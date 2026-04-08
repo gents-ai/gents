@@ -1,0 +1,115 @@
+use serde::Deserialize;
+
+use super::{AgentRequest, DefraWatcher};
+
+impl DefraWatcher {
+    pub async fn try_fetch_request(&self, doc_id: &str) -> anyhow::Result<Option<AgentRequest>> {
+        let query = format!(
+            r#"{{
+                AgentRequest(
+                    filter: {{
+                        _docID: {{ _eq: "{doc_id}" }},
+                        agent_did: {{ _eq: "{agent_did}" }},
+                        status: {{ _eq: "pending" }}
+                    }}
+                ) {{
+                    request_id
+                    agent_did
+                    session_id
+                    content
+                    created_at
+                }}
+            }}"#,
+            doc_id = doc_id,
+            agent_did = self.agent_did,
+        );
+
+        let resp = self.node.execute(&query).await;
+        if resp.has_errors() {
+            anyhow::bail!("watcher query failed: {:?}", resp.errors);
+        }
+
+        let docs: Vec<AgentRequestRow> =
+            match resp.data.as_ref().and_then(|d| d.get("AgentRequest")) {
+                Some(value) => serde_json::from_value(value.clone())?,
+                None => Vec::new(),
+            };
+
+        match docs.into_iter().next() {
+            Some(row) => Ok(Some(AgentRequest {
+                doc_id: doc_id.to_string(),
+                request_id: row.request_id,
+                agent_did: row.agent_did,
+                session_id: row.session_id,
+                content: row.content,
+                created_at: row.created_at,
+            })),
+            None => Ok(None),
+        }
+    }
+
+    pub(super) async fn pending_requests(&self) -> anyhow::Result<Vec<AgentRequest>> {
+        let query = format!(
+            r#"{{
+                AgentRequest(
+                    filter: {{
+                        agent_did: {{ _eq: "{agent_did}" }},
+                        status: {{ _eq: "pending" }}
+                    }},
+                    order: {{ created_at: ASC }}
+                ) {{
+                    _docID
+                    request_id
+                    agent_did
+                    session_id
+                    content
+                    created_at
+                }}
+            }}"#,
+            agent_did = self.agent_did,
+        );
+
+        let resp = self.node.execute(&query).await;
+        if resp.has_errors() {
+            anyhow::bail!("watcher pending-request query failed: {:?}", resp.errors);
+        }
+
+        let docs: Vec<PendingAgentRequestRow> =
+            match resp.data.as_ref().and_then(|d| d.get("AgentRequest")) {
+                Some(value) => serde_json::from_value(value.clone())?,
+                None => Vec::new(),
+            };
+
+        Ok(docs
+            .into_iter()
+            .map(|row| AgentRequest {
+                doc_id: row.doc_id,
+                request_id: row.request_id,
+                agent_did: row.agent_did,
+                session_id: row.session_id,
+                content: row.content,
+                created_at: row.created_at,
+            })
+            .collect())
+    }
+}
+
+#[derive(Deserialize)]
+struct AgentRequestRow {
+    request_id: String,
+    agent_did: String,
+    session_id: String,
+    content: String,
+    created_at: String,
+}
+
+#[derive(Deserialize)]
+struct PendingAgentRequestRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    request_id: String,
+    agent_did: String,
+    session_id: String,
+    content: String,
+    created_at: String,
+}
