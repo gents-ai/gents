@@ -1,0 +1,222 @@
+use std::sync::Arc;
+
+use rig::agent::{HookAction, PromptHook, ToolCallHookAction};
+use rig::completion::message::{
+    AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
+    ToolResultContent, UserContent,
+};
+use rig::completion::{
+    CompletionError, CompletionModel, CompletionRequest, CompletionResponse,
+};
+use rig::one_or_many::OneOrMany;
+use rig::streaming::StreamingCompletionResponse;
+use serde_json::json;
+
+use super::*;
+use crate::ensure_schemas;
+
+#[derive(Clone, Default)]
+struct TestModel;
+
+#[allow(refining_impl_trait)]
+impl CompletionModel for TestModel {
+    type Response = ();
+    type StreamingResponse = ();
+    type Client = ();
+
+    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+        Self
+    }
+
+    async fn completion(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+        Err(CompletionError::ProviderError(
+            "completion is unused in hook tests".to_string(),
+        ))
+    }
+
+    async fn stream(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        Err(CompletionError::ProviderError(
+            "streaming is unused in hook tests".to_string(),
+        ))
+    }
+}
+
+fn user_text_message(text: &str) -> Message {
+    Message::User {
+        content: OneOrMany::one(UserContent::Text(Text {
+            text: text.to_string(),
+        })),
+    }
+}
+
+#[tokio::test]
+async fn streaming_turn_persists_full_assistant_history_in_sequence() {
+    let data_path = std::env::temp_dir().join(format!("agent-daemon-hook-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::new(node.clone(), "general");
+    let user_prompt = user_text_message("Inspect /tmp/main.rs");
+    assert!(matches!(
+        PromptHook::<TestModel>::on_completion_call(&hook, &user_prompt, &[]).await,
+        HookAction::Continue
+    ));
+
+    let tool_args = r#"{"file_path":"/tmp/main.rs"}"#;
+    assert!(matches!(
+        PromptHook::<TestModel>::on_tool_call(
+            &hook,
+            "read",
+            Some("call-1".to_string()),
+            "internal-1",
+            tool_args,
+        )
+        .await,
+        ToolCallHookAction::Continue
+    ));
+
+    assert!(matches!(
+        PromptHook::<TestModel>::on_tool_result(
+            &hook,
+            "read",
+            Some("call-1".to_string()),
+            "internal-1",
+            tool_args,
+            "fn main() {}\n",
+        )
+        .await,
+        HookAction::Continue
+    ));
+
+    let streamed_assistant_turn = Message::Assistant {
+        id: None,
+        content: OneOrMany::many(vec![
+            AssistantContent::Reasoning(
+                Reasoning::new("Need to inspect the file first").with_id("rs_1".to_string()),
+            ),
+            AssistantContent::ToolCall(ToolCall {
+                id: "internal-1".to_string(),
+                call_id: Some("call-1".to_string()),
+                function: ToolFunction {
+                    name: "read".to_string(),
+                    arguments: json!({ "file_path": "/tmp/main.rs" }),
+                },
+                signature: None,
+                additional_params: None,
+            }),
+            AssistantContent::Text(Text {
+                text: "I'm reading the file now.".to_string(),
+            }),
+        ])
+        .unwrap(),
+    };
+    hook.persist_message(&streamed_assistant_turn).await.unwrap();
+
+    hook.persist_stream_tool_result_message(&ToolResult {
+        id: "internal-1".to_string(),
+        call_id: Some("call-1".to_string()),
+        content: OneOrMany::one(ToolResultContent::Text(Text {
+            text: "ephemeral stream payload".to_string(),
+        })),
+    })
+    .await
+    .unwrap();
+
+    hook.persist_message(&Message::Assistant {
+        id: None,
+        content: OneOrMany::one(AssistantContent::Text(Text {
+            text: "The file looks healthy.".to_string(),
+        })),
+    })
+    .await
+    .unwrap();
+
+    let session_id = hook.session_id().await.expect("session id");
+    let history = crate::session::load_history(&node, &session_id).await.unwrap();
+    assert_eq!(history.len(), 4);
+
+    assert!(matches!(
+        &history[0],
+        Message::User { content }
+            if matches!(content.first_ref(), UserContent::Text(Text { text }) if text == "Inspect /tmp/main.rs")
+    ));
+    assert!(matches!(
+        &history[1],
+        Message::Assistant { content, .. }
+            if content.len() == 3
+                && matches!(content.first_ref(), AssistantContent::Reasoning(reasoning) if reasoning.id.as_deref() == Some("rs_1"))
+                && matches!(content.iter().nth(1), Some(AssistantContent::ToolCall(tool_call)) if tool_call.call_id.as_deref() == Some("call-1"))
+                && matches!(content.iter().nth(2), Some(AssistantContent::Text(Text { text })) if text == "I'm reading the file now.")
+    ));
+    assert!(matches!(
+        &history[2],
+        Message::User { content }
+            if matches!(content.first_ref(), UserContent::ToolResult(tool_result)
+                if tool_result.call_id.as_deref() == Some("call-1")
+                    && matches!(tool_result.content.first_ref(), ToolResultContent::Text(Text { text }) if text == "fn main() {}\n"))
+    ));
+    assert!(matches!(
+        &history[3],
+        Message::Assistant { content, .. }
+            if matches!(content.first_ref(), AssistantContent::Text(Text { text }) if text == "The file looks healthy.")
+    ));
+
+    let resp = node
+        .execute(&format!(
+            r#"{{
+                    AgentToolCall(
+                        filter: {{
+                            session_id: {{ _eq: "{session_id}" }},
+                            tool_call_id: {{ _eq: "internal-1" }}
+                        }},
+                        limit: 1
+                    ) {{
+                        message_sequence
+                        result
+                        status
+                    }}
+                }}"#
+        ))
+        .await;
+    assert!(
+        !resp.has_errors(),
+        "query tool call failed: {:?}",
+        resp.errors
+    );
+
+    let row = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|value| value.as_array())
+        .and_then(|rows| rows.first())
+        .cloned()
+        .expect("tool call row");
+
+    assert_eq!(
+        row.get("message_sequence").and_then(|value| value.as_u64()),
+        Some(2)
+    );
+    assert_eq!(
+        row.get("result").and_then(|value| value.as_str()),
+        Some("fn main() {}\n")
+    );
+    assert_eq!(
+        row.get("status").and_then(|value| value.as_str()),
+        Some("completed")
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
