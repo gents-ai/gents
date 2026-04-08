@@ -1,0 +1,4 @@
+/target
+/.DS_Store
+/crates/defra-agent/proofs/.lake
+/crates/defra-agent/proofs/build

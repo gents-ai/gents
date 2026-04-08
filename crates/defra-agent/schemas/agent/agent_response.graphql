@@ -1,0 +1,12 @@
+type AgentResponse @branchable {
+    response_key: String @index(unique: true)
+    request_id: String @index
+    agent_did: String @index
+    session_id: String @index
+    content: String
+    status: String @index
+    token_count: Int
+    progress_seq: Int
+    created_at: String @index
+    completed_at: String
+}

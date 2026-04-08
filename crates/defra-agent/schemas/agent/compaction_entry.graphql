@@ -1,0 +1,12 @@
+type CompactionEntry @branchable {
+    compaction_key: String @index(unique: true)
+    session_id: String @index
+    sequence: Int @index
+    summary: String
+    files_read: String
+    files_modified: String
+    messages_compacted: Int
+    original_tokens: Int
+    compacted_tokens: Int
+    created_at: DateTime
+}

@@ -1,0 +1,11 @@
+type AgentToolResult @branchable {
+    agent_did: String @index
+    session_id: String @index
+    tool_name: String @index
+    tool_input: String
+    output_text: String
+    truncated: Boolean
+    truncation_metadata: String
+    conversation_doc_id: String
+    created_at: String @index
+}

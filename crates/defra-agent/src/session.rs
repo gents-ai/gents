@@ -1,0 +1,63 @@
+use std::time::Duration;
+
+use anyhow::Result;
+use defra_node::{EmbeddedNode, QueryResponse};
+use rig::completion::message::{AssistantContent, Message, Text, UserContent};
+use rig::one_or_many::OneOrMany;
+use serde::{Deserialize, Serialize};
+
+use crate::graphql::{escape_graphql_string, response_has_documents};
+
+mod compaction_entries;
+mod conversation;
+mod history;
+mod query;
+mod retry;
+mod rows;
+mod sessions;
+#[cfg(test)]
+mod tests;
+mod tool_calls;
+
+pub use compaction_entries::{load_compaction_entries, save_compaction_entry};
+pub(crate) use conversation::{
+    update_conversation_status, update_conversation_status_if_latest_with_did,
+    upsert_conversation_from_request, upsert_conversation_from_request_with_did,
+};
+pub use history::load_history;
+pub(crate) use history::save_message;
+pub(crate) use retry::execute_mutation_with_retry;
+pub use retry::count_active_sessions;
+pub(crate) use sessions::{create_session_with_id, ensure_session, max_sequence};
+pub use sessions::{close_session, create_session};
+pub async fn load_tool_call_result(
+    node: &EmbeddedNode,
+    session_id: &str,
+    tool_call_id: &str,
+) -> Result<String> {
+    tool_calls::load_tool_call_result(node, session_id, tool_call_id).await
+}
+pub(crate) use tool_calls::{complete_tool_call, save_tool_call};
+
+const MAX_MUTATION_RETRIES: u32 = 3;
+const INITIAL_RETRY_BACKOFF_MS: u64 = 100;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompactionEntry {
+    pub session_id: String,
+    pub sequence: u32,
+    pub summary: String,
+    pub files_read: Vec<String>,
+    pub files_modified: Vec<String>,
+    pub messages_compacted: u32,
+    pub original_tokens: usize,
+    pub compacted_tokens: usize,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConversationUpdateOutcome {
+    Updated,
+    AlreadyApplied,
+    SkippedStaleRequest,
+}

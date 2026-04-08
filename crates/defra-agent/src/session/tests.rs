@@ -1,0 +1,340 @@
+use super::history::deserialize_message;
+use super::*;
+use crate::ensure_schemas;
+
+#[test]
+fn test_load_history_deserializes_plain_text() {
+    let user_msg = Message::User {
+        content: OneOrMany::one(UserContent::Text(Text {
+            text: "hello".to_string(),
+        })),
+    };
+    let json = serde_json::to_string(&user_msg).unwrap();
+    let restored = deserialize_message("user", &json);
+    assert_eq!(user_msg, restored);
+}
+
+#[test]
+fn test_load_history_deserializes_legacy_assistant_content() {
+    let legacy_content = OneOrMany::many(vec![
+        AssistantContent::Reasoning(
+            rig::completion::message::Reasoning::new("Need to inspect first")
+                .with_id("rs_1".to_string()),
+        ),
+        AssistantContent::Text(Text {
+            text: "Done".to_string(),
+        }),
+    ])
+    .unwrap();
+
+    let restored = deserialize_message("assistant", &serde_json::to_string(&legacy_content).unwrap());
+    assert!(matches!(
+        restored,
+        Message::Assistant { content, .. }
+            if content.len() == 2
+                && matches!(content.first_ref(), AssistantContent::Reasoning(reasoning) if reasoning.id.as_deref() == Some("rs_1"))
+                && matches!(content.iter().nth(1), Some(AssistantContent::Text(Text { text })) if text == "Done")
+    ));
+}
+
+#[tokio::test]
+async fn compaction_entries_track_files_cumulatively() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-daemon-compaction-{}", uuid::Uuid::new_v4()));
+    let node = defra_node::EmbeddedNode::builder()
+        .data_path(&data_path)
+        .build()
+        .await
+        .unwrap();
+    ensure_schemas(&node).await.unwrap();
+
+    save_compaction_entry(
+        &node,
+        "session-1",
+        "First summary",
+        &["/tmp/a.rs".to_string()],
+        &["/tmp/b.rs".to_string()],
+        5,
+        1000,
+        200,
+    )
+    .await
+    .unwrap();
+    save_compaction_entry(
+        &node,
+        "session-1",
+        "Second summary",
+        &["/tmp/c.rs".to_string(), "/tmp/a.rs".to_string()],
+        &["/tmp/d.rs".to_string()],
+        7,
+        1200,
+        250,
+    )
+    .await
+    .unwrap();
+
+    let entries = load_compaction_entries(&node, "session-1").await.unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].files_read, vec!["/tmp/a.rs"]);
+    assert_eq!(entries[1].files_read, vec!["/tmp/a.rs", "/tmp/c.rs"]);
+    assert_eq!(entries[1].files_modified, vec!["/tmp/b.rs", "/tmp/d.rs"]);
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn complete_tool_call_preserves_started_at_datetime() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-daemon-tool-call-{}", uuid::Uuid::new_v4()));
+    let node = defra_node::EmbeddedNode::builder()
+        .data_path(&data_path)
+        .build()
+        .await
+        .unwrap();
+    ensure_schemas(&node).await.unwrap();
+
+    save_tool_call(
+        &node,
+        "session-1",
+        1,
+        "read_file",
+        "call-123",
+        r#"{"path":"src/lib.rs"}"#,
+        "called",
+    )
+    .await
+    .unwrap();
+
+    complete_tool_call(&node, "session-1", "call-123", "file contents", "completed")
+        .await
+        .unwrap();
+
+    let resp = node
+        .execute(
+            r#"{
+                AgentToolCall(
+                    filter: { tool_call_id: { _eq: "call-123" } },
+                    limit: 1
+                ) {
+                    status
+                    result
+                    started_at
+                    completed_at
+                }
+            }"#,
+        )
+        .await;
+    assert!(!resp.has_errors(), "query tool call failed: {:?}", resp.errors);
+
+    let row = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|value| value.as_array())
+        .and_then(|rows| rows.first())
+        .cloned()
+        .expect("tool call row");
+
+    assert_eq!(row.get("status").and_then(|value| value.as_str()), Some("completed"));
+    assert_eq!(row.get("result").and_then(|value| value.as_str()), Some("file contents"));
+    assert!(row
+        .get("started_at")
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| !value.is_empty()));
+    assert!(row
+        .get("completed_at")
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| !value.is_empty()));
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn close_session_preserves_started_datetime() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-daemon-session-{}", uuid::Uuid::new_v4()));
+    let node = defra_node::EmbeddedNode::builder()
+        .data_path(&data_path)
+        .build()
+        .await
+        .unwrap();
+    ensure_schemas(&node).await.unwrap();
+
+    create_session_with_id(&node, "session-1", "deploy-test")
+        .await
+        .unwrap();
+    close_session(&node, "session-1").await.unwrap();
+
+    let resp = node
+        .execute(
+            r#"{
+                AgentSession(
+                    filter: { session_id: { _eq: "session-1" } },
+                    limit: 1
+                ) {
+                    status
+                    started
+                    ended
+                }
+            }"#,
+        )
+        .await;
+    assert!(!resp.has_errors(), "query session failed: {:?}", resp.errors);
+
+    let row = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentSession"))
+        .and_then(|value| value.as_array())
+        .and_then(|rows| rows.first())
+        .cloned()
+        .expect("session row");
+
+    assert_eq!(row.get("status").and_then(|value| value.as_str()), Some("completed"));
+    assert!(row
+        .get("started")
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| !value.is_empty()));
+    assert!(row
+        .get("ended")
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| !value.is_empty()));
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn create_session_with_id_is_idempotent() {
+    let data_path = std::env::temp_dir().join(format!(
+        "agent-daemon-session-upsert-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let node = defra_node::EmbeddedNode::builder()
+        .data_path(&data_path)
+        .build()
+        .await
+        .unwrap();
+    ensure_schemas(&node).await.unwrap();
+
+    create_session_with_id(&node, "session-1", "general")
+        .await
+        .unwrap();
+    create_session_with_id(&node, "session-1", "general")
+        .await
+        .unwrap();
+
+    let resp = node
+        .execute(
+            r#"{
+                AgentSession(
+                    filter: { session_id: { _eq: "session-1" } }
+                ) {
+                    session_id
+                    agent_name
+                }
+            }"#,
+        )
+        .await;
+    assert!(!resp.has_errors(), "query session rows failed: {:?}", resp.errors);
+
+    let rows = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentSession"))
+        .and_then(|value| value.as_array())
+        .cloned()
+        .expect("session rows");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].get("agent_name").and_then(|value| value.as_str()),
+        Some("general")
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn upsert_conversation_from_request_preserves_initial_title() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-daemon-conversation-{}", uuid::Uuid::new_v4()));
+    let node = defra_node::EmbeddedNode::builder()
+        .data_path(&data_path)
+        .build()
+        .await
+        .unwrap();
+    ensure_schemas(&node).await.unwrap();
+
+    upsert_conversation_from_request(
+        &node,
+        "session-1",
+        "general",
+        "request-1",
+        "Draft a weekly fleet report",
+        "processing",
+    )
+    .await
+    .unwrap();
+    upsert_conversation_from_request(
+        &node,
+        "session-1",
+        "general",
+        "request-2",
+        "Now include the overnight daemon failures too",
+        "processing",
+    )
+    .await
+    .unwrap();
+    update_conversation_status(&node, "session-1", "general", "completed")
+        .await
+        .unwrap();
+
+    let resp = node
+        .execute(
+            r#"{
+                AgentConversation(
+                    filter: { session_id: { _eq: "session-1" } },
+                    limit: 1
+                ) {
+                    session_id
+                    agent_name
+                    agent_did
+                    title
+                    preview_text
+                    status
+                    latest_request_id
+                }
+            }"#,
+        )
+        .await;
+    assert!(!resp.has_errors(), "query conversation failed: {:?}", resp.errors);
+
+    let row = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentConversation"))
+        .and_then(|value| value.as_array())
+        .and_then(|rows| rows.first())
+        .cloned()
+        .expect("conversation row");
+
+    assert_eq!(
+        row.get("title").and_then(|value| value.as_str()),
+        Some("Draft a weekly fleet report")
+    );
+    assert_eq!(
+        row.get("preview_text").and_then(|value| value.as_str()),
+        Some("Now include the overnight daemon failures too")
+    );
+    assert_eq!(row.get("status").and_then(|value| value.as_str()), Some("completed"));
+    assert_eq!(
+        row.get("latest_request_id").and_then(|value| value.as_str()),
+        Some("request-2")
+    );
+    assert_eq!(
+        row.get("agent_did").and_then(|value| value.as_str()),
+        Some("did:defra-agent:general")
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}

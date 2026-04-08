@@ -1,0 +1,19 @@
+type AgentRequest @branchable {
+    request_id: String @index
+    agent_did: String @index
+    session_id: String @index
+    retry_parent_request: String
+    retry_root_request: String
+    superseded_by_request: String
+    content: String
+    status: String @index
+    lifecycle_state: String @index
+    admission_state: String @index
+    backend_id: String @index
+    execution_origin: String
+    created_at: String @index
+    claimed_at: String
+    deadline: String
+    retry_count: Int
+    max_retries: Int
+}

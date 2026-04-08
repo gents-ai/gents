@@ -1,0 +1,11 @@
+type AgentConversation @branchable {
+    session_id: String @index(unique: true)
+    agent_name: String @index
+    agent_did: String @index
+    title: String
+    preview_text: String
+    status: String @index
+    created_at: DateTime @index(direction: DESC)
+    updated_at: DateTime @index(direction: DESC)
+    latest_request_id: String @index
+}

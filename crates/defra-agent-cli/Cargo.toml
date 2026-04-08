@@ -1,0 +1,21 @@
+[package]
+name = "defra-agent-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Consumer CLI for the defra-agent library"
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+clap.workspace = true
+defra-agent = { path = "../defra-agent" }
+defra-node.workspace = true
+hostname.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
