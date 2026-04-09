@@ -27,7 +27,10 @@ fn test_load_history_deserializes_legacy_assistant_content() {
     ])
     .unwrap();
 
-    let restored = deserialize_message("assistant", &serde_json::to_string(&legacy_content).unwrap());
+    let restored = deserialize_message(
+        "assistant",
+        &serde_json::to_string(&legacy_content).unwrap(),
+    );
     assert!(matches!(
         restored,
         Message::Assistant { content, .. }
@@ -124,7 +127,11 @@ async fn complete_tool_call_preserves_started_at_datetime() {
             }"#,
         )
         .await;
-    assert!(!resp.has_errors(), "query tool call failed: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "query tool call failed: {:?}",
+        resp.errors
+    );
 
     let row = resp
         .data
@@ -135,8 +142,14 @@ async fn complete_tool_call_preserves_started_at_datetime() {
         .cloned()
         .expect("tool call row");
 
-    assert_eq!(row.get("status").and_then(|value| value.as_str()), Some("completed"));
-    assert_eq!(row.get("result").and_then(|value| value.as_str()), Some("file contents"));
+    assert_eq!(
+        row.get("status").and_then(|value| value.as_str()),
+        Some("completed")
+    );
+    assert_eq!(
+        row.get("result").and_then(|value| value.as_str()),
+        Some("file contents")
+    );
     assert!(row
         .get("started_at")
         .and_then(|value| value.as_str())
@@ -173,13 +186,18 @@ async fn close_session_preserves_started_datetime() {
                     limit: 1
                 ) {
                     status
+                    behavior_id
                     started
                     ended
                 }
             }"#,
         )
         .await;
-    assert!(!resp.has_errors(), "query session failed: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "query session failed: {:?}",
+        resp.errors
+    );
 
     let row = resp
         .data
@@ -190,7 +208,14 @@ async fn close_session_preserves_started_datetime() {
         .cloned()
         .expect("session row");
 
-    assert_eq!(row.get("status").and_then(|value| value.as_str()), Some("completed"));
+    assert_eq!(
+        row.get("status").and_then(|value| value.as_str()),
+        Some("completed")
+    );
+    assert_eq!(
+        row.get("behavior_id").and_then(|value| value.as_str()),
+        Some("deploy-test")
+    );
     assert!(row
         .get("started")
         .and_then(|value| value.as_str())
@@ -231,11 +256,16 @@ async fn create_session_with_id_is_idempotent() {
                 ) {
                     session_id
                     agent_name
+                    behavior_id
                 }
             }"#,
         )
         .await;
-    assert!(!resp.has_errors(), "query session rows failed: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "query session rows failed: {:?}",
+        resp.errors
+    );
 
     let rows = resp
         .data
@@ -250,14 +280,20 @@ async fn create_session_with_id_is_idempotent() {
         rows[0].get("agent_name").and_then(|value| value.as_str()),
         Some("general")
     );
+    assert_eq!(
+        rows[0].get("behavior_id").and_then(|value| value.as_str()),
+        Some("general")
+    );
 
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
 async fn upsert_conversation_from_request_preserves_initial_title() {
-    let data_path =
-        std::env::temp_dir().join(format!("agent-daemon-conversation-{}", uuid::Uuid::new_v4()));
+    let data_path = std::env::temp_dir().join(format!(
+        "agent-daemon-conversation-{}",
+        uuid::Uuid::new_v4()
+    ));
     let node = defra_node::EmbeddedNode::builder()
         .data_path(&data_path)
         .build()
@@ -299,6 +335,7 @@ async fn upsert_conversation_from_request_preserves_initial_title() {
                     session_id
                     agent_name
                     agent_did
+                    behavior_id
                     title
                     preview_text
                     status
@@ -307,7 +344,11 @@ async fn upsert_conversation_from_request_preserves_initial_title() {
             }"#,
         )
         .await;
-    assert!(!resp.has_errors(), "query conversation failed: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "query conversation failed: {:?}",
+        resp.errors
+    );
 
     let row = resp
         .data
@@ -326,15 +367,91 @@ async fn upsert_conversation_from_request_preserves_initial_title() {
         row.get("preview_text").and_then(|value| value.as_str()),
         Some("Now include the overnight daemon failures too")
     );
-    assert_eq!(row.get("status").and_then(|value| value.as_str()), Some("completed"));
     assert_eq!(
-        row.get("latest_request_id").and_then(|value| value.as_str()),
+        row.get("status").and_then(|value| value.as_str()),
+        Some("completed")
+    );
+    assert_eq!(
+        row.get("latest_request_id")
+            .and_then(|value| value.as_str()),
         Some("request-2")
     );
     assert_eq!(
         row.get("agent_did").and_then(|value| value.as_str()),
         Some("did:defra-agent:general")
     );
+    assert_eq!(
+        row.get("behavior_id").and_then(|value| value.as_str()),
+        Some("general")
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn create_session_with_behavior_id_rejects_mismatched_existing_binding() {
+    let data_path = std::env::temp_dir().join(format!(
+        "agent-daemon-session-binding-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let node = defra_node::EmbeddedNode::builder()
+        .data_path(&data_path)
+        .build()
+        .await
+        .unwrap();
+    ensure_schemas(&node).await.unwrap();
+
+    create_session_with_behavior_id(&node, "session-1", "general", "general")
+        .await
+        .unwrap();
+
+    let error = create_session_with_behavior_id(&node, "session-1", "general", "code")
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("behavior mismatch"));
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn upsert_conversation_rejects_mismatched_existing_behavior() {
+    let data_path = std::env::temp_dir().join(format!(
+        "agent-daemon-conversation-binding-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let node = defra_node::EmbeddedNode::builder()
+        .data_path(&data_path)
+        .build()
+        .await
+        .unwrap();
+    ensure_schemas(&node).await.unwrap();
+
+    upsert_conversation_from_request_with_identity(
+        &node,
+        "session-1",
+        "general",
+        "did:defra-agent:general",
+        "general",
+        "request-1",
+        "Hello",
+        "processing",
+    )
+    .await
+    .unwrap();
+
+    let error = upsert_conversation_from_request_with_identity(
+        &node,
+        "session-1",
+        "general",
+        "did:defra-agent:general",
+        "code",
+        "request-2",
+        "Hello again",
+        "processing",
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("behavior mismatch"));
 
     let _ = std::fs::remove_dir_all(&data_path);
 }

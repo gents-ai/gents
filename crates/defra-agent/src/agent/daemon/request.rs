@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Result};
 
-use super::{HandleRequestOutcome, ProfileDaemon};
+use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::backend_registry::{self, BackendPermit};
 use crate::compaction::{self, CompactionOptions, Compactor};
 use crate::prompt::PromptBuilder;
@@ -11,7 +11,7 @@ use crate::streaming::{StreamStatus, StreamWriter};
 
 const BACKEND_WAIT_POLL_MS: u64 = 1_000;
 
-impl<M: rig::completion::CompletionModel + 'static> ProfileDaemon<M> {
+impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     pub(super) async fn acquire_backend_permit(
         &self,
         lifecycle: &mut crate::lifecycle::RequestLifecycle,
@@ -19,13 +19,13 @@ impl<M: rig::completion::CompletionModel + 'static> ProfileDaemon<M> {
         let backend_id = lifecycle.backend_id();
         if backend_id.is_empty() {
             bail!(
-                "request {} cannot start because profile {} has no backend binding",
+                "request {} cannot start because behavior {} has no backend binding",
                 lifecycle.request().request_id,
-                self.profile.name
+                self.behavior.name
             );
         }
 
-        let deadline = tokio::time::Instant::now() + self.profile.deadline_duration;
+        let deadline = tokio::time::Instant::now() + self.behavior.deadline_duration;
         loop {
             if tokio::time::Instant::now() >= deadline {
                 bail!(
@@ -37,9 +37,9 @@ impl<M: rig::completion::CompletionModel + 'static> ProfileDaemon<M> {
             let backend = match backend_registry::lookup_backend(&self.node, backend_id).await? {
                 Some(backend) => backend,
                 None => bail!(
-                    "backend {} not found for profile {}",
+                    "backend {} not found for behavior {}",
                     backend_id,
-                    self.profile.name
+                    self.behavior.name
                 ),
             };
 
@@ -66,7 +66,7 @@ impl<M: rig::completion::CompletionModel + 'static> ProfileDaemon<M> {
         let (stripped_history, file_activity) = compaction::strip_tool_results(full_history);
         if !file_activity.is_empty() {
             tracing::debug!(
-                profile = %self.profile.name,
+                behavior_id = %self.behavior.name,
                 session_id = %request.session_id,
                 files_read = ?file_activity.files_read,
                 files_modified = ?file_activity.files_modified,
@@ -89,16 +89,16 @@ impl<M: rig::completion::CompletionModel + 'static> ProfileDaemon<M> {
         if prompt_exceeds_compaction_threshold(
             built.estimated_tokens,
             &request.content,
-            self.profile.context_window,
-            self.profile.compaction_threshold,
+            self.behavior.context_window,
+            self.behavior.compaction_threshold,
         ) {
             let result = self
                 .compactor
                 .compact(
                     history,
-                    self.profile.context_window,
+                    self.behavior.context_window,
                     &CompactionOptions {
-                        strategy: self.profile.compaction_strategy.clone(),
+                        strategy: self.behavior.compaction_strategy.clone(),
                         ..self.compaction_options.clone()
                     },
                 )
@@ -128,7 +128,11 @@ impl<M: rig::completion::CompletionModel + 'static> ProfileDaemon<M> {
 
         let doc_id = self
             .stream_writer
-            .begin(&request.session_id, &request.request_id)
+            .begin(
+                &request.session_id,
+                &request.request_id,
+                lifecycle.behavior_id(),
+            )
             .await?;
         lifecycle.set_response_doc_id(&doc_id);
         lifecycle.advance().await?;
@@ -146,7 +150,7 @@ impl<M: rig::completion::CompletionModel + 'static> ProfileDaemon<M> {
                     .await
                 {
                     tracing::error!(
-                        profile = %self.profile.name,
+                        behavior_id = %self.behavior.name,
                         doc_id = %doc_id,
                         error = %finalize_error,
                         "failed to finalize stream after error"

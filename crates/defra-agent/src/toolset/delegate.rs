@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,6 +12,7 @@ use crate::graphql::escape_graphql_string;
 use crate::lifecycle::DEFAULT_REQUEST_MAX_RETRIES;
 
 use super::shared::ToolError;
+use super::DELEGATE_TOOL_NAME;
 
 #[derive(Debug, Deserialize)]
 pub(super) struct DelegateToAgentArgs {
@@ -22,16 +24,26 @@ pub(super) struct DelegateToAgentArgs {
 #[derive(Clone)]
 pub(super) struct DelegateToAgentTool {
     node: Arc<EmbeddedNode>,
+    allowed_target_dids: Arc<HashSet<String>>,
 }
 
 impl DelegateToAgentTool {
-    pub(super) fn new(node: Arc<EmbeddedNode>) -> Self {
-        Self { node }
+    pub(super) fn new(node: Arc<EmbeddedNode>, allowed_target_dids: Vec<String>) -> Self {
+        Self {
+            node,
+            allowed_target_dids: Arc::new(
+                allowed_target_dids
+                    .into_iter()
+                    .map(|did| did.trim().to_string())
+                    .filter(|did| !did.is_empty())
+                    .collect(),
+            ),
+        }
     }
 }
 
 impl Tool for DelegateToAgentTool {
-    const NAME: &'static str = "delegate_to_agent";
+    const NAME: &'static str = DELEGATE_TOOL_NAME;
 
     type Error = ToolError;
     type Args = DelegateToAgentArgs;
@@ -54,6 +66,14 @@ impl Tool for DelegateToAgentTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        if !self.allowed_target_dids.contains(args.target_did.trim()) {
+            return Err(anyhow!(
+                "delegate_to_agent target DID {} is not in the allowed delegation set",
+                args.target_did
+            )
+            .into());
+        }
+
         let request_id = uuid::Uuid::new_v4().to_string();
         let session_id = uuid::Uuid::new_v4().to_string();
         let created_at = chrono::Utc::now().to_rfc3339();

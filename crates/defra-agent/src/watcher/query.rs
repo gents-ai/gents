@@ -15,6 +15,7 @@ impl DefraWatcher {
                 ) {{
                     request_id
                     agent_did
+                    behavior_id
                     session_id
                     content
                     created_at
@@ -40,6 +41,7 @@ impl DefraWatcher {
                 doc_id: doc_id.to_string(),
                 request_id: row.request_id,
                 agent_did: row.agent_did,
+                behavior_id: normalize_optional_string(row.behavior_id),
                 session_id: row.session_id,
                 content: row.content,
                 created_at: row.created_at,
@@ -61,6 +63,7 @@ impl DefraWatcher {
                     _docID
                     request_id
                     agent_did
+                    behavior_id
                     session_id
                     content
                     created_at
@@ -86,6 +89,7 @@ impl DefraWatcher {
                 doc_id: row.doc_id,
                 request_id: row.request_id,
                 agent_did: row.agent_did,
+                behavior_id: normalize_optional_string(row.behavior_id),
                 session_id: row.session_id,
                 content: row.content,
                 created_at: row.created_at,
@@ -94,10 +98,18 @@ impl DefraWatcher {
     }
 }
 
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
+}
+
 #[derive(Deserialize)]
 struct AgentRequestRow {
     request_id: String,
     agent_did: String,
+    behavior_id: Option<String>,
     session_id: String,
     content: String,
     created_at: String,
@@ -109,6 +121,7 @@ struct PendingAgentRequestRow {
     doc_id: String,
     request_id: String,
     agent_did: String,
+    behavior_id: Option<String>,
     session_id: String,
     content: String,
     created_at: String,

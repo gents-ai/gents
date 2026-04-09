@@ -5,9 +5,7 @@ use rig::completion::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
     ToolResultContent, UserContent,
 };
-use rig::completion::{
-    CompletionError, CompletionModel, CompletionRequest, CompletionResponse,
-};
+use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
 use rig::one_or_many::OneOrMany;
 use rig::streaming::StreamingCompletionResponse;
 use serde_json::json;
@@ -57,7 +55,8 @@ fn user_text_message(text: &str) -> Message {
 
 #[tokio::test]
 async fn streaming_turn_persists_full_assistant_history_in_sequence() {
-    let data_path = std::env::temp_dir().join(format!("agent-daemon-hook-{}", uuid::Uuid::new_v4()));
+    let data_path =
+        std::env::temp_dir().join(format!("agent-daemon-hook-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
             .data_path(&data_path)
@@ -67,7 +66,12 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     );
     ensure_schemas(&node).await.unwrap();
 
-    let hook = DefraSessionHook::new(node.clone(), "general");
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:general",
+        FailurePolicy::default(),
+    );
     let user_prompt = user_text_message("Inspect /tmp/main.rs");
     assert!(matches!(
         PromptHook::<TestModel>::on_completion_call(&hook, &user_prompt, &[]).await,
@@ -122,7 +126,9 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
         ])
         .unwrap(),
     };
-    hook.persist_message(&streamed_assistant_turn).await.unwrap();
+    hook.persist_message(&streamed_assistant_turn)
+        .await
+        .unwrap();
 
     hook.persist_stream_tool_result_message(&ToolResult {
         id: "internal-1".to_string(),
@@ -144,7 +150,9 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     .unwrap();
 
     let session_id = hook.session_id().await.expect("session id");
-    let history = crate::session::load_history(&node, &session_id).await.unwrap();
+    let history = crate::session::load_history(&node, &session_id)
+        .await
+        .unwrap();
     assert_eq!(history.len(), 4);
 
     assert!(matches!(

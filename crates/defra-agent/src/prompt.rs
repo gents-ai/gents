@@ -6,7 +6,7 @@
 //! ```text
 //! ┌─────────────────────────────────────┐
 //! │ Layer 1: Static system prompt       │  ← cached globally, never changes
-//! │ Layer 2: Data room context          │  ← cached per-agent, set at init
+//! │ Layer 2: Behavior context           │  ← cached per-behavior, set at init
 //! ├─────────────────────────────────────┤
 //! │ Layer 3: Compaction summaries       │  ← cached between compactions
 //! ├─────────────────────────────────────┤
@@ -18,15 +18,15 @@
 //! at daemon startup and locked for the session lifetime. Tool definitions
 //! live in Rig's separate `tools` field, also fixed at startup.
 //!
-//! Data room updates flow through `<system-reminder>` tags injected into
+//! Behavior updates flow through `<system-reminder>` tags injected into
 //! conversation messages — never by mutating the preamble.
 
 use anyhow::Result;
 use rig::completion::message::{Message, Text, UserContent};
 use rig::one_or_many::OneOrMany;
 
-use crate::config::DaemonConfig;
-use crate::config::ProfileConfig;
+use crate::config::BehaviorConfig;
+use crate::tool_surface::ToolSurface;
 
 /// Guidance appended to the preamble so the LLM knows how to discover and
 /// invoke data-service tools via the meta-tool workflow.
@@ -71,7 +71,7 @@ pub trait PromptBuilder: Send + Sync {
     ) -> impl std::future::Future<Output = Result<BuiltPrompt>> + Send;
 }
 
-/// Layered prompt builder backed by DaemonConfig.
+/// Layered prompt builder backed by loaded behavior configuration.
 ///
 /// Created once at daemon startup. The preamble is assembled from the
 /// config and frozen — all subsequent calls to `build()` only vary
@@ -86,31 +86,37 @@ pub struct LayeredPromptBuilder {
 }
 
 impl LayeredPromptBuilder {
-    /// Create a new prompt builder from daemon configuration.
-    ///
-    /// Assembles the preamble from the static system prompt and data room
-    /// context. This preamble is frozen for the daemon's lifetime.
-    pub fn new(config: &DaemonConfig) -> Self {
+    pub fn new(behavior: &BehaviorConfig, tool_surface: &ToolSurface) -> Self {
+        let tool_names = tool_surface.tool_names();
+        let tool_refs = tool_names.iter().map(String::as_str).collect::<Vec<_>>();
+        Self::for_behavior(
+            &behavior.system_prompt,
+            &behavior.name,
+            &tool_refs,
+            tool_surface.includes_meta_tools(),
+            behavior.context_window,
+            behavior.max_output_tokens,
+        )
+    }
+
+    pub fn for_behavior(
+        system_prompt: &str,
+        behavior_name: &str,
+        tool_names: &[&str],
+        include_meta_tool_guidance: bool,
+        context_window: usize,
+        max_output_tokens: usize,
+    ) -> Self {
         let preamble = build_preamble(
-            &config.system_prompt,
-            &config.data_room,
-            &["list_files", "read_file", "bash"],
+            system_prompt,
+            behavior_name,
+            tool_names,
+            include_meta_tool_guidance,
         );
         Self {
             preamble,
-            context_window: config.context_window,
-            max_output_tokens: config.max_output_tokens,
-        }
-    }
-
-    pub fn from_profile(profile: &ProfileConfig) -> Self {
-        let tool_names = profile.native_tools.tool_names();
-        let tool_refs = tool_names.iter().map(String::as_str).collect::<Vec<_>>();
-        let preamble = build_preamble(&profile.system_prompt, &profile.name, &tool_refs);
-        Self {
-            preamble,
-            context_window: profile.context_window,
-            max_output_tokens: profile.max_output_tokens,
+            context_window,
+            max_output_tokens,
         }
     }
 
@@ -134,7 +140,7 @@ impl LayeredPromptBuilder {
     }
 
     /// Inject a system reminder into the message stream.
-    /// Used for data room updates without mutating the preamble.
+    /// Used for behavior-context updates without mutating the preamble.
     pub fn system_reminder(text: &str) -> Message {
         Message::User {
             content: OneOrMany::one(UserContent::Text(Text {
@@ -175,20 +181,27 @@ impl PromptBuilder for LayeredPromptBuilder {
     }
 }
 
-/// Assemble the frozen preamble from system prompt, data room context, and
+/// Assemble the frozen preamble from system prompt, behavior context, and
 /// tool discovery guidance.
-fn build_preamble(system_prompt: &str, data_room: &str, tool_names: &[&str]) -> String {
+fn build_preamble(
+    system_prompt: &str,
+    behavior_name: &str,
+    tool_names: &[&str],
+    include_meta_tool_guidance: bool,
+) -> String {
     let mut parts = Vec::new();
 
     if !system_prompt.is_empty() {
         parts.push(system_prompt.to_string());
     }
 
-    if !data_room.is_empty() {
-        parts.push(format!("You are the {} agent.", data_room));
+    if !behavior_name.is_empty() {
+        parts.push(format!("You are the {} agent.", behavior_name));
     }
 
-    parts.push(TOOL_DISCOVERY_GUIDANCE.to_string());
+    if include_meta_tool_guidance {
+        parts.push(TOOL_DISCOVERY_GUIDANCE.to_string());
+    }
     parts.push(direct_tool_guidance(tool_names));
 
     parts.join("\n\n")
@@ -196,13 +209,9 @@ fn build_preamble(system_prompt: &str, data_room: &str, tool_names: &[&str]) -> 
 
 fn direct_tool_guidance(tool_names: &[&str]) -> String {
     if tool_names.is_empty() {
-        "You do not have any profile-specific native tools beyond the meta-tools and delegate_to_agent."
-            .to_string()
+        "You do not have any configured tools.".to_string()
     } else {
-        format!(
-            "You also have direct access to these native tools: {}.",
-            tool_names.join(", ")
-        )
+        format!("You have access to these tools: {}.", tool_names.join(", "))
     }
 }
 
@@ -218,171 +227,4 @@ fn estimate_message_tokens(messages: &[Message]) -> usize {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use rig::completion::message::AssistantContent;
-
-    fn user_msg(text: &str) -> Message {
-        Message::User {
-            content: OneOrMany::one(UserContent::Text(Text {
-                text: text.to_string(),
-            })),
-        }
-    }
-
-    fn assistant_msg(text: &str) -> Message {
-        Message::Assistant {
-            id: None,
-            content: OneOrMany::one(AssistantContent::Text(Text {
-                text: text.to_string(),
-            })),
-        }
-    }
-
-    #[test]
-    fn preamble_combines_prompt_and_data_room() {
-        let preamble = build_preamble("You are a helpful assistant.", "research", &["list_files"]);
-        assert!(preamble.contains("You are a helpful assistant."));
-        assert!(preamble.contains("You are the research agent."));
-        assert!(preamble.contains("## Tool Discovery"));
-        assert!(preamble.contains("discover_tools"));
-        assert!(preamble.contains("describe_tool"));
-        assert!(preamble.contains("call_tool"));
-        assert!(preamble.contains("list_files"));
-    }
-
-    #[test]
-    fn preamble_handles_empty_system_prompt() {
-        let preamble = build_preamble("", "general", &["bash"]);
-        assert!(preamble.contains("You are the general agent."));
-        assert!(preamble.contains("## Tool Discovery"));
-    }
-
-    #[test]
-    fn preamble_handles_empty_data_room() {
-        let preamble = build_preamble("Be helpful.", "", &[]);
-        assert!(preamble.contains("Be helpful."));
-        assert!(preamble.contains("## Tool Discovery"));
-    }
-
-    #[test]
-    fn preamble_is_frozen() {
-        let config = DaemonConfig {
-            system_prompt: "System prompt v1.".to_string(),
-            data_room: "test".to_string(),
-            ..Default::default()
-        };
-        let builder = LayeredPromptBuilder::new(&config);
-
-        // Preamble should be identical across calls.
-        assert_eq!(builder.preamble(), builder.preamble());
-        assert!(builder.preamble().contains("System prompt v1."));
-    }
-
-    #[tokio::test]
-    async fn build_without_summaries() {
-        let config = DaemonConfig {
-            system_prompt: "Be helpful.".to_string(),
-            data_room: "general".to_string(),
-            context_window: 100000,
-            ..Default::default()
-        };
-        let builder = LayeredPromptBuilder::new(&config);
-
-        let messages = vec![user_msg("hello"), assistant_msg("hi")];
-        let prompt = builder.build(&messages, &[]).await.unwrap();
-
-        assert_eq!(prompt.messages.len(), 2);
-        assert!(prompt.estimated_tokens > 0);
-        assert!(prompt.preamble.contains("Be helpful."));
-    }
-
-    #[tokio::test]
-    async fn build_with_summaries_prepends() {
-        let config = DaemonConfig {
-            system_prompt: "Be helpful.".to_string(),
-            data_room: "general".to_string(),
-            context_window: 100000,
-            ..Default::default()
-        };
-        let builder = LayeredPromptBuilder::new(&config);
-
-        let messages = vec![user_msg("what were we discussing?")];
-        let summaries = vec!["We discussed project architecture.".to_string()];
-        let prompt = builder.build(&messages, &summaries).await.unwrap();
-
-        // Summary injected as first message, conversation message second.
-        assert_eq!(prompt.messages.len(), 2);
-
-        if let Message::User { content } = &prompt.messages[0] {
-            if let UserContent::Text(t) = content.first_ref() {
-                assert!(t.text.contains("<system-reminder>"));
-                assert!(t.text.contains("project architecture"));
-            } else {
-                panic!("expected text");
-            }
-        } else {
-            panic!("expected user message");
-        }
-    }
-
-    #[test]
-    fn system_reminder_format() {
-        let msg = LayeredPromptBuilder::system_reminder("The time is 3pm.");
-        if let Message::User { content } = &msg {
-            if let UserContent::Text(t) = content.first_ref() {
-                assert!(t.text.starts_with("<system-reminder>"));
-                assert!(t.text.ends_with("</system-reminder>"));
-                assert!(t.text.contains("The time is 3pm."));
-            } else {
-                panic!("expected text");
-            }
-        } else {
-            panic!("expected user message");
-        }
-    }
-
-    #[test]
-    fn message_budget_accounts_for_preamble_and_output() {
-        let config = DaemonConfig {
-            system_prompt: "x".repeat(4000), // ~1000 tokens
-            context_window: 10000,
-            max_output_tokens: 2000,
-            ..Default::default()
-        };
-        let builder = LayeredPromptBuilder::new(&config);
-
-        // Budget should be context_window - preamble_tokens - output_tokens
-        let budget = builder.message_budget();
-        assert!(budget < 10000);
-        assert!(budget > 5000); // rough check
-    }
-
-    #[test]
-    fn would_exceed_budget_short_messages() {
-        let config = DaemonConfig {
-            system_prompt: "Be helpful.".to_string(),
-            context_window: 100000,
-            max_output_tokens: 8192,
-            ..Default::default()
-        };
-        let builder = LayeredPromptBuilder::new(&config);
-
-        let messages = vec![user_msg("hi")];
-        assert!(!builder.would_exceed_budget(&messages));
-    }
-
-    #[test]
-    fn would_exceed_budget_long_messages() {
-        let config = DaemonConfig {
-            system_prompt: "Be helpful.".to_string(),
-            context_window: 100,
-            max_output_tokens: 50,
-            ..Default::default()
-        };
-        let builder = LayeredPromptBuilder::new(&config);
-
-        let big = user_msg(&"x".repeat(10000));
-        assert!(builder.would_exceed_budget(&[big]));
-    }
-}
+mod tests;

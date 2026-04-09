@@ -1,0 +1,12 @@
+type ToolSelection {
+    selection_id: String @index(unique: true)
+    agent_did: String @index
+    display_name: String
+    enable_file_tools: Boolean
+    file_tools_mode: String
+    enable_bash: Boolean
+    bash_mode: String
+    cli_tool_names: [String]
+    enable_meta_tools: Boolean
+    delegate_to: [String]
+}

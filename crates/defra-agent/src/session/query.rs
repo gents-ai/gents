@@ -28,6 +28,7 @@ pub(super) async fn load_session_document_optional(
                 limit: 1
             ) {{
                 _docID
+                behavior_id
                 started
             }}
         }}"#
@@ -51,6 +52,20 @@ pub(super) async fn load_session_document_optional(
     Ok(rows.pop())
 }
 
+pub(crate) async fn load_session_behavior_id(
+    node: &EmbeddedNode,
+    session_id: &str,
+) -> Result<Option<String>> {
+    Ok(load_session_document_optional(node, session_id)
+        .await?
+        .and_then(|session| {
+            session.behavior_id.and_then(|behavior_id| {
+                let trimmed = behavior_id.trim().to_string();
+                (!trimmed.is_empty()).then_some(trimmed)
+            })
+        }))
+}
+
 pub(super) async fn load_conversation_document(
     node: &EmbeddedNode,
     session_id: &str,
@@ -69,6 +84,7 @@ pub(super) async fn load_conversation_document(
                 preview_text
                 status
                 latest_request_id
+                behavior_id
                 created_at
             }}
         }}"#

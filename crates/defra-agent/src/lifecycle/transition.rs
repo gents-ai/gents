@@ -82,11 +82,12 @@ impl RequestLifecycle {
             .await?
         {
             RequestStatusTransition::Updated | RequestStatusTransition::AlreadyTarget => {
-                match session::update_conversation_status_if_latest_with_did(
+                match session::update_conversation_status_if_latest_with_identity(
                     &self.node,
                     &self.request.session_id,
                     &self.agent_name,
                     &self.agent_did,
+                    &self.behavior_id,
                     &self.request.request_id,
                     "completed",
                 )
@@ -155,11 +156,12 @@ impl RequestLifecycle {
             .await?
         {
             RequestStatusTransition::Updated | RequestStatusTransition::AlreadyTarget => {
-                match session::update_conversation_status_if_latest_with_did(
+                match session::update_conversation_status_if_latest_with_identity(
                     &self.node,
                     &self.request.session_id,
                     &self.agent_name,
                     &self.agent_did,
+                    &self.behavior_id,
                     &self.request.request_id,
                     "active",
                 )
@@ -214,6 +216,7 @@ impl RequestLifecycle {
                         status: "{target_status}",
                         lifecycle_state: "{target_lifecycle_state}",
                         admission_state: "{target_admission_state}",
+                        behavior_id: "{behavior_id}",
                         backend_id: "{backend_id}",
                         execution_origin: "{execution_origin}"
                     }}
@@ -221,6 +224,7 @@ impl RequestLifecycle {
             }}"#,
             target_lifecycle_state = target_lifecycle_state.as_str(),
             target_admission_state = target_admission_state.as_str(),
+            behavior_id = escape_graphql_string(&self.behavior_id),
             backend_id = escape_graphql_string(&self.backend_id),
             execution_origin = self.execution_origin.as_str(),
         );
@@ -294,6 +298,7 @@ impl RequestLifecycle {
                         status: "{target_status}",
                         lifecycle_state: "{target_lifecycle_state}",
                         admission_state: "{target_admission_state}",
+                        behavior_id: "{behavior_id}",
                         backend_id: "{backend_id}",
                         execution_origin: "{execution_origin}"
                     }}
@@ -303,6 +308,7 @@ impl RequestLifecycle {
             from_admission_state = from_admission_state.as_str(),
             target_lifecycle_state = target_lifecycle_state.as_str(),
             target_admission_state = target_admission_state.as_str(),
+            behavior_id = escape_graphql_string(&self.behavior_id),
             backend_id = escape_graphql_string(&self.backend_id),
             execution_origin = self.execution_origin.as_str(),
         );
@@ -359,7 +365,11 @@ impl RequestLifecycle {
         }
     }
 
-    pub(super) fn ensure_state(&self, expected: &[LocalLifecycleState], action: &str) -> Result<()> {
+    pub(super) fn ensure_state(
+        &self,
+        expected: &[LocalLifecycleState],
+        action: &str,
+    ) -> Result<()> {
         if expected.contains(&self.state) {
             return Ok(());
         }
@@ -372,7 +382,10 @@ impl RequestLifecycle {
         )
     }
 
-    pub(super) async fn suppress_later_pending_duplicates(&self, duplicates: &[DedupRow]) -> Result<()> {
+    pub(super) async fn suppress_later_pending_duplicates(
+        &self,
+        duplicates: &[DedupRow],
+    ) -> Result<()> {
         let superseded_by_request = escape_graphql_string(&self.request.request_id);
         for duplicate in duplicates {
             let mutation = format!(
@@ -387,6 +400,7 @@ impl RequestLifecycle {
                             lifecycle_state: "{lifecycle_state}",
                             admission_state: "{admission_state}",
                             superseded_by_request: "{superseded_by_request}",
+                            behavior_id: "{behavior_id}",
                             backend_id: "{backend_id}",
                             execution_origin: "{execution_origin}"
                         }}
@@ -396,6 +410,7 @@ impl RequestLifecycle {
                 lifecycle_state = PersistedLifecycleState::Superseded.as_str(),
                 admission_state = PersistedAdmissionState::Released.as_str(),
                 superseded_by_request = superseded_by_request,
+                behavior_id = escape_graphql_string(&self.behavior_id),
                 backend_id = escape_graphql_string(&self.backend_id),
                 execution_origin = self.execution_origin.as_str(),
             );
@@ -445,6 +460,7 @@ impl RequestLifecycle {
                         lifecycle_state: "{lifecycle_state}",
                         admission_state: "{admission_state}",
                         superseded_by_request: "{superseded_by_request}",
+                        behavior_id: "{behavior_id}",
                         backend_id: "{backend_id}",
                         execution_origin: "{execution_origin}"
                     }}
@@ -454,6 +470,7 @@ impl RequestLifecycle {
             lifecycle_state = PersistedLifecycleState::Superseded.as_str(),
             admission_state = PersistedAdmissionState::Released.as_str(),
             superseded_by_request = superseded_by_request,
+            behavior_id = escape_graphql_string(&self.behavior_id),
             backend_id = escape_graphql_string(&self.backend_id),
             execution_origin = self.execution_origin.as_str(),
         );

@@ -110,7 +110,10 @@ async fn finalize_removes_buffer_after_successful_mutation() {
         Duration::from_secs(60),
     );
     let request_id = uuid::Uuid::new_v4().to_string();
-    let doc_id = writer.begin("session-1", &request_id).await.unwrap();
+    let doc_id = writer
+        .begin("session-1", &request_id, "general")
+        .await
+        .unwrap();
 
     writer.write_tokens(&doc_id, "tail content").await.unwrap();
     let result = writer
@@ -181,7 +184,10 @@ async fn finalize_without_buffer_uses_fallback_mutation() {
         Duration::from_secs(60),
     );
     let request_id = uuid::Uuid::new_v4().to_string();
-    let doc_id = writer.begin("session-1", &request_id).await.unwrap();
+    let doc_id = writer
+        .begin("session-1", &request_id, "general")
+        .await
+        .unwrap();
 
     writer.buffers.lock().await.remove(&doc_id);
 
@@ -191,7 +197,10 @@ async fn finalize_without_buffer_uses_fallback_mutation() {
     assert_eq!(result.token_count, 0);
 
     let row = load_response(&node, &doc_id).await;
-    assert_eq!(row.get("content").and_then(|value| value.as_str()), Some(""));
+    assert_eq!(
+        row.get("content").and_then(|value| value.as_str()),
+        Some("")
+    );
     assert_eq!(
         row.get("status").and_then(|value| value.as_str()),
         Some("error")
@@ -242,7 +251,10 @@ async fn finalize_rejects_conflicting_terminal_state() {
         Duration::from_secs(60),
     );
     let request_id = uuid::Uuid::new_v4().to_string();
-    let doc_id = writer.begin("session-1", &request_id).await.unwrap();
+    let doc_id = writer
+        .begin("session-1", &request_id, "general")
+        .await
+        .unwrap();
 
     writer.write_tokens(&doc_id, "final answer").await.unwrap();
     writer
@@ -275,10 +287,16 @@ async fn begin_rejects_existing_response_document() {
     );
     let request_id = uuid::Uuid::new_v4().to_string();
 
-    let doc_id = writer.begin("session-1", &request_id).await.unwrap();
+    let doc_id = writer
+        .begin("session-1", &request_id, "general")
+        .await
+        .unwrap();
     writer.finalize(&doc_id, StreamStatus::Error).await.unwrap();
 
-    let error = writer.begin("session-1", &request_id).await.unwrap_err();
+    let error = writer
+        .begin("session-1", &request_id, "general")
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("already exists"));
 
     let _ = fs::remove_dir_all(&data_path);

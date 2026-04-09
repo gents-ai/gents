@@ -1,0 +1,14 @@
+type AgentRuntime @branchable {
+    agent_did: String @index(unique: true)
+    process_state: String @index
+    reconcile_phase: String @index
+    active_generation: Int
+    router_generation: Int
+    default_behavior_id: String @index
+    runnable_behavior_count: Int
+    unavailable_behavior_count: Int
+    last_reconcile_result: String @index
+    last_reconcile_error: String
+    last_reconcile_completed_at: String @index
+    updated_at: String @index(direction: DESC)
+}

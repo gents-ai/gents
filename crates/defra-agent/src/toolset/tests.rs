@@ -16,7 +16,9 @@ use crate::lifecycle::DEFAULT_REQUEST_MAX_RETRIES;
 fn toolset_presets_have_expected_counts() {
     assert_eq!(ToolSet::readonly().native_tools().len(), 5);
     assert_eq!(
-        ToolSet::readwrite(std::env::temp_dir()).native_tools().len(),
+        ToolSet::readwrite(std::env::temp_dir())
+            .native_tools()
+            .len(),
         8
     );
     assert_eq!(ToolSet::meta_only().native_tools().len(), 0);
@@ -88,21 +90,22 @@ async fn write_and_edit_file_work_under_root() {
 
 #[test]
 fn read_only_bash_rejects_write_commands() {
-    assert!(
-        validate_read_only_command(
-            "git",
-            &[String::from("commit")],
-            &default_read_only_commands()
-        )
-        .is_err()
-    );
+    assert!(validate_read_only_command(
+        "git",
+        &[String::from("commit")],
+        &default_read_only_commands()
+    )
+    .is_err());
 }
 
 #[tokio::test]
 async fn delegate_to_agent_round_trip_waits_for_response() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     ensure_schemas(node.as_ref()).await.unwrap();
-    let tool = super::delegate::DelegateToAgentTool::new(node.clone());
+    let tool = super::delegate::DelegateToAgentTool::new(
+        node.clone(),
+        vec!["did:defra-agent:amy-code".to_string()],
+    );
 
     let call = tokio::spawn(async move {
         rig::tool::Tool::call(
@@ -193,4 +196,41 @@ async fn delegate_to_agent_round_trip_waits_for_response() {
 
     let result = call.await.unwrap();
     assert_eq!(result, "delegated result");
+}
+
+#[tokio::test]
+async fn delegate_to_agent_rejects_target_outside_allowlist() {
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    ensure_schemas(node.as_ref()).await.unwrap();
+    let tool = super::delegate::DelegateToAgentTool::new(
+        node.clone(),
+        vec!["did:defra-agent:allowed".to_string()],
+    );
+
+    let error = rig::tool::Tool::call(
+        &tool,
+        DelegateToAgentArgs {
+            target_did: "did:defra-agent:blocked".to_string(),
+            content: "Write a test".to_string(),
+            wait: false,
+        },
+    )
+    .await
+    .expect_err("delegate_to_agent should reject blocked targets");
+    assert!(error
+        .to_string()
+        .contains("is not in the allowed delegation set"));
+
+    let resp = node
+        .execute(r#"{ AgentRequest(limit: 1) { request_id } }"#)
+        .await;
+    assert!(!resp.has_errors(), "{:?}", resp.errors);
+    let rows = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(rows.is_empty(), "blocked delegation wrote an AgentRequest");
 }

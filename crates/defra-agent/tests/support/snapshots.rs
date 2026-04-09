@@ -9,6 +9,7 @@ struct RequestSnapshotRow {
     status: String,
     lifecycle_state: String,
     admission_state: String,
+    behavior_id: String,
     backend_id: String,
     execution_origin: String,
     retry_parent_request: String,
@@ -25,6 +26,7 @@ pub struct RequestSnapshot {
     pub status: String,
     pub lifecycle_state: String,
     pub admission_state: String,
+    pub behavior_id: String,
     pub backend_id: String,
     pub execution_origin: String,
     pub retry_parent_request: String,
@@ -42,6 +44,7 @@ impl From<RequestSnapshotRow> for RequestSnapshot {
             status: row.status,
             lifecycle_state: row.lifecycle_state,
             admission_state: row.admission_state,
+            behavior_id: row.behavior_id,
             backend_id: row.backend_id,
             execution_origin: row.execution_origin,
             retry_parent_request: row.retry_parent_request,
@@ -53,7 +56,10 @@ impl From<RequestSnapshotRow> for RequestSnapshot {
                 .claimed_at
                 .as_deref()
                 .is_some_and(|value| !value.is_empty()),
-            deadline_present: row.deadline.as_deref().is_some_and(|value| !value.is_empty()),
+            deadline_present: row
+                .deadline
+                .as_deref()
+                .is_some_and(|value| !value.is_empty()),
         }
     }
 }
@@ -61,18 +67,21 @@ impl From<RequestSnapshotRow> for RequestSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ConversationSnapshot {
     pub latest_request_id: String,
+    pub behavior_id: String,
     pub status: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SessionSnapshot {
     pub session_id: String,
+    pub behavior_id: String,
     pub status: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct ResponseSnapshotRow {
     status: String,
+    behavior_id: String,
     progress_seq: i64,
     completed_at: Option<String>,
 }
@@ -80,6 +89,7 @@ struct ResponseSnapshotRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResponseSnapshot {
     pub status: String,
+    pub behavior_id: String,
     pub progress_seq: i64,
     pub completed_at_present: bool,
 }
@@ -88,6 +98,7 @@ impl From<ResponseSnapshotRow> for ResponseSnapshot {
     fn from(row: ResponseSnapshotRow) -> Self {
         Self {
             status: row.status,
+            behavior_id: row.behavior_id,
             progress_seq: row.progress_seq,
             completed_at_present: row
                 .completed_at
@@ -95,6 +106,19 @@ impl From<ResponseSnapshotRow> for ResponseSnapshot {
                 .is_some_and(|value| !value.is_empty()),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct RuntimeSnapshot {
+    pub process_state: String,
+    pub reconcile_phase: String,
+    pub active_generation: i64,
+    pub router_generation: i64,
+    pub default_behavior_id: String,
+    pub runnable_behavior_count: i64,
+    pub unavailable_behavior_count: i64,
+    pub last_reconcile_result: String,
+    pub last_reconcile_error: String,
 }
 
 pub async fn fetch_request_snapshot(node: &EmbeddedNode, doc_id: &str) -> RequestSnapshot {
@@ -108,6 +132,7 @@ pub async fn fetch_request_snapshot(node: &EmbeddedNode, doc_id: &str) -> Reques
                 status
                 lifecycle_state
                 admission_state
+                behavior_id
                 backend_id
                 execution_origin
                 retry_parent_request
@@ -136,6 +161,7 @@ pub async fn fetch_conversation_snapshot(
                 limit: 1
             ) {{
                 latest_request_id
+                behavior_id
                 status
             }}
         }}"#
@@ -156,6 +182,7 @@ pub async fn fetch_session_snapshot(
                 limit: 1
             ) {{
                 session_id
+                behavior_id
                 status
             }}
         }}"#
@@ -173,6 +200,7 @@ pub async fn fetch_response_snapshot(node: &EmbeddedNode, doc_id: &str) -> Respo
                 limit: 1
             ) {{
                 status
+                behavior_id
                 progress_seq
                 completed_at
             }}
@@ -180,4 +208,31 @@ pub async fn fetch_response_snapshot(node: &EmbeddedNode, doc_id: &str) -> Respo
     );
     let resp = node.execute(&query).await;
     first_row::<ResponseSnapshotRow>(&resp, "AgentResponse").into()
+}
+
+pub async fn fetch_runtime_snapshot(
+    node: &EmbeddedNode,
+    agent_did: &str,
+) -> Option<RuntimeSnapshot> {
+    let agent_did = escape_graphql_string(agent_did);
+    let query = format!(
+        r#"{{
+            AgentRuntime(
+                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                limit: 1
+            ) {{
+                process_state
+                reconcile_phase
+                active_generation
+                router_generation
+                default_behavior_id
+                runnable_behavior_count
+                unavailable_behavior_count
+                last_reconcile_result
+                last_reconcile_error
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    first_optional_row::<RuntimeSnapshot>(&resp, "AgentRuntime")
 }

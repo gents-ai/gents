@@ -13,16 +13,29 @@ pub(crate) async fn create_session_with_id(
     session_id: &str,
     agent_name: &str,
 ) -> Result<()> {
+    create_session_with_behavior_id(node, session_id, agent_name, agent_name).await
+}
+
+pub(crate) async fn create_session_with_behavior_id(
+    node: &EmbeddedNode,
+    session_id: &str,
+    agent_name: &str,
+    behavior_id: &str,
+) -> Result<()> {
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_name = escape_graphql_string(agent_name);
 
     retry_operation("create_session", || async {
         let now = chrono::Utc::now().to_rfc3339();
-        let started = match load_session_document_optional(node, session_id).await? {
-            Some(session) => session.started,
-            None => now.clone(),
-        };
+        let existing = load_session_document_optional(node, session_id).await?;
+        let started = existing
+            .as_ref()
+            .map(|session| session.started.clone())
+            .unwrap_or_else(|| now.clone());
+        let resolved_behavior_id =
+            resolve_behavior_id(existing.as_ref(), behavior_id, "AgentSession")?;
         let escaped_started = escape_graphql_string(&started);
+        let escaped_behavior_id = escape_graphql_string(&resolved_behavior_id);
 
         let mutation = format!(
             r#"mutation {{
@@ -31,11 +44,13 @@ pub(crate) async fn create_session_with_id(
                     add: {{
                         session_id: "{escaped_session_id}",
                         agent_name: "{escaped_agent_name}",
+                        behavior_id: "{escaped_behavior_id}",
                         started: "{escaped_started}",
                         status: "active"
                     }},
                     update: {{
                         agent_name: "{escaped_agent_name}",
+                        behavior_id: "{escaped_behavior_id}",
                         started: "{escaped_started}",
                         status: "active"
                     }}
@@ -55,7 +70,12 @@ pub(crate) async fn create_session_with_id(
     })
     .await?;
 
-    tracing::info!(session_id = %session_id, agent = %agent_name, "session created");
+    tracing::info!(
+        session_id = %session_id,
+        agent = %agent_name,
+        behavior_id = %behavior_id,
+        "session created"
+    );
     Ok(())
 }
 
@@ -64,39 +84,16 @@ pub(crate) async fn ensure_session(
     session_id: &str,
     agent_name: &str,
 ) -> Result<()> {
-    if session_exists(node, session_id).await? {
-        return Ok(());
-    }
-
-    create_session_with_id(node, session_id, agent_name).await
+    ensure_session_with_behavior_id(node, session_id, agent_name, agent_name).await
 }
 
-pub(crate) async fn session_exists(node: &EmbeddedNode, session_id: &str) -> Result<bool> {
-    let escaped_session_id = escape_graphql_string(session_id);
-    let query = format!(
-        r#"{{
-            AgentSession(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
-                limit: 1
-            ) {{ _docID }}
-        }}"#
-    );
-
-    let resp = execute_query_timed(node, &query, "session_exists").await;
-    if resp.has_errors() {
-        anyhow::bail!(
-            "checking session existence for session_id={}: {:?}",
-            session_id,
-            resp.errors
-        );
-    }
-
-    Ok(resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentSession"))
-        .and_then(|value| value.as_array())
-        .is_some_and(|sessions| !sessions.is_empty()))
+pub(crate) async fn ensure_session_with_behavior_id(
+    node: &EmbeddedNode,
+    session_id: &str,
+    agent_name: &str,
+    behavior_id: &str,
+) -> Result<()> {
+    create_session_with_behavior_id(node, session_id, agent_name, behavior_id).await
 }
 
 pub(crate) async fn max_sequence(node: &EmbeddedNode, session_id: &str) -> Result<u32> {
@@ -165,4 +162,30 @@ pub async fn close_session(node: &EmbeddedNode, session_id: &str) -> Result<()> 
 
     tracing::info!(session_id = %session_id, "session closed");
     Ok(())
+}
+
+fn resolve_behavior_id(
+    existing: Option<&super::rows::SessionDocument>,
+    requested_behavior_id: &str,
+    collection_name: &str,
+) -> Result<String> {
+    let existing_behavior_id =
+        existing.and_then(|session| normalize_optional_string(session.behavior_id.as_deref()));
+    let requested_behavior_id = normalize_optional_string(Some(requested_behavior_id));
+
+    match (existing_behavior_id, requested_behavior_id) {
+        (Some(existing), Some(requested)) if existing != requested => anyhow::bail!(
+            "{collection_name} session behavior mismatch: existing={existing} requested={requested}"
+        ),
+        (Some(existing), _) => Ok(existing.to_string()),
+        (None, Some(requested)) => Ok(requested.to_string()),
+        (None, None) => Ok(String::new()),
+    }
+}
+
+fn normalize_optional_string(value: Option<&str>) -> Option<&str> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then_some(trimmed)
+    })
 }

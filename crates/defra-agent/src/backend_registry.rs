@@ -1,6 +1,6 @@
 //! Backend registry — DefraDB lookups and local concurrency tracking.
 //!
-//! The scheduler uses this to resolve a profile's backend, check health,
+//! The scheduler uses this to resolve a behavior's backend, check health,
 //! and enforce `max_concurrent` limits. Concurrency is tracked locally
 //! in memory (sufficient for single agent-daemon instance). Acquired
 //! capacity is represented by an owned permit so release happens on all
@@ -19,6 +19,7 @@ use crate::graphql::escape_graphql_string;
 pub struct InferenceBackend {
     pub backend_id: String,
     pub name: String,
+    /// OpenAI-compatible API base URL, including the `/v1` path segment.
     pub endpoint: String,
     pub max_concurrent: i64,
     pub enabled: bool,
@@ -137,9 +138,18 @@ pub async fn lookup_backend(
     node: &EmbeddedNode,
     backend_id: &str,
 ) -> Result<Option<InferenceBackend>> {
+    Ok(lookup_backend_record(node, backend_id)
+        .await?
+        .map(|(_, backend)| backend))
+}
+
+pub(crate) async fn lookup_backend_record(
+    node: &EmbeddedNode,
+    backend_id: &str,
+) -> Result<Option<(String, InferenceBackend)>> {
     let escaped_id = escape_graphql_string(backend_id);
     let query = format!(
-        r#"query {{ InferenceBackend(filter: {{backend_id: {{_eq: "{}"}}}}) {{ backend_id name endpoint max_concurrent enabled probe_status }} }}"#,
+        r#"query {{ InferenceBackend(filter: {{backend_id: {{_eq: "{}"}}}}) {{ _docID backend_id name endpoint max_concurrent enabled probe_status }} }}"#,
         escaped_id
     );
 
@@ -154,9 +164,85 @@ pub async fn lookup_backend(
         .and_then(|d| d.get("InferenceBackend"))
         .and_then(|v| v.as_array())
         .and_then(|arr| arr.first())
-        .and_then(InferenceBackend::from_value);
+        .and_then(|row| {
+            Some((
+                row.get("_docID")?.as_str()?.to_string(),
+                InferenceBackend::from_value(row)?,
+            ))
+        });
 
     Ok(backend)
+}
+
+pub(crate) async fn lookup_backend_by_doc_id(
+    node: &EmbeddedNode,
+    doc_id: &str,
+) -> Result<Option<(String, InferenceBackend)>> {
+    let escaped_id = escape_graphql_string(doc_id);
+    let query = format!(
+        r#"query {{ InferenceBackend(filter: {{_docID: {{_eq: "{}"}}}}, limit: 1) {{ _docID backend_id name endpoint max_concurrent enabled probe_status }} }}"#,
+        escaped_id
+    );
+
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        anyhow::bail!("query InferenceBackend by _docID failed: {:?}", resp.errors);
+    }
+
+    let backend = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("InferenceBackend"))
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|row| {
+            Some((
+                row.get("_docID")?.as_str()?.to_string(),
+                InferenceBackend::from_value(row)?,
+            ))
+        });
+
+    Ok(backend)
+}
+
+pub(crate) async fn list_backend_records(
+    node: &EmbeddedNode,
+) -> Result<Vec<(String, InferenceBackend)>> {
+    let query = r#"query {
+        InferenceBackend(order: { backend_id: ASC }) {
+            _docID
+            backend_id
+            name
+            endpoint
+            max_concurrent
+            enabled
+            probe_status
+        }
+    }"#;
+
+    let resp = node.execute(query).await;
+    if resp.has_errors() {
+        anyhow::bail!("list InferenceBackend failed: {:?}", resp.errors);
+    }
+
+    let backends = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("InferenceBackend"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|row| {
+                    Some((
+                        row.get("_docID")?.as_str()?.to_string(),
+                        InferenceBackend::from_value(row)?,
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(backends)
 }
 
 /// Query all enabled backends from DefraDB.
@@ -184,107 +270,4 @@ pub async fn list_enabled_backends(node: &EmbeddedNode) -> Result<Vec<InferenceB
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn inference_backend_from_value_parses() {
-        let json = serde_json::json!({
-            "backend_id": "workstation-dual",
-            "name": "Workstation Dual GPU",
-            "endpoint": "http://100.73.235.38:8000",
-            "max_concurrent": 4,
-            "enabled": true,
-            "probe_status": "healthy",
-        });
-
-        let backend = InferenceBackend::from_value(&json).expect("should parse");
-        assert_eq!(backend.backend_id, "workstation-dual");
-        assert_eq!(backend.endpoint, "http://100.73.235.38:8000");
-        assert_eq!(backend.max_concurrent, 4);
-        assert!(backend.enabled);
-        assert_eq!(backend.probe_status, "healthy");
-    }
-
-    #[test]
-    fn inference_backend_from_value_missing_probe_status_defaults() {
-        let json = serde_json::json!({
-            "backend_id": "test",
-            "name": "Test",
-            "endpoint": "http://localhost:8000",
-            "max_concurrent": 1,
-            "enabled": true,
-        });
-
-        let backend = InferenceBackend::from_value(&json).expect("should parse");
-        assert_eq!(backend.probe_status, "unknown");
-    }
-
-    #[test]
-    fn is_available_requires_enabled_and_healthy() {
-        let healthy = InferenceBackend {
-            backend_id: "test".into(),
-            name: "Test".into(),
-            endpoint: "http://localhost:8000".into(),
-            max_concurrent: 1,
-            enabled: true,
-            probe_status: "healthy".into(),
-        };
-        assert!(healthy.is_available());
-
-        let disabled = InferenceBackend {
-            enabled: false,
-            ..healthy.clone()
-        };
-        assert!(!disabled.is_available());
-
-        let unhealthy = InferenceBackend {
-            probe_status: "unhealthy".into(),
-            ..healthy.clone()
-        };
-        assert!(!unhealthy.is_available());
-    }
-
-    #[test]
-    fn try_acquire_respects_capacity() {
-        let tracker = BackendTracker::new();
-
-        assert_eq!(tracker.running_count("b1"), 0);
-        assert!(tracker.try_acquire("b1", 2));
-        assert_eq!(tracker.running_count("b1"), 1);
-
-        assert!(tracker.try_acquire("b1", 2));
-        assert_eq!(tracker.running_count("b1"), 2);
-
-        // At capacity — should fail
-        assert!(!tracker.try_acquire("b1", 2));
-        assert_eq!(tracker.running_count("b1"), 2);
-
-        tracker.release("b1");
-        assert_eq!(tracker.running_count("b1"), 1);
-
-        // Has capacity again
-        assert!(tracker.try_acquire("b1", 2));
-    }
-
-    #[test]
-    fn release_floors_at_zero() {
-        let tracker = BackendTracker::new();
-        tracker.release("nonexistent");
-        assert_eq!(tracker.running_count("nonexistent"), 0);
-    }
-
-    #[test]
-    fn backend_permit_releases_on_drop() {
-        let tracker = Arc::new(BackendTracker::new());
-
-        {
-            let _permit = tracker
-                .try_acquire_permit("b1", 1)
-                .expect("permit should be acquired");
-            assert_eq!(tracker.running_count("b1"), 1);
-        }
-
-        assert_eq!(tracker.running_count("b1"), 0);
-    }
-}
+mod tests;

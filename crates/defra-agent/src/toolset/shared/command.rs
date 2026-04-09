@@ -51,8 +51,16 @@ pub(crate) async fn run_command(
         context.display_path(&cwd),
         command_line,
         exit_code,
-        if stdout.is_empty() { "(empty)" } else { &stdout },
-        if stderr.is_empty() { "(empty)" } else { &stderr },
+        if stdout.is_empty() {
+            "(empty)"
+        } else {
+            &stdout
+        },
+        if stderr.is_empty() {
+            "(empty)"
+        } else {
+            &stderr
+        },
     ))
 }
 
@@ -105,9 +113,7 @@ fn validate_git_args(args: &[String]) -> Result<()> {
         .ok_or_else(|| anyhow!("git requires a read-only subcommand"))?;
 
     match subcommand {
-        "status" | "diff" | "show" | "log" | "ls-files" | "grep" | "branch" | "rev-parse" => {
-            Ok(())
-        }
+        "status" | "diff" | "show" | "log" | "ls-files" | "grep" | "branch" | "rev-parse" => Ok(()),
         other => bail!("git subcommand is not allowed by the read-only bash tool: {other}"),
     }
 }

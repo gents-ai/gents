@@ -1,6 +1,7 @@
 type InferenceBackend {
     backend_id: String @index(unique: true)
     name: String @index
+    # OpenAI-compatible API base URL, including the /v1 path segment.
     endpoint: String
     max_concurrent: Int
     enabled: Boolean @index

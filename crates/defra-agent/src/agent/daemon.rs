@@ -4,6 +4,7 @@ use std::time::Duration;
 use anyhow::Result;
 use rig::agent::Agent;
 use rig::completion::CompletionModel;
+use tokio::sync::{mpsc, Mutex};
 
 mod inference;
 mod request;
@@ -11,19 +12,18 @@ mod request;
 use super::runtime::StartupBarrier;
 use crate::backend_registry::BackendTracker;
 use crate::compaction::{CompactionOptions, DefraCompactor};
-use crate::config::ProfileConfig;
+use crate::config::BehaviorConfig;
 use crate::hook::FailurePolicy;
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::prompt::LayeredPromptBuilder;
 use crate::retry::RetryPolicy;
 use crate::streaming::DefraStreamWriter;
-use crate::watcher::{DefraWatcher, Watcher};
+use crate::watcher::AgentRequest;
 
-pub(super) struct ProfileDaemon<M: CompletionModel> {
+pub(super) struct BehaviorDaemon<M: CompletionModel> {
     node: Arc<defra_node::EmbeddedNode>,
-    profile: Arc<ProfileConfig>,
+    behavior: Arc<BehaviorConfig>,
     agent: Agent<M>,
-    watcher: DefraWatcher,
     backend_tracker: Arc<BackendTracker>,
     prompt_builder: LayeredPromptBuilder,
     stream_writer: DefraStreamWriter,
@@ -39,35 +39,33 @@ enum HandleRequestOutcome {
     FailedAfterResponse(anyhow::Error),
 }
 
-impl<M: CompletionModel + 'static> ProfileDaemon<M> {
+impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
     pub(super) fn new(
         node: Arc<defra_node::EmbeddedNode>,
-        profile: Arc<ProfileConfig>,
+        behavior: Arc<BehaviorConfig>,
         agent: Agent<M>,
+        prompt_builder: LayeredPromptBuilder,
         backend_tracker: Arc<BackendTracker>,
         retry_policy: RetryPolicy,
         hook_failure_policy: FailurePolicy,
         startup_barrier: Arc<StartupBarrier>,
     ) -> Self {
-        let watcher = DefraWatcher::new(node.clone(), profile.did());
-        let prompt_builder = LayeredPromptBuilder::from_profile(profile.as_ref());
         let stream_writer = DefraStreamWriter::new(
             node.clone(),
-            profile.did(),
-            Duration::from_millis(profile.stream_batch_ms),
+            behavior.did(),
+            Duration::from_millis(behavior.stream_batch_ms),
         );
         let compactor = DefraCompactor::new(agent.clone());
         let compaction_options = CompactionOptions {
-            threshold: profile.compaction_threshold,
-            strategy: profile.compaction_strategy.clone(),
+            threshold: behavior.compaction_threshold,
+            strategy: behavior.compaction_strategy.clone(),
             ..Default::default()
         };
 
         Self {
             node,
-            profile,
+            behavior,
             agent,
-            watcher,
             backend_tracker,
             prompt_builder,
             stream_writer,
@@ -81,40 +79,24 @@ impl<M: CompletionModel + 'static> ProfileDaemon<M> {
 
     pub(super) async fn run(
         &mut self,
+        request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> Result<()> {
         tracing::info!(
-            profile = %self.profile.name,
-            did = %self.profile.did(),
-            model = %self.profile.model_name,
-            context_window = self.profile.context_window,
-            "defra-agent profile started"
+            behavior_id = %self.behavior.name,
+            did = %self.behavior.did(),
+            model = %self.behavior.model_name,
+            context_window = self.behavior.context_window,
+            "defra-agent behavior started"
         );
 
-        match RequestLifecycle::recover_all(&self.node, self.profile.did()).await {
-            Ok(report) => {
-                if report.requests_recovered > 0 {
-                    tracing::info!(profile = %self.profile.name, count = report.requests_recovered, "recovered stuck requests");
-                }
-                if report.responses_recovered > 0 {
-                    tracing::info!(profile = %self.profile.name, count = report.responses_recovered, "recovered stuck responses");
-                }
-                if report.conversations_recovered > 0 {
-                    tracing::info!(profile = %self.profile.name, count = report.conversations_recovered, "recovered stuck conversations");
-                }
-            }
-            Err(error) => {
-                tracing::warn!(profile = %self.profile.name, error = %error, "startup recovery failed");
-            }
-        }
-
         self.startup_barrier
-            .mark_profile_ready(&self.profile.name)
+            .mark_behavior_ready(&self.behavior.name)
             .await;
         tracing::info!(
-            profile = %self.profile.name,
-            did = %self.profile.did(),
-            "defra-agent profile ready"
+            behavior_id = %self.behavior.name,
+            did = %self.behavior.did(),
+            "defra-agent behavior ready"
         );
 
         loop {
@@ -122,17 +104,16 @@ impl<M: CompletionModel + 'static> ProfileDaemon<M> {
                 biased;
 
                 _ = shutdown.changed() => {
-                    tracing::info!(profile = %self.profile.name, "shutdown signal received");
+                    tracing::info!(behavior_id = %self.behavior.name, "shutdown signal received");
                     return Ok(());
                 }
 
-                req = self.watcher.next_request() => {
+                req = async {
+                    let mut receiver = request_rx.lock().await;
+                    receiver.recv().await
+                } => {
                     match req {
-                        Some(Ok(req)) => req,
-                        Some(Err(error)) => {
-                            tracing::error!(profile = %self.profile.name, error = %error, "watcher error, retrying");
-                            continue;
-                        }
+                        Some(req) => req,
                         None => return Ok(()),
                     }
                 }
@@ -140,19 +121,19 @@ impl<M: CompletionModel + 'static> ProfileDaemon<M> {
 
             let mut lifecycle = RequestLifecycle::new_with_execution_binding(
                 self.node.clone(),
-                &self.profile.name,
-                self.profile.did(),
+                &self.behavior.name,
+                self.behavior.did(),
                 request.clone(),
-                self.profile.deadline_duration.as_secs(),
+                self.behavior.deadline_duration.as_secs(),
                 crate::lifecycle::ExecutionOrigin::Interactive,
-                self.profile.backend_id.clone().unwrap_or_default(),
+                self.behavior.backend_id.clone().unwrap_or_default(),
             );
 
             match lifecycle.claim_with_identity().await {
                 Ok(ClaimOutcome::Claimed) => {}
                 Ok(ClaimOutcome::Superseded) => {
                     tracing::info!(
-                        profile = %self.profile.name,
+                        behavior_id = %self.behavior.name,
                         request_id = %request.request_id,
                         session_id = %request.session_id,
                         "request superseded by an earlier non-terminal request"
@@ -161,7 +142,7 @@ impl<M: CompletionModel + 'static> ProfileDaemon<M> {
                 }
                 Err(error) => {
                     tracing::warn!(
-                        profile = %self.profile.name,
+                        behavior_id = %self.behavior.name,
                         request_id = %request.request_id,
                         error = %error,
                         "failed to claim request"
@@ -170,13 +151,74 @@ impl<M: CompletionModel + 'static> ProfileDaemon<M> {
                 }
             }
 
+            if let Some(requested_behavior_id) = request
+                .behavior_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|behavior_id| !behavior_id.is_empty())
+            {
+                if requested_behavior_id != self.behavior.name {
+                    let error = anyhow::anyhow!(
+                        "request targets behavior {} but runtime is serving behavior {}",
+                        requested_behavior_id,
+                        self.behavior.name
+                    );
+                    tracing::warn!(
+                        behavior_id = %self.behavior.name,
+                        request_id = %request.request_id,
+                        session_id = %request.session_id,
+                        requested_behavior_id = %requested_behavior_id,
+                        "rejecting request for unroutable behavior"
+                    );
+                    let _ = lifecycle.fail().await;
+                    if !lifecycle.response_exists().await.unwrap_or(false) {
+                        if let Err(stream_error) = self
+                            .write_error_response(&request, lifecycle.behavior_id(), &error)
+                            .await
+                        {
+                            tracing::error!(
+                                behavior_id = %self.behavior.name,
+                                error = %stream_error,
+                                "failed to write behavior-mismatch response"
+                            );
+                        }
+                    }
+                    continue;
+                }
+            }
+
+            if let Err(error) = lifecycle.prepare_session_with_identity().await {
+                tracing::error!(
+                    behavior_id = %self.behavior.name,
+                    request_id = %request.request_id,
+                    session_id = %request.session_id,
+                    behavior_id = %lifecycle.behavior_id(),
+                    error = %error,
+                    "failed to prepare behavior-pinned session"
+                );
+                let _ = lifecycle.fail().await;
+                if !lifecycle.response_exists().await.unwrap_or(false) {
+                    if let Err(stream_error) = self
+                        .write_error_response(&request, lifecycle.behavior_id(), &error)
+                        .await
+                    {
+                        tracing::error!(
+                            behavior_id = %self.behavior.name,
+                            error = %stream_error,
+                            "failed to write session-preparation response"
+                        );
+                    }
+                }
+                continue;
+            }
+
             match self.handle_request(&mut lifecycle).await {
                 Ok(HandleRequestOutcome::Completed) => {
                     let _ = lifecycle.complete().await;
                 }
                 Ok(HandleRequestOutcome::FailedAfterResponse(error)) => {
                     tracing::error!(
-                        profile = %self.profile.name,
+                        behavior_id = %self.behavior.name,
                         request_id = %request.request_id,
                         error = %error,
                         "request failed after response started"
@@ -185,17 +227,19 @@ impl<M: CompletionModel + 'static> ProfileDaemon<M> {
                 }
                 Err(error) => {
                     tracing::error!(
-                        profile = %self.profile.name,
+                        behavior_id = %self.behavior.name,
                         request_id = %request.request_id,
                         error = %error,
                         "request handling failed"
                     );
                     let _ = lifecycle.fail().await;
                     if !lifecycle.response_exists().await.unwrap_or(false) {
-                        if let Err(stream_error) = self.write_error_response(&request, &error).await
+                        if let Err(stream_error) = self
+                            .write_error_response(&request, lifecycle.behavior_id(), &error)
+                            .await
                         {
                             tracing::error!(
-                                profile = %self.profile.name,
+                                behavior_id = %self.behavior.name,
                                 error = %stream_error,
                                 "failed to write error response"
                             );

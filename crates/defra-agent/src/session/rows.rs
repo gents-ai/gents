@@ -30,6 +30,7 @@ pub(super) struct ToolCallDocument {
 pub(super) struct SessionDocument {
     #[serde(rename = "_docID")]
     pub(super) doc_id: String,
+    pub(super) behavior_id: Option<String>,
     pub(super) started: String,
 }
 
@@ -42,6 +43,7 @@ pub(super) struct ConversationDocument {
     pub(super) preview_text: String,
     pub(super) status: String,
     pub(super) latest_request_id: String,
+    pub(super) behavior_id: Option<String>,
     pub(super) created_at: String,
 }
 

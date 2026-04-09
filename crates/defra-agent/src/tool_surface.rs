@@ -1,0 +1,582 @@
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use anyhow::{anyhow, bail, Result};
+use defra_node::EmbeddedNode;
+use rig::tool::ToolDyn;
+
+use crate::health_checker::ServiceHealthMap;
+use crate::mcp_pool::McpPool;
+use crate::meta_tools::{build_meta_tools, META_TOOL_NAMES};
+use crate::toolset::{
+    build_delegate_tool, CliToolConfig, ToolSet, ToolSetBuilder, DELEGATE_TOOL_NAME,
+};
+
+const DEFAULT_CLI_TIMEOUT_SECS: u64 = 10;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FileToolMode {
+    #[default]
+    Off,
+    ReadOnly,
+    ReadWrite,
+}
+
+impl FileToolMode {
+    pub fn parse(value: &str) -> Result<Self> {
+        match value.trim() {
+            "" | "Off" => Ok(Self::Off),
+            "ReadOnly" => Ok(Self::ReadOnly),
+            "ReadWrite" => Ok(Self::ReadWrite),
+            other => bail!("unknown file tool mode {other}"),
+        }
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            Self::Off => 0,
+            Self::ReadOnly => 1,
+            Self::ReadWrite => 2,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BashMode {
+    #[default]
+    Off,
+    ReadOnly,
+    Unrestricted,
+}
+
+impl BashMode {
+    pub fn parse(value: &str) -> Result<Self> {
+        match value.trim() {
+            "" | "Off" => Ok(Self::Off),
+            "ReadOnly" => Ok(Self::ReadOnly),
+            "Unrestricted" => Ok(Self::Unrestricted),
+            other => bail!("unknown bash mode {other}"),
+        }
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            Self::Off => 0,
+            Self::ReadOnly => 1,
+            Self::Unrestricted => 2,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCeiling {
+    file_tools: FileToolMode,
+    bash: BashMode,
+    cli_tools: Vec<CliToolConfig>,
+    root: Option<PathBuf>,
+}
+
+impl ToolCeiling {
+    pub fn meta_only() -> Self {
+        Self {
+            file_tools: FileToolMode::Off,
+            bash: BashMode::Off,
+            cli_tools: Vec::new(),
+            root: None,
+        }
+    }
+
+    pub fn readonly() -> Self {
+        Self {
+            file_tools: FileToolMode::ReadOnly,
+            bash: BashMode::ReadOnly,
+            cli_tools: Vec::new(),
+            root: None,
+        }
+    }
+
+    pub fn readwrite(root: impl Into<PathBuf>) -> Self {
+        Self {
+            file_tools: FileToolMode::ReadWrite,
+            bash: BashMode::Unrestricted,
+            cli_tools: Vec::new(),
+            root: Some(root.into()),
+        }
+    }
+
+    pub fn with_cli_tool(mut self, tool: CliToolConfig) -> Self {
+        self.cli_tools.push(tool);
+        self
+    }
+
+    pub fn with_cli_tools<I>(mut self, tools: I) -> Self
+    where
+        I: IntoIterator<Item = CliToolConfig>,
+    {
+        self.cli_tools.extend(tools);
+        self
+    }
+
+    pub fn file_tools(&self) -> FileToolMode {
+        self.file_tools
+    }
+
+    pub fn bash(&self) -> BashMode {
+        self.bash
+    }
+
+    pub fn cli_tools(&self) -> &[CliToolConfig] {
+        &self.cli_tools
+    }
+
+    pub fn root(&self) -> Option<&Path> {
+        self.root.as_deref()
+    }
+}
+
+impl Default for ToolCeiling {
+    fn default() -> Self {
+        Self::meta_only()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolSelection {
+    pub file_tools: FileToolMode,
+    pub bash: BashMode,
+    pub cli_tool_names: Vec<String>,
+    pub enable_meta_tools: bool,
+    pub delegate_to: Vec<String>,
+}
+
+impl Default for ToolSelection {
+    fn default() -> Self {
+        Self {
+            file_tools: FileToolMode::Off,
+            bash: BashMode::Off,
+            cli_tool_names: Vec::new(),
+            enable_meta_tools: true,
+            delegate_to: Vec::new(),
+        }
+    }
+}
+
+type CustomToolFactoryFn = Arc<dyn Fn() -> Result<Box<dyn ToolDyn>> + Send + Sync>;
+
+#[derive(Clone)]
+pub struct CustomToolFactory {
+    name: String,
+    factory: CustomToolFactoryFn,
+}
+
+impl CustomToolFactory {
+    pub fn new(
+        name: impl Into<String>,
+        factory: impl Fn() -> Result<Box<dyn ToolDyn>> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            factory: Arc::new(factory),
+        }
+    }
+
+    pub fn from_tool<T>(tool: T) -> Self
+    where
+        T: ToolDyn + Clone + Send + Sync + 'static,
+    {
+        let name = tool.name();
+        Self::new(name, move || Ok(Box::new(tool.clone()) as Box<dyn ToolDyn>))
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn build(&self) -> Result<Box<dyn ToolDyn>> {
+        (self.factory)()
+    }
+}
+
+impl std::fmt::Debug for CustomToolFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CustomToolFactory")
+            .field("name", &self.name)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct BehaviorToolConfig {
+    host_tools: ToolSet,
+    enable_meta_tools: bool,
+    delegate_to: Vec<String>,
+    custom_tools: Vec<CustomToolFactory>,
+}
+
+impl BehaviorToolConfig {
+    pub fn meta_only() -> Self {
+        Self {
+            host_tools: ToolSet::meta_only(),
+            enable_meta_tools: true,
+            delegate_to: Vec::new(),
+            custom_tools: Vec::new(),
+        }
+    }
+
+    pub fn from_selection(
+        behavior_name: &str,
+        selection: ToolSelection,
+        ceiling: &ToolCeiling,
+        custom_tools: Vec<CustomToolFactory>,
+    ) -> Result<Self> {
+        let file_tools =
+            downgrade_file_tools(behavior_name, selection.file_tools, ceiling.file_tools());
+        let bash = downgrade_bash(behavior_name, selection.bash, ceiling.bash());
+        let host_tools = build_host_tools(
+            behavior_name,
+            file_tools,
+            bash,
+            &selection.cli_tool_names,
+            ceiling,
+        )?;
+
+        Ok(Self {
+            host_tools,
+            enable_meta_tools: selection.enable_meta_tools,
+            delegate_to: dedupe_strings(selection.delegate_to),
+            custom_tools,
+        })
+    }
+
+    pub fn host_tools(&self) -> &ToolSet {
+        &self.host_tools
+    }
+
+    pub fn meta_tools_requested(&self) -> bool {
+        self.enable_meta_tools
+    }
+
+    pub fn delegate_to(&self) -> &[String] {
+        &self.delegate_to
+    }
+
+    pub fn custom_tool_names(&self) -> Vec<String> {
+        self.custom_tools
+            .iter()
+            .map(|tool| tool.name().to_string())
+            .collect()
+    }
+
+    pub async fn resolve(&self, node: &EmbeddedNode) -> Result<ToolSurface> {
+        let include_meta_tools = if self.enable_meta_tools {
+            has_registered_mcp_services(node).await?
+        } else {
+            false
+        };
+
+        Ok(ToolSurface {
+            host_tools: self.host_tools.clone(),
+            include_meta_tools,
+            delegate_to: self.delegate_to.clone(),
+            custom_tools: self.custom_tools.clone(),
+        })
+    }
+}
+
+impl Default for BehaviorToolConfig {
+    fn default() -> Self {
+        Self::meta_only()
+    }
+}
+
+impl std::fmt::Debug for BehaviorToolConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BehaviorToolConfig")
+            .field("host_tools", &self.host_tools)
+            .field("enable_meta_tools", &self.enable_meta_tools)
+            .field("delegate_to", &self.delegate_to)
+            .field(
+                "custom_tools",
+                &self
+                    .custom_tools
+                    .iter()
+                    .map(|tool| tool.name())
+                    .collect::<Vec<_>>(),
+            )
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct ToolSurface {
+    host_tools: ToolSet,
+    include_meta_tools: bool,
+    delegate_to: Vec<String>,
+    custom_tools: Vec<CustomToolFactory>,
+}
+
+impl ToolSurface {
+    pub fn host_tools(&self) -> &ToolSet {
+        &self.host_tools
+    }
+
+    pub fn includes_meta_tools(&self) -> bool {
+        self.include_meta_tools
+    }
+
+    pub fn delegate_to(&self) -> &[String] {
+        &self.delegate_to
+    }
+
+    pub fn tool_names(&self) -> Vec<String> {
+        let mut names = self.host_tools.tool_names();
+        if self.include_meta_tools {
+            names.extend(META_TOOL_NAMES.iter().map(|name| (*name).to_string()));
+        }
+        if !self.delegate_to.is_empty() {
+            names.push(DELEGATE_TOOL_NAME.to_string());
+        }
+        names.extend(self.custom_tools.iter().map(|tool| tool.name().to_string()));
+        dedupe_strings(names)
+    }
+
+    pub fn build_tools(&self, runtime: &ToolRuntimeContext) -> Result<Vec<Box<dyn ToolDyn>>> {
+        let mut tools = self.host_tools.build_native_tools()?;
+        if !self.delegate_to.is_empty() {
+            tools.push(build_delegate_tool(
+                runtime.node.clone(),
+                self.delegate_to.clone(),
+            ));
+        }
+        if self.include_meta_tools {
+            tools.extend(build_meta_tools(
+                runtime.node.clone(),
+                runtime.mcp_pool.clone(),
+                runtime.health_map.clone(),
+                runtime.local_hostname.clone(),
+                runtime.local_subnet.clone(),
+            ));
+        }
+        for tool in &self.custom_tools {
+            tools.push(tool.build()?);
+        }
+        Ok(tools)
+    }
+}
+
+impl std::fmt::Debug for ToolSurface {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolSurface")
+            .field("host_tools", &self.host_tools)
+            .field("include_meta_tools", &self.include_meta_tools)
+            .field("delegate_to", &self.delegate_to)
+            .field(
+                "custom_tools",
+                &self
+                    .custom_tools
+                    .iter()
+                    .map(|tool| tool.name())
+                    .collect::<Vec<_>>(),
+            )
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct ToolRuntimeContext {
+    node: Arc<EmbeddedNode>,
+    mcp_pool: McpPool,
+    health_map: ServiceHealthMap,
+    local_hostname: String,
+    local_subnet: Option<String>,
+}
+
+impl ToolRuntimeContext {
+    pub fn new(
+        node: Arc<EmbeddedNode>,
+        mcp_pool: McpPool,
+        health_map: ServiceHealthMap,
+        local_hostname: impl Into<String>,
+        local_subnet: Option<String>,
+    ) -> Self {
+        Self {
+            node,
+            mcp_pool,
+            health_map,
+            local_hostname: local_hostname.into(),
+            local_subnet,
+        }
+    }
+
+    pub fn oneshot(node: Arc<EmbeddedNode>) -> Self {
+        Self {
+            node,
+            mcp_pool: McpPool::default(),
+            health_map: ServiceHealthMap::default(),
+            local_hostname: "localhost".to_string(),
+            local_subnet: None,
+        }
+    }
+
+    pub fn node(&self) -> &Arc<EmbeddedNode> {
+        &self.node
+    }
+
+    pub fn local_hostname(&self) -> &str {
+        &self.local_hostname
+    }
+
+    pub fn local_subnet(&self) -> Option<&str> {
+        self.local_subnet.as_deref()
+    }
+}
+
+pub fn cli_tool(
+    name: impl Into<String>,
+    binary_path: impl Into<PathBuf>,
+    description: impl Into<String>,
+) -> CliToolConfig {
+    CliToolConfig {
+        name: name.into(),
+        binary_path: binary_path.into(),
+        description: description.into(),
+        allowed_argv_prefixes: Vec::new(),
+        env_vars: HashMap::new(),
+        working_dir: None,
+        timeout_secs: DEFAULT_CLI_TIMEOUT_SECS,
+    }
+}
+
+fn downgrade_file_tools(
+    behavior_name: &str,
+    requested: FileToolMode,
+    ceiling: FileToolMode,
+) -> FileToolMode {
+    if requested.rank() <= ceiling.rank() {
+        return requested;
+    }
+
+    tracing::warn!(
+        behavior_id = %behavior_name,
+        requested = ?requested,
+        ceiling = ?ceiling,
+        "downgrading file tool mode to fit tool ceiling"
+    );
+    ceiling
+}
+
+fn downgrade_bash(behavior_name: &str, requested: BashMode, ceiling: BashMode) -> BashMode {
+    if requested.rank() <= ceiling.rank() {
+        return requested;
+    }
+
+    tracing::warn!(
+        behavior_id = %behavior_name,
+        requested = ?requested,
+        ceiling = ?ceiling,
+        "downgrading bash mode to fit tool ceiling"
+    );
+    ceiling
+}
+
+fn build_host_tools(
+    behavior_name: &str,
+    file_tools: FileToolMode,
+    bash: BashMode,
+    cli_tool_names: &[String],
+    ceiling: &ToolCeiling,
+) -> Result<ToolSet> {
+    let mut builder = ToolSetBuilder::default();
+    if let Some(root) = ceiling.root().map(ToOwned::to_owned) {
+        builder = builder.read_root(root.clone());
+    }
+
+    if !matches!(file_tools, FileToolMode::Off) {
+        builder = builder.list_files().read_file().glob().grep();
+    }
+
+    if matches!(file_tools, FileToolMode::ReadWrite) {
+        let root = ceiling
+            .root()
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| anyhow!("readwrite file tools require a configured tool root"))?;
+        builder = builder.write_file(root.clone()).edit_file(root);
+    }
+
+    match bash {
+        BashMode::Off => {}
+        BashMode::ReadOnly => {
+            builder = builder.bash_read_only();
+        }
+        BashMode::Unrestricted => {
+            let root = ceiling
+                .root()
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| anyhow!("unrestricted bash requires a configured tool root"))?;
+            builder = builder.bash_unrestricted(root);
+        }
+    }
+
+    let cli_tools = ceiling
+        .cli_tools()
+        .iter()
+        .map(|tool| (tool.name.clone(), tool.clone()))
+        .collect::<HashMap<_, _>>();
+    for tool_name in dedupe_strings(cli_tool_names.to_vec()) {
+        match cli_tools.get(&tool_name) {
+            Some(tool) => builder = builder.cli_tool(tool.clone()),
+            None => tracing::warn!(
+                behavior_id = %behavior_name,
+                cli_tool = %tool_name,
+                "dropping CLI tool not present in tool ceiling"
+            ),
+        }
+    }
+
+    Ok(builder.build())
+}
+
+fn dedupe_strings(values: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut deduped = Vec::with_capacity(values.len());
+    for value in values {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if seen.insert(trimmed.to_string()) {
+            deduped.push(trimmed.to_string());
+        }
+    }
+    deduped
+}
+
+async fn has_registered_mcp_services(node: &EmbeddedNode) -> Result<bool> {
+    let query = r#"{
+  ToolServiceRegistry(
+    filter: { status: { _eq: "online" } }
+    limit: 1
+  ) {
+    service_id
+  }
+}"#;
+
+    let response = node.execute(query).await;
+    if response.has_errors() {
+        bail!(
+            "query ToolServiceRegistry for tool-surface resolution failed: {:?}",
+            response.errors
+        );
+    }
+
+    let services = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("ToolServiceRegistry"))
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    Ok(!services.is_empty())
+}

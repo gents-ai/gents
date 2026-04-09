@@ -5,9 +5,11 @@ use std::time::Duration;
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 use rig::tool::ToolDyn;
+use std::collections::HashMap;
 
 mod args;
 mod bash_tools;
+mod cli_tool;
 mod delegate;
 mod file_tools;
 mod shared;
@@ -15,6 +17,7 @@ mod shared;
 mod tests;
 
 use bash_tools::{ReadOnlyBashTool, UnrestrictedBashTool};
+use cli_tool::CliTool;
 use delegate::DelegateToAgentTool;
 use file_tools::{EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool};
 use shared::ToolContext;
@@ -26,6 +29,18 @@ const DEFAULT_MAX_MATCHES: usize = 200;
 const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 10;
 const DELEGATE_POLL_INTERVAL_MS: u64 = 200;
 const DELEGATE_WAIT_TIMEOUT_SECS: u64 = 30;
+pub const DELEGATE_TOOL_NAME: &str = "delegate_to_agent";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CliToolConfig {
+    pub name: String,
+    pub binary_path: PathBuf,
+    pub description: String,
+    pub allowed_argv_prefixes: Vec<Vec<String>>,
+    pub env_vars: HashMap<String, String>,
+    pub working_dir: Option<PathBuf>,
+    pub timeout_secs: u64,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolSet {
@@ -143,6 +158,7 @@ impl ToolSet {
                 NativeTool::BashUnrestricted { timeout, root } => built.push(Box::new(
                     UnrestrictedBashTool::new(ToolContext::new(root.clone(), true)?, *timeout),
                 )),
+                NativeTool::Cli(tool) => built.push(Box::new(CliTool::new(tool.clone()))),
             }
         }
         Ok(built)
@@ -151,17 +167,33 @@ impl ToolSet {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NativeTool {
-    ListFiles { max_entries: usize },
-    ReadFile { max_chars: usize },
-    Glob { max_matches: usize },
-    Grep { max_matches: usize },
-    WriteFile { root: PathBuf },
-    EditFile { root: PathBuf },
+    ListFiles {
+        max_entries: usize,
+    },
+    ReadFile {
+        max_chars: usize,
+    },
+    Glob {
+        max_matches: usize,
+    },
+    Grep {
+        max_matches: usize,
+    },
+    WriteFile {
+        root: PathBuf,
+    },
+    EditFile {
+        root: PathBuf,
+    },
     BashReadOnly {
         timeout: Duration,
         allowlist: Vec<String>,
     },
-    BashUnrestricted { timeout: Duration, root: PathBuf },
+    BashUnrestricted {
+        timeout: Duration,
+        root: PathBuf,
+    },
+    Cli(CliToolConfig),
 }
 
 impl NativeTool {
@@ -175,6 +207,7 @@ impl NativeTool {
             Self::EditFile { .. } => "edit_file".to_string(),
             Self::BashReadOnly { .. } => "bash".to_string(),
             Self::BashUnrestricted { .. } => "bash_unrestricted".to_string(),
+            Self::Cli(tool) => tool.name.clone(),
         }
     }
 }
@@ -245,6 +278,11 @@ impl ToolSetBuilder {
         self
     }
 
+    pub fn cli_tool(mut self, tool: CliToolConfig) -> Self {
+        self.tools.push(NativeTool::Cli(tool));
+        self
+    }
+
     pub fn build(self) -> ToolSet {
         ToolSet {
             tools: self.tools,
@@ -262,8 +300,11 @@ pub fn build_native_tools() -> Result<Vec<Box<dyn ToolDyn>>> {
         .build_native_tools()
 }
 
-pub fn build_delegate_tool(node: Arc<EmbeddedNode>) -> Box<dyn ToolDyn> {
-    Box::new(DelegateToAgentTool::new(node))
+pub fn build_delegate_tool(
+    node: Arc<EmbeddedNode>,
+    allowed_target_dids: Vec<String>,
+) -> Box<dyn ToolDyn> {
+    Box::new(DelegateToAgentTool::new(node, allowed_target_dids))
 }
 
 fn default_read_only_commands() -> Vec<String> {

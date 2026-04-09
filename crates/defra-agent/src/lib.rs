@@ -1,12 +1,13 @@
 //! DefraDB-backed agent framework extracted from `agent-daemon`.
 //!
-//! This crate preserves the current single-profile agent loop pieces while
+//! This crate preserves the current agent runtime pieces while
 //! `agent-daemon` remains the first consumer during the extraction phase.
 
 pub mod agent;
 pub mod backend_registry;
 pub mod compaction;
 pub mod config;
+pub mod document_config;
 pub mod error;
 pub mod graphql;
 pub mod health_checker;
@@ -18,35 +19,53 @@ pub mod meta_tools;
 pub mod oneshot;
 pub mod prompt;
 pub mod retry;
+pub(crate) mod runtime_snapshot;
+pub(crate) mod runtime_status;
 pub mod scheduler;
 pub mod schema;
 pub mod session;
 pub mod streaming;
+pub mod tool_surface;
 pub mod toolset;
 pub mod truncation;
 pub mod watcher;
 
 pub use agent::{
-    DefraAgent, DefraAgentBuilder, ProcessLifecycleObserver, ProcessLifecycleState, ProfileBuilder,
+    BehaviorBuilder, DefraAgent, DefraAgentBuilder, DocumentRuntimeOptions,
+    ProcessLifecycleObserver, ProcessLifecycleState,
 };
 pub use backend_registry::{BackendTracker, InferenceBackend};
-pub use config::{DaemonConfig, ProfileConfig};
+pub use config::BehaviorConfig;
 pub use defra_node;
+pub use document_config::{
+    default_behavior_id_for_agent, ensure_agent_principal, list_agent_behaviors,
+    load_agent_behavior, load_agent_principal, load_inference_profile, load_tool_selection,
+    upsert_agent_behavior, upsert_inference_profile, upsert_tool_selection, AgentBehavior,
+    AgentPrincipal, InferenceProfile, PrincipalBootstrap, ToolSelectionDocument,
+};
 pub use health_checker::{spawn_health_checker, HealthStatus, ServiceHealth, ServiceHealthMap};
 pub use hook::{DefraSessionHook, FailurePolicy, HookStats};
 pub use identity::{AgentIdentity, ServiceAccount, SimpleIdentity};
 pub use lifecycle::{RecoveryReport, RequestLifecycle};
 pub use mcp_pool::McpPool;
 pub use meta_tools::build_meta_tools;
-pub use oneshot::{run_openai_oneshot, OneshotRunResult};
+pub use oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunResult};
 pub use prompt::{LayeredPromptBuilder, PromptBuilder};
 pub use schema::{
-    ensure_runtime_schemas, ensure_schemas, AGENT_CONVERSATION_SCHEMA, AGENT_MESSAGE_SCHEMA,
-    AGENT_REQUEST_SCHEMA, AGENT_RESPONSE_SCHEMA, AGENT_SESSION_SCHEMA, AGENT_TOOL_CALL_SCHEMA,
-    AGENT_TOOL_RESULT_SCHEMA, COMPACTION_ENTRY_SCHEMA, INFERENCE_BACKEND_SCHEMA,
-    TOOL_SERVICE_REGISTRY_SCHEMA,
+    ensure_runtime_schemas, ensure_schemas, AGENT_BEHAVIOR_SCHEMA, AGENT_CONVERSATION_SCHEMA,
+    AGENT_MESSAGE_SCHEMA, AGENT_PRINCIPAL_SCHEMA, AGENT_REQUEST_SCHEMA, AGENT_RESPONSE_SCHEMA,
+    AGENT_RUNTIME_SCHEMA, AGENT_SESSION_SCHEMA, AGENT_TOOL_CALL_SCHEMA, AGENT_TOOL_RESULT_SCHEMA,
+    COMPACTION_ENTRY_SCHEMA, INFERENCE_BACKEND_SCHEMA, INFERENCE_PROFILE_SCHEMA,
+    TOOL_SELECTION_SCHEMA, TOOL_SERVICE_REGISTRY_SCHEMA,
 };
 pub use streaming::{DefraStreamWriter, StreamWriter};
-pub use toolset::{build_delegate_tool, build_native_tools, NativeTool, ToolSet, ToolSetBuilder};
+pub use tool_surface::{
+    cli_tool, BashMode, BehaviorToolConfig, CustomToolFactory, FileToolMode, ToolCeiling,
+    ToolRuntimeContext, ToolSelection, ToolSurface,
+};
+pub use toolset::{
+    build_delegate_tool, build_native_tools, CliToolConfig, NativeTool, ToolSet, ToolSetBuilder,
+    DELEGATE_TOOL_NAME,
+};
 pub use truncation::{DefraSpillTruncator, TruncationLimits, TruncationMode, Truncator};
 pub use watcher::{AgentRequest, DefraWatcher, Watcher};

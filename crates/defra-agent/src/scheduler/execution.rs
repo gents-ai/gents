@@ -1,38 +1,36 @@
-use super::ops::{
-    log_followup_consumption, verify_ops_report_written, warn_if_missing_findings,
-};
+use super::ops::{log_followup_consumption, verify_ops_report_written, warn_if_missing_findings};
 use super::*;
+use crate::config::BehaviorConfig;
+use crate::tool_surface::ToolSurface;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn execute_task_standalone(
     task: &ScheduledTask,
-    profile: &ProfileConfig,
+    behavior: &BehaviorConfig,
+    tool_surface: &ToolSurface,
+    tool_runtime: &ToolRuntimeContext,
     node: &Arc<EmbeddedNode>,
-    mcp_pool: &McpPool,
-    health_map: &ServiceHealthMap,
-    local_hostname: &str,
-    local_subnet: Option<&str>,
     ops_graphql_endpoint: &str,
     backend_tracker: Arc<BackendTracker>,
 ) -> Result<()> {
-    let backend_id = profile
+    let backend_id = behavior
         .backend_id
         .as_deref()
-        .ok_or_else(|| anyhow!("scheduled profiles require backend binding"))?;
+        .ok_or_else(|| anyhow!("scheduled behaviors require backend binding"))?;
     let runtime_context = format!(
         "Current time: {}\nHost: {}\nTask: {} (run #{})\n\n",
         Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
-        local_hostname,
+        tool_runtime.local_hostname(),
         task.name,
         task.run_count + 1,
     );
     let full_prompt = format!("{}{}", runtime_context, task.prompt);
     let mut lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
         node.clone(),
-        &profile.name,
-        profile.did(),
+        &behavior.name,
+        behavior.did(),
         &full_prompt,
-        profile.deadline_duration.as_secs(),
+        behavior.deadline_duration.as_secs(),
         ExecutionOrigin::Scheduled,
         backend_id,
     )
@@ -42,12 +40,10 @@ pub(super) async fn execute_task_standalone(
         Duration::from_secs(TASK_TIMEOUT_SECS),
         execute_materialized_task(
             task,
-            profile,
+            behavior,
+            tool_surface,
+            tool_runtime,
             node,
-            mcp_pool,
-            health_map,
-            local_hostname,
-            local_subnet,
             ops_graphql_endpoint,
             backend_tracker,
             &mut lifecycle,
@@ -64,13 +60,13 @@ pub(super) async fn execute_task_standalone(
             Ok(())
         }
         Ok(Err(error)) => {
-            finalize_scheduled_failure(task, node, profile, &mut lifecycle, &error.to_string())
+            finalize_scheduled_failure(task, node, behavior, &mut lifecycle, &error.to_string())
                 .await?;
             Err(error)
         }
         Err(_) => {
             let error = anyhow!("wall-clock timeout exceeded ({}s)", TASK_TIMEOUT_SECS);
-            finalize_scheduled_failure(task, node, profile, &mut lifecycle, &error.to_string())
+            finalize_scheduled_failure(task, node, behavior, &mut lifecycle, &error.to_string())
                 .await?;
             Err(error)
         }
@@ -80,12 +76,10 @@ pub(super) async fn execute_task_standalone(
 #[allow(clippy::too_many_arguments)]
 async fn execute_materialized_task(
     task: &ScheduledTask,
-    profile: &ProfileConfig,
+    behavior: &BehaviorConfig,
+    tool_surface: &ToolSurface,
+    tool_runtime: &ToolRuntimeContext,
     node: &Arc<EmbeddedNode>,
-    mcp_pool: &McpPool,
-    health_map: &ServiceHealthMap,
-    local_hostname: &str,
-    local_subnet: Option<&str>,
     ops_graphql_endpoint: &str,
     backend_tracker: Arc<BackendTracker>,
     lifecycle: &mut RequestLifecycle,
@@ -96,41 +90,33 @@ async fn execute_materialized_task(
     let openai_client: rig::providers::openai::CompletionsClient =
         rig::providers::openai::CompletionsClient::builder()
             .api_key(&api_key)
-            .base_url(&profile.model_endpoint)
+            .base_url(&behavior.backend_endpoint)
             .build()?;
-    let prompt_builder = LayeredPromptBuilder::from_profile(profile);
+    let prompt_builder = LayeredPromptBuilder::new(behavior, tool_surface);
     let preamble = prompt_builder.preamble().to_string();
-
-    let mut tools = profile.native_tools.build_native_tools()?;
-    tools.push(build_delegate_tool(node.clone()));
-    tools.extend(build_meta_tools(
-        node.clone(),
-        mcp_pool.clone(),
-        health_map.clone(),
-        local_hostname.to_string(),
-        local_subnet.map(str::to_string),
-    ));
+    let tools = tool_surface.build_tools(tool_runtime)?;
 
     let agent = openai_client
-        .agent(&profile.model_name)
+        .agent(&behavior.model_name)
         .preamble(&preamble)
-        .default_max_turns(profile.max_turns)
+        .default_max_turns(behavior.max_turns)
         .tools(tools)
         .build();
 
     let stream_writer = DefraStreamWriter::new(
         node.clone(),
-        profile.did(),
-        Duration::from_millis(profile.stream_batch_ms),
+        behavior.did(),
+        Duration::from_millis(behavior.stream_batch_ms),
     );
-    let _backend_permit = acquire_backend_permit(task, profile, node, backend_tracker, lifecycle)
-        .await?;
+    let _backend_permit =
+        acquire_backend_permit(task, behavior, node, backend_tracker, lifecycle).await?;
     lifecycle.begin_execution().await?;
 
     let doc_id = stream_writer
         .begin(
             lifecycle.request().session_id.as_str(),
             lifecycle.request().request_id.as_str(),
+            lifecycle.behavior_id(),
         )
         .await?;
     lifecycle.set_response_doc_id(&doc_id);
@@ -138,7 +124,7 @@ async fn execute_materialized_task(
 
     let response_text = prompt_scheduled_task(
         task,
-        profile,
+        behavior,
         node,
         &prompt_builder,
         &agent,
@@ -163,19 +149,21 @@ async fn execute_materialized_task(
     .await;
     log_followup_consumption(task_started_at, &task.name, ops_graphql_endpoint).await;
 
-    stream_writer.finalize(&doc_id, StreamStatus::Complete).await?;
+    stream_writer
+        .finalize(&doc_id, StreamStatus::Complete)
+        .await?;
     Ok(())
 }
 
 async fn acquire_backend_permit(
     task: &ScheduledTask,
-    profile: &ProfileConfig,
+    behavior: &BehaviorConfig,
     node: &Arc<EmbeddedNode>,
     backend_tracker: Arc<BackendTracker>,
     lifecycle: &mut RequestLifecycle,
 ) -> Result<BackendPermit> {
     let backend_id = lifecycle.backend_id();
-    let deadline = tokio::time::Instant::now() + profile.deadline_duration;
+    let deadline = tokio::time::Instant::now() + behavior.deadline_duration;
 
     loop {
         if tokio::time::Instant::now() >= deadline {
@@ -190,9 +178,9 @@ async fn acquire_backend_permit(
             .await?
             .ok_or_else(|| {
                 anyhow!(
-                    "backend {} not found for scheduled profile {}",
+                    "backend {} not found for scheduled behavior {}",
                     backend_id,
-                    profile.name
+                    behavior.name
                 )
             })?;
 
@@ -211,7 +199,7 @@ async fn acquire_backend_permit(
 
 async fn prompt_scheduled_task<M: rig::completion::CompletionModel>(
     task: &ScheduledTask,
-    profile: &ProfileConfig,
+    behavior: &BehaviorConfig,
     node: &Arc<EmbeddedNode>,
     prompt_builder: &LayeredPromptBuilder,
     agent: &rig::agent::Agent<M>,
@@ -222,8 +210,8 @@ async fn prompt_scheduled_task<M: rig::completion::CompletionModel>(
     let hook = DefraSessionHook::resume_or_create_with_identity_policy(
         node.clone(),
         session_id,
-        &profile.name,
-        profile.did(),
+        &behavior.name,
+        behavior.did(),
         FailurePolicy::FailClosed,
     )
     .await?;
@@ -246,19 +234,22 @@ async fn prompt_scheduled_task<M: rig::completion::CompletionModel>(
             let retry_hook = DefraSessionHook::resume_or_create_with_identity_policy(
                 node.clone(),
                 session_id,
-                &profile.name,
-                profile.did(),
+                &behavior.name,
+                behavior.did(),
                 FailurePolicy::FailClosed,
             )
             .await?;
             let mut retry_history = prompt_builder.build(&[], &[]).await?.messages;
 
-            agent.prompt(full_prompt)
+            agent
+                .prompt(full_prompt)
                 .with_history(&mut retry_history)
                 .with_hook(retry_hook)
                 .await
                 .map(|response| response.to_string())
-                .map_err(|retry_error| anyhow!("scheduled task inference failed on retry: {retry_error}"))
+                .map_err(|retry_error| {
+                    anyhow!("scheduled task inference failed on retry: {retry_error}")
+                })
         }
         Err(error) => Err(anyhow!("scheduled task inference failed: {error}")),
     }
@@ -267,14 +258,14 @@ async fn prompt_scheduled_task<M: rig::completion::CompletionModel>(
 async fn finalize_scheduled_failure(
     task: &ScheduledTask,
     node: &Arc<EmbeddedNode>,
-    profile: &ProfileConfig,
+    behavior: &BehaviorConfig,
     lifecycle: &mut RequestLifecycle,
     error_message: &str,
 ) -> Result<()> {
     let stream_writer = DefraStreamWriter::new(
         node.clone(),
-        profile.did(),
-        Duration::from_millis(profile.stream_batch_ms),
+        behavior.did(),
+        Duration::from_millis(behavior.stream_batch_ms),
     );
     let response_doc_id = match lifecycle.response_doc_id() {
         Some(doc_id) => doc_id.to_string(),
@@ -283,6 +274,7 @@ async fn finalize_scheduled_failure(
                 .begin(
                     lifecycle.request().session_id.as_str(),
                     lifecycle.request().request_id.as_str(),
+                    lifecycle.behavior_id(),
                 )
                 .await?;
             lifecycle.set_response_doc_id(&doc_id);
@@ -299,7 +291,9 @@ async fn finalize_scheduled_failure(
         .await?;
     lifecycle.fail().await?;
 
-    if let Err(close_error) = close_scheduled_session(node, lifecycle.request().session_id.as_str()).await {
+    if let Err(close_error) =
+        close_scheduled_session(node, lifecycle.request().session_id.as_str()).await
+    {
         tracing::error!(
             task = %task.name,
             session_id = %lifecycle.request().session_id,

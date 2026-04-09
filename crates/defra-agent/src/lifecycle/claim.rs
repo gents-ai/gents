@@ -45,7 +45,7 @@ impl RequestLifecycle {
         .await
     }
 
-    async fn claim_inner(&mut self, explicit_did: bool) -> Result<ClaimOutcome> {
+    async fn claim_inner(&mut self, _explicit_did: bool) -> Result<ClaimOutcome> {
         self.ensure_state(&[LocalLifecycleState::Pending], "claim")?;
         let dedup = self.check_deduplication().await?;
         if !dedup.is_earliest {
@@ -63,6 +63,7 @@ impl RequestLifecycle {
         let escaped_claimed_at = escape_graphql_string(&claimed_at);
         let escaped_deadline = escape_graphql_string(&deadline);
         let escaped_backend_id = escape_graphql_string(&self.backend_id);
+        let escaped_behavior_id = escape_graphql_string(&self.behavior_id);
         let execution_origin = self.execution_origin.as_str();
 
         let mutation = format!(
@@ -76,6 +77,7 @@ impl RequestLifecycle {
                         status: "processing",
                         lifecycle_state: "{lifecycle_state}",
                         admission_state: "{admission_state}",
+                        behavior_id: "{escaped_behavior_id}",
                         backend_id: "{escaped_backend_id}",
                         execution_origin: "{execution_origin}",
                         claimed_at: "{escaped_claimed_at}",
@@ -115,29 +117,6 @@ impl RequestLifecycle {
                 execution_origin,
                 "claimed agent request with deadline"
             );
-        }
-
-        if explicit_did {
-            session::upsert_conversation_from_request_with_did(
-                &self.node,
-                &self.request.session_id,
-                &self.agent_name,
-                &self.agent_did,
-                &self.request.request_id,
-                &self.request.content,
-                "processing",
-            )
-            .await?;
-        } else {
-            session::upsert_conversation_from_request(
-                &self.node,
-                &self.request.session_id,
-                &self.agent_name,
-                &self.request.request_id,
-                &self.request.content,
-                "processing",
-            )
-            .await?;
         }
 
         self.suppress_later_pending_duplicates(&dedup.duplicates_to_suppress)

@@ -32,6 +32,11 @@ struct ProgressRow {
     progress_seq: i64,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct BehaviorRow {
+    behavior_id: String,
+}
+
 #[tokio::test]
 async fn claim_rejects_when_another_non_terminal_request_exists() {
     let db = test_db("lifecycle-dedup").await;
@@ -46,6 +51,7 @@ async fn claim_rejects_when_another_non_terminal_request_exists() {
         doc_id,
         request_id: "req-later".into(),
         agent_did: AGENT_DID.into(),
+        behavior_id: Some(AGENT_NAME.into()),
         session_id,
         content: "second".into(),
         created_at: later,
@@ -65,20 +71,38 @@ async fn claim_rejects_when_another_non_terminal_request_exists() {
             }"#,
         )
         .await;
-    assert_eq!(first_row::<StatusRow>(&resp, "AgentRequest").status, "superseded");
+    assert_eq!(
+        first_row::<StatusRow>(&resp, "AgentRequest").status,
+        "superseded"
+    );
 }
 
 #[tokio::test]
 async fn claim_suppresses_later_pending_duplicates() {
     let db = test_db("lifecycle-dedup-suppress").await;
     let session_id = uuid::Uuid::new_v4().to_string();
-    let early_doc_id = create_request(&db.node, "req-early", &session_id, "pending", "2026-03-23T00:00:00Z").await;
-    create_request(&db.node, "req-late", &session_id, "pending", "2026-03-23T00:00:01Z").await;
+    let early_doc_id = create_request(
+        &db.node,
+        "req-early",
+        &session_id,
+        "pending",
+        "2026-03-23T00:00:00Z",
+    )
+    .await;
+    create_request(
+        &db.node,
+        "req-late",
+        &session_id,
+        "pending",
+        "2026-03-23T00:00:01Z",
+    )
+    .await;
 
     let request = AgentRequest {
         doc_id: early_doc_id,
         request_id: "req-early".into(),
         agent_did: AGENT_DID.into(),
+        behavior_id: Some(AGENT_NAME.into()),
         session_id: session_id.clone(),
         content: "first".into(),
         created_at: "2026-03-23T00:00:00Z".into(),
@@ -98,7 +122,90 @@ async fn claim_suppresses_later_pending_duplicates() {
             }"#,
         )
         .await;
-    assert_eq!(first_row::<StatusRow>(&resp, "AgentRequest").status, "superseded");
+    assert_eq!(
+        first_row::<StatusRow>(&resp, "AgentRequest").status,
+        "superseded"
+    );
+}
+
+#[tokio::test]
+async fn claim_preserves_explicit_behavior_id() {
+    let db = test_db("lifecycle-explicit-behavior").await;
+    let request_id = "req-explicit";
+    let session_id = "session-explicit";
+    let created_at = "2026-03-23T00:00:00Z";
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{request_id}",
+                agent_did: "{AGENT_DID}",
+                behavior_id: "code",
+                session_id: "{session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{request_id}",
+                superseded_by_request: "",
+                content: "hello",
+                status: "pending",
+                lifecycle_state: "pending",
+                admission_state: "released",
+                backend_id: "",
+                execution_origin: "interactive",
+                created_at: "{created_at}",
+                retry_count: 0,
+                max_retries: {max_retries}
+            }}) {{ _docID }}
+        }}"#,
+        max_retries = defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+    );
+    let resp = db.node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "create request failed: {:?}",
+        resp.errors
+    );
+
+    let doc_id = first_row::<support::DocIdRow>(
+        &db.node
+            .execute(
+                r#"{
+                    AgentRequest(filter: { request_id: { _eq: "req-explicit" } }, limit: 1) {
+                        _docID
+                    }
+                }"#,
+            )
+            .await,
+        "AgentRequest",
+    )
+    .doc_id;
+    let request = AgentRequest {
+        doc_id: doc_id.clone(),
+        request_id: request_id.into(),
+        agent_did: AGENT_DID.into(),
+        behavior_id: Some("code".into()),
+        session_id: session_id.into(),
+        content: "hello".into(),
+        created_at: created_at.into(),
+    };
+
+    let mut lifecycle = RequestLifecycle::new(db.node.clone(), AGENT_NAME, request, 300);
+    assert_eq!(lifecycle.behavior_id(), "code");
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+
+    let resp = db
+        .node
+        .execute(
+            r#"{
+                AgentRequest(
+                    filter: { request_id: { _eq: "req-explicit" } },
+                    limit: 1
+                ) { behavior_id }
+            }"#,
+        )
+        .await;
+    assert_eq!(
+        first_row::<BehaviorRow>(&resp, "AgentRequest").behavior_id,
+        "code"
+    );
 }
 
 #[tokio::test]
@@ -113,7 +220,9 @@ async fn recover_all_marks_requests_as_error() {
     )
     .await;
 
-    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID).await.unwrap();
+    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+        .await
+        .unwrap();
     assert_eq!(report.requests_recovered, 1);
 
     let resp = db
@@ -127,7 +236,10 @@ async fn recover_all_marks_requests_as_error() {
             }"#,
         )
         .await;
-    assert_eq!(first_row::<StatusRow>(&resp, "AgentRequest").status, "error");
+    assert_eq!(
+        first_row::<StatusRow>(&resp, "AgentRequest").status,
+        "error"
+    );
 }
 
 #[tokio::test]
@@ -149,10 +261,18 @@ async fn recover_all_preserves_completed_response() {
         "complete",
     )
     .await;
-    upsert_conversation(&db.node, "session-complete", "stuck-complete", "hello", "processing")
-        .await;
+    upsert_conversation(
+        &db.node,
+        "session-complete",
+        "stuck-complete",
+        "hello",
+        "processing",
+    )
+    .await;
 
-    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID).await.unwrap();
+    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+        .await
+        .unwrap();
     assert_eq!(report.requests_recovered, 1);
     assert_eq!(report.conversations_recovered, 1);
 
@@ -209,9 +329,18 @@ async fn recover_all_marks_partial_streams_error_and_reactivates_conversation() 
         "streaming",
     )
     .await;
-    upsert_conversation(&db.node, "session-partial", "stuck-partial", "hello", "processing").await;
+    upsert_conversation(
+        &db.node,
+        "session-partial",
+        "stuck-partial",
+        "hello",
+        "processing",
+    )
+    .await;
 
-    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID).await.unwrap();
+    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+        .await
+        .unwrap();
     assert_eq!(report.responses_recovered, 1);
     assert_eq!(report.requests_recovered, 1);
     assert_eq!(report.conversations_recovered, 1);
@@ -259,9 +388,18 @@ async fn recover_all_creates_error_response_when_response_doc_is_missing() {
         "2026-03-23T00:00:00Z",
     )
     .await;
-    upsert_conversation(&db.node, "session-missing", "stuck-missing", "hello", "processing").await;
+    upsert_conversation(
+        &db.node,
+        "session-missing",
+        "stuck-missing",
+        "hello",
+        "processing",
+    )
+    .await;
 
-    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID).await.unwrap();
+    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+        .await
+        .unwrap();
     assert_eq!(report.responses_recovered, 1);
     assert_eq!(report.requests_recovered, 1);
     assert_eq!(report.conversations_recovered, 1);
@@ -300,6 +438,7 @@ async fn complete_does_not_overwrite_conversation_for_newer_request() {
         doc_id: first_doc_id,
         request_id: "req-first".into(),
         agent_did: AGENT_DID.into(),
+        behavior_id: Some(AGENT_NAME.into()),
         session_id: session_id.into(),
         content: "hello".into(),
         created_at: "2026-03-23T00:00:00Z".into(),
@@ -323,7 +462,10 @@ async fn complete_does_not_overwrite_conversation_for_newer_request() {
         )
         .await;
     let conversation = first_row::<ConversationRow>(&conversation_resp, "AgentConversation");
-    assert_eq!(conversation.latest_request_id.as_deref(), Some("req-second"));
+    assert_eq!(
+        conversation.latest_request_id.as_deref(),
+        Some("req-second")
+    );
     assert_eq!(conversation.status, "processing");
 }
 
@@ -343,6 +485,7 @@ async fn advance_increments_progress_seq() {
         doc_id: request_doc_id,
         request_id: "req-1".into(),
         agent_did: AGENT_DID.into(),
+        behavior_id: Some(AGENT_NAME.into()),
         session_id: "session-1".into(),
         content: "hello".into(),
         created_at: "2026-03-23T00:00:00Z".into(),
@@ -364,5 +507,8 @@ async fn advance_increments_progress_seq() {
         }}"#
     );
     let resp = db.node.execute(&query).await;
-    assert_eq!(first_row::<ProgressRow>(&resp, "AgentResponse").progress_seq, 3);
+    assert_eq!(
+        first_row::<ProgressRow>(&resp, "AgentResponse").progress_seq,
+        3
+    );
 }

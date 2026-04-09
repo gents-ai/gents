@@ -3,9 +3,7 @@ use glob::Pattern;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 
-use super::args::{
-    EditFileArgs, GlobArgs, GrepArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs,
-};
+use super::args::{EditFileArgs, GlobArgs, GrepArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs};
 use super::shared::{
     collect_entries, collect_glob_matches, collect_grep_matches, render_file_contents,
     truncate_text, ToolContext, ToolError,

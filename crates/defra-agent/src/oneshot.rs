@@ -8,10 +8,11 @@ use rig::completion::CompletionModel;
 use rig::completion::Prompt;
 use rig::tool::ToolDyn;
 
-use crate::config::DaemonConfig;
-use crate::hook::DefraSessionHook;
+use crate::config::BehaviorConfig;
+use crate::hook::{DefraSessionHook, FailurePolicy};
 use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
 use crate::schema::ensure_schemas;
+use crate::tool_surface::ToolRuntimeContext;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OneshotRunResult {
@@ -21,54 +22,72 @@ pub struct OneshotRunResult {
 
 pub async fn run_openai_oneshot(
     node: Arc<EmbeddedNode>,
-    config: &DaemonConfig,
-    tools: Vec<Box<dyn ToolDyn>>,
+    behavior: &BehaviorConfig,
+    prompt: &str,
+) -> Result<OneshotRunResult> {
+    run_openai_oneshot_with_tools(node, behavior, Vec::new(), prompt).await
+}
+
+pub async fn run_openai_oneshot_with_tools(
+    node: Arc<EmbeddedNode>,
+    behavior: &BehaviorConfig,
+    extra_tools: Vec<Box<dyn ToolDyn>>,
     prompt: &str,
 ) -> Result<OneshotRunResult> {
     ensure_schemas(node.as_ref()).await?;
 
     let api_key = std::env::var("AGENT_DAEMON_API_KEY").unwrap_or_else(|_| "no-key".to_string());
-    let prompt_builder = LayeredPromptBuilder::new(config);
+    let tool_runtime = ToolRuntimeContext::oneshot(node.clone());
+    let tool_surface = behavior.tools.resolve(node.as_ref()).await?;
+    let prompt_builder = LayeredPromptBuilder::new(behavior, &tool_surface);
     let preamble = prompt_builder.preamble().to_string();
 
     let openai_client: rig::providers::openai::CompletionsClient =
         rig::providers::openai::CompletionsClient::builder()
             .api_key(&api_key)
-            .base_url(&config.model_endpoint)
+            .base_url(&behavior.backend_endpoint)
             .build()
             .with_context(|| {
                 format!(
-                    "building OpenAI-compatible client for {}",
-                    config.model_endpoint
+                    "building OpenAI-compatible client for backend endpoint {}",
+                    behavior.backend_endpoint
                 )
             })?;
 
+    let mut tools = tool_surface.build_tools(&tool_runtime)?;
+    tools.extend(extra_tools);
+
     let agent = if tools.is_empty() {
         openai_client
-            .agent(&config.model_name)
+            .agent(&behavior.model_name)
             .preamble(&preamble)
-            .default_max_turns(config.max_turns)
+            .default_max_turns(behavior.max_turns)
             .build()
     } else {
         openai_client
-            .agent(&config.model_name)
+            .agent(&behavior.model_name)
             .preamble(&preamble)
-            .default_max_turns(config.max_turns)
+            .default_max_turns(behavior.max_turns)
             .tools(tools)
             .build()
     };
 
-    run_oneshot_with_agent(node, config, &prompt_builder, &agent, prompt).await
+    run_oneshot_with_agent(node, behavior, &prompt_builder, &agent, prompt).await
 }
 
 async fn run_oneshot_with_agent<M: CompletionModel>(
     node: Arc<EmbeddedNode>,
-    config: &DaemonConfig,
+    behavior: &BehaviorConfig,
     prompt_builder: &LayeredPromptBuilder,
     agent: &Agent<M>,
     prompt: &str,
 ) -> Result<OneshotRunResult> {
-    let hook = DefraSessionHook::new(node, &config.data_room);
+    let hook = DefraSessionHook::with_identity(
+        node,
+        &behavior.name,
+        behavior.did(),
+        FailurePolicy::default(),
+    );
     let mut history = prompt_builder.build(&[], &[]).await?.messages;
 
     let response = agent

@@ -41,13 +41,13 @@ pub struct SimpleIdentity {
 
 impl SimpleIdentity {
     pub fn new(
-        profile_name: impl Into<String>,
+        principal_name: impl Into<String>,
         key_path: impl Into<PathBuf>,
         service_account: Option<ServiceAccount>,
     ) -> Self {
-        let profile_name = profile_name.into();
+        let principal_name = principal_name.into();
         Self {
-            did: format!("did:defra-agent:{profile_name}"),
+            did: format!("did:defra-agent:{principal_name}"),
             key_path: key_path.into(),
             service_account,
             identity: tokio::sync::Mutex::new(None),

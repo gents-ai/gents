@@ -4,9 +4,7 @@ use rig::completion::{CompletionModel, CompletionResponse};
 use rig::one_or_many::OneOrMany;
 
 use crate::session;
-use crate::truncation::{
-    truncate_text, DefraSpillTruncator, TruncationMode, Truncator,
-};
+use crate::truncation::{truncate_text, DefraSpillTruncator, TruncationMode, Truncator};
 
 use super::DefraSessionHook;
 

@@ -1,7 +1,9 @@
 use super::query::load_conversation_document;
 use super::retry::execute_mutation_with_retry;
+use super::rows::ConversationDocument;
 use super::*;
 
+#[allow(dead_code)]
 pub(crate) async fn upsert_conversation_from_request(
     node: &EmbeddedNode,
     session_id: &str,
@@ -10,11 +12,12 @@ pub(crate) async fn upsert_conversation_from_request(
     content: &str,
     status: &str,
 ) -> Result<()> {
-    upsert_conversation_from_request_with_did(
+    upsert_conversation_from_request_with_identity(
         node,
         session_id,
         agent_name,
         &agent_did_for_name(agent_name),
+        agent_name,
         request_id,
         content,
         status,
@@ -22,11 +25,12 @@ pub(crate) async fn upsert_conversation_from_request(
     .await
 }
 
-pub(crate) async fn upsert_conversation_from_request_with_did(
+pub(crate) async fn upsert_conversation_from_request_with_identity(
     node: &EmbeddedNode,
     session_id: &str,
     agent_name: &str,
     agent_did: &str,
+    behavior_id: &str,
     request_id: &str,
     content: &str,
     status: &str,
@@ -39,6 +43,8 @@ pub(crate) async fn upsert_conversation_from_request_with_did(
     let escaped_preview = escape_graphql_string(&derive_conversation_preview(content));
     let escaped_status = escape_graphql_string(status);
     let existing = load_conversation_document(node, session_id).await?;
+    let resolved_behavior_id =
+        resolve_behavior_id(existing.as_ref(), behavior_id, "AgentConversation")?;
     let title = if let Some(existing) = existing.as_ref() {
         if existing.title.trim().is_empty() || existing.title == "New Conversation" {
             derive_conversation_title(content)
@@ -52,6 +58,7 @@ pub(crate) async fn upsert_conversation_from_request_with_did(
         .as_ref()
         .map(|conversation| conversation.created_at.clone())
         .unwrap_or_else(|| now.clone());
+    let escaped_behavior_id = escape_graphql_string(&resolved_behavior_id);
     let escaped_title = escape_graphql_string(&title);
     let escaped_created_at = escape_graphql_string(&created_at);
 
@@ -63,6 +70,7 @@ pub(crate) async fn upsert_conversation_from_request_with_did(
                     session_id: "{escaped_session_id}",
                     agent_name: "{escaped_agent_name}",
                     agent_did: "{escaped_agent_did}",
+                    behavior_id: "{escaped_behavior_id}",
                     title: "{escaped_title}",
                     preview_text: "{escaped_preview}",
                     status: "{escaped_status}",
@@ -73,6 +81,7 @@ pub(crate) async fn upsert_conversation_from_request_with_did(
                 update: {{
                     agent_name: "{escaped_agent_name}",
                     agent_did: "{escaped_agent_did}",
+                    behavior_id: "{escaped_behavior_id}",
                     title: "{escaped_title}",
                     preview_text: "{escaped_preview}",
                     status: "{escaped_status}",
@@ -94,21 +103,23 @@ pub(crate) async fn update_conversation_status(
     agent_name: &str,
     status: &str,
 ) -> Result<()> {
-    update_conversation_status_with_did(
+    update_conversation_status_with_identity(
         node,
         session_id,
         agent_name,
         &agent_did_for_name(agent_name),
+        agent_name,
         status,
     )
     .await
 }
 
-pub(crate) async fn update_conversation_status_with_did(
+pub(crate) async fn update_conversation_status_with_identity(
     node: &EmbeddedNode,
     session_id: &str,
     agent_name: &str,
     agent_did: &str,
+    behavior_id: &str,
     status: &str,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
@@ -117,6 +128,8 @@ pub(crate) async fn update_conversation_status_with_did(
     let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_status = escape_graphql_string(status);
     let existing = load_conversation_document(node, session_id).await?;
+    let resolved_behavior_id =
+        resolve_behavior_id(existing.as_ref(), behavior_id, "AgentConversation")?;
     let title = existing
         .as_ref()
         .map(|conversation| conversation.title.clone())
@@ -133,6 +146,7 @@ pub(crate) async fn update_conversation_status_with_did(
         .as_ref()
         .map(|conversation| conversation.created_at.clone())
         .unwrap_or_else(|| now.clone());
+    let escaped_behavior_id = escape_graphql_string(&resolved_behavior_id);
     let escaped_title = escape_graphql_string(&title);
     let escaped_preview_text = escape_graphql_string(&preview_text);
     let escaped_latest_request_id = escape_graphql_string(&latest_request_id);
@@ -146,6 +160,7 @@ pub(crate) async fn update_conversation_status_with_did(
                     session_id: "{escaped_session_id}",
                     agent_name: "{escaped_agent_name}",
                     agent_did: "{escaped_agent_did}",
+                    behavior_id: "{escaped_behavior_id}",
                     title: "{escaped_title}",
                     preview_text: "{escaped_preview_text}",
                     status: "{escaped_status}",
@@ -156,6 +171,7 @@ pub(crate) async fn update_conversation_status_with_did(
                 update: {{
                     agent_name: "{escaped_agent_name}",
                     agent_did: "{escaped_agent_did}",
+                    behavior_id: "{escaped_behavior_id}",
                     title: "{escaped_title}",
                     preview_text: "{escaped_preview_text}",
                     status: "{escaped_status}",
@@ -171,11 +187,12 @@ pub(crate) async fn update_conversation_status_with_did(
     Ok(())
 }
 
-pub(crate) async fn update_conversation_status_if_latest_with_did(
+pub(crate) async fn update_conversation_status_if_latest_with_identity(
     node: &EmbeddedNode,
     session_id: &str,
     agent_name: &str,
     agent_did: &str,
+    behavior_id: &str,
     latest_request_id: &str,
     status: &str,
 ) -> Result<ConversationUpdateOutcome> {
@@ -190,6 +207,8 @@ pub(crate) async fn update_conversation_status_if_latest_with_did(
     let Some(existing) = existing else {
         return Ok(ConversationUpdateOutcome::SkippedStaleRequest);
     };
+    let resolved_behavior_id =
+        resolve_behavior_id(Some(&existing), behavior_id, "AgentConversation")?;
 
     if existing.latest_request_id != latest_request_id {
         return Ok(ConversationUpdateOutcome::SkippedStaleRequest);
@@ -202,6 +221,7 @@ pub(crate) async fn update_conversation_status_if_latest_with_did(
     let escaped_title = escape_graphql_string(&existing.title);
     let escaped_preview_text = escape_graphql_string(&existing.preview_text);
     let escaped_created_at = escape_graphql_string(&existing.created_at);
+    let escaped_behavior_id = escape_graphql_string(&resolved_behavior_id);
     let mutation = format!(
         r#"mutation {{
             update_AgentConversation(
@@ -212,6 +232,7 @@ pub(crate) async fn update_conversation_status_if_latest_with_did(
                 input: {{
                     agent_name: "{escaped_agent_name}",
                     agent_did: "{escaped_agent_did}",
+                    behavior_id: "{escaped_behavior_id}",
                     title: "{escaped_title}",
                     preview_text: "{escaped_preview_text}",
                     status: "{escaped_status}",
@@ -258,6 +279,32 @@ pub(crate) async fn update_conversation_status_if_latest_with_did(
 
 fn agent_did_for_name(agent_name: &str) -> String {
     format!("did:defra-agent:{agent_name}")
+}
+
+fn resolve_behavior_id(
+    existing: Option<&ConversationDocument>,
+    requested_behavior_id: &str,
+    collection_name: &str,
+) -> Result<String> {
+    let existing_behavior_id = existing
+        .and_then(|conversation| normalize_optional_string(conversation.behavior_id.as_deref()));
+    let requested_behavior_id = normalize_optional_string(Some(requested_behavior_id));
+
+    match (existing_behavior_id, requested_behavior_id) {
+        (Some(existing), Some(requested)) if existing != requested => anyhow::bail!(
+            "{collection_name} session behavior mismatch: existing={existing} requested={requested}"
+        ),
+        (Some(existing), _) => Ok::<String, anyhow::Error>(existing.to_string()),
+        (None, Some(requested)) => Ok::<String, anyhow::Error>(requested.to_string()),
+        (None, None) => Ok(String::new()),
+    }
+}
+
+fn normalize_optional_string(value: Option<&str>) -> Option<&str> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then_some(trimmed)
+    })
 }
 
 fn derive_conversation_title(content: &str) -> String {

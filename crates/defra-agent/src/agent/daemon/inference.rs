@@ -4,13 +4,13 @@ use anyhow::{anyhow, Result};
 use futures::StreamExt;
 use rig::streaming::StreamingPrompt;
 
-use super::{HandleRequestOutcome, ProfileDaemon};
+use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS;
 use crate::error::classify_completion_error;
 use crate::hook::DefraSessionHook;
 use crate::streaming::{StreamStatus, StreamWriter};
 
-impl<M: rig::completion::CompletionModel + 'static> ProfileDaemon<M> {
+impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     pub(super) async fn run_inference(
         &mut self,
         request: &crate::watcher::AgentRequest,
@@ -25,7 +25,7 @@ impl<M: rig::completion::CompletionModel + 'static> ProfileDaemon<M> {
             if attempt > 0 {
                 let delay = self.retry_policy.delay_for_attempt(attempt - 1);
                 tracing::info!(
-                    profile = %self.profile.name,
+                    behavior_id = %self.behavior.name,
                     attempt,
                     delay_ms = delay.as_millis() as u64,
                     request_id = %request.request_id,
@@ -37,8 +37,8 @@ impl<M: rig::completion::CompletionModel + 'static> ProfileDaemon<M> {
             let hook = DefraSessionHook::resume_or_create_with_identity_policy(
                 self.node.clone(),
                 &request.session_id,
-                &self.profile.name,
-                self.profile.did(),
+                &self.behavior.name,
+                self.behavior.did(),
                 self.hook_failure_policy,
             )
             .await?;
@@ -154,14 +154,18 @@ impl<M: rig::completion::CompletionModel + 'static> ProfileDaemon<M> {
     pub(super) async fn write_error_response(
         &self,
         request: &crate::watcher::AgentRequest,
+        behavior_id: &str,
         error: &anyhow::Error,
     ) -> Result<()> {
         let doc_id = self
             .stream_writer
-            .begin(&request.session_id, &request.request_id)
+            .begin(&request.session_id, &request.request_id, behavior_id)
             .await?;
         let error_text = format!("Error: {}", error);
-        let _ = self.stream_writer.write_tokens(&doc_id, &error_text).await?;
+        let _ = self
+            .stream_writer
+            .write_tokens(&doc_id, &error_text)
+            .await?;
         self.stream_writer
             .finalize(&doc_id, StreamStatus::Error)
             .await?;

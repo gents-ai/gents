@@ -45,10 +45,12 @@ impl RequestLifecycle {
         execution_origin: ExecutionOrigin,
         backend_id: impl Into<String>,
     ) -> Self {
+        let behavior_id = resolve_behavior_id(agent_name, request.behavior_id.as_deref());
         Self {
             node,
             agent_name: agent_name.to_string(),
             agent_did: agent_did.to_string(),
+            behavior_id,
             execution_origin,
             backend_id: backend_id.into(),
             request,
@@ -70,6 +72,7 @@ impl RequestLifecycle {
         backend_id: impl Into<String>,
     ) -> Result<Self> {
         let backend_id = backend_id.into();
+        let behavior_id = agent_name.to_string();
         let request_id = uuid::Uuid::new_v4().to_string();
         let session_id = uuid::Uuid::new_v4().to_string();
         let created_at = chrono::Utc::now().to_rfc3339();
@@ -78,10 +81,17 @@ impl RequestLifecycle {
             + chrono::Duration::seconds(deadline_duration_secs as i64))
         .to_rfc3339();
 
-        session::create_session_with_id(node.as_ref(), &session_id, agent_name).await?;
+        session::create_session_with_behavior_id(
+            node.as_ref(),
+            &session_id,
+            agent_name,
+            &behavior_id,
+        )
+        .await?;
 
         let escaped_request_id = escape_graphql_string(&request_id);
         let escaped_agent_did = escape_graphql_string(agent_did);
+        let escaped_behavior_id = escape_graphql_string(&behavior_id);
         let escaped_session_id = escape_graphql_string(&session_id);
         let escaped_content = escape_graphql_string(content);
         let escaped_backend_id = escape_graphql_string(&backend_id);
@@ -96,6 +106,7 @@ impl RequestLifecycle {
                 add_AgentRequest(input: {{
                     request_id: "{escaped_request_id}",
                     agent_did: "{escaped_agent_did}",
+                    behavior_id: "{escaped_behavior_id}",
                     session_id: "{escaped_session_id}",
                     retry_parent_request: "",
                     retry_root_request: "{escaped_retry_root_request}",
@@ -188,16 +199,18 @@ impl RequestLifecycle {
             doc_id,
             request_id: request_id.clone(),
             agent_did: agent_did.to_string(),
+            behavior_id: Some(behavior_id.clone()),
             session_id: session_id.clone(),
             content: content.to_string(),
             created_at,
         };
 
-        session::upsert_conversation_from_request_with_did(
+        session::upsert_conversation_from_request_with_identity(
             node.as_ref(),
             &session_id,
             agent_name,
             agent_did,
+            &behavior_id,
             &request_id,
             content,
             "processing",
@@ -208,6 +221,7 @@ impl RequestLifecycle {
             node,
             agent_name: agent_name.to_string(),
             agent_did: agent_did.to_string(),
+            behavior_id,
             execution_origin,
             backend_id,
             request,
@@ -228,5 +242,31 @@ impl RequestLifecycle {
 
     pub fn backend_id(&self) -> &str {
         &self.backend_id
+    }
+
+    pub fn behavior_id(&self) -> &str {
+        &self.behavior_id
+    }
+
+    pub async fn prepare_session_with_identity(&self) -> Result<()> {
+        self.ensure_state(&[LocalLifecycleState::Claimed], "prepare_session")?;
+        session::ensure_session_with_behavior_id(
+            &self.node,
+            &self.request.session_id,
+            &self.agent_name,
+            &self.behavior_id,
+        )
+        .await?;
+        session::upsert_conversation_from_request_with_identity(
+            &self.node,
+            &self.request.session_id,
+            &self.agent_name,
+            &self.agent_did,
+            &self.behavior_id,
+            &self.request.request_id,
+            &self.request.content,
+            "processing",
+        )
+        .await
     }
 }

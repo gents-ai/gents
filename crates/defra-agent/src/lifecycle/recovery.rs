@@ -23,6 +23,7 @@ async fn recover_stuck_requests(node: &EmbeddedNode, agent_did: &str) -> Result<
             ) {{
                 _docID
                 request_id
+                behavior_id
                 session_id
                 retry_count
             }}
@@ -187,6 +188,7 @@ async fn recover_missing_response_documents(node: &EmbeddedNode, agent_did: &str
                 }}
             ) {{
                 request_id
+                behavior_id
                 session_id
             }}
         }}"#
@@ -211,6 +213,10 @@ async fn recover_missing_response_documents(node: &EmbeddedNode, agent_did: &str
     let mut recovered = 0;
     for row in rows {
         let request_id = row.get("request_id").and_then(|v| v.as_str()).unwrap_or("");
+        let behavior_id = row
+            .get("behavior_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let session_id = row.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
         if request_id.is_empty() || session_id.is_empty() {
             continue;
@@ -228,6 +234,7 @@ async fn recover_missing_response_documents(node: &EmbeddedNode, agent_did: &str
             escape_graphql_string("Error: daemon restarted before response could be generated");
         let escaped_request_id = escape_graphql_string(request_id);
         let escaped_agent_did = escape_graphql_string(agent_did);
+        let escaped_behavior_id = escape_graphql_string(behavior_id);
         let escaped_session_id = escape_graphql_string(session_id);
         let mutation = format!(
             r#"mutation {{
@@ -235,6 +242,7 @@ async fn recover_missing_response_documents(node: &EmbeddedNode, agent_did: &str
                     response_key: "{escaped_request_id}",
                     request_id: "{escaped_request_id}",
                     agent_did: "{escaped_agent_did}",
+                    behavior_id: "{escaped_behavior_id}",
                     session_id: "{escaped_session_id}",
                     content: "{error_text}",
                     status: "error",

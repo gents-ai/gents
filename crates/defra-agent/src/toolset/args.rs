@@ -71,3 +71,9 @@ pub(super) struct BashArgs {
     #[serde(default = "default_command_timeout_secs")]
     pub timeout_secs: u64,
 }
+
+#[derive(Debug, Deserialize)]
+pub(super) struct CliToolArgs {
+    #[serde(default)]
+    pub argv: Vec<String>,
+}

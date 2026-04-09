@@ -1,171 +1,187 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
+use rig::tool::ToolDyn;
 
-use super::runtime::default_hostname;
-use super::{DefraAgent, ProcessLifecycleObserver};
+use super::{runtime, DefraAgent, ProcessLifecycleObserver};
+use crate::backend_registry::lookup_backend;
 use crate::compaction::CompactionStrategy;
 use crate::config::{
-    ProfileConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
+    BehaviorConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
-    DEFAULT_MODEL_ENDPOINT, DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
+    DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
 };
 use crate::hook::FailurePolicy;
 use crate::identity::AgentIdentity;
 use crate::mcp_pool::McpPool;
 use crate::retry::RetryPolicy;
-use crate::toolset::ToolSet;
+use crate::tool_surface::{
+    BashMode, BehaviorToolConfig, CustomToolFactory, FileToolMode, ToolCeiling, ToolSelection,
+};
 
-#[derive(Default)]
+#[cfg(test)]
+const TEST_DEFAULT_BACKEND_ENDPOINT: &str = "http://localhost:8000/v1";
+
 pub struct DefraAgentBuilder {
     node: Option<Arc<EmbeddedNode>>,
-    profiles: Vec<PendingProfileConfig>,
-    mcp_pool: Option<McpPool>,
+    identity: Option<Arc<dyn AgentIdentity>>,
+    default_behavior_id: Option<String>,
+    tool_ceiling: ToolCeiling,
+    mcp_pool: McpPool,
     local_hostname: Option<String>,
     local_subnet: Option<String>,
     retry_policy: RetryPolicy,
     hook_failure_policy: FailurePolicy,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
+    behaviors: Vec<PendingBehaviorConfig>,
 }
 
-pub struct ProfileBuilder {
-    builder: DefraAgentBuilder,
-    profile: PendingProfileConfig,
-}
-
-#[derive(Clone)]
-pub(crate) struct PendingProfileConfig {
-    name: String,
-    identity: Option<Arc<dyn AgentIdentity>>,
-    backend_id: Option<String>,
-    model_endpoint: String,
-    model_name: String,
-    context_window: usize,
-    max_output_tokens: usize,
-    max_turns: usize,
-    system_prompt: String,
-    native_tools: ToolSet,
-    compaction_threshold: f64,
-    compaction_strategy: CompactionStrategy,
-    stream_batch_ms: u64,
-    deadline_duration: Duration,
-}
-
-impl PendingProfileConfig {
-    pub(crate) fn new(name: impl Into<String>) -> Self {
+impl Default for DefraAgentBuilder {
+    fn default() -> Self {
         Self {
-            name: name.into(),
+            node: None,
             identity: None,
-            backend_id: None,
-            model_endpoint: DEFAULT_MODEL_ENDPOINT.to_string(),
-            model_name: DEFAULT_MODEL_NAME.to_string(),
-            context_window: DEFAULT_CONTEXT_WINDOW,
-            max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
-            max_turns: DEFAULT_MAX_TURNS,
-            system_prompt: String::new(),
-            native_tools: ToolSet::meta_only(),
-            compaction_threshold: DEFAULT_COMPACTION_THRESHOLD,
-            compaction_strategy: CompactionStrategy::StripThenSummarize,
-            stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
-            deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
+            default_behavior_id: None,
+            tool_ceiling: ToolCeiling::meta_only(),
+            mcp_pool: McpPool::default(),
+            local_hostname: None,
+            local_subnet: None,
+            retry_policy: RetryPolicy::default(),
+            hook_failure_policy: FailurePolicy::default(),
+            process_state_observer: None,
+            behaviors: Vec::new(),
         }
-    }
-
-    fn build(self) -> Result<ProfileConfig> {
-        let identity = self
-            .identity
-            .ok_or_else(|| anyhow!("profile '{}' is missing identity", self.name))?;
-
-        Ok(ProfileConfig {
-            name: self.name,
-            identity,
-            backend_id: self.backend_id,
-            model_endpoint: self.model_endpoint,
-            model_name: self.model_name,
-            context_window: self.context_window,
-            max_output_tokens: self.max_output_tokens,
-            max_turns: self.max_turns,
-            system_prompt: self.system_prompt,
-            native_tools: self.native_tools,
-            compaction_threshold: self.compaction_threshold,
-            compaction_strategy: self.compaction_strategy,
-            stream_batch_ms: self.stream_batch_ms,
-            deadline_duration: self.deadline_duration,
-        })
     }
 }
 
 impl DefraAgentBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     pub fn node(mut self, node: Arc<EmbeddedNode>) -> Self {
         self.node = Some(node);
         self
     }
 
+    pub fn identity(mut self, identity: Arc<dyn AgentIdentity>) -> Self {
+        self.identity = Some(identity);
+        self
+    }
+
+    pub fn default_behavior_id(mut self, behavior_id: impl Into<String>) -> Self {
+        self.default_behavior_id = Some(behavior_id.into());
+        self
+    }
+
+    pub fn tool_ceiling(mut self, tool_ceiling: ToolCeiling) -> Self {
+        self.tool_ceiling = tool_ceiling;
+        self
+    }
+
     pub fn mcp_pool(mut self, mcp_pool: McpPool) -> Self {
-        self.mcp_pool = Some(mcp_pool);
+        self.mcp_pool = mcp_pool;
         self
     }
 
-    pub fn local_hostname(mut self, hostname: impl Into<String>) -> Self {
-        self.local_hostname = Some(hostname.into());
+    pub fn local_hostname(mut self, local_hostname: impl Into<String>) -> Self {
+        self.local_hostname = Some(local_hostname.into());
         self
     }
 
-    pub fn local_subnet(mut self, subnet: impl Into<String>) -> Self {
-        self.local_subnet = Some(subnet.into());
+    pub fn local_subnet(mut self, local_subnet: impl Into<String>) -> Self {
+        self.local_subnet = Some(local_subnet.into());
         self
     }
 
-    pub fn retry_policy(mut self, policy: RetryPolicy) -> Self {
-        self.retry_policy = policy;
+    pub fn retry_policy(mut self, retry_policy: RetryPolicy) -> Self {
+        self.retry_policy = retry_policy;
         self
     }
 
-    pub fn hook_failure_policy(mut self, policy: FailurePolicy) -> Self {
-        self.hook_failure_policy = policy;
+    pub fn hook_failure_policy(mut self, hook_failure_policy: FailurePolicy) -> Self {
+        self.hook_failure_policy = hook_failure_policy;
         self
     }
 
-    pub fn process_state_observer(
-        mut self,
-        observer: Arc<dyn ProcessLifecycleObserver>,
-    ) -> Self {
+    pub fn process_state_observer(mut self, observer: Arc<dyn ProcessLifecycleObserver>) -> Self {
         self.process_state_observer = Some(observer);
         self
     }
 
-    pub fn profile(self, name: impl Into<String>) -> ProfileBuilder {
-        ProfileBuilder {
-            builder: self,
-            profile: PendingProfileConfig::new(name),
+    pub fn behavior(self, name: impl Into<String>) -> BehaviorBuilder {
+        BehaviorBuilder {
+            agent: self,
+            behavior: PendingBehaviorConfig::new(name),
         }
     }
 
-    pub fn build(self) -> Result<DefraAgent> {
+    pub async fn build(self) -> Result<DefraAgent> {
         let node = self
             .node
-            .ok_or_else(|| anyhow!("DefraAgent builder requires a node"))?;
-
-        if self.profiles.is_empty() {
-            bail!("DefraAgent requires at least one profile");
+            .ok_or_else(|| anyhow!("DefraAgent builder is missing node"))?;
+        let identity = self
+            .identity
+            .ok_or_else(|| anyhow!("DefraAgent builder is missing identity"))?;
+        if self.behaviors.is_empty() {
+            anyhow::bail!("DefraAgent builder requires at least one behavior");
         }
 
-        let mut names = std::collections::HashSet::new();
-        let mut profiles = Vec::with_capacity(self.profiles.len());
-        for profile in self.profiles {
-            if !names.insert(profile.name.clone()) {
-                bail!("duplicate profile name '{}'", profile.name);
-            }
-            profiles.push(Arc::new(profile.build()?));
+        let default_behavior_id = self
+            .default_behavior_id
+            .clone()
+            .unwrap_or_else(|| self.behaviors[0].name.clone());
+        let behavior_names = self
+            .behaviors
+            .iter()
+            .map(|behavior| behavior.name.clone())
+            .collect::<Vec<_>>();
+        if !behavior_names
+            .iter()
+            .any(|name| name == &default_behavior_id)
+        {
+            anyhow::bail!(
+                "default behavior {} is not present in builder behaviors",
+                default_behavior_id
+            );
         }
+        let duplicates = find_duplicates(&behavior_names);
+        if !duplicates.is_empty() {
+            anyhow::bail!(
+                "duplicate behavior names in builder: {}",
+                duplicates.into_iter().collect::<Vec<_>>().join(", ")
+            );
+        }
+
+        let mut behaviors = Vec::with_capacity(self.behaviors.len());
+        for behavior in self.behaviors {
+            let config = behavior
+                .build(node.as_ref(), Some(&identity), &self.tool_ceiling)
+                .await?;
+            behaviors.push(Arc::new(config));
+        }
+        behaviors.sort_by(|left, right| {
+            let left_is_default = left.name == default_behavior_id;
+            let right_is_default = right.name == default_behavior_id;
+            right_is_default
+                .cmp(&left_is_default)
+                .then_with(|| left.name.cmp(&right.name))
+        });
 
         Ok(DefraAgent {
             node,
-            profiles,
-            mcp_pool: self.mcp_pool.unwrap_or_default(),
-            local_hostname: self.local_hostname.unwrap_or_else(default_hostname),
+            agent_did: identity.did().to_string(),
+            default_behavior_id,
+            behaviors,
+            unavailable_behaviors: Default::default(),
+            document_runtime_context: None,
+            mcp_pool: self.mcp_pool,
+            local_hostname: self
+                .local_hostname
+                .unwrap_or_else(runtime::default_hostname),
             local_subnet: self.local_subnet,
             retry_policy: self.retry_policy,
             hook_failure_policy: self.hook_failure_policy,
@@ -174,88 +190,264 @@ impl DefraAgentBuilder {
     }
 }
 
-impl ProfileBuilder {
-    pub fn identity<I>(mut self, identity: I) -> Self
-    where
-        I: AgentIdentity + 'static,
-    {
-        self.profile.identity = Some(Arc::new(identity));
+pub struct BehaviorBuilder {
+    agent: DefraAgentBuilder,
+    behavior: PendingBehaviorConfig,
+}
+
+impl BehaviorBuilder {
+    pub fn identity(mut self, identity: Arc<dyn AgentIdentity>) -> Self {
+        self.behavior.identity = Some(identity);
         self
     }
 
-    pub fn system_prompt(mut self, prompt: impl Into<String>) -> Self {
-        self.profile.system_prompt = prompt.into();
+    pub fn backend_id(mut self, backend_id: impl Into<String>) -> Self {
+        self.behavior.backend_id = Some(backend_id.into());
         self
     }
 
-    pub fn native_tools(mut self, native_tools: ToolSet) -> Self {
-        self.profile.native_tools = native_tools;
+    pub fn model_name(mut self, model_name: impl Into<String>) -> Self {
+        self.behavior.model_name = model_name.into();
         self
     }
 
-    pub fn model_endpoint(mut self, endpoint: impl Into<String>) -> Self {
-        self.profile.model_endpoint = endpoint.into();
-        self
-    }
-
-    pub fn model_name(mut self, name: impl Into<String>) -> Self {
-        self.profile.model_name = name.into();
+    pub fn system_prompt(mut self, system_prompt: impl Into<String>) -> Self {
+        self.behavior.system_prompt = system_prompt.into();
         self
     }
 
     pub fn context_window(mut self, context_window: usize) -> Self {
-        self.profile.context_window = context_window;
+        self.behavior.context_window = context_window;
         self
     }
 
     pub fn max_output_tokens(mut self, max_output_tokens: usize) -> Self {
-        self.profile.max_output_tokens = max_output_tokens;
+        self.behavior.max_output_tokens = max_output_tokens;
         self
     }
 
     pub fn max_turns(mut self, max_turns: usize) -> Self {
-        self.profile.max_turns = max_turns;
+        self.behavior.max_turns = max_turns;
         self
     }
 
-    pub fn compaction_threshold(mut self, threshold: f64) -> Self {
-        self.profile.compaction_threshold = threshold;
+    pub fn enable_file_tools(mut self, mode: FileToolMode) -> Self {
+        self.behavior.tool_selection.file_tools = mode;
         self
     }
 
-    pub fn compaction_strategy(mut self, strategy: CompactionStrategy) -> Self {
-        self.profile.compaction_strategy = strategy;
+    pub fn enable_bash(mut self, mode: BashMode) -> Self {
+        self.behavior.tool_selection.bash = mode;
+        self
+    }
+
+    pub fn cli_tools<I, S>(mut self, cli_tool_names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.behavior.tool_selection.cli_tool_names =
+            cli_tool_names.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn enable_meta_tools(mut self, enable_meta_tools: bool) -> Self {
+        self.behavior.tool_selection.enable_meta_tools = enable_meta_tools;
+        self
+    }
+
+    pub fn delegate_to<I, S>(mut self, delegate_to: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.behavior.tool_selection.delegate_to =
+            delegate_to.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn custom_tool<T>(mut self, tool: T) -> Self
+    where
+        T: ToolDyn + Clone + Send + Sync + 'static,
+    {
+        self.behavior
+            .custom_tools
+            .push(CustomToolFactory::from_tool(tool));
+        self
+    }
+
+    pub fn custom_tool_factory(mut self, tool: CustomToolFactory) -> Self {
+        self.behavior.custom_tools.push(tool);
+        self
+    }
+
+    pub fn compaction_threshold(mut self, compaction_threshold: f64) -> Self {
+        self.behavior.compaction_threshold = compaction_threshold;
+        self
+    }
+
+    pub fn compaction_strategy(mut self, compaction_strategy: CompactionStrategy) -> Self {
+        self.behavior.compaction_strategy = compaction_strategy;
         self
     }
 
     pub fn stream_batch_ms(mut self, stream_batch_ms: u64) -> Self {
-        self.profile.stream_batch_ms = stream_batch_ms;
+        self.behavior.stream_batch_ms = stream_batch_ms;
         self
     }
 
-    pub fn deadline_duration(mut self, deadline_duration: Duration) -> Self {
-        self.profile.deadline_duration = deadline_duration;
-        self
-    }
-
-    pub fn backend_id(mut self, id: impl Into<String>) -> Self {
-        self.profile.backend_id = Some(id.into());
+    pub fn deadline_duration_secs(mut self, deadline_duration_secs: u64) -> Self {
+        self.behavior.deadline_duration = Duration::from_secs(deadline_duration_secs);
         self
     }
 
     pub fn done(mut self) -> DefraAgentBuilder {
-        self.builder.profiles.push(self.profile);
-        self.builder
+        self.agent.behaviors.push(self.behavior);
+        self.agent
+    }
+}
+
+fn find_duplicates(values: &[String]) -> HashSet<String> {
+    let mut seen = HashSet::new();
+    let mut duplicates = HashSet::new();
+    for value in values {
+        if !seen.insert(value.clone()) {
+            duplicates.insert(value.clone());
+        }
+    }
+    duplicates
+}
+
+#[derive(Clone)]
+pub(crate) struct PendingBehaviorConfig {
+    name: String,
+    identity: Option<Arc<dyn AgentIdentity>>,
+    backend_id: Option<String>,
+    #[cfg(test)]
+    backend_endpoint: String,
+    model_name: String,
+    context_window: usize,
+    max_output_tokens: usize,
+    max_turns: usize,
+    system_prompt: String,
+    tool_selection: ToolSelection,
+    custom_tools: Vec<CustomToolFactory>,
+    compaction_threshold: f64,
+    compaction_strategy: CompactionStrategy,
+    stream_batch_ms: u64,
+    deadline_duration: Duration,
+}
+
+impl PendingBehaviorConfig {
+    pub(crate) fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            identity: None,
+            backend_id: None,
+            #[cfg(test)]
+            backend_endpoint: TEST_DEFAULT_BACKEND_ENDPOINT.to_string(),
+            model_name: DEFAULT_MODEL_NAME.to_string(),
+            context_window: DEFAULT_CONTEXT_WINDOW,
+            max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
+            max_turns: DEFAULT_MAX_TURNS,
+            system_prompt: String::new(),
+            tool_selection: ToolSelection::default(),
+            custom_tools: Vec::new(),
+            compaction_threshold: DEFAULT_COMPACTION_THRESHOLD,
+            compaction_strategy: CompactionStrategy::StripThenSummarize,
+            stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
+            deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
+        }
+    }
+
+    async fn build(
+        self,
+        node: &EmbeddedNode,
+        default_identity: Option<&Arc<dyn AgentIdentity>>,
+        tool_ceiling: &ToolCeiling,
+    ) -> Result<BehaviorConfig> {
+        let identity = self
+            .identity
+            .clone()
+            .or_else(|| default_identity.cloned())
+            .ok_or_else(|| anyhow!("behavior '{}' is missing identity", self.name))?;
+        let backend_id = self
+            .backend_id
+            .as_deref()
+            .ok_or_else(|| anyhow!("behavior '{}' is missing backend_id", self.name))?;
+        let backend = lookup_backend(node, backend_id).await?.ok_or_else(|| {
+            anyhow!(
+                "behavior '{}' references missing backend {}",
+                self.name,
+                backend_id
+            )
+        })?;
+        if !backend.is_available() {
+            anyhow::bail!(
+                "behavior '{}' backend {} is unavailable (enabled={} probe_status={})",
+                self.name,
+                backend_id,
+                backend.enabled,
+                backend.probe_status
+            );
+        }
+        self.build_with_resolved_backend(
+            identity,
+            Some(backend.backend_id),
+            backend.endpoint,
+            tool_ceiling,
+        )
+    }
+
+    fn build_with_resolved_backend(
+        self,
+        identity: Arc<dyn AgentIdentity>,
+        backend_id: Option<String>,
+        backend_endpoint: String,
+        tool_ceiling: &ToolCeiling,
+    ) -> Result<BehaviorConfig> {
+        let behavior_name = self.name.clone();
+
+        Ok(BehaviorConfig {
+            name: self.name,
+            identity,
+            backend_id,
+            backend_endpoint,
+            model_name: self.model_name,
+            context_window: self.context_window,
+            max_output_tokens: self.max_output_tokens,
+            max_turns: self.max_turns,
+            system_prompt: self.system_prompt,
+            tools: BehaviorToolConfig::from_selection(
+                &behavior_name,
+                self.tool_selection,
+                tool_ceiling,
+                self.custom_tools,
+            )?,
+            compaction_threshold: self.compaction_threshold,
+            compaction_strategy: self.compaction_strategy,
+            stream_batch_ms: self.stream_batch_ms,
+            deadline_duration: self.deadline_duration,
+        })
     }
 }
 
 #[cfg(test)]
-impl PendingProfileConfig {
-    pub(crate) fn build_with_identity_for_test<I>(mut self, identity: I) -> ProfileConfig
+impl PendingBehaviorConfig {
+    pub(crate) fn build_with_identity_for_test<I>(mut self, identity: I) -> BehaviorConfig
     where
         I: AgentIdentity + 'static,
     {
+        let backend_id = self.backend_id.clone();
+        let backend_endpoint = self.backend_endpoint.clone();
         self.identity = Some(Arc::new(identity));
-        self.build().unwrap()
+        let resolved_identity = self.identity.clone().unwrap();
+        self.build_with_resolved_backend(
+            resolved_identity,
+            backend_id,
+            backend_endpoint,
+            &ToolCeiling::meta_only(),
+        )
+        .unwrap()
     }
 }

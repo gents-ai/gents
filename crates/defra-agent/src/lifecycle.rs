@@ -103,6 +103,7 @@ pub struct RequestLifecycle {
     node: Arc<EmbeddedNode>,
     agent_name: String,
     agent_did: String,
+    behavior_id: String,
     execution_origin: ExecutionOrigin,
     backend_id: String,
     request: AgentRequest,
@@ -117,4 +118,12 @@ pub struct RecoveryReport {
     pub requests_recovered: usize,
     pub responses_recovered: usize,
     pub conversations_recovered: usize,
+}
+
+fn resolve_behavior_id(default_behavior_id: &str, requested_behavior_id: Option<&str>) -> String {
+    requested_behavior_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(default_behavior_id)
+        .to_string()
 }

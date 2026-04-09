@@ -20,16 +20,22 @@ mod tests;
 mod tool_calls;
 
 pub use compaction_entries::{load_compaction_entries, save_compaction_entry};
+#[allow(unused_imports)]
 pub(crate) use conversation::{
-    update_conversation_status, update_conversation_status_if_latest_with_did,
-    upsert_conversation_from_request, upsert_conversation_from_request_with_did,
+    update_conversation_status, update_conversation_status_if_latest_with_identity,
+    upsert_conversation_from_request, upsert_conversation_from_request_with_identity,
 };
 pub use history::load_history;
 pub(crate) use history::save_message;
-pub(crate) use retry::execute_mutation_with_retry;
+pub(crate) use query::load_session_behavior_id;
 pub use retry::count_active_sessions;
-pub(crate) use sessions::{create_session_with_id, ensure_session, max_sequence};
+pub(crate) use retry::execute_mutation_with_retry;
 pub use sessions::{close_session, create_session};
+#[allow(unused_imports)]
+pub(crate) use sessions::{
+    create_session_with_behavior_id, create_session_with_id, ensure_session,
+    ensure_session_with_behavior_id, max_sequence,
+};
 pub async fn load_tool_call_result(
     node: &EmbeddedNode,
     session_id: &str,

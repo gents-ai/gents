@@ -11,6 +11,7 @@ the same session while leaving the failed request in session history.
 /-- Session-level request lineage with a designated latest request. -/
 structure SessionState where
   sessionId : SessionId
+  behaviorId : BehaviorId
   requestIds : Finset RequestId
   ctx : RequestId → RequestContext
   latest : RequestId
@@ -21,6 +22,7 @@ namespace SessionState
 @[ext] theorem ext
     {s t : SessionState}
     (h_sessionId : s.sessionId = t.sessionId)
+    (h_behaviorId : s.behaviorId = t.behaviorId)
     (h_requestIds : s.requestIds = t.requestIds)
     (h_ctx : s.ctx = t.ctx)
     (h_latest : s.latest = t.latest) :
@@ -28,6 +30,7 @@ namespace SessionState
   cases s
   cases t
   cases h_sessionId
+  cases h_behaviorId
   cases h_requestIds
   cases h_ctx
   cases h_latest
@@ -81,6 +84,7 @@ inductive Transition : SessionState → SessionState → Prop where
   | reissue_failed {pre post : SessionState} (failedId newId : RequestId) :
       CanReissue pre failedId newId →
       post.sessionId = pre.sessionId →
+      post.behaviorId = pre.behaviorId →
       post.requestIds = insert newId pre.requestIds →
       post.latest = newId →
       post.ctx =
@@ -101,6 +105,7 @@ def step? (pre : SessionState) : Action → Option SessionState
       if _h_reissue : CanReissue pre failedId newId then
         some
           { sessionId := pre.sessionId
+          , behaviorId := pre.behaviorId
           , requestIds := insert newId pre.requestIds
           , latest := newId
           , ctx :=
@@ -136,16 +141,17 @@ theorem step_sound
       simp [step?] at h_step
       rcases h_step with ⟨h_reissue, h_post⟩
       subst post
-      exact Transition.reissue_failed failedId newId h_reissue rfl rfl rfl rfl
+      exact Transition.reissue_failed failedId newId h_reissue rfl rfl rfl rfl rfl
 
 theorem transition_complete
     {pre post : SessionState}
     (h_trans : Transition pre post) :
     ∃ action : Action, step? pre action = some post := by
   cases h_trans with
-  | reissue_failed failedId newId h_reissue h_session h_requestIds h_latest h_ctx =>
+  | reissue_failed failedId newId h_reissue h_session h_behavior h_requestIds h_latest h_ctx =>
       have h_post :
           { sessionId := pre.sessionId
+          , behaviorId := pre.behaviorId
           , requestIds := insert newId pre.requestIds
           , latest := newId
           , ctx :=
@@ -156,6 +162,7 @@ theorem transition_complete
           } = post := by
         apply ext
         · exact h_session.symm
+        · exact h_behavior.symm
         · exact h_requestIds.symm
         · exact h_ctx.symm
         · exact h_latest.symm
@@ -233,14 +240,21 @@ theorem reissue_preserves_session
     (h_trans : Transition pre post) :
     post.sessionId = pre.sessionId := by
   cases h_trans with
-  | reissue_failed _ _ _ h_session _ _ => exact h_session
+  | reissue_failed _ _ _ h_session _ _ _ _ => exact h_session
+
+theorem reissue_preserves_behavior
+    {pre post : SessionState}
+    (h_trans : Transition pre post) :
+    post.behaviorId = pre.behaviorId := by
+  cases h_trans with
+  | reissue_failed _ _ _ _ h_behavior _ _ _ => exact h_behavior
 
 theorem reissue_latest_in_requestIds
     {pre post : SessionState}
     (h_trans : Transition pre post) :
     post.latest ∈ post.requestIds := by
   cases h_trans with
-  | reissue_failed _ _ _ _ h_requestIds h_latest _ =>
+  | reissue_failed _ _ _ _ _ h_requestIds h_latest _ =>
       rw [h_latest, h_requestIds]
       exact Finset.mem_insert_self _ _
 
@@ -249,7 +263,7 @@ theorem reissue_latest_pending
     (h_trans : Transition pre post) :
     (post.ctx post.latest).state = .pending := by
   cases h_trans with
-  | reissue_failed _ _ h_can _ _ h_latest h_ctx =>
+  | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
       rw [h_latest, h_ctx]
       simp [reissuedContext]
 
@@ -258,7 +272,7 @@ theorem reissue_latest_released
     (h_trans : Transition pre post) :
     (post.ctx post.latest).admission = .released := by
   cases h_trans with
-  | reissue_failed _ _ h_can _ _ h_latest h_ctx =>
+  | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
       rw [h_latest, h_ctx]
       simp [reissuedContext]
 
@@ -267,7 +281,7 @@ theorem reissue_latest_origin_preserved
     (h_trans : Transition pre post) :
     (post.ctx post.latest).origin = (pre.ctx pre.latest).origin := by
   cases h_trans with
-  | reissue_failed _ _ h_can _ _ h_latest h_ctx =>
+  | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
       rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _⟩
       rw [h_latest, h_ctx, h_failed_latest]
       simp [reissuedContext]
@@ -277,7 +291,7 @@ theorem reissue_latest_backend_preserved
     (h_trans : Transition pre post) :
     (post.ctx post.latest).backend = (pre.ctx pre.latest).backend := by
   cases h_trans with
-  | reissue_failed _ _ h_can _ _ h_latest h_ctx =>
+  | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
       rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _⟩
       rw [h_latest, h_ctx, h_failed_latest]
       simp [reissuedContext]
@@ -287,7 +301,7 @@ theorem reissue_latest_retryCount_succ
     (h_trans : Transition pre post) :
     (post.ctx post.latest).retryCount = (pre.ctx pre.latest).retryCount + 1 := by
   cases h_trans with
-  | reissue_failed _ _ h_can _ _ h_latest h_ctx =>
+  | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
       rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _⟩
       rw [h_latest, h_ctx, h_failed_latest]
       simp [reissuedContext]
@@ -297,7 +311,7 @@ theorem reissue_latest_retryBound
     (h_trans : Transition pre post) :
     (post.ctx post.latest).retryCount ≤ (post.ctx post.latest).maxRetries := by
   cases h_trans with
-  | reissue_failed _ _ h_can _ _ h_latest h_ctx =>
+  | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
       rcases h_can with ⟨h_failed_latest, _, _, _, _, h_budget, _⟩
       have h_budget_latest : (pre.ctx pre.latest).retryCount < (pre.ctx pre.latest).maxRetries := by
         simpa [← h_failed_latest] using h_budget
@@ -309,7 +323,7 @@ theorem reissue_demotes_previous_latest
     (h_trans : Transition pre post) :
     (post.ctx pre.latest).isLatest = false := by
   cases h_trans with
-  | reissue_failed failedId newId h_can _ _ _ h_ctx =>
+  | reissue_failed failedId newId h_can _ _ _ _ h_ctx =>
       rcases h_can with ⟨h_failed_latest, h_failed_mem, h_new, _, _, _, _⟩
       have h_distinct : newId ≠ pre.latest := by
         intro h_eq
@@ -328,7 +342,7 @@ theorem reissue_preserves_latestFlagInvariant
     (h_trans : Transition pre post) :
     post.latestFlagInvariant := by
   cases h_trans with
-  | reissue_failed failedId newId h_can _ h_requestIds h_latest h_ctx =>
+  | reissue_failed failedId newId h_can _ _ h_requestIds h_latest h_ctx =>
       rcases h_pre with ⟨h_pre_latest_mem, h_pre_latest_flag, h_pre_others⟩
       rcases h_can with ⟨h_failed_latest, h_failed_mem, h_new, _, _, _, _⟩
       constructor

@@ -1,0 +1,8 @@
+type AgentPrincipal {
+    agent_did: String @index(unique: true)
+    display_name: String
+    default_behavior_id: String @index
+    enabled: Boolean @index
+    created_at: String
+    created_by: String
+}

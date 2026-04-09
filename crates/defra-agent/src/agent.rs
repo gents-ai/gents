@@ -1,24 +1,37 @@
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use defra_node::EmbeddedNode;
 use tokio::sync::watch;
 
-use crate::config::ProfileConfig;
+use crate::compaction::CompactionStrategy;
+use crate::config::{
+    BehaviorConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
+    DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
+};
 use crate::hook::FailurePolicy;
+use crate::identity::AgentIdentity;
 use crate::mcp_pool::McpPool;
 use crate::retry::RetryPolicy;
+use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
+use crate::tool_surface::{BashMode, BehaviorToolConfig, FileToolMode, ToolCeiling, ToolSelection};
 
 mod builder;
 mod daemon;
+mod document_view;
+mod reconcile;
 mod runtime;
 mod stream_processor;
+#[cfg(test)]
 mod supervision;
 #[cfg(test)]
 mod tests;
 
-pub use builder::{DefraAgentBuilder, ProfileBuilder};
 #[cfg(test)]
-pub(crate) use builder::PendingProfileConfig;
+pub(crate) use builder::PendingBehaviorConfig;
+pub use builder::{BehaviorBuilder, DefraAgentBuilder};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessLifecycleState {
@@ -45,10 +58,44 @@ pub trait ProcessLifecycleObserver: Send + Sync {
     fn on_process_state_change(&self, state: ProcessLifecycleState);
 }
 
+pub struct DocumentRuntimeOptions {
+    pub tool_ceiling: ToolCeiling,
+    pub mcp_pool: McpPool,
+    pub local_hostname: Option<String>,
+    pub local_subnet: Option<String>,
+    pub retry_policy: RetryPolicy,
+    pub hook_failure_policy: FailurePolicy,
+    pub process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
+}
+
+impl Default for DocumentRuntimeOptions {
+    fn default() -> Self {
+        Self {
+            tool_ceiling: ToolCeiling::meta_only(),
+            mcp_pool: McpPool::default(),
+            local_hostname: None,
+            local_subnet: None,
+            retry_policy: RetryPolicy::default(),
+            hook_failure_policy: FailurePolicy::default(),
+            process_state_observer: None,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct DocumentResolveContext {
+    pub(crate) identity: Arc<dyn AgentIdentity>,
+    pub(crate) tool_ceiling: ToolCeiling,
+}
+
 #[derive(Clone)]
 pub struct DefraAgent {
     node: Arc<EmbeddedNode>,
-    profiles: Vec<Arc<ProfileConfig>>,
+    agent_did: String,
+    default_behavior_id: String,
+    behaviors: Vec<Arc<BehaviorConfig>>,
+    unavailable_behaviors: HashMap<String, String>,
+    document_runtime_context: Option<DocumentResolveContext>,
     mcp_pool: McpPool,
     local_hostname: String,
     local_subnet: Option<String>,
@@ -59,14 +106,172 @@ pub struct DefraAgent {
 
 impl DefraAgent {
     pub fn builder() -> DefraAgentBuilder {
-        DefraAgentBuilder::default()
+        DefraAgentBuilder::new()
     }
 
-    pub fn profiles(&self) -> &[Arc<ProfileConfig>] {
-        &self.profiles
+    pub async fn from_default_behavior_documents(
+        node: Arc<EmbeddedNode>,
+        identity: Arc<dyn AgentIdentity>,
+        options: DocumentRuntimeOptions,
+    ) -> anyhow::Result<Self> {
+        let document_runtime_context = DocumentResolveContext {
+            identity: identity.clone(),
+            tool_ceiling: options.tool_ceiling.clone(),
+        };
+        let resolved_snapshot =
+            resolve_document_runtime_snapshot(node.as_ref(), &document_runtime_context).await?;
+        let default_behavior_id = resolved_snapshot.default_behavior_id.clone();
+        let mut behaviors = resolved_snapshot
+            .behaviors
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        behaviors.sort_by(|left, right| {
+            let left_is_default = left.name == default_behavior_id;
+            let right_is_default = right.name == default_behavior_id;
+            right_is_default
+                .cmp(&left_is_default)
+                .then_with(|| left.name.cmp(&right.name))
+        });
+
+        Ok(Self {
+            node,
+            agent_did: identity.did().to_string(),
+            default_behavior_id,
+            behaviors,
+            unavailable_behaviors: resolved_snapshot.unavailable_behaviors,
+            document_runtime_context: Some(document_runtime_context),
+            mcp_pool: options.mcp_pool,
+            local_hostname: options
+                .local_hostname
+                .unwrap_or_else(runtime::default_hostname),
+            local_subnet: options.local_subnet,
+            retry_policy: options.retry_policy,
+            hook_failure_policy: options.hook_failure_policy,
+            process_state_observer: options.process_state_observer,
+        })
+    }
+
+    pub fn behaviors(&self) -> &[Arc<BehaviorConfig>] {
+        &self.behaviors
+    }
+
+    pub fn agent_did(&self) -> &str {
+        &self.agent_did
+    }
+
+    pub fn default_behavior_id(&self) -> &str {
+        &self.default_behavior_id
+    }
+
+    pub fn unavailable_behaviors(&self) -> &HashMap<String, String> {
+        &self.unavailable_behaviors
+    }
+
+    pub(crate) fn document_runtime_context(&self) -> Option<&DocumentResolveContext> {
+        self.document_runtime_context.as_ref()
     }
 
     pub async fn run(self, shutdown: watch::Receiver<bool>) -> anyhow::Result<()> {
         runtime::run_agent(self, shutdown).await
     }
+}
+
+pub(crate) async fn resolve_document_runtime_snapshot(
+    node: &EmbeddedNode,
+    context: &DocumentResolveContext,
+) -> anyhow::Result<ResolvedRuntimeSnapshot> {
+    let view = document_view::load_document_runtime_view(node, context.identity.did()).await?;
+    document_view::resolve_document_runtime_snapshot_from_view(node, context, &view).await
+}
+
+pub(crate) fn behavior_config_from_documents(
+    identity: Arc<dyn AgentIdentity>,
+    behavior: &crate::document_config::AgentBehavior,
+    backend: &crate::backend_registry::InferenceBackend,
+    inference_profile: Option<&crate::document_config::InferenceProfile>,
+    tool_selection: ToolSelection,
+    tool_ceiling: &ToolCeiling,
+) -> anyhow::Result<BehaviorConfig> {
+    let compaction_strategy = parse_compaction_strategy(behavior.compaction_strategy.as_deref())?;
+    let stream_batch_ms = inference_profile
+        .and_then(|profile| profile.stream_batch_ms)
+        .and_then(|value| u64::try_from(value).ok())
+        .unwrap_or(DEFAULT_STREAM_BATCH_MS);
+    let deadline_duration_secs = inference_profile
+        .and_then(|profile| profile.deadline_duration_secs)
+        .and_then(|value| u64::try_from(value).ok())
+        .unwrap_or(DEFAULT_DEADLINE_DURATION_SECS);
+
+    Ok(BehaviorConfig {
+        name: behavior.behavior_id.clone(),
+        identity,
+        backend_id: Some(backend.backend_id.clone()),
+        backend_endpoint: backend.endpoint.clone(),
+        model_name: normalize_optional_string(behavior.model_name.as_deref())
+            .unwrap_or(DEFAULT_MODEL_NAME)
+            .to_string(),
+        context_window: inference_profile
+            .and_then(|profile| profile.context_window)
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or(DEFAULT_CONTEXT_WINDOW),
+        max_output_tokens: inference_profile
+            .and_then(|profile| profile.max_output_tokens)
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS),
+        max_turns: inference_profile
+            .and_then(|profile| profile.max_turns)
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or(DEFAULT_MAX_TURNS),
+        system_prompt: behavior.system_prompt.clone().unwrap_or_default(),
+        tools: BehaviorToolConfig::from_selection(
+            &behavior.behavior_id,
+            tool_selection,
+            tool_ceiling,
+            Vec::new(),
+        )?,
+        compaction_threshold: behavior
+            .compaction_threshold
+            .unwrap_or(DEFAULT_COMPACTION_THRESHOLD),
+        compaction_strategy,
+        stream_batch_ms,
+        deadline_duration: Duration::from_secs(deadline_duration_secs),
+    })
+}
+
+fn parse_compaction_strategy(value: Option<&str>) -> anyhow::Result<CompactionStrategy> {
+    match normalize_optional_string(value) {
+        None => Ok(CompactionStrategy::StripThenSummarize),
+        Some("StripToolResults") => Ok(CompactionStrategy::StripToolResults),
+        Some("Summarize") => Ok(CompactionStrategy::Summarize),
+        Some("StripThenSummarize") => Ok(CompactionStrategy::StripThenSummarize),
+        Some(other) => anyhow::bail!("unknown compaction strategy {other}"),
+    }
+}
+
+fn normalize_optional_string(value: Option<&str>) -> Option<&str> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then_some(trimmed)
+    })
+}
+
+pub(crate) fn tool_selection_from_document(
+    selection: &crate::document_config::ToolSelectionDocument,
+) -> anyhow::Result<ToolSelection> {
+    Ok(ToolSelection {
+        file_tools: if selection.enable_file_tools.unwrap_or(false) {
+            FileToolMode::parse(selection.file_tools_mode.as_deref().unwrap_or("ReadOnly"))?
+        } else {
+            FileToolMode::Off
+        },
+        bash: if selection.enable_bash.unwrap_or(false) {
+            BashMode::parse(selection.bash_mode.as_deref().unwrap_or("ReadOnly"))?
+        } else {
+            BashMode::Off
+        },
+        cli_tool_names: selection.cli_tool_names.clone().unwrap_or_default(),
+        enable_meta_tools: selection.enable_meta_tools.unwrap_or(true),
+        delegate_to: selection.delegate_to.clone().unwrap_or_default(),
+    })
 }

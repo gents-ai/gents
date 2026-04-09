@@ -1,6 +1,7 @@
 type AgentRequest @branchable {
     request_id: String @index
     agent_did: String @index
+    behavior_id: String @index
     session_id: String @index
     retry_parent_request: String
     retry_root_request: String

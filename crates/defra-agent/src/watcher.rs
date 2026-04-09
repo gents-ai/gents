@@ -20,6 +20,7 @@ pub struct AgentRequest {
     pub doc_id: String,
     pub request_id: String,
     pub agent_did: String,
+    pub behavior_id: Option<String>,
     pub session_id: String,
     pub content: String,
     pub created_at: String,

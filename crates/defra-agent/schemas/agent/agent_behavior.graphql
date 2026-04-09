@@ -1,0 +1,14 @@
+type AgentBehavior {
+    behavior_id: String @index(unique: true)
+    agent_did: String @index
+    display_name: String
+    system_prompt: String
+    backend_id: String @index
+    model_name: String
+    tool_selection_id: String @index
+    inference_profile_id: String @index
+    compaction_strategy: String
+    compaction_threshold: Float
+    enabled: Boolean @index
+    created_at: String
+}

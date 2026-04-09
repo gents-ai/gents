@@ -21,7 +21,12 @@ async fn interactive_claim_snapshot_matches_claimed_waiting() {
     let created_at = chrono::Utc::now().to_rfc3339();
     let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
 
-    let request = build_request(doc_id.clone(), request_id.clone(), session_id.clone(), created_at);
+    let request = build_request(
+        doc_id.clone(),
+        request_id.clone(),
+        session_id.clone(),
+        created_at,
+    );
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
@@ -40,6 +45,7 @@ async fn interactive_claim_snapshot_matches_claimed_waiting() {
             status: "processing".into(),
             lifecycle_state: "claimed".into(),
             admission_state: "waiting".into(),
+            behavior_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "interactive".into(),
             retry_parent_request: "".into(),
@@ -53,23 +59,25 @@ async fn interactive_claim_snapshot_matches_claimed_waiting() {
     );
     assert_eq!(
         fetch_conversation_snapshot(&db.node, &session_id).await,
-        Some(ConversationSnapshot {
-            latest_request_id: request_id,
-            status: "processing".into(),
-        })
+        None
     );
     assert_eq!(fetch_session_snapshot(&db.node, &session_id).await, None);
 }
 
 #[tokio::test]
-async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
-    let db = test_db("interactive-executing").await;
+async fn interactive_prepare_session_pins_behavior() {
+    let db = test_db("interactive-prepare-session").await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
     let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
 
-    let request = build_request(doc_id.clone(), request_id.clone(), session_id.clone(), created_at);
+    let request = build_request(
+        doc_id.clone(),
+        request_id.clone(),
+        session_id.clone(),
+        created_at,
+    );
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
@@ -81,6 +89,52 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
     );
 
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    lifecycle.prepare_session_with_identity().await.unwrap();
+
+    assert_eq!(
+        fetch_session_snapshot(&db.node, &session_id).await,
+        Some(SessionSnapshot {
+            session_id: session_id.clone(),
+            behavior_id: AGENT_NAME.into(),
+            status: "active".into(),
+        })
+    );
+    assert_eq!(
+        fetch_conversation_snapshot(&db.node, &session_id).await,
+        Some(ConversationSnapshot {
+            latest_request_id: request_id,
+            behavior_id: AGENT_NAME.into(),
+            status: "processing".into(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
+    let db = test_db("interactive-executing").await;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+
+    let request = build_request(
+        doc_id.clone(),
+        request_id.clone(),
+        session_id.clone(),
+        created_at,
+    );
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    lifecycle.prepare_session_with_identity().await.unwrap();
     lifecycle.mark_slot_acquired().await.unwrap();
 
     assert_eq!(
@@ -89,6 +143,7 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
             status: "processing".into(),
             lifecycle_state: "claimed".into(),
             admission_state: "acquired".into(),
+            behavior_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "interactive".into(),
             retry_parent_request: "".into(),
@@ -119,6 +174,7 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
             status: "processing".into(),
             lifecycle_state: "processing".into(),
             admission_state: "executing".into(),
+            behavior_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "interactive".into(),
             retry_parent_request: "".into(),
@@ -134,13 +190,23 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
         fetch_conversation_snapshot(&db.node, &session_id).await,
         Some(ConversationSnapshot {
             latest_request_id: request_id,
+            behavior_id: AGENT_NAME.into(),
             status: "processing".into(),
+        })
+    );
+    assert_eq!(
+        fetch_session_snapshot(&db.node, &session_id).await,
+        Some(SessionSnapshot {
+            session_id,
+            behavior_id: AGENT_NAME.into(),
+            status: "active".into(),
         })
     );
     assert_eq!(
         fetch_response_snapshot(&db.node, &response_doc_id).await,
         ResponseSnapshot {
             status: "streaming".into(),
+            behavior_id: AGENT_NAME.into(),
             progress_seq: 1,
             completed_at_present: false,
         }
@@ -155,7 +221,12 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
     let created_at = chrono::Utc::now().to_rfc3339();
     let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
 
-    let request = build_request(doc_id.clone(), request_id.clone(), session_id.clone(), created_at);
+    let request = build_request(
+        doc_id.clone(),
+        request_id.clone(),
+        session_id.clone(),
+        created_at,
+    );
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
@@ -167,6 +238,7 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
     );
 
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    lifecycle.prepare_session_with_identity().await.unwrap();
     lifecycle.fail().await.unwrap();
 
     assert_eq!(
@@ -175,6 +247,7 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
             status: "error".into(),
             lifecycle_state: "failed".into(),
             admission_state: "released".into(),
+            behavior_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "interactive".into(),
             retry_parent_request: "".into(),
@@ -190,6 +263,15 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
         fetch_conversation_snapshot(&db.node, &session_id).await,
         Some(ConversationSnapshot {
             latest_request_id: request_id,
+            behavior_id: AGENT_NAME.into(),
+            status: "active".into(),
+        })
+    );
+    assert_eq!(
+        fetch_session_snapshot(&db.node, &session_id).await,
+        Some(SessionSnapshot {
+            session_id,
+            behavior_id: AGENT_NAME.into(),
             status: "active".into(),
         })
     );
@@ -216,6 +298,7 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
             status: "processing".into(),
             lifecycle_state: "claimed".into(),
             admission_state: "waiting".into(),
+            behavior_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "scheduled".into(),
             retry_parent_request: "".into(),
@@ -231,6 +314,7 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
         fetch_session_snapshot(&db.node, &lifecycle.request().session_id).await,
         Some(SessionSnapshot {
             session_id: lifecycle.request().session_id.clone(),
+            behavior_id: AGENT_NAME.into(),
             status: "active".into(),
         })
     );
@@ -238,6 +322,7 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
         fetch_conversation_snapshot(&db.node, &lifecycle.request().session_id).await,
         Some(ConversationSnapshot {
             latest_request_id: lifecycle.request().request_id.clone(),
+            behavior_id: AGENT_NAME.into(),
             status: "processing".into(),
         })
     );

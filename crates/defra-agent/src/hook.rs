@@ -55,18 +55,6 @@ enum PolicyDecision {
 }
 
 impl DefraSessionHook {
-    pub fn new(node: Arc<EmbeddedNode>, agent_name: &str) -> Self {
-        Self::with_policy(node, agent_name, FailurePolicy::default())
-    }
-
-    pub fn with_policy(
-        node: Arc<EmbeddedNode>,
-        agent_name: &str,
-        failure_policy: FailurePolicy,
-    ) -> Self {
-        Self::with_identity(node, agent_name, &agent_did(agent_name), failure_policy)
-    }
-
     pub fn with_identity(
         node: Arc<EmbeddedNode>,
         agent_name: &str,
@@ -91,30 +79,6 @@ impl DefraSessionHook {
                 initialized: false,
             })),
         }
-    }
-
-    pub async fn resume(
-        node: Arc<EmbeddedNode>,
-        session_id: &str,
-        agent_name: &str,
-    ) -> anyhow::Result<Self> {
-        Self::resume_with_policy(node, session_id, agent_name, FailurePolicy::default()).await
-    }
-
-    pub async fn resume_with_policy(
-        node: Arc<EmbeddedNode>,
-        session_id: &str,
-        agent_name: &str,
-        failure_policy: FailurePolicy,
-    ) -> anyhow::Result<Self> {
-        Self::resume_with_identity_policy(
-            node,
-            session_id,
-            agent_name,
-            &agent_did(agent_name),
-            failure_policy,
-        )
-        .await
     }
 
     pub async fn resume_with_identity_policy(
@@ -190,15 +154,6 @@ impl DefraSessionHook {
         }
     }
 
-    pub async fn resume_or_create_with_policy(
-        node: Arc<EmbeddedNode>,
-        session_id: &str,
-        agent_name: &str,
-        failure_policy: FailurePolicy,
-    ) -> anyhow::Result<Self> {
-        Self::resume_with_policy(node, session_id, agent_name, failure_policy).await
-    }
-
     pub async fn resume_or_create_with_identity_policy(
         node: Arc<EmbeddedNode>,
         session_id: &str,
@@ -238,8 +193,4 @@ impl DefraSessionHook {
             },
         }
     }
-}
-
-fn agent_did(agent_name: &str) -> String {
-    format!("did:defra-agent:{agent_name}")
 }

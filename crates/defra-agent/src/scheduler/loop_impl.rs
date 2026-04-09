@@ -2,7 +2,7 @@ use super::execution::execute_task_standalone;
 use super::*;
 
 impl Scheduler {
-    pub async fn run(&self, cancel: CancellationToken) -> Result<()> {
+    pub async fn run(&mut self, cancel: CancellationToken) -> Result<()> {
         tracing::info!("scheduler started, tick interval = {}s", TICK_INTERVAL_SECS);
 
         loop {
@@ -20,9 +20,9 @@ impl Scheduler {
         }
     }
 
-    async fn tick(&self) -> Result<()> {
-        let profile_names: Vec<&str> = self.profiles.iter().map(|p| p.name.as_str()).collect();
-        let tasks = self.query_due_tasks(&profile_names).await?;
+    async fn tick(&mut self) -> Result<()> {
+        let active_snapshot = self.current_snapshot();
+        let tasks = self.query_due_tasks().await?;
 
         if tasks.is_empty() {
             tracing::debug!("scheduler tick: no due tasks");
@@ -34,45 +34,74 @@ impl Scheduler {
         let mut handles: Vec<(ScheduledTask, tokio::task::JoinHandle<Result<()>>)> = Vec::new();
 
         for task in tasks {
-            let profile = match self.profiles.iter().find(|p| p.name == task.profile_name) {
-                Some(p) => p.clone(),
+            let behavior = match active_snapshot.behavior(&task.behavior_id) {
+                Some(behavior) => behavior.clone(),
                 None => {
+                    let error_message = active_snapshot
+                        .unavailable_reason(&task.behavior_id)
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(|| {
+                            format!("scheduled task behavior {} is not loaded", task.behavior_id)
+                        });
                     tracing::warn!(
                         task = %task.name,
-                        profile = %task.profile_name,
-                        "skipping task: profile not found"
+                        behavior_id = %task.behavior_id,
+                        "skipping task: behavior not loaded"
                     );
+                    self.update_task_failure(&task, &error_message).await?;
                     continue;
                 }
             };
 
-            if profile.backend_id.is_none() {
+            if behavior.backend_id.is_none() {
                 tracing::error!(
                     task = %task.name,
-                    profile = %profile.name,
-                    "skipping task: scheduled profiles require backend binding"
+                    behavior_id = %behavior.name,
+                    "skipping task: scheduled behaviors require backend binding"
                 );
+                self.update_task_failure(
+                    &task,
+                    &format!(
+                        "scheduled task behavior {} requires a backend binding",
+                        behavior.name
+                    ),
+                )
+                .await?;
                 continue;
             }
+            let tool_surface = match active_snapshot.tool_surface(&task.behavior_id) {
+                Some(tool_surface) => tool_surface.clone(),
+                None => {
+                    tracing::warn!(
+                        task = %task.name,
+                        behavior_id = %task.behavior_id,
+                        "skipping task: tool surface not resolved for behavior"
+                    );
+                    self.update_task_failure(
+                        &task,
+                        &format!(
+                            "scheduled task behavior {} has no resolved tool surface",
+                            task.behavior_id
+                        ),
+                    )
+                    .await?;
+                    continue;
+                }
+            };
 
             let task_clone = task.clone();
             let node = self.node.clone();
-            let mcp_pool = self.mcp_pool.clone();
-            let health_map = self.health_map.clone();
-            let local_hostname = self.local_hostname.clone();
-            let local_subnet = self.local_subnet.clone();
+            let tool_runtime = self.tool_runtime.clone();
             let ops_graphql_endpoint = self.ops_graphql_endpoint.clone();
             let backend_tracker = self.backend_tracker.clone();
 
             let handle = tokio::spawn(async move {
                 execute_task_standalone(
                     &task_clone,
-                    &profile,
+                    &behavior,
+                    tool_surface.as_ref(),
+                    &tool_runtime,
                     &node,
-                    &mcp_pool,
-                    &health_map,
-                    &local_hostname,
-                    local_subnet.as_deref(),
                     &ops_graphql_endpoint,
                     backend_tracker,
                 )
@@ -116,30 +145,34 @@ impl Scheduler {
         Ok(())
     }
 
-    async fn query_due_tasks(&self, profile_names: &[&str]) -> Result<Vec<ScheduledTask>> {
-        let query = r#"query { ScheduledTask(filter: {enabled: {_eq: true}}) { _docID task_id name profile_name prompt interval_secs enabled next_run_at last_status last_error run_count } }"#;
-
-        let resp = self.node.execute(query).await;
-        if resp.has_errors() {
-            anyhow::bail!("query ScheduledTask failed: {:?}", resp.errors);
+    async fn query_due_tasks(&self) -> Result<Vec<ScheduledTask>> {
+        let items = self.query_scheduled_task_rows().await?;
+        let mut tasks = Vec::new();
+        for item in &items {
+            let task = ScheduledTask::from_value(item)?;
+            if task.is_due() {
+                tasks.push(task);
+            }
         }
 
-        let items = resp
+        Ok(tasks)
+    }
+
+    async fn query_scheduled_task_rows(&self) -> Result<Vec<serde_json::Value>> {
+        const BEHAVIOR_QUERY: &str = r#"query { ScheduledTask(filter: {enabled: {_eq: true}}) { _docID task_id name behavior_id prompt interval_secs enabled next_run_at last_status last_error run_count } }"#;
+
+        let behavior_resp = self.node.execute(BEHAVIOR_QUERY).await;
+        if behavior_resp.has_errors() {
+            anyhow::bail!("query ScheduledTask failed: {:?}", behavior_resp.errors);
+        }
+
+        Ok(behavior_resp
             .data
             .as_ref()
             .and_then(|d| d.get("ScheduledTask"))
             .and_then(|v| v.as_array())
             .cloned()
-            .unwrap_or_default();
-
-        let tasks: Vec<ScheduledTask> = items
-            .iter()
-            .filter_map(ScheduledTask::from_value)
-            .filter(|t| profile_names.contains(&t.profile_name.as_str()))
-            .filter(|t| t.is_due())
-            .collect();
-
-        Ok(tasks)
+            .unwrap_or_default())
     }
 
     async fn update_task_failure(&self, task: &ScheduledTask, error_msg: &str) -> Result<()> {

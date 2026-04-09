@@ -1,6 +1,7 @@
 type AgentSession @branchable {
     session_id: String @index(unique: true)
     agent_name: String @index
+    behavior_id: String @index
     started: DateTime
     ended: DateTime
     status: String

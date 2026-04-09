@@ -229,7 +229,11 @@ async fn defra_compactor_uses_mock_summary_response() {
     assert!(result.messages_compacted > 0);
 
     let request = model.last_request.lock().unwrap().clone().unwrap();
-    assert!(request.preamble.as_deref().unwrap().contains("coding agent"));
+    assert!(request
+        .preamble
+        .as_deref()
+        .unwrap()
+        .contains("coding agent"));
     let last_message = request.chat_history.last();
     match last_message {
         Message::User { content } => match content.first_ref() {
@@ -280,7 +284,10 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         };
         let assistant_tool_call = tool_call_msg("read", r#"{"file_path": "/workspace/main.rs"}"#);
         let tool_result = tool_result_msg("call-1", &"file contents\n".repeat(50));
-        let assistant = text_msg("assistant", &format!("Response {turn}: {}", "y".repeat(500)));
+        let assistant = text_msg(
+            "assistant",
+            &format!("Response {turn}: {}", "y".repeat(500)),
+        );
 
         session::save_message(
             &node,
@@ -375,17 +382,22 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         .collect::<Vec<_>>();
     assert_eq!(resumed_history, result.messages);
 
-    let config = crate::config::DaemonConfig {
-        system_prompt: "Be helpful.".to_string(),
-        data_room: "general".to_string(),
-        ..Default::default()
-    };
-    let prompt_builder = LayeredPromptBuilder::new(&config);
+    let prompt_builder = LayeredPromptBuilder::for_behavior(
+        "Be helpful.",
+        "general",
+        &["list_files", "read_file", "bash"],
+        true,
+        crate::config::DEFAULT_CONTEXT_WINDOW,
+        crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
+    );
     let summaries = entries
         .iter()
         .map(|entry| entry.summary.clone())
         .collect::<Vec<_>>();
-    let built = prompt_builder.build(&resumed_history, &summaries).await.unwrap();
+    let built = prompt_builder
+        .build(&resumed_history, &summaries)
+        .await
+        .unwrap();
 
     if let Message::User { content } = &built.messages[0] {
         if let UserContent::Text(text) = content.first_ref() {

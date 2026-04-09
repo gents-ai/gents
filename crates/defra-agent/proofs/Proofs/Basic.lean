@@ -14,6 +14,9 @@ abbrev SessionId := Nat
 /-- A request identifier within a session. -/
 abbrev RequestId := Nat
 
+/-- A behavior identifier bound to a session. -/
+abbrev BehaviorId := Nat
+
 /-- Predicate: a state type has terminal states. -/
 class HasTerminal (α : Type) where
   isTerminal : α → Prop

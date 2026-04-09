@@ -3,6 +3,12 @@ use defra_node::EmbeddedNode;
 
 pub const INFERENCE_BACKEND_SCHEMA: &str =
     include_str!("../schemas/inference/inference_backend.graphql");
+pub const INFERENCE_PROFILE_SCHEMA: &str =
+    include_str!("../schemas/inference/inference_profile.graphql");
+pub const AGENT_PRINCIPAL_SCHEMA: &str = include_str!("../schemas/agent/agent_principal.graphql");
+pub const AGENT_BEHAVIOR_SCHEMA: &str = include_str!("../schemas/agent/agent_behavior.graphql");
+pub const AGENT_RUNTIME_SCHEMA: &str = include_str!("../schemas/agent/agent_runtime.graphql");
+pub const TOOL_SELECTION_SCHEMA: &str = include_str!("../schemas/agent/tool_selection.graphql");
 pub const AGENT_CONVERSATION_SCHEMA: &str =
     include_str!("../schemas/agent/agent_conversation.graphql");
 pub const AGENT_REQUEST_SCHEMA: &str = include_str!("../schemas/agent/agent_request.graphql");
@@ -19,6 +25,11 @@ pub const TOOL_SERVICE_REGISTRY_SCHEMA: &str =
 pub const RUNTIME_ALL: &[&str] = &[INFERENCE_BACKEND_SCHEMA];
 
 pub const ALL: &[&str] = &[
+    AGENT_PRINCIPAL_SCHEMA,
+    AGENT_BEHAVIOR_SCHEMA,
+    AGENT_RUNTIME_SCHEMA,
+    TOOL_SELECTION_SCHEMA,
+    INFERENCE_PROFILE_SCHEMA,
     AGENT_CONVERSATION_SCHEMA,
     AGENT_REQUEST_SCHEMA,
     AGENT_RESPONSE_SCHEMA,

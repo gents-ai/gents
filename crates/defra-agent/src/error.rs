@@ -192,7 +192,7 @@ mod tests {
     #[test]
     fn inference_error_retryability() {
         assert!(InferenceError::ModelUnreachable {
-            endpoint: "http://localhost:8000".into()
+            endpoint: "http://localhost:8000/v1".into()
         }
         .is_retryable());
 
@@ -226,7 +226,7 @@ mod tests {
     #[test]
     fn daemon_error_from_variants() {
         let config_err: DaemonError = ConfigError::Missing {
-            key: "model_endpoint".into(),
+            key: "backend_endpoint".into(),
         }
         .into();
         assert!(matches!(config_err, DaemonError::Config(_)));

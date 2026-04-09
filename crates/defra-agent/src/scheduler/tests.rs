@@ -6,7 +6,7 @@ fn scheduled_task_parses_from_json() {
         "_docID": "abc123",
         "task_id": "seed-fleet-health",
         "name": "fleet-health-daily",
-        "profile_name": "amy-general",
+        "behavior_id": "amy-general",
         "prompt": "Check fleet health",
         "interval_secs": 86400,
         "enabled": true,
@@ -18,7 +18,7 @@ fn scheduled_task_parses_from_json() {
         doc_id: json["_docID"].as_str().unwrap_or_default().to_string(),
         task_id: json["task_id"].as_str().unwrap_or_default().to_string(),
         name: json["name"].as_str().unwrap_or_default().to_string(),
-        profile_name: json["profile_name"].as_str().unwrap_or_default().to_string(),
+        behavior_id: json["behavior_id"].as_str().unwrap_or_default().to_string(),
         prompt: json["prompt"].as_str().unwrap_or_default().to_string(),
         interval_secs: json["interval_secs"].as_i64().unwrap_or(3600),
         enabled: json["enabled"].as_bool().unwrap_or(false),
@@ -62,7 +62,7 @@ fn scheduled_task_from_value_parses() {
         "_docID": "doc1",
         "task_id": "task-1",
         "name": "test-task",
-        "profile_name": "general",
+        "behavior_id": "general",
         "prompt": "Do something",
         "interval_secs": 3600,
         "enabled": true,
@@ -74,7 +74,7 @@ fn scheduled_task_from_value_parses() {
     assert_eq!(task.doc_id, "doc1");
     assert_eq!(task.task_id, "task-1");
     assert_eq!(task.name, "test-task");
-    assert_eq!(task.profile_name, "general");
+    assert_eq!(task.behavior_id, "general");
     assert_eq!(task.prompt, "Do something");
     assert_eq!(task.interval_secs, 3600);
     assert!(task.enabled);
@@ -83,12 +83,47 @@ fn scheduled_task_from_value_parses() {
 }
 
 #[test]
-fn scheduled_task_from_value_with_timestamp() {
+fn scheduled_task_from_value_rejects_missing_behavior_id() {
     let json = serde_json::json!({
         "_docID": "doc2",
         "task_id": "task-2",
         "name": "timed-task",
-        "profile_name": "general",
+        "prompt": "Run check",
+        "interval_secs": 600,
+        "enabled": true,
+        "next_run_at": "2026-04-02T14:30:00Z",
+        "run_count": 1,
+    });
+
+    let error = ScheduledTask::from_value(&json).expect_err("should reject");
+    assert!(error.to_string().contains("behavior_id"));
+}
+
+#[test]
+fn scheduled_task_from_value_rejects_invalid_timestamp() {
+    let json = serde_json::json!({
+        "_docID": "doc3",
+        "task_id": "task-3",
+        "name": "bad-timestamp",
+        "behavior_id": "code",
+        "prompt": "Run check",
+        "interval_secs": 600,
+        "enabled": true,
+        "next_run_at": "not-a-time",
+        "run_count": 1,
+    });
+
+    let error = ScheduledTask::from_value(&json).expect_err("should reject");
+    assert!(error.to_string().contains("next_run_at"));
+}
+
+#[test]
+fn scheduled_task_from_value_with_timestamp() {
+    let json = serde_json::json!({
+        "_docID": "doc4",
+        "task_id": "task-4",
+        "name": "timed-task",
+        "behavior_id": "general",
         "prompt": "Run check",
         "interval_secs": 600,
         "enabled": true,
@@ -111,7 +146,7 @@ fn is_due_when_never_run() {
         doc_id: "d".into(),
         task_id: "t".into(),
         name: "n".into(),
-        profile_name: "p".into(),
+        behavior_id: "p".into(),
         prompt: "x".into(),
         interval_secs: 3600,
         enabled: true,
@@ -128,7 +163,7 @@ fn is_due_when_past() {
         doc_id: "d".into(),
         task_id: "t".into(),
         name: "n".into(),
-        profile_name: "p".into(),
+        behavior_id: "p".into(),
         prompt: "x".into(),
         interval_secs: 3600,
         enabled: true,
@@ -145,7 +180,7 @@ fn not_due_when_future() {
         doc_id: "d".into(),
         task_id: "t".into(),
         name: "n".into(),
-        profile_name: "p".into(),
+        behavior_id: "p".into(),
         prompt: "x".into(),
         interval_secs: 3600,
         enabled: true,
@@ -166,7 +201,7 @@ fn not_due_when_disabled() {
         doc_id: "d".into(),
         task_id: "t".into(),
         name: "n".into(),
-        profile_name: "p".into(),
+        behavior_id: "p".into(),
         prompt: "x".into(),
         interval_secs: 3600,
         enabled: false,

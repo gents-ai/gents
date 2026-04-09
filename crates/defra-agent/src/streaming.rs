@@ -45,6 +45,7 @@ pub trait StreamWriter: Send + Sync {
         &self,
         session_id: &str,
         request_id: &str,
+        behavior_id: &str,
     ) -> impl std::future::Future<Output = Result<String>> + Send;
 
     fn write_tokens(
@@ -91,7 +92,7 @@ impl DefraStreamWriter {
 }
 
 impl StreamWriter for DefraStreamWriter {
-    async fn begin(&self, session_id: &str, request_id: &str) -> Result<String> {
+    async fn begin(&self, session_id: &str, request_id: &str, behavior_id: &str) -> Result<String> {
         if let Some(existing) = load_response_state_by_key(&self.node, request_id).await? {
             anyhow::bail!(
                 "refusing to begin response for request_id={} because AgentResponse {} already exists with status={}",
@@ -103,12 +104,14 @@ impl StreamWriter for DefraStreamWriter {
 
         let now = chrono::Utc::now().to_rfc3339();
         let response_key = request_id.to_string();
+        let escaped_behavior_id = escape_graphql_string(behavior_id);
         let mutation = format!(
             r#"mutation {{
                 create_AgentResponse(input: {{
                     response_key: "{response_key}",
                     request_id: "{request_id}",
                     agent_did: "{agent_did}",
+                    behavior_id: "{escaped_behavior_id}",
                     session_id: "{session_id}",
                     content: "",
                     status: "streaming",

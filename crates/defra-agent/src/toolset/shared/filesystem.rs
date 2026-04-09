@@ -89,7 +89,14 @@ pub(crate) fn collect_grep_matches(
         let path = entry.path();
         let metadata = entry.metadata()?;
         if metadata.is_dir() {
-            collect_grep_matches(context, &path, pattern, case_sensitive, max_matches, matches)?;
+            collect_grep_matches(
+                context,
+                &path,
+                pattern,
+                case_sensitive,
+                max_matches,
+                matches,
+            )?;
             continue;
         }
 

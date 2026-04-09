@@ -9,17 +9,14 @@ use rig::completion::Prompt;
 use tokio_util::sync::CancellationToken;
 
 use crate::backend_registry::{self, BackendPermit, BackendTracker};
-use crate::config::ProfileConfig;
 use crate::graphql::escape_graphql_string;
-use crate::health_checker::ServiceHealthMap;
 use crate::hook::{DefraSessionHook, FailurePolicy};
 use crate::lifecycle::{ExecutionOrigin, RequestLifecycle};
-use crate::mcp_pool::McpPool;
-use crate::meta_tools::build_meta_tools;
 use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
+use crate::runtime_snapshot::{refresh_active_snapshot, ActiveRuntimeSnapshot};
 use crate::session;
 use crate::streaming::{DefraStreamWriter, StreamStatus, StreamWriter};
-use crate::toolset::build_delegate_tool;
+use crate::tool_surface::ToolRuntimeContext;
 
 mod execution;
 mod loop_impl;
@@ -36,7 +33,7 @@ pub struct ScheduledTask {
     pub doc_id: String,
     pub task_id: String,
     pub name: String,
-    pub profile_name: String,
+    pub behavior_id: String,
     pub prompt: String,
     pub interval_secs: i64,
     pub enabled: bool,
@@ -45,20 +42,17 @@ pub struct ScheduledTask {
 }
 
 impl ScheduledTask {
-    fn from_value(v: &serde_json::Value) -> Option<Self> {
-        Some(Self {
-            doc_id: v.get("_docID")?.as_str()?.to_string(),
-            task_id: v.get("task_id")?.as_str()?.to_string(),
-            name: v.get("name")?.as_str()?.to_string(),
-            profile_name: v.get("profile_name")?.as_str()?.to_string(),
-            prompt: v.get("prompt")?.as_str()?.to_string(),
-            interval_secs: v.get("interval_secs")?.as_i64()?,
-            enabled: v.get("enabled")?.as_bool()?,
-            next_run_at: v
-                .get("next_run_at")
-                .and_then(|v| v.as_str())
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                .map(|dt| dt.with_timezone(&Utc)),
+    fn from_value(v: &serde_json::Value) -> Result<Self> {
+        let behavior_id = required_string_field(v, "behavior_id")?.to_string();
+        Ok(Self {
+            doc_id: required_string_field(v, "_docID")?.to_string(),
+            task_id: required_string_field(v, "task_id")?.to_string(),
+            name: required_string_field(v, "name")?.to_string(),
+            behavior_id,
+            prompt: required_string_field(v, "prompt")?.to_string(),
+            interval_secs: required_i64_field(v, "interval_secs")?,
+            enabled: required_bool_field(v, "enabled")?,
+            next_run_at: optional_rfc3339_field(v, "next_run_at")?,
             run_count: v.get("run_count").and_then(|v| v.as_i64()).unwrap_or(0),
         })
     }
@@ -74,38 +68,73 @@ impl ScheduledTask {
     }
 }
 
+fn required_string_field<'a>(value: &'a serde_json::Value, field: &str) -> Result<&'a str> {
+    value
+        .get(field)
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow!("ScheduledTask missing required string field '{field}'"))
+}
+
+fn required_i64_field(value: &serde_json::Value, field: &str) -> Result<i64> {
+    value
+        .get(field)
+        .and_then(|value| value.as_i64())
+        .ok_or_else(|| anyhow!("ScheduledTask missing required integer field '{field}'"))
+}
+
+fn required_bool_field(value: &serde_json::Value, field: &str) -> Result<bool> {
+    value
+        .get(field)
+        .and_then(|value| value.as_bool())
+        .ok_or_else(|| anyhow!("ScheduledTask missing required boolean field '{field}'"))
+}
+
+fn optional_rfc3339_field(
+    value: &serde_json::Value,
+    field: &str,
+) -> Result<Option<chrono::DateTime<Utc>>> {
+    match value.get(field).and_then(|value| value.as_str()) {
+        Some(raw) => chrono::DateTime::parse_from_rfc3339(raw)
+            .map(|value| Some(value.with_timezone(&Utc)))
+            .map_err(|error| {
+                anyhow!("ScheduledTask field '{field}' is not valid RFC3339: {error}")
+            }),
+        None => Ok(None),
+    }
+}
+
 pub struct Scheduler {
     node: Arc<EmbeddedNode>,
-    profiles: Vec<Arc<ProfileConfig>>,
-    mcp_pool: McpPool,
-    health_map: ServiceHealthMap,
-    local_hostname: String,
-    local_subnet: Option<String>,
+    active_snapshot: Arc<ActiveRuntimeSnapshot>,
+    active_snapshot_rx: tokio::sync::watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+    tool_runtime: ToolRuntimeContext,
     ops_graphql_endpoint: String,
     backend_tracker: Arc<BackendTracker>,
 }
 
 impl Scheduler {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub(crate) fn new(
         node: Arc<EmbeddedNode>,
-        profiles: Vec<Arc<ProfileConfig>>,
-        mcp_pool: McpPool,
-        health_map: ServiceHealthMap,
-        local_hostname: String,
-        local_subnet: Option<String>,
+        active_snapshot_rx: tokio::sync::watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+        tool_runtime: ToolRuntimeContext,
         ops_graphql_endpoint: String,
         backend_tracker: Arc<BackendTracker>,
     ) -> Self {
+        let active_snapshot = active_snapshot_rx.borrow().clone();
         Self {
             node,
-            profiles,
-            mcp_pool,
-            health_map,
-            local_hostname,
-            local_subnet,
+            active_snapshot,
+            active_snapshot_rx,
+            tool_runtime,
             ops_graphql_endpoint,
             backend_tracker,
         }
+    }
+
+    fn current_snapshot(&mut self) -> Arc<ActiveRuntimeSnapshot> {
+        refresh_active_snapshot(&mut self.active_snapshot, &mut self.active_snapshot_rx);
+        self.active_snapshot.clone()
     }
 }

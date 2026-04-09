@@ -17,7 +17,7 @@ cd proofs && lake build
 
 | File | Contents |
 |------|----------|
-| `Proofs/Basic.lean` | Shared types: Time, SessionId, HasTerminal typeclass |
+| `Proofs/Basic.lean` | Shared types: Time, SessionId, RequestId, BehaviorId, HasTerminal typeclass |
 | `Proofs/Process.lean` | Layer 1 process lifecycle plus executable `Action` / `step?` / `replay?` |
 | `Proofs/Scheduling.lean` | Backend binding, admission, and scheduler state |
 | `Proofs/Request.lean` | Layer 2 request lifecycle plus executable `Action` / `step?` / `replay?` |
@@ -25,6 +25,7 @@ cd proofs && lake build
 | `Proofs/Composed.lean` | Cross-layer composition with guards |
 | `Proofs/Fleet.lean` | Fleet-level slot accounting plus executable scheduler actions |
 | `Proofs/SessionRecovery.lean` | Session-level retry/reissue plus executable `Action` / `step?` / `replay?` |
+| `Proofs/RuntimeReconcile.lean` | Runtime generation publication, behavior-pinned sessions, and reconcile preservation invariants |
 | `Proofs/Properties/Safety.lean` | S1-S6 safety proofs |
 | `Proofs/Properties/Liveness.lean` | L1, L3 bounded termination |
 | `Proofs/Properties/Decidable.lean` | Finite-state exhaustive checks |

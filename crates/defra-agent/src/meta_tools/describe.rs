@@ -3,9 +3,7 @@ use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::Deserialize;
 
-use super::shared::{
-    enforce_health_gate, lookup_service, MetaToolContext, MetaToolError,
-};
+use super::shared::{enforce_health_gate, lookup_service, MetaToolContext, MetaToolError};
 
 #[derive(Debug, Deserialize)]
 pub struct DescribeToolArgs {
