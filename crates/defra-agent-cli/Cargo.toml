@@ -14,10 +14,13 @@ path = "src/main.rs"
 anyhow.workspace = true
 chrono.workspace = true
 clap.workspace = true
+crossterm = "0.29"
 defra-agent = { path = "../defra-agent" }
 defra-node.workspace = true
 hostname.workspace = true
+ratatui = "0.29"
 reqwest.workspace = true
+rig-core = "0.31"
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

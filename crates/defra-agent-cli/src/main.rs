@@ -19,6 +19,8 @@ use serde_json::{json, Value};
 use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
 
+mod tui;
+
 const DEFAULT_AGENT_NAME: &str = "default";
 const DEFAULT_HTTP_PORT: u16 = 9191;
 const DEFAULT_LOG_FILTER: &str = concat!(
@@ -69,6 +71,7 @@ enum Command {
     #[command(name = "server")]
     Server(ServeArgs),
     Chat(ChatArgs),
+    Tui(TuiArgs),
     Show {
         #[command(subcommand)]
         command: ShowCommand,
@@ -158,6 +161,26 @@ struct ChatArgs {
     poll_secs: u64,
     #[arg(value_name = "MESSAGE")]
     message: Vec<String>,
+}
+
+#[derive(clap::Args, Clone)]
+struct TuiArgs {
+    #[arg(long)]
+    home: Option<PathBuf>,
+    #[arg(long)]
+    graphql: Option<String>,
+    #[arg(long)]
+    agent_did: Option<String>,
+    #[arg(long)]
+    agent_name: Option<String>,
+    #[arg(long)]
+    session_id: Option<String>,
+    #[arg(long)]
+    behavior_id: Option<String>,
+    #[arg(long, default_value_t = 300)]
+    timeout_secs: u64,
+    #[arg(long, default_value_t = 500)]
+    poll_ms: u64,
 }
 
 #[derive(Subcommand)]
@@ -502,6 +525,7 @@ async fn main() -> Result<()> {
         Command::Init(args) => init(args).await,
         Command::Server(args) => serve(args).await,
         Command::Chat(args) => chat(args).await,
+        Command::Tui(args) => tui::run(args).await,
         Command::Show { command } => match command {
             ShowCommand::Request(args) => request_show(args).await,
             ShowCommand::Response(args) => response_show(args).await,
