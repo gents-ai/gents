@@ -4,8 +4,9 @@
 
 If you want to try it, the shortest path is:
 1. Build the CLI.
-2. Start a local server with `--init <inference-endpoint>`.
-3. Open `chat` in another terminal.
+2. Run `init <inference-endpoint>`.
+3. Start `server`.
+4. Open `chat` in another terminal.
 
 ## Demo Quickstart
 
@@ -13,6 +14,7 @@ Prerequisites:
 
 - Rust toolchain
 - one reachable OpenAI-compatible inference endpoint
+- one model name served by that endpoint
 - if your endpoint requires auth, set `AGENT_DAEMON_API_KEY`
 
 The backend endpoint must be the OpenAI-compatible base URL, including `/v1`.
@@ -25,46 +27,77 @@ cargo build -p defra-agent-cli --release
 
 ### 2. Set demo variables
 
-Change only `INFERENCE_ENDPOINT`. The rest can stay as-is for a local demo.
+Set the endpoint and model name for your inference backend.
 
 ```bash
 export AGENT=./target/release/defra-agent
 export INFERENCE_ENDPOINT=http://127.0.0.1:8000/v1
+export MODEL_NAME=your-model-name
 ```
 
 By default the CLI keeps its local node, keys, and runtime state in `~/.defra-agent`.
 If you want to isolate a demo, pass `--home /some/path` to both `server` and `chat`.
 
-### 3. Start the server and initialize the default runtime
+### 3. Initialize the default runtime
+
+Run this once:
+
+```bash
+$AGENT init "$INFERENCE_ENDPOINT" --model-name "$MODEL_NAME"
+```
+
+This is idempotent. It provisions a standard safe home directory under `~/.defra-agent`:
+
+- default principal
+- default backend
+- default tool selection
+- default behavior
+- a CLI-oriented default system prompt
+- read-only file and bash tools by default
+
+If you want write-capable local tools for a demo, opt in explicitly:
+
+```bash
+$AGENT init "$INFERENCE_ENDPOINT" --model-name "$MODEL_NAME" --write-tools
+```
+
+If you want to isolate a demo, pass `--home /some/path` to `init`, `server`, and `chat`.
+
+If you want to override the default backend id as well:
+
+```bash
+$AGENT init "$INFERENCE_ENDPOINT" \
+  --model-name "$MODEL_NAME" \
+  --backend-id my-backend
+```
+
+The init output is JSON. The most useful fields are:
+
+- `agent_did`
+- `default_behavior_id`
+- `tool_ceiling`
+- `init.backend_id`
+- `init.model_name`
+- `init.tool_selection_id`
+
+If your inference endpoint requires auth, export `AGENT_DAEMON_API_KEY` before running `init`.
+
+### 4. Start the server
 
 Run this in terminal 1:
 
 ```bash
-$AGENT server --init "$INFERENCE_ENDPOINT"
+$AGENT server
 ```
 
-This is idempotent. It bootstraps the principal, creates or updates the default backend document, and binds the default behavior to it before the runtime starts.
-
-If you want to override the default binding, pass both `--backend-id` and `--model-name` together:
-
-```bash
-$AGENT server \
-  --init "$INFERENCE_ENDPOINT" \
-  --backend-id my-backend \
-  --model-name my-model
-```
-
-The server prints JSON when it is ready. The most useful fields are:
+The server reads the initialized home directory, starts the local node, and prints JSON when it is ready. The most useful fields are:
 
 - `agent_did`
 - `graphql`
 - `default_behavior_id`
-- `init.backend_id`
-- `init.model_name`
+- `tool_ceiling`
 
-If your inference endpoint requires auth, export `AGENT_DAEMON_API_KEY` before starting the server.
-
-### 4. Start chatting
+### 5. Start chatting
 
 Run this in terminal 2:
 
@@ -80,24 +113,33 @@ If you only want a single turn, pass the message directly:
 $AGENT chat "Introduce yourself in two short sentences."
 ```
 
-## Optional: Enable Read-Only Local Tools
+## Tool Defaults
 
-If you want a simple tools demo, start the server with a read-only ceiling:
+`init` enables a standard local toolset by default:
 
-```bash
-$AGENT server \
-  --init "$INFERENCE_ENDPOINT" \
-  --tool-ceiling readonly
-```
+- file tools: `ReadOnly`
+- bash: `ReadOnly`
+- meta tools: enabled
 
-Then create a tool selection and attach it to the default behavior. Read `agent_did`, `graphql`, `init.backend_id`, and `init.model_name` from the server startup JSON.
+That means a fresh demo can immediately inspect the local filesystem after `init -> server -> chat`.
+
+If you want write-capable tools instead, rerun `init` with `--write-tools`.
+
+The bootstrap templates live in:
+
+- `crates/defra-agent-cli/bootstrap/standard-readonly.jsonl`
+- `crates/defra-agent-cli/bootstrap/standard-readwrite.jsonl`
+
+They are plain JSONL so the default bootstrap documents stay easy to inspect and edit.
+
+## Advanced: Change Tool Selection After Init
+
+If you want to replace the default tool selection, you can still update documents directly. Read `agent_did` and `graphql` from the `server` startup JSON.
 
 ```bash
 export GRAPHQL=http://127.0.0.1:9191/api/v0/graphql
 export AGENT_DID="did:defra-agent:default"
 export TOOL_SELECTION_ID=default-tools
-export BACKEND_ID=default-backend
-export MODEL_NAME="<model-name-from-serve-output>"
 
 $AGENT tool-selection upsert \
   --graphql "$GRAPHQL" \
@@ -108,8 +150,6 @@ $AGENT tool-selection upsert \
 $AGENT behavior upsert \
   --graphql "$GRAPHQL" \
   --agent-did "$AGENT_DID" \
-  --backend-id "$BACKEND_ID" \
-  --model-name "$MODEL_NAME" \
   --tool-selection-id "$TOOL_SELECTION_ID" \
   --display-name "Demo"
 ```

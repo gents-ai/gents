@@ -11,9 +11,9 @@ use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{
     cli_tool, default_behavior_id_for_agent, ensure_agent_principal, ensure_runtime_schemas,
-    upsert_agent_behavior, AgentIdentity, BashMode, DefraAgent, DocumentRuntimeOptions,
-    FileToolMode, McpPool, ProcessLifecycleObserver, ProcessLifecycleState, SimpleIdentity,
-    ToolCeiling,
+    upsert_agent_behavior, upsert_tool_selection, AgentIdentity, BashMode, DefraAgent,
+    DocumentRuntimeOptions, FileToolMode, McpPool, ProcessLifecycleObserver, ProcessLifecycleState,
+    SimpleIdentity, ToolCeiling, ToolSelectionDocument,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -22,8 +22,12 @@ use tracing_subscriber::EnvFilter;
 
 const DEFAULT_AGENT_NAME: &str = "default";
 const DEFAULT_HTTP_PORT: u16 = 9191;
-const INIT_PRESENT_SENTINEL: &str = "__present__";
+const INIT_CONFIG_FILE_NAME: &str = "init.json";
 const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
+const DEFAULT_INIT_SYSTEM_PROMPT: &str = "You are a local CLI agent running for the user inside a terminal-backed DefraDB runtime. Be concise, inspect real files and command output before making claims, and prefer available tools over guessing. If you have only read-only tools, say so plainly when the user asks for changes. If you have write-capable tools, only modify files when the user explicitly asks.";
+const STANDARD_READONLY_INIT_TEMPLATE: &str = include_str!("../bootstrap/standard-readonly.jsonl");
+const STANDARD_READWRITE_INIT_TEMPLATE: &str =
+    include_str!("../bootstrap/standard-readwrite.jsonl");
 
 struct CliReadyObserver {
     tx: watch::Sender<ProcessLifecycleState>,
@@ -47,6 +51,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    Init(InitArgs),
     #[command(name = "server", alias = "serve")]
     Server(ServeArgs),
     Chat(ChatArgs),
@@ -77,6 +82,34 @@ enum Command {
 }
 
 #[derive(clap::Args)]
+struct InitArgs {
+    #[arg(long)]
+    home: Option<PathBuf>,
+    #[arg(long, hide = true)]
+    data_dir: Option<PathBuf>,
+    #[arg(long, default_value = DEFAULT_AGENT_NAME)]
+    agent_name: String,
+    #[arg(long)]
+    key_path: Option<PathBuf>,
+    #[arg(value_name = "INFERENCE_ENDPOINT")]
+    inference_endpoint: Option<String>,
+    #[arg(long)]
+    backend_id: Option<String>,
+    #[arg(long)]
+    backend_name: Option<String>,
+    #[arg(long)]
+    model_name: String,
+    #[arg(long, default_value_t = 1)]
+    max_concurrent: i64,
+    #[arg(long, default_value_t = false)]
+    write_tools: bool,
+    #[arg(long)]
+    tool_root: Option<PathBuf>,
+    #[arg(long)]
+    system_prompt_file: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
 struct ServeArgs {
     #[arg(long)]
     home: Option<PathBuf>,
@@ -86,29 +119,12 @@ struct ServeArgs {
     http_addr: IpAddr,
     #[arg(long, default_value_t = DEFAULT_HTTP_PORT)]
     http_port: u16,
-    #[arg(long, default_value = DEFAULT_AGENT_NAME)]
-    agent_name: String,
+    #[arg(long)]
+    agent_name: Option<String>,
     #[arg(long)]
     key_path: Option<PathBuf>,
-    #[arg(
-        long,
-        num_args = 0..=1,
-        value_name = "INFERENCE_ENDPOINT",
-        default_missing_value = INIT_PRESENT_SENTINEL
-    )]
-    init: Option<String>,
-    #[arg(long, hide = true)]
-    inference_endpoint: Option<String>,
-    #[arg(long)]
-    backend_id: Option<String>,
-    #[arg(long)]
-    backend_name: Option<String>,
-    #[arg(long)]
-    model_name: Option<String>,
-    #[arg(long, default_value_t = 1)]
-    max_concurrent: i64,
-    #[arg(long, value_enum, default_value_t = ToolCeilingArg::MetaOnly)]
-    tool_ceiling: ToolCeilingArg,
+    #[arg(long, value_enum)]
+    tool_ceiling: Option<ToolCeilingArg>,
     #[arg(long = "cli-tool")]
     cli_tools: Vec<String>,
     #[arg(long)]
@@ -137,7 +153,7 @@ struct ChatArgs {
     message: Vec<String>,
 }
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, ValueEnum, PartialEq, Eq)]
 enum ToolCeilingArg {
     MetaOnly,
     Readonly,
@@ -145,14 +161,33 @@ enum ToolCeilingArg {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
-struct ServeInitSummary {
+struct InitSummary {
     backend_id: String,
     backend_name: String,
     endpoint: String,
     model_name: String,
     default_behavior_id: String,
+    tool_selection_id: String,
+    tool_ceiling: ToolCeilingArg,
+    tool_root: Option<String>,
     created_principal: bool,
     created_default_behavior: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredInitConfig {
+    home: String,
+    agent_name: String,
+    agent_did: String,
+    key_path: Option<String>,
+    backend_id: String,
+    backend_name: String,
+    endpoint: String,
+    model_name: String,
+    default_behavior_id: String,
+    tool_selection_id: String,
+    tool_ceiling: ToolCeilingArg,
+    tool_root: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,6 +197,44 @@ struct StoredRuntimeState {
     agent_name: String,
     agent_did: String,
     default_behavior_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum InitTemplateRecord {
+    Backend {
+        backend_id: String,
+        name: String,
+        endpoint: String,
+        model_name: String,
+        max_concurrent: i64,
+        probe_status: String,
+    },
+    ToolSelection {
+        selection_id: String,
+        agent_did: String,
+        display_name: Option<String>,
+        enable_file_tools: Option<bool>,
+        file_tools_mode: Option<String>,
+        enable_bash: Option<bool>,
+        bash_mode: Option<String>,
+        cli_tool_names: Option<Vec<String>>,
+        enable_meta_tools: Option<bool>,
+        delegate_to: Option<Vec<String>>,
+    },
+    Behavior {
+        behavior_id: String,
+        agent_did: String,
+        display_name: Option<String>,
+        system_prompt: Option<String>,
+        backend_id: Option<String>,
+        model_name: Option<String>,
+        tool_selection_id: Option<String>,
+        inference_profile_id: Option<String>,
+        compaction_strategy: Option<String>,
+        compaction_threshold: Option<f64>,
+        enabled: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -348,6 +421,7 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
+        Command::Init(args) => init(args).await,
         Command::Server(args) => serve(args).await,
         Command::Chat(args) => chat(args).await,
         Command::Backend { command } => match command {
@@ -373,6 +447,68 @@ async fn main() -> Result<()> {
     }
 }
 
+async fn init(args: InitArgs) -> Result<()> {
+    let home_dir = resolve_home_dir(args.home.as_deref());
+    let data_dir = args
+        .data_dir
+        .clone()
+        .unwrap_or_else(|| default_data_dir(&home_dir));
+    fs::create_dir_all(&data_dir)
+        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
+
+    let key_path = args
+        .key_path
+        .clone()
+        .unwrap_or_else(|| default_key_path(&home_dir, &args.agent_name));
+    if let Some(parent) = key_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating key directory {}", parent.display()))?;
+    }
+
+    let identity = Arc::new(SimpleIdentity::new(&args.agent_name, &key_path, None));
+    let node = EmbeddedNode::builder()
+        .data_path(&data_dir)
+        .build()
+        .await
+        .context("building embedded defra node for init")?;
+    ensure_runtime_schemas(&node).await?;
+
+    let summary = initialize_runtime_home(&node, &home_dir, &args, identity.did()).await?;
+    let stored = StoredInitConfig {
+        home: home_dir.to_string_lossy().to_string(),
+        agent_name: args.agent_name.clone(),
+        agent_did: identity.did().to_string(),
+        key_path: Some(key_path.to_string_lossy().to_string()),
+        backend_id: summary.backend_id.clone(),
+        backend_name: summary.backend_name.clone(),
+        endpoint: summary.endpoint.clone(),
+        model_name: summary.model_name.clone(),
+        default_behavior_id: summary.default_behavior_id.clone(),
+        tool_selection_id: summary.tool_selection_id.clone(),
+        tool_ceiling: summary.tool_ceiling,
+        tool_root: summary.tool_root.clone(),
+    };
+    write_init_config(&home_dir, &stored)?;
+    clear_runtime_state(&home_dir)?;
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "status": "initialized",
+            "home": home_dir,
+            "agent_name": args.agent_name,
+            "agent_did": identity.did(),
+            "default_behavior_id": summary.default_behavior_id,
+            "tool_selection_id": summary.tool_selection_id,
+            "tool_ceiling": format_tool_ceiling(summary.tool_ceiling),
+            "tool_root": summary.tool_root,
+            "init": summary,
+        }))?
+    );
+
+    Ok(())
+}
+
 async fn serve(args: ServeArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
     let data_dir = args
@@ -391,23 +527,52 @@ async fn serve(args: ServeArgs) -> Result<()> {
             .context("building embedded defra node")?,
     );
     ensure_runtime_schemas(node.as_ref()).await?;
+    let init_config = read_init_config(&home_dir)?;
+    if let (Some(explicit), Some(config)) = (args.agent_name.as_deref(), init_config.as_ref()) {
+        if explicit != config.agent_name {
+            anyhow::bail!(
+                "--agent-name {} does not match initialized home agent {}",
+                explicit,
+                config.agent_name
+            );
+        }
+    }
 
     let local_hostname = hostname::get()
         .map(|host| host.to_string_lossy().to_string())
         .unwrap_or_else(|_| "unknown".to_string());
+    let agent_name = args
+        .agent_name
+        .clone()
+        .or_else(|| init_config.as_ref().map(|config| config.agent_name.clone()))
+        .unwrap_or_else(|| DEFAULT_AGENT_NAME.to_string());
     let key_path = args
         .key_path
         .clone()
-        .unwrap_or_else(|| default_key_path(&home_dir, &args.agent_name));
+        .or_else(|| {
+            init_config
+                .as_ref()
+                .and_then(|config| config.key_path.as_ref().map(PathBuf::from))
+        })
+        .unwrap_or_else(|| default_key_path(&home_dir, &agent_name));
     if let Some(parent) = key_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("creating key directory {}", parent.display()))?;
     }
-    let mut tool_ceiling = match args.tool_ceiling {
+    let effective_tool_ceiling = args
+        .tool_ceiling
+        .or_else(|| init_config.as_ref().map(|config| config.tool_ceiling))
+        .unwrap_or(ToolCeilingArg::MetaOnly);
+    let effective_tool_root = args.tool_root.clone().or_else(|| {
+        init_config
+            .as_ref()
+            .and_then(|config| config.tool_root.as_ref().map(PathBuf::from))
+    });
+    let mut tool_ceiling = match effective_tool_ceiling {
         ToolCeilingArg::MetaOnly => ToolCeiling::meta_only(),
         ToolCeilingArg::Readonly => ToolCeiling::readonly(),
         ToolCeilingArg::Readwrite => {
-            let root = args.tool_root.as_ref().ok_or_else(|| {
+            let root = effective_tool_root.as_ref().ok_or_else(|| {
                 anyhow::anyhow!("--tool-root is required when --tool-ceiling readwrite")
             })?;
             ToolCeiling::readwrite(root)
@@ -416,10 +581,8 @@ async fn serve(args: ServeArgs) -> Result<()> {
     for cli_tool_arg in &args.cli_tools {
         tool_ceiling = tool_ceiling.with_cli_tool(parse_cli_tool_arg(cli_tool_arg)?);
     }
-    let identity = Arc::new(SimpleIdentity::new(&args.agent_name, &key_path, None));
+    let identity = Arc::new(SimpleIdentity::new(&agent_name, &key_path, None));
     let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
-    let init_summary =
-        maybe_initialize_runtime_documents(node.as_ref(), &args, identity.did()).await?;
 
     let agent = DefraAgent::from_default_behavior_documents(
         node,
@@ -483,7 +646,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
         &StoredRuntimeState {
             home: home_dir.to_string_lossy().to_string(),
             graphql: graphql_url.clone(),
-            agent_name: args.agent_name.clone(),
+            agent_name: agent_name.clone(),
             agent_did: identity.did().to_string(),
             default_behavior_id: default_behavior_id.clone(),
         },
@@ -494,12 +657,13 @@ async fn serve(args: ServeArgs) -> Result<()> {
         serde_json::to_string_pretty(&json!({
             "status": "serving",
             "home": home_dir,
-            "agent_name": args.agent_name,
+            "agent_name": agent_name,
             "agent_did": identity.did(),
             "default_behavior_id": default_behavior_id,
+            "tool_ceiling": format_tool_ceiling(effective_tool_ceiling),
+            "tool_root": effective_tool_root,
             "runnable_behaviors": runnable_behaviors,
             "unavailable_behaviors": unavailable_behaviors,
-            "init": init_summary,
             "graphql": graphql_url,
         }))?
     );
@@ -512,6 +676,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
 async fn chat(args: ChatArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
     let runtime_state = read_runtime_state(&home_dir)?;
+    let init_config = read_init_config(&home_dir)?;
     let graphql = args
         .graphql
         .clone()
@@ -521,11 +686,13 @@ async fn chat(args: ChatArgs) -> Result<()> {
         .agent_name
         .clone()
         .or_else(|| runtime_state.as_ref().map(|state| state.agent_name.clone()))
+        .or_else(|| init_config.as_ref().map(|config| config.agent_name.clone()))
         .unwrap_or_else(|| DEFAULT_AGENT_NAME.to_string());
     let agent_did = args
         .agent_did
         .clone()
         .or_else(|| runtime_state.as_ref().map(|state| state.agent_did.clone()))
+        .or_else(|| init_config.as_ref().map(|config| config.agent_did.clone()))
         .unwrap_or_else(|| format!("did:defra-agent:{agent_name}"));
     let session_id = args
         .session_id
@@ -1020,11 +1187,12 @@ fn extract_mutation_doc_id(response: &Value, collection_name: &str) -> Result<St
     anyhow::bail!("graphql mutation returned no _docID for {collection_name}: {response}");
 }
 
-async fn maybe_initialize_runtime_documents(
+async fn initialize_runtime_home(
     node: &EmbeddedNode,
-    args: &ServeArgs,
+    home_dir: &Path,
+    args: &InitArgs,
     agent_did: &str,
-) -> Result<Option<ServeInitSummary>> {
+) -> Result<InitSummary> {
     let explicit_backend_id = args
         .backend_id
         .as_deref()
@@ -1035,90 +1203,302 @@ async fn maybe_initialize_runtime_documents(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let explicit_model_name = args
-        .model_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let inline_endpoint = args
-        .init
-        .as_deref()
-        .filter(|value| *value != INIT_PRESENT_SENTINEL);
-    if inline_endpoint.is_some() && args.inference_endpoint.is_some() {
-        anyhow::bail!(
-            "pass the inference endpoint either as --init <url> or --inference-endpoint, not both"
-        );
+    let model_name = args.model_name.trim();
+    if model_name.is_empty() {
+        anyhow::bail!("--model-name must not be empty");
     }
-    let init_requested = args.init.is_some() || args.inference_endpoint.is_some();
-    if !init_requested {
-        if explicit_backend_id.is_some()
-            || explicit_backend_name.is_some()
-            || explicit_model_name.is_some()
-        {
-            anyhow::bail!("--backend-id, --backend-name, and --model-name require --init");
-        }
-        return Ok(None);
-    }
-    if explicit_backend_id.is_some() != explicit_model_name.is_some() {
-        anyhow::bail!(
-            "--backend-id and --model-name must be provided together when overriding --init"
-        );
-    }
-    if explicit_backend_name.is_some() && explicit_backend_id.is_none() {
-        anyhow::bail!("--backend-name requires --backend-id when overriding --init");
+    if args.tool_root.is_some() && !args.write_tools {
+        anyhow::bail!("--tool-root requires --write-tools");
     }
 
-    let endpoint = inline_endpoint
-        .or(args.inference_endpoint.as_deref())
-        .ok_or_else(|| anyhow::anyhow!("an inference endpoint is required when --init is set"))?;
-    let bootstrap = ensure_agent_principal(node, agent_did).await?;
+    let endpoint = resolve_init_endpoint(args.inference_endpoint.as_deref())?;
     let backend_id = explicit_backend_id
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| format!("{}-backend", args.agent_name));
     let backend_name = explicit_backend_name
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| backend_id.clone());
-    let model_name = match explicit_model_name.map(ToOwned::to_owned) {
-        Some(model_name) => model_name,
-        None => match resolve_model_name(endpoint).await {
-            Ok(model_name) => model_name,
-            Err(error) => {
-                tracing::warn!(
-                    endpoint = %endpoint,
-                    error = %error,
-                    fallback_model = %defra_agent::config::DEFAULT_MODEL_NAME,
-                    "could not resolve model list from inference endpoint; falling back to default model name"
-                );
-                defra_agent::config::DEFAULT_MODEL_NAME.to_string()
-            }
-        },
+    let bootstrap = ensure_agent_principal(node, agent_did).await?;
+    let default_behavior_id = bootstrap.default_behavior.behavior_id.clone();
+    let tool_selection_id = format!("{default_behavior_id}:tools");
+    let tool_ceiling = if args.write_tools {
+        ToolCeilingArg::Readwrite
+    } else {
+        ToolCeilingArg::Readonly
     };
-
-    upsert_inference_backend_document(
-        node,
+    let tool_root = if args.write_tools {
+        Some(resolve_default_write_tool_root(args.tool_root.as_deref())?)
+    } else {
+        None
+    };
+    let system_prompt = match args.system_prompt_file.as_ref() {
+        Some(path) => fs::read_to_string(path)
+            .with_context(|| format!("reading system prompt from {}", path.display()))?,
+        None => DEFAULT_INIT_SYSTEM_PROMPT.to_string(),
+    };
+    let template = init_template_for_ceiling(tool_ceiling);
+    let template_vars = init_template_vars(
+        home_dir,
+        agent_did,
+        &args.agent_name,
         &backend_id,
         &backend_name,
-        endpoint,
-        &model_name,
+        &endpoint,
+        model_name,
         args.max_concurrent,
-        "healthy",
-    )
-    .await?;
+        &default_behavior_id,
+        &tool_selection_id,
+        &system_prompt,
+        tool_root.as_deref(),
+    );
+    apply_init_template(node, template, &template_vars).await?;
 
-    let mut default_behavior = bootstrap.default_behavior.clone();
-    default_behavior.backend_id = Some(backend_id.clone());
-    default_behavior.model_name = Some(model_name.clone());
-    upsert_agent_behavior(node, &default_behavior).await?;
-
-    Ok(Some(ServeInitSummary {
+    Ok(InitSummary {
         backend_id,
         backend_name,
-        endpoint: endpoint.to_string(),
-        model_name,
-        default_behavior_id: default_behavior.behavior_id,
+        endpoint,
+        model_name: model_name.to_string(),
+        default_behavior_id,
+        tool_selection_id,
+        tool_ceiling,
+        tool_root: tool_root.map(|path| path.to_string_lossy().to_string()),
         created_principal: bootstrap.created_principal,
         created_default_behavior: bootstrap.created_default_behavior,
-    }))
+    })
+}
+
+fn resolve_init_endpoint(explicit: Option<&str>) -> Result<String> {
+    explicit
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            std::env::var("INFERENCE_ENDPOINT")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!("an inference endpoint is required; pass it to `defra-agent init` or set INFERENCE_ENDPOINT")
+        })
+}
+
+fn resolve_default_write_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
+    if let Some(path) = explicit {
+        return Ok(path.to_path_buf());
+    }
+
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or_else(|| anyhow::anyhow!("unable to determine a default tool root for write tools"))
+}
+
+fn init_template_for_ceiling(tool_ceiling: ToolCeilingArg) -> &'static str {
+    match tool_ceiling {
+        ToolCeilingArg::Readonly => STANDARD_READONLY_INIT_TEMPLATE,
+        ToolCeilingArg::Readwrite => STANDARD_READWRITE_INIT_TEMPLATE,
+        ToolCeilingArg::MetaOnly => STANDARD_READONLY_INIT_TEMPLATE,
+    }
+}
+
+fn init_template_vars(
+    home_dir: &Path,
+    agent_did: &str,
+    agent_name: &str,
+    backend_id: &str,
+    backend_name: &str,
+    endpoint: &str,
+    model_name: &str,
+    max_concurrent: i64,
+    default_behavior_id: &str,
+    tool_selection_id: &str,
+    system_prompt: &str,
+    tool_root: Option<&Path>,
+) -> std::collections::BTreeMap<String, String> {
+    let mut vars = std::collections::BTreeMap::new();
+    vars.insert("HOME".to_string(), home_dir.to_string_lossy().to_string());
+    vars.insert("AGENT_DID".to_string(), agent_did.to_string());
+    vars.insert("AGENT_NAME".to_string(), agent_name.to_string());
+    vars.insert("BACKEND_ID".to_string(), backend_id.to_string());
+    vars.insert("BACKEND_NAME".to_string(), backend_name.to_string());
+    vars.insert("ENDPOINT".to_string(), endpoint.to_string());
+    vars.insert("MODEL_NAME".to_string(), model_name.to_string());
+    vars.insert("MAX_CONCURRENT".to_string(), max_concurrent.to_string());
+    vars.insert(
+        "DEFAULT_BEHAVIOR_ID".to_string(),
+        default_behavior_id.to_string(),
+    );
+    vars.insert(
+        "TOOL_SELECTION_ID".to_string(),
+        tool_selection_id.to_string(),
+    );
+    vars.insert("SYSTEM_PROMPT".to_string(), system_prompt.to_string());
+    vars.insert(
+        "TOOL_ROOT".to_string(),
+        tool_root
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_default(),
+    );
+    vars
+}
+
+async fn apply_init_template(
+    node: &EmbeddedNode,
+    template: &str,
+    vars: &std::collections::BTreeMap<String, String>,
+) -> Result<()> {
+    for (line_no, line) in template.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        let value: Value = serde_json::from_str(trimmed)
+            .with_context(|| format!("parsing init template line {}", line_no + 1))?;
+        let substituted = substitute_template_value(&value, vars)
+            .with_context(|| format!("substituting init template line {}", line_no + 1))?;
+        let record: InitTemplateRecord = serde_json::from_value(substituted)
+            .with_context(|| format!("decoding init template line {}", line_no + 1))?;
+        match record {
+            InitTemplateRecord::Backend {
+                backend_id,
+                name,
+                endpoint,
+                model_name,
+                max_concurrent,
+                probe_status,
+            } => {
+                upsert_inference_backend_document(
+                    node,
+                    &backend_id,
+                    &name,
+                    &endpoint,
+                    &model_name,
+                    max_concurrent,
+                    &probe_status,
+                )
+                .await?;
+            }
+            InitTemplateRecord::ToolSelection {
+                selection_id,
+                agent_did,
+                display_name,
+                enable_file_tools,
+                file_tools_mode,
+                enable_bash,
+                bash_mode,
+                cli_tool_names,
+                enable_meta_tools,
+                delegate_to,
+            } => {
+                upsert_tool_selection(
+                    node,
+                    &ToolSelectionDocument {
+                        selection_id,
+                        agent_did,
+                        display_name,
+                        enable_file_tools,
+                        file_tools_mode,
+                        enable_bash,
+                        bash_mode,
+                        cli_tool_names,
+                        enable_meta_tools,
+                        delegate_to,
+                    },
+                )
+                .await?;
+            }
+            InitTemplateRecord::Behavior {
+                behavior_id,
+                agent_did,
+                display_name,
+                system_prompt,
+                backend_id,
+                model_name,
+                tool_selection_id,
+                inference_profile_id,
+                compaction_strategy,
+                compaction_threshold,
+                enabled,
+            } => {
+                upsert_agent_behavior(
+                    node,
+                    &defra_agent::AgentBehavior {
+                        behavior_id,
+                        agent_did,
+                        display_name,
+                        system_prompt,
+                        backend_id,
+                        model_name,
+                        tool_selection_id,
+                        inference_profile_id,
+                        compaction_strategy,
+                        compaction_threshold,
+                        enabled,
+                        created_at: None,
+                    },
+                )
+                .await?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn substitute_template_value(
+    value: &Value,
+    vars: &std::collections::BTreeMap<String, String>,
+) -> Result<Value> {
+    Ok(match value {
+        Value::Null => Value::Null,
+        Value::Bool(value) => Value::Bool(*value),
+        Value::Number(value) => Value::Number(value.clone()),
+        Value::String(value) => substitute_template_string(value, vars)?,
+        Value::Array(values) => Value::Array(
+            values
+                .iter()
+                .map(|value| substitute_template_value(value, vars))
+                .collect::<Result<Vec<_>>>()?,
+        ),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, value)| Ok((key.clone(), substitute_template_value(value, vars)?)))
+                .collect::<Result<serde_json::Map<String, Value>>>()?,
+        ),
+    })
+}
+
+fn substitute_template_string(
+    template: &str,
+    vars: &std::collections::BTreeMap<String, String>,
+) -> Result<Value> {
+    if let Some(name) = full_placeholder_name(template) {
+        let replacement = vars
+            .get(name)
+            .ok_or_else(|| anyhow::anyhow!("missing init template variable {name}"))?;
+        if let Ok(json_scalar) = serde_json::from_str::<Value>(replacement) {
+            return Ok(json_scalar);
+        }
+        return Ok(Value::String(replacement.clone()));
+    }
+
+    let mut rendered = template.to_string();
+    for (name, value) in vars {
+        rendered = rendered.replace(&format!("${{{name}}}"), value);
+    }
+    if rendered.contains("${") {
+        anyhow::bail!("unresolved init template placeholder in {template}");
+    }
+    Ok(Value::String(rendered))
+}
+
+fn full_placeholder_name(template: &str) -> Option<&str> {
+    template
+        .strip_prefix("${")
+        .and_then(|value| value.strip_suffix('}'))
+        .filter(|value| !value.is_empty())
 }
 
 async fn upsert_inference_backend_document(
@@ -1168,33 +1548,6 @@ async fn upsert_inference_backend_document(
         anyhow::bail!("upsert InferenceBackend failed: {:?}", response.errors);
     }
     Ok(())
-}
-
-async fn resolve_model_name(endpoint: &str) -> Result<String> {
-    let models_url = format!("{}/models", endpoint.trim_end_matches('/'));
-    let mut request = reqwest::Client::new().get(&models_url);
-    if let Ok(api_key) = std::env::var("AGENT_DAEMON_API_KEY") {
-        if !api_key.trim().is_empty() {
-            request = request.bearer_auth(api_key);
-        }
-    }
-    let response = request
-        .send()
-        .await
-        .with_context(|| format!("requesting model list from {models_url}"))?;
-    let value: Value = response
-        .json()
-        .await
-        .with_context(|| format!("decoding model list from {models_url}"))?;
-
-    if let Some(id) = value.pointer("/data/0/id").and_then(Value::as_str) {
-        return Ok(id.to_string());
-    }
-    if let Some(model) = value.pointer("/models/0/model").and_then(Value::as_str) {
-        return Ok(model.to_string());
-    }
-
-    anyhow::bail!("could not resolve a model id from {models_url}: {value}");
 }
 
 fn response_query(request_id: &str) -> String {
@@ -1326,8 +1679,34 @@ fn default_data_dir(home_dir: &Path) -> PathBuf {
     home_dir.join("data")
 }
 
+fn init_config_path(home_dir: &Path) -> PathBuf {
+    home_dir.join(INIT_CONFIG_FILE_NAME)
+}
+
 fn runtime_state_path(home_dir: &Path) -> PathBuf {
     home_dir.join(RUNTIME_STATE_FILE_NAME)
+}
+
+fn write_init_config(home_dir: &Path, state: &StoredInitConfig) -> Result<()> {
+    fs::create_dir_all(home_dir)
+        .with_context(|| format!("creating home directory {}", home_dir.display()))?;
+    let path = init_config_path(home_dir);
+    let contents = serde_json::to_vec_pretty(state).context("encoding local init config JSON")?;
+    fs::write(&path, contents)
+        .with_context(|| format!("writing init config {}", path.display()))?;
+    Ok(())
+}
+
+fn read_init_config(home_dir: &Path) -> Result<Option<StoredInitConfig>> {
+    let path = init_config_path(home_dir);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes =
+        fs::read(&path).with_context(|| format!("reading init config {}", path.display()))?;
+    let state = serde_json::from_slice(&bytes)
+        .with_context(|| format!("decoding init config {}", path.display()))?;
+    Ok(Some(state))
 }
 
 fn write_runtime_state(home_dir: &Path, state: &StoredRuntimeState) -> Result<()> {
@@ -1350,6 +1729,15 @@ fn read_runtime_state(home_dir: &Path) -> Result<Option<StoredRuntimeState>> {
     let state = serde_json::from_slice(&bytes)
         .with_context(|| format!("decoding runtime state {}", path.display()))?;
     Ok(Some(state))
+}
+
+fn clear_runtime_state(home_dir: &Path) -> Result<()> {
+    let path = runtime_state_path(home_dir);
+    if path.exists() {
+        fs::remove_file(&path)
+            .with_context(|| format!("removing stale runtime state {}", path.display()))?;
+    }
+    Ok(())
 }
 
 fn default_key_path(home_dir: &Path, agent_name: &str) -> PathBuf {
@@ -1430,6 +1818,14 @@ fn normalize_bash_mode(enabled: bool, explicit: Option<&str>) -> Result<String> 
     };
     BashMode::parse(value)?;
     Ok(value.to_string())
+}
+
+fn format_tool_ceiling(value: ToolCeilingArg) -> &'static str {
+    match value {
+        ToolCeilingArg::MetaOnly => "meta-only",
+        ToolCeilingArg::Readonly => "readonly",
+        ToolCeilingArg::Readwrite => "readwrite",
+    }
 }
 
 async fn wait_for_terminal_response(

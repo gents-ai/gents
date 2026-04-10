@@ -74,20 +74,22 @@ impl MockModelEndpoint {
             while !stop_for_thread.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
-                        let mut buffer = [0_u8; 4096];
-                        let read = stream.read(&mut buffer).unwrap_or(0);
-                        let request = String::from_utf8_lossy(&buffer[..read]);
-                        let (status, body) = if request.starts_with("GET /v1/models ") {
+                        let request = match read_http_request(&mut stream) {
+                            Ok(request) => request,
+                            Err(_) => {
+                                let _ = stream.shutdown(Shutdown::Both);
+                                continue;
+                            }
+                        };
+
+                        let (status, body) = if request.method == "GET"
+                            && (request.path == "/v1/models" || request.path == "/models")
+                        {
                             ("200 OK", format!(r#"{{"data":[{{"id":"{model_name}"}}]}}"#))
                         } else {
                             ("404 Not Found", r#"{"error":"not found"}"#.to_string())
                         };
-                        let response = format!(
-                            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                            body.len()
-                        );
-                        let _ = stream.write_all(response.as_bytes());
-                        let _ = stream.flush();
+                        let _ = write_http_response(&mut stream, status, "application/json", &body);
                         let _ = stream.shutdown(Shutdown::Both);
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -365,18 +367,28 @@ impl Drop for MockChatEndpoint {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_selection_upsert_defaults_enabled_modes_to_readonly() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let data_dir = tempdir.path().join("data");
     let home_dir = tempdir.path().join("home");
-    fs::create_dir_all(&data_dir)?;
     fs::create_dir_all(&home_dir)?;
 
+    let model_name = format!("mock-config-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
     let port = allocate_port()?;
     let agent_name = format!("cli-config-{}", Uuid::new_v4().simple());
     let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
     let selection_id = format!("{agent_name}:tools");
 
-    let mut serve = spawn_serve(&home_dir, port, &agent_name, "readonly")?;
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve.child)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
@@ -446,11 +458,11 @@ async fn tool_selection_upsert_defaults_enabled_modes_to_readonly() -> Result<()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_submit_waits_for_response_by_default() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let data_dir = tempdir.path().join("data");
     let home_dir = tempdir.path().join("home");
-    fs::create_dir_all(&data_dir)?;
     fs::create_dir_all(&home_dir)?;
 
+    let model_name = format!("mock-submit-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
     let port = allocate_port()?;
     let agent_name = format!("cli-submit-{}", Uuid::new_v4().simple());
     let graphql = graphql_url(port);
@@ -458,7 +470,17 @@ async fn request_submit_waits_for_response_by_default() -> Result<()> {
     let request_content = format!("CLI wait test {}", Uuid::new_v4());
     let expected_content = format!("wait-ok-{}", Uuid::new_v4().simple());
 
-    let mut serve = spawn_serve(&home_dir, port, &agent_name, "meta-only")?;
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve.child)?;
     wait_for_runtime_ready(
         &graphql,
@@ -541,13 +563,17 @@ async fn chat_uses_runtime_state_for_interactive_turns() -> Result<()> {
     let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
 
-    let mut serve = spawn_serve_with_args(
+    run_init_json(
         &home_dir,
-        port,
-        &agent_name,
-        "meta-only",
-        &["--init", mock_endpoint.endpoint()],
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
     )?;
+    let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve.child)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
@@ -606,11 +632,9 @@ async fn chat_uses_runtime_state_for_interactive_turns() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn serve_init_bootstraps_backend_and_default_behavior_idempotently() -> Result<()> {
+async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotently() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let data_dir = tempdir.path().join("data");
     let home_dir = tempdir.path().join("home");
-    fs::create_dir_all(&data_dir)?;
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-model-{}", Uuid::new_v4().simple());
@@ -621,9 +645,28 @@ async fn serve_init_bootstraps_backend_and_default_behavior_idempotently() -> Re
     let agent_did = format!("did:defra-agent:{agent_name}");
     let backend_id = format!("{agent_name}-backend");
     let graphql = graphql_url(port);
+    let tool_selection_id = format!("{agent_did}:default:tools");
 
-    let extra_args = ["--init", mock_endpoint.endpoint()];
-    let mut serve = spawn_serve_with_args(&home_dir, port, &agent_name, "meta-only", &extra_args)?;
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    assert_eq!(
+        init.get("status").and_then(Value::as_str),
+        Some("initialized")
+    );
+    assert_eq!(
+        init.pointer("/init/tool_ceiling").and_then(Value::as_str),
+        Some("Readonly")
+    );
+
+    let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve.child)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
@@ -633,12 +676,23 @@ async fn serve_init_bootstraps_backend_and_default_behavior_idempotently() -> Re
         &backend_id,
         mock_endpoint.endpoint(),
         &model_name,
+        &tool_selection_id,
     )
     .await?;
 
     drop(serve);
 
-    let mut serve = spawn_serve_with_args(&home_dir, port, &agent_name, "meta-only", &extra_args)?;
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve.child)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
@@ -648,6 +702,7 @@ async fn serve_init_bootstraps_backend_and_default_behavior_idempotently() -> Re
         &backend_id,
         mock_endpoint.endpoint(),
         &model_name,
+        &tool_selection_id,
     )
     .await?;
 
@@ -690,42 +745,55 @@ async fn serve_init_bootstraps_backend_and_default_behavior_idempotently() -> Re
             .map(Vec::len),
         Some(1)
     );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn serve_init_rejects_partial_backend_override() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let home_dir = tempdir.path().join("home");
-    fs::create_dir_all(&home_dir)?;
-
-    let port = allocate_port()?;
-    let output = Command::new(cli_bin())
-        .env("HOME", &home_dir)
-        .env("RUST_LOG", "error")
-        .arg("server")
-        .arg("--http-port")
-        .arg(port.to_string())
-        .arg("--init")
-        .arg("http://127.0.0.1:65535/v1")
-        .arg("--backend-id")
-        .arg("custom-backend")
-        .output()
-        .context("running defra-agent server with partial backend override")?;
-
-    assert!(!output.status.success(), "server init should fail");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("--backend-id and --model-name must be provided together"),
-        "expected paired-override validation error, got:\n{stderr}"
+    let selection_rows = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{
+                ToolSelection(filter: {{ selection_id: {{ _eq: "{}" }} }}) {{
+                    selection_id
+                }}
+            }}"#,
+            escape_graphql_string(&tool_selection_id),
+        ),
+    )
+    .await?;
+    assert_eq!(
+        selection_rows
+            .pointer("/data/ToolSelection")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(1)
     );
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn serve_init_accepts_explicit_backend_and_model_together() -> Result<()> {
+async fn init_requires_model_name() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let output = Command::new(cli_bin())
+        .env("HOME", &home_dir)
+        .env("RUST_LOG", "error")
+        .arg("init")
+        .arg("http://127.0.0.1:65535/v1")
+        .output()
+        .context("running defra-agent init without model name")?;
+
+    assert!(!output.status.success(), "init should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--model-name <MODEL_NAME>"),
+        "expected clap missing-argument error, got:\n{stderr}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
@@ -738,21 +806,21 @@ async fn serve_init_accepts_explicit_backend_and_model_together() -> Result<()> 
     let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
     let backend_id = format!("{agent_name}-custom-backend");
+    let tool_selection_id = format!("{agent_did}:default:tools");
 
-    let mut serve = spawn_serve_with_args(
+    run_init_json(
         &home_dir,
-        port,
-        &agent_name,
-        "meta-only",
         &[
-            "--init",
-            mock_endpoint.endpoint(),
-            "--backend-id",
-            &backend_id,
+            "--agent-name",
+            &agent_name,
             "--model-name",
             &model_name,
+            "--backend-id",
+            &backend_id,
+            mock_endpoint.endpoint(),
         ],
     )?;
+    let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve.child)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
@@ -762,6 +830,7 @@ async fn serve_init_accepts_explicit_backend_and_model_together() -> Result<()> 
         &backend_id,
         mock_endpoint.endpoint(),
         &model_name,
+        &tool_selection_id,
     )
     .await?;
 
@@ -771,9 +840,7 @@ async fn serve_init_accepts_explicit_backend_and_model_together() -> Result<()> 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let data_dir = tempdir.path().join("data");
     let home_dir = tempdir.path().join("home");
-    fs::create_dir_all(&data_dir)?;
     fs::create_dir_all(&home_dir)?;
 
     let token = format!("E2E_TOKEN_{}", Uuid::new_v4().simple());
@@ -792,37 +859,29 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
     let agent_name = format!("cli-tool-loop-{}", Uuid::new_v4().simple());
     let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
-    let backend_id = format!("{agent_name}-backend");
-    let selection_id = format!("{agent_name}:tools");
-
-    let mut serve = spawn_serve_with_args(
-        &home_dir,
-        port,
-        &agent_name,
-        "readonly",
-        &["--init", mock_endpoint.endpoint()],
-    )?;
-    wait_for_port(port, &mut serve.child)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
-
-    let selection = run_cli_json(
+    let init = run_init_json(
         &home_dir,
         &[
-            "tool-selection",
-            "upsert",
-            "--graphql",
-            &graphql,
-            "--agent-did",
-            &agent_did,
-            "--selection-id",
-            &selection_id,
-            "--enable-file-tools",
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
         ],
     )?;
-    let selection_doc_id = selection
-        .get("doc_id")
+    let backend_id = init
+        .pointer("/init/backend_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("tool-selection output missing doc_id: {selection}"))?;
+        .ok_or_else(|| anyhow!("init output missing backend_id: {init}"))?
+        .to_string();
+    let selection_id = init
+        .pointer("/init/tool_selection_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing tool_selection_id: {init}"))?
+        .to_string();
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve.child)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
     let behavior = run_cli_json(
         &home_dir,
         &[
@@ -850,6 +909,7 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
         .get("doc_id")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("behavior output missing doc_id: {behavior}"))?;
+    let selection_doc_id = doc_id_for_selection(&graphql, &selection_id).await?;
     let config_rows = graphql_query(
         &graphql,
         &format!(
@@ -866,7 +926,7 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
                 }}
             }}"#,
             escape_graphql_string(behavior_doc_id),
-            escape_graphql_string(selection_doc_id),
+            escape_graphql_string(&selection_doc_id),
         ),
     )
     .await?;
@@ -994,9 +1054,7 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
 #[ignore = "requires a reachable external OpenAI-compatible endpoint"]
 async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let data_dir = tempdir.path().join("data");
     let home_dir = tempdir.path().join("home");
-    fs::create_dir_all(&data_dir)?;
     fs::create_dir_all(&home_dir)?;
 
     let token = format!("E2E_TOKEN_{}", Uuid::new_v4().simple());
@@ -1012,39 +1070,33 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     let agent_name = format!("cli-live-{}", Uuid::new_v4().simple());
     let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
-    let backend_id = format!("{agent_name}-backend");
-    let selection_id = format!("{agent_name}:tools");
     let model_endpoint = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT")
         .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
-    let mut serve = spawn_serve_with_args(
-        &home_dir,
-        port,
-        &agent_name,
-        "readonly",
-        &["--init", &model_endpoint],
-    )?;
-    wait_for_port(port, &mut serve.child)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
-    let model_name = default_behavior_model_name(&graphql, &agent_did).await?;
-
-    let selection = run_cli_json(
+    let model_name = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME")
+        .context("set DEFRA_AGENT_CLI_E2E_MODEL_NAME for the live CLI e2e test")?;
+    let init = run_init_json(
         &home_dir,
         &[
-            "tool-selection",
-            "upsert",
-            "--graphql",
-            &graphql,
-            "--agent-did",
-            &agent_did,
-            "--selection-id",
-            &selection_id,
-            "--enable-file-tools",
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            &model_endpoint,
         ],
     )?;
-    assert_eq!(
-        selection.get("file_tools_mode").and_then(Value::as_str),
-        Some("ReadOnly")
-    );
+    let backend_id = init
+        .pointer("/init/backend_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing backend_id: {init}"))?
+        .to_string();
+    let selection_id = init
+        .pointer("/init/tool_selection_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing tool_selection_id: {init}"))?
+        .to_string();
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve.child)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
     run_cli_json(
         &home_dir,
         &[
@@ -1121,32 +1173,23 @@ fn graphql_url(port: u16) -> String {
     format!("http://127.0.0.1:{port}/api/v0/graphql")
 }
 
-fn spawn_serve(
-    home_dir: &Path,
-    port: u16,
-    agent_name: &str,
-    tool_ceiling: &str,
-) -> Result<ServeProcess> {
-    spawn_serve_with_args(home_dir, port, agent_name, tool_ceiling, &[])
+fn run_init_json(home_dir: &Path, args: &[&str]) -> Result<Value> {
+    let mut command_args = vec!["init"];
+    command_args.extend_from_slice(args);
+    run_cli_json(home_dir, &command_args)
 }
 
-fn spawn_serve_with_args(
-    home_dir: &Path,
-    port: u16,
-    agent_name: &str,
-    tool_ceiling: &str,
-    extra_args: &[&str],
-) -> Result<ServeProcess> {
+fn spawn_server(home_dir: &Path, port: u16) -> Result<ServeProcess> {
+    spawn_server_with_args(home_dir, port, &[])
+}
+
+fn spawn_server_with_args(home_dir: &Path, port: u16, extra_args: &[&str]) -> Result<ServeProcess> {
     let child = Command::new(cli_bin())
         .env("HOME", home_dir)
         .env("RUST_LOG", "error")
         .arg("server")
         .arg("--http-port")
         .arg(port.to_string())
-        .arg("--agent-name")
-        .arg(agent_name)
-        .arg("--tool-ceiling")
-        .arg(tool_ceiling)
         .args(extra_args)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1161,6 +1204,7 @@ async fn assert_runtime_init_state(
     backend_id: &str,
     endpoint: &str,
     model_name: &str,
+    tool_selection_id: &str,
 ) -> Result<()> {
     let query = format!(
         r#"{{
@@ -1173,6 +1217,7 @@ async fn assert_runtime_init_state(
                 behavior_id
                 backend_id
                 model_name
+                tool_selection_id
                 enabled
             }}
             InferenceBackend(filter: {{ backend_id: {{ _eq: "{}" }} }}, limit: 1) {{
@@ -1182,15 +1227,25 @@ async fn assert_runtime_init_state(
                 probe_status
                 models
             }}
+            ToolSelection(filter: {{ selection_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                selection_id
+                enable_file_tools
+                file_tools_mode
+                enable_bash
+                bash_mode
+                enable_meta_tools
+            }}
         }}"#,
         escape_graphql_string(agent_did),
         escape_graphql_string(agent_did),
         escape_graphql_string(backend_id),
+        escape_graphql_string(tool_selection_id),
     );
     let response = graphql_query(graphql, &query).await?;
     let principal = first_graphql_row(&response, "AgentPrincipal")?;
     let behavior = first_graphql_row(&response, "AgentBehavior")?;
     let backend = first_graphql_row(&response, "InferenceBackend")?;
+    let tool_selection = first_graphql_row(&response, "ToolSelection")?;
 
     let default_behavior_id = format!("{agent_did}:default");
     assert_eq!(
@@ -1218,6 +1273,10 @@ async fn assert_runtime_init_state(
         behavior.get("model_name").and_then(Value::as_str),
         Some(model_name)
     );
+    assert_eq!(
+        behavior.get("tool_selection_id").and_then(Value::as_str),
+        Some(tool_selection_id)
+    );
     assert_eq!(behavior.get("enabled").and_then(Value::as_bool), Some(true));
 
     assert_eq!(
@@ -1237,8 +1296,58 @@ async fn assert_runtime_init_state(
         backend.pointer("/models/0").and_then(Value::as_str),
         Some(model_name)
     );
+    assert_eq!(
+        tool_selection.get("selection_id").and_then(Value::as_str),
+        Some(tool_selection_id)
+    );
+    assert_eq!(
+        tool_selection
+            .get("enable_file_tools")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        tool_selection
+            .get("file_tools_mode")
+            .and_then(Value::as_str),
+        Some("ReadOnly")
+    );
+    assert_eq!(
+        tool_selection.get("enable_bash").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        tool_selection.get("bash_mode").and_then(Value::as_str),
+        Some("ReadOnly")
+    );
+    assert_eq!(
+        tool_selection
+            .get("enable_meta_tools")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
 
     Ok(())
+}
+
+async fn doc_id_for_selection(graphql: &str, selection_id: &str) -> Result<String> {
+    let response = graphql_query(
+        graphql,
+        &format!(
+            r#"{{
+                ToolSelection(filter: {{ selection_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    _docID
+                }}
+            }}"#,
+            escape_graphql_string(selection_id),
+        ),
+    )
+    .await?;
+    first_graphql_row(&response, "ToolSelection")?
+        .get("_docID")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| anyhow!("ToolSelection row missing _docID for {selection_id}"))
 }
 
 fn wait_for_port(port: u16, child: &mut Child) -> Result<()> {
@@ -1399,26 +1508,6 @@ fn first_graphql_row<'a>(response: &'a Value, field: &str) -> Result<&'a Value> 
         .and_then(Value::as_array)
         .and_then(|rows| rows.first())
         .ok_or_else(|| anyhow!("missing {field} row in GraphQL response: {response}"))
-}
-
-async fn default_behavior_model_name(graphql: &str, agent_did: &str) -> Result<String> {
-    let response = graphql_query(
-        graphql,
-        &format!(
-            r#"{{
-                AgentBehavior(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 1) {{
-                    model_name
-                }}
-            }}"#,
-            escape_graphql_string(agent_did),
-        ),
-    )
-    .await?;
-    let row = first_graphql_row(&response, "AgentBehavior")?;
-    row.get("model_name")
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-        .ok_or_else(|| anyhow!("default behavior missing model_name: {row}"))
 }
 
 async fn wait_for_runtime_ready(graphql: &str, agent_did: &str, timeout: Duration) -> Result<()> {
