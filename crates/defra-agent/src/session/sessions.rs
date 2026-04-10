@@ -25,9 +25,10 @@ pub(crate) async fn create_session_with_behavior_id(
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_name = escape_graphql_string(agent_name);
 
-    retry_operation("create_session", || async {
+    let created = retry_operation("create_session", || async {
         let now = chrono::Utc::now().to_rfc3339();
         let existing = load_session_document_optional(node, session_id).await?;
+        let created = existing.is_none();
         let started = existing
             .as_ref()
             .map(|session| session.started.clone())
@@ -63,18 +64,24 @@ pub(crate) async fn create_session_with_behavior_id(
         log_mutation_timing("create_session", started_at.elapsed());
 
         if !resp.has_errors() {
-            return Ok(());
+            return Ok(created);
         }
 
         anyhow::bail!("create_session mutation failed: {:?}", resp.errors)
     })
     .await?;
 
+    let log_message = if created {
+        "session created"
+    } else {
+        "session ensured"
+    };
     tracing::info!(
         session_id = %session_id,
         agent = %agent_name,
         behavior_id = %behavior_id,
-        "session created"
+        created,
+        "{log_message}"
     );
     Ok(())
 }
