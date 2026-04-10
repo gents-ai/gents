@@ -30,6 +30,9 @@ pub(super) struct StreamProcessor<'a> {
     last_reasoning_progress_at: Option<Instant>,
 }
 
+#[cfg(test)]
+mod tests;
+
 const REASONING_PROGRESS_INTERVAL: Duration = Duration::from_millis(500);
 
 impl<'a> StreamProcessor<'a> {
@@ -71,7 +74,14 @@ impl<'a> StreamProcessor<'a> {
             Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(
                 reasoning,
             ))) => {
+                let rendered = render_reasoning_text(&reasoning);
                 self.assistant_turn.push_reasoning(reasoning);
+                if !rendered.is_empty() {
+                    let _ = self
+                        .stream_writer
+                        .write_reasoning(self.doc_id, &rendered)
+                        .await?;
+                }
                 self.mark_reasoning_progress().await?;
                 Ok(StreamAction::Continue)
             }
@@ -79,6 +89,12 @@ impl<'a> StreamProcessor<'a> {
                 StreamedAssistantContent::ReasoningDelta { reasoning, id },
             )) => {
                 self.assistant_turn.push_reasoning_delta(id, &reasoning);
+                if !reasoning.is_empty() {
+                    let _ = self
+                        .stream_writer
+                        .write_reasoning(self.doc_id, &reasoning)
+                        .await?;
+                }
                 self.mark_reasoning_progress().await?;
                 Ok(StreamAction::Continue)
             }
@@ -124,6 +140,31 @@ impl<'a> StreamProcessor<'a> {
             Ok(_) => Ok(StreamAction::Continue),
             Err(error) => Ok(StreamAction::Error(error)),
         }
+    }
+
+    pub(super) fn has_observable_activity(&self) -> bool {
+        self.assistant_turn.has_content()
+            || !self.streamed_text.trim().is_empty()
+            || self
+                .final_text
+                .as_deref()
+                .is_some_and(|text| !text.trim().is_empty())
+    }
+
+    pub(super) async fn persist_partial_turn(&mut self, context: &str) -> Result<bool> {
+        let Some(message) = self.assistant_turn.take_message() else {
+            return Ok(false);
+        };
+
+        self.persistence_hook.apply_persistence_policy(
+            self.persistence_hook
+                .persist_message(&message)
+                .await
+                .map(|_| ()),
+            context,
+        )?;
+
+        Ok(true)
     }
 }
 
@@ -202,6 +243,13 @@ impl AssistantTurnAccumulator {
             .ok()
             .map(|content| CompletionMessage::Assistant { id: None, content })
     }
+
+    fn has_content(&self) -> bool {
+        !self.text.is_empty()
+            || !self.reasoning.is_empty()
+            || !self.pending_reasoning_delta_text.is_empty()
+            || !self.tool_calls.is_empty()
+    }
 }
 
 impl<'a> StreamProcessor<'a> {
@@ -237,4 +285,28 @@ fn merge_reasoning_blocks(
     } else {
         accumulated_reasoning.push(incoming.clone());
     }
+}
+
+fn render_reasoning_text(reasoning: &AssistantReasoning) -> String {
+    use rig::completion::message::ReasoningContent;
+
+    let mut rendered = String::new();
+    for part in &reasoning.content {
+        let piece = match part {
+            ReasoningContent::Text { text, .. } | ReasoningContent::Summary(text) => text.as_str(),
+            ReasoningContent::Encrypted(_) => "[encrypted reasoning]",
+            ReasoningContent::Redacted { .. } => "[redacted reasoning]",
+            _ => "[opaque reasoning]",
+        };
+
+        if piece.is_empty() {
+            continue;
+        }
+        if !rendered.is_empty() {
+            rendered.push('\n');
+        }
+        rendered.push_str(piece);
+    }
+
+    rendered
 }

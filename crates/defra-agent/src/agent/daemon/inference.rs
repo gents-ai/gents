@@ -53,53 +53,55 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
 
             let liveness_timeout = Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS);
 
-            let (mut streamed_text, final_text, stream_error) = {
-                let mut processor = crate::agent::stream_processor::StreamProcessor::new(
-                    &persistence_hook,
-                    &self.stream_writer,
-                    lifecycle,
-                    doc_id,
-                );
-                let mut stream_error = None;
+            let mut processor = crate::agent::stream_processor::StreamProcessor::new(
+                &persistence_hook,
+                &self.stream_writer,
+                lifecycle,
+                doc_id,
+            );
+            let mut stream_error = None;
 
-                loop {
-                    let item = match tokio::time::timeout(liveness_timeout, stream.next()).await {
-                        Ok(Some(item)) => item,
-                        Ok(None) => break,
-                        Err(_) => {
-                            stream_error = Some(rig::agent::StreamingError::Completion(
-                                rig::completion::CompletionError::ProviderError(format!(
-                                    "stream liveness timeout: no data received for {}s",
-                                    DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS
-                                )),
-                            ));
-                            break;
-                        }
-                    };
-                    match processor.process_item(item).await {
-                        Ok(crate::agent::stream_processor::StreamAction::Continue) => {}
-                        Ok(crate::agent::stream_processor::StreamAction::Done) => break,
-                        Ok(crate::agent::stream_processor::StreamAction::Error(error)) => {
-                            stream_error = Some(error);
-                            break;
-                        }
-                        Err(error) => return Err(error),
+            loop {
+                let item = match tokio::time::timeout(liveness_timeout, stream.next()).await {
+                    Ok(Some(item)) => item,
+                    Ok(None) => break,
+                    Err(_) => {
+                        stream_error = Some(rig::agent::StreamingError::Completion(
+                            rig::completion::CompletionError::ProviderError(format!(
+                                "stream liveness timeout: no data received for {}s",
+                                DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS
+                            )),
+                        ));
+                        break;
                     }
+                };
+                match processor.process_item(item).await {
+                    Ok(crate::agent::stream_processor::StreamAction::Continue) => {}
+                    Ok(crate::agent::stream_processor::StreamAction::Done) => break,
+                    Ok(crate::agent::stream_processor::StreamAction::Error(error)) => {
+                        stream_error = Some(error);
+                        break;
+                    }
+                    Err(error) => return Err(error),
                 }
+            }
 
-                (processor.streamed_text, processor.final_text, stream_error)
-            };
+            let had_observable_activity = processor.has_observable_activity();
 
             if let Some(error) = stream_error {
                 let classified = classify_completion_error(&error);
                 let can_retry = classified.is_retryable()
-                    && streamed_text_has_no_visible_content(&streamed_text)
+                    && !had_observable_activity
                     && attempt + 1 < max_attempts;
 
                 if can_retry {
                     last_inference_error = Some(classified);
                     continue;
                 }
+
+                let _ = processor
+                    .persist_partial_turn("persist errored assistant turn")
+                    .await?;
 
                 let error_reason = format!("agent stream failed: {}", error);
                 self.stream_writer
@@ -113,6 +115,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     error_reason
                 )));
             }
+
+            let mut streamed_text = std::mem::take(&mut processor.streamed_text);
+            let final_text = processor.final_text.take();
 
             if let Some(text) = final_text.as_deref() {
                 if streamed_text.is_empty() {
@@ -177,8 +182,4 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             .await?;
         Ok(())
     }
-}
-
-fn streamed_text_has_no_visible_content(text: &str) -> bool {
-    text.trim().is_empty()
 }

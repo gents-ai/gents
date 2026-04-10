@@ -34,6 +34,7 @@ async fn load_response(
                 ) {{
                     _docID
                     content
+                    reasoning
                     error_message
                     status
                     token_count
@@ -99,6 +100,7 @@ fn build_finalize_mutation_omits_content_fields_without_buffer() {
     assert!(mutation.contains(r#"status: "complete""#));
     assert!(mutation.contains(r#"completed_at: "2026-03-24T00:00:00Z""#));
     assert!(!mutation.contains("content:"));
+    assert!(!mutation.contains("reasoning:"));
     assert!(!mutation.contains("token_count:"));
 }
 
@@ -132,6 +134,10 @@ async fn finalize_removes_buffer_after_successful_mutation() {
         Some("tail content")
     );
     assert_eq!(
+        row.get("reasoning").and_then(|value| value.as_str()),
+        Some("")
+    );
+    assert_eq!(
         row.get("status").and_then(|value| value.as_str()),
         Some("complete")
     );
@@ -161,6 +167,7 @@ async fn finalize_keeps_buffer_when_mutation_fails() {
         invalid_doc_id.clone(),
         StreamBuffer {
             content: "lost tail".to_string(),
+            reasoning: String::new(),
             token_count: 2,
             last_flush_at: Instant::now(),
         },
@@ -203,6 +210,10 @@ async fn finalize_without_buffer_uses_fallback_mutation() {
         Some("")
     );
     assert_eq!(
+        row.get("reasoning").and_then(|value| value.as_str()),
+        Some("")
+    );
+    assert_eq!(
         row.get("status").and_then(|value| value.as_str()),
         Some("error")
     );
@@ -242,6 +253,10 @@ async fn error_message_persists_on_error_response() {
         row.get("error_message").and_then(|value| value.as_str()),
         Some("stream liveness timeout: no data received for 120s")
     );
+    assert_eq!(
+        row.get("reasoning").and_then(|value| value.as_str()),
+        Some("")
+    );
 
     let _ = fs::remove_dir_all(&data_path);
 }
@@ -260,6 +275,7 @@ async fn write_tokens_fails_when_response_document_is_missing() {
         missing_doc_id.clone(),
         StreamBuffer {
             content: String::new(),
+            reasoning: String::new(),
             token_count: 0,
             last_flush_at: Instant::now() - Duration::from_secs(1),
         },
@@ -305,6 +321,42 @@ async fn finalize_rejects_conflicting_terminal_state() {
     assert_eq!(
         row.get("status").and_then(|value| value.as_str()),
         Some("complete")
+    );
+    assert_eq!(
+        row.get("reasoning").and_then(|value| value.as_str()),
+        Some("")
+    );
+
+    let _ = fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn write_reasoning_persists_on_response() {
+    let (node, data_path) = build_test_node("reasoning-write").await;
+    let writer = DefraStreamWriter::new(
+        node.clone(),
+        "did:defra-agent:test",
+        Duration::from_millis(1),
+    );
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let doc_id = writer
+        .begin("session-1", &request_id, "general")
+        .await
+        .unwrap();
+
+    writer
+        .write_reasoning(&doc_id, "Need to inspect the repo structure first.")
+        .await
+        .unwrap();
+    writer
+        .finalize(&doc_id, StreamStatus::Complete)
+        .await
+        .unwrap();
+
+    let row = load_response(&node, &doc_id).await;
+    assert_eq!(
+        row.get("reasoning").and_then(|value| value.as_str()),
+        Some("Need to inspect the repo structure first.")
     );
 
     let _ = fs::remove_dir_all(&data_path);

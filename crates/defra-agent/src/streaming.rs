@@ -54,6 +54,12 @@ pub trait StreamWriter: Send + Sync {
         tokens: &str,
     ) -> impl std::future::Future<Output = Result<bool>> + Send;
 
+    fn write_reasoning(
+        &self,
+        doc_id: &str,
+        reasoning: &str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+
     fn finalize(
         &self,
         doc_id: &str,
@@ -70,6 +76,7 @@ pub struct DefraStreamWriter {
 
 struct StreamBuffer {
     content: String,
+    reasoning: String,
     token_count: usize,
     last_flush_at: Instant,
 }
@@ -77,6 +84,7 @@ struct StreamBuffer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StreamBufferSnapshot {
     content: String,
+    reasoning: String,
     token_count: usize,
 }
 
@@ -88,6 +96,51 @@ impl DefraStreamWriter {
             batch_interval,
             buffers: Mutex::new(HashMap::new()),
         }
+    }
+
+    async fn flush_snapshot(&self, doc_id: &str, snapshot: &StreamBufferSnapshot) -> Result<()> {
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentResponse(
+                    filter: {{
+                        _docID: {{ _eq: "{doc_id}" }},
+                        status: {{ _eq: "streaming" }}
+                    }},
+                    input: {{
+                        content: "{content}",
+                        reasoning: "{reasoning}",
+                        token_count: {token_count}
+                    }}
+                ) {{ _docID }}
+            }}"#,
+            content = escape_graphql_string(&snapshot.content),
+            reasoning = escape_graphql_string(&snapshot.reasoning),
+            token_count = snapshot.token_count,
+        );
+
+        let resp = self.node.execute(&mutation).await;
+        if resp.has_errors() {
+            anyhow::bail!("updating AgentResponse failed: {:?}", resp.errors);
+        }
+
+        if !resp
+            .data
+            .as_ref()
+            .and_then(|data| data.get("update_AgentResponse"))
+            .is_some_and(response_has_documents)
+        {
+            let current = load_response_state(&self.node, doc_id).await?;
+            anyhow::bail!(
+                "cannot write streaming state to AgentResponse {} because it is {}",
+                doc_id,
+                current
+                    .as_ref()
+                    .map(|response| response.status.as_str())
+                    .unwrap_or("missing")
+            );
+        }
+
+        Ok(())
     }
 
     pub async fn set_error_message(&self, doc_id: &str, error_message: &str) -> Result<()> {
@@ -136,6 +189,7 @@ impl StreamWriter for DefraStreamWriter {
                     behavior_id: "{escaped_behavior_id}",
                     session_id: "{session_id}",
                     content: "",
+                    reasoning: "",
                     status: "streaming",
                     error_message: "",
                     token_count: 0,
@@ -163,6 +217,7 @@ impl StreamWriter for DefraStreamWriter {
             doc_id.clone(),
             StreamBuffer {
                 content: String::new(),
+                reasoning: String::new(),
                 token_count: 0,
                 last_flush_at: Instant::now(),
             },
@@ -191,52 +246,46 @@ impl StreamWriter for DefraStreamWriter {
                 None
             } else {
                 buf.last_flush_at = Instant::now();
-                Some((buf.content.clone(), buf.token_count))
+                Some(StreamBufferSnapshot {
+                    content: buf.content.clone(),
+                    reasoning: buf.reasoning.clone(),
+                    token_count: buf.token_count,
+                })
             }
         };
 
-        let Some((content, token_count)) = snapshot else {
+        let Some(snapshot) = snapshot else {
             return Ok(false);
         };
 
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentResponse(
-                    filter: {{
-                        _docID: {{ _eq: "{doc_id}" }},
-                        status: {{ _eq: "streaming" }}
-                    }},
-                    input: {{
-                        content: "{content}",
-                        token_count: {token_count}
-                    }}
-                ) {{ _docID }}
-            }}"#,
-            content = escape_graphql_string(&content),
-        );
+        self.flush_snapshot(doc_id, &snapshot).await?;
+        Ok(true)
+    }
 
-        let resp = self.node.execute(&mutation).await;
-        if resp.has_errors() {
-            anyhow::bail!("updating AgentResponse failed: {:?}", resp.errors);
-        }
+    async fn write_reasoning(&self, doc_id: &str, reasoning: &str) -> Result<bool> {
+        let snapshot = {
+            let mut buffers = self.buffers.lock().await;
+            let buf = buffers
+                .get_mut(doc_id)
+                .ok_or_else(|| anyhow::anyhow!("no buffer for doc_id={}", doc_id))?;
+            buf.reasoning.push_str(reasoning);
+            if buf.last_flush_at.elapsed() < self.batch_interval {
+                None
+            } else {
+                buf.last_flush_at = Instant::now();
+                Some(StreamBufferSnapshot {
+                    content: buf.content.clone(),
+                    reasoning: buf.reasoning.clone(),
+                    token_count: buf.token_count,
+                })
+            }
+        };
 
-        if !resp
-            .data
-            .as_ref()
-            .and_then(|data| data.get("update_AgentResponse"))
-            .is_some_and(response_has_documents)
-        {
-            let current = load_response_state(&self.node, doc_id).await?;
-            anyhow::bail!(
-                "cannot write tokens to AgentResponse {} because it is {}",
-                doc_id,
-                current
-                    .as_ref()
-                    .map(|response| response.status.as_str())
-                    .unwrap_or("missing")
-            );
-        }
+        let Some(snapshot) = snapshot else {
+            return Ok(false);
+        };
 
+        self.flush_snapshot(doc_id, &snapshot).await?;
         Ok(true)
     }
 
@@ -245,6 +294,7 @@ impl StreamWriter for DefraStreamWriter {
             let buffers = self.buffers.lock().await;
             buffers.get(doc_id).map(|buf| StreamBufferSnapshot {
                 content: buf.content.clone(),
+                reasoning: buf.reasoning.clone(),
                 token_count: buf.token_count,
             })
         };
@@ -265,6 +315,7 @@ impl StreamWriter for DefraStreamWriter {
                         status = %status.as_str(),
                         token_count = snapshot.token_count,
                         lost_content_len = snapshot.content.len(),
+                        lost_reasoning_len = snapshot.reasoning.len(),
                         error = %error,
                         "failed to finalize streaming response after retries; leaving buffer in place for crash-recovery"
                     );
@@ -358,6 +409,7 @@ fn build_finalize_mutation(
                     }},
                     input: {{
                         content: "{content}",
+                        reasoning: "{reasoning}",
                         status: "{status}",
                         token_count: {token_count},
                         completed_at: "{now}"
@@ -365,6 +417,7 @@ fn build_finalize_mutation(
                 ) {{ _docID }}
             }}"#,
             content = escape_graphql_string(&snapshot.content),
+            reasoning = escape_graphql_string(&snapshot.reasoning),
             status = status.as_str(),
             token_count = snapshot.token_count,
         ),

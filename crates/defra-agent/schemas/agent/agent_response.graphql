@@ -5,6 +5,7 @@ type AgentResponse @branchable {
     behavior_id: String @index
     session_id: String @index
     content: String
+    reasoning: String
     status: String @index
     error_message: String
     token_count: Int

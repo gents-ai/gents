@@ -1538,8 +1538,10 @@ fn response_query(request_id: &str) -> String {
             ) {{
                 request_id
                 behavior_id
+                session_id
                 status
                 content
+                reasoning
                 error_message
                 token_count
                 progress_seq
@@ -1562,6 +1564,7 @@ fn chat_progress_query(request_id: &str, session_id: &str) -> String {
                 session_id
                 status
                 content
+                reasoning
                 error_message
                 progress_seq
                 completed_at
@@ -1595,6 +1598,7 @@ struct SubmittedRequest {
 #[derive(Debug, Clone)]
 struct ChatTurnProgress {
     content: String,
+    reasoning: String,
     error_message: Option<String>,
     progress_seq: u64,
     status: String,
@@ -2025,6 +2029,7 @@ async fn stream_turn_progress(
     let idle_timeout = Duration::from_secs(timeout_secs);
     let mut last_progress_at = tokio::time::Instant::now();
     let mut latest_content = String::new();
+    let mut latest_reasoning = String::new();
     let mut latest_progress_seq = 0;
     let mut latest_error_message: Option<String> = None;
     let mut thinking_printed = false;
@@ -2070,6 +2075,7 @@ async fn stream_turn_progress(
         {
             if progress.progress_seq > latest_progress_seq
                 || progress.content != latest_content
+                || progress.reasoning != latest_reasoning
                 || progress.error_message != latest_error_message
             {
                 last_progress_at = tokio::time::Instant::now();
@@ -2077,7 +2083,7 @@ async fn stream_turn_progress(
             if !thinking_printed
                 && progress.status == "streaming"
                 && progress.content.is_empty()
-                && progress.progress_seq > latest_progress_seq
+                && !progress.reasoning.trim().is_empty()
             {
                 println!("[thinking]");
                 io::stdout().flush()?;
@@ -2086,6 +2092,7 @@ async fn stream_turn_progress(
             latest_progress_seq = progress.progress_seq;
             latest_error_message = progress.error_message.clone();
             latest_content = progress.content.clone();
+            latest_reasoning = progress.reasoning.clone();
 
             if matches!(progress.status.as_str(), "complete" | "error") {
                 if !progress.content.trim().is_empty() {
@@ -2124,6 +2131,11 @@ async fn stream_turn_progress(
 fn decode_chat_turn_progress(row: &Value) -> Option<ChatTurnProgress> {
     Some(ChatTurnProgress {
         content: row.get("content")?.as_str()?.to_string(),
+        reasoning: row
+            .get("reasoning")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
         error_message: row
             .get("error_message")
             .and_then(Value::as_str)
