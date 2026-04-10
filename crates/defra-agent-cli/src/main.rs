@@ -29,8 +29,10 @@ const BOOTSTRAP_TOOL_SELECTION_STANDARD_READONLY: &str =
     include_str!("../bootstrap/ToolSelection/standard-readonly.gql");
 const BOOTSTRAP_TOOL_SELECTION_STANDARD_READWRITE: &str =
     include_str!("../bootstrap/ToolSelection/standard-readwrite.gql");
-const BOOTSTRAP_AGENT_BEHAVIOR_DEFAULT: &str =
-    include_str!("../bootstrap/AgentBehavior/default.gql");
+const BOOTSTRAP_AGENT_BEHAVIOR_STANDARD_READONLY: &str =
+    include_str!("../bootstrap/AgentBehavior/standard-readonly.gql");
+const BOOTSTRAP_AGENT_BEHAVIOR_STANDARD_READWRITE: &str =
+    include_str!("../bootstrap/AgentBehavior/standard-readwrite.gql");
 
 struct CliReadyObserver {
     tx: watch::Sender<ProcessLifecycleState>,
@@ -220,8 +222,8 @@ const STANDARD_READONLY_BOOTSTRAP: &[BootstrapMutationTemplate] = &[
     },
     BootstrapMutationTemplate {
         collection: "AgentBehavior",
-        option: "default",
-        mutation: BOOTSTRAP_AGENT_BEHAVIOR_DEFAULT,
+        option: "standard-readonly",
+        mutation: BOOTSTRAP_AGENT_BEHAVIOR_STANDARD_READONLY,
     },
 ];
 
@@ -238,8 +240,8 @@ const STANDARD_READWRITE_BOOTSTRAP: &[BootstrapMutationTemplate] = &[
     },
     BootstrapMutationTemplate {
         collection: "AgentBehavior",
-        option: "default",
-        mutation: BOOTSTRAP_AGENT_BEHAVIOR_DEFAULT,
+        option: "standard-readwrite",
+        mutation: BOOTSTRAP_AGENT_BEHAVIOR_STANDARD_READWRITE,
     },
 ];
 

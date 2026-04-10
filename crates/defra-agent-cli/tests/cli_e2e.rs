@@ -623,7 +623,8 @@ async fn chat_uses_runtime_state_for_interactive_turns() -> Result<()> {
     );
     assert!(
         request_system_message(&captured_requests[0])
-            .is_some_and(|system| system.contains("You are")),
+            .is_some_and(|system| system.contains("read-only operating mode")
+                && system.contains("incident triage")),
         "expected system prompt in request: {}",
         captured_requests[0]
     );
@@ -677,6 +678,9 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
         mock_endpoint.endpoint(),
         &model_name,
         &tool_selection_id,
+        "ReadOnly",
+        "ReadOnly",
+        "read-only operating mode",
     )
     .await?;
 
@@ -703,6 +707,9 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
         mock_endpoint.endpoint(),
         &model_name,
         &tool_selection_id,
+        "ReadOnly",
+        "ReadOnly",
+        "read-only operating mode",
     )
     .await?;
 
@@ -831,6 +838,61 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
         mock_endpoint.endpoint(),
         &model_name,
         &tool_selection_id,
+        "ReadOnly",
+        "ReadOnly",
+        "read-only operating mode",
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("write-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+
+    let port = allocate_port()?;
+    let agent_name = format!("cli-write-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+    let graphql = graphql_url(port);
+    let backend_id = format!("{agent_name}-backend");
+    let tool_selection_id = format!("{agent_did}:default:tools");
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            "--write-tools",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    assert_eq!(
+        init.pointer("/init/tool_ceiling").and_then(Value::as_str),
+        Some("Readwrite")
+    );
+
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve.child)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    assert_runtime_init_state(
+        &graphql,
+        &agent_did,
+        &backend_id,
+        mock_endpoint.endpoint(),
+        &model_name,
+        &tool_selection_id,
+        "ReadWrite",
+        "Unrestricted",
+        "write-capable local tools",
     )
     .await?;
 
@@ -1205,6 +1267,9 @@ async fn assert_runtime_init_state(
     endpoint: &str,
     model_name: &str,
     tool_selection_id: &str,
+    expected_file_tools_mode: &str,
+    expected_bash_mode: &str,
+    expected_prompt_snippet: &str,
 ) -> Result<()> {
     let query = format!(
         r#"{{
@@ -1218,6 +1283,7 @@ async fn assert_runtime_init_state(
                 backend_id
                 model_name
                 tool_selection_id
+                system_prompt
                 enabled
             }}
             InferenceBackend(filter: {{ backend_id: {{ _eq: "{}" }} }}, limit: 1) {{
@@ -1277,6 +1343,13 @@ async fn assert_runtime_init_state(
         behavior.get("tool_selection_id").and_then(Value::as_str),
         Some(tool_selection_id)
     );
+    assert!(
+        behavior
+            .get("system_prompt")
+            .and_then(Value::as_str)
+            .is_some_and(|prompt| prompt.contains(expected_prompt_snippet)),
+        "expected system_prompt to contain {expected_prompt_snippet}: {behavior}"
+    );
     assert_eq!(behavior.get("enabled").and_then(Value::as_bool), Some(true));
 
     assert_eq!(
@@ -1310,7 +1383,7 @@ async fn assert_runtime_init_state(
         tool_selection
             .get("file_tools_mode")
             .and_then(Value::as_str),
-        Some("ReadOnly")
+        Some(expected_file_tools_mode)
     );
     assert_eq!(
         tool_selection.get("enable_bash").and_then(Value::as_bool),
@@ -1318,7 +1391,7 @@ async fn assert_runtime_init_state(
     );
     assert_eq!(
         tool_selection.get("bash_mode").and_then(Value::as_str),
-        Some("ReadOnly")
+        Some(expected_bash_mode)
     );
     assert_eq!(
         tool_selection

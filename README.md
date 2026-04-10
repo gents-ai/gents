@@ -130,7 +130,8 @@ The bootstrap templates live in:
 - `crates/defra-agent-cli/bootstrap/InferenceBackend/default.gql`
 - `crates/defra-agent-cli/bootstrap/ToolSelection/standard-readonly.gql`
 - `crates/defra-agent-cli/bootstrap/ToolSelection/standard-readwrite.gql`
-- `crates/defra-agent-cli/bootstrap/AgentBehavior/default.gql`
+- `crates/defra-agent-cli/bootstrap/AgentBehavior/standard-readonly.gql`
+- `crates/defra-agent-cli/bootstrap/AgentBehavior/standard-readwrite.gql`
 
 They are raw GraphQL mutations, one object per file, organized by collection so the default bootstrap documents stay easy to inspect and edit.
 
