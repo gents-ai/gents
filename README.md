@@ -45,6 +45,15 @@ $AGENT server --init "$INFERENCE_ENDPOINT"
 
 This is idempotent. It bootstraps the principal, creates or updates the default backend document, and binds the default behavior to it before the runtime starts.
 
+If you want to override the default binding, pass both `--backend-id` and `--model-name` together:
+
+```bash
+$AGENT server \
+  --init "$INFERENCE_ENDPOINT" \
+  --backend-id my-backend \
+  --model-name my-model
+```
+
 The server prints JSON when it is ready. The most useful fields are:
 
 - `agent_did`

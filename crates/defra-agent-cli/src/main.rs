@@ -1025,6 +1025,21 @@ async fn maybe_initialize_runtime_documents(
     args: &ServeArgs,
     agent_did: &str,
 ) -> Result<Option<ServeInitSummary>> {
+    let explicit_backend_id = args
+        .backend_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let explicit_backend_name = args
+        .backend_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let explicit_model_name = args
+        .model_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let inline_endpoint = args
         .init
         .as_deref()
@@ -1036,25 +1051,34 @@ async fn maybe_initialize_runtime_documents(
     }
     let init_requested = args.init.is_some() || args.inference_endpoint.is_some();
     if !init_requested {
-        if args.backend_id.is_some() || args.backend_name.is_some() || args.model_name.is_some() {
+        if explicit_backend_id.is_some()
+            || explicit_backend_name.is_some()
+            || explicit_model_name.is_some()
+        {
             anyhow::bail!("--backend-id, --backend-name, and --model-name require --init");
         }
         return Ok(None);
+    }
+    if explicit_backend_id.is_some() != explicit_model_name.is_some() {
+        anyhow::bail!(
+            "--backend-id and --model-name must be provided together when overriding --init"
+        );
+    }
+    if explicit_backend_name.is_some() && explicit_backend_id.is_none() {
+        anyhow::bail!("--backend-name requires --backend-id when overriding --init");
     }
 
     let endpoint = inline_endpoint
         .or(args.inference_endpoint.as_deref())
         .ok_or_else(|| anyhow::anyhow!("an inference endpoint is required when --init is set"))?;
     let bootstrap = ensure_agent_principal(node, agent_did).await?;
-    let backend_id = args
-        .backend_id
-        .clone()
+    let backend_id = explicit_backend_id
+        .map(ToOwned::to_owned)
         .unwrap_or_else(|| format!("{}-backend", args.agent_name));
-    let backend_name = args
-        .backend_name
-        .clone()
+    let backend_name = explicit_backend_name
+        .map(ToOwned::to_owned)
         .unwrap_or_else(|| backend_id.clone());
-    let model_name = match args.model_name.clone() {
+    let model_name = match explicit_model_name.map(ToOwned::to_owned) {
         Some(model_name) => model_name,
         None => match resolve_model_name(endpoint).await {
             Ok(model_name) => model_name,

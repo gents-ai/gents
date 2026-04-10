@@ -695,6 +695,80 @@ async fn serve_init_bootstraps_backend_and_default_behavior_idempotently() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_init_rejects_partial_backend_override() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let port = allocate_port()?;
+    let output = Command::new(cli_bin())
+        .env("HOME", &home_dir)
+        .env("RUST_LOG", "error")
+        .arg("server")
+        .arg("--http-port")
+        .arg(port.to_string())
+        .arg("--init")
+        .arg("http://127.0.0.1:65535/v1")
+        .arg("--backend-id")
+        .arg("custom-backend")
+        .output()
+        .context("running defra-agent server with partial backend override")?;
+
+    assert!(!output.status.success(), "server init should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--backend-id and --model-name must be provided together"),
+        "expected paired-override validation error, got:\n{stderr}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_init_accepts_explicit_backend_and_model_together() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("explicit-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+
+    let port = allocate_port()?;
+    let agent_name = format!("cli-explicit-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+    let graphql = graphql_url(port);
+    let backend_id = format!("{agent_name}-custom-backend");
+
+    let mut serve = spawn_serve_with_args(
+        &home_dir,
+        port,
+        &agent_name,
+        "meta-only",
+        &[
+            "--init",
+            mock_endpoint.endpoint(),
+            "--backend-id",
+            &backend_id,
+            "--model-name",
+            &model_name,
+        ],
+    )?;
+    wait_for_port(port, &mut serve.child)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    assert_runtime_init_state(
+        &graphql,
+        &agent_did,
+        &backend_id,
+        mock_endpoint.endpoint(),
+        &model_name,
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let data_dir = tempdir.path().join("data");
