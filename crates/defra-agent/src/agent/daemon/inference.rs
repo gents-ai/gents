@@ -101,7 +101,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     continue;
                 }
 
+                let error_reason = format!("agent stream failed: {}", error);
                 let error_text = format!("Agent error: {}", error);
+                self.stream_writer
+                    .set_error_message(doc_id, &error_reason)
+                    .await?;
                 if streamed_text_has_no_visible_content(&streamed_text) {
                     let _ = self.stream_writer.write_tokens(doc_id, &error_text).await?;
                 }
@@ -110,8 +114,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     .await?;
 
                 return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
-                    "agent stream failed: {}",
-                    error
+                    error_reason
                 )));
             }
 
@@ -141,6 +144,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             "Inference failed after {} attempts: {}",
             max_attempts, last_error
         );
+        self.stream_writer
+            .set_error_message(doc_id, &error_text)
+            .await?;
         let _ = self.stream_writer.write_tokens(doc_id, &error_text).await?;
         self.stream_writer
             .finalize(doc_id, StreamStatus::Error)
@@ -161,7 +167,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             .stream_writer
             .begin(&request.session_id, &request.request_id, behavior_id)
             .await?;
-        let error_text = format!("Error: {}", error);
+        let error_reason = error.to_string();
+        let error_text = format!("Error: {}", error_reason);
+        self.stream_writer
+            .set_error_message(&doc_id, &error_reason)
+            .await?;
         let _ = self
             .stream_writer
             .write_tokens(&doc_id, &error_text)

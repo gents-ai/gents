@@ -12,6 +12,7 @@ type AgentRequest @branchable {
     admission_state: String @index
     backend_id: String @index
     execution_origin: String
+    failure_reason: String
     created_at: String @index
     claimed_at: String
     deadline: String

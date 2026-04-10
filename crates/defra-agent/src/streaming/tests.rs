@@ -34,6 +34,7 @@ async fn load_response(
                 ) {{
                     _docID
                     content
+                    error_message
                     status
                     token_count
                     completed_at
@@ -209,6 +210,38 @@ async fn finalize_without_buffer_uses_fallback_mutation() {
         .get("completed_at")
         .and_then(|value| value.as_str())
         .is_some_and(|value| !value.is_empty()));
+
+    let _ = fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn error_message_persists_on_error_response() {
+    let (node, data_path) = build_test_node("error-message").await;
+    let writer = DefraStreamWriter::new(
+        node.clone(),
+        "did:defra-agent:test",
+        Duration::from_secs(60),
+    );
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let doc_id = writer
+        .begin("session-1", &request_id, "general")
+        .await
+        .unwrap();
+
+    writer
+        .set_error_message(
+            &doc_id,
+            "stream liveness timeout: no data received for 120s",
+        )
+        .await
+        .unwrap();
+    writer.finalize(&doc_id, StreamStatus::Error).await.unwrap();
+
+    let row = load_response(&node, &doc_id).await;
+    assert_eq!(
+        row.get("error_message").and_then(|value| value.as_str()),
+        Some("stream liveness timeout: no data received for 120s")
+    );
 
     let _ = fs::remove_dir_all(&data_path);
 }

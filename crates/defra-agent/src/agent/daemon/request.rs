@@ -144,6 +144,18 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         match result {
             Ok(outcome) => Ok(outcome),
             Err(error) => {
+                if let Err(set_error) = self
+                    .stream_writer
+                    .set_error_message(&doc_id, &error.to_string())
+                    .await
+                {
+                    tracing::error!(
+                        behavior_id = %self.behavior.name,
+                        doc_id = %doc_id,
+                        error = %set_error,
+                        "failed to persist response error message"
+                    );
+                }
                 if let Err(finalize_error) = self
                     .stream_writer
                     .finalize(&doc_id, StreamStatus::Error)

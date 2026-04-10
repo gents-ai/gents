@@ -656,6 +656,7 @@ async fn fail_routed_request(
         }
     }
 
+    let _ = lifecycle.record_failure_reason(error_message).await;
     let _ = lifecycle.fail().await;
     if lifecycle.response_exists().await.unwrap_or(false) {
         return Ok(());
@@ -664,6 +665,9 @@ async fn fail_routed_request(
     let stream_writer = DefraStreamWriter::new(node, agent_did, Duration::from_millis(0));
     let doc_id = stream_writer
         .begin(&request.session_id, &request.request_id, behavior_id)
+        .await?;
+    stream_writer
+        .set_error_message(&doc_id, error_message)
         .await?;
     let _ = stream_writer
         .write_tokens(&doc_id, &format!("Error: {error_message}"))

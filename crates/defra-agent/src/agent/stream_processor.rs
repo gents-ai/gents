@@ -83,7 +83,7 @@ impl<'a> StreamProcessor<'a> {
                 Ok(StreamAction::Continue)
             }
             Ok(MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
-                tool_result,
+                tool_result: _tool_result,
                 ..
             })) => {
                 if let Some(message) = self.assistant_turn.take_message() {
@@ -95,12 +95,6 @@ impl<'a> StreamProcessor<'a> {
                         "persist streamed assistant turn",
                     )?;
                 }
-                self.persistence_hook.apply_persistence_policy(
-                    self.persistence_hook
-                        .persist_stream_tool_result_message(&tool_result)
-                        .await,
-                    "persist stream tool result",
-                )?;
                 self.lifecycle.advance().await?;
                 Ok(StreamAction::Continue)
             }

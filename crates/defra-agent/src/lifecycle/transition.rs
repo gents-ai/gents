@@ -2,6 +2,31 @@ use super::rows::{DedupRow, RequestStatusTransition};
 use super::*;
 
 impl RequestLifecycle {
+    pub async fn record_failure_reason(&mut self, reason: &str) -> Result<()> {
+        let doc_id = &self.request.doc_id;
+        let escaped_reason = escape_graphql_string(reason);
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentRequest(
+                    filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                    input: {{ failure_reason: "{escaped_reason}" }}
+                ) {{ _docID }}
+            }}"#
+        );
+
+        let resp = self.node.execute(&mutation).await;
+        if resp.has_errors() {
+            anyhow::bail!(
+                "recording failure reason for request {} doc_id={doc_id}: {:?}",
+                self.request.request_id,
+                resp.errors
+            );
+        }
+
+        self.failure_reason = Some(reason.to_string());
+        Ok(())
+    }
+
     pub async fn advance(&mut self) -> Result<()> {
         self.ensure_state(&[LocalLifecycleState::Streaming], "advance")?;
         let doc_id = self
@@ -228,7 +253,8 @@ impl RequestLifecycle {
                         admission_state: "{target_admission_state}",
                         behavior_id: "{behavior_id}",
                         backend_id: "{backend_id}",
-                        execution_origin: "{execution_origin}"
+                        execution_origin: "{execution_origin}",
+                        failure_reason: "{failure_reason}"
                     }}
                 ) {{ _docID }}
             }}"#,
@@ -237,6 +263,8 @@ impl RequestLifecycle {
             behavior_id = escape_graphql_string(&self.behavior_id),
             backend_id = escape_graphql_string(&self.backend_id),
             execution_origin = self.execution_origin.as_str(),
+            failure_reason =
+                escape_graphql_string(self.failure_reason.as_deref().unwrap_or_default()),
         );
 
         let resp = self.node.execute(&mutation).await;
@@ -310,7 +338,8 @@ impl RequestLifecycle {
                         admission_state: "{target_admission_state}",
                         behavior_id: "{behavior_id}",
                         backend_id: "{backend_id}",
-                        execution_origin: "{execution_origin}"
+                        execution_origin: "{execution_origin}",
+                        failure_reason: "{failure_reason}"
                     }}
                 ) {{ _docID }}
             }}"#,
@@ -321,6 +350,8 @@ impl RequestLifecycle {
             behavior_id = escape_graphql_string(&self.behavior_id),
             backend_id = escape_graphql_string(&self.backend_id),
             execution_origin = self.execution_origin.as_str(),
+            failure_reason =
+                escape_graphql_string(self.failure_reason.as_deref().unwrap_or_default()),
         );
 
         let resp = self.node.execute(&mutation).await;

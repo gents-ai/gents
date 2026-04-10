@@ -106,6 +106,7 @@ pub struct RequestLifecycle {
     behavior_id: String,
     execution_origin: ExecutionOrigin,
     backend_id: String,
+    failure_reason: Option<String>,
     request: AgentRequest,
     response_doc_id: Option<String>,
     progress_seq: u32,

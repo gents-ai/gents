@@ -1134,6 +1134,7 @@ async fn request_show(args: RequestShowArgs) -> Result<()> {
                 admission_state
                 backend_id
                 execution_origin
+                failure_reason
                 retry_count
                 max_retries
                 created_at
@@ -1420,6 +1421,7 @@ fn response_query(request_id: &str) -> String {
                 behavior_id
                 status
                 content
+                error_message
                 token_count
                 progress_seq
                 completed_at
@@ -1441,6 +1443,7 @@ fn chat_progress_query(request_id: &str, session_id: &str) -> String {
                 session_id
                 status
                 content
+                error_message
                 progress_seq
                 completed_at
             }}
@@ -1473,6 +1476,7 @@ struct SubmittedRequest {
 #[derive(Debug, Clone)]
 struct ChatTurnProgress {
     content: String,
+    error_message: Option<String>,
     status: String,
 }
 
@@ -1524,6 +1528,7 @@ async fn create_agent_request(
                 admission_state: "released",
                 backend_id: "",
                 execution_origin: "interactive",
+                failure_reason: "",
                 created_at: "{created_at}",
                 retry_count: 0,
                 max_retries: 3
@@ -1891,11 +1896,32 @@ async fn stream_chat_turn_progress(
             }
 
             if matches!(progress.status.as_str(), "complete" | "error") {
+                if progress.status == "error" {
+                    if let Some(error_message) = progress
+                        .error_message
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                    {
+                        if !progress.content.contains(error_message) {
+                            if !at_line_start {
+                                println!();
+                            }
+                            println!("[agent error] {error_message}");
+                            io::stdout().flush()?;
+                            at_line_start = true;
+                        }
+                    }
+                }
                 if !at_line_start {
                     println!();
                     io::stdout().flush()?;
                 }
-                return Ok(progress.content);
+                return Ok(if progress.content.trim().is_empty() {
+                    progress.error_message.unwrap_or(progress.content)
+                } else {
+                    progress.content
+                });
             }
         }
 
@@ -1913,6 +1939,10 @@ async fn stream_chat_turn_progress(
 fn decode_chat_turn_progress(row: &Value) -> Option<ChatTurnProgress> {
     Some(ChatTurnProgress {
         content: row.get("content")?.as_str()?.to_string(),
+        error_message: row
+            .get("error_message")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
         status: row.get("status")?.as_str()?.to_string(),
     })
 }

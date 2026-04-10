@@ -89,6 +89,28 @@ impl DefraStreamWriter {
             buffers: Mutex::new(HashMap::new()),
         }
     }
+
+    pub async fn set_error_message(&self, doc_id: &str, error_message: &str) -> Result<()> {
+        let escaped_error_message = escape_graphql_string(error_message);
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentResponse(
+                    filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                    input: {{ error_message: "{escaped_error_message}" }}
+                ) {{ _docID }}
+            }}"#
+        );
+
+        let resp = self.node.execute(&mutation).await;
+        if resp.has_errors() {
+            anyhow::bail!(
+                "updating AgentResponse error_message for doc_id={doc_id}: {:?}",
+                resp.errors
+            );
+        }
+
+        Ok(())
+    }
 }
 
 impl StreamWriter for DefraStreamWriter {
@@ -115,6 +137,7 @@ impl StreamWriter for DefraStreamWriter {
                     session_id: "{session_id}",
                     content: "",
                     status: "streaming",
+                    error_message: "",
                     token_count: 0,
                     progress_seq: 0,
                     created_at: "{now}",

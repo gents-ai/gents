@@ -282,6 +282,10 @@ async fn finalize_scheduled_failure(
         }
     };
     let error_text = format!("Error: {}", error_message);
+    let _ = lifecycle.record_failure_reason(error_message).await;
+    stream_writer
+        .set_error_message(&response_doc_id, error_message)
+        .await?;
 
     let _ = stream_writer
         .write_tokens(&response_doc_id, &error_text)

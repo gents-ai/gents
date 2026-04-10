@@ -170,6 +170,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                         requested_behavior_id = %requested_behavior_id,
                         "rejecting request for unroutable behavior"
                     );
+                    let _ = lifecycle.record_failure_reason(&error.to_string()).await;
                     let _ = lifecycle.fail().await;
                     if !lifecycle.response_exists().await.unwrap_or(false) {
                         if let Err(stream_error) = self
@@ -196,6 +197,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     error = %error,
                     "failed to prepare behavior-pinned session"
                 );
+                let _ = lifecycle.record_failure_reason(&error.to_string()).await;
                 let _ = lifecycle.fail().await;
                 if !lifecycle.response_exists().await.unwrap_or(false) {
                     if let Err(stream_error) = self
@@ -223,6 +225,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                         error = %error,
                         "request failed after response started"
                     );
+                    let _ = lifecycle.record_failure_reason(&error.to_string()).await;
                     let _ = lifecycle.fail().await;
                 }
                 Err(error) => {
@@ -232,6 +235,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                         error = %error,
                         "request handling failed"
                     );
+                    let _ = lifecycle.record_failure_reason(&error.to_string()).await;
                     let _ = lifecycle.fail().await;
                     if !lifecycle.response_exists().await.unwrap_or(false) {
                         if let Err(stream_error) = self
