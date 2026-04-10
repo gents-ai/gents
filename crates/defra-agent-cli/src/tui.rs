@@ -12,12 +12,13 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Terminal;
-use rig::completion::message::{
-    AssistantContent, Message, ReasoningContent, Text, ToolResultContent, UserContent,
-};
+use rig::completion::message::{AssistantContent, Message, ReasoningContent, Text, UserContent};
 use rig::one_or_many::OneOrMany;
 use serde::Deserialize;
 use serde_json::Value;
+
+#[cfg(test)]
+mod tests;
 
 pub(crate) async fn run(args: crate::TuiArgs) -> Result<()> {
     let home_dir = crate::resolve_home_dir(args.home.as_deref());
@@ -126,6 +127,38 @@ struct App {
     last_refresh_at: Instant,
     should_quit: bool,
     spinner_index: usize,
+    focus: FocusPane,
+    transcript_scroll_from_bottom: u16,
+    tools_scroll_from_bottom: u16,
+    reasoning_scroll_from_bottom: u16,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FocusPane {
+    Transcript,
+    Tools,
+    Thinking,
+    Compose,
+}
+
+impl FocusPane {
+    fn next(self) -> Self {
+        match self {
+            Self::Transcript => Self::Tools,
+            Self::Tools => Self::Thinking,
+            Self::Thinking => Self::Compose,
+            Self::Compose => Self::Transcript,
+        }
+    }
+
+    fn previous(self) -> Self {
+        match self {
+            Self::Transcript => Self::Compose,
+            Self::Tools => Self::Transcript,
+            Self::Thinking => Self::Tools,
+            Self::Compose => Self::Thinking,
+        }
+    }
 }
 
 impl App {
@@ -157,6 +190,10 @@ impl App {
             last_refresh_at: Instant::now(),
             should_quit: false,
             spinner_index: 0,
+            focus: FocusPane::Compose,
+            transcript_scroll_from_bottom: 0,
+            tools_scroll_from_bottom: 0,
+            reasoning_scroll_from_bottom: 0,
         }
     }
 
@@ -168,6 +205,12 @@ impl App {
             KeyCode::Char('q') if key.modifiers.is_empty() && self.input.trim().is_empty() => {
                 self.should_quit = true;
             }
+            KeyCode::BackTab => {
+                self.focus = self.focus.previous();
+            }
+            KeyCode::Tab => {
+                self.focus = self.focus.next();
+            }
             KeyCode::Esc => {
                 if self.input.is_empty() {
                     self.should_quit = true;
@@ -175,6 +218,12 @@ impl App {
                     self.input.clear();
                 }
             }
+            KeyCode::Up => self.scroll_focused(1),
+            KeyCode::Down => self.scroll_focused(-1),
+            KeyCode::PageUp => self.scroll_focused(10),
+            KeyCode::PageDown => self.scroll_focused(-10),
+            KeyCode::Home => self.jump_to_oldest(),
+            KeyCode::End => self.jump_to_latest(),
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.input.push('\n');
             }
@@ -184,13 +233,46 @@ impl App {
             KeyCode::Backspace => {
                 self.input.pop();
             }
-            KeyCode::Tab => self.input.push('\t'),
             KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.input.push(ch);
             }
             _ => {}
         }
         Ok(())
+    }
+
+    fn scroll_focused(&mut self, delta_from_bottom: i32) {
+        let target = match self.focus {
+            FocusPane::Transcript => &mut self.transcript_scroll_from_bottom,
+            FocusPane::Tools => &mut self.tools_scroll_from_bottom,
+            FocusPane::Thinking => &mut self.reasoning_scroll_from_bottom,
+            FocusPane::Compose => return,
+        };
+
+        if delta_from_bottom >= 0 {
+            *target = target.saturating_add(delta_from_bottom as u16);
+        } else {
+            *target = target.saturating_sub((-delta_from_bottom) as u16);
+        }
+    }
+
+    fn jump_to_latest(&mut self) {
+        match self.focus {
+            FocusPane::Transcript => self.transcript_scroll_from_bottom = 0,
+            FocusPane::Tools => self.tools_scroll_from_bottom = 0,
+            FocusPane::Thinking => self.reasoning_scroll_from_bottom = 0,
+            FocusPane::Compose => {}
+        }
+    }
+
+    fn jump_to_oldest(&mut self) {
+        const FAR_SCROLL: u16 = u16::MAX;
+        match self.focus {
+            FocusPane::Transcript => self.transcript_scroll_from_bottom = FAR_SCROLL,
+            FocusPane::Tools => self.tools_scroll_from_bottom = FAR_SCROLL,
+            FocusPane::Thinking => self.reasoning_scroll_from_bottom = FAR_SCROLL,
+            FocusPane::Compose => {}
+        }
     }
 
     async fn submit_input(&mut self) -> Result<()> {
@@ -222,12 +304,8 @@ impl App {
         let snapshot = load_snapshot(&self.graphql, &self.agent_did, &self.session_id).await?;
         self.transcript = render_transcript(&snapshot.messages, snapshot.response.as_ref());
         self.tool_text = render_tools(&snapshot.tools);
-        self.reasoning_text = snapshot
-            .response
-            .as_ref()
-            .map(|response| response.reasoning.trim().to_string())
-            .filter(|text| !text.is_empty())
-            .unwrap_or_else(|| "No persisted reasoning yet.".to_string());
+        self.reasoning_text =
+            render_reasoning_history(&snapshot.messages, snapshot.response.as_ref());
         self.runtime_text =
             render_runtime(snapshot.runtime.as_ref(), &self.agent_name, &self.agent_did);
         self.latest_response = snapshot.response;
@@ -271,10 +349,10 @@ impl App {
     fn footer_text(&self) -> String {
         match self.last_error.as_deref() {
             Some(error) => format!(
-                "Enter send | Shift+Enter newline | Esc clear/quit | Ctrl-C quit | error: {}",
+                "Tab pane | Up/Down scroll | Enter send | Shift+Enter newline | Esc clear/quit | Ctrl-C quit | error: {}",
                 truncate_tail(error, 120)
             ),
-            None => "Enter send | Shift+Enter newline | Esc clear/quit | Ctrl-C quit".to_string(),
+            None => "Tab pane | Up/Down scroll | Enter send | Shift+Enter newline | Esc clear/quit | Ctrl-C quit".to_string(),
         }
     }
 }
@@ -424,9 +502,16 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &App) {
     frame.render_widget(header, layout[0]);
 
     let transcript = Paragraph::new(app.transcript.as_str())
-        .block(Block::default().borders(Borders::ALL).title("Chat"))
+        .block(pane_block("Chat", app.focus == FocusPane::Transcript))
         .wrap(Wrap { trim: false })
-        .scroll((scroll_offset(&app.transcript, body[0].height), 0));
+        .scroll((
+            scroll_offset(
+                &app.transcript,
+                body[0].height,
+                app.transcript_scroll_from_bottom,
+            ),
+            0,
+        ));
     frame.render_widget(transcript, body[0]);
 
     let runtime = Paragraph::new(app.runtime_text.as_str())
@@ -435,9 +520,12 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &App) {
     frame.render_widget(runtime, side[0]);
 
     let tools = Paragraph::new(app.tool_text.as_str())
-        .block(Block::default().borders(Borders::ALL).title("Tools"))
+        .block(pane_block("Tools", app.focus == FocusPane::Tools))
         .wrap(Wrap { trim: false })
-        .scroll((scroll_offset(&app.tool_text, side[1].height), 0));
+        .scroll((
+            scroll_offset(&app.tool_text, side[1].height, app.tools_scroll_from_bottom),
+            0,
+        ));
     frame.render_widget(tools, side[1]);
 
     let thinking_title = if app.latest_response.as_ref().is_some_and(|response| {
@@ -448,20 +536,22 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &App) {
         "Thinking"
     };
     let thinking = Paragraph::new(app.reasoning_text.as_str())
-        .block(Block::default().borders(Borders::ALL).title(thinking_title))
+        .block(pane_block(thinking_title, app.focus == FocusPane::Thinking))
         .wrap(Wrap { trim: false })
-        .scroll((scroll_offset(&app.reasoning_text, side[2].height), 0));
+        .scroll((
+            scroll_offset(
+                &app.reasoning_text,
+                side[2].height,
+                app.reasoning_scroll_from_bottom,
+            ),
+            0,
+        ));
     frame.render_widget(thinking, side[2]);
 
     let composer = Paragraph::new(app.input.as_str())
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Compose")
-                .title_style(Style::default().add_modifier(Modifier::BOLD)),
-        )
+        .block(pane_block("Compose", app.focus == FocusPane::Compose))
         .wrap(Wrap { trim: false })
-        .scroll((scroll_offset(&app.input, layout[2].height), 0));
+        .scroll((scroll_offset(&app.input, layout[2].height, 0), 0));
     frame.render_widget(composer, layout[2]);
 
     let footer = Paragraph::new(app.footer_text())
@@ -470,24 +560,33 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &App) {
     frame.render_widget(footer, layout[3]);
 }
 
-fn scroll_offset(text: &str, height: u16) -> u16 {
+fn pane_block<'a>(title: &'a str, focused: bool) -> Block<'a> {
+    let mut block = Block::default().borders(Borders::ALL).title(title);
+    if focused {
+        block = block.title_style(Style::default().add_modifier(Modifier::BOLD));
+    }
+    block
+}
+
+fn scroll_offset(text: &str, height: u16, from_bottom: u16) -> u16 {
     let visible = height.saturating_sub(2) as usize;
     let lines = text.lines().count();
-    lines.saturating_sub(visible) as u16
+    let max_scroll = lines.saturating_sub(visible) as u16;
+    max_scroll.saturating_sub(from_bottom.min(max_scroll))
 }
 
 fn render_transcript(messages: &[MessageRow], response: Option<&ResponseRow>) -> String {
     let mut rendered = String::new();
     for row in messages {
         let message = decode_message(&row.role, &row.content);
-        let body = render_message_body(&message);
+        let body = render_transcript_message_body(&message);
         if body.trim().is_empty() {
             continue;
         }
         if !rendered.is_empty() {
             rendered.push_str("\n\n");
         }
-        rendered.push_str(&format!("#{} {}", row.sequence, role_label(&row.role)));
+        rendered.push_str(transcript_label(&message));
         rendered.push('\n');
         rendered.push_str(&body);
     }
@@ -538,6 +637,31 @@ fn render_tools(tools: &[ToolRow]) -> String {
         lines.push(line);
     }
     lines.join("\n\n")
+}
+
+fn render_reasoning_history(messages: &[MessageRow], response: Option<&ResponseRow>) -> String {
+    let mut blocks = Vec::new();
+
+    for row in messages {
+        let message = decode_message(&row.role, &row.content);
+        if let Some(reasoning) = extract_message_reasoning(&message) {
+            if !reasoning.trim().is_empty() {
+                blocks.push(format!("Turn #{}\n{}", row.sequence, reasoning.trim()));
+            }
+        }
+    }
+
+    if let Some(response) = response {
+        if !response.reasoning.trim().is_empty() {
+            blocks.push(format!("Live response\n{}", response.reasoning.trim()));
+        }
+    }
+
+    if blocks.is_empty() {
+        "No persisted reasoning yet.\n\nThis usually means the current provider is returning plain assistant text without structured reasoning events.".to_string()
+    } else {
+        blocks.join("\n\n")
+    }
 }
 
 fn render_runtime(runtime: Option<&RuntimeRow>, agent_name: &str, agent_did: &str) -> String {
@@ -601,57 +725,48 @@ fn decode_message(role: &str, content: &str) -> Message {
     }
 }
 
-fn render_message_body(message: &Message) -> String {
+fn render_transcript_message_body(message: &Message) -> String {
     match message {
         Message::User { content } => content
             .iter()
-            .map(|item| match item {
-                UserContent::Text(text) => text.text.clone(),
-                UserContent::ToolResult(tool_result) => tool_result
-                    .content
-                    .iter()
-                    .filter_map(|content| match content {
-                        ToolResultContent::Text(text) => Some(format!(
-                            "[tool result] {}",
-                            truncate_tail(text.text.trim(), 160)
-                        )),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-                _ => "[non-text user content]".to_string(),
+            .filter_map(|item| match item {
+                UserContent::Text(text) if !text.text.trim().is_empty() => {
+                    Some(text.text.trim().to_string())
+                }
+                _ => None,
             })
-            .filter(|item| !item.trim().is_empty())
             .collect::<Vec<_>>()
             .join("\n"),
-        Message::Assistant { content, .. } => {
-            let mut lines = Vec::new();
-            for item in content.iter() {
-                match item {
-                    AssistantContent::Text(text) => {
-                        if !text.text.trim().is_empty() {
-                            lines.push(text.text.trim().to_string());
-                        }
-                    }
-                    AssistantContent::ToolCall(tool_call) => {
-                        lines.push(format!(
-                            "[tool] {} {}",
-                            tool_call.function.name,
-                            truncate_tail(&tool_call.function.arguments.to_string(), 120)
-                        ));
-                    }
-                    AssistantContent::Reasoning(reasoning) => {
-                        let summary = render_reasoning_summary(reasoning);
-                        if !summary.is_empty() {
-                            lines.push(format!("[thinking] {}", truncate_tail(&summary, 120)));
-                        }
-                    }
-                    _ => {}
+        Message::Assistant { content, .. } => content
+            .iter()
+            .filter_map(|item| match item {
+                AssistantContent::Text(text) if !text.text.trim().is_empty() => {
+                    Some(text.text.trim().to_string())
                 }
-            }
-            lines.join("\n")
-        }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
     }
+}
+
+fn extract_message_reasoning(message: &Message) -> Option<String> {
+    let Message::Assistant { content, .. } = message else {
+        return None;
+    };
+
+    let chunks = content
+        .iter()
+        .filter_map(|item| match item {
+            AssistantContent::Reasoning(reasoning) => {
+                let rendered = render_reasoning_summary(reasoning);
+                (!rendered.trim().is_empty()).then_some(rendered)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    (!chunks.is_empty()).then_some(chunks.join("\n\n"))
 }
 
 fn render_reasoning_summary(reasoning: &rig::completion::message::Reasoning) -> String {
@@ -671,10 +786,19 @@ fn render_reasoning_summary(reasoning: &rig::completion::message::Reasoning) -> 
     out
 }
 
-fn role_label(role: &str) -> &'static str {
-    match role {
-        "assistant" => "Assistant",
-        _ => "You",
+fn transcript_label(message: &Message) -> &'static str {
+    match message {
+        Message::Assistant { .. } => "Assistant",
+        Message::User { content } => {
+            let has_text = content.iter().any(
+                |item| matches!(item, UserContent::Text(text) if !text.text.trim().is_empty()),
+            );
+            if has_text {
+                "You"
+            } else {
+                "Tool"
+            }
+        }
     }
 }
 
