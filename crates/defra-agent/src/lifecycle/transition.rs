@@ -120,6 +120,11 @@ impl RequestLifecycle {
         }
 
         self.state = LocalLifecycleState::Completed;
+        tracing::info!(
+            request_id = %self.request.request_id,
+            session_id = %self.request.session_id,
+            "request completed"
+        );
         Ok(())
     }
 
@@ -194,6 +199,11 @@ impl RequestLifecycle {
         }
 
         self.state = LocalLifecycleState::Failed;
+        tracing::info!(
+            request_id = %self.request.request_id,
+            session_id = %self.request.session_id,
+            "request failed"
+        );
         Ok(())
     }
 

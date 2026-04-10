@@ -484,6 +484,12 @@ where
 
         match active_snapshot.dispatchers.get(&resolution.behavior_id) {
             Some(dispatcher) => {
+                tracing::info!(
+                    request_id = %request.request_id,
+                    session_id = %request.session_id,
+                    behavior_id = %resolution.behavior_id,
+                    "dispatching request to behavior executor"
+                );
                 dispatcher.send(request).await.map_err(|_| {
                     anyhow!(
                         "executor queue for behavior {} closed unexpectedly",

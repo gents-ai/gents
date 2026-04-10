@@ -21,7 +21,15 @@ use tracing_subscriber::EnvFilter;
 
 const DEFAULT_AGENT_NAME: &str = "default";
 const DEFAULT_HTTP_PORT: u16 = 9191;
-const DEFAULT_LOG_FILTER: &str = "error";
+const DEFAULT_LOG_FILTER: &str = concat!(
+    "warn,",
+    "defra_agent::agent::runtime=info,",
+    "defra_agent::agent::daemon=info,",
+    "defra_agent::agent::reconcile=info,",
+    "defra_agent::session::sessions=info,",
+    "defra_agent::streaming=info,",
+    "defra_agent::scheduler::loop_impl=info"
+);
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
 const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
 const BOOTSTRAP_INFERENCE_BACKEND_DEFAULT: &str =

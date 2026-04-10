@@ -145,9 +145,11 @@ impl StreamWriter for DefraStreamWriter {
             },
         );
 
-        tracing::debug!(
+        tracing::info!(
             doc_id = %doc_id,
+            request_id = %request_id,
             session_id = %session_id,
+            behavior_id = %behavior_id,
             "started streaming response"
         );
 
