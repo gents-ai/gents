@@ -725,6 +725,76 @@ async fn chat_uses_runtime_state_for_interactive_turns() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chat_continues_existing_session_when_session_id_is_provided() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let expected_reply = format!("chat-continue-{}", Uuid::new_v4().simple());
+    let model_name = format!("mock-chat-continue-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
+
+    let port = allocate_port()?;
+    let agent_name = format!("cli-chat-continue-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+    let graphql = graphql_url(port);
+    let first_prompt = format!("Remember the token {}.", Uuid::new_v4().simple());
+    let second_prompt = "What token did I tell you to remember?";
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve.child)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let first_stdout = run_cli_text(&home_dir, &["chat", &first_prompt])?;
+    assert!(
+        first_stdout.contains(&expected_reply),
+        "expected first chat turn to contain {expected_reply}, got:\n{first_stdout}"
+    );
+
+    let (_request_id, session_id, _behavior_id) =
+        wait_for_request(&graphql, &agent_did, &first_prompt).await?;
+
+    let second_stdout = run_cli_text(
+        &home_dir,
+        &["chat", "--session-id", &session_id, second_prompt],
+    )?;
+    assert!(
+        second_stdout.contains(&expected_reply),
+        "expected follow-up chat turn to contain {expected_reply}, got:\n{second_stdout}"
+    );
+
+    let captured_requests = mock_endpoint.captured_chat_requests();
+    assert_eq!(captured_requests.len(), 2);
+    assert!(
+        request_contains_role_text(&captured_requests[1], "user", &first_prompt),
+        "expected follow-up request to include prior user turn: {}",
+        captured_requests[1]
+    );
+    assert!(
+        request_contains_role_text(&captured_requests[1], "assistant", &expected_reply),
+        "expected follow-up request to include prior assistant turn: {}",
+        captured_requests[1]
+    );
+    assert!(
+        request_contains_role_text(&captured_requests[1], "user", second_prompt),
+        "expected follow-up request to include current user turn: {}",
+        captured_requests[1]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_buffers_final_response_and_shows_tool_progress() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -1740,6 +1810,26 @@ fn run_cli_json(home_dir: &Path, args: &[&str]) -> Result<Value> {
         .with_context(|| format!("parsing JSON from defra-agent {}", args.join(" ")))
 }
 
+fn run_cli_text(home_dir: &Path, args: &[&str]) -> Result<String> {
+    let output = Command::new(cli_bin())
+        .env("HOME", home_dir)
+        .env("RUST_LOG", "error")
+        .args(args)
+        .output()
+        .with_context(|| format!("running defra-agent {}", args.join(" ")))?;
+    if !output.status.success() {
+        bail!(
+            "defra-agent {} failed\nstdout:\n{}\nstderr:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    String::from_utf8(output.stdout)
+        .with_context(|| format!("parsing stdout from defra-agent {}", args.join(" ")))
+}
+
 async fn wait_for_request(
     graphql: &str,
     agent_did: &str,
@@ -2283,6 +2373,28 @@ fn request_tool_result_text(request: &Value) -> Option<String> {
                         Some(text)
                     }
                     _ => None,
+                }
+            })
+        })
+}
+
+fn request_contains_role_text(request: &Value, role: &str, needle: &str) -> bool {
+    request
+        .get("messages")
+        .and_then(Value::as_array)
+        .is_some_and(|messages| {
+            messages.iter().any(|message| {
+                if message.get("role").and_then(Value::as_str) != Some(role) {
+                    return false;
+                }
+                match message.get("content") {
+                    Some(Value::String(content)) => content.contains(needle),
+                    Some(Value::Array(parts)) => parts.iter().any(|part| {
+                        part.get("text")
+                            .and_then(Value::as_str)
+                            .is_some_and(|text| text.contains(needle))
+                    }),
+                    _ => false,
                 }
             })
         })

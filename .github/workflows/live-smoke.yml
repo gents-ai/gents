@@ -1,0 +1,36 @@
+name: Live Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      inference_endpoint:
+        description: OpenAI-compatible base URL, including /v1
+        required: true
+        default: http://100.73.235.38:8000/v1
+      model_name:
+        description: Model name served by the endpoint
+        required: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT: ${{ github.event.inputs.inference_endpoint }}
+  DEFRA_AGENT_CLI_E2E_MODEL_NAME: ${{ github.event.inputs.model_name }}
+  AGENT_DAEMON_API_KEY: ${{ secrets.AGENT_DAEMON_API_KEY }}
+
+jobs:
+  live-cli-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rewrite Git SSH dependencies to HTTPS
+        run: git config --global url."https://github.com/".insteadOf ssh://git@github.com/
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run live CLI smoke test
+        run: cargo test -p defra-agent-cli --test cli_e2e cli_flow_runs_real_tool_loop_against_live_endpoint -- --ignored --nocapture --test-threads=1

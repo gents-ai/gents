@@ -204,6 +204,54 @@ $AGENT response wait \
   --request-id "<request-id>"
 ```
 
+## Testing
+
+The main regression path should use the shipped CLI binary against the full local flow:
+
+1. `defra-agent init`
+2. `defra-agent server`
+3. `defra-agent chat` or `defra-agent request submit`
+
+That flow already has a mocked end-to-end harness in [crates/defra-agent-cli/tests/cli_e2e.rs](crates/defra-agent-cli/tests/cli_e2e.rs). Those tests are intentionally:
+
+- idempotent
+- isolated to a temp home directory
+- bound to ephemeral local ports
+- cleaned up when the test exits
+
+Run the mocked binary-flow suite locally with:
+
+```bash
+cargo test -p defra-agent-cli --test cli_e2e -- --nocapture --test-threads=1
+```
+
+Run the library/integration suite with:
+
+```bash
+cargo test -p defra-agent --lib --tests
+```
+
+Run the Lean proofs with:
+
+```bash
+cd crates/defra-agent/proofs && lake build
+```
+
+There is also an ignored live smoke test for the real binary flow against an external inference endpoint:
+
+```bash
+export DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT=http://100.73.235.38:8000/v1
+export DEFRA_AGENT_CLI_E2E_MODEL_NAME=your-model-name
+# export AGENT_DAEMON_API_KEY=...   # if your endpoint requires auth
+
+cargo test -p defra-agent-cli \
+  --test cli_e2e \
+  cli_flow_runs_real_tool_loop_against_live_endpoint \
+  -- --ignored --nocapture --test-threads=1
+```
+
+The mocked binary-flow suite is what CI should gate on. The live smoke test is for manual or release validation, not the main correctness gate.
+
 ## Repository Layout
 
 - `crates/defra-agent`
