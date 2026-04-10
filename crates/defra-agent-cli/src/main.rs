@@ -379,9 +379,11 @@ enum RequestCommand {
 #[derive(clap::Args)]
 struct RequestSubmitArgs {
     #[arg(long)]
-    graphql: String,
+    home: Option<PathBuf>,
     #[arg(long)]
-    agent_did: String,
+    graphql: Option<String>,
+    #[arg(long)]
+    agent_did: Option<String>,
     #[arg(long)]
     content: String,
     #[arg(long)]
@@ -399,7 +401,9 @@ struct RequestSubmitArgs {
 #[derive(clap::Args)]
 struct RequestShowArgs {
     #[arg(long)]
-    graphql: String,
+    home: Option<PathBuf>,
+    #[arg(long)]
+    graphql: Option<String>,
     #[arg(long)]
     request_id: String,
 }
@@ -413,7 +417,9 @@ enum ResponseCommand {
 #[derive(clap::Args)]
 struct ResponseShowArgs {
     #[arg(long)]
-    graphql: String,
+    home: Option<PathBuf>,
+    #[arg(long)]
+    graphql: Option<String>,
     #[arg(long)]
     request_id: String,
 }
@@ -421,7 +427,9 @@ struct ResponseShowArgs {
 #[derive(clap::Args)]
 struct ResponseWaitArgs {
     #[arg(long)]
-    graphql: String,
+    home: Option<PathBuf>,
+    #[arg(long)]
+    graphql: Option<String>,
     #[arg(long)]
     request_id: String,
     #[arg(long, default_value_t = 120)]
@@ -1077,9 +1085,11 @@ async fn inference_profile_upsert(args: InferenceProfileUpsertArgs) -> Result<()
 }
 
 async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
     let submitted = create_agent_request(
-        &args.graphql,
-        &args.agent_did,
+        &graphql,
+        &agent_did,
         &args.content,
         args.session_id.as_deref(),
         args.behavior_id.as_deref(),
@@ -1097,7 +1107,7 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
     }
 
     let response = wait_for_terminal_response(
-        &args.graphql,
+        &graphql,
         &submitted.request_id,
         args.timeout_secs,
         args.poll_secs,
@@ -1118,6 +1128,7 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
 }
 
 async fn request_show(args: RequestShowArgs) -> Result<()> {
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let query = format!(
         r#"{{
             AgentRequest(
@@ -1144,21 +1155,23 @@ async fn request_show(args: RequestShowArgs) -> Result<()> {
         }}"#,
         request_id = escape_graphql_string(&args.request_id),
     );
-    let response = post_graphql(&args.graphql, &query).await?;
+    let response = post_graphql(&graphql, &query).await?;
     println!("{}", serde_json::to_string_pretty(&response)?);
     Ok(())
 }
 
 async fn response_show(args: ResponseShowArgs) -> Result<()> {
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let query = response_query(&args.request_id);
-    let response = post_graphql(&args.graphql, &query).await?;
+    let response = post_graphql(&graphql, &query).await?;
     println!("{}", serde_json::to_string_pretty(&response)?);
     Ok(())
 }
 
 async fn response_wait(args: ResponseWaitArgs) -> Result<()> {
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let response = wait_for_terminal_response(
-        &args.graphql,
+        &graphql,
         &args.request_id,
         args.timeout_secs,
         args.poll_secs,
@@ -1477,6 +1490,7 @@ struct SubmittedRequest {
 struct ChatTurnProgress {
     content: String,
     error_message: Option<String>,
+    progress_seq: u64,
     status: String,
 }
 
@@ -1653,6 +1667,37 @@ fn clear_runtime_state(home_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+fn resolve_graphql_endpoint(explicit: Option<&str>, home: Option<&Path>) -> Result<String> {
+    if let Some(graphql) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
+        return Ok(graphql.to_string());
+    }
+
+    let home_dir = resolve_home_dir(home);
+    if let Some(runtime_state) = read_runtime_state(&home_dir)? {
+        return Ok(runtime_state.graphql);
+    }
+
+    Ok(format!(
+        "http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql"
+    ))
+}
+
+fn resolve_agent_did(home: Option<&Path>, explicit: Option<&str>) -> Result<String> {
+    if let Some(agent_did) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
+        return Ok(agent_did.to_string());
+    }
+
+    let home_dir = resolve_home_dir(home);
+    if let Some(runtime_state) = read_runtime_state(&home_dir)? {
+        return Ok(runtime_state.agent_did);
+    }
+    if let Some(init_config) = read_init_config(&home_dir)? {
+        return Ok(init_config.agent_did);
+    }
+
+    Ok(format!("did:defra-agent:{DEFAULT_AGENT_NAME}"))
+}
+
 fn default_key_path(home_dir: &Path, agent_name: &str) -> PathBuf {
     home_dir.join("keys").join(format!("{agent_name}.key"))
 }
@@ -1747,7 +1792,10 @@ async fn wait_for_terminal_response(
     timeout_secs: u64,
     poll_secs: u64,
 ) -> Result<serde_json::Value> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
+    let idle_timeout = Duration::from_secs(timeout_secs);
+    let mut last_progress_at = tokio::time::Instant::now();
+    let mut last_progress_signature: Option<String> = None;
+
     loop {
         let query = response_query(request_id);
         let response = post_graphql(graphql, &query).await?;
@@ -1757,6 +1805,13 @@ async fn wait_for_terminal_response(
             .cloned()
             .unwrap_or_default();
         if let Some(row) = rows.first() {
+            let signature = serde_json::to_string(row)
+                .context("serializing AgentResponse progress row for timeout tracking")?;
+            if last_progress_signature.as_deref() != Some(signature.as_str()) {
+                last_progress_signature = Some(signature);
+                last_progress_at = tokio::time::Instant::now();
+            }
+
             let status = row
                 .get("status")
                 .and_then(|value| value.as_str())
@@ -1766,8 +1821,8 @@ async fn wait_for_terminal_response(
             }
         }
 
-        if tokio::time::Instant::now() >= deadline {
-            anyhow::bail!("timed out waiting for AgentResponse {request_id}");
+        if last_progress_at.elapsed() >= idle_timeout {
+            anyhow::bail!("timed out waiting for AgentResponse {request_id} after {timeout_secs}s of inactivity");
         }
 
         tokio::time::sleep(Duration::from_secs(poll_secs)).await;
@@ -1839,7 +1894,8 @@ async fn stream_chat_turn_progress(
     timeout_secs: u64,
     poll_secs: u64,
 ) -> Result<String> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
+    let idle_timeout = Duration::from_secs(timeout_secs);
+    let mut last_progress_at = tokio::time::Instant::now();
     let mut rendered_content = String::new();
     let mut at_line_start = true;
 
@@ -1861,8 +1917,16 @@ async fn stream_chat_turn_progress(
                 continue;
             }
             known_tool_calls.insert(tool.tool_call_key.clone(), tool.status.clone());
+            last_progress_at = tokio::time::Instant::now();
             if !at_line_start {
                 println!();
+            }
+            if previous_status.is_none() && matches!(tool.status.as_str(), "completed" | "error") {
+                println!(
+                    "[tool] {} {}",
+                    tool.tool_name,
+                    preview_progress_text(&tool.args)
+                );
             }
             println!("{}", format_tool_progress_line(&tool));
             io::stdout().flush()?;
@@ -1878,6 +1942,9 @@ async fn stream_chat_turn_progress(
             .as_ref()
             .and_then(|row| decode_chat_turn_progress(row))
         {
+            if progress.progress_seq > 0 || progress.content != rendered_content {
+                last_progress_at = tokio::time::Instant::now();
+            }
             if let Some(delta) = progress.content.strip_prefix(&rendered_content) {
                 if !delta.is_empty() {
                     print!("{delta}");
@@ -1925,10 +1992,11 @@ async fn stream_chat_turn_progress(
             }
         }
 
-        if tokio::time::Instant::now() >= deadline {
+        if last_progress_at.elapsed() >= idle_timeout {
             anyhow::bail!(
-                "timed out waiting for AgentResponse {}",
-                submitted.request_id
+                "timed out waiting for AgentResponse {} after {}s of inactivity",
+                submitted.request_id,
+                timeout_secs
             );
         }
 
@@ -1943,6 +2011,7 @@ fn decode_chat_turn_progress(row: &Value) -> Option<ChatTurnProgress> {
             .get("error_message")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
+        progress_seq: row.get("progress_seq").and_then(Value::as_u64).unwrap_or(0),
         status: row.get("status")?.as_str()?.to_string(),
     })
 }
