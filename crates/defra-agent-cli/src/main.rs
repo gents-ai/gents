@@ -63,16 +63,10 @@ struct Cli {
     command: Command,
 }
 
-#[derive(clap::Args, Clone, Default)]
-struct JsonOutputArgs {
-    #[arg(long, default_value_t = false)]
-    json: bool,
-}
-
 #[derive(Subcommand)]
 enum Command {
     Init(InitArgs),
-    #[command(name = "server", alias = "serve")]
+    #[command(name = "server")]
     Server(ServeArgs),
     Chat(ChatArgs),
     Show {
@@ -83,26 +77,6 @@ enum Command {
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
-    },
-    #[command(hide = true)]
-    Backend {
-        #[command(subcommand)]
-        command: BackendCommand,
-    },
-    #[command(hide = true)]
-    Behavior {
-        #[command(subcommand)]
-        command: BehaviorCommand,
-    },
-    #[command(name = "tool-selection", hide = true)]
-    ToolSelection {
-        #[command(subcommand)]
-        command: ToolSelectionCommand,
-    },
-    #[command(hide = true)]
-    InferenceProfile {
-        #[command(subcommand)]
-        command: InferenceProfileCommand,
     },
     Request {
         #[command(subcommand)]
@@ -116,8 +90,6 @@ enum Command {
 
 #[derive(clap::Args)]
 struct InitArgs {
-    #[command(flatten)]
-    output: JsonOutputArgs,
     #[arg(long)]
     home: Option<PathBuf>,
     #[arg(long, hide = true)]
@@ -146,8 +118,6 @@ struct InitArgs {
 
 #[derive(clap::Args)]
 struct ServeArgs {
-    #[command(flatten)]
-    output: JsonOutputArgs,
     #[arg(long)]
     home: Option<PathBuf>,
     #[arg(long, hide = true)]
@@ -199,8 +169,6 @@ enum ShowCommand {
 
 #[derive(clap::Args)]
 struct StatusArgs {
-    #[command(flatten)]
-    output: JsonOutputArgs,
     #[arg(long)]
     home: Option<PathBuf>,
     #[arg(long)]
@@ -211,8 +179,6 @@ struct StatusArgs {
 
 #[derive(clap::Args)]
 struct RuntimeShowArgs {
-    #[command(flatten)]
-    output: JsonOutputArgs,
     #[arg(long)]
     home: Option<PathBuf>,
     #[arg(long)]
@@ -332,26 +298,24 @@ const STANDARD_READWRITE_BOOTSTRAP: &[BootstrapMutationTemplate] = &[
 
 #[derive(Subcommand)]
 enum BackendCommand {
-    #[command(name = "set", alias = "upsert")]
+    #[command(name = "set")]
     Set(BackendUpsertArgs),
 }
 
 #[derive(Subcommand)]
 enum BehaviorCommand {
-    #[command(name = "set", alias = "upsert")]
+    #[command(name = "set")]
     Set(BehaviorUpsertArgs),
 }
 
 #[derive(Subcommand)]
 enum ToolSelectionCommand {
-    #[command(name = "set", alias = "upsert")]
+    #[command(name = "set")]
     Set(ToolSelectionUpsertArgs),
 }
 
 #[derive(clap::Args)]
 struct BehaviorUpsertArgs {
-    #[command(flatten)]
-    output: JsonOutputArgs,
     #[arg(long)]
     graphql: String,
     #[arg(long)]
@@ -380,8 +344,6 @@ struct BehaviorUpsertArgs {
 
 #[derive(clap::Args)]
 struct ToolSelectionUpsertArgs {
-    #[command(flatten)]
-    output: JsonOutputArgs,
     #[arg(long)]
     graphql: String,
     #[arg(long)]
@@ -408,14 +370,12 @@ struct ToolSelectionUpsertArgs {
 
 #[derive(Subcommand)]
 enum InferenceProfileCommand {
-    #[command(name = "set", alias = "upsert")]
+    #[command(name = "set")]
     Set(InferenceProfileUpsertArgs),
 }
 
 #[derive(clap::Args)]
 struct InferenceProfileUpsertArgs {
-    #[command(flatten)]
-    output: JsonOutputArgs,
     #[arg(long)]
     graphql: String,
     #[arg(long)]
@@ -438,8 +398,6 @@ struct InferenceProfileUpsertArgs {
 
 #[derive(clap::Args)]
 struct BackendUpsertArgs {
-    #[command(flatten)]
-    output: JsonOutputArgs,
     #[arg(long)]
     graphql: String,
     #[arg(long)]
@@ -464,8 +422,6 @@ enum RequestCommand {
 
 #[derive(clap::Args)]
 struct RequestSubmitArgs {
-    #[command(flatten)]
-    output: JsonOutputArgs,
     #[arg(long)]
     home: Option<PathBuf>,
     #[arg(long)]
@@ -488,8 +444,6 @@ struct RequestSubmitArgs {
 
 #[derive(clap::Args)]
 struct RequestShowArgs {
-    #[command(flatten)]
-    output: JsonOutputArgs,
     #[arg(long)]
     home: Option<PathBuf>,
     #[arg(long)]
@@ -508,8 +462,6 @@ enum ResponseCommand {
 
 #[derive(clap::Args)]
 struct ResponseShowArgs {
-    #[command(flatten)]
-    output: JsonOutputArgs,
     #[arg(long)]
     home: Option<PathBuf>,
     #[arg(long)]
@@ -522,8 +474,6 @@ struct ResponseShowArgs {
 
 #[derive(clap::Args)]
 struct ResponseWaitArgs {
-    #[command(flatten)]
-    output: JsonOutputArgs,
     #[arg(long)]
     home: Option<PathBuf>,
     #[arg(long)]
@@ -571,18 +521,6 @@ async fn main() -> Result<()> {
             ConfigCommand::Profile { command } => match command {
                 InferenceProfileCommand::Set(args) => inference_profile_set(args).await,
             },
-        },
-        Command::Backend { command } => match command {
-            BackendCommand::Set(args) => backend_set(args).await,
-        },
-        Command::Behavior { command } => match command {
-            BehaviorCommand::Set(args) => behavior_set(args).await,
-        },
-        Command::ToolSelection { command } => match command {
-            ToolSelectionCommand::Set(args) => tool_selection_set(args).await,
-        },
-        Command::InferenceProfile { command } => match command {
-            InferenceProfileCommand::Set(args) => inference_profile_set(args).await,
         },
         Command::Request { command } => match command {
             RequestCommand::Submit(args) => request_submit(args).await,
@@ -653,7 +591,7 @@ async fn init(args: InitArgs) -> Result<()> {
         "tool_root": summary.tool_root,
         "init": summary,
     });
-    print_json_or_text(args.output.json, &output, format_init_output(&output))?;
+    print_json(&output)?;
 
     Ok(())
 }
@@ -813,7 +751,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
         "unavailable_behaviors": unavailable_behaviors,
         "graphql": graphql_url,
     });
-    print_json_or_text(args.output.json, &output, format_server_output(&output))?;
+    print_json(&output)?;
     eprintln!(
         "defra-agent server is running. Press Ctrl-C to stop. Run `defra-agent chat` in another terminal."
     );
@@ -939,7 +877,7 @@ async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
         "enabled": args.enabled,
         "probe_status": args.probe_status,
     });
-    print_json_or_text(args.output.json, &output, format_backend_output(&output))?;
+    print_json(&output)?;
     Ok(())
 }
 
@@ -1032,7 +970,7 @@ async fn behavior_set(args: BehaviorUpsertArgs) -> Result<()> {
         "inference_profile_id": args.inference_profile_id,
         "enabled": args.enabled,
     });
-    print_json_or_text(args.output.json, &output, format_behavior_output(&output))?;
+    print_json(&output)?;
     Ok(())
 }
 
@@ -1118,7 +1056,7 @@ async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<()> {
         "enable_meta_tools": args.enable_meta_tools,
         "delegate_to": args.delegate_to,
     });
-    print_json_or_text(args.output.json, &output, format_tools_output(&output))?;
+    print_json(&output)?;
     Ok(())
 }
 
@@ -1188,7 +1126,7 @@ async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> Result<()> {
         "stream_batch_ms": args.stream_batch_ms,
         "deadline_duration_secs": args.deadline_duration_secs,
     });
-    print_json_or_text(args.output.json, &output, format_profile_output(&output))?;
+    print_json(&output)?;
     Ok(())
 }
 
@@ -1210,45 +1148,25 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
         "behavior_id": submitted.behavior_id,
     });
     if args.no_wait {
-        print_json_or_text(
-            args.output.json,
-            &request_summary,
-            format_request_submit_nowait_output(&request_summary),
-        )?;
+        print_json(&request_summary)?;
         return Ok(());
     }
 
-    let response = if args.output.json {
-        wait_for_terminal_response(
-            &graphql,
-            &submitted.request_id,
-            args.timeout_secs,
-            args.poll_secs,
-        )
-        .await
-        .with_context(|| format!("waiting for AgentResponse {}", submitted.request_id))?
-    } else {
-        let existing_tool_calls =
-            load_existing_tool_call_keys(&graphql, &submitted.session_id).await?;
-        stream_turn_progress(
-            &graphql,
-            &submitted,
-            existing_tool_calls,
-            args.timeout_secs,
-            args.poll_secs,
-        )
-        .await
-        .with_context(|| format!("waiting for AgentResponse {}", submitted.request_id))?
-    };
+    let response = wait_for_terminal_response(
+        &graphql,
+        &submitted.request_id,
+        args.timeout_secs,
+        args.poll_secs,
+    )
+    .await
+    .with_context(|| format!("waiting for AgentResponse {}", submitted.request_id))?;
     let mut output = request_summary
         .as_object()
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("request summary was not a JSON object"))?;
     output.insert("response".to_string(), response);
     let output = serde_json::Value::Object(output);
-    if args.output.json {
-        print_json_or_text(true, &output, String::new())?;
-    }
+    print_json(&output)?;
     Ok(())
 }
 
@@ -1283,11 +1201,7 @@ async fn request_show(args: RequestShowArgs) -> Result<()> {
         request_id = escape_graphql_string(&request_id),
     );
     let response = post_graphql(&graphql, &query).await?;
-    print_json_or_text(
-        args.output.json,
-        &response,
-        format_request_show_output(&response),
-    )?;
+    print_json(&response)?;
     Ok(())
 }
 
@@ -1297,11 +1211,7 @@ async fn response_show(args: ResponseShowArgs) -> Result<()> {
         resolve_request_id(args.request_id.as_deref(), args.request_id_flag.as_deref())?;
     let query = response_query(&request_id);
     let response = post_graphql(&graphql, &query).await?;
-    print_json_or_text(
-        args.output.json,
-        &response,
-        format_response_show_output(&response),
-    )?;
+    print_json(&response)?;
     Ok(())
 }
 
@@ -1312,11 +1222,7 @@ async fn response_wait(args: ResponseWaitArgs) -> Result<()> {
     let response =
         wait_for_terminal_response(&graphql, &request_id, args.timeout_secs, args.poll_secs)
             .await?;
-    print_json_or_text(
-        args.output.json,
-        &response,
-        format_response_row_output(&response),
-    )?;
+    print_json(&response)?;
     Ok(())
 }
 
@@ -1324,7 +1230,7 @@ async fn status(args: StatusArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
     let output = load_runtime_status_output(args.home.as_deref(), &graphql, &agent_did).await?;
-    print_json_or_text(args.output.json, &output, format_status_output(&output))?;
+    print_json(&output)?;
     Ok(())
 }
 
@@ -1332,7 +1238,7 @@ async fn show_runtime(args: RuntimeShowArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
     let output = load_runtime_status_output(args.home.as_deref(), &graphql, &agent_did).await?;
-    print_json_or_text(args.output.json, &output, format_status_output(&output))?;
+    print_json(&output)?;
     Ok(())
 }
 
@@ -2003,345 +1909,9 @@ fn format_tool_ceiling(value: ToolCeilingArg) -> &'static str {
     }
 }
 
-fn print_json_or_text(json_output: bool, value: &Value, text: String) -> Result<()> {
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(value)?);
-    } else {
-        println!("{text}");
-    }
+fn print_json(value: &Value) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
-}
-
-fn format_init_output(value: &Value) -> String {
-    format!(
-        concat!(
-            "defra-agent initialized\n",
-            "home: {}\n",
-            "agent: {}\n",
-            "default behavior: {}\n",
-            "tool selection: {}\n",
-            "backend: {}\n",
-            "model: {}\n",
-            "tool ceiling: {}"
-        ),
-        value.get("home").and_then(Value::as_str).unwrap_or(""),
-        value.get("agent_did").and_then(Value::as_str).unwrap_or(""),
-        value
-            .get("default_behavior_id")
-            .and_then(Value::as_str)
-            .unwrap_or(""),
-        value
-            .get("tool_selection_id")
-            .and_then(Value::as_str)
-            .unwrap_or(""),
-        value
-            .pointer("/init/backend_id")
-            .and_then(Value::as_str)
-            .unwrap_or(""),
-        value
-            .pointer("/init/model_name")
-            .and_then(Value::as_str)
-            .unwrap_or(""),
-        value
-            .get("tool_ceiling")
-            .and_then(Value::as_str)
-            .unwrap_or(""),
-    )
-}
-
-fn format_server_output(value: &Value) -> String {
-    let tool_root = value
-        .get("tool_root")
-        .and_then(Value::as_str)
-        .unwrap_or("-");
-    format!(
-        concat!(
-            "defra-agent server ready\n",
-            "home: {}\n",
-            "graphql: {}\n",
-            "agent: {}\n",
-            "default behavior: {}\n",
-            "tool ceiling: {}\n",
-            "tool root: {}\n",
-            "runnable behaviors: {}\n",
-            "unavailable behaviors: {}"
-        ),
-        value.get("home").and_then(Value::as_str).unwrap_or(""),
-        value.get("graphql").and_then(Value::as_str).unwrap_or(""),
-        value.get("agent_did").and_then(Value::as_str).unwrap_or(""),
-        value
-            .get("default_behavior_id")
-            .and_then(Value::as_str)
-            .unwrap_or(""),
-        value
-            .get("tool_ceiling")
-            .and_then(Value::as_str)
-            .unwrap_or(""),
-        tool_root,
-        value
-            .get("runnable_behaviors")
-            .and_then(Value::as_array)
-            .map(Vec::len)
-            .unwrap_or(0),
-        value
-            .get("unavailable_behaviors")
-            .and_then(Value::as_object)
-            .map(serde_json::Map::len)
-            .unwrap_or(0),
-    )
-}
-
-fn format_backend_output(value: &Value) -> String {
-    format!(
-        "backend set: {} -> {} (doc {})",
-        value
-            .get("backend_id")
-            .and_then(Value::as_str)
-            .unwrap_or(""),
-        value.get("endpoint").and_then(Value::as_str).unwrap_or(""),
-        value.get("doc_id").and_then(Value::as_str).unwrap_or(""),
-    )
-}
-
-fn format_behavior_output(value: &Value) -> String {
-    format!(
-        "behavior set: {} (backend {}, tools {}, profile {})",
-        value
-            .get("behavior_id")
-            .and_then(Value::as_str)
-            .unwrap_or(""),
-        value
-            .get("backend_id")
-            .and_then(Value::as_str)
-            .unwrap_or("-"),
-        value
-            .get("tool_selection_id")
-            .and_then(Value::as_str)
-            .unwrap_or("-"),
-        value
-            .get("inference_profile_id")
-            .and_then(Value::as_str)
-            .unwrap_or("-"),
-    )
-}
-
-fn format_tools_output(value: &Value) -> String {
-    format!(
-        "tools set: {} (file tools {}, bash {}, meta {})",
-        value
-            .get("selection_id")
-            .and_then(Value::as_str)
-            .unwrap_or(""),
-        value
-            .get("file_tools_mode")
-            .and_then(Value::as_str)
-            .unwrap_or("Off"),
-        value
-            .get("bash_mode")
-            .and_then(Value::as_str)
-            .unwrap_or("Off"),
-        value
-            .get("enable_meta_tools")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-    )
-}
-
-fn format_profile_output(value: &Value) -> String {
-    format!(
-        "profile set: {} (context window {}, max turns {}, max output {})",
-        value
-            .get("profile_id")
-            .and_then(Value::as_str)
-            .unwrap_or(""),
-        value
-            .get("context_window")
-            .and_then(Value::as_i64)
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "-".to_string()),
-        value
-            .get("max_turns")
-            .and_then(Value::as_i64)
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "-".to_string()),
-        value
-            .get("max_output_tokens")
-            .and_then(Value::as_i64)
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "-".to_string()),
-    )
-}
-
-fn format_request_submit_nowait_output(value: &Value) -> String {
-    format!(
-        concat!(
-            "submitted request {}\n",
-            "session: {}\n",
-            "agent: {}\n",
-            "behavior: {}"
-        ),
-        value
-            .get("request_id")
-            .and_then(Value::as_str)
-            .unwrap_or(""),
-        value
-            .get("session_id")
-            .and_then(Value::as_str)
-            .unwrap_or(""),
-        value.get("agent_did").and_then(Value::as_str).unwrap_or(""),
-        value
-            .get("behavior_id")
-            .and_then(Value::as_str)
-            .unwrap_or("-"),
-    )
-}
-
-fn format_request_show_output(response: &Value) -> String {
-    if let Some(row) = first_graphql_row_opt(response, "AgentRequest") {
-        return format!(
-            concat!(
-                "request: {}\n",
-                "status: {}\n",
-                "lifecycle: {}\n",
-                "admission: {}\n",
-                "agent: {}\n",
-                "behavior: {}\n",
-                "session: {}\n",
-                "backend: {}\n",
-                "failure: {}"
-            ),
-            row.get("request_id").and_then(Value::as_str).unwrap_or(""),
-            row.get("status").and_then(Value::as_str).unwrap_or(""),
-            row.get("lifecycle_state")
-                .and_then(Value::as_str)
-                .unwrap_or(""),
-            row.get("admission_state")
-                .and_then(Value::as_str)
-                .unwrap_or(""),
-            row.get("agent_did").and_then(Value::as_str).unwrap_or(""),
-            row.get("behavior_id")
-                .and_then(Value::as_str)
-                .unwrap_or("-"),
-            row.get("session_id").and_then(Value::as_str).unwrap_or(""),
-            row.get("backend_id").and_then(Value::as_str).unwrap_or("-"),
-            row.get("failure_reason")
-                .and_then(Value::as_str)
-                .unwrap_or("-"),
-        );
-    }
-    "request not found".to_string()
-}
-
-fn format_response_show_output(response: &Value) -> String {
-    if let Some(row) = first_graphql_row_opt(response, "AgentResponse") {
-        return format_response_row_output(row);
-    }
-    "response not found".to_string()
-}
-
-fn format_response_row_output(row: &Value) -> String {
-    let content = row
-        .get("content")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim_end();
-    let header = format!(
-        concat!(
-            "response: {}\n",
-            "status: {}\n",
-            "behavior: {}\n",
-            "progress: {}\n",
-            "completed_at: {}\n",
-            "error: {}"
-        ),
-        row.get("request_id").and_then(Value::as_str).unwrap_or(""),
-        row.get("status").and_then(Value::as_str).unwrap_or(""),
-        row.get("behavior_id")
-            .and_then(Value::as_str)
-            .unwrap_or("-"),
-        row.get("progress_seq")
-            .and_then(Value::as_i64)
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "0".to_string()),
-        row.get("completed_at")
-            .and_then(Value::as_str)
-            .unwrap_or("-"),
-        row.get("error_message")
-            .and_then(Value::as_str)
-            .unwrap_or("-"),
-    );
-    if content.is_empty() {
-        header
-    } else {
-        format!("{header}\n\n{content}")
-    }
-}
-
-fn format_status_output(value: &Value) -> String {
-    let runtime = value.get("runtime").unwrap_or(&Value::Null);
-    format!(
-        concat!(
-            "defra-agent status\n",
-            "home: {}\n",
-            "graphql: {}\n",
-            "agent: {}\n",
-            "process: {}\n",
-            "reconcile: {} ({})\n",
-            "generation: active {}, router {}\n",
-            "default behavior: {}\n",
-            "behaviors: {} runnable, {} unavailable\n",
-            "last error: {}"
-        ),
-        value.get("home").and_then(Value::as_str).unwrap_or(""),
-        value.get("graphql").and_then(Value::as_str).unwrap_or(""),
-        value.get("agent_did").and_then(Value::as_str).unwrap_or(""),
-        runtime
-            .get("process_state")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown"),
-        runtime
-            .get("reconcile_phase")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown"),
-        runtime
-            .get("last_reconcile_result")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown"),
-        runtime
-            .get("active_generation")
-            .and_then(Value::as_i64)
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "-".to_string()),
-        runtime
-            .get("router_generation")
-            .and_then(Value::as_i64)
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "-".to_string()),
-        runtime
-            .get("default_behavior_id")
-            .and_then(Value::as_str)
-            .unwrap_or("-"),
-        runtime
-            .get("runnable_behavior_count")
-            .and_then(Value::as_i64)
-            .unwrap_or(0),
-        runtime
-            .get("unavailable_behavior_count")
-            .and_then(Value::as_i64)
-            .unwrap_or(0),
-        runtime
-            .get("last_reconcile_error")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("-"),
-    )
-}
-
-fn first_graphql_row_opt<'a>(response: &'a Value, field: &str) -> Option<&'a Value> {
-    response
-        .pointer(&format!("/data/{field}"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
 }
 
 async fn wait_for_terminal_response(

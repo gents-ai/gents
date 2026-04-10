@@ -154,13 +154,13 @@ export GRAPHQL=http://127.0.0.1:9191/api/v0/graphql
 export AGENT_DID="did:defra-agent:default"
 export TOOL_SELECTION_ID=default-tools
 
-$AGENT tool-selection upsert \
+$AGENT config tools set \
   --graphql "$GRAPHQL" \
   --agent-did "$AGENT_DID" \
   --selection-id "$TOOL_SELECTION_ID" \
   --enable-file-tools
 
-$AGENT behavior upsert \
+$AGENT config behavior set \
   --graphql "$GRAPHQL" \
   --agent-did "$AGENT_DID" \
   --tool-selection-id "$TOOL_SELECTION_ID" \

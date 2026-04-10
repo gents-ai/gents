@@ -495,7 +495,6 @@ async fn request_submit_waits_for_response_by_default() -> Result<()> {
         &[
             "request",
             "submit",
-            "--json",
             "--graphql",
             &graphql,
             "--agent-did",
@@ -1129,8 +1128,9 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
     let behavior = run_cli_json(
         &home_dir,
         &[
+            "config",
             "behavior",
-            "upsert",
+            "set",
             "--graphql",
             &graphql,
             "--agent-did",
@@ -1344,8 +1344,9 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     run_cli_json(
         &home_dir,
         &[
+            "config",
             "behavior",
-            "upsert",
+            "set",
             "--graphql",
             &graphql,
             "--agent-did",
@@ -1637,7 +1638,6 @@ fn run_cli_json(home_dir: &Path, args: &[&str]) -> Result<Value> {
         .env("HOME", home_dir)
         .env("RUST_LOG", "error")
         .args(args)
-        .arg("--json")
         .output()
         .with_context(|| format!("running defra-agent {}", args.join(" ")))?;
     if !output.status.success() {
