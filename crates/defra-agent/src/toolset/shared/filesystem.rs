@@ -12,7 +12,19 @@ pub(crate) fn collect_entries(
     max_entries: usize,
     entries: &mut Vec<String>,
 ) -> Result<()> {
-    let mut children = std::fs::read_dir(dir)?.collect::<std::result::Result<Vec<_>, _>>()?;
+    let read_dir = match std::fs::read_dir(dir) {
+        Ok(read_dir) => read_dir,
+        Err(error) if should_skip_io_error(&error) => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut children = Vec::new();
+    for entry in read_dir {
+        match entry {
+            Ok(entry) => children.push(entry),
+            Err(error) if should_skip_io_error(&error) => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
     children.sort_by_key(|entry| entry.file_name());
 
     for entry in children {
@@ -21,7 +33,11 @@ pub(crate) fn collect_entries(
         }
 
         let path = entry.path();
-        let metadata = entry.metadata()?;
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) if should_skip_io_error(&error) => continue,
+            Err(error) => return Err(error.into()),
+        };
         let mut display = context.display_path(&path);
         if metadata.is_dir() {
             display.push('/');
@@ -43,7 +59,19 @@ pub(crate) fn collect_glob_matches(
     max_matches: usize,
     matches: &mut Vec<String>,
 ) -> Result<()> {
-    let mut children = std::fs::read_dir(dir)?.collect::<std::result::Result<Vec<_>, _>>()?;
+    let read_dir = match std::fs::read_dir(dir) {
+        Ok(read_dir) => read_dir,
+        Err(error) if should_skip_io_error(&error) => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut children = Vec::new();
+    for entry in read_dir {
+        match entry {
+            Ok(entry) => children.push(entry),
+            Err(error) if should_skip_io_error(&error) => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
     children.sort_by_key(|entry| entry.file_name());
 
     for entry in children {
@@ -52,7 +80,11 @@ pub(crate) fn collect_glob_matches(
         }
 
         let path = entry.path();
-        let metadata = entry.metadata()?;
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) if should_skip_io_error(&error) => continue,
+            Err(error) => return Err(error.into()),
+        };
         let display = context.display_path(&path);
         if pattern.matches(&display) {
             matches.push(if metadata.is_dir() {
@@ -78,7 +110,19 @@ pub(crate) fn collect_grep_matches(
     max_matches: usize,
     matches: &mut Vec<String>,
 ) -> Result<()> {
-    let mut children = std::fs::read_dir(dir)?.collect::<std::result::Result<Vec<_>, _>>()?;
+    let read_dir = match std::fs::read_dir(dir) {
+        Ok(read_dir) => read_dir,
+        Err(error) if should_skip_io_error(&error) => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut children = Vec::new();
+    for entry in read_dir {
+        match entry {
+            Ok(entry) => children.push(entry),
+            Err(error) if should_skip_io_error(&error) => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
     children.sort_by_key(|entry| entry.file_name());
 
     for entry in children {
@@ -87,7 +131,11 @@ pub(crate) fn collect_grep_matches(
         }
 
         let path = entry.path();
-        let metadata = entry.metadata()?;
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) if should_skip_io_error(&error) => continue,
+            Err(error) => return Err(error.into()),
+        };
         if metadata.is_dir() {
             collect_grep_matches(
                 context,
@@ -167,4 +215,11 @@ pub(crate) fn truncate_text(text: &str, max_chars: usize) -> String {
 
     let truncated = text.chars().take(max_chars).collect::<String>();
     format!("{truncated}\n[truncated to {max_chars} chars]")
+}
+
+fn should_skip_io_error(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::NotFound
+    )
 }

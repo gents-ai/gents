@@ -21,6 +21,7 @@ use tracing_subscriber::EnvFilter;
 
 const DEFAULT_AGENT_NAME: &str = "default";
 const DEFAULT_HTTP_PORT: u16 = 9191;
+const DEFAULT_LOG_FILTER: &str = "error";
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
 const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
 const BOOTSTRAP_INFERENCE_BACKEND_DEFAULT: &str =
@@ -92,6 +93,8 @@ struct InitArgs {
     home: Option<PathBuf>,
     #[arg(long, hide = true)]
     data_dir: Option<PathBuf>,
+    #[arg(long, default_value_t = false)]
+    dangerously_overwrite: bool,
     #[arg(long, default_value = DEFAULT_AGENT_NAME)]
     agent_name: String,
     #[arg(long)]
@@ -423,7 +426,8 @@ struct ResponseWaitArgs {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER)),
         )
         .init();
 
@@ -457,6 +461,9 @@ async fn main() -> Result<()> {
 
 async fn init(args: InitArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
+    if args.dangerously_overwrite {
+        dangerously_overwrite_home(&home_dir)?;
+    }
     let data_dir = args
         .data_dir
         .clone()
@@ -675,6 +682,9 @@ async fn serve(args: ServeArgs) -> Result<()> {
             "graphql": graphql_url,
         }))?
     );
+    eprintln!(
+        "defra-agent server is running. Press Ctrl-C to stop. Run `defra-agent chat` in another terminal."
+    );
 
     run_handle
         .await
@@ -708,7 +718,7 @@ async fn chat(args: ChatArgs) -> Result<()> {
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     if !args.message.is_empty() {
-        let response = submit_chat_turn(
+        submit_chat_turn(
             &graphql,
             &agent_did,
             &session_id,
@@ -718,7 +728,6 @@ async fn chat(args: ChatArgs) -> Result<()> {
             args.poll_secs,
         )
         .await?;
-        println!("{response}");
         return Ok(());
     }
 
@@ -740,7 +749,7 @@ async fn chat(args: ChatArgs) -> Result<()> {
             break;
         }
 
-        let response = submit_chat_turn(
+        submit_chat_turn(
             &graphql,
             &agent_did,
             &session_id,
@@ -750,7 +759,6 @@ async fn chat(args: ChatArgs) -> Result<()> {
             args.poll_secs,
         )
         .await?;
-        writeln!(stdout, "{response}")?;
     }
 
     Ok(())
@@ -1289,9 +1297,9 @@ fn resolve_default_write_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
         return Ok(path.to_path_buf());
     }
 
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::current_dir().ok())
+    std::env::current_dir()
+        .ok()
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .ok_or_else(|| anyhow::anyhow!("unable to determine a default tool root for write tools"))
 }
 
@@ -1413,12 +1421,60 @@ fn response_query(request_id: &str) -> String {
     )
 }
 
+fn chat_progress_query(request_id: &str, session_id: &str) -> String {
+    format!(
+        r#"{{
+            AgentResponse(
+                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                order: {{ created_at: DESC }},
+                limit: 1
+            ) {{
+                request_id
+                session_id
+                status
+                content
+                progress_seq
+                completed_at
+            }}
+            AgentToolCall(
+                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                order: {{ started_at: ASC }}
+            ) {{
+                tool_call_key
+                tool_name
+                status
+                args
+                result
+                started_at
+                completed_at
+            }}
+        }}"#,
+        request_id = escape_graphql_string(request_id),
+        session_id = escape_graphql_string(session_id),
+    )
+}
+
 #[derive(Debug, Clone)]
 struct SubmittedRequest {
     request_id: String,
     session_id: String,
     agent_did: String,
     behavior_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ChatTurnProgress {
+    content: String,
+    status: String,
+}
+
+#[derive(Debug, Clone)]
+struct ToolCallProgress {
+    tool_call_key: String,
+    tool_name: String,
+    status: String,
+    args: String,
+    result: String,
 }
 
 async fn create_agent_request(
@@ -1493,15 +1549,17 @@ async fn submit_chat_turn(
     timeout_secs: u64,
     poll_secs: u64,
 ) -> Result<String> {
+    let existing_tool_calls = load_existing_tool_call_keys(graphql, session_id).await?;
     let submitted =
         create_agent_request(graphql, agent_did, content, Some(session_id), behavior_id).await?;
-    let response =
-        wait_for_terminal_response(graphql, &submitted.request_id, timeout_secs, poll_secs).await?;
-    Ok(response
-        .get("content")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string())
+    stream_chat_turn_progress(
+        graphql,
+        &submitted,
+        existing_tool_calls,
+        timeout_secs,
+        poll_secs,
+    )
+    .await
 }
 
 fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
@@ -1701,4 +1759,200 @@ async fn wait_for_terminal_response(
 
         tokio::time::sleep(Duration::from_secs(poll_secs)).await;
     }
+}
+
+fn dangerously_overwrite_home(home_dir: &Path) -> Result<()> {
+    if !home_dir.exists() {
+        return Ok(());
+    }
+
+    if home_dir.as_os_str().is_empty() || home_dir == Path::new("/") {
+        anyhow::bail!("refusing to dangerously overwrite {}", home_dir.display());
+    }
+    if let Some(user_home) = std::env::var_os("HOME").map(PathBuf::from) {
+        if home_dir == user_home {
+            anyhow::bail!(
+                "refusing to dangerously overwrite the user home directory {}; pass a dedicated defra-agent home instead",
+                home_dir.display()
+            );
+        }
+    }
+
+    fs::remove_dir_all(home_dir)
+        .with_context(|| format!("dangerously overwriting {}", home_dir.display()))?;
+    Ok(())
+}
+
+async fn load_existing_tool_call_keys(
+    graphql: &str,
+    session_id: &str,
+) -> Result<std::collections::BTreeMap<String, String>> {
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{ session_id: {{ _eq: "{session_id}" }} }}
+            ) {{
+                tool_call_key
+                status
+            }}
+        }}"#,
+        session_id = escape_graphql_string(session_id),
+    );
+    let response = post_graphql(graphql, &query).await?;
+    let rows = response
+        .pointer("/data/AgentToolCall")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            Some((
+                row.get("tool_call_key")?.as_str()?.to_string(),
+                row.get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            ))
+        })
+        .collect())
+}
+
+async fn stream_chat_turn_progress(
+    graphql: &str,
+    submitted: &SubmittedRequest,
+    mut known_tool_calls: std::collections::BTreeMap<String, String>,
+    timeout_secs: u64,
+    poll_secs: u64,
+) -> Result<String> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
+    let mut rendered_content = String::new();
+    let mut at_line_start = true;
+
+    loop {
+        let query = chat_progress_query(&submitted.request_id, &submitted.session_id);
+        let response = post_graphql(graphql, &query).await?;
+
+        let tool_rows = response
+            .pointer("/data/AgentToolCall")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for tool in tool_rows
+            .into_iter()
+            .filter_map(|row| decode_tool_call_progress(&row))
+        {
+            let previous_status = known_tool_calls.get(&tool.tool_call_key).cloned();
+            if previous_status.as_deref() == Some(tool.status.as_str()) {
+                continue;
+            }
+            known_tool_calls.insert(tool.tool_call_key.clone(), tool.status.clone());
+            if !at_line_start {
+                println!();
+            }
+            println!("{}", format_tool_progress_line(&tool));
+            io::stdout().flush()?;
+            at_line_start = true;
+        }
+
+        let response_row = response
+            .pointer("/data/AgentResponse")
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+            .cloned();
+        if let Some(progress) = response_row
+            .as_ref()
+            .and_then(|row| decode_chat_turn_progress(row))
+        {
+            if let Some(delta) = progress.content.strip_prefix(&rendered_content) {
+                if !delta.is_empty() {
+                    print!("{delta}");
+                    io::stdout().flush()?;
+                    rendered_content = progress.content.clone();
+                    at_line_start = delta.ends_with('\n');
+                }
+            } else if progress.content != rendered_content {
+                if !at_line_start {
+                    println!();
+                }
+                print!("{}", progress.content);
+                io::stdout().flush()?;
+                rendered_content = progress.content.clone();
+                at_line_start = rendered_content.ends_with('\n');
+            }
+
+            if matches!(progress.status.as_str(), "complete" | "error") {
+                if !at_line_start {
+                    println!();
+                    io::stdout().flush()?;
+                }
+                return Ok(progress.content);
+            }
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!(
+                "timed out waiting for AgentResponse {}",
+                submitted.request_id
+            );
+        }
+
+        tokio::time::sleep(Duration::from_secs(poll_secs)).await;
+    }
+}
+
+fn decode_chat_turn_progress(row: &Value) -> Option<ChatTurnProgress> {
+    Some(ChatTurnProgress {
+        content: row.get("content")?.as_str()?.to_string(),
+        status: row.get("status")?.as_str()?.to_string(),
+    })
+}
+
+fn decode_tool_call_progress(row: &Value) -> Option<ToolCallProgress> {
+    Some(ToolCallProgress {
+        tool_call_key: row.get("tool_call_key")?.as_str()?.to_string(),
+        tool_name: row.get("tool_name")?.as_str()?.to_string(),
+        status: row.get("status")?.as_str()?.to_string(),
+        args: row
+            .get("args")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        result: row
+            .get("result")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+    })
+}
+
+fn format_tool_progress_line(tool: &ToolCallProgress) -> String {
+    match tool.status.as_str() {
+        "completed" => format!("[tool done] {}", tool.tool_name),
+        "error" => format!(
+            "[tool error] {} {}",
+            tool.tool_name,
+            preview_progress_text(&tool.result)
+        ),
+        _ => format!(
+            "[tool] {} {}",
+            tool.tool_name,
+            preview_progress_text(&tool.args)
+        ),
+    }
+}
+
+fn preview_progress_text(value: &str) -> String {
+    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = compact.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let preview = if trimmed.chars().count() > 120 {
+        format!("{}...", trimmed.chars().take(120).collect::<String>())
+    } else {
+        trimmed.to_string()
+    };
+    format!("({preview})")
 }

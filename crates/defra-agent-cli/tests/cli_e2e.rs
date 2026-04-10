@@ -800,6 +800,56 @@ async fn init_requires_model_name() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn init_dangerously_overwrite_replaces_existing_home() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("overwrite-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-overwrite-{}", Uuid::new_v4().simple());
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    let runtime_home = home_dir.join(".defra-agent");
+    let stale_path = runtime_home.join("stale.txt");
+    fs::write(&stale_path, "stale").context("writing stale file into runtime home")?;
+    assert!(stale_path.exists(), "expected stale file to exist");
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--dangerously-overwrite",
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    assert!(
+        !stale_path.exists(),
+        "dangerously overwrite should remove stale files in the runtime home"
+    );
+    assert!(
+        runtime_home.join("init.json").exists(),
+        "init config should be recreated after dangerously overwrite"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");

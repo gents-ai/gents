@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use defra_node::EmbeddedNode;
 
-use super::args::{EditFileArgs, ReadFileArgs, WriteFileArgs};
+use super::args::{EditFileArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs};
 use super::delegate::DelegateToAgentArgs;
-use super::file_tools::{EditFileTool, ReadFileTool, WriteFileTool};
+use super::file_tools::{EditFileTool, ListFilesTool, ReadFileTool, WriteFileTool};
 use super::shared::{validate_read_only_command, ToolContext};
 use super::*;
 use crate::ensure_schemas;
@@ -86,6 +86,35 @@ async fn write_and_edit_file_work_under_root() {
 
     let content = std::fs::read_to_string(root.join("nested/file.txt")).unwrap();
     assert_eq!(content, "hello amy");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn list_files_skips_permission_denied_subtrees() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = temp_root("defra-agent-list-files-perms");
+    std::fs::write(root.join("visible.txt"), "ok").unwrap();
+    let restricted = root.join("restricted");
+    std::fs::create_dir_all(restricted.join("nested")).unwrap();
+    std::fs::write(restricted.join("nested/secret.txt"), "hidden").unwrap();
+    std::fs::set_permissions(&restricted, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let tool = ListFilesTool::new(ToolContext::new(root.clone(), false).unwrap(), 100);
+    let output = rig::tool::Tool::call(
+        &tool,
+        ListFilesArgs {
+            path: Some(".".to_string()),
+            recursive: true,
+            max_entries: 100,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(output.contains("visible.txt"), "{output}");
+
+    std::fs::set_permissions(&restricted, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 #[test]

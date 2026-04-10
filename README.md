@@ -61,6 +61,14 @@ If you want write-capable local tools for a demo, opt in explicitly:
 $AGENT init "$INFERENCE_ENDPOINT" --model-name "$MODEL_NAME" --write-tools
 ```
 
+With `--write-tools`, the default tool root is the current directory where you run `init`. Pass `--tool-root /path/to/root` if you want a different scope.
+
+If you want to wipe and recreate the configured agent home from scratch:
+
+```bash
+$AGENT init "$INFERENCE_ENDPOINT" --model-name "$MODEL_NAME" --dangerously-overwrite
+```
+
 If you want to isolate a demo, pass `--home /some/path` to `init`, `server`, and `chat`.
 
 If you want to override the default backend id as well:
@@ -97,6 +105,8 @@ The server reads the initialized home directory, starts the local node, and prin
 - `default_behavior_id`
 - `tool_ceiling`
 
+`server` stays in the foreground until you stop it with `Ctrl-C`. By default it keeps logs quiet and prints the readiness JSON plus a short status line. If you want debug output, set `RUST_LOG=info` or a more specific filter before starting it.
+
 ### 5. Start chatting
 
 Run this in terminal 2:
@@ -105,7 +115,7 @@ Run this in terminal 2:
 $AGENT chat
 ```
 
-That opens a terminal session using the runtime state written by `server`. Type a message, press Enter, and keep going on the same session. Exit with `/exit`.
+That opens a terminal session using the runtime state written by `server`. Type a message, press Enter, and keep going on the same session. Exit with `/exit`. While the agent is working, `chat` now prints live tool progress and streamed response text instead of waiting silently for the turn to finish.
 
 If you only want a single turn, pass the message directly:
 
