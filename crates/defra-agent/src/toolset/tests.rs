@@ -4,9 +4,11 @@ use std::time::Duration;
 
 use defra_node::EmbeddedNode;
 
-use super::args::{EditFileArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs};
+use super::args::{EditFileArgs, GlobArgs, GrepArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs};
 use super::delegate::DelegateToAgentArgs;
-use super::file_tools::{EditFileTool, ListFilesTool, ReadFileTool, WriteFileTool};
+use super::file_tools::{
+    EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool,
+};
 use super::shared::{validate_read_only_command, ToolContext};
 use super::*;
 use crate::ensure_schemas;
@@ -52,8 +54,12 @@ async fn read_file_returns_numbered_contents() {
     .await
     .unwrap();
 
-    assert!(output.contains("2: beta"));
-    assert!(output.contains("3: gamma"));
+    let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(value["path"], "notes.txt");
+    assert_eq!(value["start_line"], 2);
+    assert_eq!(value["end_line"], 3);
+    assert_eq!(value["returned_lines"], 2);
+    assert_eq!(value["content"], "2: beta\n3: gamma");
 }
 
 #[tokio::test]
@@ -112,9 +118,111 @@ async fn list_files_skips_permission_denied_subtrees() {
     .await
     .unwrap();
 
-    assert!(output.contains("visible.txt"), "{output}");
+    let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+    let entries = value["entries"].as_array().unwrap();
+    assert!(
+        entries.iter().any(|entry| entry["path"] == "visible.txt"),
+        "{output}"
+    );
 
     std::fs::set_permissions(&restricted, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[tokio::test]
+async fn list_files_ignores_common_generated_directories_by_default() {
+    let root = temp_root("defra-agent-list-files-ignored");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("target/debug")).unwrap();
+    std::fs::write(root.join("src/lib.rs"), "pub fn hi() {}\n").unwrap();
+    std::fs::write(root.join("target/debug/app"), "compiled").unwrap();
+    let tool = ListFilesTool::new(ToolContext::new(root.clone(), false).unwrap(), 100);
+
+    let output = rig::tool::Tool::call(
+        &tool,
+        ListFilesArgs {
+            path: Some(".".to_string()),
+            recursive: true,
+            max_entries: 100,
+        },
+    )
+    .await
+    .unwrap();
+
+    let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+    let entries = value["entries"].as_array().unwrap();
+    assert!(
+        entries.iter().any(|entry| entry["path"] == "src"),
+        "{output}"
+    );
+    assert!(
+        entries.iter().all(|entry| entry["path"] != "target"),
+        "{output}"
+    );
+}
+
+#[tokio::test]
+async fn glob_returns_structured_json_matches() {
+    let root = temp_root("defra-agent-glob");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("target/debug")).unwrap();
+    std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(root.join("target/debug/main.rs"), "generated\n").unwrap();
+    let tool = GlobTool::new(ToolContext::new(root.clone(), false).unwrap(), 100);
+
+    let output = rig::tool::Tool::call(
+        &tool,
+        GlobArgs {
+            pattern: "**/*.rs".to_string(),
+            path: Some(".".to_string()),
+            max_matches: 100,
+        },
+    )
+    .await
+    .unwrap();
+
+    let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+    let matches = value["matches"].as_array().unwrap();
+    assert!(
+        matches.iter().any(|entry| entry["path"] == "src/main.rs"),
+        "{output}"
+    );
+    assert!(matches
+        .iter()
+        .all(|entry| entry["path"] != "target/debug/main.rs"));
+}
+
+#[tokio::test]
+async fn grep_returns_structured_json_matches() {
+    let root = temp_root("defra-agent-grep");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("src/main.rs"),
+        "fn main() {\n    println!(\"hello\");\n}\n",
+    )
+    .unwrap();
+    let tool = GrepTool::new(ToolContext::new(root.clone(), false).unwrap(), 100);
+
+    let output = rig::tool::Tool::call(
+        &tool,
+        GrepArgs {
+            pattern: "println".to_string(),
+            path: Some(".".to_string()),
+            case_sensitive: true,
+            max_matches: 100,
+        },
+    )
+    .await
+    .unwrap();
+
+    let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(value["files_with_matches"], 1);
+    let matches = value["matches"].as_array().unwrap();
+    assert_eq!(matches[0]["path"], "src/main.rs");
+    assert_eq!(matches[0]["line_number"], 2);
+    assert!(matches[0]["preview"]
+        .as_str()
+        .unwrap()
+        .contains("println!(\"hello\")"));
 }
 
 #[test]

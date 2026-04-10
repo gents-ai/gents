@@ -1,13 +1,18 @@
+use std::collections::BTreeSet;
+
 use anyhow::{anyhow, Context as _, Result};
 use glob::Pattern;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
+use serde::Serialize;
 
 use super::args::{EditFileArgs, GlobArgs, GrepArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs};
 use super::shared::{
-    collect_entries, collect_glob_matches, collect_grep_matches, render_file_contents,
-    truncate_text, ToolContext, ToolError,
+    collect_entries, collect_glob_matches, collect_grep_matches, default_ignored_names,
+    render_file_contents, truncate_inline, truncate_text, FilesystemEntry, ToolContext, ToolError,
 };
+
+const DEFAULT_GREP_PREVIEW_CHARS: usize = 240;
 
 #[derive(Clone)]
 pub(super) struct ListFilesTool {
@@ -102,7 +107,7 @@ impl Tool for ListFilesTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: format!(
-                "List files and directories under the allowed root ({}).",
+                "List files and directories under the allowed root ({}). Returns concise JSON and skips common generated directories by default.",
                 self.context.root().display()
             ),
             parameters: serde_json::json!({
@@ -118,21 +123,22 @@ impl Tool for ListFilesTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let dir = self.context.resolve_existing_dir(args.path.as_deref())?;
-        let mut entries = Vec::new();
-        collect_entries(
+        let entries = collect_entries(
             &self.context,
             &dir,
             args.recursive,
             args.max_entries.max(1).min(self.default_max_entries.max(1)),
-            &mut entries,
         )?;
-        entries.sort();
 
-        Ok(if entries.is_empty() {
-            format!("(no entries under {})", self.context.display_path(&dir))
-        } else {
-            entries.join("\n")
-        })
+        Ok(render_json(&ListFilesOutput {
+            path: self.context.display_path(&dir),
+            recursive: args.recursive,
+            returned_entries: entries.items.len(),
+            truncated: entries.truncated,
+            default_ignored: default_ignored_names(),
+            summary: summarize_entries(&entries.items),
+            entries: entries.items,
+        })?)
     }
 }
 
@@ -147,7 +153,7 @@ impl Tool for ReadFileTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: format!(
-                "Read a UTF-8 text file under the allowed root ({}).",
+                "Read a UTF-8 text file under the allowed root ({}). Returns concise JSON with line metadata.",
                 self.context.root().display()
             ),
             parameters: serde_json::json!({
@@ -168,13 +174,17 @@ impl Tool for ReadFileTool {
         let bytes = tokio::fs::read(&path).await?;
         let text = String::from_utf8_lossy(&bytes).into_owned();
         let rendered = render_file_contents(&text, args.start_line, args.end_line);
-        let rendered = truncate_text(&rendered, args.max_chars.min(self.default_max_chars).max(1));
+        let max_chars = args.max_chars.min(self.default_max_chars).max(1);
 
-        Ok(format!(
-            "=== {} ===\n{}",
-            self.context.display_path(&path),
-            rendered
-        ))
+        Ok(render_json(&ReadFileOutput {
+            path: self.context.display_path(&path),
+            start_line: rendered.start_line,
+            end_line: rendered.end_line,
+            total_lines: rendered.total_lines,
+            returned_lines: rendered.returned_lines,
+            truncated: rendered.content.chars().count() > max_chars,
+            content: truncate_text(&rendered.content, max_chars),
+        })?)
     }
 }
 
@@ -188,7 +198,7 @@ impl Tool for GlobTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Find files matching a glob pattern under the allowed root.".to_string(),
+            description: "Find files matching a glob pattern under the allowed root. Returns concise JSON and skips common generated directories by default.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -205,21 +215,21 @@ impl Tool for GlobTool {
         let dir = self.context.resolve_existing_dir(args.path.as_deref())?;
         let pattern = Pattern::new(&args.pattern)
             .with_context(|| format!("invalid glob pattern {}", args.pattern))?;
-        let mut matches = Vec::new();
-        collect_glob_matches(
+        let matches = collect_glob_matches(
             &self.context,
             &dir,
             &pattern,
             args.max_matches.min(self.default_max_matches).max(1),
-            &mut matches,
         )?;
-        matches.sort();
 
-        Ok(if matches.is_empty() {
-            format!("(no matches for {})", args.pattern)
-        } else {
-            matches.join("\n")
-        })
+        Ok(render_json(&GlobOutput {
+            pattern: args.pattern,
+            path: self.context.display_path(&dir),
+            returned_matches: matches.items.len(),
+            truncated: matches.truncated,
+            default_ignored: default_ignored_names(),
+            matches: matches.items,
+        })?)
     }
 }
 
@@ -233,7 +243,7 @@ impl Tool for GrepTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Search text files under the allowed root for a substring.".to_string(),
+            description: "Search text files under the allowed root for a substring. Returns concise JSON and skips common generated directories by default.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -249,21 +259,39 @@ impl Tool for GrepTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let dir = self.context.resolve_existing_dir(args.path.as_deref())?;
-        let mut matches = Vec::new();
-        collect_grep_matches(
+        let max_matches = args.max_matches.min(self.default_max_matches).max(1);
+        let collected = collect_grep_matches(
             &self.context,
             &dir,
             &args.pattern,
             args.case_sensitive,
-            args.max_matches.min(self.default_max_matches).max(1),
-            &mut matches,
+            max_matches,
         )?;
 
-        Ok(if matches.is_empty() {
-            format!("(no matches for {})", args.pattern)
-        } else {
-            matches.join("\n")
-        })
+        let mut files_with_matches = BTreeSet::new();
+        let matches = collected
+            .items
+            .into_iter()
+            .map(|entry| {
+                files_with_matches.insert(entry.path.clone());
+                GrepOutputMatch {
+                    path: entry.path,
+                    line_number: entry.line_number,
+                    preview: truncate_inline(&entry.line, DEFAULT_GREP_PREVIEW_CHARS),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        Ok(render_json(&GrepOutput {
+            pattern: args.pattern,
+            path: self.context.display_path(&dir),
+            case_sensitive: args.case_sensitive,
+            returned_matches: matches.len(),
+            files_with_matches: files_with_matches.len(),
+            truncated: collected.truncated,
+            default_ignored: default_ignored_names(),
+            matches,
+        })?)
     }
 }
 
@@ -358,4 +386,78 @@ impl Tool for EditFileTool {
             }
         ))
     }
+}
+
+#[derive(Serialize)]
+struct EntrySummary {
+    files: usize,
+    directories: usize,
+}
+
+#[derive(Serialize)]
+struct ListFilesOutput {
+    path: String,
+    recursive: bool,
+    returned_entries: usize,
+    truncated: bool,
+    default_ignored: &'static [&'static str],
+    summary: EntrySummary,
+    entries: Vec<FilesystemEntry>,
+}
+
+#[derive(Serialize)]
+struct ReadFileOutput {
+    path: String,
+    start_line: usize,
+    end_line: usize,
+    total_lines: usize,
+    returned_lines: usize,
+    truncated: bool,
+    content: String,
+}
+
+#[derive(Serialize)]
+struct GlobOutput {
+    pattern: String,
+    path: String,
+    returned_matches: usize,
+    truncated: bool,
+    default_ignored: &'static [&'static str],
+    matches: Vec<FilesystemEntry>,
+}
+
+#[derive(Serialize)]
+struct GrepOutput {
+    pattern: String,
+    path: String,
+    case_sensitive: bool,
+    returned_matches: usize,
+    files_with_matches: usize,
+    truncated: bool,
+    default_ignored: &'static [&'static str],
+    matches: Vec<GrepOutputMatch>,
+}
+
+#[derive(Serialize)]
+struct GrepOutputMatch {
+    path: String,
+    line_number: usize,
+    preview: String,
+}
+
+fn summarize_entries(entries: &[FilesystemEntry]) -> EntrySummary {
+    let mut files = 0;
+    let mut directories = 0;
+    for entry in entries {
+        match entry.entry_type {
+            "file" => files += 1,
+            "directory" => directories += 1,
+            _ => {}
+        }
+    }
+    EntrySummary { files, directories }
+}
+
+fn render_json(value: &impl Serialize) -> Result<String> {
+    serde_json::to_string_pretty(value).context("serializing tool output")
 }

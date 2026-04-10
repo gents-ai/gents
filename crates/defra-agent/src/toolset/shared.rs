@@ -5,8 +5,8 @@ mod filesystem;
 pub(super) use command::{run_command, validate_read_only_command};
 pub(super) use context::{ToolContext, ToolError};
 pub(super) use filesystem::{
-    collect_entries, collect_glob_matches, collect_grep_matches, render_file_contents,
-    truncate_text,
+    collect_entries, collect_glob_matches, collect_grep_matches, default_ignored_names,
+    render_file_contents, truncate_inline, truncate_text, FilesystemEntry,
 };
 
 pub(super) fn default_max_list_entries() -> usize {
