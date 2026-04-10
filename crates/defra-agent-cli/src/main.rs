@@ -159,7 +159,7 @@ struct ChatArgs {
     session_id: Option<String>,
     #[arg(long)]
     behavior_id: Option<String>,
-    #[arg(long, default_value_t = 120)]
+    #[arg(long, default_value_t = 300)]
     timeout_secs: u64,
     #[arg(long, default_value_t = 1)]
     poll_secs: u64,
@@ -392,7 +392,7 @@ struct RequestSubmitArgs {
     behavior_id: Option<String>,
     #[arg(long, default_value_t = false)]
     no_wait: bool,
-    #[arg(long, default_value_t = 120)]
+    #[arg(long, default_value_t = 300)]
     timeout_secs: u64,
     #[arg(long, default_value_t = 1)]
     poll_secs: u64,
@@ -404,8 +404,10 @@ struct RequestShowArgs {
     home: Option<PathBuf>,
     #[arg(long)]
     graphql: Option<String>,
-    #[arg(long)]
-    request_id: String,
+    #[arg(long = "request-id")]
+    request_id_flag: Option<String>,
+    #[arg(value_name = "REQUEST_ID")]
+    request_id: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -420,8 +422,10 @@ struct ResponseShowArgs {
     home: Option<PathBuf>,
     #[arg(long)]
     graphql: Option<String>,
-    #[arg(long)]
-    request_id: String,
+    #[arg(long = "request-id")]
+    request_id_flag: Option<String>,
+    #[arg(value_name = "REQUEST_ID")]
+    request_id: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -430,9 +434,11 @@ struct ResponseWaitArgs {
     home: Option<PathBuf>,
     #[arg(long)]
     graphql: Option<String>,
-    #[arg(long)]
-    request_id: String,
-    #[arg(long, default_value_t = 120)]
+    #[arg(long = "request-id")]
+    request_id_flag: Option<String>,
+    #[arg(value_name = "REQUEST_ID")]
+    request_id: Option<String>,
+    #[arg(long, default_value_t = 300)]
     timeout_secs: u64,
     #[arg(long, default_value_t = 1)]
     poll_secs: u64,
@@ -1129,6 +1135,8 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
 
 async fn request_show(args: RequestShowArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let request_id =
+        resolve_request_id(args.request_id.as_deref(), args.request_id_flag.as_deref())?;
     let query = format!(
         r#"{{
             AgentRequest(
@@ -1153,7 +1161,7 @@ async fn request_show(args: RequestShowArgs) -> Result<()> {
                 deadline
             }}
         }}"#,
-        request_id = escape_graphql_string(&args.request_id),
+        request_id = escape_graphql_string(&request_id),
     );
     let response = post_graphql(&graphql, &query).await?;
     println!("{}", serde_json::to_string_pretty(&response)?);
@@ -1162,7 +1170,9 @@ async fn request_show(args: RequestShowArgs) -> Result<()> {
 
 async fn response_show(args: ResponseShowArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let query = response_query(&args.request_id);
+    let request_id =
+        resolve_request_id(args.request_id.as_deref(), args.request_id_flag.as_deref())?;
+    let query = response_query(&request_id);
     let response = post_graphql(&graphql, &query).await?;
     println!("{}", serde_json::to_string_pretty(&response)?);
     Ok(())
@@ -1170,13 +1180,11 @@ async fn response_show(args: ResponseShowArgs) -> Result<()> {
 
 async fn response_wait(args: ResponseWaitArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let response = wait_for_terminal_response(
-        &graphql,
-        &args.request_id,
-        args.timeout_secs,
-        args.poll_secs,
-    )
-    .await?;
+    let request_id =
+        resolve_request_id(args.request_id.as_deref(), args.request_id_flag.as_deref())?;
+    let response =
+        wait_for_terminal_response(&graphql, &request_id, args.timeout_secs, args.poll_secs)
+            .await?;
     println!("{}", serde_json::to_string_pretty(&response)?);
     Ok(())
 }
@@ -1698,6 +1706,22 @@ fn resolve_agent_did(home: Option<&Path>, explicit: Option<&str>) -> Result<Stri
     Ok(format!("did:defra-agent:{DEFAULT_AGENT_NAME}"))
 }
 
+fn resolve_request_id(positional: Option<&str>, flag: Option<&str>) -> Result<String> {
+    let positional = positional.map(str::trim).filter(|value| !value.is_empty());
+    let flag = flag.map(str::trim).filter(|value| !value.is_empty());
+    match (positional, flag) {
+        (Some(positional), Some(flag)) if positional != flag => {
+            anyhow::bail!(
+                "conflicting request ids provided: positional={} and --request-id={}",
+                positional,
+                flag
+            );
+        }
+        (Some(request_id), _) | (_, Some(request_id)) => Ok(request_id.to_string()),
+        (None, None) => anyhow::bail!("missing request id"),
+    }
+}
+
 fn default_key_path(home_dir: &Path, agent_name: &str) -> PathBuf {
     home_dir.join("keys").join(format!("{agent_name}.key"))
 }
@@ -2036,10 +2060,15 @@ fn decode_tool_call_progress(row: &Value) -> Option<ToolCallProgress> {
 
 fn format_tool_progress_line(tool: &ToolCallProgress) -> String {
     match tool.status.as_str() {
-        "completed" => format!("[tool done] {}", tool.tool_name),
-        "error" => format!(
-            "[tool error] {} {}",
+        "completed" => format!(
+            "[tool done] {} {}",
             tool.tool_name,
+            preview_progress_text(&tool.args)
+        ),
+        "error" => format!(
+            "[tool error] {} {} {}",
+            tool.tool_name,
+            preview_progress_text(&tool.args),
             preview_progress_text(&tool.result)
         ),
         _ => format!(
