@@ -19,6 +19,7 @@ pub const AGENT_SESSION_SCHEMA: &str = include_str!("../schemas/agent/agent_sess
 pub const AGENT_MESSAGE_SCHEMA: &str = include_str!("../schemas/agent/agent_message.graphql");
 pub const AGENT_TOOL_CALL_SCHEMA: &str = include_str!("../schemas/agent/agent_tool_call.graphql");
 pub const COMPACTION_ENTRY_SCHEMA: &str = include_str!("../schemas/agent/compaction_entry.graphql");
+pub const SCHEDULED_TASK_SCHEMA: &str = include_str!("../schemas/agent/scheduled_task.graphql");
 pub const TOOL_SERVICE_REGISTRY_SCHEMA: &str =
     include_str!("../schemas/services/tool_service_registry.graphql");
 
@@ -38,6 +39,7 @@ pub const ALL: &[&str] = &[
     AGENT_MESSAGE_SCHEMA,
     AGENT_TOOL_CALL_SCHEMA,
     COMPACTION_ENTRY_SCHEMA,
+    SCHEDULED_TASK_SCHEMA,
     TOOL_SERVICE_REGISTRY_SCHEMA,
 ];
 

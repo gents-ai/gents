@@ -457,6 +457,97 @@ async fn tool_selection_upsert_defaults_enabled_modes_to_readonly() -> Result<()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scheduled_task_set_persists_concrete_default_behavior_id() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-task-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let agent_name = format!("cli-task-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+    let graphql = graphql_url(port);
+    let task_id = format!("task-{}", Uuid::new_v4().simple());
+    let default_behavior_id = format!("{agent_did}:default");
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve.child)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let output = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "task",
+            "set",
+            "--task-id",
+            &task_id,
+            "--name",
+            "daily-check",
+            "--prompt",
+            "Check the repo health.",
+            "--interval-secs",
+            "600",
+        ],
+    )?;
+    assert_eq!(
+        output.get("behavior_id").and_then(Value::as_str),
+        Some(default_behavior_id.as_str())
+    );
+
+    let query = format!(
+        r#"{{
+            ScheduledTask(filter: {{ task_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                task_id
+                agent_did
+                behavior_id
+                name
+                prompt
+                interval_secs
+                enabled
+                next_run_at
+            }}
+        }}"#,
+        escape_graphql_string(&task_id),
+    );
+    let response = graphql_query(&graphql, &query).await?;
+    let row = first_graphql_row(&response, "ScheduledTask")?;
+    assert_eq!(
+        row.get("task_id").and_then(Value::as_str),
+        Some(task_id.as_str())
+    );
+    assert_eq!(
+        row.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+    assert_eq!(
+        row.get("behavior_id").and_then(Value::as_str),
+        Some(default_behavior_id.as_str())
+    );
+    assert_eq!(row.get("name").and_then(Value::as_str), Some("daily-check"));
+    assert_eq!(
+        row.get("prompt").and_then(Value::as_str),
+        Some("Check the repo health.")
+    );
+    assert_eq!(row.get("interval_secs").and_then(Value::as_i64), Some(600));
+    assert_eq!(row.get("enabled").and_then(Value::as_bool), Some(true));
+    assert!(row.get("next_run_at").is_some());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_submit_waits_for_response_by_default() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");

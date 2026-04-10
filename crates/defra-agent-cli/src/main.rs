@@ -228,6 +228,10 @@ enum ConfigCommand {
         #[command(subcommand)]
         command: InferenceProfileCommand,
     },
+    Task {
+        #[command(subcommand)]
+        command: ScheduledTaskCommand,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, ValueEnum, PartialEq, Eq)]
@@ -397,6 +401,12 @@ enum InferenceProfileCommand {
     Set(InferenceProfileUpsertArgs),
 }
 
+#[derive(Subcommand)]
+enum ScheduledTaskCommand {
+    #[command(name = "set")]
+    Set(ScheduledTaskSetArgs),
+}
+
 #[derive(clap::Args)]
 struct InferenceProfileUpsertArgs {
     #[arg(long)]
@@ -417,6 +427,32 @@ struct InferenceProfileUpsertArgs {
     stream_batch_ms: Option<i64>,
     #[arg(long)]
     deadline_duration_secs: Option<i64>,
+}
+
+#[derive(clap::Args)]
+struct ScheduledTaskSetArgs {
+    #[arg(long)]
+    home: Option<PathBuf>,
+    #[arg(long)]
+    graphql: Option<String>,
+    #[arg(long)]
+    agent_did: Option<String>,
+    #[arg(long)]
+    task_id: String,
+    #[arg(long)]
+    name: String,
+    #[arg(long)]
+    prompt: Option<String>,
+    #[arg(long)]
+    prompt_file: Option<PathBuf>,
+    #[arg(long)]
+    behavior_id: Option<String>,
+    #[arg(long)]
+    interval_secs: i64,
+    #[arg(long, default_value_t = true)]
+    enabled: bool,
+    #[arg(long)]
+    next_run_at: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -544,6 +580,9 @@ async fn main() -> Result<()> {
             },
             ConfigCommand::Profile { command } => match command {
                 InferenceProfileCommand::Set(args) => inference_profile_set(args).await,
+            },
+            ConfigCommand::Task { command } => match command {
+                ScheduledTaskCommand::Set(args) => scheduled_task_set(args).await,
             },
         },
         Command::Request { command } => match command {
@@ -1149,6 +1188,108 @@ async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> Result<()> {
         "temperature": args.temperature,
         "stream_batch_ms": args.stream_batch_ms,
         "deadline_duration_secs": args.deadline_duration_secs,
+    });
+    print_json(&output)?;
+    Ok(())
+}
+
+async fn scheduled_task_set(args: ScheduledTaskSetArgs) -> Result<()> {
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
+    let task_id = require_non_empty("task_id", &args.task_id)?;
+    let name = require_non_empty("name", &args.name)?;
+    if args.interval_secs <= 0 {
+        anyhow::bail!("--interval-secs must be greater than zero");
+    }
+
+    let prompt = resolve_task_prompt(args.prompt.as_deref(), args.prompt_file.as_deref())?;
+    let behavior_id =
+        resolve_scheduled_task_behavior_id(&graphql, &agent_did, args.behavior_id.as_deref())
+            .await?;
+    let next_run_at = normalize_optional_rfc3339(args.next_run_at.as_deref())?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let next_run_at_field = nullable_string_field("next_run_at", next_run_at.as_deref());
+
+    let add_fields = vec![
+        Some(format!(r#"task_id: "{}""#, escape_graphql_string(task_id))),
+        Some(format!(
+            r#"agent_did: "{}""#,
+            escape_graphql_string(&agent_did)
+        )),
+        Some(format!(
+            r#"behavior_id: "{}""#,
+            escape_graphql_string(&behavior_id)
+        )),
+        Some(format!(r#"name: "{}""#, escape_graphql_string(name))),
+        Some(format!(r#"prompt: "{}""#, escape_graphql_string(&prompt))),
+        Some(format!("interval_secs: {}", args.interval_secs)),
+        Some(format!(
+            "enabled: {}",
+            if args.enabled { "true" } else { "false" }
+        )),
+        Some(next_run_at_field.clone()),
+        Some(r#"last_status: """#.to_string()),
+        Some(r#"last_error: """#.to_string()),
+        Some("run_count: 0".to_string()),
+        Some(format!(r#"created_at: "{}""#, escape_graphql_string(&now))),
+        Some(format!(r#"updated_at: "{}""#, escape_graphql_string(&now))),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(",\n                    ");
+
+    let update_fields = vec![
+        Some(format!(
+            r#"agent_did: "{}""#,
+            escape_graphql_string(&agent_did)
+        )),
+        Some(format!(
+            r#"behavior_id: "{}""#,
+            escape_graphql_string(&behavior_id)
+        )),
+        Some(format!(r#"name: "{}""#, escape_graphql_string(name))),
+        Some(format!(r#"prompt: "{}""#, escape_graphql_string(&prompt))),
+        Some(format!("interval_secs: {}", args.interval_secs)),
+        Some(format!(
+            "enabled: {}",
+            if args.enabled { "true" } else { "false" }
+        )),
+        Some(next_run_at_field),
+        Some(format!(r#"updated_at: "{}""#, escape_graphql_string(&now))),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(",\n                    ");
+
+    let mutation = format!(
+        r#"mutation {{
+            upsert_ScheduledTask(
+                filter: {{ task_id: {{ _eq: "{task_id}" }} }},
+                add: {{
+                    {add_fields}
+                }},
+                update: {{
+                    {update_fields}
+                }}
+            ) {{ _docID }}
+        }}"#,
+        task_id = escape_graphql_string(task_id),
+        add_fields = add_fields,
+        update_fields = update_fields,
+    );
+    let response = post_graphql(&graphql, &mutation).await?;
+    let doc_id = extract_mutation_doc_id(&response, "ScheduledTask")?;
+    let output = json!({
+        "doc_id": doc_id,
+        "task_id": task_id,
+        "agent_did": agent_did,
+        "behavior_id": behavior_id,
+        "name": name,
+        "interval_secs": args.interval_secs,
+        "enabled": args.enabled,
+        "next_run_at": next_run_at,
     });
     print_json(&output)?;
     Ok(())
@@ -1858,6 +1999,139 @@ fn display_host(host: IpAddr) -> String {
         IpAddr::V4(addr) if addr == Ipv4Addr::UNSPECIFIED => "127.0.0.1".to_string(),
         _ => host.to_string(),
     }
+}
+
+fn require_non_empty<'a>(field: &str, value: &'a str) -> Result<&'a str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("--{field} must not be empty");
+    }
+    Ok(trimmed)
+}
+
+fn nullable_string_field(name: &str, value: Option<&str>) -> String {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => format!(r#"{name}: "{}""#, escape_graphql_string(value)),
+        None => format!("{name}: null"),
+    }
+}
+
+fn normalize_optional_rfc3339(value: Option<&str>) -> Result<Option<String>> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(raw) => {
+            let parsed = chrono::DateTime::parse_from_rfc3339(raw)
+                .with_context(|| format!("parsing RFC3339 timestamp {raw}"))?;
+            Ok(Some(
+                parsed
+                    .with_timezone(&chrono::Utc)
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            ))
+        }
+        None => Ok(None),
+    }
+}
+
+fn resolve_task_prompt(prompt: Option<&str>, prompt_file: Option<&Path>) -> Result<String> {
+    match (prompt, prompt_file) {
+        (Some(_), Some(path)) => anyhow::bail!(
+            "provide either --prompt or --prompt-file, not both ({})",
+            path.display()
+        ),
+        (Some(prompt), None) => Ok(require_non_empty("prompt", prompt)?.to_string()),
+        (None, Some(path)) => {
+            let prompt = fs::read_to_string(path)
+                .with_context(|| format!("reading task prompt from {}", path.display()))?;
+            Ok(require_non_empty("prompt-file", &prompt)?.to_string())
+        }
+        (None, None) => anyhow::bail!("a task prompt is required; pass --prompt or --prompt-file"),
+    }
+}
+
+async fn resolve_scheduled_task_behavior_id(
+    graphql: &str,
+    agent_did: &str,
+    explicit_behavior_id: Option<&str>,
+) -> Result<String> {
+    let behavior_id = match explicit_behavior_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(behavior_id) => behavior_id.to_string(),
+        None => load_default_behavior_id_for_agent(graphql, agent_did).await?,
+    };
+
+    ensure_behavior_belongs_to_agent(graphql, agent_did, &behavior_id).await?;
+    Ok(behavior_id)
+}
+
+async fn load_default_behavior_id_for_agent(graphql: &str, agent_did: &str) -> Result<String> {
+    let query = format!(
+        r#"{{
+            AgentPrincipal(
+                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                limit: 1
+            ) {{
+                default_behavior_id
+            }}
+        }}"#,
+        agent_did = escape_graphql_string(agent_did),
+    );
+    let response = post_graphql(graphql, &query).await?;
+    let principal = first_graphql_row(&response, "AgentPrincipal")
+        .with_context(|| format!("loading AgentPrincipal for {agent_did}"))?;
+    principal
+        .get("default_behavior_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("AgentPrincipal {agent_did} has no default_behavior_id"))
+}
+
+async fn ensure_behavior_belongs_to_agent(
+    graphql: &str,
+    agent_did: &str,
+    behavior_id: &str,
+) -> Result<()> {
+    let query = format!(
+        r#"{{
+            AgentBehavior(
+                filter: {{ behavior_id: {{ _eq: "{behavior_id}" }} }},
+                limit: 1
+            ) {{
+                behavior_id
+                agent_did
+            }}
+        }}"#,
+        behavior_id = escape_graphql_string(behavior_id),
+    );
+    let response = post_graphql(graphql, &query).await?;
+    let behavior = first_graphql_row(&response, "AgentBehavior")
+        .with_context(|| format!("loading AgentBehavior {behavior_id}"))?;
+    let owner = behavior
+        .get("agent_did")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("AgentBehavior {behavior_id} is missing agent_did"))?;
+    if owner != agent_did {
+        anyhow::bail!(
+            "AgentBehavior {} belongs to {} not {}",
+            behavior_id,
+            owner,
+            agent_did
+        );
+    }
+    Ok(())
+}
+
+fn first_graphql_row<'a>(response: &'a Value, collection_name: &str) -> Result<&'a Value> {
+    response
+        .get("data")
+        .and_then(|data| data.get(collection_name))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .ok_or_else(|| anyhow::anyhow!("graphql returned no rows for {collection_name}"))
 }
 
 fn optional_i64_field(name: &str, value: Option<i64>) -> Option<String> {

@@ -1,0 +1,16 @@
+type ScheduledTask @branchable {
+    task_id: String @index(unique: true)
+    agent_did: String @index
+    behavior_id: String @index
+    name: String @index
+    prompt: String
+    interval_secs: Int
+    enabled: Boolean @index
+    next_run_at: DateTime @index(direction: ASC)
+    last_run_at: DateTime @index(direction: DESC)
+    last_status: String @index
+    last_error: String
+    run_count: Int
+    created_at: DateTime @index(direction: DESC)
+    updated_at: DateTime @index(direction: DESC)
+}
