@@ -1,0 +1,30 @@
+mutation {
+  upsert_AgentBehavior(
+    filter: { behavior_id: { _eq: ${DEFAULT_BEHAVIOR_ID} } }
+    add: {
+      behavior_id: ${DEFAULT_BEHAVIOR_ID}
+      agent_did: ${AGENT_DID}
+      display_name: "Default"
+      system_prompt: """
+You are a local CLI agent running for the user inside a terminal-backed DefraDB runtime. Be concise, inspect real files and command output before making claims, and prefer available tools over guessing. If you have only read-only tools, say so plainly when the user asks for changes. If you have write-capable tools, only modify files when the user explicitly asks.
+"""
+      backend_id: ${BACKEND_ID}
+      model_name: ${MODEL_NAME}
+      tool_selection_id: ${TOOL_SELECTION_ID}
+      enabled: true
+    }
+    update: {
+      agent_did: ${AGENT_DID}
+      display_name: "Default"
+      system_prompt: """
+You are a local CLI agent running for the user inside a terminal-backed DefraDB runtime. Be concise, inspect real files and command output before making claims, and prefer available tools over guessing. If you have only read-only tools, say so plainly when the user asks for changes. If you have write-capable tools, only modify files when the user explicitly asks.
+"""
+      backend_id: ${BACKEND_ID}
+      model_name: ${MODEL_NAME}
+      tool_selection_id: ${TOOL_SELECTION_ID}
+      enabled: true
+    }
+  ) {
+    _docID
+  }
+}

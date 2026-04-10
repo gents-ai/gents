@@ -1,0 +1,30 @@
+mutation {
+  upsert_ToolSelection(
+    filter: { selection_id: { _eq: ${TOOL_SELECTION_ID} } }
+    add: {
+      selection_id: ${TOOL_SELECTION_ID}
+      agent_did: ${AGENT_DID}
+      display_name: "Standard Read-Only Tools"
+      enable_file_tools: true
+      file_tools_mode: "ReadOnly"
+      enable_bash: true
+      bash_mode: "ReadOnly"
+      cli_tool_names: []
+      enable_meta_tools: true
+      delegate_to: []
+    }
+    update: {
+      agent_did: ${AGENT_DID}
+      display_name: "Standard Read-Only Tools"
+      enable_file_tools: true
+      file_tools_mode: "ReadOnly"
+      enable_bash: true
+      bash_mode: "ReadOnly"
+      cli_tool_names: []
+      enable_meta_tools: true
+      delegate_to: []
+    }
+  ) {
+    _docID
+  }
+}

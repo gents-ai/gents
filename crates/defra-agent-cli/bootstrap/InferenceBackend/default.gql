@@ -1,0 +1,26 @@
+mutation {
+  upsert_InferenceBackend(
+    filter: { backend_id: { _eq: ${BACKEND_ID} } }
+    add: {
+      backend_id: ${BACKEND_ID}
+      name: ${BACKEND_NAME}
+      endpoint: ${ENDPOINT}
+      max_concurrent: ${MAX_CONCURRENT}
+      enabled: true
+      models: [${MODEL_NAME}]
+      last_probe: ${LAST_PROBE_AT}
+      probe_status: "healthy"
+    }
+    update: {
+      name: ${BACKEND_NAME}
+      endpoint: ${ENDPOINT}
+      max_concurrent: ${MAX_CONCURRENT}
+      enabled: true
+      models: [${MODEL_NAME}]
+      last_probe: ${LAST_PROBE_AT}
+      probe_status: "healthy"
+    }
+  ) {
+    _docID
+  }
+}

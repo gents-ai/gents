@@ -127,10 +127,12 @@ If you want write-capable tools instead, rerun `init` with `--write-tools`.
 
 The bootstrap templates live in:
 
-- `crates/defra-agent-cli/bootstrap/standard-readonly.jsonl`
-- `crates/defra-agent-cli/bootstrap/standard-readwrite.jsonl`
+- `crates/defra-agent-cli/bootstrap/InferenceBackend/default.gql`
+- `crates/defra-agent-cli/bootstrap/ToolSelection/standard-readonly.gql`
+- `crates/defra-agent-cli/bootstrap/ToolSelection/standard-readwrite.gql`
+- `crates/defra-agent-cli/bootstrap/AgentBehavior/default.gql`
 
-They are plain JSONL so the default bootstrap documents stay easy to inspect and edit.
+They are raw GraphQL mutations, one object per file, organized by collection so the default bootstrap documents stay easy to inspect and edit.
 
 ## Advanced: Change Tool Selection After Init
 

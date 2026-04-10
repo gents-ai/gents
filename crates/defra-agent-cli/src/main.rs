@@ -11,9 +11,8 @@ use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{
     cli_tool, default_behavior_id_for_agent, ensure_agent_principal, ensure_runtime_schemas,
-    upsert_agent_behavior, upsert_tool_selection, AgentIdentity, BashMode, DefraAgent,
-    DocumentRuntimeOptions, FileToolMode, McpPool, ProcessLifecycleObserver, ProcessLifecycleState,
-    SimpleIdentity, ToolCeiling, ToolSelectionDocument,
+    AgentIdentity, BashMode, DefraAgent, DocumentRuntimeOptions, FileToolMode, McpPool,
+    ProcessLifecycleObserver, ProcessLifecycleState, SimpleIdentity, ToolCeiling,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -24,10 +23,14 @@ const DEFAULT_AGENT_NAME: &str = "default";
 const DEFAULT_HTTP_PORT: u16 = 9191;
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
 const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
-const DEFAULT_INIT_SYSTEM_PROMPT: &str = "You are a local CLI agent running for the user inside a terminal-backed DefraDB runtime. Be concise, inspect real files and command output before making claims, and prefer available tools over guessing. If you have only read-only tools, say so plainly when the user asks for changes. If you have write-capable tools, only modify files when the user explicitly asks.";
-const STANDARD_READONLY_INIT_TEMPLATE: &str = include_str!("../bootstrap/standard-readonly.jsonl");
-const STANDARD_READWRITE_INIT_TEMPLATE: &str =
-    include_str!("../bootstrap/standard-readwrite.jsonl");
+const BOOTSTRAP_INFERENCE_BACKEND_DEFAULT: &str =
+    include_str!("../bootstrap/InferenceBackend/default.gql");
+const BOOTSTRAP_TOOL_SELECTION_STANDARD_READONLY: &str =
+    include_str!("../bootstrap/ToolSelection/standard-readonly.gql");
+const BOOTSTRAP_TOOL_SELECTION_STANDARD_READWRITE: &str =
+    include_str!("../bootstrap/ToolSelection/standard-readwrite.gql");
+const BOOTSTRAP_AGENT_BEHAVIOR_DEFAULT: &str =
+    include_str!("../bootstrap/AgentBehavior/default.gql");
 
 struct CliReadyObserver {
     tx: watch::Sender<ProcessLifecycleState>,
@@ -105,8 +108,6 @@ struct InitArgs {
     write_tools: bool,
     #[arg(long)]
     tool_root: Option<PathBuf>,
-    #[arg(long)]
-    system_prompt_file: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -199,43 +200,48 @@ struct StoredRuntimeState {
     default_behavior_id: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum InitTemplateRecord {
-    Backend {
-        backend_id: String,
-        name: String,
-        endpoint: String,
-        model_name: String,
-        max_concurrent: i64,
-        probe_status: String,
-    },
-    ToolSelection {
-        selection_id: String,
-        agent_did: String,
-        display_name: Option<String>,
-        enable_file_tools: Option<bool>,
-        file_tools_mode: Option<String>,
-        enable_bash: Option<bool>,
-        bash_mode: Option<String>,
-        cli_tool_names: Option<Vec<String>>,
-        enable_meta_tools: Option<bool>,
-        delegate_to: Option<Vec<String>>,
-    },
-    Behavior {
-        behavior_id: String,
-        agent_did: String,
-        display_name: Option<String>,
-        system_prompt: Option<String>,
-        backend_id: Option<String>,
-        model_name: Option<String>,
-        tool_selection_id: Option<String>,
-        inference_profile_id: Option<String>,
-        compaction_strategy: Option<String>,
-        compaction_threshold: Option<f64>,
-        enabled: bool,
-    },
+#[derive(Clone, Copy)]
+struct BootstrapMutationTemplate {
+    collection: &'static str,
+    option: &'static str,
+    mutation: &'static str,
 }
+
+const STANDARD_READONLY_BOOTSTRAP: &[BootstrapMutationTemplate] = &[
+    BootstrapMutationTemplate {
+        collection: "InferenceBackend",
+        option: "default",
+        mutation: BOOTSTRAP_INFERENCE_BACKEND_DEFAULT,
+    },
+    BootstrapMutationTemplate {
+        collection: "ToolSelection",
+        option: "standard-readonly",
+        mutation: BOOTSTRAP_TOOL_SELECTION_STANDARD_READONLY,
+    },
+    BootstrapMutationTemplate {
+        collection: "AgentBehavior",
+        option: "default",
+        mutation: BOOTSTRAP_AGENT_BEHAVIOR_DEFAULT,
+    },
+];
+
+const STANDARD_READWRITE_BOOTSTRAP: &[BootstrapMutationTemplate] = &[
+    BootstrapMutationTemplate {
+        collection: "InferenceBackend",
+        option: "default",
+        mutation: BOOTSTRAP_INFERENCE_BACKEND_DEFAULT,
+    },
+    BootstrapMutationTemplate {
+        collection: "ToolSelection",
+        option: "standard-readwrite",
+        mutation: BOOTSTRAP_TOOL_SELECTION_STANDARD_READWRITE,
+    },
+    BootstrapMutationTemplate {
+        collection: "AgentBehavior",
+        option: "default",
+        mutation: BOOTSTRAP_AGENT_BEHAVIOR_DEFAULT,
+    },
+];
 
 #[derive(Subcommand)]
 enum BackendCommand {
@@ -1231,13 +1237,8 @@ async fn initialize_runtime_home(
     } else {
         None
     };
-    let system_prompt = match args.system_prompt_file.as_ref() {
-        Some(path) => fs::read_to_string(path)
-            .with_context(|| format!("reading system prompt from {}", path.display()))?,
-        None => DEFAULT_INIT_SYSTEM_PROMPT.to_string(),
-    };
-    let template = init_template_for_ceiling(tool_ceiling);
-    let template_vars = init_template_vars(
+    let templates = bootstrap_templates_for_ceiling(tool_ceiling);
+    let template_vars = bootstrap_template_vars(
         home_dir,
         agent_did,
         &args.agent_name,
@@ -1248,10 +1249,8 @@ async fn initialize_runtime_home(
         args.max_concurrent,
         &default_behavior_id,
         &tool_selection_id,
-        &system_prompt,
-        tool_root.as_deref(),
     );
-    apply_init_template(node, template, &template_vars).await?;
+    apply_bootstrap_templates(node, templates, &template_vars).await?;
 
     Ok(InitSummary {
         backend_id,
@@ -1294,15 +1293,17 @@ fn resolve_default_write_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("unable to determine a default tool root for write tools"))
 }
 
-fn init_template_for_ceiling(tool_ceiling: ToolCeilingArg) -> &'static str {
+fn bootstrap_templates_for_ceiling(
+    tool_ceiling: ToolCeilingArg,
+) -> &'static [BootstrapMutationTemplate] {
     match tool_ceiling {
-        ToolCeilingArg::Readonly => STANDARD_READONLY_INIT_TEMPLATE,
-        ToolCeilingArg::Readwrite => STANDARD_READWRITE_INIT_TEMPLATE,
-        ToolCeilingArg::MetaOnly => STANDARD_READONLY_INIT_TEMPLATE,
+        ToolCeilingArg::Readonly => STANDARD_READONLY_BOOTSTRAP,
+        ToolCeilingArg::Readwrite => STANDARD_READWRITE_BOOTSTRAP,
+        ToolCeilingArg::MetaOnly => STANDARD_READONLY_BOOTSTRAP,
     }
 }
 
-fn init_template_vars(
+fn bootstrap_template_vars(
     home_dir: &Path,
     agent_did: &str,
     agent_name: &str,
@@ -1313,241 +1314,80 @@ fn init_template_vars(
     max_concurrent: i64,
     default_behavior_id: &str,
     tool_selection_id: &str,
-    system_prompt: &str,
-    tool_root: Option<&Path>,
 ) -> std::collections::BTreeMap<String, String> {
     let mut vars = std::collections::BTreeMap::new();
-    vars.insert("HOME".to_string(), home_dir.to_string_lossy().to_string());
-    vars.insert("AGENT_DID".to_string(), agent_did.to_string());
-    vars.insert("AGENT_NAME".to_string(), agent_name.to_string());
-    vars.insert("BACKEND_ID".to_string(), backend_id.to_string());
-    vars.insert("BACKEND_NAME".to_string(), backend_name.to_string());
-    vars.insert("ENDPOINT".to_string(), endpoint.to_string());
-    vars.insert("MODEL_NAME".to_string(), model_name.to_string());
+    vars.insert(
+        "HOME".to_string(),
+        graphql_string_literal(&home_dir.to_string_lossy()),
+    );
+    vars.insert("AGENT_DID".to_string(), graphql_string_literal(agent_did));
+    vars.insert("AGENT_NAME".to_string(), graphql_string_literal(agent_name));
+    vars.insert("BACKEND_ID".to_string(), graphql_string_literal(backend_id));
+    vars.insert(
+        "BACKEND_NAME".to_string(),
+        graphql_string_literal(backend_name),
+    );
+    vars.insert("ENDPOINT".to_string(), graphql_string_literal(endpoint));
+    vars.insert("MODEL_NAME".to_string(), graphql_string_literal(model_name));
     vars.insert("MAX_CONCURRENT".to_string(), max_concurrent.to_string());
     vars.insert(
         "DEFAULT_BEHAVIOR_ID".to_string(),
-        default_behavior_id.to_string(),
+        graphql_string_literal(default_behavior_id),
     );
     vars.insert(
         "TOOL_SELECTION_ID".to_string(),
-        tool_selection_id.to_string(),
+        graphql_string_literal(tool_selection_id),
     );
-    vars.insert("SYSTEM_PROMPT".to_string(), system_prompt.to_string());
     vars.insert(
-        "TOOL_ROOT".to_string(),
-        tool_root
-            .map(|path| path.to_string_lossy().to_string())
-            .unwrap_or_default(),
+        "LAST_PROBE_AT".to_string(),
+        graphql_string_literal(&chrono::Utc::now().to_rfc3339()),
     );
     vars
 }
 
-async fn apply_init_template(
+async fn apply_bootstrap_templates(
     node: &EmbeddedNode,
-    template: &str,
+    templates: &[BootstrapMutationTemplate],
     vars: &std::collections::BTreeMap<String, String>,
 ) -> Result<()> {
-    for (line_no, line) in template.lines().enumerate() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-
-        let value: Value = serde_json::from_str(trimmed)
-            .with_context(|| format!("parsing init template line {}", line_no + 1))?;
-        let substituted = substitute_template_value(&value, vars)
-            .with_context(|| format!("substituting init template line {}", line_no + 1))?;
-        let record: InitTemplateRecord = serde_json::from_value(substituted)
-            .with_context(|| format!("decoding init template line {}", line_no + 1))?;
-        match record {
-            InitTemplateRecord::Backend {
-                backend_id,
-                name,
-                endpoint,
-                model_name,
-                max_concurrent,
-                probe_status,
-            } => {
-                upsert_inference_backend_document(
-                    node,
-                    &backend_id,
-                    &name,
-                    &endpoint,
-                    &model_name,
-                    max_concurrent,
-                    &probe_status,
+    for template in templates {
+        let mutation =
+            substitute_bootstrap_template(template.mutation, vars).with_context(|| {
+                format!(
+                    "rendering bootstrap template {}/{}",
+                    template.collection, template.option
                 )
-                .await?;
-            }
-            InitTemplateRecord::ToolSelection {
-                selection_id,
-                agent_did,
-                display_name,
-                enable_file_tools,
-                file_tools_mode,
-                enable_bash,
-                bash_mode,
-                cli_tool_names,
-                enable_meta_tools,
-                delegate_to,
-            } => {
-                upsert_tool_selection(
-                    node,
-                    &ToolSelectionDocument {
-                        selection_id,
-                        agent_did,
-                        display_name,
-                        enable_file_tools,
-                        file_tools_mode,
-                        enable_bash,
-                        bash_mode,
-                        cli_tool_names,
-                        enable_meta_tools,
-                        delegate_to,
-                    },
-                )
-                .await?;
-            }
-            InitTemplateRecord::Behavior {
-                behavior_id,
-                agent_did,
-                display_name,
-                system_prompt,
-                backend_id,
-                model_name,
-                tool_selection_id,
-                inference_profile_id,
-                compaction_strategy,
-                compaction_threshold,
-                enabled,
-            } => {
-                upsert_agent_behavior(
-                    node,
-                    &defra_agent::AgentBehavior {
-                        behavior_id,
-                        agent_did,
-                        display_name,
-                        system_prompt,
-                        backend_id,
-                        model_name,
-                        tool_selection_id,
-                        inference_profile_id,
-                        compaction_strategy,
-                        compaction_threshold,
-                        enabled,
-                        created_at: None,
-                    },
-                )
-                .await?;
-            }
+            })?;
+        let response = node.execute(&mutation).await;
+        if response.has_errors() {
+            anyhow::bail!(
+                "bootstrap mutation failed for {}/{}: {:?}",
+                template.collection,
+                template.option,
+                response.errors
+            );
         }
     }
 
     Ok(())
 }
 
-fn substitute_template_value(
-    value: &Value,
-    vars: &std::collections::BTreeMap<String, String>,
-) -> Result<Value> {
-    Ok(match value {
-        Value::Null => Value::Null,
-        Value::Bool(value) => Value::Bool(*value),
-        Value::Number(value) => Value::Number(value.clone()),
-        Value::String(value) => substitute_template_string(value, vars)?,
-        Value::Array(values) => Value::Array(
-            values
-                .iter()
-                .map(|value| substitute_template_value(value, vars))
-                .collect::<Result<Vec<_>>>()?,
-        ),
-        Value::Object(map) => Value::Object(
-            map.iter()
-                .map(|(key, value)| Ok((key.clone(), substitute_template_value(value, vars)?)))
-                .collect::<Result<serde_json::Map<String, Value>>>()?,
-        ),
-    })
-}
-
-fn substitute_template_string(
+fn substitute_bootstrap_template(
     template: &str,
     vars: &std::collections::BTreeMap<String, String>,
-) -> Result<Value> {
-    if let Some(name) = full_placeholder_name(template) {
-        let replacement = vars
-            .get(name)
-            .ok_or_else(|| anyhow::anyhow!("missing init template variable {name}"))?;
-        if let Ok(json_scalar) = serde_json::from_str::<Value>(replacement) {
-            return Ok(json_scalar);
-        }
-        return Ok(Value::String(replacement.clone()));
-    }
-
+) -> Result<String> {
     let mut rendered = template.to_string();
     for (name, value) in vars {
         rendered = rendered.replace(&format!("${{{name}}}"), value);
     }
     if rendered.contains("${") {
-        anyhow::bail!("unresolved init template placeholder in {template}");
+        anyhow::bail!("unresolved bootstrap template placeholder");
     }
-    Ok(Value::String(rendered))
+    Ok(rendered)
 }
 
-fn full_placeholder_name(template: &str) -> Option<&str> {
-    template
-        .strip_prefix("${")
-        .and_then(|value| value.strip_suffix('}'))
-        .filter(|value| !value.is_empty())
-}
-
-async fn upsert_inference_backend_document(
-    node: &EmbeddedNode,
-    backend_id: &str,
-    name: &str,
-    endpoint: &str,
-    model_name: &str,
-    max_concurrent: i64,
-    probe_status: &str,
-) -> Result<()> {
-    let escaped_backend_id = escape_graphql_string(backend_id);
-    let escaped_name = escape_graphql_string(name);
-    let escaped_endpoint = escape_graphql_string(endpoint);
-    let escaped_model_name = escape_graphql_string(model_name);
-    let escaped_probe_status = escape_graphql_string(probe_status);
-    let now = chrono::Utc::now().to_rfc3339();
-    let mutation = format!(
-        r#"mutation {{
-            upsert_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                add: {{
-                    backend_id: "{escaped_backend_id}",
-                    name: "{escaped_name}",
-                    endpoint: "{escaped_endpoint}",
-                    max_concurrent: {max_concurrent},
-                    enabled: true,
-                    models: ["{escaped_model_name}"],
-                    last_probe: "{now}",
-                    probe_status: "{escaped_probe_status}"
-                }},
-                update: {{
-                    name: "{escaped_name}",
-                    endpoint: "{escaped_endpoint}",
-                    max_concurrent: {max_concurrent},
-                    enabled: true,
-                    models: ["{escaped_model_name}"],
-                    last_probe: "{now}",
-                    probe_status: "{escaped_probe_status}"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-
-    let response = node.execute(&mutation).await;
-    if response.has_errors() {
-        anyhow::bail!("upsert InferenceBackend failed: {:?}", response.errors);
-    }
-    Ok(())
+fn graphql_string_literal(value: &str) -> String {
+    format!(r#""{}""#, escape_graphql_string(value))
 }
 
 fn response_query(request_id: &str) -> String {

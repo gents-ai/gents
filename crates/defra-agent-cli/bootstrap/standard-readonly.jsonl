@@ -1,3 +1,0 @@
-{"kind":"backend","backend_id":"${BACKEND_ID}","name":"${BACKEND_NAME}","endpoint":"${ENDPOINT}","model_name":"${MODEL_NAME}","max_concurrent":"${MAX_CONCURRENT}","probe_status":"healthy"}
-{"kind":"tool_selection","selection_id":"${TOOL_SELECTION_ID}","agent_did":"${AGENT_DID}","display_name":"Standard Read-Only Tools","enable_file_tools":true,"file_tools_mode":"ReadOnly","enable_bash":true,"bash_mode":"ReadOnly","enable_meta_tools":true,"delegate_to":[]}
-{"kind":"behavior","behavior_id":"${DEFAULT_BEHAVIOR_ID}","agent_did":"${AGENT_DID}","display_name":"Default","system_prompt":"${SYSTEM_PROMPT}","backend_id":"${BACKEND_ID}","model_name":"${MODEL_NAME}","tool_selection_id":"${TOOL_SELECTION_ID}","enabled":true}
