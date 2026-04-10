@@ -395,8 +395,9 @@ async fn tool_selection_upsert_defaults_enabled_modes_to_readonly() -> Result<()
     let output = run_cli_json(
         &home_dir,
         &[
-            "tool-selection",
-            "upsert",
+            "config",
+            "tools",
+            "set",
             "--graphql",
             &graphql,
             "--agent-did",
@@ -494,6 +495,7 @@ async fn request_submit_waits_for_response_by_default() -> Result<()> {
         &[
             "request",
             "submit",
+            "--json",
             "--graphql",
             &graphql,
             "--agent-did",
@@ -627,6 +629,89 @@ async fn chat_uses_runtime_state_for_interactive_turns() -> Result<()> {
                 && system.contains("incident triage")),
         "expected system prompt in request: {}",
         captured_requests[0]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chat_buffers_final_response_and_shows_tool_progress() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+    fs::write(home_dir.join("notes.txt"), "chat-tool-token\n")?;
+
+    let expected_reply = "chat-tool-token";
+    let model_name = format!("mock-tool-chat-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockOpenAIEndpoint::start(&model_name, expected_reply)?;
+
+    let port = allocate_port()?;
+    let agent_name = format!("cli-tool-chat-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+    let graphql = graphql_url(port);
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve.child)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let mut child = Command::new(cli_bin())
+        .env("HOME", &home_dir)
+        .env("RUST_LOG", "error")
+        .arg("chat")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("spawning defra-agent chat for tool transcript test")?;
+
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| anyhow!("chat child missing stdin"))?;
+        stdin
+            .write_all(b"Read notes.txt and reply with its token.\n/exit\n")
+            .context("writing interactive chat input")?;
+        stdin.flush().context("flushing interactive chat input")?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .context("waiting for defra-agent chat tool transcript run")?;
+    if !output.status.success() {
+        bail!(
+            "defra-agent chat failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("[thinking]"),
+        "expected chat output to contain thinking marker, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("[tool] read_file"),
+        "expected chat output to contain tool start, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("[tool done] read_file"),
+        "expected chat output to contain tool completion, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains(expected_reply),
+        "expected chat output to contain final reply {expected_reply}, got:\n{stdout}"
     );
 
     Ok(())
@@ -770,6 +855,53 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
             .and_then(Value::as_array)
             .map(Vec::len),
         Some(1)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn status_reads_local_runtime_context_by_default() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-status-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+
+    let port = allocate_port()?;
+    let agent_name = format!("cli-status-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+    let graphql = graphql_url(port);
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve.child)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let output = run_cli_json(&home_dir, &["status"])?;
+    assert_eq!(
+        output.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+    assert_eq!(
+        output
+            .pointer("/runtime/process_state")
+            .and_then(Value::as_str),
+        Some("ready")
+    );
+    assert_eq!(
+        output.get("graphql").and_then(Value::as_str),
+        Some(graphql.as_str())
     );
 
     Ok(())
@@ -1505,6 +1637,7 @@ fn run_cli_json(home_dir: &Path, args: &[&str]) -> Result<Value> {
         .env("HOME", home_dir)
         .env("RUST_LOG", "error")
         .args(args)
+        .arg("--json")
         .output()
         .with_context(|| format!("running defra-agent {}", args.join(" ")))?;
     if !output.status.success() {

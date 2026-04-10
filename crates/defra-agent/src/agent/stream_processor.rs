@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use anyhow::Result;
 use rig::agent::MultiTurnStreamItem;
 use rig::completion::message::{
@@ -25,7 +27,10 @@ pub(super) struct StreamProcessor<'a> {
     pub(super) streamed_text: String,
     pub(super) final_text: Option<String>,
     doc_id: &'a str,
+    last_reasoning_progress_at: Option<Instant>,
 }
+
+const REASONING_PROGRESS_INTERVAL: Duration = Duration::from_millis(500);
 
 impl<'a> StreamProcessor<'a> {
     pub(super) fn new(
@@ -42,6 +47,7 @@ impl<'a> StreamProcessor<'a> {
             streamed_text: String::new(),
             final_text: None,
             doc_id,
+            last_reasoning_progress_at: None,
         }
     }
 
@@ -66,12 +72,14 @@ impl<'a> StreamProcessor<'a> {
                 reasoning,
             ))) => {
                 self.assistant_turn.push_reasoning(reasoning);
+                self.mark_reasoning_progress().await?;
                 Ok(StreamAction::Continue)
             }
             Ok(MultiTurnStreamItem::StreamAssistantItem(
                 StreamedAssistantContent::ReasoningDelta { reasoning, id },
             )) => {
                 self.assistant_turn.push_reasoning_delta(id, &reasoning);
+                self.mark_reasoning_progress().await?;
                 Ok(StreamAction::Continue)
             }
             Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall {
@@ -193,6 +201,19 @@ impl AssistantTurnAccumulator {
         OneOrMany::many(content)
             .ok()
             .map(|content| CompletionMessage::Assistant { id: None, content })
+    }
+}
+
+impl<'a> StreamProcessor<'a> {
+    async fn mark_reasoning_progress(&mut self) -> Result<()> {
+        let should_advance = self
+            .last_reasoning_progress_at
+            .is_none_or(|last| last.elapsed() >= REASONING_PROGRESS_INTERVAL);
+        if should_advance {
+            self.lifecycle.advance().await?;
+            self.last_reasoning_progress_at = Some(Instant::now());
+        }
+        Ok(())
     }
 }
 
