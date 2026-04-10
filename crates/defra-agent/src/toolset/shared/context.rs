@@ -36,10 +36,8 @@ impl From<std::io::Error> for ToolError {
 }
 
 impl ToolContext {
-    pub(crate) fn from_home() -> Result<Self> {
-        let root = dirs::home_dir()
-            .or_else(|| std::env::current_dir().ok())
-            .ok_or_else(|| anyhow!("unable to determine a tool root directory"))?;
+    pub(crate) fn from_default_read_root() -> Result<Self> {
+        let root = resolve_default_read_root(std::env::current_dir().ok(), dirs::home_dir())?;
         Self::new(root, false)
     }
 
@@ -132,6 +130,15 @@ impl ToolContext {
     }
 }
 
+fn resolve_default_read_root(
+    current_dir: Option<PathBuf>,
+    home_dir: Option<PathBuf>,
+) -> Result<PathBuf> {
+    current_dir
+        .or(home_dir)
+        .ok_or_else(|| anyhow!("unable to determine a tool root directory"))
+}
+
 fn normalize_for_creation(path: &Path) -> Result<PathBuf> {
     let mut normalized = PathBuf::new();
     for component in path.components() {
@@ -144,4 +151,29 @@ fn normalize_for_creation(path: &Path) -> Result<PathBuf> {
         }
     }
     Ok(normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_default_read_root;
+
+    #[test]
+    fn default_read_root_prefers_current_dir() {
+        let cwd = std::env::temp_dir().join("defra-agent-cwd-root");
+        let home = std::env::temp_dir().join("defra-agent-home-root");
+        let resolved = resolve_default_read_root(Some(cwd.clone()), Some(home)).unwrap();
+        assert_eq!(resolved, cwd);
+    }
+
+    #[test]
+    fn default_read_root_falls_back_to_home() {
+        let home = std::env::temp_dir().join("defra-agent-home-root");
+        let resolved = resolve_default_read_root(None, Some(home.clone())).unwrap();
+        assert_eq!(resolved, home);
+    }
+
+    #[test]
+    fn default_read_root_errors_when_unavailable() {
+        assert!(resolve_default_read_root(None, None).is_err());
+    }
 }

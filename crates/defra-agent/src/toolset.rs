@@ -126,7 +126,7 @@ impl ToolSet {
     pub fn build_native_tools(&self) -> Result<Vec<Box<dyn ToolDyn>>> {
         let read_context = match &self.read_root {
             Some(root) => ToolContext::new(root.clone(), false)?,
-            None => ToolContext::from_home()?,
+            None => ToolContext::from_default_read_root()?,
         };
 
         let mut built: Vec<Box<dyn ToolDyn>> = Vec::new();
