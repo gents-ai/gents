@@ -163,6 +163,13 @@ impl Scheduler {
 
         let behavior_resp = self.node.execute(BEHAVIOR_QUERY).await;
         if behavior_resp.has_errors() {
+            let error_text = format!("{:?}", behavior_resp.errors);
+            if is_missing_scheduled_task_collection_error(&error_text) {
+                tracing::debug!(
+                    "ScheduledTask collection not present; skipping scheduled task scan"
+                );
+                return Ok(Vec::new());
+            }
             anyhow::bail!("query ScheduledTask failed: {:?}", behavior_resp.errors);
         }
 

@@ -4,8 +4,8 @@
 
 If you want to try it, the shortest path is:
 1. Build the CLI.
-2. Start a local server with `--init`.
-3. Submit requests and keep chatting on the same session.
+2. Start a local server with `--init <inference-endpoint>`.
+3. Open `chat` in another terminal.
 
 ## Demo Quickstart
 
@@ -28,28 +28,19 @@ cargo build -p defra-agent-cli --release
 Change only `INFERENCE_ENDPOINT`. The rest can stay as-is for a local demo.
 
 ```bash
-export AGENT=./target/release/defra-agent-cli
+export AGENT=./target/release/defra-agent
 export INFERENCE_ENDPOINT=http://127.0.0.1:8000/v1
-
-export DATA_DIR=$PWD/var/demo-agent
-export HTTP_PORT=9191
-export GRAPHQL=http://127.0.0.1:$HTTP_PORT/api/v0/graphql
-
-export AGENT_NAME=demo
-export AGENT_DID=did:defra-agent:$AGENT_NAME
 ```
+
+By default the CLI keeps its local node, keys, and runtime state in `~/.defra-agent`.
+If you want to isolate a demo, pass `--home /some/path` to both `server` and `chat`.
 
 ### 3. Start the server and initialize the default runtime
 
 Run this in terminal 1:
 
 ```bash
-$AGENT serve \
-  --data-dir "$DATA_DIR" \
-  --http-port "$HTTP_PORT" \
-  --agent-name "$AGENT_NAME" \
-  --init \
-  --inference-endpoint "$INFERENCE_ENDPOINT"
+$AGENT server --init "$INFERENCE_ENDPOINT"
 ```
 
 This is idempotent. It bootstraps the principal, creates or updates the default backend document, and binds the default behavior to it before the runtime starts.
@@ -62,27 +53,22 @@ The server prints JSON when it is ready. The most useful fields are:
 - `init.backend_id`
 - `init.model_name`
 
-### 4. Send the first message
+If your inference endpoint requires auth, export `AGENT_DAEMON_API_KEY` before starting the server.
 
-`request submit` waits for the terminal response by default and prints both the `session_id` and the final response.
+### 4. Start chatting
+
+Run this in terminal 2:
 
 ```bash
-$AGENT request submit \
-  --graphql "$GRAPHQL" \
-  --agent-did "$AGENT_DID" \
-  --content "Introduce yourself in two short sentences."
+$AGENT chat
 ```
 
-### 5. Keep chatting on the same session
+That opens a terminal session using the runtime state written by `server`. Type a message, press Enter, and keep going on the same session. Exit with `/exit`.
 
-Take the `session_id` from the previous command's JSON output and pass it back in:
+If you only want a single turn, pass the message directly:
 
 ```bash
-$AGENT request submit \
-  --graphql "$GRAPHQL" \
-  --agent-did "$AGENT_DID" \
-  --session-id "<session-id-from-the-previous-response>" \
-  --content "What did I ask you to do in the previous turn?"
+$AGENT chat "Introduce yourself in two short sentences."
 ```
 
 ## Optional: Enable Read-Only Local Tools
@@ -90,20 +76,18 @@ $AGENT request submit \
 If you want a simple tools demo, start the server with a read-only ceiling:
 
 ```bash
-$AGENT serve \
-  --data-dir "$DATA_DIR" \
-  --http-port "$HTTP_PORT" \
-  --agent-name "$AGENT_NAME" \
-  --init \
-  --inference-endpoint "$INFERENCE_ENDPOINT" \
+$AGENT server \
+  --init "$INFERENCE_ENDPOINT" \
   --tool-ceiling readonly
 ```
 
-Then create a tool selection and attach it to the default behavior. The `backend_id` is `$AGENT_NAME-backend`. The `model_name` should match `init.model_name` from the server's startup JSON.
+Then create a tool selection and attach it to the default behavior. Read `agent_did`, `graphql`, `init.backend_id`, and `init.model_name` from the server startup JSON.
 
 ```bash
-export TOOL_SELECTION_ID=$AGENT_NAME-tools
-export BACKEND_ID=$AGENT_NAME-backend
+export GRAPHQL=http://127.0.0.1:9191/api/v0/graphql
+export AGENT_DID="did:defra-agent:default"
+export TOOL_SELECTION_ID=default-tools
+export BACKEND_ID=default-backend
 export MODEL_NAME="<model-name-from-serve-output>"
 
 $AGENT tool-selection upsert \
@@ -124,6 +108,15 @@ $AGENT behavior upsert \
 After that, the agent can use read-only file tools on new requests. This change is live; no restart is required.
 
 ## Useful Commands
+
+Submit a single request without using `chat`:
+
+```bash
+$AGENT request submit \
+  --graphql "$GRAPHQL" \
+  --agent-did "$AGENT_DID" \
+  --content "Introduce yourself in two short sentences."
+```
 
 Show a request document:
 

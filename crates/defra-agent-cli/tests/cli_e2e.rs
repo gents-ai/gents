@@ -34,6 +34,14 @@ struct MockOpenAIEndpoint {
     handle: Option<JoinHandle<()>>,
 }
 
+struct MockChatEndpoint {
+    endpoint: String,
+    port: u16,
+    stop: Arc<AtomicBool>,
+    captured_chat_requests: Arc<Mutex<Vec<Value>>>,
+    handle: Option<JoinHandle<()>>,
+}
+
 struct HttpRequestData {
     method: String,
     path: String,
@@ -236,6 +244,124 @@ impl Drop for MockOpenAIEndpoint {
     }
 }
 
+impl MockChatEndpoint {
+    fn start(model_name: &str, final_text: &str) -> Result<Self> {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).context("binding mock chat port")?;
+        listener
+            .set_nonblocking(true)
+            .context("marking mock chat listener nonblocking")?;
+        let port = listener
+            .local_addr()
+            .context("reading mock chat port")?
+            .port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_for_thread = stop.clone();
+        let model_name = model_name.to_string();
+        let final_text = final_text.to_string();
+        let captured_chat_requests = Arc::new(Mutex::new(Vec::new()));
+        let captured_chat_requests_for_thread = captured_chat_requests.clone();
+
+        let handle = thread::spawn(move || {
+            while !stop_for_thread.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let request = match read_http_request(&mut stream) {
+                            Ok(request) => request,
+                            Err(_) => {
+                                let _ = stream.shutdown(Shutdown::Both);
+                                continue;
+                            }
+                        };
+
+                        match (request.method.as_str(), request.path.as_str()) {
+                            ("GET", "/v1/models") => {
+                                let body = format!(r#"{{"data":[{{"id":"{model_name}"}}]}}"#);
+                                let _ = write_http_response(
+                                    &mut stream,
+                                    "200 OK",
+                                    "application/json",
+                                    &body,
+                                );
+                            }
+                            ("POST", "/v1/chat/completions") => {
+                                let request_json: Value =
+                                    match serde_json::from_slice(&request.body) {
+                                        Ok(value) => value,
+                                        Err(_) => {
+                                            let _ = write_http_response(
+                                                &mut stream,
+                                                "400 Bad Request",
+                                                "application/json",
+                                                r#"{"error":"invalid json"}"#,
+                                            );
+                                            let _ = stream.shutdown(Shutdown::Both);
+                                            continue;
+                                        }
+                                    };
+                                captured_chat_requests_for_thread
+                                    .lock()
+                                    .expect("captured chat request mutex poisoned")
+                                    .push(request_json);
+
+                                let _ = write_http_response(
+                                    &mut stream,
+                                    "200 OK",
+                                    "text/event-stream",
+                                    &completion_text_sse(&final_text),
+                                );
+                            }
+                            _ => {
+                                let _ = write_http_response(
+                                    &mut stream,
+                                    "404 Not Found",
+                                    "application/json",
+                                    r#"{"error":"not found"}"#,
+                                );
+                            }
+                        }
+
+                        let _ = stream.flush();
+                        let _ = stream.shutdown(Shutdown::Both);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(25));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        Ok(Self {
+            endpoint: format!("http://127.0.0.1:{port}/v1"),
+            port,
+            stop,
+            captured_chat_requests,
+            handle: Some(handle),
+        })
+    }
+
+    fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+
+    fn captured_chat_requests(&self) -> Vec<Value> {
+        self.captured_chat_requests
+            .lock()
+            .expect("captured chat request mutex poisoned")
+            .clone()
+    }
+}
+
+impl Drop for MockChatEndpoint {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        let _ = TcpStream::connect(("127.0.0.1", self.port));
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_selection_upsert_defaults_enabled_modes_to_readonly() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -250,7 +376,7 @@ async fn tool_selection_upsert_defaults_enabled_modes_to_readonly() -> Result<()
     let graphql = graphql_url(port);
     let selection_id = format!("{agent_name}:tools");
 
-    let mut serve = spawn_serve(&data_dir, &home_dir, port, &agent_name, "readonly")?;
+    let mut serve = spawn_serve(&home_dir, port, &agent_name, "readonly")?;
     wait_for_port(port, &mut serve.child)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
@@ -332,7 +458,7 @@ async fn request_submit_waits_for_response_by_default() -> Result<()> {
     let request_content = format!("CLI wait test {}", Uuid::new_v4());
     let expected_content = format!("wait-ok-{}", Uuid::new_v4().simple());
 
-    let mut serve = spawn_serve(&data_dir, &home_dir, port, &agent_name, "meta-only")?;
+    let mut serve = spawn_serve(&home_dir, port, &agent_name, "meta-only")?;
     wait_for_port(port, &mut serve.child)?;
     wait_for_runtime_ready(
         &graphql,
@@ -401,6 +527,85 @@ async fn request_submit_waits_for_response_by_default() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chat_uses_runtime_state_for_interactive_turns() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let expected_reply = format!("chat-ok-{}", Uuid::new_v4().simple());
+    let model_name = format!("mock-chat-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
+
+    let port = allocate_port()?;
+    let agent_name = format!("cli-chat-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+    let graphql = graphql_url(port);
+
+    let mut serve = spawn_serve_with_args(
+        &home_dir,
+        port,
+        &agent_name,
+        "meta-only",
+        &["--init", mock_endpoint.endpoint()],
+    )?;
+    wait_for_port(port, &mut serve.child)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let mut child = Command::new(cli_bin())
+        .env("HOME", &home_dir)
+        .env("RUST_LOG", "error")
+        .arg("chat")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("spawning defra-agent chat")?;
+
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| anyhow!("chat child missing stdin"))?;
+        stdin
+            .write_all(b"Reply with exactly the configured token.\n/exit\n")
+            .context("writing interactive chat input")?;
+        stdin.flush().context("flushing interactive chat input")?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .context("waiting for defra-agent chat")?;
+    if !output.status.success() {
+        bail!(
+            "defra-agent chat failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&expected_reply),
+        "expected chat output to contain {expected_reply}, got:\n{stdout}"
+    );
+
+    let captured_requests = mock_endpoint.captured_chat_requests();
+    assert_eq!(captured_requests.len(), 1);
+    assert_eq!(
+        captured_requests[0].get("model").and_then(Value::as_str),
+        Some(model_name.as_str())
+    );
+    assert!(
+        request_system_message(&captured_requests[0])
+            .is_some_and(|system| system.contains("You are")),
+        "expected system prompt in request: {}",
+        captured_requests[0]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn serve_init_bootstraps_backend_and_default_behavior_idempotently() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let data_dir = tempdir.path().join("data");
@@ -417,15 +622,8 @@ async fn serve_init_bootstraps_backend_and_default_behavior_idempotently() -> Re
     let backend_id = format!("{agent_name}-backend");
     let graphql = graphql_url(port);
 
-    let extra_args = ["--init", "--inference-endpoint", mock_endpoint.endpoint()];
-    let mut serve = spawn_serve_with_args(
-        &data_dir,
-        &home_dir,
-        port,
-        &agent_name,
-        "meta-only",
-        &extra_args,
-    )?;
+    let extra_args = ["--init", mock_endpoint.endpoint()];
+    let mut serve = spawn_serve_with_args(&home_dir, port, &agent_name, "meta-only", &extra_args)?;
     wait_for_port(port, &mut serve.child)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
@@ -440,14 +638,7 @@ async fn serve_init_bootstraps_backend_and_default_behavior_idempotently() -> Re
 
     drop(serve);
 
-    let mut serve = spawn_serve_with_args(
-        &data_dir,
-        &home_dir,
-        port,
-        &agent_name,
-        "meta-only",
-        &extra_args,
-    )?;
+    let mut serve = spawn_serve_with_args(&home_dir, port, &agent_name, "meta-only", &extra_args)?;
     wait_for_port(port, &mut serve.child)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
@@ -531,12 +722,11 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
     let selection_id = format!("{agent_name}:tools");
 
     let mut serve = spawn_serve_with_args(
-        &data_dir,
         &home_dir,
         port,
         &agent_name,
         "readonly",
-        &["--init", "--inference-endpoint", mock_endpoint.endpoint()],
+        &["--init", mock_endpoint.endpoint()],
     )?;
     wait_for_port(port, &mut serve.child)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
@@ -753,12 +943,11 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     let model_endpoint = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT")
         .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
     let mut serve = spawn_serve_with_args(
-        &data_dir,
         &home_dir,
         port,
         &agent_name,
         "readonly",
-        &["--init", "--inference-endpoint", &model_endpoint],
+        &["--init", &model_endpoint],
     )?;
     wait_for_port(port, &mut serve.child)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
@@ -841,7 +1030,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
 }
 
 fn cli_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_defra-agent-cli")
+    env!("CARGO_BIN_EXE_defra-agent")
 }
 
 fn allocate_port() -> Result<u16> {
@@ -859,17 +1048,15 @@ fn graphql_url(port: u16) -> String {
 }
 
 fn spawn_serve(
-    data_dir: &Path,
     home_dir: &Path,
     port: u16,
     agent_name: &str,
     tool_ceiling: &str,
 ) -> Result<ServeProcess> {
-    spawn_serve_with_args(data_dir, home_dir, port, agent_name, tool_ceiling, &[])
+    spawn_serve_with_args(home_dir, port, agent_name, tool_ceiling, &[])
 }
 
 fn spawn_serve_with_args(
-    data_dir: &Path,
     home_dir: &Path,
     port: u16,
     agent_name: &str,
@@ -879,9 +1066,7 @@ fn spawn_serve_with_args(
     let child = Command::new(cli_bin())
         .env("HOME", home_dir)
         .env("RUST_LOG", "error")
-        .arg("serve")
-        .arg("--data-dir")
-        .arg(data_dir)
+        .arg("server")
         .arg("--http-port")
         .arg(port.to_string())
         .arg("--agent-name")
@@ -892,7 +1077,7 @@ fn spawn_serve_with_args(
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .context("spawning defra-agent-cli serve")?;
+        .context("spawning defra-agent server")?;
     Ok(ServeProcess { child })
 }
 
@@ -992,7 +1177,7 @@ fn wait_for_port(port: u16, child: &mut Child) -> Result<()> {
             bail!("serve exited before becoming ready: {status}");
         }
         if Instant::now() >= deadline {
-            bail!("timed out waiting for defra-agent-cli serve on port {port}");
+            bail!("timed out waiting for defra-agent server on port {port}");
         }
         thread::sleep(Duration::from_millis(200));
     }
@@ -1006,7 +1191,7 @@ fn spawn_cli(home_dir: &Path, args: &[&str]) -> Result<Child> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .with_context(|| format!("spawning defra-agent-cli {}", args.join(" ")))
+        .with_context(|| format!("spawning defra-agent {}", args.join(" ")))
 }
 
 fn run_cli_json(home_dir: &Path, args: &[&str]) -> Result<Value> {
@@ -1015,10 +1200,10 @@ fn run_cli_json(home_dir: &Path, args: &[&str]) -> Result<Value> {
         .env("RUST_LOG", "error")
         .args(args)
         .output()
-        .with_context(|| format!("running defra-agent-cli {}", args.join(" ")))?;
+        .with_context(|| format!("running defra-agent {}", args.join(" ")))?;
     if !output.status.success() {
         bail!(
-            "defra-agent-cli {} failed\nstdout:\n{}\nstderr:\n{}",
+            "defra-agent {} failed\nstdout:\n{}\nstderr:\n{}",
             args.join(" "),
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
@@ -1026,7 +1211,7 @@ fn run_cli_json(home_dir: &Path, args: &[&str]) -> Result<Value> {
     }
 
     serde_json::from_slice(&output.stdout)
-        .with_context(|| format!("parsing JSON from defra-agent-cli {}", args.join(" ")))
+        .with_context(|| format!("parsing JSON from defra-agent {}", args.join(" ")))
 }
 
 async fn wait_for_request(

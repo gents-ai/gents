@@ -219,3 +219,13 @@ fn missing_findings_warning_conditions() {
     assert!(!super::ops::should_warn_missing_findings("degraded", 3));
     assert!(!super::ops::should_warn_missing_findings("critical", 1));
 }
+
+#[test]
+fn missing_scheduled_task_collection_is_treated_as_empty() {
+    assert!(is_missing_scheduled_task_collection_error(
+        "query ScheduledTask failed: [QueryResponseError { message: \"collection not found: Cannot query collection 'ScheduledTask': collection not found\", path: None, locations: None }]"
+    ));
+    assert!(!is_missing_scheduled_task_collection_error(
+        "query ScheduledTask failed: some other datastore error"
+    ));
+}

@@ -1,3 +1,5 @@
+use std::fs;
+use std::io::{self, BufRead, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -13,9 +15,15 @@ use defra_agent::{
     FileToolMode, McpPool, ProcessLifecycleObserver, ProcessLifecycleState, SimpleIdentity,
     ToolCeiling,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
+
+const DEFAULT_AGENT_NAME: &str = "default";
+const DEFAULT_HTTP_PORT: u16 = 9191;
+const INIT_PRESENT_SENTINEL: &str = "__present__";
+const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
 
 struct CliReadyObserver {
     tx: watch::Sender<ProcessLifecycleState>,
@@ -29,7 +37,7 @@ impl ProcessLifecycleObserver for CliReadyObserver {
 
 #[derive(Parser)]
 #[command(
-    name = "defra-agent-cli",
+    name = "defra-agent",
     about = "Consumer CLI for the defra-agent library"
 )]
 struct Cli {
@@ -39,7 +47,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    Serve(ServeArgs),
+    #[command(name = "server", alias = "serve")]
+    Server(ServeArgs),
+    Chat(ChatArgs),
     Backend {
         #[command(subcommand)]
         command: BackendCommand,
@@ -69,18 +79,25 @@ enum Command {
 #[derive(clap::Args)]
 struct ServeArgs {
     #[arg(long)]
-    data_dir: PathBuf,
+    home: Option<PathBuf>,
+    #[arg(long, hide = true)]
+    data_dir: Option<PathBuf>,
     #[arg(long, default_value = "127.0.0.1")]
     http_addr: IpAddr,
-    #[arg(long, default_value_t = 9191)]
+    #[arg(long, default_value_t = DEFAULT_HTTP_PORT)]
     http_port: u16,
-    #[arg(long)]
+    #[arg(long, default_value = DEFAULT_AGENT_NAME)]
     agent_name: String,
     #[arg(long)]
     key_path: Option<PathBuf>,
-    #[arg(long, default_value_t = false)]
-    init: bool,
-    #[arg(long)]
+    #[arg(
+        long,
+        num_args = 0..=1,
+        value_name = "INFERENCE_ENDPOINT",
+        default_missing_value = INIT_PRESENT_SENTINEL
+    )]
+    init: Option<String>,
+    #[arg(long, hide = true)]
     inference_endpoint: Option<String>,
     #[arg(long)]
     backend_id: Option<String>,
@@ -96,6 +113,28 @@ struct ServeArgs {
     cli_tools: Vec<String>,
     #[arg(long)]
     tool_root: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+struct ChatArgs {
+    #[arg(long)]
+    home: Option<PathBuf>,
+    #[arg(long)]
+    graphql: Option<String>,
+    #[arg(long)]
+    agent_did: Option<String>,
+    #[arg(long)]
+    agent_name: Option<String>,
+    #[arg(long)]
+    session_id: Option<String>,
+    #[arg(long)]
+    behavior_id: Option<String>,
+    #[arg(long, default_value_t = 120)]
+    timeout_secs: u64,
+    #[arg(long, default_value_t = 1)]
+    poll_secs: u64,
+    #[arg(value_name = "MESSAGE")]
+    message: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -114,6 +153,15 @@ struct ServeInitSummary {
     default_behavior_id: String,
     created_principal: bool,
     created_default_behavior: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredRuntimeState {
+    home: String,
+    graphql: String,
+    agent_name: String,
+    agent_did: String,
+    default_behavior_id: String,
 }
 
 #[derive(Subcommand)]
@@ -300,7 +348,8 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
-        Command::Serve(args) => serve(args).await,
+        Command::Server(args) => serve(args).await,
+        Command::Chat(args) => chat(args).await,
         Command::Backend { command } => match command {
             BackendCommand::Upsert(args) => backend_upsert(args).await,
         },
@@ -325,10 +374,17 @@ async fn main() -> Result<()> {
 }
 
 async fn serve(args: ServeArgs) -> Result<()> {
+    let home_dir = resolve_home_dir(args.home.as_deref());
+    let data_dir = args
+        .data_dir
+        .clone()
+        .unwrap_or_else(|| default_data_dir(&home_dir));
+    fs::create_dir_all(&data_dir)
+        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
     let http_addr = SocketAddr::new(args.http_addr, args.http_port);
     let node = Arc::new(
         EmbeddedNode::builder()
-            .data_path(&args.data_dir)
+            .data_path(&data_dir)
             .with_http(defra_node::HttpConfig::with_addr(http_addr))
             .build()
             .await
@@ -342,7 +398,11 @@ async fn serve(args: ServeArgs) -> Result<()> {
     let key_path = args
         .key_path
         .clone()
-        .unwrap_or_else(|| default_key_path(&args.data_dir, &args.agent_name));
+        .unwrap_or_else(|| default_key_path(&home_dir, &args.agent_name));
+    if let Some(parent) = key_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating key directory {}", parent.display()))?;
+    }
     let mut tool_ceiling = match args.tool_ceiling {
         ToolCeilingArg::MetaOnly => ToolCeiling::meta_only(),
         ToolCeilingArg::Readonly => ToolCeiling::readonly(),
@@ -386,6 +446,11 @@ async fn serve(args: ServeArgs) -> Result<()> {
         .collect::<Vec<_>>();
     let default_behavior_id = agent.default_behavior_id().to_string();
     let unavailable_behaviors = agent.unavailable_behaviors().clone();
+    let graphql_url = format!(
+        "http://{}:{}/api/v0/graphql",
+        display_host(args.http_addr),
+        args.http_port
+    );
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     tokio::spawn(async move {
@@ -413,23 +478,107 @@ async fn serve(args: ServeArgs) -> Result<()> {
         }
     }
 
+    write_runtime_state(
+        &home_dir,
+        &StoredRuntimeState {
+            home: home_dir.to_string_lossy().to_string(),
+            graphql: graphql_url.clone(),
+            agent_name: args.agent_name.clone(),
+            agent_did: identity.did().to_string(),
+            default_behavior_id: default_behavior_id.clone(),
+        },
+    )?;
+
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
             "status": "serving",
+            "home": home_dir,
             "agent_name": args.agent_name,
             "agent_did": identity.did(),
             "default_behavior_id": default_behavior_id,
             "runnable_behaviors": runnable_behaviors,
             "unavailable_behaviors": unavailable_behaviors,
             "init": init_summary,
-            "graphql": format!("http://{}:{}/api/v0/graphql", display_host(args.http_addr), args.http_port),
+            "graphql": graphql_url,
         }))?
     );
 
     run_handle
         .await
         .context("joining defra-agent runtime task")?
+}
+
+async fn chat(args: ChatArgs) -> Result<()> {
+    let home_dir = resolve_home_dir(args.home.as_deref());
+    let runtime_state = read_runtime_state(&home_dir)?;
+    let graphql = args
+        .graphql
+        .clone()
+        .or_else(|| runtime_state.as_ref().map(|state| state.graphql.clone()))
+        .unwrap_or_else(|| format!("http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql"));
+    let agent_name = args
+        .agent_name
+        .clone()
+        .or_else(|| runtime_state.as_ref().map(|state| state.agent_name.clone()))
+        .unwrap_or_else(|| DEFAULT_AGENT_NAME.to_string());
+    let agent_did = args
+        .agent_did
+        .clone()
+        .or_else(|| runtime_state.as_ref().map(|state| state.agent_did.clone()))
+        .unwrap_or_else(|| format!("did:defra-agent:{agent_name}"));
+    let session_id = args
+        .session_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    if !args.message.is_empty() {
+        let response = submit_chat_turn(
+            &graphql,
+            &agent_did,
+            &session_id,
+            args.behavior_id.as_deref(),
+            &args.message.join(" "),
+            args.timeout_secs,
+            args.poll_secs,
+        )
+        .await?;
+        println!("{response}");
+        return Ok(());
+    }
+
+    let stdin = io::stdin();
+    let mut lines = stdin.lock().lines();
+    let mut stdout = io::stdout();
+    loop {
+        write!(stdout, "> ")?;
+        stdout.flush()?;
+        let Some(line) = lines.next() else {
+            break;
+        };
+        let line = line?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if matches!(trimmed, "/exit" | "/quit" | "exit" | "quit") {
+            break;
+        }
+
+        let response = submit_chat_turn(
+            &graphql,
+            &agent_did,
+            &session_id,
+            args.behavior_id.as_deref(),
+            trimmed,
+            args.timeout_secs,
+            args.poll_secs,
+        )
+        .await?;
+        writeln!(stdout, "{response}")?;
+    }
+
+    Ok(())
 }
 
 async fn backend_upsert(args: BackendUpsertArgs) -> Result<()> {
@@ -737,58 +886,19 @@ async fn inference_profile_upsert(args: InferenceProfileUpsertArgs) -> Result<()
 }
 
 async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let session_id = args
-        .session_id
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let behavior_field = args
-        .behavior_id
-        .as_deref()
-        .filter(|behavior_id| !behavior_id.trim().is_empty())
-        .map(|behavior_id| {
-            format!(
-                r#"
-                behavior_id: "{}","#,
-                escape_graphql_string(behavior_id)
-            )
-        })
-        .unwrap_or_default();
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{request_id}",
-                agent_did: "{agent_did}",
-                {behavior_field}
-                session_id: "{session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{request_id}",
-                superseded_by_request: "",
-                content: "{content}",
-                status: "pending",
-                lifecycle_state: "pending",
-                admission_state: "released",
-                backend_id: "",
-                execution_origin: "interactive",
-                created_at: "{created_at}",
-                retry_count: 0,
-                max_retries: 3
-            }}) {{ _docID }}
-        }}"#,
-        request_id = escape_graphql_string(&request_id),
-        agent_did = escape_graphql_string(&args.agent_did),
-        behavior_field = behavior_field,
-        session_id = escape_graphql_string(&session_id),
-        content = escape_graphql_string(&args.content),
-    );
-    post_graphql(&args.graphql, &mutation).await?;
-    let behavior_id = args.behavior_id.clone();
-    let agent_did = args.agent_did.clone();
+    let submitted = create_agent_request(
+        &args.graphql,
+        &args.agent_did,
+        &args.content,
+        args.session_id.as_deref(),
+        args.behavior_id.as_deref(),
+    )
+    .await?;
     let request_summary = json!({
-        "request_id": request_id,
-        "session_id": session_id,
-        "agent_did": agent_did,
-        "behavior_id": behavior_id,
+        "request_id": submitted.request_id,
+        "session_id": submitted.session_id,
+        "agent_did": submitted.agent_did,
+        "behavior_id": submitted.behavior_id,
     });
     if args.no_wait {
         println!("{}", serde_json::to_string_pretty(&request_summary)?);
@@ -797,12 +907,12 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
 
     let response = wait_for_terminal_response(
         &args.graphql,
-        &request_id,
+        &submitted.request_id,
         args.timeout_secs,
         args.poll_secs,
     )
     .await
-    .with_context(|| format!("waiting for AgentResponse {request_id}"))?;
+    .with_context(|| format!("waiting for AgentResponse {}", submitted.request_id))?;
     let mut output = request_summary
         .as_object()
         .cloned()
@@ -915,23 +1025,26 @@ async fn maybe_initialize_runtime_documents(
     args: &ServeArgs,
     agent_did: &str,
 ) -> Result<Option<ServeInitSummary>> {
-    let has_init_overrides = args.inference_endpoint.is_some()
-        || args.backend_id.is_some()
-        || args.backend_name.is_some()
-        || args.model_name.is_some();
-    if !args.init {
-        if has_init_overrides {
-            anyhow::bail!(
-                "--inference-endpoint, --backend-id, --backend-name, and --model-name require --init"
-            );
+    let inline_endpoint = args
+        .init
+        .as_deref()
+        .filter(|value| *value != INIT_PRESENT_SENTINEL);
+    if inline_endpoint.is_some() && args.inference_endpoint.is_some() {
+        anyhow::bail!(
+            "pass the inference endpoint either as --init <url> or --inference-endpoint, not both"
+        );
+    }
+    let init_requested = args.init.is_some() || args.inference_endpoint.is_some();
+    if !init_requested {
+        if args.backend_id.is_some() || args.backend_name.is_some() || args.model_name.is_some() {
+            anyhow::bail!("--backend-id, --backend-name, and --model-name require --init");
         }
         return Ok(None);
     }
 
-    let endpoint = args
-        .inference_endpoint
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("--inference-endpoint is required when --init is set"))?;
+    let endpoint = inline_endpoint
+        .or(args.inference_endpoint.as_deref())
+        .ok_or_else(|| anyhow::anyhow!("an inference endpoint is required when --init is set"))?;
     let bootstrap = ensure_agent_principal(node, agent_did).await?;
     let backend_id = args
         .backend_id
@@ -1081,8 +1194,142 @@ fn response_query(request_id: &str) -> String {
     )
 }
 
-fn default_key_path(data_dir: &Path, agent_name: &str) -> PathBuf {
-    data_dir.join("keys").join(format!("{agent_name}.key"))
+#[derive(Debug, Clone)]
+struct SubmittedRequest {
+    request_id: String,
+    session_id: String,
+    agent_did: String,
+    behavior_id: Option<String>,
+}
+
+async fn create_agent_request(
+    graphql: &str,
+    agent_did: &str,
+    content: &str,
+    session_id: Option<&str>,
+    behavior_id: Option<&str>,
+) -> Result<SubmittedRequest> {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = session_id
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let behavior_field = behavior_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            format!(
+                r#"
+                behavior_id: "{}","#,
+                escape_graphql_string(value)
+            )
+        })
+        .unwrap_or_default();
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{request_id}",
+                agent_did: "{agent_did}",
+                {behavior_field}
+                session_id: "{session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{request_id}",
+                superseded_by_request: "",
+                content: "{content}",
+                status: "pending",
+                lifecycle_state: "pending",
+                admission_state: "released",
+                backend_id: "",
+                execution_origin: "interactive",
+                created_at: "{created_at}",
+                retry_count: 0,
+                max_retries: 3
+            }}) {{ _docID }}
+        }}"#,
+        request_id = escape_graphql_string(&request_id),
+        agent_did = escape_graphql_string(agent_did),
+        behavior_field = behavior_field,
+        session_id = escape_graphql_string(&session_id),
+        content = escape_graphql_string(content),
+    );
+    post_graphql(graphql, &mutation).await?;
+
+    Ok(SubmittedRequest {
+        request_id,
+        session_id,
+        agent_did: agent_did.to_string(),
+        behavior_id: behavior_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+    })
+}
+
+async fn submit_chat_turn(
+    graphql: &str,
+    agent_did: &str,
+    session_id: &str,
+    behavior_id: Option<&str>,
+    content: &str,
+    timeout_secs: u64,
+    poll_secs: u64,
+) -> Result<String> {
+    let submitted =
+        create_agent_request(graphql, agent_did, content, Some(session_id), behavior_id).await?;
+    let response =
+        wait_for_terminal_response(graphql, &submitted.request_id, timeout_secs, poll_secs).await?;
+    Ok(response
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string())
+}
+
+fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
+    explicit
+        .map(Path::to_path_buf)
+        .unwrap_or_else(default_home_dir)
+}
+
+fn default_home_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".defra-agent")
+}
+
+fn default_data_dir(home_dir: &Path) -> PathBuf {
+    home_dir.join("data")
+}
+
+fn runtime_state_path(home_dir: &Path) -> PathBuf {
+    home_dir.join(RUNTIME_STATE_FILE_NAME)
+}
+
+fn write_runtime_state(home_dir: &Path, state: &StoredRuntimeState) -> Result<()> {
+    fs::create_dir_all(home_dir)
+        .with_context(|| format!("creating home directory {}", home_dir.display()))?;
+    let path = runtime_state_path(home_dir);
+    let contents = serde_json::to_vec_pretty(state).context("encoding local runtime state JSON")?;
+    fs::write(&path, contents)
+        .with_context(|| format!("writing runtime state {}", path.display()))?;
+    Ok(())
+}
+
+fn read_runtime_state(home_dir: &Path) -> Result<Option<StoredRuntimeState>> {
+    let path = runtime_state_path(home_dir);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes =
+        fs::read(&path).with_context(|| format!("reading runtime state {}", path.display()))?;
+    let state = serde_json::from_slice(&bytes)
+        .with_context(|| format!("decoding runtime state {}", path.display()))?;
+    Ok(Some(state))
+}
+
+fn default_key_path(home_dir: &Path, agent_name: &str) -> PathBuf {
+    home_dir.join("keys").join(format!("{agent_name}.key"))
 }
 
 fn display_host(host: IpAddr) -> String {

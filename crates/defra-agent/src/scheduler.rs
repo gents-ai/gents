@@ -27,6 +27,8 @@ mod tests;
 const TICK_INTERVAL_SECS: u64 = 60;
 const TASK_TIMEOUT_SECS: u64 = 900;
 const BACKEND_WAIT_POLL_MS: u64 = 1_000;
+const SCHEDULED_TASK_COLLECTION_MISSING_ERROR: &str =
+    "Cannot query collection 'ScheduledTask': collection not found";
 
 #[derive(Debug, Clone)]
 pub struct ScheduledTask {
@@ -102,6 +104,10 @@ fn optional_rfc3339_field(
             }),
         None => Ok(None),
     }
+}
+
+fn is_missing_scheduled_task_collection_error(error_text: &str) -> bool {
+    error_text.contains(SCHEDULED_TASK_COLLECTION_MISSING_ERROR)
 }
 
 pub struct Scheduler {

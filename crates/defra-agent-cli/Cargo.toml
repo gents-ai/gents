@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Consumer CLI for the defra-agent library"
+autobins = false
+
+[[bin]]
+name = "defra-agent"
+path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
