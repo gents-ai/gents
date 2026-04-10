@@ -2027,10 +2027,7 @@ async fn stream_turn_progress(
     let mut latest_content = String::new();
     let mut latest_progress_seq = 0;
     let mut latest_error_message: Option<String> = None;
-    let mut allow_thinking_marker = false;
-
-    println!("[thinking]");
-    io::stdout().flush()?;
+    let mut thinking_printed = false;
 
     loop {
         let query = chat_progress_query(&submitted.request_id, &submitted.session_id);
@@ -2060,7 +2057,6 @@ async fn stream_turn_progress(
             }
             println!("{}", format_tool_progress_line(&tool));
             io::stdout().flush()?;
-            allow_thinking_marker = true;
         }
 
         let response_row = response
@@ -2078,15 +2074,14 @@ async fn stream_turn_progress(
             {
                 last_progress_at = tokio::time::Instant::now();
             }
-            if allow_thinking_marker
+            if !thinking_printed
                 && progress.status == "streaming"
-                && (progress.progress_seq > latest_progress_seq
-                    || progress.content != latest_content
-                    || progress.error_message != latest_error_message)
+                && progress.content.is_empty()
+                && progress.progress_seq > latest_progress_seq
             {
                 println!("[thinking]");
                 io::stdout().flush()?;
-                allow_thinking_marker = false;
+                thinking_printed = true;
             }
             latest_progress_seq = progress.progress_seq;
             latest_error_message = progress.error_message.clone();

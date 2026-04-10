@@ -102,13 +102,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 }
 
                 let error_reason = format!("agent stream failed: {}", error);
-                let error_text = format!("Agent error: {}", error);
                 self.stream_writer
                     .set_error_message(doc_id, &error_reason)
                     .await?;
-                if streamed_text_has_no_visible_content(&streamed_text) {
-                    let _ = self.stream_writer.write_tokens(doc_id, &error_text).await?;
-                }
                 self.stream_writer
                     .finalize(doc_id, StreamStatus::Error)
                     .await?;

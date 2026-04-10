@@ -697,10 +697,6 @@ async fn chat_buffers_final_response_and_shows_tool_progress() -> Result<()> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("[thinking]"),
-        "expected chat output to contain thinking marker, got:\n{stdout}"
-    );
-    assert!(
         stdout.contains("[tool] read_file"),
         "expected chat output to contain tool start, got:\n{stdout}"
     );
