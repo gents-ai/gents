@@ -8,6 +8,11 @@ use crate::tool_surface::ToolCeiling;
 use crate::watcher::AgentRequest;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::net::{Shutdown, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::thread::JoinHandle;
 
 async fn test_node() -> Arc<defra_node::EmbeddedNode> {
     Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap())
@@ -32,6 +37,7 @@ fn request(behavior_id: Option<&str>, session_id: &str) -> AgentRequest {
 
 #[derive(Debug, serde::Deserialize)]
 struct RuntimeStatusRow {
+    process_state: String,
     reconcile_phase: String,
     active_generation: i64,
     last_reconcile_result: String,
@@ -46,6 +52,7 @@ async fn fetch_runtime_status(
     let query = format!(
         r#"{{
             AgentRuntime(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}, limit: 1) {{
+                process_state
                 reconcile_phase
                 active_generation
                 last_reconcile_result
@@ -68,6 +75,145 @@ async fn fetch_runtime_status(
         .cloned()
         .expect("AgentRuntime row");
     serde_json::from_value(value).expect("decode AgentRuntime row")
+}
+
+struct MockModelEndpoint {
+    endpoint: String,
+    port: u16,
+    stop: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl MockModelEndpoint {
+    fn start(model_name: &str) -> anyhow::Result<Self> {
+        let listener = TcpListener::bind(("127.0.0.1", 0))?;
+        listener.set_nonblocking(true)?;
+        let port = listener.local_addr()?.port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_for_thread = stop.clone();
+        let model_name = model_name.to_string();
+        let handle = thread::spawn(move || {
+            while !stop_for_thread.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let request = match read_http_request(&mut stream) {
+                            Ok(request) => request,
+                            Err(_) => {
+                                let _ = stream.shutdown(Shutdown::Both);
+                                continue;
+                            }
+                        };
+                        let (status, body) = if request.method == "GET"
+                            && (request.path == "/v1/models" || request.path == "/models")
+                        {
+                            ("200 OK", format!(r#"{{"data":[{{"id":"{model_name}"}}]}}"#))
+                        } else {
+                            ("404 Not Found", r#"{"error":"not found"}"#.to_string())
+                        };
+                        let _ = write_http_response(&mut stream, status, "application/json", &body);
+                        let _ = stream.shutdown(Shutdown::Both);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(25));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        Ok(Self {
+            endpoint: format!("http://127.0.0.1:{port}/v1"),
+            port,
+            stop,
+            handle: Some(handle),
+        })
+    }
+
+    fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+}
+
+impl Drop for MockModelEndpoint {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        let _ = TcpStream::connect(("127.0.0.1", self.port));
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+struct HttpRequestData {
+    method: String,
+    path: String,
+}
+
+fn read_http_request(stream: &mut TcpStream) -> anyhow::Result<HttpRequestData> {
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    let mut buffer = Vec::new();
+    let mut temp = [0u8; 1024];
+    let header_end = loop {
+        let read = stream.read(&mut temp)?;
+        if read == 0 {
+            anyhow::bail!("connection closed before headers");
+        }
+        buffer.extend_from_slice(&temp[..read]);
+        if let Some(index) = find_subslice(&buffer, b"\r\n\r\n") {
+            break index + 4;
+        }
+    };
+    let header_text = String::from_utf8_lossy(&buffer[..header_end]);
+    let mut lines = header_text.split("\r\n").filter(|line| !line.is_empty());
+    let request_line = lines
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("missing request line"))?;
+    let mut parts = request_line.split_whitespace();
+    let method = parts
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("missing request method"))?
+        .to_string();
+    let path = parts
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("missing request path"))?
+        .to_string();
+
+    Ok(HttpRequestData { method, path })
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn write_http_response(
+    stream: &mut TcpStream,
+    status: &str,
+    content_type: &str,
+    body: &str,
+) -> anyhow::Result<()> {
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(response.as_bytes())?;
+    stream.flush()?;
+    Ok(())
+}
+
+#[derive(Default)]
+struct RecordingObserver {
+    states: std::sync::Mutex<Vec<crate::agent::ProcessLifecycleState>>,
+}
+
+impl crate::agent::ProcessLifecycleObserver for RecordingObserver {
+    fn on_process_state_change(&self, state: crate::agent::ProcessLifecycleState) {
+        self.states
+            .lock()
+            .expect("recording observer mutex poisoned")
+            .push(state);
+    }
 }
 
 async fn bind_default_behavior_backend(
@@ -560,6 +706,62 @@ async fn control_watcher_resolves_tool_selection_into_reconciled_tool_surface() 
 
     let _ = shutdown_tx.send(true);
     watcher_task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn run_agent_fails_before_ready_when_startup_probe_rejects_model() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("startup-probe-rejects-model"));
+    let mock_endpoint = MockModelEndpoint::start("different-model").unwrap();
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-startup-probe",
+        mock_endpoint.endpoint(),
+    )
+    .await;
+    let observer = Arc::new(RecordingObserver::default());
+    let agent = crate::DefraAgent::from_default_behavior_documents(
+        node.clone(),
+        identity.clone(),
+        crate::agent::DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            process_state_observer: Some(observer.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+
+    let error = agent
+        .run(shutdown_rx)
+        .await
+        .expect_err("startup should fail");
+    assert!(
+        format!("{error:#}").contains("did not advertise model default"),
+        "{error:#}"
+    );
+
+    let observed = observer
+        .states
+        .lock()
+        .expect("recording observer mutex poisoned")
+        .clone();
+    assert_eq!(
+        observed,
+        vec![crate::agent::ProcessLifecycleState::Recovering]
+    );
+
+    let status = fetch_runtime_status(node.as_ref(), identity.did()).await;
+    assert_eq!(status.process_state, "recovering");
+    assert_eq!(status.reconcile_phase, "idle");
+    assert_eq!(status.active_generation, 0);
+    assert_eq!(status.last_reconcile_result, "error");
+    assert!(status
+        .last_reconcile_error
+        .contains("did not advertise model default"));
 }
 
 async fn update_agent_principal_enabled(

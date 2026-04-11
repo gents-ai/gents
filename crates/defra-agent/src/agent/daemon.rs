@@ -96,7 +96,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         tracing::info!(
             behavior_id = %self.behavior.name,
             did = %self.behavior.did(),
-            "defra-agent behavior ready"
+            "defra-agent behavior executor online"
         );
 
         loop {

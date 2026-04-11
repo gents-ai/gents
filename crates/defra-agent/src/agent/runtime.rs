@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use defra_node::EventName;
 use rig::client::CompletionClient;
 use tokio::sync::{mpsc, watch, Mutex, Notify};
@@ -48,6 +48,19 @@ enum BackgroundTaskResult {
     RouterObserver(Result<()>),
     Reconcile(Result<()>),
     Control(Result<()>),
+}
+
+const STARTUP_BACKEND_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(serde::Deserialize)]
+struct OpenAiModelsResponse {
+    #[serde(default)]
+    data: Vec<OpenAiModelRecord>,
+}
+
+#[derive(serde::Deserialize)]
+struct OpenAiModelRecord {
+    id: String,
 }
 
 impl StartupBarrier {
@@ -143,6 +156,9 @@ pub(super) async fn run_agent(
     runtime_status
         .set_reconcile_phase(ReconcilePhase::Resolving)
         .await;
+    if let Some(observer) = &agent.process_state_observer {
+        observer.on_process_state_change(ProcessLifecycleState::Recovering);
+    }
     let health_map = ServiceHealthMap::new();
     let tool_runtime = ToolRuntimeContext::new(
         agent.node.clone(),
@@ -154,10 +170,14 @@ pub(super) async fn run_agent(
     let resolved_snapshot = match resolve_startup_snapshot(&agent).await {
         Ok(snapshot) => snapshot,
         Err(error) => {
-            runtime_status.publish_error(&error.to_string()).await;
+            runtime_status.publish_error(&format!("{error:#}")).await;
             return Err(error);
         }
     };
+    if let Err(error) = validate_startup_snapshot(&agent, &tool_runtime, &resolved_snapshot).await {
+        runtime_status.publish_error(&format!("{error:#}")).await;
+        return Err(error);
+    }
     let _health_checker = spawn_health_checker(
         agent.node.clone(),
         agent.mcp_pool.clone(),
@@ -166,10 +186,6 @@ pub(super) async fn run_agent(
         agent.local_subnet.clone(),
         cancel.child_token(),
     );
-
-    if let Some(observer) = &agent.process_state_observer {
-        observer.on_process_state_change(ProcessLifecycleState::Recovering);
-    }
 
     log_recovery(
         agent.node.as_ref(),
@@ -417,6 +433,117 @@ async fn log_recovery(node: &defra_node::EmbeddedNode, agent_did: &str, default_
             tracing::warn!(agent_did = %agent_did, error = %error, "startup recovery failed");
         }
     }
+}
+
+async fn validate_startup_snapshot(
+    agent: &DefraAgent,
+    tool_runtime: &ToolRuntimeContext,
+    snapshot: &ResolvedRuntimeSnapshot,
+) -> Result<()> {
+    if snapshot.behaviors.is_empty() {
+        let mut unavailable = snapshot
+            .unavailable_behaviors
+            .iter()
+            .map(|(behavior_id, reason)| format!("{behavior_id}: {reason}"))
+            .collect::<Vec<_>>();
+        unavailable.sort();
+        if unavailable.is_empty() {
+            anyhow::bail!(
+                "agent {} has no runnable behaviors at startup",
+                agent.agent_did()
+            );
+        }
+        anyhow::bail!(
+            "agent {} has no runnable behaviors at startup ({})",
+            agent.agent_did(),
+            unavailable.join("; ")
+        );
+    }
+
+    let api_key = std::env::var("AGENT_DAEMON_API_KEY").unwrap_or_else(|_| "no-key".to_string());
+    let client = reqwest::Client::builder()
+        .timeout(STARTUP_BACKEND_PROBE_TIMEOUT)
+        .build()
+        .context("building startup readiness probe client")?;
+    let mut behavior_ids = snapshot.behaviors.keys().cloned().collect::<Vec<_>>();
+    behavior_ids.sort();
+
+    for behavior_id in behavior_ids {
+        let behavior = snapshot
+            .behaviors
+            .get(&behavior_id)
+            .expect("behavior id came from snapshot.behaviors");
+        let tool_surface = snapshot
+            .tool_surfaces
+            .get(&behavior_id)
+            .ok_or_else(|| anyhow!("missing tool surface for behavior {behavior_id}"))?;
+        tool_surface
+            .build_tools(tool_runtime)
+            .with_context(|| format!("building startup tool surface for behavior {behavior_id}"))?;
+        probe_behavior_backend(&client, &api_key, behavior.as_ref())
+            .await
+            .with_context(|| format!("validating startup backend for behavior {behavior_id}"))?;
+    }
+
+    Ok(())
+}
+
+async fn probe_behavior_backend(
+    client: &reqwest::Client,
+    api_key: &str,
+    behavior: &crate::config::BehaviorConfig,
+) -> Result<()> {
+    let models_url = format!("{}/models", behavior.backend_endpoint.trim_end_matches('/'));
+    let response = client
+        .get(&models_url)
+        .bearer_auth(api_key)
+        .send()
+        .await
+        .with_context(|| format!("querying {}", models_url))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .unwrap_or_else(|_| "<unreadable body>".to_string());
+    if !status.is_success() {
+        anyhow::bail!(
+            "startup readiness probe failed for behavior {} against {}: {} {}",
+            behavior.name,
+            models_url,
+            status,
+            truncate_probe_body(&body)
+        );
+    }
+
+    let models: OpenAiModelsResponse = serde_json::from_str(&body).with_context(|| {
+        format!(
+            "decoding readiness probe response from {}: {}",
+            models_url,
+            truncate_probe_body(&body)
+        )
+    })?;
+    if !models
+        .data
+        .iter()
+        .any(|model| model.id == behavior.model_name)
+    {
+        anyhow::bail!(
+            "startup readiness probe for behavior {} did not advertise model {} at {}",
+            behavior.name,
+            behavior.model_name,
+            models_url
+        );
+    }
+
+    Ok(())
+}
+
+fn truncate_probe_body(body: &str) -> String {
+    const LIMIT: usize = 256;
+    if body.len() <= LIMIT {
+        return body.to_string();
+    }
+    format!("{}...", &body[..LIMIT])
 }
 
 async fn run_router(
@@ -725,7 +852,7 @@ async fn run_control_watcher(
                                 error = %error,
                                 "runtime control watcher failed to refresh document view for pending visibility"
                             );
-                            runtime_status.publish_error(&error.to_string()).await;
+                            runtime_status.publish_error(&format!("{error:#}")).await;
                             if settle_deadline.is_some_and(|deadline| tokio::time::Instant::now() < deadline) {
                                 dirty = true;
                                 sleep.as_mut().reset(tokio::time::Instant::now() + CONTROL_RECONCILE_SETTLE_RETRY);
@@ -770,7 +897,7 @@ async fn run_control_watcher(
                             error = %error,
                             "runtime reconcile resolve failed; keeping previous active generation"
                         );
-                        runtime_status.publish_error(&error.to_string()).await;
+                        runtime_status.publish_error(&format!("{error:#}")).await;
                     }
                 }
                 if settle_deadline.is_some_and(|deadline| tokio::time::Instant::now() < deadline) {
@@ -805,7 +932,7 @@ async fn run_control_watcher(
                                 error = %error,
                                 "runtime control watcher failed to resync document view after dropped events"
                             );
-                            runtime_status.publish_error(&error.to_string()).await;
+                            runtime_status.publish_error(&format!("{error:#}")).await;
                             continue;
                         }
                     }
@@ -855,7 +982,9 @@ async fn run_control_watcher(
                                     error = %resync_error,
                                     "runtime control watcher failed to resync document view after update error"
                                 );
-                                runtime_status.publish_error(&resync_error.to_string()).await;
+                                runtime_status
+                                    .publish_error(&format!("{resync_error:#}"))
+                                    .await;
                                 continue;
                             }
                         }

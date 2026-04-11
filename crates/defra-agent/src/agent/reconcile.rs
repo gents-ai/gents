@@ -161,7 +161,9 @@ where
                                 error = %error,
                                 "runtime reconcile apply failed; keeping previous active generation"
                             );
-                            self.runtime_status.publish_error(&error.to_string()).await;
+                            self.runtime_status
+                                .publish_error(&format!("{error:#}"))
+                                .await;
                         }
                     }
                 }

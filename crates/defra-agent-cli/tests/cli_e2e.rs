@@ -1589,6 +1589,7 @@ fn spawn_server_with_args(home_dir: &Path, port: u16, extra_args: &[&str]) -> Re
     let child = Command::new(cli_bin())
         .env("HOME", home_dir)
         .env("RUST_LOG", "error")
+        .current_dir(home_dir)
         .arg("server")
         .arg("--http-port")
         .arg(port.to_string())
@@ -1783,6 +1784,7 @@ fn spawn_cli(home_dir: &Path, args: &[&str]) -> Result<Child> {
     Command::new(cli_bin())
         .env("HOME", home_dir)
         .env("RUST_LOG", "error")
+        .current_dir(home_dir)
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1794,6 +1796,7 @@ fn run_cli_json(home_dir: &Path, args: &[&str]) -> Result<Value> {
     let output = Command::new(cli_bin())
         .env("HOME", home_dir)
         .env("RUST_LOG", "error")
+        .current_dir(home_dir)
         .args(args)
         .output()
         .with_context(|| format!("running defra-agent {}", args.join(" ")))?;
