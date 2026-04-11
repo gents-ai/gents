@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -102,6 +102,28 @@ const RESPONSE_AFTER_HELP: &str = "\
 Examples:
   defra-agent response wait REQUEST_ID
   defra-agent response show REQUEST_ID";
+const DIAGNOSE_AFTER_HELP: &str = "\
+Examples:
+  defra-agent diagnose
+  defra-agent diagnose --home /path/to/home
+  defra-agent diagnose --graphql http://127.0.0.1:9191/api/v0/graphql";
+const CONFIG_EXPORT_AFTER_HELP: &str = "\
+Exports the desired configuration documents for one agent principal.
+
+Examples:
+  defra-agent config export > agent-config.json
+  defra-agent config export --agent-did did:defra-agent:default > agent-config.json";
+const CONFIG_IMPORT_AFTER_HELP: &str = "\
+Imports desired configuration documents.
+
+Default behavior is insert-only and will fail if a document already exists.
+Use --override to switch to upsert mode.
+
+Examples:
+  defra-agent config import agent-config.json
+  cat agent-config.json | defra-agent config import
+  defra-agent config import agent-config.json --override";
+const CONFIG_EXPORT_FORMAT: &str = "defra-agent-config/v1";
 const BOOTSTRAP_INFERENCE_BACKEND_DEFAULT: &str =
     include_str!("../bootstrap/InferenceBackend/default.gql");
 const BOOTSTRAP_TOOL_SELECTION_STANDARD_READONLY: &str =
@@ -112,6 +134,32 @@ const BOOTSTRAP_AGENT_BEHAVIOR_STANDARD_READONLY: &str =
     include_str!("../bootstrap/AgentBehavior/standard-readonly.gql");
 const BOOTSTRAP_AGENT_BEHAVIOR_STANDARD_READWRITE: &str =
     include_str!("../bootstrap/AgentBehavior/standard-readwrite.gql");
+const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
+    ("AgentPrincipal", "agent_did"),
+    ("AgentBehavior", "behavior_id"),
+    ("AgentRuntime", "agent_did"),
+    ("ToolSelection", "selection_id"),
+    ("InferenceProfile", "profile_id"),
+    ("InferenceBackend", "backend_id"),
+    ("AgentConversation", "session_id"),
+    ("AgentRequest", "request_id"),
+    ("AgentResponse", "request_id"),
+    ("AgentToolResult", "agent_did"),
+    ("AgentSession", "session_id"),
+    ("AgentMessage", "message_key"),
+    ("AgentToolCall", "tool_call_key"),
+    ("CompactionEntry", "compaction_key"),
+    ("ScheduledTask", "task_id"),
+    ("ToolServiceRegistry", "service_id"),
+];
+const EXPORT_AGENT_PRINCIPAL_FIELDS: &str =
+    "agent_did display_name default_behavior_id enabled created_at created_by";
+const EXPORT_AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled created_at";
+const EXPORT_TOOL_SELECTION_FIELDS: &str = "selection_id agent_did display_name enable_file_tools file_tools_mode enable_bash bash_mode cli_tool_names enable_meta_tools delegate_to";
+const EXPORT_INFERENCE_BACKEND_FIELDS: &str =
+    "backend_id name endpoint api_key_env_var max_concurrent enabled models last_probe probe_status";
+const EXPORT_INFERENCE_PROFILE_FIELDS: &str =
+    "profile_id display_name context_window max_output_tokens max_turns temperature stream_batch_ms deadline_duration_secs";
 
 struct CliReadyObserver {
     tx: watch::Sender<ProcessLifecycleState>,
@@ -155,6 +203,8 @@ enum Command {
     },
     #[command(about = "Show the current local runtime status", after_help = STATUS_AFTER_HELP)]
     Status(StatusArgs),
+    #[command(about = "Run local configuration and runtime diagnostics", after_help = DIAGNOSE_AFTER_HELP)]
+    Diagnose(DiagnoseArgs),
     #[command(about = "Write runtime configuration documents", after_help = CONFIG_AFTER_HELP)]
     Config {
         #[command(subcommand)]
@@ -314,6 +364,16 @@ struct StatusArgs {
 }
 
 #[derive(clap::Args)]
+struct DiagnoseArgs {
+    #[arg(long)]
+    home: Option<PathBuf>,
+    #[arg(long)]
+    graphql: Option<String>,
+    #[arg(long)]
+    agent_did: Option<String>,
+}
+
+#[derive(clap::Args)]
 struct RuntimeShowArgs {
     #[arg(long)]
     home: Option<PathBuf>,
@@ -350,6 +410,10 @@ enum ConfigCommand {
         #[command(subcommand)]
         command: ScheduledTaskCommand,
     },
+    #[command(about = "Export desired configuration documents", after_help = CONFIG_EXPORT_AFTER_HELP)]
+    Export(ConfigExportArgs),
+    #[command(about = "Import desired configuration documents", after_help = CONFIG_IMPORT_AFTER_HELP)]
+    Import(ConfigImportArgs),
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, ValueEnum, PartialEq, Eq)]
@@ -398,6 +462,52 @@ struct StoredRuntimeState {
     agent_name: String,
     agent_did: String,
     default_behavior_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ConfigExportBundle {
+    format: String,
+    agent_did: String,
+    exported_at: String,
+    access_mode: String,
+    agent_principal: Option<Value>,
+    #[serde(default)]
+    agent_behaviors: Vec<Value>,
+    #[serde(default)]
+    tool_selections: Vec<Value>,
+    #[serde(default)]
+    inference_backends: Vec<Value>,
+    #[serde(default)]
+    inference_profiles: Vec<Value>,
+}
+
+enum ConfigAccess {
+    Graphql(String),
+    Local(EmbeddedNode),
+}
+
+impl ConfigAccess {
+    fn mode(&self) -> &'static str {
+        match self {
+            Self::Graphql(_) => "graphql",
+            Self::Local(_) => "local",
+        }
+    }
+
+    async fn execute(&self, query: &str) -> Result<Value> {
+        match self {
+            Self::Graphql(graphql) => post_graphql(graphql, query).await,
+            Self::Local(node) => {
+                let response = node.execute(query).await;
+                if response.has_errors() {
+                    anyhow::bail!("graphql returned errors: {:?}", response.errors);
+                }
+                Ok(json!({
+                    "data": response.data.unwrap_or(Value::Null),
+                }))
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -598,6 +708,35 @@ struct BackendUpsertArgs {
     probe_status: String,
 }
 
+#[derive(clap::Args)]
+struct ConfigExportArgs {
+    #[arg(long)]
+    home: Option<PathBuf>,
+    #[arg(long)]
+    graphql: Option<String>,
+    #[arg(long)]
+    agent_did: Option<String>,
+}
+
+#[derive(clap::Args)]
+struct ConfigImportArgs {
+    #[arg(long)]
+    home: Option<PathBuf>,
+    #[arg(long)]
+    graphql: Option<String>,
+    #[arg(
+        long = "override",
+        default_value_t = false,
+        help = "Upsert documents instead of failing when they already exist"
+    )]
+    override_existing: bool,
+    #[arg(
+        value_name = "PATH",
+        help = "JSON export file to import. Reads stdin when omitted"
+    )]
+    path: Option<PathBuf>,
+}
+
 #[derive(Subcommand)]
 enum RequestCommand {
     #[command(
@@ -699,6 +838,7 @@ async fn main() -> Result<()> {
             ShowCommand::Runtime(args) => show_runtime(args).await,
         },
         Command::Status(args) => status(args).await,
+        Command::Diagnose(args) => diagnose(args).await,
         Command::Config { command } => match command {
             ConfigCommand::Backend { command } => match command {
                 BackendCommand::Set(args) => backend_set(args).await,
@@ -715,6 +855,8 @@ async fn main() -> Result<()> {
             ConfigCommand::Task { command } => match command {
                 ScheduledTaskCommand::Set(args) => scheduled_task_set(args).await,
             },
+            ConfigCommand::Export(args) => config_export(args).await,
+            ConfigCommand::Import(args) => config_import(args).await,
         },
         Command::Request { command } => match command {
             RequestCommand::Submit(args) => request_submit(args).await,
@@ -1553,6 +1695,211 @@ async fn show_runtime(args: RuntimeShowArgs) -> Result<()> {
     Ok(())
 }
 
+async fn diagnose(args: DiagnoseArgs) -> Result<()> {
+    let home_dir = resolve_home_dir(args.home.as_deref());
+    let init_config = read_init_config(&home_dir)?;
+    let runtime_state = read_runtime_state(&home_dir)?;
+    let graphql = args
+        .graphql
+        .clone()
+        .or_else(|| runtime_state.as_ref().map(|state| state.graphql.clone()));
+    let graphql_reachable = match graphql.as_deref() {
+        Some(endpoint) => graphql_endpoint_available(endpoint).await,
+        None => false,
+    };
+    let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
+    let (access, _) =
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+
+    let schema_checks = diagnose_schema_presence(&access).await;
+    let bundle_result = build_config_export_bundle(&access, &agent_did).await;
+    let config_load_error = bundle_result.as_ref().err().map(ToString::to_string);
+    let bundle = bundle_result.unwrap_or_else(|_| ConfigExportBundle {
+        format: CONFIG_EXPORT_FORMAT.to_string(),
+        agent_did: agent_did.clone(),
+        exported_at: chrono::Utc::now().to_rfc3339(),
+        access_mode: access.mode().to_string(),
+        agent_principal: None,
+        agent_behaviors: Vec::new(),
+        tool_selections: Vec::new(),
+        inference_backends: Vec::new(),
+        inference_profiles: Vec::new(),
+    });
+    let runtime_row = match load_runtime_row(&access, &agent_did).await {
+        Ok(Some(row)) => row,
+        Ok(None) => Value::Null,
+        Err(error) => json!({
+            "error": error.to_string(),
+        }),
+    };
+
+    let behavior_ids = bundle
+        .agent_behaviors
+        .iter()
+        .filter_map(|row| {
+            row.get("behavior_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let default_behavior_id = bundle
+        .agent_principal
+        .as_ref()
+        .and_then(|row| row.get("default_behavior_id"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let default_behavior_check = match default_behavior_id.as_deref() {
+        Some(behavior_id) if behavior_ids.contains(behavior_id) => json!({
+            "ok": true,
+            "default_behavior_id": behavior_id,
+        }),
+        Some(behavior_id) => json!({
+            "ok": false,
+            "default_behavior_id": behavior_id,
+            "error": format!("default behavior {} is not present in AgentBehavior documents", behavior_id),
+        }),
+        None => json!({
+            "ok": false,
+            "error": format!("AgentPrincipal {} is missing or has no default_behavior_id", agent_did),
+        }),
+    };
+    let tool_ceiling_check = diagnose_tool_ceiling(init_config.as_ref());
+    let backend_reports = diagnose_backends(&bundle).await;
+    let schemas_ok = schema_checks
+        .iter()
+        .all(|check| check.get("ok").and_then(Value::as_bool) == Some(true));
+    let backends_ok = backend_reports
+        .iter()
+        .all(|check| check.get("ok").and_then(Value::as_bool) == Some(true));
+    let default_behavior_ok = default_behavior_check
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let tool_ceiling_ok = tool_ceiling_check
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let principal_present = bundle.agent_principal.is_some();
+    let status = if schemas_ok
+        && principal_present
+        && default_behavior_ok
+        && tool_ceiling_ok
+        && backends_ok
+        && config_load_error.is_none()
+    {
+        "ok"
+    } else {
+        "degraded"
+    };
+
+    let output = json!({
+        "status": status,
+        "home": home_dir,
+        "agent_did": agent_did,
+        "access_mode": access.mode(),
+        "graphql": graphql,
+        "graphql_reachable": graphql_reachable,
+        "runtime": runtime_row,
+        "checks": {
+            "schemas": schema_checks,
+            "config_documents_loadable": {
+                "ok": config_load_error.is_none(),
+                "error": config_load_error,
+            },
+            "agent_principal_present": principal_present,
+            "default_behavior": default_behavior_check,
+            "tool_ceiling": tool_ceiling_check,
+            "backends": backend_reports,
+        },
+        "config_counts": {
+            "agent_behaviors": bundle.agent_behaviors.len(),
+            "tool_selections": bundle.tool_selections.len(),
+            "inference_backends": bundle.inference_backends.len(),
+            "inference_profiles": bundle.inference_profiles.len(),
+        },
+    });
+    print_json(&output)?;
+    Ok(())
+}
+
+async fn config_export(args: ConfigExportArgs) -> Result<()> {
+    let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
+    let (access, _) =
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+    let bundle = build_config_export_bundle(&access, &agent_did).await?;
+    print_json(&serde_json::to_value(bundle)?)?;
+    Ok(())
+}
+
+async fn config_import(args: ConfigImportArgs) -> Result<()> {
+    let bundle = read_config_import_bundle(args.path.as_deref())?;
+    validate_config_import_bundle(&bundle)?;
+    let (access, _) =
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+
+    let imported_backends = apply_import_collection(
+        &access,
+        "InferenceBackend",
+        "backend_id",
+        &bundle.inference_backends,
+        args.override_existing,
+    )
+    .await?;
+    let imported_profiles = apply_import_collection(
+        &access,
+        "InferenceProfile",
+        "profile_id",
+        &bundle.inference_profiles,
+        args.override_existing,
+    )
+    .await?;
+    let imported_tool_selections = apply_import_collection(
+        &access,
+        "ToolSelection",
+        "selection_id",
+        &bundle.tool_selections,
+        args.override_existing,
+    )
+    .await?;
+    let imported_behaviors = apply_import_collection(
+        &access,
+        "AgentBehavior",
+        "behavior_id",
+        &bundle.agent_behaviors,
+        args.override_existing,
+    )
+    .await?;
+    let imported_principal = apply_import_collection(
+        &access,
+        "AgentPrincipal",
+        "agent_did",
+        &bundle
+            .agent_principal
+            .clone()
+            .into_iter()
+            .collect::<Vec<_>>(),
+        args.override_existing,
+    )
+    .await?;
+
+    let output = json!({
+        "status": "imported",
+        "format": bundle.format,
+        "agent_did": bundle.agent_did,
+        "access_mode": access.mode(),
+        "override": args.override_existing,
+        "counts": {
+            "agent_principal": imported_principal,
+            "agent_behaviors": imported_behaviors,
+            "tool_selections": imported_tool_selections,
+            "inference_backends": imported_backends,
+            "inference_profiles": imported_profiles,
+        },
+    });
+    print_json(&output)?;
+    Ok(())
+}
+
 async fn load_runtime_status_output(
     home: Option<&Path>,
     graphql: &str,
@@ -1589,13 +1936,654 @@ async fn load_runtime_status_output(
         .unwrap_or(Value::Null);
     let home_dir = resolve_home_dir(home);
     let runtime_state = read_runtime_state(&home_dir)?;
-    Ok(json!({
+    let mut output = json!({
         "home": home_dir,
         "graphql": graphql,
         "agent_did": agent_did,
         "runtime_state": runtime_state,
         "runtime": runtime_row,
-    }))
+    });
+    if let Some(map) = output.as_object_mut() {
+        for field in [
+            "process_state",
+            "reconcile_phase",
+            "active_generation",
+            "router_generation",
+            "default_behavior_id",
+            "runnable_behavior_count",
+            "unavailable_behavior_count",
+            "last_reconcile_result",
+            "last_reconcile_error",
+            "last_reconcile_completed_at",
+        ] {
+            map.insert(
+                field.to_string(),
+                runtime_row.get(field).cloned().unwrap_or(Value::Null),
+            );
+        }
+    }
+    Ok(output)
+}
+
+async fn resolve_config_access(
+    home: Option<&Path>,
+    explicit_graphql: Option<&str>,
+    ensure_local_schemas: bool,
+) -> Result<(ConfigAccess, PathBuf)> {
+    let home_dir = resolve_home_dir(home);
+    if let Some(graphql) = explicit_graphql
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok((ConfigAccess::Graphql(graphql.to_string()), home_dir));
+    }
+    if let Some(runtime_state) = read_runtime_state(&home_dir)? {
+        if graphql_endpoint_available(&runtime_state.graphql).await {
+            return Ok((ConfigAccess::Graphql(runtime_state.graphql), home_dir));
+        }
+    }
+
+    let data_dir = default_data_dir(&home_dir);
+    fs::create_dir_all(&data_dir)
+        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
+    let node = EmbeddedNode::builder()
+        .data_path(&data_dir)
+        .build()
+        .await
+        .with_context(|| format!("building embedded defra node from {}", data_dir.display()))?;
+    if ensure_local_schemas {
+        ensure_runtime_schemas(&node).await?;
+    }
+    Ok((ConfigAccess::Local(node), home_dir))
+}
+
+async fn graphql_endpoint_available(graphql: &str) -> bool {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return false,
+    };
+    match client
+        .post(graphql)
+        .json(&json!({ "query": "{ __typename }" }))
+        .send()
+        .await
+    {
+        Ok(response) => response.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+async fn load_runtime_row(access: &ConfigAccess, agent_did: &str) -> Result<Option<Value>> {
+    let query = format!(
+        r#"{{
+            AgentRuntime(
+                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                limit: 1
+            ) {{
+                agent_did
+                process_state
+                reconcile_phase
+                active_generation
+                router_generation
+                default_behavior_id
+                runnable_behavior_count
+                unavailable_behavior_count
+                last_reconcile_result
+                last_reconcile_error
+                last_reconcile_completed_at
+                updated_at
+            }}
+        }}"#,
+        agent_did = escape_graphql_string(agent_did),
+    );
+    Ok(graphql_rows(access, "AgentRuntime", &query)
+        .await?
+        .into_iter()
+        .next())
+}
+
+async fn graphql_rows(
+    access: &ConfigAccess,
+    collection_name: &str,
+    query: &str,
+) -> Result<Vec<Value>> {
+    let response = access.execute(query).await?;
+    Ok(response
+        .get("data")
+        .and_then(|data| data.get(collection_name))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default())
+}
+
+async fn build_config_export_bundle(
+    access: &ConfigAccess,
+    agent_did: &str,
+) -> Result<ConfigExportBundle> {
+    let principal_rows = graphql_rows(
+        access,
+        "AgentPrincipal",
+        &format!(
+            r#"{{
+                AgentPrincipal(
+                    filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                    limit: 1
+                ) {{
+                    {fields}
+                }}
+            }}"#,
+            agent_did = escape_graphql_string(agent_did),
+            fields = EXPORT_AGENT_PRINCIPAL_FIELDS,
+        ),
+    )
+    .await?;
+    let mut behavior_rows = graphql_rows(
+        access,
+        "AgentBehavior",
+        &format!(
+            r#"{{
+                AgentBehavior(
+                    filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                    order: {{ created_at: ASC }}
+                ) {{
+                    {fields}
+                }}
+            }}"#,
+            agent_did = escape_graphql_string(agent_did),
+            fields = EXPORT_AGENT_BEHAVIOR_FIELDS,
+        ),
+    )
+    .await?;
+    sort_document_rows(&mut behavior_rows, "behavior_id");
+
+    let tool_selection_ids = collect_string_field_values(&behavior_rows, "tool_selection_id");
+    let backend_ids = collect_string_field_values(&behavior_rows, "backend_id");
+    let profile_ids = collect_string_field_values(&behavior_rows, "inference_profile_id");
+
+    let mut tool_selection_rows = if tool_selection_ids.is_empty() {
+        Vec::new()
+    } else {
+        graphql_rows(
+            access,
+            "ToolSelection",
+            &format!(
+                r#"{{
+                    ToolSelection(
+                        filter: {{ selection_id: {{ _in: {} }} }}
+                    ) {{
+                        {fields}
+                    }}
+                }}"#,
+                graphql_string_list_literal(&tool_selection_ids),
+                fields = EXPORT_TOOL_SELECTION_FIELDS,
+            ),
+        )
+        .await?
+    };
+    sort_document_rows(&mut tool_selection_rows, "selection_id");
+
+    let mut backend_rows = if backend_ids.is_empty() {
+        Vec::new()
+    } else {
+        graphql_rows(
+            access,
+            "InferenceBackend",
+            &format!(
+                r#"{{
+                    InferenceBackend(
+                        filter: {{ backend_id: {{ _in: {} }} }}
+                    ) {{
+                        {fields}
+                    }}
+                }}"#,
+                graphql_string_list_literal(&backend_ids),
+                fields = EXPORT_INFERENCE_BACKEND_FIELDS,
+            ),
+        )
+        .await?
+    };
+    sort_document_rows(&mut backend_rows, "backend_id");
+
+    let mut profile_rows = if profile_ids.is_empty() {
+        Vec::new()
+    } else {
+        graphql_rows(
+            access,
+            "InferenceProfile",
+            &format!(
+                r#"{{
+                    InferenceProfile(
+                        filter: {{ profile_id: {{ _in: {} }} }}
+                    ) {{
+                        {fields}
+                    }}
+                }}"#,
+                graphql_string_list_literal(&profile_ids),
+                fields = EXPORT_INFERENCE_PROFILE_FIELDS,
+            ),
+        )
+        .await?
+    };
+    sort_document_rows(&mut profile_rows, "profile_id");
+
+    Ok(ConfigExportBundle {
+        format: CONFIG_EXPORT_FORMAT.to_string(),
+        agent_did: agent_did.to_string(),
+        exported_at: chrono::Utc::now().to_rfc3339(),
+        access_mode: access.mode().to_string(),
+        agent_principal: principal_rows.into_iter().next(),
+        agent_behaviors: behavior_rows,
+        tool_selections: tool_selection_rows,
+        inference_backends: backend_rows,
+        inference_profiles: profile_rows,
+    })
+}
+
+fn sort_document_rows(rows: &mut [Value], key: &str) {
+    rows.sort_by(|left, right| {
+        let left_key = left.get(key).and_then(Value::as_str).unwrap_or_default();
+        let right_key = right.get(key).and_then(Value::as_str).unwrap_or_default();
+        left_key.cmp(right_key)
+    });
+}
+
+fn collect_string_field_values(rows: &[Value], field: &str) -> Vec<String> {
+    let mut values = rows
+        .iter()
+        .filter_map(|row| row.get(field).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    values.sort();
+    values.dedup();
+    values
+}
+
+fn graphql_string_list_literal(values: &[String]) -> String {
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn read_config_import_bundle(path: Option<&Path>) -> Result<ConfigExportBundle> {
+    let contents = match path {
+        Some(path) => fs::read_to_string(path)
+            .with_context(|| format!("reading config import from {}", path.display()))?,
+        None => {
+            let mut contents = String::new();
+            io::stdin()
+                .read_to_string(&mut contents)
+                .context("reading config import from stdin")?;
+            contents
+        }
+    };
+    serde_json::from_str(&contents).context("decoding config import JSON")
+}
+
+fn validate_config_import_bundle(bundle: &ConfigExportBundle) -> Result<()> {
+    if bundle.format != CONFIG_EXPORT_FORMAT {
+        anyhow::bail!(
+            "unsupported config import format {}; expected {}",
+            bundle.format,
+            CONFIG_EXPORT_FORMAT
+        );
+    }
+    if bundle.agent_did.trim().is_empty() {
+        anyhow::bail!("config import is missing agent_did");
+    }
+    Ok(())
+}
+
+async fn apply_import_collection(
+    access: &ConfigAccess,
+    collection_name: &str,
+    unique_field: &str,
+    docs: &[Value],
+    override_existing: bool,
+) -> Result<usize> {
+    for doc in docs {
+        let unique_value = doc
+            .get(unique_field)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{} import document is missing {}: {}",
+                    collection_name,
+                    unique_field,
+                    doc
+                )
+            })?;
+        let document_literal = graphql_input_literal(doc)?;
+        let mutation = if override_existing {
+            format!(
+                r#"mutation {{
+                    upsert_{collection_name}(
+                        filter: {{ {unique_field}: {{ _eq: "{unique_value}" }} }},
+                        add: {document_literal},
+                        update: {document_literal}
+                    ) {{ _docID }}
+                }}"#,
+                collection_name = collection_name,
+                unique_field = unique_field,
+                unique_value = escape_graphql_string(unique_value),
+                document_literal = document_literal,
+            )
+        } else {
+            format!(
+                r#"mutation {{
+                    create_{collection_name}(input: {document_literal}) {{ _docID }}
+                }}"#,
+                collection_name = collection_name,
+                document_literal = document_literal,
+            )
+        };
+        let response = access.execute(&mutation).await.map_err(|error| {
+            if override_existing {
+                anyhow::anyhow!(
+                    "importing {collection_name} {} failed: {error}",
+                    unique_value
+                )
+            } else {
+                anyhow::anyhow!(
+                    "importing {collection_name} {} failed: {error}\nNext:\n  1. If the document already exists, rerun with `defra-agent config import --override`\n  2. Or remove the existing document and retry",
+                    unique_value
+                )
+            }
+        })?;
+        let _ = extract_mutation_doc_id(&response, collection_name)?;
+    }
+
+    Ok(docs.len())
+}
+
+fn graphql_input_literal(value: &Value) -> Result<String> {
+    match value {
+        Value::Null => Ok("null".to_string()),
+        Value::Bool(value) => Ok(value.to_string()),
+        Value::Number(value) => Ok(value.to_string()),
+        Value::String(value) => Ok(graphql_string_literal(value)),
+        Value::Array(values) => {
+            let rendered = values
+                .iter()
+                .map(graphql_input_literal)
+                .collect::<Result<Vec<_>>>()?;
+            Ok(format!("[{}]", rendered.join(", ")))
+        }
+        Value::Object(map) => {
+            let rendered = map
+                .iter()
+                .map(|(key, value)| Ok(format!("{key}: {}", graphql_input_literal(value)?)))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(format!("{{ {} }}", rendered.join(", ")))
+        }
+    }
+}
+
+async fn diagnose_schema_presence(access: &ConfigAccess) -> Vec<Value> {
+    let mut results = Vec::new();
+    for (collection, field) in SCHEMA_COLLECTION_CHECKS {
+        let query = format!(
+            r#"{{ {collection}(limit: 1) {{ {field} }} }}"#,
+            collection = collection,
+            field = field
+        );
+        match access.execute(&query).await {
+            Ok(_) => results.push(json!({
+                "collection": collection,
+                "ok": true,
+            })),
+            Err(error) => results.push(json!({
+                "collection": collection,
+                "ok": false,
+                "error": error.to_string(),
+            })),
+        }
+    }
+    results
+}
+
+fn diagnose_tool_ceiling(init_config: Option<&StoredInitConfig>) -> Value {
+    match init_config {
+        Some(config) => {
+            let tool_root = config.tool_root.as_deref();
+            let ok = match config.tool_ceiling {
+                ToolCeilingArg::Readwrite => tool_root
+                    .map(Path::new)
+                    .map(|path| path.is_dir())
+                    .unwrap_or(false),
+                _ => true,
+            };
+            let error = if ok {
+                None
+            } else {
+                Some("readwrite tool ceiling requires an existing tool_root directory".to_string())
+            };
+            json!({
+                "ok": ok,
+                "tool_ceiling": format_tool_ceiling(config.tool_ceiling),
+                "tool_root": config.tool_root,
+                "error": error,
+            })
+        }
+        None => json!({
+            "ok": true,
+            "error": null,
+            "note": "no local init.json found; tool ceiling is unknown until `defra-agent init` runs"
+        }),
+    }
+}
+
+async fn diagnose_backends(bundle: &ConfigExportBundle) -> Vec<Value> {
+    let mut models_by_backend = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for behavior in &bundle.agent_behaviors {
+        let Some(backend_id) = behavior.get("backend_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(model_name) = behavior.get("model_name").and_then(Value::as_str) else {
+            continue;
+        };
+        if backend_id.trim().is_empty() || model_name.trim().is_empty() {
+            continue;
+        }
+        models_by_backend
+            .entry(backend_id.to_string())
+            .or_default()
+            .push(model_name.to_string());
+    }
+    for models in models_by_backend.values_mut() {
+        models.sort();
+        models.dedup();
+    }
+
+    let mut reports = Vec::new();
+    let present_backend_ids = bundle
+        .inference_backends
+        .iter()
+        .filter_map(|backend| backend.get("backend_id").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect::<std::collections::BTreeSet<_>>();
+    for backend in &bundle.inference_backends {
+        reports.push(
+            diagnose_backend(
+                backend,
+                models_by_backend
+                    .get(
+                        backend
+                            .get("backend_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
+                    )
+                    .cloned()
+                    .unwrap_or_default(),
+            )
+            .await,
+        );
+    }
+    for backend_id in models_by_backend.keys() {
+        if !present_backend_ids.contains(backend_id) {
+            reports.push(json!({
+                "backend_id": backend_id,
+                "ok": false,
+                "error": format!("referenced backend {} is missing", backend_id),
+                "required_models": models_by_backend.get(backend_id).cloned().unwrap_or_default(),
+            }));
+        }
+    }
+    reports.sort_by(|left, right| {
+        let left_key = left
+            .get("backend_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let right_key = right
+            .get("backend_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        left_key.cmp(right_key)
+    });
+    reports
+}
+
+async fn diagnose_backend(backend: &Value, required_models: Vec<String>) -> Value {
+    let backend_id = backend
+        .get("backend_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let endpoint = backend
+        .get("endpoint")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let enabled = backend
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let probe_status = backend
+        .get("probe_status")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let api_key_env_var = backend
+        .get("api_key_env_var")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+
+    let mut ok = enabled && probe_status == "healthy";
+    let mut error = None::<String>;
+    let mut discovered_models = Vec::<String>::new();
+
+    let api_key = match api_key_env_var.as_deref() {
+        Some(name) => match std::env::var(name) {
+            Ok(value) if !value.trim().is_empty() => Some(value),
+            _ => {
+                ok = false;
+                error = Some(format!(
+                    "required backend API key env var {} is not set",
+                    name
+                ));
+                None
+            }
+        },
+        None => None,
+    };
+
+    if ok {
+        let models_url = format!("{}/models", endpoint.trim_end_matches('/'));
+        let client = match reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+        {
+            Ok(client) => client,
+            Err(build_error) => {
+                ok = false;
+                error = Some(format!("building probe client: {build_error}"));
+                return json!({
+                    "backend_id": backend_id,
+                    "ok": ok,
+                    "endpoint": endpoint,
+                    "enabled": enabled,
+                    "probe_status": probe_status,
+                    "api_key_env_var": api_key_env_var,
+                    "required_models": required_models,
+                    "discovered_models": discovered_models,
+                    "error": error,
+                });
+            }
+        };
+        let mut request = client.get(&models_url);
+        if let Some(api_key) = api_key.as_deref() {
+            request = request.bearer_auth(api_key);
+        }
+        match request.send().await {
+            Ok(response) => {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                if !status.is_success() {
+                    ok = false;
+                    error = Some(format!("GET {} returned {}: {}", models_url, status, body));
+                } else {
+                    let parsed = serde_json::from_str::<Value>(&body).ok();
+                    discovered_models = parsed
+                        .as_ref()
+                        .and_then(|value| value.get("data"))
+                        .and_then(Value::as_array)
+                        .map(|rows| {
+                            rows.iter()
+                                .filter_map(|row| row.get("id").and_then(Value::as_str))
+                                .map(ToOwned::to_owned)
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    let missing_models = required_models
+                        .iter()
+                        .filter(|model| {
+                            !discovered_models
+                                .iter()
+                                .any(|candidate| candidate == *model)
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if !missing_models.is_empty() {
+                        ok = false;
+                        error = Some(format!(
+                            "backend {} is missing required models: {}",
+                            backend_id,
+                            missing_models.join(", ")
+                        ));
+                    }
+                }
+            }
+            Err(request_error) => {
+                ok = false;
+                error = Some(format!("probing {} failed: {}", models_url, request_error));
+            }
+        }
+    }
+
+    json!({
+        "backend_id": backend_id,
+        "ok": ok,
+        "endpoint": endpoint,
+        "enabled": enabled,
+        "probe_status": probe_status,
+        "api_key_env_var": api_key_env_var,
+        "required_models": required_models,
+        "discovered_models": discovered_models,
+        "error": error,
+    })
 }
 
 async fn post_graphql(graphql: &str, query: &str) -> Result<serde_json::Value> {

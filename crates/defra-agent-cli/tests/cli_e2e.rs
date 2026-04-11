@@ -652,6 +652,203 @@ async fn scheduled_task_set_persists_concrete_default_behavior_id() -> Result<()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn diagnose_works_from_local_home_without_server() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-diagnose-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-diagnose-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    let output = run_cli_json(&home_dir, &["diagnose"])?;
+    assert_eq!(output.get("status").and_then(Value::as_str), Some("ok"));
+    assert_eq!(
+        output.get("access_mode").and_then(Value::as_str),
+        Some("local")
+    );
+    assert_eq!(
+        output.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+    assert_eq!(
+        output.get("graphql_reachable").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        output
+            .pointer("/checks/default_behavior/ok")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        output
+            .pointer("/checks/tool_ceiling/ok")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        output
+            .pointer("/checks/backends/0/ok")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_export_import_round_trips_offline_and_requires_override() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let source_home = tempdir.path().join("source-home");
+    let target_home = tempdir.path().join("target-home");
+    fs::create_dir_all(&source_home)?;
+    fs::create_dir_all(&target_home)?;
+
+    let model_name = format!("mock-export-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-export-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+    let export_path = tempdir.path().join("agent-config.json");
+
+    run_init_json(
+        &source_home,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    let exported = run_cli_json(&source_home, &["config", "export"])?;
+    assert_eq!(
+        exported.get("format").and_then(Value::as_str),
+        Some("defra-agent-config/v1")
+    );
+    assert_eq!(
+        exported.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+    assert_eq!(
+        exported
+            .pointer("/agent_behaviors")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        exported
+            .pointer("/tool_selections")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        exported
+            .pointer("/inference_backends")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(1)
+    );
+
+    fs::write(&export_path, serde_json::to_vec_pretty(&exported)?)
+        .context("writing config export fixture")?;
+
+    let imported = run_cli_json(
+        &target_home,
+        &[
+            "config",
+            "import",
+            export_path.to_str().expect("utf-8 export path"),
+        ],
+    )?;
+    assert_eq!(
+        imported.get("status").and_then(Value::as_str),
+        Some("imported")
+    );
+    assert_eq!(
+        imported
+            .pointer("/counts/agent_principal")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        imported
+            .pointer("/counts/agent_behaviors")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let reexported = run_cli_json(
+        &target_home,
+        &["config", "export", "--agent-did", &agent_did],
+    )?;
+    assert_eq!(
+        reexported.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+    assert_eq!(
+        reexported
+            .pointer("/agent_principal/default_behavior_id")
+            .and_then(Value::as_str),
+        exported
+            .pointer("/agent_principal/default_behavior_id")
+            .and_then(Value::as_str)
+    );
+    assert_eq!(
+        reexported
+            .pointer("/agent_behaviors/0/behavior_id")
+            .and_then(Value::as_str),
+        exported
+            .pointer("/agent_behaviors/0/behavior_id")
+            .and_then(Value::as_str)
+    );
+
+    let stderr = run_cli_failure_stderr(
+        &target_home,
+        &[
+            "config",
+            "import",
+            export_path.to_str().expect("utf-8 export path"),
+        ],
+    )?;
+    assert!(
+        stderr.contains("defra-agent config import --override"),
+        "expected override guidance in stderr, got:\n{stderr}"
+    );
+
+    let overridden = run_cli_json(
+        &target_home,
+        &[
+            "config",
+            "import",
+            export_path.to_str().expect("utf-8 export path"),
+            "--override",
+        ],
+    )?;
+    assert_eq!(
+        overridden.get("override").and_then(Value::as_bool),
+        Some(true)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_submit_waits_for_response_by_default() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -1237,6 +1434,20 @@ async fn status_reads_local_runtime_context_by_default() -> Result<()> {
             .pointer("/runtime/process_state")
             .and_then(Value::as_str),
         Some("ready")
+    );
+    assert_eq!(
+        output.get("process_state").and_then(Value::as_str),
+        Some("ready")
+    );
+    assert_eq!(
+        output.get("reconcile_phase").and_then(Value::as_str),
+        Some("idle")
+    );
+    assert_eq!(
+        output
+            .get("runnable_behavior_count")
+            .and_then(Value::as_i64),
+        Some(1)
     );
     assert_eq!(
         output.get("graphql").and_then(Value::as_str),
