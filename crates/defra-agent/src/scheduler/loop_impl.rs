@@ -12,7 +12,7 @@ impl Scheduler {
                     return Ok(());
                 }
                 _ = tokio::time::sleep(std::time::Duration::from_secs(TICK_INTERVAL_SECS)) => {
-                    if let Err(error) = self.tick().await {
+                    if let Err(error) = self.tick(cancel.clone()).await {
                         tracing::error!(error = %error, "scheduler tick failed");
                     }
                 }
@@ -20,7 +20,7 @@ impl Scheduler {
         }
     }
 
-    async fn tick(&mut self) -> Result<()> {
+    pub(super) async fn tick(&mut self, cancel: CancellationToken) -> Result<()> {
         let active_snapshot = self.current_snapshot();
         let tasks = self.query_due_tasks().await?;
 
@@ -31,9 +31,13 @@ impl Scheduler {
 
         tracing::info!(count = tasks.len(), "scheduler tick: found due tasks");
 
-        let mut handles: Vec<(ScheduledTask, tokio::task::JoinHandle<Result<()>>)> = Vec::new();
+        let mut handles = tokio::task::JoinSet::new();
 
         for task in tasks {
+            if cancel.is_cancelled() {
+                tracing::info!("scheduler tick interrupted by shutdown before task spawn");
+                return Ok(());
+            }
             let behavior = match active_snapshot.behavior(&task.behavior_id) {
                 Some(behavior) => behavior.clone(),
                 None => {
@@ -93,28 +97,42 @@ impl Scheduler {
             let node = self.node.clone();
             let tool_runtime = self.tool_runtime.clone();
             let backend_tracker = self.backend_tracker.clone();
+            let task_cancel = cancel.child_token();
 
-            let handle = tokio::spawn(async move {
-                execute_task_standalone(
+            handles.spawn(async move {
+                let result = execute_task_standalone(
                     &task_clone,
                     &behavior,
                     tool_surface.as_ref(),
                     &tool_runtime,
                     &node,
                     backend_tracker,
+                    task_cancel,
                 )
-                .await
+                .await;
+                (task_clone, result)
             });
-
-            handles.push((task, handle));
         }
 
-        for (task, handle) in handles {
-            match handle.await {
-                Ok(Ok(())) => {
+        while !handles.is_empty() {
+            tokio::select! {
+                _ = cancel.cancelled() => {
+                    tracing::info!(
+                        in_flight_tasks = handles.len(),
+                        "scheduler cancelling in-flight tasks during shutdown"
+                    );
+                    handles.abort_all();
+                    return Ok(());
+                }
+                joined = handles.join_next() => {
+                    let Some(joined) = joined else {
+                        break;
+                    };
+                    match joined {
+                        Ok((task, Ok(()))) => {
                     tracing::info!(task = %task.name, "scheduled task completed successfully");
                 }
-                Ok(Err(error)) => {
+                        Ok((task, Err(error))) => {
                     tracing::error!(task = %task.name, error = %error, "scheduled task failed");
                     if let Err(update_err) =
                         self.update_task_failure(&task, &error.to_string()).await
@@ -126,15 +144,14 @@ impl Scheduler {
                         );
                     }
                 }
-                Err(join_err) => {
+                        Err(join_err) => {
                     let msg = format!("task panicked: {}", join_err);
-                    tracing::error!(task = %task.name, "{}", msg);
-                    if let Err(update_err) = self.update_task_failure(&task, &msg).await {
-                        tracing::error!(
-                            task = %task.name,
-                            error = %update_err,
-                            "failed to update task failure status after panic"
-                        );
+                            if join_err.is_cancelled() {
+                                tracing::info!("scheduled task aborted during shutdown");
+                            } else {
+                                tracing::error!("{}", msg);
+                            }
+                        }
                     }
                 }
             }

@@ -214,7 +214,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 continue;
             }
 
-            match self.handle_request(&mut lifecycle).await {
+            match self.handle_request(&mut lifecycle, shutdown.clone()).await {
                 Ok(HandleRequestOutcome::Completed) => {
                     let _ = lifecycle.complete().await;
                 }

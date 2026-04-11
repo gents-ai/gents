@@ -15,6 +15,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     pub(super) async fn acquire_backend_permit(
         &self,
         lifecycle: &mut crate::lifecycle::RequestLifecycle,
+        shutdown: &mut tokio::sync::watch::Receiver<bool>,
     ) -> Result<BackendPermit> {
         let backend_id = lifecycle.backend_id();
         if backend_id.is_empty() {
@@ -27,6 +28,12 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
 
         let deadline = tokio::time::Instant::now() + self.behavior.deadline_duration;
         loop {
+            if *shutdown.borrow() {
+                bail!(
+                    "shutdown requested while waiting for backend {} capacity",
+                    backend_id
+                );
+            }
             if tokio::time::Instant::now() >= deadline {
                 bail!(
                     "timed out waiting for backend {} capacity before inference start",
@@ -53,13 +60,22 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 }
             }
 
-            tokio::time::sleep(Duration::from_millis(BACKEND_WAIT_POLL_MS)).await;
+            tokio::select! {
+                _ = shutdown.changed() => {
+                    bail!(
+                        "shutdown requested while waiting for backend {} capacity",
+                        backend_id
+                    );
+                }
+                _ = tokio::time::sleep(Duration::from_millis(BACKEND_WAIT_POLL_MS)) => {}
+            }
         }
     }
 
     pub(super) async fn handle_request(
         &mut self,
         lifecycle: &mut crate::lifecycle::RequestLifecycle,
+        mut shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> Result<HandleRequestOutcome> {
         let request = lifecycle.request().clone();
         let full_history = session::load_history(&self.node, &request.session_id).await?;
@@ -123,7 +139,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             built = self.prompt_builder.build(&history, &summaries).await?;
         }
 
-        let _backend_permit = self.acquire_backend_permit(lifecycle).await?;
+        let _backend_permit = self
+            .acquire_backend_permit(lifecycle, &mut shutdown)
+            .await?;
         lifecycle.begin_execution().await?;
 
         let doc_id = self
@@ -138,7 +156,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         lifecycle.advance().await?;
 
         let result = self
-            .run_inference(&request, &doc_id, &built.messages, lifecycle)
+            .run_inference(&request, &doc_id, &built.messages, lifecycle, &mut shutdown)
             .await;
 
         match result {

@@ -10,6 +10,7 @@ pub(super) async fn execute_task_standalone(
     tool_runtime: &ToolRuntimeContext,
     node: &Arc<EmbeddedNode>,
     backend_tracker: Arc<BackendTracker>,
+    cancel: CancellationToken,
 ) -> Result<()> {
     let backend_id = behavior
         .backend_id
@@ -34,20 +35,25 @@ pub(super) async fn execute_task_standalone(
     )
     .await?;
 
-    let timed = tokio::time::timeout(
-        Duration::from_secs(TASK_TIMEOUT_SECS),
-        execute_materialized_task(
-            task,
-            behavior,
-            tool_surface,
-            tool_runtime,
-            node,
-            backend_tracker,
-            &mut lifecycle,
-            &full_prompt,
-        ),
-    )
-    .await;
+    let timed = tokio::select! {
+        _ = cancel.cancelled() => {
+            return Err(anyhow!("scheduled task cancelled during shutdown"));
+        }
+        timed = tokio::time::timeout(
+            Duration::from_secs(TASK_TIMEOUT_SECS),
+            execute_materialized_task(
+                task,
+                behavior,
+                tool_surface,
+                tool_runtime,
+                node,
+                backend_tracker,
+                &mut lifecycle,
+                &full_prompt,
+                &cancel,
+            ),
+        ) => timed
+    };
 
     match timed {
         Ok(Ok(())) => {
@@ -80,6 +86,7 @@ async fn execute_materialized_task(
     backend_tracker: Arc<BackendTracker>,
     lifecycle: &mut RequestLifecycle,
     full_prompt: &str,
+    cancel: &CancellationToken,
 ) -> Result<()> {
     let api_key = std::env::var("AGENT_DAEMON_API_KEY").unwrap_or_else(|_| "no-key".to_string());
     let openai_client: rig::providers::openai::CompletionsClient =
@@ -104,7 +111,7 @@ async fn execute_materialized_task(
         Duration::from_millis(behavior.stream_batch_ms),
     );
     let _backend_permit =
-        acquire_backend_permit(task, behavior, node, backend_tracker, lifecycle).await?;
+        acquire_backend_permit(task, behavior, node, backend_tracker, lifecycle, cancel).await?;
     lifecycle.begin_execution().await?;
 
     let doc_id = stream_writer
@@ -125,6 +132,7 @@ async fn execute_materialized_task(
         &agent,
         lifecycle.request().session_id.as_str(),
         full_prompt,
+        cancel,
     )
     .await?;
 
@@ -145,11 +153,15 @@ async fn acquire_backend_permit(
     node: &Arc<EmbeddedNode>,
     backend_tracker: Arc<BackendTracker>,
     lifecycle: &mut RequestLifecycle,
+    cancel: &CancellationToken,
 ) -> Result<BackendPermit> {
     let backend_id = lifecycle.backend_id();
     let deadline = tokio::time::Instant::now() + behavior.deadline_duration;
 
     loop {
+        if cancel.is_cancelled() {
+            bail!("scheduled task '{}' cancelled during shutdown", task.name);
+        }
         if tokio::time::Instant::now() >= deadline {
             bail!(
                 "task '{}' timed out waiting for backend {} capacity",
@@ -177,7 +189,12 @@ async fn acquire_backend_permit(
             }
         }
 
-        tokio::time::sleep(Duration::from_millis(BACKEND_WAIT_POLL_MS)).await;
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                bail!("scheduled task '{}' cancelled during shutdown", task.name);
+            }
+            _ = tokio::time::sleep(Duration::from_millis(BACKEND_WAIT_POLL_MS)) => {}
+        }
     }
 }
 
@@ -189,6 +206,7 @@ async fn prompt_scheduled_task<M: rig::completion::CompletionModel>(
     agent: &rig::agent::Agent<M>,
     session_id: &str,
     full_prompt: &str,
+    cancel: &CancellationToken,
 ) -> Result<String> {
     let mut history = prompt_builder.build(&[], &[]).await?.messages;
     let hook = DefraSessionHook::resume_or_create_with_identity_policy(
@@ -200,12 +218,15 @@ async fn prompt_scheduled_task<M: rig::completion::CompletionModel>(
     )
     .await?;
 
-    match agent
-        .prompt(full_prompt)
-        .with_history(&mut history)
-        .with_hook(hook)
-        .await
-    {
+    match tokio::select! {
+        _ = cancel.cancelled() => {
+            return Err(anyhow!("scheduled task '{}' cancelled during shutdown", task.name));
+        }
+        response = agent
+            .prompt(full_prompt)
+            .with_history(&mut history)
+            .with_hook(hook) => response
+    } {
         Ok(response) => Ok(response.to_string()),
         Err(error) if error.to_string().contains("empty") => {
             tracing::warn!(
@@ -213,7 +234,12 @@ async fn prompt_scheduled_task<M: rig::completion::CompletionModel>(
                 error = %error,
                 "empty completion response, retrying after 2s"
             );
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            tokio::select! {
+                _ = cancel.cancelled() => {
+                    return Err(anyhow!("scheduled task '{}' cancelled during shutdown", task.name));
+                }
+                _ = tokio::time::sleep(Duration::from_secs(2)) => {}
+            }
 
             let retry_hook = DefraSessionHook::resume_or_create_with_identity_policy(
                 node.clone(),
@@ -225,15 +251,19 @@ async fn prompt_scheduled_task<M: rig::completion::CompletionModel>(
             .await?;
             let mut retry_history = prompt_builder.build(&[], &[]).await?.messages;
 
-            agent
-                .prompt(full_prompt)
-                .with_history(&mut retry_history)
-                .with_hook(retry_hook)
-                .await
-                .map(|response| response.to_string())
-                .map_err(|retry_error| {
-                    anyhow!("scheduled task inference failed on retry: {retry_error}")
-                })
+            tokio::select! {
+                _ = cancel.cancelled() => {
+                    Err(anyhow!("scheduled task '{}' cancelled during shutdown", task.name))
+                }
+                response = agent
+                    .prompt(full_prompt)
+                    .with_history(&mut retry_history)
+                    .with_hook(retry_hook) => response
+                    .map(|response| response.to_string())
+                    .map_err(|retry_error| {
+                        anyhow!("scheduled task inference failed on retry: {retry_error}")
+                    })
+            }
         }
         Err(error) => Err(anyhow!("scheduled task inference failed: {error}")),
     }

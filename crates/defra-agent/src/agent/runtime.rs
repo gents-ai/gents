@@ -352,16 +352,16 @@ pub(super) async fn run_agent(
         });
     }
 
-    let result = tokio::select! {
-        _ = shutdown.changed() => Ok(()),
+    let (result, shutdown_requested) = tokio::select! {
+        _ = shutdown.changed() => (Ok(()), true),
         Some(joined) = background_tasks.join_next() => match joined {
-            Ok(BackgroundTaskResult::Router(result)) => result,
-            Ok(BackgroundTaskResult::RouterObserver(result)) => result,
-            Ok(BackgroundTaskResult::Reconcile(result)) => result,
-            Ok(BackgroundTaskResult::Control(result)) => result,
-            Err(error) => Err(anyhow!("background task join failed: {error}")),
+            Ok(BackgroundTaskResult::Router(result)) => (result, false),
+            Ok(BackgroundTaskResult::RouterObserver(result)) => (result, false),
+            Ok(BackgroundTaskResult::Reconcile(result)) => (result, false),
+            Ok(BackgroundTaskResult::Control(result)) => (result, false),
+            Err(error) => (Err(anyhow!("background task join failed: {error}")), false),
         },
-        else => Ok(()),
+        else => (Ok(()), false),
     };
 
     if let Some(observer) = &agent.process_state_observer {
@@ -371,7 +371,10 @@ pub(super) async fn run_agent(
         .set_process_state(ProcessLifecycleState::ShuttingDown)
         .await;
 
-    background_tasks.abort_all();
+    cancel.cancel();
+    if !shutdown_requested {
+        background_tasks.abort_all();
+    }
     while let Some(joined) = background_tasks.join_next().await {
         if let Err(error) = joined {
             if !error.is_cancelled() {
@@ -380,7 +383,6 @@ pub(super) async fn run_agent(
         }
     }
 
-    cancel.cancel();
     let _ = readiness_handle.await;
     let _ = scheduler_handle.await;
 

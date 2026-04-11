@@ -77,6 +77,49 @@ async fn fetch_runtime_status(
     serde_json::from_value(value).expect("decode AgentRuntime row")
 }
 
+async fn wait_for_runtime_process_state(
+    node: &defra_node::EmbeddedNode,
+    agent_did: &str,
+    expected_process_state: &str,
+) {
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let query = format!(
+            r#"{{
+                AgentRuntime(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}, limit: 1) {{
+                    process_state
+                }}
+            }}"#
+        );
+        let response = node.execute(&query).await;
+        assert!(
+            !response.has_errors(),
+            "AgentRuntime query failed: {:?}",
+            response.errors
+        );
+        let process_state = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRuntime"))
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("process_state"))
+            .and_then(Value::as_str);
+        if process_state == Some(expected_process_state) {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for AgentRuntime {} to reach process_state={}; last={:?}",
+            agent_did,
+            expected_process_state,
+            process_state
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 struct MockModelEndpoint {
     endpoint: String,
     port: u16,
@@ -222,6 +265,16 @@ async fn bind_default_behavior_backend(
     backend_id: &str,
     endpoint: &str,
 ) {
+    bind_default_behavior_backend_with_capacity(node, agent_did, backend_id, endpoint, 1).await;
+}
+
+async fn bind_default_behavior_backend_with_capacity(
+    node: &defra_node::EmbeddedNode,
+    agent_did: &str,
+    backend_id: &str,
+    endpoint: &str,
+    max_concurrent: i64,
+) {
     let bootstrap = crate::ensure_agent_principal(node, agent_did)
         .await
         .unwrap();
@@ -235,7 +288,7 @@ async fn bind_default_behavior_backend(
                     backend_id: "{escaped_backend_id}",
                     name: "{escaped_backend_id}",
                     endpoint: "{escaped_endpoint}",
-                    max_concurrent: 1,
+                    max_concurrent: {max_concurrent},
                     enabled: true,
                     models: ["default"],
                     last_probe: "2026-04-09T00:00:00Z",
@@ -244,7 +297,7 @@ async fn bind_default_behavior_backend(
                 update: {{
                     name: "{escaped_backend_id}",
                     endpoint: "{escaped_endpoint}",
-                    max_concurrent: 1,
+                    max_concurrent: {max_concurrent},
                     enabled: true,
                     last_probe: "2026-04-09T00:00:00Z",
                     probe_status: "healthy"
@@ -268,6 +321,72 @@ async fn bind_default_behavior_backend(
     crate::upsert_agent_behavior(node, &default_behavior)
         .await
         .unwrap();
+}
+
+async fn create_agent_request(
+    node: &defra_node::EmbeddedNode,
+    agent_did: &str,
+    request_id: &str,
+    session_id: &str,
+    content: &str,
+) -> String {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_session_id = escape_graphql_string(session_id);
+    let escaped_content = escape_graphql_string(content);
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{escaped_request_id}",
+                agent_did: "{escaped_agent_did}",
+                behavior_id: "",
+                session_id: "{escaped_session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{escaped_request_id}",
+                superseded_by_request: "",
+                content: "{escaped_content}",
+                status: "pending",
+                lifecycle_state: "pending",
+                admission_state: "released",
+                backend_id: "",
+                execution_origin: "interactive",
+                created_at: "{created_at}",
+                retry_count: 0,
+                max_retries: {max_retries}
+            }}) {{ _docID }}
+        }}"#,
+        max_retries = crate::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create_AgentRequest failed: {:?}",
+        response.errors
+    );
+    let query = format!(
+        r#"{{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
+                _docID
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "AgentRequest lookup failed: {:?}",
+        response.errors
+    );
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .expect("AgentRequest _docID")
 }
 
 struct ScriptedWatcher {
@@ -784,4 +903,108 @@ async fn update_agent_principal_enabled(
         "update_AgentPrincipal failed: {:?}",
         response.errors
     );
+}
+
+async fn wait_for_request_state(
+    node: &defra_node::EmbeddedNode,
+    doc_id: &str,
+    expected_status: &str,
+    expected_admission_state: &str,
+) {
+    let escaped_doc_id = escape_graphql_string(doc_id);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let query = format!(
+            r#"{{
+                AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, limit: 1) {{
+                    status
+                    admission_state
+                }}
+            }}"#
+        );
+        let response = node.execute(&query).await;
+        assert!(
+            !response.has_errors(),
+            "AgentRequest query failed: {:?}",
+            response.errors
+        );
+        let row = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+            .cloned()
+            .expect("AgentRequest row");
+        let status = row
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let admission_state = row
+            .get("admission_state")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if status == expected_status && admission_state == expected_admission_state {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for AgentRequest {} to reach status={} admission_state={}, last row={:?}",
+            doc_id,
+            expected_status,
+            expected_admission_state,
+            row
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("shutdown-waiting-request"));
+    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
+    bind_default_behavior_backend_with_capacity(
+        node.as_ref(),
+        identity.did(),
+        "backend-blocked",
+        mock_endpoint.endpoint(),
+        0,
+    )
+    .await;
+    let agent = crate::DefraAgent::from_default_behavior_documents(
+        node.clone(),
+        identity.clone(),
+        crate::agent::DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let handle = tokio::spawn(agent.run(shutdown_rx));
+
+    wait_for_runtime_process_state(node.as_ref(), identity.did(), "ready").await;
+
+    let request_doc_id = create_agent_request(
+        node.as_ref(),
+        identity.did(),
+        "req-shutdown-waiting",
+        "session-shutdown-waiting",
+        "hello",
+    )
+    .await;
+    wait_for_request_state(node.as_ref(), &request_doc_id, "processing", "waiting").await;
+
+    let _ = shutdown_tx.send(true);
+    tokio::time::timeout(Duration::from_secs(2), handle)
+        .await
+        .expect("agent shutdown should not wait for backend deadline")
+        .expect("agent task should join")
+        .expect("agent run should return ok");
+
+    wait_for_request_state(node.as_ref(), &request_doc_id, "error", "released").await;
 }

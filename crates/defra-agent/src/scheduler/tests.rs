@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::thread::JoinHandle;
+use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 
 use crate::compaction::CompactionStrategy;
 use crate::config::{
@@ -394,13 +396,22 @@ fn write_http_response(
 }
 
 async fn insert_backend(node: &EmbeddedNode, backend_id: &str, endpoint: &str) {
+    insert_backend_with_capacity(node, backend_id, endpoint, 1).await;
+}
+
+async fn insert_backend_with_capacity(
+    node: &EmbeddedNode,
+    backend_id: &str,
+    endpoint: &str,
+    max_concurrent: i64,
+) {
     let mutation = format!(
         r#"mutation {{
             create_InferenceBackend(input: {{
                 backend_id: "{backend_id}",
                 name: "scheduler-backend",
                 endpoint: "{endpoint}",
-                max_concurrent: 1,
+                max_concurrent: {max_concurrent},
                 enabled: true,
                 models: ["scheduled-model"],
                 last_probe: "2026-04-10T00:00:00Z",
@@ -466,7 +477,105 @@ async fn scheduled_execution_succeeds_without_external_ops_service() {
         &tool_runtime,
         &node,
         Arc::new(BackendTracker::new()),
+        CancellationToken::new(),
     )
     .await
     .expect("scheduled execution should not depend on external ops service");
+}
+
+async fn insert_due_task(node: &EmbeddedNode, task_id: &str, behavior_id: &str, prompt: &str) {
+    let mutation = format!(
+        r#"mutation {{
+            create_ScheduledTask(input: {{
+                task_id: "{task_id}",
+                agent_did: "did:defra-agent:scheduled-test",
+                behavior_id: "{behavior_id}",
+                name: "blocked-task",
+                prompt: "{prompt}",
+                interval_secs: 60,
+                enabled: true,
+                next_run_at: "2026-04-10T00:00:00Z",
+                run_count: 0
+            }}) {{ _docID }}
+        }}"#,
+        task_id = escape_graphql_string(task_id),
+        behavior_id = escape_graphql_string(behavior_id),
+        prompt = escape_graphql_string(prompt),
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(!resp.has_errors(), "{:?}", resp.errors);
+}
+
+#[tokio::test]
+async fn scheduler_tick_shutdown_is_prompt_while_task_waits_for_backend_capacity() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let mock_endpoint = MockCompletionEndpoint::start("scheduled-model", "scheduled-ok").unwrap();
+    insert_backend_with_capacity(
+        node.as_ref(),
+        "backend-blocked",
+        mock_endpoint.endpoint(),
+        0,
+    )
+    .await;
+
+    let identity = Arc::new(SimpleIdentity::new(
+        "scheduled-test",
+        dir.path().join("identity.key"),
+        None,
+    ));
+    let behavior = Arc::new(BehaviorConfig {
+        name: "did:defra-agent:scheduled-test:default".to_string(),
+        identity,
+        backend_id: Some("backend-blocked".to_string()),
+        backend_endpoint: mock_endpoint.endpoint().to_string(),
+        model_name: "scheduled-model".to_string(),
+        context_window: DEFAULT_CONTEXT_WINDOW,
+        max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
+        max_turns: DEFAULT_MAX_TURNS,
+        system_prompt: "You are a scheduler test agent.".to_string(),
+        tools: BehaviorToolConfig::meta_only(),
+        compaction_threshold: DEFAULT_COMPACTION_THRESHOLD,
+        compaction_strategy: CompactionStrategy::StripThenSummarize,
+        stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
+        deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
+    });
+    let tool_surface = Arc::new(behavior.tools.resolve(node.as_ref()).await.unwrap());
+    insert_due_task(
+        node.as_ref(),
+        "task-blocked",
+        &behavior.name,
+        "Say scheduled-ok",
+    )
+    .await;
+
+    let active_snapshot = Arc::new(crate::runtime_snapshot::ActiveRuntimeSnapshot {
+        generation: 1,
+        default_behavior_id: behavior.name.clone(),
+        behaviors: std::collections::HashMap::from([(behavior.name.clone(), behavior.clone())]),
+        tool_surfaces: std::collections::HashMap::from([(behavior.name.clone(), tool_surface)]),
+        unavailable_behaviors: std::collections::HashMap::new(),
+        dispatchers: std::collections::HashMap::new(),
+    });
+    let (_tx, rx) = watch::channel(active_snapshot);
+    let mut scheduler = Scheduler::new(
+        node.clone(),
+        rx,
+        ToolRuntimeContext::oneshot(node.clone()),
+        Arc::new(BackendTracker::new()),
+    );
+    let cancel = CancellationToken::new();
+    let cancel_for_tick = cancel.clone();
+
+    let tick = tokio::spawn(async move { scheduler.tick(cancel_for_tick).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    cancel.cancel();
+
+    tokio::time::timeout(Duration::from_secs(2), tick)
+        .await
+        .expect("scheduler tick should not wait for backend deadline")
+        .expect("tick task should join")
+        .expect("scheduler tick should return ok");
 }

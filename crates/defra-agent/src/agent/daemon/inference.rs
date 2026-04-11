@@ -17,11 +17,15 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         doc_id: &str,
         history: &[rig::completion::message::Message],
         lifecycle: &mut crate::lifecycle::RequestLifecycle,
+        shutdown: &mut tokio::sync::watch::Receiver<bool>,
     ) -> Result<HandleRequestOutcome> {
         let max_attempts = self.retry_policy.max_retries + 1;
         let mut last_inference_error: Option<crate::error::InferenceError> = None;
 
         for attempt in 0..max_attempts {
+            if *shutdown.borrow() {
+                return Err(anyhow!("shutdown requested during inference"));
+            }
             if attempt > 0 {
                 let delay = self.retry_policy.delay_for_attempt(attempt - 1);
                 tracing::info!(
@@ -31,7 +35,12 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     request_id = %request.request_id,
                     "retrying inference after transient failure"
                 );
-                tokio::time::sleep(delay).await;
+                tokio::select! {
+                    _ = shutdown.changed() => {
+                        return Err(anyhow!("shutdown requested during inference retry backoff"));
+                    }
+                    _ = tokio::time::sleep(delay) => {}
+                }
             }
 
             let hook = DefraSessionHook::resume_or_create_with_identity_policy(
@@ -44,12 +53,16 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             .await?;
             let persistence_hook = hook.clone();
 
-            let mut stream = self
-                .agent
-                .stream_prompt(&request.content)
-                .with_history(history.to_vec())
-                .with_hook(hook)
-                .await;
+            let mut stream = tokio::select! {
+                _ = shutdown.changed() => {
+                    return Err(anyhow!("shutdown requested before inference stream started"));
+                }
+                stream = self
+                    .agent
+                    .stream_prompt(&request.content)
+                    .with_history(history.to_vec())
+                    .with_hook(hook) => stream
+            };
 
             let liveness_timeout = Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS);
 
@@ -62,7 +75,12 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             let mut stream_error = None;
 
             loop {
-                let item = match tokio::time::timeout(liveness_timeout, stream.next()).await {
+                let item = match tokio::select! {
+                    _ = shutdown.changed() => {
+                        return Err(anyhow!("shutdown requested during inference stream"));
+                    }
+                    result = tokio::time::timeout(liveness_timeout, stream.next()) => result
+                } {
                     Ok(Some(item)) => item,
                     Ok(None) => break,
                     Err(_) => {
