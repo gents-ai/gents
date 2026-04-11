@@ -508,6 +508,58 @@ async fn tool_selection_upsert_defaults_enabled_modes_to_readonly() -> Result<()
     Ok(())
 }
 
+#[test]
+fn top_level_help_shows_quickstart_workflow() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let output = run_cli_text(&home_dir, &["--help"])?;
+    assert!(
+        output.contains("Quick start:"),
+        "expected quick start section in help output, got:\n{output}"
+    );
+    assert!(
+        output.contains("defra-agent init http://HOST:PORT/v1 --model-name MODEL"),
+        "expected init example in help output, got:\n{output}"
+    );
+    assert!(
+        output.contains("defra-agent server"),
+        "expected server example in help output, got:\n{output}"
+    );
+    assert!(
+        output.contains("defra-agent chat"),
+        "expected chat example in help output, got:\n{output}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn status_without_runtime_suggests_init_and_server() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+
+    let stderr = run_cli_failure_stderr(&home_dir, &["status", "--graphql", &graphql])?;
+    assert!(
+        stderr.contains("defra-agent init <INFERENCE_ENDPOINT> --model-name <MODEL_NAME>"),
+        "expected init suggestion in stderr, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("defra-agent server"),
+        "expected server suggestion in stderr, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("defra-agent status"),
+        "expected status suggestion in stderr, got:\n{stderr}"
+    );
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn scheduled_task_set_persists_concrete_default_behavior_id() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -1978,6 +2030,26 @@ fn run_cli_text(home_dir: &Path, args: &[&str]) -> Result<String> {
 
     String::from_utf8(output.stdout)
         .with_context(|| format!("parsing stdout from defra-agent {}", args.join(" ")))
+}
+
+fn run_cli_failure_stderr(home_dir: &Path, args: &[&str]) -> Result<String> {
+    let output = Command::new(cli_bin())
+        .env("HOME", home_dir)
+        .env("RUST_LOG", "error")
+        .args(args)
+        .output()
+        .with_context(|| format!("running defra-agent {}", args.join(" ")))?;
+    if output.status.success() {
+        bail!(
+            "expected defra-agent {} to fail\nstdout:\n{}\nstderr:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    String::from_utf8(output.stderr)
+        .with_context(|| format!("parsing stderr from defra-agent {}", args.join(" ")))
 }
 
 async fn wait_for_request(

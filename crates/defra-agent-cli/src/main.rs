@@ -34,6 +34,74 @@ const DEFAULT_LOG_FILTER: &str = concat!(
 );
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
 const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
+const CLI_AFTER_HELP: &str = "\
+Quick start:
+  defra-agent init http://HOST:PORT/v1 --model-name MODEL
+  defra-agent server
+  defra-agent chat
+
+Inspect the local runtime:
+  defra-agent status
+  defra-agent show runtime
+  defra-agent show response REQUEST_ID
+
+Update runtime documents:
+  defra-agent config backend set ...
+  defra-agent config behavior set ...
+  defra-agent config tools set ...";
+const INIT_AFTER_HELP: &str = "\
+Bootstrap a local home directory with one default backend, one default behavior, and a safe read-only tool selection.
+
+Examples:
+  defra-agent init http://HOST:PORT/v1 --model-name MODEL
+  defra-agent init $INFERENCE_ENDPOINT --model-name MODEL --write-tools
+
+Next:
+  defra-agent server
+  defra-agent chat";
+const SERVER_AFTER_HELP: &str = "\
+`server` reads the initialized home directory, starts the embedded DefraDB runtime, and serves GraphQL locally.
+
+Common flow:
+  defra-agent init http://HOST:PORT/v1 --model-name MODEL
+  defra-agent server
+  defra-agent chat";
+const CHAT_AFTER_HELP: &str = "\
+Examples:
+  defra-agent chat
+  defra-agent chat \"summarize this repo\"
+  defra-agent chat --session-id SESSION_ID \"continue the previous conversation\"
+
+Diagnostics:
+  defra-agent status
+  defra-agent show response REQUEST_ID";
+const STATUS_AFTER_HELP: &str = "\
+Status reads the local runtime by default.
+
+Examples:
+  defra-agent status
+  defra-agent status --home /path/to/home
+  defra-agent status --graphql http://127.0.0.1:9191/api/v0/graphql";
+const SHOW_AFTER_HELP: &str = "\
+Examples:
+  defra-agent show runtime
+  defra-agent show request REQUEST_ID
+  defra-agent show response REQUEST_ID";
+const CONFIG_AFTER_HELP: &str = "\
+Examples:
+  defra-agent config backend set --graphql URL --backend-id default-backend --name default-backend --endpoint http://HOST:PORT/v1 --max-concurrent 1
+  defra-agent config behavior set --graphql URL --agent-did did:defra-agent:default --backend-id default-backend --model-name MODEL
+  defra-agent config tools set --graphql URL --agent-did did:defra-agent:default --selection-id did:defra-agent:default:default:tools --enable-file-tools";
+const REQUEST_AFTER_HELP: &str = "\
+`request` is the low-level document path. Most users should prefer `defra-agent chat`.
+
+Examples:
+  defra-agent request submit --content \"summarize this repo\"
+  defra-agent request show REQUEST_ID";
+const RESPONSE_AFTER_HELP: &str = "\
+Examples:
+  defra-agent response wait REQUEST_ID
+  defra-agent response show REQUEST_ID";
 const BOOTSTRAP_INFERENCE_BACKEND_DEFAULT: &str =
     include_str!("../bootstrap/InferenceBackend/default.gql");
 const BOOTSTRAP_TOOL_SELECTION_STANDARD_READONLY: &str =
@@ -58,7 +126,8 @@ impl ProcessLifecycleObserver for CliReadyObserver {
 #[derive(Parser)]
 #[command(
     name = "defra-agent",
-    about = "Consumer CLI for the defra-agent library"
+    about = "Local-first CLI for bootstrapping, running, and inspecting a defra-agent runtime",
+    after_help = CLI_AFTER_HELP
 )]
 struct Cli {
     #[command(subcommand)]
@@ -67,24 +136,36 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    #[command(about = "Initialize a local agent home directory", after_help = INIT_AFTER_HELP)]
     Init(InitArgs),
-    #[command(name = "server")]
+    #[command(
+        name = "server",
+        about = "Run the local defra-agent runtime from an initialized home",
+        after_help = SERVER_AFTER_HELP
+    )]
     Server(ServeArgs),
+    #[command(about = "Chat with the local agent in the terminal", after_help = CHAT_AFTER_HELP)]
     Chat(ChatArgs),
+    #[command(about = "Experimental terminal UI", hide = true)]
     Tui(TuiArgs),
+    #[command(about = "Show stored runtime, request, or response state", after_help = SHOW_AFTER_HELP)]
     Show {
         #[command(subcommand)]
         command: ShowCommand,
     },
+    #[command(about = "Show the current local runtime status", after_help = STATUS_AFTER_HELP)]
     Status(StatusArgs),
+    #[command(about = "Write runtime configuration documents", after_help = CONFIG_AFTER_HELP)]
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    #[command(about = "Low-level request submission and inspection", after_help = REQUEST_AFTER_HELP)]
     Request {
         #[command(subcommand)]
         command: RequestCommand,
     },
+    #[command(about = "Low-level response inspection", after_help = RESPONSE_AFTER_HELP)]
     Response {
         #[command(subcommand)]
         command: ResponseCommand,
@@ -93,37 +174,57 @@ enum Command {
 
 #[derive(clap::Args)]
 struct InitArgs {
-    #[arg(long)]
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
     home: Option<PathBuf>,
     #[arg(long, hide = true)]
     data_dir: Option<PathBuf>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Delete the existing home directory before re-initializing it"
+    )]
     dangerously_overwrite: bool,
-    #[arg(long, default_value = DEFAULT_AGENT_NAME)]
+    #[arg(long, default_value = DEFAULT_AGENT_NAME, help = "Local agent name. This becomes did:defra-agent:<AGENT_NAME>")]
     agent_name: String,
     #[arg(long)]
     key_path: Option<PathBuf>,
-    #[arg(value_name = "INFERENCE_ENDPOINT")]
+    #[arg(
+        value_name = "INFERENCE_ENDPOINT",
+        help = "OpenAI-compatible inference base URL, including /v1. Falls back to INFERENCE_ENDPOINT."
+    )]
     inference_endpoint: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Optional backend document id. Defaults to <agent-name>-backend"
+    )]
     backend_id: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Optional backend display name. Defaults to the backend id"
+    )]
     backend_name: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Environment variable name holding the backend API key")]
     api_key_env_var: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Required model id to bind to the default behavior")]
     model_name: String,
     #[arg(long, default_value_t = 1)]
     max_concurrent: i64,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Bootstrap write-capable tools instead of the safe read-only default"
+    )]
     write_tools: bool,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Root directory for write-capable tools. Defaults to the current working directory"
+    )]
     tool_root: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
 struct ServeArgs {
-    #[arg(long)]
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
     home: Option<PathBuf>,
     #[arg(long, hide = true)]
     data_dir: Option<PathBuf>,
@@ -135,17 +236,21 @@ struct ServeArgs {
     agent_name: Option<String>,
     #[arg(long)]
     key_path: Option<PathBuf>,
-    #[arg(long, value_enum)]
+    #[arg(
+        long,
+        value_enum,
+        help = "Operator safety cap that clamps document tool selection at runtime"
+    )]
     tool_ceiling: Option<ToolCeilingArg>,
     #[arg(long = "cli-tool")]
     cli_tools: Vec<String>,
-    #[arg(long)]
+    #[arg(long, help = "Root directory for readwrite tool ceilings")]
     tool_root: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
 struct ChatArgs {
-    #[arg(long)]
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
     home: Option<PathBuf>,
     #[arg(long)]
     graphql: Option<String>,
@@ -153,9 +258,12 @@ struct ChatArgs {
     agent_did: Option<String>,
     #[arg(long)]
     agent_name: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Continue an existing session instead of starting a fresh one"
+    )]
     session_id: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Override the behavior for this one-off turn or session")]
     behavior_id: Option<String>,
     #[arg(long, default_value_t = 300)]
     timeout_secs: u64,
@@ -187,8 +295,11 @@ struct TuiArgs {
 
 #[derive(Subcommand)]
 enum ShowCommand {
+    #[command(about = "Show a stored AgentRequest document")]
     Request(RequestShowArgs),
+    #[command(about = "Show the latest AgentResponse for a request")]
     Response(ResponseShowArgs),
+    #[command(about = "Show the persisted AgentRuntime document")]
     Runtime(RuntimeShowArgs),
 }
 
@@ -214,22 +325,27 @@ struct RuntimeShowArgs {
 
 #[derive(Subcommand)]
 enum ConfigCommand {
+    #[command(about = "Write an InferenceBackend document")]
     Backend {
         #[command(subcommand)]
         command: BackendCommand,
     },
+    #[command(about = "Write an AgentBehavior document")]
     Behavior {
         #[command(subcommand)]
         command: BehaviorCommand,
     },
+    #[command(about = "Write a ToolSelection document")]
     Tools {
         #[command(subcommand)]
         command: ToolSelectionCommand,
     },
+    #[command(about = "Write an InferenceProfile document")]
     Profile {
         #[command(subcommand)]
         command: InferenceProfileCommand,
     },
+    #[command(about = "Write a ScheduledTask document")]
     Task {
         #[command(subcommand)]
         command: ScheduledTaskCommand,
@@ -467,9 +583,12 @@ struct BackendUpsertArgs {
     backend_id: String,
     #[arg(long)]
     name: String,
-    #[arg(long)]
+    #[arg(long, help = "OpenAI-compatible backend base URL, including /v1")]
     endpoint: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Environment variable name holding this backend's API key"
+    )]
     api_key_env_var: Option<String>,
     #[arg(long)]
     max_concurrent: i64,
@@ -481,7 +600,11 @@ struct BackendUpsertArgs {
 
 #[derive(Subcommand)]
 enum RequestCommand {
+    #[command(
+        about = "Create an AgentRequest document and optionally wait for the final AgentResponse"
+    )]
     Submit(RequestSubmitArgs),
+    #[command(about = "Show a stored AgentRequest document")]
     Show(RequestShowArgs),
 }
 
@@ -521,7 +644,9 @@ struct RequestShowArgs {
 
 #[derive(Subcommand)]
 enum ResponseCommand {
+    #[command(about = "Show the latest AgentResponse for a request")]
     Show(ResponseShowArgs),
+    #[command(about = "Wait until a request reaches a terminal AgentResponse")]
     Wait(ResponseWaitArgs),
 }
 
@@ -752,7 +877,14 @@ async fn serve(args: ServeArgs) -> Result<()> {
             ..Default::default()
         },
     )
-    .await?;
+    .await
+    .with_context(|| {
+        format!(
+            "starting defra-agent server from {}\n{}",
+            home_dir.display(),
+            server_start_failure_hint(&home_dir)
+        )
+    })?;
     let runnable_behaviors = agent
         .behaviors()
         .iter()
@@ -1473,10 +1605,23 @@ async fn post_graphql(graphql: &str, query: &str) -> Result<serde_json::Value> {
         .json(&json!({ "query": query }))
         .send()
         .await
-        .with_context(|| format!("posting GraphQL to {graphql}"))?;
-    let value: serde_json::Value = response.json().await.context("decoding GraphQL JSON")?;
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "failed to post GraphQL to {graphql}: {error}\n{}",
+                graphql_diagnostic_hint(graphql)
+            )
+        })?;
+    let value: serde_json::Value = response.json().await.map_err(|error| {
+        anyhow::anyhow!(
+            "failed to decode GraphQL response from {graphql}: {error}\n{}",
+            graphql_diagnostic_hint(graphql)
+        )
+    })?;
     if let Some(errors) = value.get("errors") {
-        anyhow::bail!("graphql returned errors: {errors}");
+        anyhow::bail!(
+            "graphql returned errors from {graphql}: {errors}\n{}",
+            graphql_diagnostic_hint(graphql)
+        );
     }
     Ok(value)
 }
@@ -1598,7 +1743,9 @@ fn resolve_init_endpoint(explicit: Option<&str>) -> Result<String> {
                 .filter(|value| !value.is_empty())
         })
         .ok_or_else(|| {
-            anyhow::anyhow!("an inference endpoint is required; pass it to `defra-agent init` or set INFERENCE_ENDPOINT")
+            anyhow::anyhow!(
+                "an inference endpoint is required\nNext:\n  1. Pass it explicitly: `defra-agent init http://HOST:PORT/v1 --model-name MODEL`\n  2. Or set INFERENCE_ENDPOINT before running `defra-agent init`"
+            )
         })
 }
 
@@ -2016,13 +2163,15 @@ fn resolve_request_id(positional: Option<&str>, flag: Option<&str>) -> Result<St
     match (positional, flag) {
         (Some(positional), Some(flag)) if positional != flag => {
             anyhow::bail!(
-                "conflicting request ids provided: positional={} and --request-id={}",
+                "conflicting request ids provided: positional={} and --request-id={}\nNext:\n  1. Pass the request id once: `defra-agent show response REQUEST_ID`\n  2. Or use `--request-id REQUEST_ID`, but not both",
                 positional,
                 flag
             );
         }
         (Some(request_id), _) | (_, Some(request_id)) => Ok(request_id.to_string()),
-        (None, None) => anyhow::bail!("missing request id"),
+        (None, None) => anyhow::bail!(
+            "missing request id\nNext:\n  1. Pass it positionally: `defra-agent show response REQUEST_ID`\n  2. Or use `--request-id REQUEST_ID`"
+        ),
     }
 }
 
@@ -2288,7 +2437,10 @@ async fn wait_for_terminal_response(
         }
 
         if last_progress_at.elapsed() >= idle_timeout {
-            anyhow::bail!("timed out waiting for AgentResponse {request_id} after {timeout_secs}s of inactivity");
+            anyhow::bail!(
+                "timed out waiting for AgentResponse {request_id} after {timeout_secs}s of inactivity\n{}",
+                request_diagnostic_hint(request_id)
+            );
         }
 
         tokio::time::sleep(Duration::from_secs(poll_secs)).await;
@@ -2442,8 +2594,18 @@ async fn stream_turn_progress(
                     {
                         if !progress.content.contains(error_message) {
                             println!("[agent error] {error_message}");
+                            println!(
+                                "[inspect] defra-agent show response {}",
+                                submitted.request_id
+                            );
                             io::stdout().flush()?;
                         }
+                    } else {
+                        println!(
+                            "[inspect] defra-agent show response {}",
+                            submitted.request_id
+                        );
+                        io::stdout().flush()?;
                     }
                 }
                 return Ok(response_row.unwrap_or(Value::Null));
@@ -2452,14 +2614,44 @@ async fn stream_turn_progress(
 
         if last_progress_at.elapsed() >= idle_timeout {
             anyhow::bail!(
-                "timed out waiting for AgentResponse {} after {}s of inactivity",
+                "timed out waiting for AgentResponse {} after {}s of inactivity\n{}",
                 submitted.request_id,
-                timeout_secs
+                timeout_secs,
+                request_diagnostic_hint(&submitted.request_id)
             );
         }
 
         tokio::time::sleep(Duration::from_secs(poll_secs)).await;
     }
+}
+
+fn is_probably_local_graphql_endpoint(graphql: &str) -> bool {
+    let graphql = graphql.trim();
+    graphql.contains("127.0.0.1") || graphql.contains("localhost")
+}
+
+fn graphql_diagnostic_hint(graphql: &str) -> String {
+    if is_probably_local_graphql_endpoint(graphql) {
+        "Next:\n  1. If this home is not initialized, run `defra-agent init <INFERENCE_ENDPOINT> --model-name <MODEL_NAME>`\n  2. Start the runtime with `defra-agent server`\n  3. Inspect it with `defra-agent status`".to_string()
+    } else {
+        format!(
+            "Next:\n  1. Verify the GraphQL endpoint {graphql}\n  2. Retry with `--graphql {graphql}` or point the command at the correct runtime"
+        )
+    }
+}
+
+fn request_diagnostic_hint(request_id: &str) -> String {
+    format!(
+        "Next:\n  1. Run `defra-agent show request {request_id}`\n  2. Run `defra-agent show response {request_id}`\n  3. Inspect the runtime with `defra-agent status`"
+    )
+}
+
+fn server_start_failure_hint(home_dir: &Path) -> String {
+    format!(
+        "Next:\n  1. Inspect the initialized home at {}\n  2. If this home is stale, rerun `defra-agent init <INFERENCE_ENDPOINT> --model-name <MODEL_NAME>`\n  3. If the home is already initialized, inspect backend and behavior docs once the runtime is available with `defra-agent status --home {}`",
+        init_config_path(home_dir).display(),
+        home_dir.display()
+    )
 }
 
 fn decode_chat_turn_progress(row: &Value) -> Option<ChatTurnProgress> {
