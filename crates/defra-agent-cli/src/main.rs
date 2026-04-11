@@ -110,6 +110,8 @@ struct InitArgs {
     #[arg(long)]
     backend_name: Option<String>,
     #[arg(long)]
+    api_key_env_var: Option<String>,
+    #[arg(long)]
     model_name: String,
     #[arg(long, default_value_t = 1)]
     max_concurrent: i64,
@@ -246,6 +248,7 @@ struct InitSummary {
     backend_id: String,
     backend_name: String,
     endpoint: String,
+    api_key_env_var: Option<String>,
     model_name: String,
     default_behavior_id: String,
     tool_selection_id: String,
@@ -264,6 +267,7 @@ struct StoredInitConfig {
     backend_id: String,
     backend_name: String,
     endpoint: String,
+    api_key_env_var: Option<String>,
     model_name: String,
     default_behavior_id: String,
     tool_selection_id: String,
@@ -466,6 +470,8 @@ struct BackendUpsertArgs {
     #[arg(long)]
     endpoint: String,
     #[arg(long)]
+    api_key_env_var: Option<String>,
+    #[arg(long)]
     max_concurrent: i64,
     #[arg(long, default_value_t = true)]
     enabled: bool,
@@ -634,6 +640,7 @@ async fn init(args: InitArgs) -> Result<()> {
         backend_id: summary.backend_id.clone(),
         backend_name: summary.backend_name.clone(),
         endpoint: summary.endpoint.clone(),
+        api_key_env_var: summary.api_key_env_var.clone(),
         model_name: summary.model_name.clone(),
         default_behavior_id: summary.default_behavior_id.clone(),
         tool_selection_id: summary.tool_selection_id.clone(),
@@ -906,6 +913,7 @@ async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
                     backend_id: "{backend_id}",
                     name: "{name}",
                     endpoint: "{endpoint}",
+                    {api_key_env_var_add},
                     max_concurrent: {max_concurrent},
                     enabled: {enabled},
                     models: ["default"],
@@ -915,6 +923,7 @@ async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
                 update: {{
                     name: "{name}",
                     endpoint: "{endpoint}",
+                    {api_key_env_var_update},
                     max_concurrent: {max_concurrent},
                     enabled: {enabled},
                     last_probe: "{now}",
@@ -925,6 +934,10 @@ async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
         backend_id = escape_graphql_string(&args.backend_id),
         name = escape_graphql_string(&args.name),
         endpoint = escape_graphql_string(&args.endpoint),
+        api_key_env_var_add =
+            nullable_string_field("api_key_env_var", args.api_key_env_var.as_deref()),
+        api_key_env_var_update =
+            nullable_string_field("api_key_env_var", args.api_key_env_var.as_deref()),
         max_concurrent = args.max_concurrent,
         enabled = if args.enabled { "true" } else { "false" },
         probe_status = escape_graphql_string(&args.probe_status),
@@ -936,6 +949,7 @@ async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
         "doc_id": doc_id,
         "backend_id": args.backend_id,
         "endpoint": args.endpoint,
+        "api_key_env_var": args.api_key_env_var,
         "max_concurrent": args.max_concurrent,
         "enabled": args.enabled,
         "probe_status": args.probe_status,
@@ -1521,6 +1535,7 @@ async fn initialize_runtime_home(
     }
 
     let endpoint = resolve_init_endpoint(args.inference_endpoint.as_deref())?;
+    let api_key_env_var = resolve_init_api_key_env_var(args.api_key_env_var.as_deref());
     let backend_id = explicit_backend_id
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| format!("{}-backend", args.agent_name));
@@ -1548,6 +1563,7 @@ async fn initialize_runtime_home(
         &backend_id,
         &backend_name,
         &endpoint,
+        api_key_env_var.as_deref(),
         model_name,
         args.max_concurrent,
         &default_behavior_id,
@@ -1559,6 +1575,7 @@ async fn initialize_runtime_home(
         backend_id,
         backend_name,
         endpoint,
+        api_key_env_var,
         model_name: model_name.to_string(),
         default_behavior_id,
         tool_selection_id,
@@ -1582,6 +1599,18 @@ fn resolve_init_endpoint(explicit: Option<&str>) -> Result<String> {
         })
         .ok_or_else(|| {
             anyhow::anyhow!("an inference endpoint is required; pass it to `defra-agent init` or set INFERENCE_ENDPOINT")
+        })
+}
+
+fn resolve_init_api_key_env_var(explicit: Option<&str>) -> Option<String> {
+    explicit
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            std::env::var_os("AGENT_DAEMON_API_KEY")
+                .is_some()
+                .then(|| "AGENT_DAEMON_API_KEY".to_string())
         })
 }
 
@@ -1613,6 +1642,7 @@ fn bootstrap_template_vars(
     backend_id: &str,
     backend_name: &str,
     endpoint: &str,
+    api_key_env_var: Option<&str>,
     model_name: &str,
     max_concurrent: i64,
     default_behavior_id: &str,
@@ -1631,6 +1661,12 @@ fn bootstrap_template_vars(
         graphql_string_literal(backend_name),
     );
     vars.insert("ENDPOINT".to_string(), graphql_string_literal(endpoint));
+    vars.insert(
+        "API_KEY_ENV_VAR".to_string(),
+        api_key_env_var
+            .map(graphql_string_literal)
+            .unwrap_or_else(|| "null".to_string()),
+    );
     vars.insert("MODEL_NAME".to_string(), graphql_string_literal(model_name));
     vars.insert("MAX_CONCURRENT".to_string(), max_concurrent.to_string());
     vars.insert(

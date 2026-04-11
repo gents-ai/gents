@@ -395,6 +395,7 @@ impl PendingBehaviorConfig {
             identity,
             Some(backend.backend_id),
             backend.endpoint,
+            backend.api_key_env_var,
             tool_ceiling,
         )
     }
@@ -404,6 +405,7 @@ impl PendingBehaviorConfig {
         identity: Arc<dyn AgentIdentity>,
         backend_id: Option<String>,
         backend_endpoint: String,
+        backend_api_key_env_var: Option<String>,
         tool_ceiling: &ToolCeiling,
     ) -> Result<BehaviorConfig> {
         let behavior_name = self.name.clone();
@@ -413,6 +415,7 @@ impl PendingBehaviorConfig {
             identity,
             backend_id,
             backend_endpoint,
+            backend_api_key_env_var,
             model_name: self.model_name,
             context_window: self.context_window,
             max_output_tokens: self.max_output_tokens,
@@ -446,6 +449,7 @@ impl PendingBehaviorConfig {
             resolved_identity,
             backend_id,
             backend_endpoint,
+            None,
             &ToolCeiling::meta_only(),
         )
         .unwrap()

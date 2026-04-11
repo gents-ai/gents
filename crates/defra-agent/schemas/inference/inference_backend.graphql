@@ -3,6 +3,9 @@ type InferenceBackend {
     name: String @index
     # OpenAI-compatible API base URL, including the /v1 path segment.
     endpoint: String
+    # Optional environment-variable reference for the backend API key.
+    # Credentials are not stored directly in DefraDB documents.
+    api_key_env_var: String
     max_concurrent: Int
     enabled: Boolean @index
     models: [String]

@@ -6,6 +6,7 @@ fn inference_backend_from_value_parses() {
         "backend_id": "workstation-dual",
         "name": "Workstation Dual GPU",
         "endpoint": "http://100.73.235.38:8000/v1",
+        "api_key_env_var": "DUAL_GPU_API_KEY",
         "max_concurrent": 4,
         "enabled": true,
         "probe_status": "healthy",
@@ -14,6 +15,7 @@ fn inference_backend_from_value_parses() {
     let backend = InferenceBackend::from_value(&json).expect("should parse");
     assert_eq!(backend.backend_id, "workstation-dual");
     assert_eq!(backend.endpoint, "http://100.73.235.38:8000/v1");
+    assert_eq!(backend.api_key_env_var.as_deref(), Some("DUAL_GPU_API_KEY"));
     assert_eq!(backend.max_concurrent, 4);
     assert!(backend.enabled);
     assert_eq!(backend.probe_status, "healthy");
@@ -39,6 +41,7 @@ fn is_available_requires_enabled_and_healthy() {
         backend_id: "test".into(),
         name: "Test".into(),
         endpoint: "http://localhost:8000/v1".into(),
+        api_key_env_var: None,
         max_concurrent: 1,
         enabled: true,
         probe_status: "healthy".into(),

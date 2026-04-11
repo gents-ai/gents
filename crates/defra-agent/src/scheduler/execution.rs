@@ -88,7 +88,7 @@ async fn execute_materialized_task(
     full_prompt: &str,
     cancel: &CancellationToken,
 ) -> Result<()> {
-    let api_key = std::env::var("AGENT_DAEMON_API_KEY").unwrap_or_else(|_| "no-key".to_string());
+    let api_key = behavior.completion_client_api_key()?;
     let openai_client: rig::providers::openai::CompletionsClient =
         rig::providers::openai::CompletionsClient::builder()
             .api_key(&api_key)

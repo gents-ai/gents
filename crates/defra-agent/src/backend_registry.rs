@@ -21,6 +21,7 @@ pub struct InferenceBackend {
     pub name: String,
     /// OpenAI-compatible API base URL, including the `/v1` path segment.
     pub endpoint: String,
+    pub api_key_env_var: Option<String>,
     pub max_concurrent: i64,
     pub enabled: bool,
     pub probe_status: String,
@@ -33,6 +34,12 @@ impl InferenceBackend {
             backend_id: v.get("backend_id")?.as_str()?.to_string(),
             name: v.get("name")?.as_str()?.to_string(),
             endpoint: v.get("endpoint")?.as_str()?.to_string(),
+            api_key_env_var: v
+                .get("api_key_env_var")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(ToOwned::to_owned),
             max_concurrent: v.get("max_concurrent")?.as_i64()?,
             enabled: v.get("enabled")?.as_bool()?,
             probe_status: v
@@ -149,7 +156,7 @@ pub(crate) async fn lookup_backend_record(
 ) -> Result<Option<(String, InferenceBackend)>> {
     let escaped_id = escape_graphql_string(backend_id);
     let query = format!(
-        r#"query {{ InferenceBackend(filter: {{backend_id: {{_eq: "{}"}}}}) {{ _docID backend_id name endpoint max_concurrent enabled probe_status }} }}"#,
+        r#"query {{ InferenceBackend(filter: {{backend_id: {{_eq: "{}"}}}}) {{ _docID backend_id name endpoint api_key_env_var max_concurrent enabled probe_status }} }}"#,
         escaped_id
     );
 
@@ -180,7 +187,7 @@ pub(crate) async fn lookup_backend_by_doc_id(
 ) -> Result<Option<(String, InferenceBackend)>> {
     let escaped_id = escape_graphql_string(doc_id);
     let query = format!(
-        r#"query {{ InferenceBackend(filter: {{_docID: {{_eq: "{}"}}}}, limit: 1) {{ _docID backend_id name endpoint max_concurrent enabled probe_status }} }}"#,
+        r#"query {{ InferenceBackend(filter: {{_docID: {{_eq: "{}"}}}}, limit: 1) {{ _docID backend_id name endpoint api_key_env_var max_concurrent enabled probe_status }} }}"#,
         escaped_id
     );
 
@@ -214,6 +221,7 @@ pub(crate) async fn list_backend_records(
             backend_id
             name
             endpoint
+            api_key_env_var
             max_concurrent
             enabled
             probe_status
@@ -247,7 +255,7 @@ pub(crate) async fn list_backend_records(
 
 /// Query all enabled backends from DefraDB.
 pub async fn list_enabled_backends(node: &EmbeddedNode) -> Result<Vec<InferenceBackend>> {
-    let query = r#"query { InferenceBackend(filter: {enabled: {_eq: true}}) { backend_id name endpoint max_concurrent enabled probe_status models last_probe } }"#;
+    let query = r#"query { InferenceBackend(filter: {enabled: {_eq: true}}) { backend_id name endpoint api_key_env_var max_concurrent enabled probe_status models last_probe } }"#;
 
     let resp = node.execute(query).await;
     if resp.has_errors() {

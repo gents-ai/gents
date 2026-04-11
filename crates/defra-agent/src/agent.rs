@@ -208,6 +208,7 @@ pub(crate) fn behavior_config_from_documents(
         identity,
         backend_id: Some(backend.backend_id.clone()),
         backend_endpoint: backend.endpoint.clone(),
+        backend_api_key_env_var: backend.api_key_env_var.clone(),
         model_name: normalize_optional_string(behavior.model_name.as_deref())
             .unwrap_or(DEFAULT_MODEL_NAME)
             .to_string(),

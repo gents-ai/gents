@@ -106,8 +106,7 @@ impl RuntimeContext {
         shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
         let tool_names = tool_surface.tool_names();
-        let api_key =
-            std::env::var("AGENT_DAEMON_API_KEY").unwrap_or_else(|_| "no-key".to_string());
+        let api_key = behavior.completion_client_api_key()?;
         let openai_client: rig::providers::openai::CompletionsClient =
             rig::providers::openai::CompletionsClient::builder()
                 .api_key(&api_key)
@@ -462,7 +461,6 @@ async fn validate_startup_snapshot(
         );
     }
 
-    let api_key = std::env::var("AGENT_DAEMON_API_KEY").unwrap_or_else(|_| "no-key".to_string());
     let client = reqwest::Client::builder()
         .timeout(STARTUP_BACKEND_PROBE_TIMEOUT)
         .build()
@@ -482,7 +480,8 @@ async fn validate_startup_snapshot(
         tool_surface
             .build_tools(tool_runtime)
             .with_context(|| format!("building startup tool surface for behavior {behavior_id}"))?;
-        probe_behavior_backend(&client, &api_key, behavior.as_ref())
+        let api_key = behavior.resolve_backend_api_key()?;
+        probe_behavior_backend(&client, api_key.as_deref(), behavior.as_ref())
             .await
             .with_context(|| format!("validating startup backend for behavior {behavior_id}"))?;
     }
@@ -492,13 +491,15 @@ async fn validate_startup_snapshot(
 
 async fn probe_behavior_backend(
     client: &reqwest::Client,
-    api_key: &str,
+    api_key: Option<&str>,
     behavior: &crate::config::BehaviorConfig,
 ) -> Result<()> {
     let models_url = format!("{}/models", behavior.backend_endpoint.trim_end_matches('/'));
-    let response = client
-        .get(&models_url)
-        .bearer_auth(api_key)
+    let mut request = client.get(&models_url);
+    if let Some(api_key) = api_key {
+        request = request.bearer_auth(api_key);
+    }
+    let response = request
         .send()
         .await
         .with_context(|| format!("querying {}", models_url))?;

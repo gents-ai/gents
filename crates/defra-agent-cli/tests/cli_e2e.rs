@@ -45,6 +45,7 @@ struct MockChatEndpoint {
 struct HttpRequestData {
     method: String,
     path: String,
+    headers: std::collections::HashMap<String, String>,
     body: Vec<u8>,
 }
 
@@ -59,6 +60,10 @@ impl Drop for ServeProcess {
 
 impl MockModelEndpoint {
     fn start(model_name: &str) -> Result<Self> {
+        Self::start_with_required_bearer(model_name, None)
+    }
+
+    fn start_with_required_bearer(model_name: &str, required_bearer: Option<&str>) -> Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0)).context("binding mock model port")?;
         listener
             .set_nonblocking(true)
@@ -70,6 +75,7 @@ impl MockModelEndpoint {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_for_thread = stop.clone();
         let model_name = model_name.to_string();
+        let required_bearer = required_bearer.map(ToOwned::to_owned);
         let handle = thread::spawn(move || {
             while !stop_for_thread.load(Ordering::Relaxed) {
                 match listener.accept() {
@@ -82,10 +88,23 @@ impl MockModelEndpoint {
                             }
                         };
 
+                        let authorized = required_bearer.as_ref().is_none_or(|expected| {
+                            request
+                                .headers
+                                .get("authorization")
+                                .is_some_and(|value| value == &format!("Bearer {expected}"))
+                        });
                         let (status, body) = if request.method == "GET"
                             && (request.path == "/v1/models" || request.path == "/models")
                         {
-                            ("200 OK", format!(r#"{{"data":[{{"id":"{model_name}"}}]}}"#))
+                            if authorized {
+                                ("200 OK", format!(r#"{{"data":[{{"id":"{model_name}"}}]}}"#))
+                            } else {
+                                (
+                                    "401 Unauthorized",
+                                    r#"{"error":"unauthorized"}"#.to_string(),
+                                )
+                            }
                         } else {
                             ("404 Not Found", r#"{"error":"not found"}"#.to_string())
                         };
@@ -248,6 +267,14 @@ impl Drop for MockOpenAIEndpoint {
 
 impl MockChatEndpoint {
     fn start(model_name: &str, final_text: &str) -> Result<Self> {
+        Self::start_with_required_bearer(model_name, final_text, None)
+    }
+
+    fn start_with_required_bearer(
+        model_name: &str,
+        final_text: &str,
+        required_bearer: Option<&str>,
+    ) -> Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0)).context("binding mock chat port")?;
         listener
             .set_nonblocking(true)
@@ -260,6 +287,7 @@ impl MockChatEndpoint {
         let stop_for_thread = stop.clone();
         let model_name = model_name.to_string();
         let final_text = final_text.to_string();
+        let required_bearer = required_bearer.map(ToOwned::to_owned);
         let captured_chat_requests = Arc::new(Mutex::new(Vec::new()));
         let captured_chat_requests_for_thread = captured_chat_requests.clone();
 
@@ -275,17 +303,41 @@ impl MockChatEndpoint {
                             }
                         };
 
+                        let authorized = required_bearer.as_ref().is_none_or(|expected| {
+                            request
+                                .headers
+                                .get("authorization")
+                                .is_some_and(|value| value == &format!("Bearer {expected}"))
+                        });
+
                         match (request.method.as_str(), request.path.as_str()) {
                             ("GET", "/v1/models") => {
-                                let body = format!(r#"{{"data":[{{"id":"{model_name}"}}]}}"#);
+                                let (status, body) = if authorized {
+                                    ("200 OK", format!(r#"{{"data":[{{"id":"{model_name}"}}]}}"#))
+                                } else {
+                                    (
+                                        "401 Unauthorized",
+                                        r#"{"error":"unauthorized"}"#.to_string(),
+                                    )
+                                };
                                 let _ = write_http_response(
                                     &mut stream,
-                                    "200 OK",
+                                    status,
                                     "application/json",
                                     &body,
                                 );
                             }
                             ("POST", "/v1/chat/completions") => {
+                                if !authorized {
+                                    let _ = write_http_response(
+                                        &mut stream,
+                                        "401 Unauthorized",
+                                        "application/json",
+                                        r#"{"error":"unauthorized"}"#,
+                                    );
+                                    let _ = stream.shutdown(Shutdown::Both);
+                                    continue;
+                                }
                                 let request_json: Value =
                                     match serde_json::from_slice(&request.body) {
                                         Ok(value) => value,
@@ -917,6 +969,7 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
         &agent_did,
         &backend_id,
         mock_endpoint.endpoint(),
+        None,
         &model_name,
         &tool_selection_id,
         "ReadOnly",
@@ -946,6 +999,7 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
         &agent_did,
         &backend_id,
         mock_endpoint.endpoint(),
+        None,
         &model_name,
         &tool_selection_id,
         "ReadOnly",
@@ -1011,6 +1065,83 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
             .and_then(Value::as_array)
             .map(Vec::len),
         Some(1)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-auth-model-{}", Uuid::new_v4().simple());
+    let expected_reply = "AUTH_BACKEND_OK";
+    let mock_endpoint = MockChatEndpoint::start_with_required_bearer(
+        &model_name,
+        expected_reply,
+        Some("backend-key"),
+    )?;
+
+    let port = allocate_port()?;
+    let agent_name = format!("cli-auth-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+    let backend_id = format!("{agent_name}-backend");
+    let graphql = graphql_url(port);
+    let tool_selection_id = format!("{agent_did}:default:tools");
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            "--api-key-env-var",
+            "DEFRA_AGENT_TEST_CLI_BACKEND_KEY",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    assert_eq!(
+        init.pointer("/init/api_key_env_var")
+            .and_then(Value::as_str),
+        Some("DEFRA_AGENT_TEST_CLI_BACKEND_KEY")
+    );
+
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        port,
+        &[],
+        &[("DEFRA_AGENT_TEST_CLI_BACKEND_KEY", "backend-key")],
+    )?;
+    wait_for_port(port, &mut serve.child)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    assert_runtime_init_state(
+        &graphql,
+        &agent_did,
+        &backend_id,
+        mock_endpoint.endpoint(),
+        Some("DEFRA_AGENT_TEST_CLI_BACKEND_KEY"),
+        &model_name,
+        &tool_selection_id,
+        "ReadOnly",
+        "ReadOnly",
+        "read-only operating mode",
+    )
+    .await?;
+
+    let output = run_cli_text(
+        &home_dir,
+        &[
+            "chat",
+            "backend auth should flow through the configured env var",
+        ],
+    )?;
+    assert!(
+        output.contains(expected_reply),
+        "expected chat output to contain {expected_reply}, got:\n{output}"
     );
 
     Ok(())
@@ -1174,6 +1305,7 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
         &agent_did,
         &backend_id,
         mock_endpoint.endpoint(),
+        None,
         &model_name,
         &tool_selection_id,
         "ReadOnly",
@@ -1226,6 +1358,7 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
         &agent_did,
         &backend_id,
         mock_endpoint.endpoint(),
+        None,
         &model_name,
         &tool_selection_id,
         "ReadWrite",
@@ -1582,11 +1715,17 @@ fn run_init_json(home_dir: &Path, args: &[&str]) -> Result<Value> {
 }
 
 fn spawn_server(home_dir: &Path, port: u16) -> Result<ServeProcess> {
-    spawn_server_with_args(home_dir, port, &[])
+    spawn_server_with_env(home_dir, port, &[], &[])
 }
 
-fn spawn_server_with_args(home_dir: &Path, port: u16, extra_args: &[&str]) -> Result<ServeProcess> {
-    let child = Command::new(cli_bin())
+fn spawn_server_with_env(
+    home_dir: &Path,
+    port: u16,
+    extra_args: &[&str],
+    envs: &[(&str, &str)],
+) -> Result<ServeProcess> {
+    let mut command = Command::new(cli_bin());
+    command
         .env("HOME", home_dir)
         .env("RUST_LOG", "error")
         .current_dir(home_dir)
@@ -1595,9 +1734,11 @@ fn spawn_server_with_args(home_dir: &Path, port: u16, extra_args: &[&str]) -> Re
         .arg(port.to_string())
         .args(extra_args)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("spawning defra-agent server")?;
+        .stderr(Stdio::null());
+    for (name, value) in envs {
+        command.env(name, value);
+    }
+    let child = command.spawn().context("spawning defra-agent server")?;
     Ok(ServeProcess { child })
 }
 
@@ -1606,6 +1747,7 @@ async fn assert_runtime_init_state(
     agent_did: &str,
     backend_id: &str,
     endpoint: &str,
+    expected_api_key_env_var: Option<&str>,
     model_name: &str,
     tool_selection_id: &str,
     expected_file_tools_mode: &str,
@@ -1630,6 +1772,7 @@ async fn assert_runtime_init_state(
             InferenceBackend(filter: {{ backend_id: {{ _eq: "{}" }} }}, limit: 1) {{
                 backend_id
                 endpoint
+                api_key_env_var
                 enabled
                 probe_status
                 models
@@ -1700,6 +1843,10 @@ async fn assert_runtime_init_state(
     assert_eq!(
         backend.get("endpoint").and_then(Value::as_str),
         Some(endpoint)
+    );
+    assert_eq!(
+        backend.get("api_key_env_var").and_then(Value::as_str),
+        expected_api_key_env_var
     );
     assert_eq!(backend.get("enabled").and_then(Value::as_bool), Some(true));
     assert_eq!(
@@ -2180,6 +2327,14 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequestData> {
         .next()
         .ok_or_else(|| anyhow!("missing HTTP path"))?
         .to_string();
+    let headers = header_text
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            Some((name.trim().to_ascii_lowercase(), value.trim().to_string()))
+        })
+        .collect();
     let body_end = header_end + content_length;
     let body = if buffer.len() >= body_end {
         buffer[header_end..body_end].to_vec()
@@ -2187,7 +2342,12 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequestData> {
         Vec::new()
     };
 
-    Ok(HttpRequestData { method, path, body })
+    Ok(HttpRequestData {
+        method,
+        path,
+        headers,
+        body,
+    })
 }
 
 fn find_header_end(buffer: &[u8]) -> Option<usize> {

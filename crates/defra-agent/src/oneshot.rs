@@ -36,7 +36,7 @@ pub async fn run_openai_oneshot_with_tools(
 ) -> Result<OneshotRunResult> {
     ensure_schemas(node.as_ref()).await?;
 
-    let api_key = std::env::var("AGENT_DAEMON_API_KEY").unwrap_or_else(|_| "no-key".to_string());
+    let api_key = behavior.completion_client_api_key()?;
     let tool_runtime = ToolRuntimeContext::oneshot(node.clone());
     let tool_surface = behavior.tools.resolve(node.as_ref()).await?;
     let prompt_builder = LayeredPromptBuilder::new(behavior, &tool_surface);

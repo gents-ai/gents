@@ -5,6 +5,7 @@ mutation {
       backend_id: ${BACKEND_ID}
       name: ${BACKEND_NAME}
       endpoint: ${ENDPOINT}
+      api_key_env_var: ${API_KEY_ENV_VAR}
       max_concurrent: ${MAX_CONCURRENT}
       enabled: true
       models: [${MODEL_NAME}]
@@ -14,6 +15,7 @@ mutation {
     update: {
       name: ${BACKEND_NAME}
       endpoint: ${ENDPOINT}
+      api_key_env_var: ${API_KEY_ENV_VAR}
       max_concurrent: ${MAX_CONCURRENT}
       enabled: true
       models: [${MODEL_NAME}]
