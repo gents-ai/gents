@@ -1,4 +1,3 @@
-use super::ops::{log_followup_consumption, verify_ops_report_written, warn_if_missing_findings};
 use super::*;
 use crate::config::BehaviorConfig;
 use crate::tool_surface::ToolSurface;
@@ -10,7 +9,6 @@ pub(super) async fn execute_task_standalone(
     tool_surface: &ToolSurface,
     tool_runtime: &ToolRuntimeContext,
     node: &Arc<EmbeddedNode>,
-    ops_graphql_endpoint: &str,
     backend_tracker: Arc<BackendTracker>,
 ) -> Result<()> {
     let backend_id = behavior
@@ -44,7 +42,6 @@ pub(super) async fn execute_task_standalone(
             tool_surface,
             tool_runtime,
             node,
-            ops_graphql_endpoint,
             backend_tracker,
             &mut lifecycle,
             &full_prompt,
@@ -80,12 +77,10 @@ async fn execute_materialized_task(
     tool_surface: &ToolSurface,
     tool_runtime: &ToolRuntimeContext,
     node: &Arc<EmbeddedNode>,
-    ops_graphql_endpoint: &str,
     backend_tracker: Arc<BackendTracker>,
     lifecycle: &mut RequestLifecycle,
     full_prompt: &str,
 ) -> Result<()> {
-    let task_started_at = Utc::now();
     let api_key = std::env::var("AGENT_DAEMON_API_KEY").unwrap_or_else(|_| "no-key".to_string());
     let openai_client: rig::providers::openai::CompletionsClient =
         rig::providers::openai::CompletionsClient::builder()
@@ -137,17 +132,6 @@ async fn execute_materialized_task(
         let _ = stream_writer.write_tokens(&doc_id, &response_text).await?;
         lifecycle.advance().await?;
     }
-
-    let report_status =
-        verify_ops_report_written(task_started_at, &task.name, ops_graphql_endpoint).await?;
-    warn_if_missing_findings(
-        task_started_at,
-        &task.name,
-        &report_status,
-        ops_graphql_endpoint,
-    )
-    .await;
-    log_followup_consumption(task_started_at, &task.name, ops_graphql_endpoint).await;
 
     stream_writer
         .finalize(&doc_id, StreamStatus::Complete)

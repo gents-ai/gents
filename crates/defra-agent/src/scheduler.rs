@@ -20,7 +20,6 @@ use crate::tool_surface::ToolRuntimeContext;
 
 mod execution;
 mod loop_impl;
-mod ops;
 #[cfg(test)]
 mod tests;
 
@@ -115,7 +114,6 @@ pub struct Scheduler {
     active_snapshot: Arc<ActiveRuntimeSnapshot>,
     active_snapshot_rx: tokio::sync::watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     tool_runtime: ToolRuntimeContext,
-    ops_graphql_endpoint: String,
     backend_tracker: Arc<BackendTracker>,
 }
 
@@ -125,7 +123,6 @@ impl Scheduler {
         node: Arc<EmbeddedNode>,
         active_snapshot_rx: tokio::sync::watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
         tool_runtime: ToolRuntimeContext,
-        ops_graphql_endpoint: String,
         backend_tracker: Arc<BackendTracker>,
     ) -> Self {
         let active_snapshot = active_snapshot_rx.borrow().clone();
@@ -134,7 +131,6 @@ impl Scheduler {
             active_snapshot,
             active_snapshot_rx,
             tool_runtime,
-            ops_graphql_endpoint,
             backend_tracker,
         }
     }

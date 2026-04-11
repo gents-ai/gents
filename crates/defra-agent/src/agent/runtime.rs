@@ -221,13 +221,10 @@ pub(super) async fn run_agent(
     let (reconcile_tx, reconcile_rx) = mpsc::channel(8);
     let _reconcile_tx_guard = reconcile_tx.clone();
 
-    let ops_graphql_endpoint = std::env::var("OPS_GRAPHQL_ENDPOINT")
-        .unwrap_or_else(|_| "http://127.0.0.1:9202/api/v0/graphql".to_string());
     let scheduler = crate::scheduler::Scheduler::new(
         agent.node.clone(),
         active_snapshot_rx.clone(),
         scheduler_tool_runtime,
-        ops_graphql_endpoint,
         backend_tracker.clone(),
     );
 

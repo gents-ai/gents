@@ -92,7 +92,6 @@ impl Scheduler {
             let task_clone = task.clone();
             let node = self.node.clone();
             let tool_runtime = self.tool_runtime.clone();
-            let ops_graphql_endpoint = self.ops_graphql_endpoint.clone();
             let backend_tracker = self.backend_tracker.clone();
 
             let handle = tokio::spawn(async move {
@@ -102,7 +101,6 @@ impl Scheduler {
                     tool_surface.as_ref(),
                     &tool_runtime,
                     &node,
-                    &ops_graphql_endpoint,
                     backend_tracker,
                 )
                 .await
