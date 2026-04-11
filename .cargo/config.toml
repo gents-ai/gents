@@ -1,0 +1,5 @@
+[target.aarch64-apple-darwin]
+linker = "./scripts/macos-clang-lld.sh"
+
+[target.x86_64-apple-darwin]
+linker = "./scripts/macos-clang-lld.sh"

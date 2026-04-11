@@ -414,7 +414,6 @@ async fn insert_backend_with_capacity(
                 max_concurrent: {max_concurrent},
                 enabled: true,
                 models: ["scheduled-model"],
-                last_probe: "2026-04-10T00:00:00Z",
                 probe_status: "healthy"
             }}) {{ _docID }}
         }}"#,

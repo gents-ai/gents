@@ -38,7 +38,6 @@ async fn bind_default_behavior_backend(
                     max_concurrent: 1,
                     enabled: true,
                     models: ["default"],
-                    last_probe: "2026-04-09T00:00:00Z",
                     probe_status: "healthy"
                 }},
                 update: {{
@@ -46,7 +45,6 @@ async fn bind_default_behavior_backend(
                     endpoint: "{escaped_endpoint}",
                     max_concurrent: 1,
                     enabled: true,
-                    last_probe: "2026-04-09T00:00:00Z",
                     probe_status: "healthy"
                 }}
             ) {{ _docID }}

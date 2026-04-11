@@ -177,7 +177,6 @@ async fn upsert_demo_backend(node: &EmbeddedNode, backend_id: &str, endpoint: &s
                     max_concurrent: 1,
                     enabled: true,
                     models: ["default"],
-                    last_probe: "{now}",
                     probe_status: "healthy"
                 }},
                 update: {{
@@ -185,7 +184,6 @@ async fn upsert_demo_backend(node: &EmbeddedNode, backend_id: &str, endpoint: &s
                     endpoint: "{endpoint}",
                     max_concurrent: 1,
                     enabled: true,
-                    last_probe: "{now}",
                     probe_status: "healthy"
                 }}
             ) {{ _docID }}

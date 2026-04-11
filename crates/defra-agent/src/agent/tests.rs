@@ -562,7 +562,6 @@ async fn insert_backend_with_health(
                 max_concurrent: 2,
                 enabled: {enabled},
                 models: ["default"],
-                last_probe: "2026-04-09T00:00:00Z",
                 probe_status: "{escaped_probe_status}"
             }}) {{ _docID }}
         }}"#
