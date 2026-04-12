@@ -27,7 +27,7 @@ Plus an informal protocol reference covering the parallel observation surfaces (
 - **Lean-first.** The client turn projection is a state machine. State machines in this repo start in Lean. The protocol doc explains the Lean model; it is not the source of truth.
 - **Pure projection, no clock.** The server liveness proofs (L1 bounded termination, L3 recovery convergence) guarantee every request reaches a terminal state. If a client perceives a "stall," that is a transport/sync problem, not a turn-state problem. Therefore `derive` is a pure function of document observations — no `currentTime`, no client-local timing. This makes the formal contract stronger: every client state corresponds to a server-committed fact.
 - **Turn identity = retry chain root.** `TurnId` is `retry_root_request_id` (or `request_id` if no retry parent). All retry attempts for a user's original message collapse into one logical turn. Supersession is a cross-turn event.
-- **Response can be more current than request.** Under P2P replication lag, the client may observe `AgentResponse.status = complete` before `AgentRequest.lifecycle_state` transitions to `completed`. The derivation trusts the response in this case, because the server writes the response before transitioning the request. This matches Amy's working behavior.
+- **Response can be more current than request (non-terminal only).** Under P2P replication lag, the client may observe `AgentResponse.status = complete` before `AgentRequest.lifecycle_state` transitions to `completed`. The derivation trusts the response **only when the request's lifecycle is non-terminal**. Once the request lifecycle is terminal (`completed`, `failed`, `superseded`, or `dead`), it always wins over any response — this preserves monotonicity (T2) against stale streaming responses arriving alongside a terminal request. This matches Amy's working behavior for the common case.
 - **5 client states, no ideal-only states in v1.** `awaitingInput` and `dead` are annotated in the derivation as mapping to existing states (`waitingForClaim` and `failed` respectively). When the runtime implements those (Deviations #2 and #3), clients can introduce additional states without breaking the existing projection.
 - **Trivial merge, nontrivial derive.** The merge function (accepting incoming document snapshots into the observation store) is trivial under the DefraDB merged-snapshot assumption. The formal content lives in the derivation and its 5 theorems. This is honest — we explicitly defer P2P merge proofs to defradb.rs.
 - **Stalled is a UI affordance, not a turn state.** If a client wants to show "checking server..." after N seconds of no updates on a non-terminal turn, that is a per-client UX decision layered on top of the projection. Each client owns its own staleness heuristic.
@@ -102,18 +102,29 @@ structure TurnObservation where
 `deriveAttempt : AttemptView -> ClientTurnState`
 
 Priority order:
-1. `supersededBy.isSome` or `lifecycleState = .superseded` -> `.superseded`
-2. `lifecycleState = .dead` -> `.failed`
-3. Response exists with `.complete` -> `.completed`
-4. Response exists with `.error` -> `.failed`
-5. Response exists with `.streaming` -> `.streaming`
-6. `lifecycleState = .completed` (no response yet) -> `.completed`
-7. `lifecycleState = .failed` (no response yet) -> `.failed`
-8. Everything else (pending, claimed, processing, inputRequired — no response) -> `.waitingForClaim`
+1. `isSuperseded = true` or `lifecycleState = .superseded` -> `.superseded`
+2. `lifecycleState = .completed` -> `.completed`
+3. `lifecycleState = .failed` or `lifecycleState = .dead` -> `.failed`
+4. (lifecycle is now known non-terminal: pending/claimed/processing/inputRequired)
+5. Response exists with `.complete` -> `.completed`
+6. Response exists with `.error` -> `.failed`
+7. Response exists with `.streaming` -> `.streaming`
+8. No response -> `.waitingForClaim`
 
-Rule 3 taking precedence over request lifecycle state is the "response can be more current" decision.
+Rules 2-3 checking server terminal states BEFORE response prevents stale
+streaming responses from demoting a terminally failed/completed request.
+This corrects the original spec ordering and is required for monotonicity
+(T2) to hold.
 
-Rule 8 mapping `inputRequired` to `waitingForClaim` is the Deviation #2 annotation. When the runtime persists `inputRequired`, clients can add a 6th state here.
+The fall-through from the server lifecycle check to the response arm (rules
+5-7) is where the "response can be more current than request" design
+decision applies — but only when the lifecycle is non-terminal. Once the
+server lifecycle is terminal, rules 2-3 fire and the response is ignored.
+
+Rule 8 mapping `inputRequired` to `waitingForClaim` (handled in the
+non-terminal fall-through when no response exists) is the Deviation #2
+annotation. When the runtime persists `inputRequired`, clients can add a
+6th state here.
 
 **Layer 2 — full turn:**
 
