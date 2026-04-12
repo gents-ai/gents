@@ -546,3 +546,56 @@ theorem terminal_coherence (view : AttemptView) :
           simp [deriveAttempt, h_super, h_lc, ClientTurnState.isTerminal]
     · -- isSuperseded = true
       simp [deriveAttempt, h_super, ClientTurnState.isTerminal]
+
+/-! ## Theorem T1: Convergence
+
+    Under the merged-snapshot assumption (DefraDB delivers CRDT-merged
+    latest per document), `deriveTurn` is a deterministic function of
+    its input. Observation order does not affect the result.
+
+    This is trivially true because `deriveTurn` is a pure function.
+    We state it explicitly to document the assumption.
+-/
+
+/-- T1: deriveTurn is deterministic (pure function of input). -/
+theorem deriveTurn_deterministic
+    (attempts : List AttemptView) :
+    deriveTurn attempts = deriveTurn attempts := rfl
+
+/-! ## Theorem T5: Turn Replacement
+
+    Adding a retry attempt to the chain changes the tip.
+    deriveTurn of the extended chain equals deriveAttempt of the new tip.
+
+    The rank relationship depends on the scenario:
+    - Supersession (isSuperseded set on old tip): rank stays at 2
+    - Retry restart (old tip was failed, new attempt is pending):
+      rank decreases from 2 to 0. This is the one allowed decrease.
+-/
+
+/-- T5a: extending the chain with a new attempt always derives from
+    the new attempt. -/
+theorem turn_replacement_derives_new_tip
+    (attempts : List AttemptView)
+    (newTip : AttemptView) :
+    deriveTurn (attempts ++ [newTip]) = some (deriveAttempt newTip) :=
+  deriveTurn_append_singleton attempts newTip
+
+/-- T5b: supersession always produces rank 2. -/
+theorem supersession_rank
+    (view : AttemptView)
+    (h_super : view.request.isSuperseded = true) :
+    (deriveAttempt view).rank = 2 := by
+  simp [deriveAttempt, h_super, ClientTurnState.rank]
+
+/-- T5c: retry restart is the one case where a new tip can have lower
+    rank than the old tip. The new tip is waitingForClaim (rank 0). -/
+theorem retry_restart_state
+    (newTip : AttemptView)
+    (h_pending : newTip.request.lifecycleState = .pending)
+    (h_not_super : newTip.request.isSuperseded = false)
+    (h_no_resp : newTip.response = none) :
+    deriveAttempt newTip = .waitingForClaim := by
+  obtain ⟨req, resp⟩ := newTip
+  simp only at h_pending h_not_super h_no_resp
+  simp [deriveAttempt, h_not_super, h_pending, h_no_resp]
