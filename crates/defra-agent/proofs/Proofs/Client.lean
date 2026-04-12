@@ -405,3 +405,122 @@ theorem response_advance_monotonic_streaming_to_terminal
   rw [deriveAttempt_nonterminal_response_driven h_not_super h_nonterminal,
       deriveAttempt_nonterminal_response_driven h_not_super h_nonterminal]
   rcases h_terminal with h | h <;> simp [h, ClientTurnState.rank]
+
+/-! ## Theorem T3: Terminal Coherence
+
+    The client view is terminal iff the server request is effectively
+    terminal. "Effectively terminal" means:
+    - The request is superseded (isSuperseded = true), OR
+    - The lifecycle state is terminal (completed/failed/superseded/dead), OR
+    - The response status is terminal (complete/error)
+
+    The third disjunct captures replication-lag tolerance: when the
+    response has advanced past the request, the client should still
+    correctly identify the turn as terminal.
+-/
+
+/-- Whether a request/response pair is effectively terminal from the
+    server's perspective, accounting for replication lag. -/
+def effectivelyTerminal (view : AttemptView) : Prop :=
+  view.request.isSuperseded = true ∨
+  view.request.lifecycleState = .completed ∨
+  view.request.lifecycleState = .failed ∨
+  view.request.lifecycleState = .superseded ∨
+  view.request.lifecycleState = .dead ∨
+  (∃ r, view.response = some r ∧ (r.status = .complete ∨ r.status = .error))
+
+instance (view : AttemptView) : Decidable (effectivelyTerminal view) := by
+  unfold effectivelyTerminal
+  infer_instance
+
+/-- T3: The client view is terminal iff the attempt is effectively terminal. -/
+theorem terminal_coherence (view : AttemptView) :
+    (deriveAttempt view).isTerminal = true ↔ effectivelyTerminal view := by
+  obtain ⟨req, resp⟩ := view
+  constructor
+  · -- Forward: client terminal → effectively terminal
+    intro h_client_term
+    unfold effectivelyTerminal
+    -- Case split directly on the isSuperseded boolean
+    cases h_super : req.isSuperseded
+    · -- isSuperseded = false
+      simp [deriveAttempt, h_super] at h_client_term
+      cases h_lc : req.lifecycleState
+      · -- pending: consult response
+        simp [h_lc] at h_client_term
+        right; right; right; right; right
+        cases resp with
+        | none => simp [ClientTurnState.isTerminal] at h_client_term
+        | some r =>
+          refine ⟨r, rfl, ?_⟩
+          cases h_status : r.status
+          · simp [h_status, ClientTurnState.isTerminal] at h_client_term
+          · exact Or.inl rfl
+          · exact Or.inr rfl
+      · -- claimed: consult response
+        simp [h_lc] at h_client_term
+        right; right; right; right; right
+        cases resp with
+        | none => simp [ClientTurnState.isTerminal] at h_client_term
+        | some r =>
+          refine ⟨r, rfl, ?_⟩
+          cases h_status : r.status
+          · simp [h_status, ClientTurnState.isTerminal] at h_client_term
+          · exact Or.inl rfl
+          · exact Or.inr rfl
+      · -- processing: consult response
+        simp [h_lc] at h_client_term
+        right; right; right; right; right
+        cases resp with
+        | none => simp [ClientTurnState.isTerminal] at h_client_term
+        | some r =>
+          refine ⟨r, rfl, ?_⟩
+          cases h_status : r.status
+          · simp [h_status, ClientTurnState.isTerminal] at h_client_term
+          · exact Or.inl rfl
+          · exact Or.inr rfl
+      · -- inputRequired: consult response
+        simp [h_lc] at h_client_term
+        right; right; right; right; right
+        cases resp with
+        | none => simp [ClientTurnState.isTerminal] at h_client_term
+        | some r =>
+          refine ⟨r, rfl, ?_⟩
+          cases h_status : r.status
+          · simp [h_status, ClientTurnState.isTerminal] at h_client_term
+          · exact Or.inl rfl
+          · exact Or.inr rfl
+      · -- completed: terminal lifecycle
+        right; left; rfl
+      · -- failed: terminal lifecycle
+        right; right; left; rfl
+      · -- superseded: terminal lifecycle
+        right; right; right; left; rfl
+      · -- dead: terminal lifecycle
+        right; right; right; right; left; rfl
+    · -- isSuperseded = true
+      exact Or.inl rfl
+  · -- Backward: effectively terminal → client terminal
+    intro h_eff
+    cases h_super : req.isSuperseded
+    · -- isSuperseded = false
+      rcases h_eff with h_super' | h_lc_comp | h_lc_fail | h_lc_super | h_lc_dead | ⟨r, h_resp, h_status⟩
+      · -- isSuperseded = true contradicts h_super = false
+        simp only at h_super'
+        rw [h_super] at h_super'
+        exact absurd h_super' (by simp)
+      · simp only at h_lc_comp
+        simp [deriveAttempt, h_super, h_lc_comp, ClientTurnState.isTerminal]
+      · simp only at h_lc_fail
+        simp [deriveAttempt, h_super, h_lc_fail, ClientTurnState.isTerminal]
+      · simp only at h_lc_super
+        simp [deriveAttempt, h_super, h_lc_super, ClientTurnState.isTerminal]
+      · simp only at h_lc_dead
+        simp [deriveAttempt, h_super, h_lc_dead, ClientTurnState.isTerminal]
+      · -- Response terminal: case on lifecycle state
+        simp only at h_resp
+        simp only [deriveAttempt, h_super, if_false]
+        cases h_lc : req.lifecycleState <;> simp [h_lc, ClientTurnState.isTerminal] <;>
+          (rw [h_resp]; rcases h_status with h | h <;> simp [h, ClientTurnState.isTerminal])
+    · -- isSuperseded = true
+      simp [deriveAttempt, h_super, ClientTurnState.isTerminal]
