@@ -7,6 +7,7 @@ import Proofs.Composed
 import Proofs.Fleet
 import Proofs.SessionRecovery
 import Proofs.RuntimeReconcile
+import Proofs.Client
 import Proofs.Properties.Safety
 import Proofs.Properties.Decidable
 import Proofs.Properties.Liveness
