@@ -131,3 +131,30 @@ theorem deriveTurn_append_singleton
       -- and deriveTurn matches the `_ :: rest` case
       simp only [List.cons_append, deriveTurn]
       exact ih
+
+/-! ## Theorem T4: Totality
+
+    `deriveAttempt` is total by construction — it is a match expression
+    with exhaustive coverage over `RequestState` and `Option ResponseSnapshot`.
+
+    `deriveTurn` is total for non-empty attempt lists.
+-/
+
+/-- T4: deriveAttempt is total — defined for every possible AttemptView. -/
+theorem deriveAttempt_total (view : AttemptView) :
+    ∃ s : ClientTurnState, deriveAttempt view = s :=
+  ⟨deriveAttempt view, rfl⟩
+
+/-- T4: deriveTurn is defined for every non-empty attempt list. -/
+theorem deriveTurn_total
+    {attempts : List AttemptView}
+    (h : attempts ≠ []) :
+    ∃ s : ClientTurnState, deriveTurn attempts = some s := by
+  induction attempts with
+  | nil => contradiction
+  | cons head tail ih =>
+    cases tail with
+    | nil => exact ⟨deriveAttempt head, rfl⟩
+    | cons h' t' =>
+      simp [deriveTurn]
+      exact ih (by simp)
