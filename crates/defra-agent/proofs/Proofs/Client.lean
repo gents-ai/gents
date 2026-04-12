@@ -74,3 +74,32 @@ structure AttemptView where
   request : RequestSnapshot
   response : Option ResponseSnapshot
   deriving DecidableEq, Repr
+
+/-- Derive client turn state from a single attempt observation.
+
+    Priority order:
+    1. Supersession takes absolute precedence (cross-turn event).
+    2. Server terminal lifecycle states override any response
+       (terminal states are irreversible — proven in Request.lean).
+    3. For non-terminal request states, response may be more current
+       than the request under P2P replication lag. Trust the response.
+    4. No response and non-terminal request → waitingForClaim. -/
+def deriveAttempt : AttemptView → ClientTurnState
+  | ⟨req, resp⟩ =>
+    -- Supersession: cross-turn event, always takes precedence
+    if req.isSuperseded then .superseded
+    else match req.lifecycleState with
+    -- Server terminal states override any stale response
+    | .superseded    => .superseded
+    | .completed     => .completed
+    | .failed        => .failed
+    | .dead          => .failed
+    -- Non-terminal: response may be more current than request
+    | .pending | .claimed | .processing | .inputRequired =>
+      match resp with
+      | some r =>
+        match r.status with
+        | .complete  => .completed
+        | .error     => .failed
+        | .streaming => .streaming
+      | none => .waitingForClaim
