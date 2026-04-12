@@ -239,7 +239,32 @@ theorem transition_implies_lifecycle
     subst h_post; simp [LifecycleTransition, h_state]
 
 /-- T2: A valid server lifecycle state transition never decreases the client rank
-    when the response and supersession flag are held fixed. -/
+    when the response and supersession flag are held fixed.
+
+    Structured as an explicit 12-arm case analysis matching the constructors of
+    `LifecycleTransition`, in the same style as `transition_implies_lifecycle`
+    above and the `Transition` case-splits in `Request.lean`. The 52 invalid
+    `(pre_state, post_state)` combinations are discharged up front by reducing
+    `h_trans` to `False`; the 12 valid arms are then closed one at a time.
+
+    Writing each arm explicitly keeps future breakage (changes to
+    `deriveAttempt` or `LifecycleTransition`) localized to a specific arm
+    rather than surfacing as a confusing failure inside an `all_goals` block.
+
+    The 12 valid (pre_state, post_state) pairs:
+      pending → claimed (claim): rank 0→0 (both non-terminal, response-driven)
+      pending → superseded (dedup_lose): rank 0→2
+      claimed → processing (begin_inference): rank 0→0 (both non-terminal)
+      processing → processing (advance): identity (0→0 or 1→1)
+      processing → inputRequired (need_input): rank 0→0 (both non-terminal)
+      inputRequired → processing (input_received): rank 0→0 (both non-terminal)
+      processing → completed (finish): rank ≤1 → 2
+      processing → failed (fail): rank ≤1 → 2
+      claimed → failed (fail_before_stream): rank 0→2
+      inputRequired → failed (input_timeout): rank ≤1 → 2
+      failed → dead (exhaust): rank 2→2 (dead maps to .failed)
+      processing → dead (deadline_expire): rank ≤1 → 2
+-/
 theorem lifecycle_transition_monotonic
     {pre_state post_state : RequestState}
     (h_trans : LifecycleTransition pre_state post_state)
@@ -247,20 +272,111 @@ theorem lifecycle_transition_monotonic
     (resp : Option ResponseSnapshot) :
     (deriveAttempt ⟨⟨post_state, isSuperseded⟩, resp⟩).rank ≥
     (deriveAttempt ⟨⟨pre_state, isSuperseded⟩, resp⟩).rank := by
+  -- First dispose of the 52 invalid `(pre_state, post_state)` combinations
+  -- by reducing `h_trans` to `False`. The 12 valid arms remain as named
+  -- cases and are closed one by one below. Each arm uses the same tactic
+  -- shape — split on `isSuperseded`, then on `resp` (and if `resp = some r`,
+  -- on `r.status`) — but written explicitly so that future changes to
+  -- `deriveAttempt` or `LifecycleTransition` produce a localized failure
+  -- at the specific arm, not a confusing `all_goals` error.
   cases pre_state <;> cases post_state <;>
-    simp [LifecycleTransition] at h_trans <;>
-    try contradiction
-  all_goals {
+    try (simp [LifecycleTransition] at h_trans)
+  case pending.claimed =>
     cases isSuperseded
-    case false =>
-      cases resp with
+    · cases resp with
       | none => simp [deriveAttempt, ClientTurnState.rank]
       | some r =>
         obtain ⟨status⟩ := r
         cases status <;> simp [deriveAttempt, ClientTurnState.rank]
-    case true =>
-      simp [deriveAttempt, ClientTurnState.rank]
-  }
+    · simp [deriveAttempt, ClientTurnState.rank]
+  case pending.superseded =>
+    cases isSuperseded
+    · cases resp with
+      | none => simp [deriveAttempt, ClientTurnState.rank]
+      | some r =>
+        obtain ⟨status⟩ := r
+        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
+    · simp [deriveAttempt, ClientTurnState.rank]
+  case claimed.processing =>
+    cases isSuperseded
+    · cases resp with
+      | none => simp [deriveAttempt, ClientTurnState.rank]
+      | some r =>
+        obtain ⟨status⟩ := r
+        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
+    · simp [deriveAttempt, ClientTurnState.rank]
+  case claimed.failed =>
+    cases isSuperseded
+    · cases resp with
+      | none => simp [deriveAttempt, ClientTurnState.rank]
+      | some r =>
+        obtain ⟨status⟩ := r
+        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
+    · simp [deriveAttempt, ClientTurnState.rank]
+  case processing.processing =>
+    cases isSuperseded
+    · cases resp with
+      | none => simp [deriveAttempt, ClientTurnState.rank]
+      | some r =>
+        obtain ⟨status⟩ := r
+        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
+    · simp [deriveAttempt, ClientTurnState.rank]
+  case processing.inputRequired =>
+    cases isSuperseded
+    · cases resp with
+      | none => simp [deriveAttempt, ClientTurnState.rank]
+      | some r =>
+        obtain ⟨status⟩ := r
+        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
+    · simp [deriveAttempt, ClientTurnState.rank]
+  case processing.completed =>
+    cases isSuperseded
+    · cases resp with
+      | none => simp [deriveAttempt, ClientTurnState.rank]
+      | some r =>
+        obtain ⟨status⟩ := r
+        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
+    · simp [deriveAttempt, ClientTurnState.rank]
+  case processing.failed =>
+    cases isSuperseded
+    · cases resp with
+      | none => simp [deriveAttempt, ClientTurnState.rank]
+      | some r =>
+        obtain ⟨status⟩ := r
+        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
+    · simp [deriveAttempt, ClientTurnState.rank]
+  case processing.dead =>
+    cases isSuperseded
+    · cases resp with
+      | none => simp [deriveAttempt, ClientTurnState.rank]
+      | some r =>
+        obtain ⟨status⟩ := r
+        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
+    · simp [deriveAttempt, ClientTurnState.rank]
+  case inputRequired.processing =>
+    cases isSuperseded
+    · cases resp with
+      | none => simp [deriveAttempt, ClientTurnState.rank]
+      | some r =>
+        obtain ⟨status⟩ := r
+        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
+    · simp [deriveAttempt, ClientTurnState.rank]
+  case inputRequired.failed =>
+    cases isSuperseded
+    · cases resp with
+      | none => simp [deriveAttempt, ClientTurnState.rank]
+      | some r =>
+        obtain ⟨status⟩ := r
+        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
+    · simp [deriveAttempt, ClientTurnState.rank]
+  case failed.dead =>
+    cases isSuperseded
+    · cases resp with
+      | none => simp [deriveAttempt, ClientTurnState.rank]
+      | some r =>
+        obtain ⟨status⟩ := r
+        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
+    · simp [deriveAttempt, ClientTurnState.rank]
 
 /-- T2 (response direction): advancing the response from none to some never decreases
     rank when the request is held fixed at a non-terminal lifecycle state. -/
