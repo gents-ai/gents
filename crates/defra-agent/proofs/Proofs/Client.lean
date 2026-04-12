@@ -103,3 +103,31 @@ def deriveAttempt : AttemptView → ClientTurnState
         | .error     => .failed
         | .streaming => .streaming
       | none => .waitingForClaim
+
+/-- Derive client turn state from a full turn observation.
+
+    The turn is a retry chain: a list of attempts ordered root-first,
+    tip-last. The tip is the most recent attempt — the one the client
+    should render.
+
+    Returns `none` for empty observations (no turn exists). -/
+def deriveTurn : List AttemptView → Option ClientTurnState
+  | []          => none
+  | [a]         => some (deriveAttempt a)
+  | _ :: rest   => deriveTurn rest
+
+/-- deriveTurn always returns the derivation of the last element. -/
+theorem deriveTurn_append_singleton
+    (attempts : List AttemptView)
+    (a : AttemptView) :
+    deriveTurn (attempts ++ [a]) = some (deriveAttempt a) := by
+  induction attempts with
+  | nil => rfl
+  | cons head tail ih =>
+    cases tail with
+    | nil => rfl
+    | cons h' t' =>
+      -- Now (head :: h' :: t') ++ [a] = head :: (h' :: t' ++ [a])
+      -- and deriveTurn matches the `_ :: rest` case
+      simp only [List.cons_append, deriveTurn]
+      exact ih
