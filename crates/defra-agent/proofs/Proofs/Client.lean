@@ -158,3 +158,134 @@ theorem deriveTurn_total
     | cons h' t' =>
       simp [deriveTurn]
       exact ih (by simp)
+
+/-! ## Theorem T2: Monotonicity
+
+    If the server transitions a request forward (valid `Transition` from
+    `Proofs.Request`) while the response is held fixed, the client rank
+    never decreases.
+
+    For response advances (none → some, or status change toward terminal),
+    the client rank also never decreases when the request is held fixed
+    and non-terminal.
+-/
+
+/-- Helper: for non-terminal lifecycle states, deriveAttempt result depends
+    only on the response (not which specific non-terminal state). -/
+theorem deriveAttempt_nonterminal_response_driven
+    {req : RequestSnapshot}
+    {resp : Option ResponseSnapshot}
+    (h_not_super : req.isSuperseded = false)
+    (h_state : req.lifecycleState = .pending ∨ req.lifecycleState = .claimed ∨
+               req.lifecycleState = .processing ∨ req.lifecycleState = .inputRequired) :
+    deriveAttempt ⟨req, resp⟩ = match resp with
+      | some r => match r.status with
+        | .complete => .completed
+        | .error => .failed
+        | .streaming => .streaming
+      | none => .waitingForClaim := by
+  simp [deriveAttempt, h_not_super]
+  rcases h_state with h | h | h | h <;> simp [h]
+
+/-- Helper: valid server lifecycle state transitions (projecting RequestContext.Transition
+    down to just the state component). -/
+def LifecycleTransition : RequestState → RequestState → Prop
+  | .pending,        .claimed         => True  -- claim
+  | .pending,        .superseded      => True  -- dedup_lose
+  | .claimed,        .processing      => True  -- begin_inference
+  | .processing,     .processing      => True  -- advance (progressSeq++)
+  | .processing,     .inputRequired   => True  -- need_input
+  | .inputRequired,  .processing      => True  -- input_received
+  | .processing,     .completed       => True  -- finish
+  | .processing,     .failed          => True  -- fail
+  | .claimed,        .failed          => True  -- fail_before_stream
+  | .inputRequired,  .failed          => True  -- input_timeout
+  | .failed,         .dead            => True  -- exhaust
+  | .processing,     .dead            => True  -- deadline_expire
+  | _,               _                => False
+
+/-- Project RequestContext.Transition to a LifecycleTransition at the state level.
+
+    Every server transition induces exactly one of the 12 pre/post state pairs
+    enumerated in LifecycleTransition. -/
+theorem transition_implies_lifecycle
+    {pre post : RequestContext}
+    (h : RequestContext.Transition pre post) :
+    LifecycleTransition pre.state post.state := by
+  cases h with
+  | claim h_state _ h_post =>
+    subst h_post; simp [LifecycleTransition, h_state]
+  | dedup_lose h_state _ h_post =>
+    subst h_post; simp [LifecycleTransition, h_state]
+  | begin_inference h_state _ h_post =>
+    subst h_post; simp [LifecycleTransition, h_state]
+  | advance h_state _ h_post =>
+    subst h_post; simp [LifecycleTransition, h_state]
+  | need_input h_state _ h_post =>
+    subst h_post; simp [LifecycleTransition, h_state]
+  | input_received h_state _ h_post =>
+    subst h_post; simp [LifecycleTransition, h_state]
+  | finish h_state _ h_post =>
+    subst h_post; simp [LifecycleTransition, h_state]
+  | fail h_state _ h_post =>
+    subst h_post; simp [LifecycleTransition, h_state]
+  | fail_before_stream h_state _ h_post =>
+    subst h_post; simp [LifecycleTransition, h_state]
+  | input_timeout h_state _ _ h_post =>
+    subst h_post; simp [LifecycleTransition, h_state]
+  | exhaust h_state _ h_post =>
+    subst h_post; simp [LifecycleTransition, h_state]
+  | deadline_expire h_state _ _ h_post =>
+    subst h_post; simp [LifecycleTransition, h_state]
+
+/-- T2: A valid server lifecycle state transition never decreases the client rank
+    when the response and supersession flag are held fixed. -/
+theorem lifecycle_transition_monotonic
+    {pre_state post_state : RequestState}
+    (h_trans : LifecycleTransition pre_state post_state)
+    (isSuperseded : Bool)
+    (resp : Option ResponseSnapshot) :
+    (deriveAttempt ⟨⟨post_state, isSuperseded⟩, resp⟩).rank ≥
+    (deriveAttempt ⟨⟨pre_state, isSuperseded⟩, resp⟩).rank := by
+  cases pre_state <;> cases post_state <;>
+    simp [LifecycleTransition] at h_trans <;>
+    try contradiction
+  all_goals {
+    cases isSuperseded
+    case false =>
+      cases resp with
+      | none => simp [deriveAttempt, ClientTurnState.rank]
+      | some r =>
+        obtain ⟨status⟩ := r
+        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
+    case true =>
+      simp [deriveAttempt, ClientTurnState.rank]
+  }
+
+/-- T2 (response direction): advancing the response from none to some never decreases
+    rank when the request is held fixed at a non-terminal lifecycle state. -/
+theorem response_advance_monotonic_none_to_some
+    {req : RequestSnapshot}
+    {resp : ResponseSnapshot}
+    (h_not_super : req.isSuperseded = false)
+    (h_nonterminal : req.lifecycleState = .pending ∨ req.lifecycleState = .claimed ∨
+                     req.lifecycleState = .processing ∨ req.lifecycleState = .inputRequired) :
+    (deriveAttempt ⟨req, some resp⟩).rank ≥
+    (deriveAttempt ⟨req, none⟩).rank := by
+  rw [deriveAttempt_nonterminal_response_driven h_not_super h_nonterminal,
+      deriveAttempt_nonterminal_response_driven h_not_super h_nonterminal]
+  cases resp.status <;> simp [ClientTurnState.rank]
+
+/-- T2 (response direction): streaming → complete/error never decreases rank. -/
+theorem response_advance_monotonic_streaming_to_terminal
+    {req : RequestSnapshot}
+    {resp_new : ResponseSnapshot}
+    (h_not_super : req.isSuperseded = false)
+    (h_nonterminal : req.lifecycleState = .pending ∨ req.lifecycleState = .claimed ∨
+                     req.lifecycleState = .processing ∨ req.lifecycleState = .inputRequired)
+    (h_terminal : resp_new.status = .complete ∨ resp_new.status = .error) :
+    (deriveAttempt ⟨req, some resp_new⟩).rank ≥
+    (deriveAttempt ⟨req, some ⟨.streaming⟩⟩).rank := by
+  rw [deriveAttempt_nonterminal_response_driven h_not_super h_nonterminal,
+      deriveAttempt_nonterminal_response_driven h_not_super h_nonterminal]
+  rcases h_terminal with h | h <;> simp [h, ClientTurnState.rank]
