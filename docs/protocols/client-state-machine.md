@@ -24,7 +24,7 @@ followed by a new pending attempt (rank 0).
 
 ## Turn Identity
 
-A turn is identified by `retry_root_request_id` — the `request_id` of
+A turn is identified by `retry_root_request` — the `request_id` of
 the first request in a retry chain. All retries share the same root and
 collapse into one logical user turn.
 
