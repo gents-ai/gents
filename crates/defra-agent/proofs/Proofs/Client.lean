@@ -553,8 +553,11 @@ theorem terminal_coherence (view : AttemptView) :
     latest per document), `deriveTurn` is a deterministic function of
     its input. Observation order does not affect the result.
 
-    This is trivially true because `deriveTurn` is a pure function.
-    We state it explicitly to document the assumption.
+    The proof below is `rfl` — it is purely declarative, restating that
+    a pure function is deterministic. The real convergence guarantee is
+    carried by DefraDB's CRDT merge semantics, which live outside this
+    Lean model. This theorem's purpose is to document the dependency so
+    a reader knows convergence is *assumed* here, not *proven* here.
 -/
 
 /-- T1: deriveTurn is deterministic (pure function of input). -/
@@ -596,6 +599,4 @@ theorem retry_restart_state
     (h_not_super : newTip.request.isSuperseded = false)
     (h_no_resp : newTip.response = none) :
     deriveAttempt newTip = .waitingForClaim := by
-  obtain ⟨req, resp⟩ := newTip
-  simp only at h_pending h_not_super h_no_resp
   simp [deriveAttempt, h_not_super, h_pending, h_no_resp]
