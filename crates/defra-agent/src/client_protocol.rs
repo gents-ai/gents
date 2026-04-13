@@ -168,7 +168,7 @@ pub fn derive_attempt(view: &AttemptView) -> ClientTurnState {
     }
 }
 
-fn resolve_tip<'a>(attempts: &'a [AttemptView]) -> Option<&'a AttemptView> {
+fn resolve_tip(attempts: &[AttemptView]) -> Option<&AttemptView> {
     if attempts.is_empty() {
         return None;
     }
