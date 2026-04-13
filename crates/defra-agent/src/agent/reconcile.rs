@@ -6,6 +6,7 @@ use anyhow::{anyhow, Result};
 use futures::FutureExt;
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
+use tracing::Instrument;
 
 use crate::config::BehaviorConfig;
 use crate::retry::RetryPolicy;
@@ -112,66 +113,87 @@ where
                     let Some(proposal) = proposal else {
                         break;
                     };
-                    self.runtime_status
-                        .set_reconcile_phase(ReconcilePhase::Diffing)
+                    let current_generation = self.current_snapshot.generation;
+                    let next_generation = current_generation + 1;
+                    let proposed_behavior_count = proposal.behaviors.len();
+                    let proposed_unavailable_behavior_count = proposal.unavailable_behaviors.len();
+                    let proposed_default_behavior_id = proposal.default_behavior_id.clone();
+
+                    self.handle_proposal(proposal, &active_snapshot_tx, shutdown.clone())
+                        .instrument(tracing::info_span!(
+                            "runtime.reconcile",
+                            current_generation,
+                            next_generation,
+                            proposed_behavior_count,
+                            proposed_unavailable_behavior_count,
+                            proposed_default_behavior_id = %proposed_default_behavior_id,
+                        ))
                         .await;
-                    if proposal.configuration_fingerprint() == self.current_snapshot.configuration_fingerprint() {
-                        tracing::debug!(
-                            generation = self.current_snapshot.generation,
-                            "runtime reconcile noop: resolved snapshot matches active generation"
-                        );
-                        self.runtime_status
-                            .publish_noop(self.current_snapshot.as_ref())
-                            .await;
-                        continue;
-                    }
-                    let diff = diff_counts(&self.current_snapshot, &proposal);
-                    let next_generation = self.current_snapshot.generation + 1;
-                    self.runtime_status
-                        .set_reconcile_phase(ReconcilePhase::Applying)
-                        .await;
-                    match self.apply_snapshot(
-                        proposal,
-                        next_generation,
-                        &active_snapshot_tx,
-                        shutdown.clone(),
-                    ) {
-                        Ok(()) => {
-                            tracing::info!(
-                                generation = next_generation,
-                                added_behaviors = diff.added,
-                                removed_behaviors = diff.removed,
-                                updated_behaviors = diff.updated,
-                                default_changed = diff.default_changed,
-                                unavailable_changed = diff.unavailable_changed,
-                                "runtime reconcile applied"
-                            );
-                            self.runtime_status
-                                .publish_applied(self.current_snapshot.as_ref())
-                                .await;
-                        }
-                        Err(error) => {
-                            tracing::error!(
-                                generation = next_generation,
-                                added_behaviors = diff.added,
-                                removed_behaviors = diff.removed,
-                                updated_behaviors = diff.updated,
-                                default_changed = diff.default_changed,
-                                unavailable_changed = diff.unavailable_changed,
-                                error = %error,
-                                "runtime reconcile apply failed; keeping previous active generation"
-                            );
-                            self.runtime_status
-                                .publish_error(&format!("{error:#}"))
-                                .await;
-                        }
-                    }
                 }
             }
         }
 
         self.shutdown_slots().await;
         Ok(())
+    }
+
+    async fn handle_proposal(
+        &mut self,
+        proposal: ResolvedRuntimeSnapshot,
+        active_snapshot_tx: &watch::Sender<Arc<ActiveRuntimeSnapshot>>,
+        shutdown: watch::Receiver<bool>,
+    ) {
+        self.runtime_status
+            .set_reconcile_phase(ReconcilePhase::Diffing)
+            .await;
+        if proposal.configuration_fingerprint() == self.current_snapshot.configuration_fingerprint()
+        {
+            tracing::debug!(
+                generation = self.current_snapshot.generation,
+                "runtime reconcile noop: resolved snapshot matches active generation"
+            );
+            self.runtime_status
+                .publish_noop(self.current_snapshot.as_ref())
+                .await;
+            return;
+        }
+
+        let diff = diff_counts(&self.current_snapshot, &proposal);
+        let next_generation = self.current_snapshot.generation + 1;
+        self.runtime_status
+            .set_reconcile_phase(ReconcilePhase::Applying)
+            .await;
+        match self.apply_snapshot(proposal, next_generation, active_snapshot_tx, shutdown) {
+            Ok(()) => {
+                tracing::info!(
+                    generation = next_generation,
+                    added_behaviors = diff.added,
+                    removed_behaviors = diff.removed,
+                    updated_behaviors = diff.updated,
+                    default_changed = diff.default_changed,
+                    unavailable_changed = diff.unavailable_changed,
+                    "runtime reconcile applied"
+                );
+                self.runtime_status
+                    .publish_applied(self.current_snapshot.as_ref())
+                    .await;
+            }
+            Err(error) => {
+                tracing::error!(
+                    generation = next_generation,
+                    added_behaviors = diff.added,
+                    removed_behaviors = diff.removed,
+                    updated_behaviors = diff.updated,
+                    default_changed = diff.default_changed,
+                    unavailable_changed = diff.unavailable_changed,
+                    error = %error,
+                    "runtime reconcile apply failed; keeping previous active generation"
+                );
+                self.runtime_status
+                    .publish_error(&format!("{error:#}"))
+                    .await;
+            }
+        }
     }
 
     fn apply_snapshot(

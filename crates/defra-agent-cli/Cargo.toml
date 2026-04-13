@@ -19,6 +19,9 @@ crossterm = "0.29"
 defra-agent = { path = "../defra-agent" }
 defra-node.workspace = true
 hostname.workspace = true
+opentelemetry.workspace = true
+opentelemetry-otlp.workspace = true
+opentelemetry_sdk.workspace = true
 ratatui = "0.29"
 reqwest.workspace = true
 rig-core = "0.31"
@@ -26,6 +29,7 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 

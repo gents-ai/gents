@@ -3,12 +3,18 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use futures::StreamExt;
 use rig::streaming::StreamingPrompt;
+use tracing::Instrument;
 
 use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS;
 use crate::error::classify_completion_error;
 use crate::hook::DefraSessionHook;
 use crate::streaming::{StreamStatus, StreamWriter};
+
+enum InferenceAttemptOutcome {
+    Retry(crate::error::InferenceError),
+    Finished(HandleRequestOutcome),
+}
 
 impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     pub(super) async fn run_inference(
@@ -43,117 +49,145 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 }
             }
 
-            let hook = DefraSessionHook::resume_or_create_with_identity_policy(
-                self.node.clone(),
-                &request.session_id,
-                &self.behavior.name,
-                self.behavior.did(),
-                self.hook_failure_policy,
-            )
-            .await?;
-            let persistence_hook = hook.clone();
+            let attempt_index = attempt + 1;
+            let request_id = request.request_id.clone();
+            let session_id = request.session_id.clone();
+            let behavior_id = self.behavior.name.clone();
+            let backend_id = lifecycle.backend_id().to_string();
+            let model_name = self.behavior.model_name.clone();
+            let attempt_result = async {
+                let hook = DefraSessionHook::resume_or_create_with_identity_policy(
+                    self.node.clone(),
+                    &request.session_id,
+                    &self.behavior.name,
+                    self.behavior.did(),
+                    self.hook_failure_policy,
+                )
+                .await?;
+                let persistence_hook = hook.clone();
 
-            let mut stream = tokio::select! {
-                _ = shutdown.changed() => {
-                    return Err(anyhow!("shutdown requested before inference stream started"));
-                }
-                stream = self
-                    .agent
-                    .stream_prompt(&request.content)
-                    .with_history(history.to_vec())
-                    .with_hook(hook) => stream
-            };
-
-            let liveness_timeout = Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS);
-
-            let mut processor = crate::agent::stream_processor::StreamProcessor::new(
-                &persistence_hook,
-                &self.stream_writer,
-                lifecycle,
-                doc_id,
-            );
-            let mut stream_error = None;
-
-            loop {
-                let item = match tokio::select! {
+                let mut stream = tokio::select! {
                     _ = shutdown.changed() => {
-                        return Err(anyhow!("shutdown requested during inference stream"));
+                        return Err(anyhow!("shutdown requested before inference stream started"));
                     }
-                    result = tokio::time::timeout(liveness_timeout, stream.next()) => result
-                } {
-                    Ok(Some(item)) => item,
-                    Ok(None) => break,
-                    Err(_) => {
-                        stream_error = Some(rig::agent::StreamingError::Completion(
-                            rig::completion::CompletionError::ProviderError(format!(
-                                "stream liveness timeout: no data received for {}s",
-                                DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS
-                            )),
-                        ));
-                        break;
-                    }
+                    stream = self
+                        .agent
+                        .stream_prompt(&request.content)
+                        .with_history(history.to_vec())
+                        .with_hook(hook) => stream
                 };
-                match processor.process_item(item).await {
-                    Ok(crate::agent::stream_processor::StreamAction::Continue) => {}
-                    Ok(crate::agent::stream_processor::StreamAction::Done) => break,
-                    Ok(crate::agent::stream_processor::StreamAction::Error(error)) => {
-                        stream_error = Some(error);
-                        break;
+
+                let liveness_timeout = Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS);
+
+                let mut processor = crate::agent::stream_processor::StreamProcessor::new(
+                    &persistence_hook,
+                    &self.stream_writer,
+                    lifecycle,
+                    doc_id,
+                );
+                let mut stream_error = None;
+
+                loop {
+                    let item = match tokio::select! {
+                        _ = shutdown.changed() => {
+                            return Err(anyhow!("shutdown requested during inference stream"));
+                        }
+                        result = tokio::time::timeout(liveness_timeout, stream.next()) => result
+                    } {
+                        Ok(Some(item)) => item,
+                        Ok(None) => break,
+                        Err(_) => {
+                            stream_error = Some(rig::agent::StreamingError::Completion(
+                                rig::completion::CompletionError::ProviderError(format!(
+                                    "stream liveness timeout: no data received for {}s",
+                                    DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS
+                                )),
+                            ));
+                            break;
+                        }
+                    };
+                    match processor.process_item(item).await {
+                        Ok(crate::agent::stream_processor::StreamAction::Continue) => {}
+                        Ok(crate::agent::stream_processor::StreamAction::Done) => break,
+                        Ok(crate::agent::stream_processor::StreamAction::Error(error)) => {
+                            stream_error = Some(error);
+                            break;
+                        }
+                        Err(error) => return Err(error),
                     }
-                    Err(error) => return Err(error),
                 }
+
+                let had_observable_activity = processor.has_observable_activity();
+
+                if let Some(error) = stream_error {
+                    let classified = classify_completion_error(&error);
+                    let can_retry = classified.is_retryable()
+                        && !had_observable_activity
+                        && attempt_index < max_attempts;
+
+                    if can_retry {
+                        return Ok(InferenceAttemptOutcome::Retry(classified));
+                    }
+
+                    let _ = processor
+                        .persist_partial_turn("persist errored assistant turn")
+                        .await?;
+
+                    let error_reason = format!("agent stream failed: {}", error);
+                    self.stream_writer
+                        .set_error_message(doc_id, &error_reason)
+                        .await?;
+                    self.stream_writer
+                        .finalize(doc_id, StreamStatus::Error)
+                        .await?;
+
+                    return Ok(InferenceAttemptOutcome::Finished(
+                        HandleRequestOutcome::FailedAfterResponse(anyhow!(error_reason)),
+                    ));
+                }
+
+                let mut streamed_text = std::mem::take(&mut processor.streamed_text);
+                let final_text = processor.final_text.take();
+
+                if let Some(text) = final_text.as_deref() {
+                    if streamed_text.is_empty() {
+                        let _ = self.stream_writer.write_tokens(doc_id, text).await?;
+                        streamed_text.push_str(text);
+                    } else if let Some(remainder) = text.strip_prefix(&streamed_text) {
+                        if !remainder.is_empty() {
+                            let _ = self.stream_writer.write_tokens(doc_id, remainder).await?;
+                            streamed_text.push_str(remainder);
+                        }
+                    }
+                }
+
+                self.stream_writer
+                    .finalize(doc_id, StreamStatus::Complete)
+                    .await?;
+
+                Ok(InferenceAttemptOutcome::Finished(
+                    HandleRequestOutcome::Completed,
+                ))
             }
+            .instrument(tracing::info_span!(
+                "inference.attempt",
+                request_id = %request_id,
+                session_id = %session_id,
+                behavior_id = %behavior_id,
+                backend_id = %backend_id,
+                model_name = %model_name,
+                attempt = attempt_index,
+                max_attempts,
+            ))
+            .await?;
 
-            let had_observable_activity = processor.has_observable_activity();
-
-            if let Some(error) = stream_error {
-                let classified = classify_completion_error(&error);
-                let can_retry = classified.is_retryable()
-                    && !had_observable_activity
-                    && attempt + 1 < max_attempts;
-
-                if can_retry {
+            match attempt_result {
+                InferenceAttemptOutcome::Retry(classified) => {
                     last_inference_error = Some(classified);
                     continue;
                 }
-
-                let _ = processor
-                    .persist_partial_turn("persist errored assistant turn")
-                    .await?;
-
-                let error_reason = format!("agent stream failed: {}", error);
-                self.stream_writer
-                    .set_error_message(doc_id, &error_reason)
-                    .await?;
-                self.stream_writer
-                    .finalize(doc_id, StreamStatus::Error)
-                    .await?;
-
-                return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
-                    error_reason
-                )));
+                InferenceAttemptOutcome::Finished(outcome) => return Ok(outcome),
             }
-
-            let mut streamed_text = std::mem::take(&mut processor.streamed_text);
-            let final_text = processor.final_text.take();
-
-            if let Some(text) = final_text.as_deref() {
-                if streamed_text.is_empty() {
-                    let _ = self.stream_writer.write_tokens(doc_id, text).await?;
-                    streamed_text.push_str(text);
-                } else if let Some(remainder) = text.strip_prefix(&streamed_text) {
-                    if !remainder.is_empty() {
-                        let _ = self.stream_writer.write_tokens(doc_id, remainder).await?;
-                        streamed_text.push_str(remainder);
-                    }
-                }
-            }
-
-            self.stream_writer
-                .finalize(doc_id, StreamStatus::Complete)
-                .await?;
-
-            return Ok(HandleRequestOutcome::Completed);
         }
 
         let last_error = last_inference_error

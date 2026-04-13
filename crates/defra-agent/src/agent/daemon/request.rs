@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{bail, Result};
+use tracing::Instrument;
 
 use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::backend_registry::{self, BackendPermit};
@@ -78,72 +79,94 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         mut shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> Result<HandleRequestOutcome> {
         let request = lifecycle.request().clone();
-        let full_history = session::load_history(&self.node, &request.session_id).await?;
-        let (stripped_history, file_activity) = compaction::strip_tool_results(full_history);
-        if !file_activity.is_empty() {
-            tracing::debug!(
-                behavior_id = %self.behavior.name,
-                session_id = %request.session_id,
-                files_read = ?file_activity.files_read,
-                files_modified = ?file_activity.files_modified,
-                "files referenced in stripped history"
-            );
-        }
-
-        let compaction_entries =
-            session::load_compaction_entries(&self.node, &request.session_id).await?;
-        let mut history = drop_compacted_prefix(
-            stripped_history,
-            total_compacted_messages(&compaction_entries),
-        );
-        let mut summaries = compaction_entries
-            .into_iter()
-            .map(|entry| entry.summary)
-            .collect::<Vec<_>>();
-
-        let mut built = self.prompt_builder.build(&history, &summaries).await?;
-        if prompt_exceeds_compaction_threshold(
-            built.estimated_tokens,
-            &request.content,
-            self.behavior.context_window,
-            self.behavior.compaction_threshold,
-        ) {
-            let result = self
-                .compactor
-                .compact(
-                    history,
-                    self.behavior.context_window,
-                    &CompactionOptions {
-                        strategy: self.behavior.compaction_strategy.clone(),
-                        ..self.compaction_options.clone()
-                    },
-                )
-                .await?;
-
-            history = result.messages;
-            if let Some(summary) = result.summary {
-                let entry = session::save_compaction_entry(
-                    &self.node,
-                    &request.session_id,
-                    &summary,
-                    &result.files_read,
-                    &result.files_modified,
-                    result.messages_compacted,
-                    result.original_token_estimate,
-                    result.compacted_token_estimate,
-                )
-                .await?;
-                summaries.push(entry.summary);
+        let behavior_name = self.behavior.name.clone();
+        let built = async {
+            let full_history = session::load_history(&self.node, &request.session_id).await?;
+            let (stripped_history, file_activity) = compaction::strip_tool_results(full_history);
+            if !file_activity.is_empty() {
+                tracing::debug!(
+                    behavior_id = %self.behavior.name,
+                    session_id = %request.session_id,
+                    files_read = ?file_activity.files_read,
+                    files_modified = ?file_activity.files_modified,
+                    "files referenced in stripped history"
+                );
             }
 
-            built = self.prompt_builder.build(&history, &summaries).await?;
-        }
+            let compaction_entries =
+                session::load_compaction_entries(&self.node, &request.session_id).await?;
+            let mut history = drop_compacted_prefix(
+                stripped_history,
+                total_compacted_messages(&compaction_entries),
+            );
+            let mut summaries = compaction_entries
+                .into_iter()
+                .map(|entry| entry.summary)
+                .collect::<Vec<_>>();
 
+            let mut built = self.prompt_builder.build(&history, &summaries).await?;
+            if prompt_exceeds_compaction_threshold(
+                built.estimated_tokens,
+                &request.content,
+                self.behavior.context_window,
+                self.behavior.compaction_threshold,
+            ) {
+                let result = self
+                    .compactor
+                    .compact(
+                        history,
+                        self.behavior.context_window,
+                        &CompactionOptions {
+                            strategy: self.behavior.compaction_strategy.clone(),
+                            ..self.compaction_options.clone()
+                        },
+                    )
+                    .await?;
+
+                history = result.messages;
+                if let Some(summary) = result.summary {
+                    let entry = session::save_compaction_entry(
+                        &self.node,
+                        &request.session_id,
+                        &summary,
+                        &result.files_read,
+                        &result.files_modified,
+                        result.messages_compacted,
+                        result.original_token_estimate,
+                        result.compacted_token_estimate,
+                    )
+                    .await?;
+                    summaries.push(entry.summary);
+                }
+
+                built = self.prompt_builder.build(&history, &summaries).await?;
+            }
+
+            Ok::<_, anyhow::Error>(built)
+        }
+        .instrument(tracing::info_span!(
+            "request.prepare_prompt",
+            request_id = %request.request_id,
+            session_id = %request.session_id,
+            behavior_id = %behavior_name,
+        ))
+        .await?;
+
+        let acquire_behavior_id = behavior_name.clone();
+        let acquire_backend_id = lifecycle.backend_id().to_string();
         let _backend_permit = self
             .acquire_backend_permit(lifecycle, &mut shutdown)
+            .instrument(tracing::info_span!(
+                "request.acquire_backend_permit",
+                request_id = %request.request_id,
+                session_id = %request.session_id,
+                behavior_id = %acquire_behavior_id,
+                backend_id = %acquire_backend_id,
+            ))
             .await?;
         lifecycle.begin_execution().await?;
 
+        let response_behavior_id = lifecycle.behavior_id().to_string();
         let doc_id = self
             .stream_writer
             .begin(
@@ -151,12 +174,27 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 &request.request_id,
                 lifecycle.behavior_id(),
             )
+            .instrument(tracing::info_span!(
+                "request.begin_response",
+                request_id = %request.request_id,
+                session_id = %request.session_id,
+                behavior_id = %response_behavior_id,
+            ))
             .await?;
         lifecycle.set_response_doc_id(&doc_id);
         lifecycle.advance().await?;
 
+        let inference_behavior_id = lifecycle.behavior_id().to_string();
+        let inference_backend_id = lifecycle.backend_id().to_string();
         let result = self
             .run_inference(&request, &doc_id, &built.messages, lifecycle, &mut shutdown)
+            .instrument(tracing::info_span!(
+                "request.run_inference",
+                request_id = %request.request_id,
+                session_id = %request.session_id,
+                behavior_id = %inference_behavior_id,
+                backend_id = %inference_backend_id,
+            ))
             .await;
 
         match result {

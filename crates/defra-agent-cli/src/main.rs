@@ -25,9 +25,9 @@ use defra_agent::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::watch;
-use tracing_subscriber::EnvFilter;
 
 mod desired_state;
+mod telemetry;
 mod tui;
 
 const DEFAULT_AGENT_NAME: &str = "default";
@@ -38,6 +38,7 @@ const DEFAULT_LOG_FILTER: &str = concat!(
     "defra_agent::agent::runtime=info,",
     "defra_agent::agent::daemon=info,",
     "defra_agent::agent::reconcile=info,",
+    "defra_agent::hook=info,",
     "defra_agent::session::sessions=info,",
     "defra_agent::streaming=info,",
     "defra_agent::scheduler::loop_impl=info"
@@ -1211,15 +1212,9 @@ struct ResponseWaitArgs {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER)),
-        )
-        .init();
-
+    let telemetry = telemetry::init(DEFAULT_LOG_FILTER)?;
     let cli = Cli::parse();
-    match cli.command {
+    let result = match cli.command {
         Command::Init(args) => init(args).await,
         Command::Server(args) => serve(args).await,
         Command::Chat(args) => chat(args).await,
@@ -1261,7 +1256,9 @@ async fn main() -> Result<()> {
             ResponseCommand::Show(args) => response_show(args).await,
             ResponseCommand::Wait(args) => response_wait(args).await,
         },
-    }
+    };
+    telemetry.shutdown();
+    result
 }
 
 async fn init(args: InitArgs) -> Result<()> {

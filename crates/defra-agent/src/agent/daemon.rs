@@ -5,6 +5,7 @@ use anyhow::Result;
 use rig::agent::Agent;
 use rig::completion::CompletionModel;
 use tokio::sync::{mpsc, Mutex};
+use tracing::Instrument;
 
 mod inference;
 mod request;
@@ -119,83 +120,89 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 }
             };
 
-            let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-                self.node.clone(),
-                &self.behavior.name,
-                self.behavior.did(),
-                request.clone(),
-                self.behavior.deadline_duration.as_secs(),
-                crate::lifecycle::ExecutionOrigin::Interactive,
-                self.behavior.backend_id.clone().unwrap_or_default(),
-            );
-
-            match lifecycle.claim_with_identity().await {
-                Ok(ClaimOutcome::Claimed) => {}
-                Ok(ClaimOutcome::Superseded) => {
-                    tracing::info!(
-                        behavior_id = %self.behavior.name,
-                        request_id = %request.request_id,
-                        session_id = %request.session_id,
-                        "request superseded by an earlier non-terminal request"
-                    );
-                    continue;
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        behavior_id = %self.behavior.name,
-                        request_id = %request.request_id,
-                        error = %error,
-                        "failed to claim request"
-                    );
-                    continue;
-                }
-            }
-
-            if let Some(requested_behavior_id) = request
+            let request_id = request.request_id.clone();
+            let session_id = request.session_id.clone();
+            let agent_did = request.agent_did.clone();
+            let requested_behavior_id = request
                 .behavior_id
                 .as_deref()
                 .map(str::trim)
                 .filter(|behavior_id| !behavior_id.is_empty())
-            {
-                if requested_behavior_id != self.behavior.name {
-                    let error = anyhow::anyhow!(
-                        "request targets behavior {} but runtime is serving behavior {}",
-                        requested_behavior_id,
-                        self.behavior.name
-                    );
-                    tracing::warn!(
-                        behavior_id = %self.behavior.name,
-                        request_id = %request.request_id,
-                        session_id = %request.session_id,
-                        requested_behavior_id = %requested_behavior_id,
-                        "rejecting request for unroutable behavior"
-                    );
-                    let _ = lifecycle.record_failure_reason(&error.to_string()).await;
-                    let _ = lifecycle.fail().await;
-                    if !lifecycle.response_exists().await.unwrap_or(false) {
-                        if let Err(stream_error) = self
-                            .write_error_response(&request, lifecycle.behavior_id(), &error)
-                            .await
-                        {
-                            tracing::error!(
-                                behavior_id = %self.behavior.name,
-                                error = %stream_error,
-                                "failed to write behavior-mismatch response"
-                            );
-                        }
-                    }
-                    continue;
-                }
-            }
+                .unwrap_or("")
+                .to_string();
+            let behavior_id = self.behavior.name.clone();
+            let backend_id = self.behavior.backend_id.clone().unwrap_or_default();
 
-            if let Err(error) = lifecycle.prepare_session_with_identity().await {
-                tracing::error!(
+            self.process_request(request, shutdown.clone())
+                .instrument(tracing::info_span!(
+                    "agent.request",
+                    request_id = %request_id,
+                    session_id = %session_id,
+                    agent_did = %agent_did,
+                    behavior_id = %behavior_id,
+                    requested_behavior_id = %requested_behavior_id,
+                    backend_id = %backend_id,
+                    execution_origin = "interactive",
+                ))
+                .await;
+        }
+    }
+
+    async fn process_request(
+        &mut self,
+        request: AgentRequest,
+        shutdown: tokio::sync::watch::Receiver<bool>,
+    ) {
+        let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+            self.node.clone(),
+            &self.behavior.name,
+            self.behavior.did(),
+            request.clone(),
+            self.behavior.deadline_duration.as_secs(),
+            crate::lifecycle::ExecutionOrigin::Interactive,
+            self.behavior.backend_id.clone().unwrap_or_default(),
+        );
+
+        match lifecycle.claim_with_identity().await {
+            Ok(ClaimOutcome::Claimed) => {}
+            Ok(ClaimOutcome::Superseded) => {
+                tracing::info!(
                     behavior_id = %self.behavior.name,
                     request_id = %request.request_id,
                     session_id = %request.session_id,
-                    behavior_id = %lifecycle.behavior_id(),
+                    "request superseded by an earlier non-terminal request"
+                );
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    behavior_id = %self.behavior.name,
+                    request_id = %request.request_id,
                     error = %error,
-                    "failed to prepare behavior-pinned session"
+                    "failed to claim request"
+                );
+                return;
+            }
+        }
+
+        if let Some(requested_behavior_id) = request
+            .behavior_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|behavior_id| !behavior_id.is_empty())
+        {
+            if requested_behavior_id != self.behavior.name {
+                let error = anyhow::anyhow!(
+                    "request targets behavior {} but runtime is serving behavior {}",
+                    requested_behavior_id,
+                    self.behavior.name
+                );
+                tracing::warn!(
+                    behavior_id = %self.behavior.name,
+                    request_id = %request.request_id,
+                    session_id = %request.session_id,
+                    requested_behavior_id = %requested_behavior_id,
+                    "rejecting request for unroutable behavior"
                 );
                 let _ = lifecycle.record_failure_reason(&error.to_string()).await;
                 let _ = lifecycle.fail().await;
@@ -207,47 +214,73 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                         tracing::error!(
                             behavior_id = %self.behavior.name,
                             error = %stream_error,
-                            "failed to write session-preparation response"
+                            "failed to write behavior-mismatch response"
                         );
                     }
                 }
-                continue;
+                return;
             }
+        }
 
-            match self.handle_request(&mut lifecycle, shutdown.clone()).await {
-                Ok(HandleRequestOutcome::Completed) => {
-                    let _ = lifecycle.complete().await;
-                }
-                Ok(HandleRequestOutcome::FailedAfterResponse(error)) => {
+        if let Err(error) = lifecycle.prepare_session_with_identity().await {
+            tracing::error!(
+                behavior_id = %self.behavior.name,
+                request_id = %request.request_id,
+                session_id = %request.session_id,
+                behavior_id = %lifecycle.behavior_id(),
+                error = %error,
+                "failed to prepare behavior-pinned session"
+            );
+            let _ = lifecycle.record_failure_reason(&error.to_string()).await;
+            let _ = lifecycle.fail().await;
+            if !lifecycle.response_exists().await.unwrap_or(false) {
+                if let Err(stream_error) = self
+                    .write_error_response(&request, lifecycle.behavior_id(), &error)
+                    .await
+                {
                     tracing::error!(
                         behavior_id = %self.behavior.name,
-                        request_id = %request.request_id,
-                        error = %error,
-                        "request failed after response started"
+                        error = %stream_error,
+                        "failed to write session-preparation response"
                     );
-                    let _ = lifecycle.record_failure_reason(&error.to_string()).await;
-                    let _ = lifecycle.fail().await;
                 }
-                Err(error) => {
-                    tracing::error!(
-                        behavior_id = %self.behavior.name,
-                        request_id = %request.request_id,
-                        error = %error,
-                        "request handling failed"
-                    );
-                    let _ = lifecycle.record_failure_reason(&error.to_string()).await;
-                    let _ = lifecycle.fail().await;
-                    if !lifecycle.response_exists().await.unwrap_or(false) {
-                        if let Err(stream_error) = self
-                            .write_error_response(&request, lifecycle.behavior_id(), &error)
-                            .await
-                        {
-                            tracing::error!(
-                                behavior_id = %self.behavior.name,
-                                error = %stream_error,
-                                "failed to write error response"
-                            );
-                        }
+            }
+            return;
+        }
+
+        match self.handle_request(&mut lifecycle, shutdown).await {
+            Ok(HandleRequestOutcome::Completed) => {
+                let _ = lifecycle.complete().await;
+            }
+            Ok(HandleRequestOutcome::FailedAfterResponse(error)) => {
+                tracing::error!(
+                    behavior_id = %self.behavior.name,
+                    request_id = %request.request_id,
+                    error = %error,
+                    "request failed after response started"
+                );
+                let _ = lifecycle.record_failure_reason(&error.to_string()).await;
+                let _ = lifecycle.fail().await;
+            }
+            Err(error) => {
+                tracing::error!(
+                    behavior_id = %self.behavior.name,
+                    request_id = %request.request_id,
+                    error = %error,
+                    "request handling failed"
+                );
+                let _ = lifecycle.record_failure_reason(&error.to_string()).await;
+                let _ = lifecycle.fail().await;
+                if !lifecycle.response_exists().await.unwrap_or(false) {
+                    if let Err(stream_error) = self
+                        .write_error_response(&request, lifecycle.behavior_id(), &error)
+                        .await
+                    {
+                        tracing::error!(
+                            behavior_id = %self.behavior.name,
+                            error = %stream_error,
+                            "failed to write error response"
+                        );
                     }
                 }
             }

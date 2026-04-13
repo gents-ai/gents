@@ -2,6 +2,7 @@ use rig::agent::{HookAction, PromptHook, ToolCallHookAction};
 use rig::completion::message::{Message, Text, ToolResult, ToolResultContent, UserContent};
 use rig::completion::{CompletionModel, CompletionResponse};
 use rig::one_or_many::OneOrMany;
+use tracing::Instrument;
 
 use crate::session;
 use crate::truncation::{truncate_text, DefraSpillTruncator, TruncationMode, Truncator};
@@ -192,6 +193,11 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
 
             Ok(())
         }
+        .instrument(tracing::info_span!(
+            "tool.call",
+            tool_name = %tool_name,
+            tool_call_id = %internal_call_id,
+        ))
         .await;
 
         match result {
@@ -259,6 +265,11 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
 
             Ok(())
         }
+        .instrument(tracing::info_span!(
+            "tool.result",
+            tool_name = %tool_name,
+            tool_call_id = %internal_call_id,
+        ))
         .await;
 
         match persist_result {
