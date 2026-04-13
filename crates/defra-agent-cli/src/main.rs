@@ -2064,7 +2064,6 @@ async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
                     supports_structured_outputs: {supports_structured_outputs},
                     supports_json_schema: {supports_json_schema},
                     models: ["default"],
-                    last_probe: "{now}",
                     probe_status: "{probe_status}"
                 }},
                 update: {{
@@ -2079,7 +2078,6 @@ async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
                     supports_streaming: {supports_streaming},
                     supports_structured_outputs: {supports_structured_outputs},
                     supports_json_schema: {supports_json_schema},
-                    last_probe: "{now}",
                     probe_status: "{probe_status}"
                 }}
             ) {{ _docID }}
@@ -2101,7 +2099,6 @@ async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
         supports_structured_outputs = graphql_bool_literal(backend.supports_structured_outputs),
         supports_json_schema = graphql_bool_literal(backend.supports_json_schema),
         probe_status = escape_graphql_string(&args.probe_status),
-        now = chrono::Utc::now().to_rfc3339(),
     );
     let response = post_graphql(&args.graphql, &mutation).await?;
     let doc_id = extract_mutation_doc_id(&response, "InferenceBackend")?;
@@ -3862,28 +3859,32 @@ async fn apply_import_collection(
                     doc
                 )
             })?;
-        let document_literal = graphql_input_literal(doc)?;
+        let add_doc = sanitize_import_document(collection_name, doc, false)?;
+        let add_literal = graphql_input_literal(&add_doc)?;
         let mutation = if override_existing {
+            let update_doc = sanitize_import_document(collection_name, doc, true)?;
+            let update_literal = graphql_input_literal(&update_doc)?;
             format!(
                 r#"mutation {{
                     upsert_{collection_name}(
                         filter: {{ {unique_field}: {{ _eq: "{unique_value}" }} }},
-                        add: {document_literal},
-                        update: {document_literal}
+                        add: {add_literal},
+                        update: {update_literal}
                     ) {{ _docID }}
                 }}"#,
                 collection_name = collection_name,
                 unique_field = unique_field,
                 unique_value = escape_graphql_string(unique_value),
-                document_literal = document_literal,
+                add_literal = add_literal,
+                update_literal = update_literal,
             )
         } else {
             format!(
                 r#"mutation {{
-                    create_{collection_name}(input: {document_literal}) {{ _docID }}
+                    create_{collection_name}(input: {add_literal}) {{ _docID }}
                 }}"#,
                 collection_name = collection_name,
-                document_literal = document_literal,
+                add_literal = add_literal,
             )
         };
         let response = access.execute(&mutation).await.map_err(|error| {
@@ -3903,6 +3904,22 @@ async fn apply_import_collection(
     }
 
     Ok(docs.len())
+}
+
+fn sanitize_import_document(collection_name: &str, doc: &Value, for_update: bool) -> Result<Value> {
+    if collection_name != "InferenceBackend" {
+        return Ok(doc.clone());
+    }
+
+    let mut object = doc
+        .as_object()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("InferenceBackend import document must be an object"))?;
+    object.remove("last_probe");
+    if for_update {
+        object.insert("last_probe".to_string(), Value::Null);
+    }
+    Ok(Value::Object(object))
 }
 
 fn diff_has_pending_apply(counts: &desired_state::DesiredStateDiffCollectionsCounts) -> bool {
@@ -4768,10 +4785,6 @@ fn bootstrap_template_vars(
     vars.insert(
         "TOOL_SELECTION_ID".to_string(),
         graphql_string_literal(tool_selection_id),
-    );
-    vars.insert(
-        "LAST_PROBE_AT".to_string(),
-        graphql_string_literal(&chrono::Utc::now().to_rfc3339()),
     );
     vars
 }

@@ -15,7 +15,6 @@ mutation {
       supports_structured_outputs: ${SUPPORTS_STRUCTURED_OUTPUTS}
       supports_json_schema: ${SUPPORTS_JSON_SCHEMA}
       models: [${MODEL_NAME}]
-      last_probe: ${LAST_PROBE_AT}
       probe_status: "healthy"
     }
     update: {
@@ -31,7 +30,6 @@ mutation {
       supports_structured_outputs: ${SUPPORTS_STRUCTURED_OUTPUTS}
       supports_json_schema: ${SUPPORTS_JSON_SCHEMA}
       models: [${MODEL_NAME}]
-      last_probe: ${LAST_PROBE_AT}
       probe_status: "healthy"
     }
   ) {
