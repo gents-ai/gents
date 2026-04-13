@@ -1483,6 +1483,104 @@ async fn request_submit_waits_for_response_by_default() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_submit_supports_content_file_and_output_file() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-submit-file-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let agent_name = format!("cli-submit-file-{}", Uuid::new_v4().simple());
+    let graphql = graphql_url(port);
+    let request_agent_did = format!("did:defra-agent:request-file-{}", Uuid::new_v4().simple());
+    let request_content = format!("CLI file request {}", Uuid::new_v4());
+    let expected_content = format!("wait-file-ok-{}", Uuid::new_v4().simple());
+    let content_path = tempdir.path().join("request.txt");
+    let output_path = tempdir.path().join("request-output.json");
+    fs::write(&content_path, &request_content)?;
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve.child)?;
+    wait_for_runtime_ready(
+        &graphql,
+        &format!("did:defra-agent:{agent_name}"),
+        Duration::from_secs(30),
+    )
+    .await?;
+
+    let submit = spawn_cli(
+        &home_dir,
+        &[
+            "request",
+            "submit",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &request_agent_did,
+            "--content-file",
+            content_path
+                .to_str()
+                .ok_or_else(|| anyhow!("content path is not utf-8"))?,
+            "--output-file",
+            output_path
+                .to_str()
+                .ok_or_else(|| anyhow!("output path is not utf-8"))?,
+            "--timeout-secs",
+            "20",
+            "--poll-secs",
+            "1",
+        ],
+    )?;
+
+    let (request_id, session_id, behavior_id) =
+        wait_for_request(&graphql, &request_agent_did, &request_content).await?;
+    insert_terminal_response(
+        &graphql,
+        &request_id,
+        &request_agent_did,
+        &behavior_id,
+        &session_id,
+        &expected_content,
+    )
+    .await?;
+
+    let output = submit
+        .wait_with_output()
+        .context("waiting for request submit child")?;
+    if !output.status.success() {
+        bail!(
+            "request submit failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let stdout_json: Value =
+        serde_json::from_slice(&output.stdout).context("parsing request submit JSON")?;
+    let file_json = read_json_file(&output_path)?;
+    assert_eq!(stdout_json, file_json);
+    assert_eq!(
+        stdout_json
+            .pointer("/response/content")
+            .and_then(Value::as_str),
+        Some(expected_content.as_str())
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_uses_runtime_state_for_interactive_turns() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -1631,6 +1729,86 @@ async fn chat_continues_existing_session_when_session_id_is_provided() -> Result
         request_contains_role_text(&captured_requests[1], "user", second_prompt),
         "expected follow-up request to include current user turn: {}",
         captured_requests[1]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chat_supports_message_file_json_output_and_output_file() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let expected_reply = format!("chat-json-{}", Uuid::new_v4().simple());
+    let model_name = format!("mock-chat-json-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
+
+    let port = allocate_port()?;
+    let agent_name = format!("cli-chat-json-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+    let graphql = graphql_url(port);
+    let message = format!("Reply with exactly {}.", Uuid::new_v4().simple());
+    let message_path = tempdir.path().join("chat-message.txt");
+    let output_path = tempdir.path().join("chat-output.json");
+    fs::write(&message_path, &message)?;
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve.child)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let output = run_cli_json(
+        &home_dir,
+        &[
+            "chat",
+            "--message-file",
+            message_path
+                .to_str()
+                .ok_or_else(|| anyhow!("message path is not utf-8"))?,
+            "--output-format",
+            "json",
+            "--output-file",
+            output_path
+                .to_str()
+                .ok_or_else(|| anyhow!("output path is not utf-8"))?,
+        ],
+    )?;
+
+    let file_output = read_json_file(&output_path)?;
+    assert_eq!(output, file_output);
+    assert!(
+        output.get("request_id").and_then(Value::as_str).is_some(),
+        "chat json output should include request_id: {output}"
+    );
+    assert!(
+        output.get("session_id").and_then(Value::as_str).is_some(),
+        "chat json output should include session_id: {output}"
+    );
+    assert_eq!(
+        output.pointer("/response/status").and_then(Value::as_str),
+        Some("complete")
+    );
+    assert_eq!(
+        output.pointer("/response/content").and_then(Value::as_str),
+        Some(expected_reply.as_str())
+    );
+
+    let captured_requests = mock_endpoint.captured_chat_requests();
+    assert_eq!(captured_requests.len(), 1);
+    assert!(
+        request_contains_role_text(&captured_requests[0], "user", &message),
+        "expected request to include message file content: {}",
+        captured_requests[0]
     );
 
     Ok(())

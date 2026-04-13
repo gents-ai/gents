@@ -329,6 +329,12 @@ struct ChatArgs {
     session_id: Option<String>,
     #[arg(long, help = "Override the behavior for this one-off turn or session")]
     behavior_id: Option<String>,
+    #[arg(long = "message-file", help = "Read the user message from a file")]
+    message_file: Option<PathBuf>,
+    #[arg(long, value_enum, default_value_t = ChatOutputFormat::Text)]
+    output_format: ChatOutputFormat,
+    #[arg(long = "output-file", help = "Write the final response to a file")]
+    output_file: Option<PathBuf>,
     #[arg(long, default_value_t = 300)]
     timeout_secs: u64,
     #[arg(long, default_value_t = 1)]
@@ -375,6 +381,12 @@ struct StatusArgs {
     graphql: Option<String>,
     #[arg(long)]
     agent_did: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum ChatOutputFormat {
+    Text,
+    Json,
 }
 
 #[derive(clap::Args)]
@@ -1149,11 +1161,15 @@ struct RequestSubmitArgs {
     #[arg(long)]
     agent_did: Option<String>,
     #[arg(long)]
-    content: String,
+    content: Option<String>,
+    #[arg(long = "content-file")]
+    content_file: Option<PathBuf>,
     #[arg(long)]
     session_id: Option<String>,
     #[arg(long)]
     behavior_id: Option<String>,
+    #[arg(long = "output-file")]
+    output_file: Option<PathBuf>,
     #[arg(long, default_value_t = false)]
     no_wait: bool,
     #[arg(long, default_value_t = 300)]
@@ -1526,18 +1542,51 @@ async fn chat(args: ChatArgs) -> Result<()> {
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    if !args.message.is_empty() {
-        submit_chat_turn(
-            &graphql,
-            &agent_did,
-            &session_id,
-            args.behavior_id.as_deref(),
-            &args.message.join(" "),
-            args.timeout_secs,
-            args.poll_secs,
-        )
-        .await?;
+    if let Some(message) = resolve_chat_message(&args.message, args.message_file.as_deref())? {
+        match args.output_format {
+            ChatOutputFormat::Text => {
+                let (_submitted, response) = submit_chat_turn(
+                    &graphql,
+                    &agent_did,
+                    &session_id,
+                    args.behavior_id.as_deref(),
+                    &message,
+                    args.timeout_secs,
+                    args.poll_secs,
+                )
+                .await?;
+                if let Some(path) = args.output_file.as_deref() {
+                    write_text_output_file(path, response_text_content(&response))?;
+                }
+            }
+            ChatOutputFormat::Json => {
+                let output = submit_chat_turn_json(
+                    &graphql,
+                    &agent_did,
+                    &session_id,
+                    args.behavior_id.as_deref(),
+                    &message,
+                    args.timeout_secs,
+                    args.poll_secs,
+                )
+                .await?;
+                print_json(&output)?;
+                if let Some(path) = args.output_file.as_deref() {
+                    write_json_output_file(path, &output)?;
+                }
+            }
+        }
         return Ok(());
+    }
+
+    if args.output_format != ChatOutputFormat::Text {
+        anyhow::bail!("interactive chat only supports --output-format text");
+    }
+    if let Some(path) = args.output_file.as_deref() {
+        anyhow::bail!(
+            "--output-file {} requires a one-shot message via MESSAGE or --message-file",
+            path.display()
+        );
     }
 
     let stdin = io::stdin();
@@ -1981,10 +2030,11 @@ async fn scheduled_task_set(args: ScheduledTaskSetArgs) -> Result<()> {
 async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
+    let content = resolve_request_content(args.content.as_deref(), args.content_file.as_deref())?;
     let submitted = create_agent_request(
         &graphql,
         &agent_did,
-        &args.content,
+        &content,
         args.session_id.as_deref(),
         args.behavior_id.as_deref(),
     )
@@ -1997,6 +2047,9 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
     });
     if args.no_wait {
         print_json(&request_summary)?;
+        if let Some(path) = args.output_file.as_deref() {
+            write_json_output_file(path, &request_summary)?;
+        }
         return Ok(());
     }
 
@@ -2015,6 +2068,9 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
     output.insert("response".to_string(), response);
     let output = serde_json::Value::Object(output);
     print_json(&output)?;
+    if let Some(path) = args.output_file.as_deref() {
+        write_json_output_file(path, &output)?;
+    }
     Ok(())
 }
 
@@ -3843,11 +3899,11 @@ async fn submit_chat_turn(
     content: &str,
     timeout_secs: u64,
     poll_secs: u64,
-) -> Result<()> {
+) -> Result<(SubmittedRequest, Value)> {
     let existing_tool_calls = load_existing_tool_call_keys(graphql, session_id).await?;
     let submitted =
         create_agent_request(graphql, agent_did, content, Some(session_id), behavior_id).await?;
-    stream_turn_progress(
+    let response = stream_turn_progress(
         graphql,
         &submitted,
         existing_tool_calls,
@@ -3855,7 +3911,25 @@ async fn submit_chat_turn(
         poll_secs,
     )
     .await?;
-    Ok(())
+    Ok((submitted, response))
+}
+
+async fn submit_chat_turn_json(
+    graphql: &str,
+    agent_did: &str,
+    session_id: &str,
+    behavior_id: Option<&str>,
+    content: &str,
+    timeout_secs: u64,
+    poll_secs: u64,
+) -> Result<Value> {
+    let submitted =
+        create_agent_request(graphql, agent_did, content, Some(session_id), behavior_id).await?;
+    let response =
+        wait_for_terminal_response(graphql, &submitted.request_id, timeout_secs, poll_secs)
+            .await
+            .with_context(|| format!("waiting for AgentResponse {}", submitted.request_id))?;
+    Ok(chat_turn_output(&submitted, response))
 }
 
 fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
@@ -4042,6 +4116,43 @@ fn resolve_task_prompt(prompt: Option<&str>, prompt_file: Option<&Path>) -> Resu
     }
 }
 
+fn resolve_chat_message(message: &[String], message_file: Option<&Path>) -> Result<Option<String>> {
+    if !message.is_empty() && message_file.is_some() {
+        anyhow::bail!("provide either MESSAGE or --message-file, not both");
+    }
+    if !message.is_empty() {
+        return Ok(Some(
+            require_non_empty("message", &message.join(" "))?.to_string(),
+        ));
+    }
+    if let Some(path) = message_file {
+        let message = fs::read_to_string(path)
+            .with_context(|| format!("reading chat message from {}", path.display()))?;
+        return Ok(Some(
+            require_non_empty("message-file", &message)?.to_string(),
+        ));
+    }
+    Ok(None)
+}
+
+fn resolve_request_content(content: Option<&str>, content_file: Option<&Path>) -> Result<String> {
+    match (content, content_file) {
+        (Some(_), Some(path)) => anyhow::bail!(
+            "provide either --content or --content-file, not both ({})",
+            path.display()
+        ),
+        (Some(content), None) => Ok(require_non_empty("content", content)?.to_string()),
+        (None, Some(path)) => {
+            let content = fs::read_to_string(path)
+                .with_context(|| format!("reading request content from {}", path.display()))?;
+            Ok(require_non_empty("content-file", &content)?.to_string())
+        }
+        (None, None) => {
+            anyhow::bail!("request content is required; pass --content or --content-file")
+        }
+    }
+}
+
 async fn resolve_scheduled_task_behavior_id(
     graphql: &str,
     agent_did: &str,
@@ -4209,6 +4320,45 @@ fn format_tool_ceiling(value: ToolCeilingArg) -> &'static str {
 fn print_json(value: &Value) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
+}
+
+fn write_json_output_file(path: &Path, value: &Value) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating output directory {}", parent.display()))?;
+    }
+    let contents =
+        serde_json::to_vec_pretty(value).context("encoding JSON output for output file")?;
+    fs::write(path, contents)
+        .with_context(|| format!("writing JSON output file {}", path.display()))?;
+    Ok(())
+}
+
+fn write_text_output_file(path: &Path, content: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating output directory {}", parent.display()))?;
+    }
+    fs::write(path, content)
+        .with_context(|| format!("writing text output file {}", path.display()))?;
+    Ok(())
+}
+
+fn response_text_content(response: &Value) -> &str {
+    response
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+}
+
+fn chat_turn_output(submitted: &SubmittedRequest, response: Value) -> Value {
+    json!({
+        "request_id": submitted.request_id,
+        "session_id": submitted.session_id,
+        "agent_did": submitted.agent_did,
+        "behavior_id": submitted.behavior_id,
+        "response": response,
+    })
 }
 
 async fn wait_for_terminal_response(
