@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{anyhow, Result};
+use defra_agent::BackendProviderKind;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -59,10 +60,21 @@ pub(crate) struct DesiredToolSelection {
 pub(crate) struct DesiredInferenceBackend {
     pub(crate) backend_id: String,
     pub(crate) name: String,
+    #[serde(default)]
+    pub(crate) provider_kind: BackendProviderKind,
     pub(crate) endpoint: String,
+    pub(crate) api_key: Option<String>,
     pub(crate) api_key_env_var: Option<String>,
     pub(crate) max_concurrent: i64,
     pub(crate) enabled: bool,
+    #[serde(default = "default_true")]
+    pub(crate) supports_tool_calls: bool,
+    #[serde(default = "default_true")]
+    pub(crate) supports_streaming: bool,
+    #[serde(default)]
+    pub(crate) supports_structured_outputs: bool,
+    #[serde(default)]
+    pub(crate) supports_json_schema: bool,
     #[serde(default)]
     pub(crate) models: Vec<String>,
 }
@@ -355,6 +367,44 @@ fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Vec<String>) 
                 "duplicate backend_id in inference-backends.json: {backend_id}"
             ));
         }
+
+        if backend.endpoint.trim().is_empty() {
+            errors.push(format!(
+                "backend {} in inference-backends.json must contain a non-empty endpoint",
+                backend.backend_id
+            ));
+        }
+
+        if backend
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| value.is_empty())
+        {
+            errors.push(format!(
+                "backend {} in inference-backends.json contains an empty api_key",
+                backend.backend_id
+            ));
+        }
+
+        if backend
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+            && backend
+                .api_key_env_var
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_some()
+        {
+            errors.push(format!(
+                "backend {} in inference-backends.json must not set both api_key and api_key_env_var",
+                backend.backend_id
+            ));
+        }
     }
 
     for selection in &manifest.tool_selections {
@@ -529,10 +579,16 @@ pub(crate) fn manifest_from_export_bundle(
                     &[
                         "backend_id",
                         "name",
+                        "provider_kind",
                         "endpoint",
+                        "api_key",
                         "api_key_env_var",
                         "max_concurrent",
                         "enabled",
+                        "supports_tool_calls",
+                        "supports_streaming",
+                        "supports_structured_outputs",
+                        "supports_json_schema",
                         "models",
                     ],
                 )
@@ -712,6 +768,10 @@ fn normalize_manifest(manifest: &mut DesiredStateManifest) {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 fn desired_from_value<T>(value: &Value, allowed_fields: &[&str]) -> Result<T>
 where
     T: for<'de> Deserialize<'de>,
@@ -724,6 +784,7 @@ where
         .filter_map(|field| {
             object
                 .get(*field)
+                .filter(|value| !value.is_null())
                 .map(|value| ((*field).to_string(), value.clone()))
         })
         .collect::<Map<String, Value>>();

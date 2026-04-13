@@ -8,6 +8,7 @@ use rig::completion::CompletionModel;
 use rig::completion::Prompt;
 use rig::tool::ToolDyn;
 
+use crate::backend_provider::build_completion_client;
 use crate::config::BehaviorConfig;
 use crate::hook::{DefraSessionHook, FailurePolicy};
 use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
@@ -42,20 +43,24 @@ pub async fn run_openai_oneshot_with_tools(
     let prompt_builder = LayeredPromptBuilder::new(behavior, &tool_surface);
     let preamble = prompt_builder.preamble().to_string();
 
-    let openai_client: rig::providers::openai::CompletionsClient =
-        rig::providers::openai::CompletionsClient::builder()
-            .api_key(&api_key)
-            .base_url(&behavior.backend_endpoint)
-            .build()
-            .with_context(|| {
-                format!(
-                    "building OpenAI-compatible client for backend endpoint {}",
-                    behavior.backend_endpoint
-                )
-            })?;
-
     let mut tools = tool_surface.build_tools(&tool_runtime)?;
     tools.extend(extra_tools);
+    let tool_names = tools
+        .iter()
+        .map(|tool| tool.name().to_string())
+        .collect::<Vec<_>>();
+    behavior.ensure_tool_calling_support_for_names(&tool_names)?;
+    let openai_client = build_completion_client(
+        behavior.backend_provider_kind,
+        &behavior.backend_endpoint,
+        &api_key,
+    )
+    .with_context(|| {
+        format!(
+            "building completion client for behavior {} against {}",
+            behavior.name, behavior.backend_endpoint
+        )
+    })?;
 
     let agent = if tools.is_empty() {
         openai_client

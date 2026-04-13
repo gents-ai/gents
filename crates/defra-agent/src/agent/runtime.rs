@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 use super::daemon::BehaviorDaemon;
 use super::reconcile::GenerationSupervisor;
 use super::{DefraAgent, ProcessLifecycleState};
+use crate::backend_provider::{build_completion_client, discover_models};
 use crate::backend_registry::BackendTracker;
 use crate::health_checker::{spawn_health_checker, ServiceHealthMap};
 use crate::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
@@ -51,17 +52,6 @@ enum BackgroundTaskResult {
 }
 
 const STARTUP_BACKEND_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
-
-#[derive(serde::Deserialize)]
-struct OpenAiModelsResponse {
-    #[serde(default)]
-    data: Vec<OpenAiModelRecord>,
-}
-
-#[derive(serde::Deserialize)]
-struct OpenAiModelRecord {
-    id: String,
-}
 
 impl StartupBarrier {
     fn new(behaviors: &[Arc<crate::config::BehaviorConfig>]) -> Self {
@@ -107,14 +97,15 @@ impl RuntimeContext {
     ) -> Result<()> {
         let tool_names = tool_surface.tool_names();
         let api_key = behavior.completion_client_api_key()?;
-        let openai_client: rig::providers::openai::CompletionsClient =
-            rig::providers::openai::CompletionsClient::builder()
-                .api_key(&api_key)
-                .base_url(&behavior.backend_endpoint)
-                .build()?;
         let prompt_builder = LayeredPromptBuilder::new(behavior.as_ref(), tool_surface.as_ref());
         let preamble = prompt_builder.preamble().to_string();
         let tools = tool_surface.build_tools(&self.tool_runtime)?;
+        behavior.ensure_runtime_compatibility(tool_surface.as_ref())?;
+        let openai_client = build_completion_client(
+            behavior.backend_provider_kind,
+            &behavior.backend_endpoint,
+            &api_key,
+        )?;
         tracing::info!(
             behavior_id = %behavior.name,
             did = %behavior.did(),
@@ -477,6 +468,7 @@ async fn validate_startup_snapshot(
             .tool_surfaces
             .get(&behavior_id)
             .ok_or_else(|| anyhow!("missing tool surface for behavior {behavior_id}"))?;
+        behavior.ensure_runtime_compatibility(tool_surface.as_ref())?;
         tool_surface
             .build_tools(tool_runtime)
             .with_context(|| format!("building startup tool surface for behavior {behavior_id}"))?;
@@ -494,59 +486,27 @@ async fn probe_behavior_backend(
     api_key: Option<&str>,
     behavior: &crate::config::BehaviorConfig,
 ) -> Result<()> {
-    let models_url = format!("{}/models", behavior.backend_endpoint.trim_end_matches('/'));
-    let mut request = client.get(&models_url);
-    if let Some(api_key) = api_key {
-        request = request.bearer_auth(api_key);
-    }
-    let response = request
-        .send()
-        .await
-        .with_context(|| format!("querying {}", models_url))?;
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .unwrap_or_else(|_| "<unreadable body>".to_string());
-    if !status.is_success() {
-        anyhow::bail!(
-            "startup readiness probe failed for behavior {} against {}: {} {}",
-            behavior.name,
-            models_url,
-            status,
-            truncate_probe_body(&body)
-        );
-    }
-
-    let models: OpenAiModelsResponse = serde_json::from_str(&body).with_context(|| {
-        format!(
-            "decoding readiness probe response from {}: {}",
-            models_url,
-            truncate_probe_body(&body)
-        )
-    })?;
-    if !models
-        .data
+    let discovered_models = discover_models(
+        client,
+        behavior.backend_provider_kind,
+        &behavior.backend_endpoint,
+        api_key,
+    )
+    .await?;
+    if !discovered_models
         .iter()
-        .any(|model| model.id == behavior.model_name)
+        .any(|model| model == &behavior.model_name)
     {
         anyhow::bail!(
-            "startup readiness probe for behavior {} did not advertise model {} at {}",
+            "startup readiness probe for behavior {} did not advertise model {} on backend {} ({})",
             behavior.name,
             behavior.model_name,
-            models_url
+            behavior.backend_id.as_deref().unwrap_or("<unbound>"),
+            behavior.backend_provider_kind
         );
     }
 
     Ok(())
-}
-
-fn truncate_probe_body(body: &str) -> String {
-    const LIMIT: usize = 256;
-    if body.len() <= LIMIT {
-        return body.to_string();
-    }
-    format!("{}...", &body[..LIMIT])
 }
 
 async fn run_router(

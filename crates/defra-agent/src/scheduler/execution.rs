@@ -1,4 +1,5 @@
 use super::*;
+use crate::backend_provider::build_completion_client;
 use crate::config::BehaviorConfig;
 use crate::tool_surface::ToolSurface;
 
@@ -89,14 +90,16 @@ async fn execute_materialized_task(
     cancel: &CancellationToken,
 ) -> Result<()> {
     let api_key = behavior.completion_client_api_key()?;
-    let openai_client: rig::providers::openai::CompletionsClient =
-        rig::providers::openai::CompletionsClient::builder()
-            .api_key(&api_key)
-            .base_url(&behavior.backend_endpoint)
-            .build()?;
     let prompt_builder = LayeredPromptBuilder::new(behavior, tool_surface);
     let preamble = prompt_builder.preamble().to_string();
+    let tool_names = tool_surface.tool_names();
+    behavior.ensure_tool_calling_support_for_names(&tool_names)?;
     let tools = tool_surface.build_tools(tool_runtime)?;
+    let openai_client = build_completion_client(
+        behavior.backend_provider_kind,
+        &behavior.backend_endpoint,
+        &api_key,
+    )?;
 
     let agent = openai_client
         .agent(&behavior.model_name)

@@ -3,9 +3,10 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
+use crate::backend_provider::BackendProviderKind;
 use crate::compaction::CompactionStrategy;
 use crate::identity::AgentIdentity;
-use crate::tool_surface::BehaviorToolConfig;
+use crate::tool_surface::{BehaviorToolConfig, ToolSurface};
 
 pub const DEFAULT_CONTEXT_WINDOW: usize = 131_072;
 pub const DEFAULT_MAX_OUTPUT_TOKENS: usize = 32_768;
@@ -23,8 +24,14 @@ pub struct BehaviorConfig {
     pub name: String,
     pub identity: Arc<dyn AgentIdentity>,
     pub backend_id: Option<String>,
+    pub backend_provider_kind: BackendProviderKind,
     pub backend_endpoint: String,
+    pub backend_api_key: Option<String>,
     pub backend_api_key_env_var: Option<String>,
+    pub backend_supports_tool_calls: bool,
+    pub backend_supports_streaming: bool,
+    pub backend_supports_structured_outputs: bool,
+    pub backend_supports_json_schema: bool,
     pub model_name: String,
     pub context_window: usize,
     pub max_output_tokens: usize,
@@ -43,8 +50,29 @@ impl std::fmt::Debug for BehaviorConfig {
             .field("name", &self.name)
             .field("identity_did", &self.identity.did())
             .field("backend_id", &self.backend_id)
+            .field("backend_provider_kind", &self.backend_provider_kind)
             .field("backend_endpoint", &self.backend_endpoint)
+            .field(
+                "backend_api_key",
+                &self.backend_api_key.as_ref().map(|_| "<redacted>"),
+            )
             .field("backend_api_key_env_var", &self.backend_api_key_env_var)
+            .field(
+                "backend_supports_tool_calls",
+                &self.backend_supports_tool_calls,
+            )
+            .field(
+                "backend_supports_streaming",
+                &self.backend_supports_streaming,
+            )
+            .field(
+                "backend_supports_structured_outputs",
+                &self.backend_supports_structured_outputs,
+            )
+            .field(
+                "backend_supports_json_schema",
+                &self.backend_supports_json_schema,
+            )
             .field("model_name", &self.model_name)
             .field("context_window", &self.context_window)
             .field("max_output_tokens", &self.max_output_tokens)
@@ -65,6 +93,10 @@ impl BehaviorConfig {
     }
 
     pub fn resolve_backend_api_key(&self) -> Result<Option<String>> {
+        if let Some(api_key) = normalize_optional_secret(self.backend_api_key.as_deref()) {
+            return Ok(Some(api_key.to_string()));
+        }
+
         if let Some(env_var) = normalize_optional_env_var(self.backend_api_key_env_var.as_deref()) {
             let value = std::env::var(env_var).with_context(|| {
                 format!(
@@ -97,9 +129,43 @@ impl BehaviorConfig {
             .resolve_backend_api_key()?
             .unwrap_or_else(|| "no-key".to_string()))
     }
+
+    pub fn ensure_tool_calling_support_for_names(&self, tool_names: &[String]) -> Result<()> {
+        if tool_names.is_empty() || self.backend_supports_tool_calls {
+            return Ok(());
+        }
+
+        anyhow::bail!(
+            "behavior {} backend {} ({}) does not support tool calling but resolved tools are enabled: {}",
+            self.name,
+            self.backend_id.as_deref().unwrap_or("<unbound>"),
+            self.backend_provider_kind,
+            tool_names.join(", ")
+        );
+    }
+
+    pub fn ensure_runtime_compatibility(&self, tool_surface: &ToolSurface) -> Result<()> {
+        if !self.backend_supports_streaming {
+            anyhow::bail!(
+                "behavior {} backend {} ({}) does not support streaming and cannot serve interactive runtime requests",
+                self.name,
+                self.backend_id.as_deref().unwrap_or("<unbound>"),
+                self.backend_provider_kind
+            );
+        }
+
+        self.ensure_tool_calling_support_for_names(&tool_surface.tool_names())
+    }
 }
 
 fn normalize_optional_env_var(value: Option<&str>) -> Option<&str> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then_some(trimmed)
+    })
+}
+
+fn normalize_optional_secret(value: Option<&str>) -> Option<&str> {
     value.and_then(|value| {
         let trimmed = value.trim();
         (!trimmed.is_empty()).then_some(trimmed)

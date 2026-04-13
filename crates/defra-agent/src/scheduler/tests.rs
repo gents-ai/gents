@@ -17,6 +17,7 @@ use crate::config::{
 use crate::ensure_runtime_schemas;
 use crate::identity::SimpleIdentity;
 use crate::tool_surface::{BehaviorToolConfig, ToolRuntimeContext};
+use crate::BackendProviderKind;
 
 #[test]
 fn scheduled_task_parses_from_json() {
@@ -442,8 +443,14 @@ async fn scheduled_execution_succeeds_without_external_ops_service() {
         name: "did:defra-agent:scheduled-test:default".to_string(),
         identity,
         backend_id: Some("backend-1".to_string()),
+        backend_provider_kind: BackendProviderKind::OpenAiCompatible,
         backend_endpoint: mock_endpoint.endpoint().to_string(),
+        backend_api_key: None,
         backend_api_key_env_var: None,
+        backend_supports_tool_calls: true,
+        backend_supports_streaming: true,
+        backend_supports_structured_outputs: false,
+        backend_supports_json_schema: false,
         model_name: "scheduled-model".to_string(),
         context_window: DEFAULT_CONTEXT_WINDOW,
         max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
@@ -530,8 +537,14 @@ async fn scheduler_tick_shutdown_is_prompt_while_task_waits_for_backend_capacity
         name: "did:defra-agent:scheduled-test:default".to_string(),
         identity,
         backend_id: Some("backend-blocked".to_string()),
+        backend_provider_kind: BackendProviderKind::OpenAiCompatible,
         backend_endpoint: mock_endpoint.endpoint().to_string(),
+        backend_api_key: None,
         backend_api_key_env_var: None,
+        backend_supports_tool_calls: true,
+        backend_supports_streaming: true,
+        backend_supports_structured_outputs: false,
+        backend_supports_json_schema: false,
         model_name: "scheduled-model".to_string(),
         context_window: DEFAULT_CONTEXT_WINDOW,
         max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,

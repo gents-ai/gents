@@ -6,6 +6,7 @@ use tokio::sync::{mpsc, watch, Mutex};
 
 use super::*;
 use crate::agent::PendingBehaviorConfig;
+use crate::backend_provider::BackendProviderKind;
 use crate::config::BehaviorConfig;
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
@@ -304,8 +305,14 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         name: "general".to_string(),
         identity: identity.clone(),
         backend_id: Some("backend-general".to_string()),
+        backend_provider_kind: BackendProviderKind::OpenAiCompatible,
         backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
+        backend_api_key: None,
         backend_api_key_env_var: None,
+        backend_supports_tool_calls: true,
+        backend_supports_streaming: true,
+        backend_supports_structured_outputs: false,
+        backend_supports_json_schema: false,
         model_name: "default".to_string(),
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         max_output_tokens: crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
@@ -321,8 +328,14 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         name: "general".to_string(),
         identity: identity.clone(),
         backend_id: Some("backend-general".to_string()),
+        backend_provider_kind: BackendProviderKind::OpenAiCompatible,
         backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
+        backend_api_key: None,
         backend_api_key_env_var: None,
+        backend_supports_tool_calls: true,
+        backend_supports_streaming: true,
+        backend_supports_structured_outputs: false,
+        backend_supports_json_schema: false,
         model_name: "default".to_string(),
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         max_output_tokens: crate::config::DEFAULT_MAX_OUTPUT_TOKENS,

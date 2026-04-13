@@ -320,6 +320,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         .unwrap_or_else(|| default_behavior_id_for_agent(context.identity.did()));
 
     let mut behaviors = Vec::<Arc<BehaviorConfig>>::new();
+    let mut tool_surfaces = HashMap::new();
     let mut unavailable_behaviors = HashMap::new();
 
     for behavior_record in view.behaviors.values() {
@@ -354,7 +355,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
             )),
         };
 
-        let resolved = (|| {
+        let resolved = async {
             let backend = backend?;
             if !backend.is_available() {
                 anyhow::bail!(
@@ -398,28 +399,30 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                 None => ToolSelection::default(),
             };
 
-            behavior_config_from_documents(
+            let behavior_config = behavior_config_from_documents(
                 context.identity.clone(),
                 behavior,
                 backend,
                 inference_profile,
                 tool_selection,
                 &context.tool_ceiling,
-            )
-        })();
+            )?;
+            let behavior = Arc::new(behavior_config);
+            let tool_surface = Arc::new(behavior.tools.resolve(node).await?);
+            behavior.ensure_runtime_compatibility(tool_surface.as_ref())?;
+            Ok::<_, anyhow::Error>((behavior, tool_surface))
+        }
+        .await;
 
         match resolved {
-            Ok(behavior_config) => behaviors.push(Arc::new(behavior_config)),
+            Ok((behavior_config, tool_surface)) => {
+                tool_surfaces.insert(behavior_config.name.clone(), tool_surface);
+                behaviors.push(behavior_config);
+            }
             Err(error) => {
                 unavailable_behaviors.insert(behavior.behavior_id.clone(), error.to_string());
             }
         }
-    }
-
-    let mut tool_surfaces = HashMap::new();
-    for behavior in &behaviors {
-        let tool_surface = behavior.tools.resolve(node).await?;
-        tool_surfaces.insert(behavior.name.clone(), Arc::new(tool_surface));
     }
 
     Ok(ResolvedRuntimeSnapshot::from_parts(

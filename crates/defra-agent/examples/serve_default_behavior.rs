@@ -190,7 +190,6 @@ async fn upsert_demo_backend(node: &EmbeddedNode, backend_id: &str, endpoint: &s
         }}"#,
         backend_id = escape_graphql_string(backend_id),
         endpoint = escape_graphql_string(endpoint),
-        now = chrono::Utc::now().to_rfc3339(),
     );
     let response = node.execute(&mutation).await;
     if response.has_errors() {

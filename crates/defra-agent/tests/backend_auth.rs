@@ -13,8 +13,9 @@ use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{
     ensure_agent_principal, ensure_runtime_schemas, load_agent_behavior, upsert_agent_behavior,
-    AgentIdentity, BehaviorConfig, BehaviorToolConfig, DefraAgent, DocumentRuntimeOptions,
-    ProcessLifecycleObserver, ProcessLifecycleState, SimpleIdentity, ToolCeiling,
+    AgentIdentity, BackendProviderKind, BehaviorConfig, BehaviorToolConfig, DefraAgent,
+    DocumentRuntimeOptions, ProcessLifecycleObserver, ProcessLifecycleState, SimpleIdentity,
+    ToolCeiling,
 };
 use serde_json::Value;
 use tokio::sync::watch;
@@ -137,8 +138,14 @@ fn test_behavior(
         name: name.to_string(),
         identity: Arc::new(test_identity(name)),
         backend_id: Some(backend_id.to_string()),
+        backend_provider_kind: BackendProviderKind::OpenAiCompatible,
         backend_endpoint: "http://localhost:8000/v1".to_string(),
+        backend_api_key: None,
         backend_api_key_env_var: backend_api_key_env_var.map(ToOwned::to_owned),
+        backend_supports_tool_calls: true,
+        backend_supports_streaming: true,
+        backend_supports_structured_outputs: false,
+        backend_supports_json_schema: false,
         model_name: defra_agent::config::DEFAULT_MODEL_NAME.to_string(),
         context_window: defra_agent::config::DEFAULT_CONTEXT_WINDOW,
         max_output_tokens: defra_agent::config::DEFAULT_MAX_OUTPUT_TOKENS,
@@ -291,6 +298,24 @@ fn write_http_response(
     stream.write_all(response.as_bytes())?;
     stream.flush()?;
     Ok(())
+}
+
+#[test]
+fn behavior_config_prefers_raw_backend_api_key() {
+    let mut behavior = test_behavior("behavior-raw", "backend-raw", Some("IGNORED_ENV_KEY"));
+    behavior.backend_api_key = Some("raw-key".to_string());
+
+    unsafe {
+        std::env::set_var("AGENT_DAEMON_API_KEY", "legacy-key");
+        std::env::set_var("IGNORED_ENV_KEY", "env-key");
+    }
+    let resolved = behavior.resolve_backend_api_key().expect("resolve api key");
+    unsafe {
+        std::env::remove_var("AGENT_DAEMON_API_KEY");
+        std::env::remove_var("IGNORED_ENV_KEY");
+    }
+
+    assert_eq!(resolved.as_deref(), Some("raw-key"));
 }
 
 #[test]

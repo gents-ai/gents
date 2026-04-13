@@ -207,8 +207,14 @@ pub(crate) fn behavior_config_from_documents(
         name: behavior.behavior_id.clone(),
         identity,
         backend_id: Some(backend.backend_id.clone()),
+        backend_provider_kind: backend.provider_kind,
         backend_endpoint: backend.endpoint.clone(),
+        backend_api_key: backend.api_key.clone(),
         backend_api_key_env_var: backend.api_key_env_var.clone(),
+        backend_supports_tool_calls: backend.supports_tool_calls,
+        backend_supports_streaming: backend.supports_streaming,
+        backend_supports_structured_outputs: backend.supports_structured_outputs,
+        backend_supports_json_schema: backend.supports_json_schema,
         model_name: normalize_optional_string(behavior.model_name.as_deref())
             .unwrap_or(DEFAULT_MODEL_NAME)
             .to_string(),

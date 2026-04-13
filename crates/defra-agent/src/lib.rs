@@ -4,6 +4,7 @@
 //! `agent-daemon` remains the first consumer during the extraction phase.
 
 pub mod agent;
+pub mod backend_provider;
 pub mod backend_registry;
 pub mod client_protocol;
 pub mod compaction;
@@ -34,6 +35,11 @@ pub mod watcher;
 pub use agent::{
     BehaviorBuilder, DefraAgent, DefraAgentBuilder, DocumentRuntimeOptions,
     ProcessLifecycleObserver, ProcessLifecycleState,
+};
+pub use backend_provider::{
+    adapter_for as backend_provider_adapter,
+    build_completion_client as build_backend_completion_client,
+    discover_models as discover_backend_models, BackendProviderAdapter, BackendProviderKind,
 };
 pub use backend_registry::{BackendTracker, InferenceBackend};
 pub use config::BehaviorConfig;

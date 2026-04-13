@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 
+use crate::backend_provider::BackendProviderKind;
 use crate::graphql::escape_graphql_string;
 
 /// An inference backend document from DefraDB.
@@ -19,29 +20,89 @@ use crate::graphql::escape_graphql_string;
 pub struct InferenceBackend {
     pub backend_id: String,
     pub name: String,
+    pub provider_kind: BackendProviderKind,
     /// OpenAI-compatible API base URL, including the `/v1` path segment.
     pub endpoint: String,
+    pub api_key: Option<String>,
     pub api_key_env_var: Option<String>,
     pub max_concurrent: i64,
     pub enabled: bool,
+    pub supports_tool_calls: bool,
+    pub supports_streaming: bool,
+    pub supports_structured_outputs: bool,
+    pub supports_json_schema: bool,
+    pub models: Vec<String>,
     pub probe_status: String,
 }
 
 impl InferenceBackend {
     /// Parse from a DefraDB JSON value.
-    pub fn from_value(v: &serde_json::Value) -> Option<Self> {
-        Some(Self {
-            backend_id: v.get("backend_id")?.as_str()?.to_string(),
-            name: v.get("name")?.as_str()?.to_string(),
-            endpoint: v.get("endpoint")?.as_str()?.to_string(),
+    pub fn from_value(v: &serde_json::Value) -> Result<Self> {
+        Ok(Self {
+            backend_id: v
+                .get("backend_id")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| anyhow::anyhow!("backend_id is required"))?
+                .to_string(),
+            name: v
+                .get("name")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| anyhow::anyhow!("backend name is required"))?
+                .to_string(),
+            provider_kind: BackendProviderKind::parse_optional(
+                v.get("provider_kind").and_then(|value| value.as_str()),
+            )?,
+            endpoint: v
+                .get("endpoint")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| anyhow::anyhow!("backend endpoint is required"))?
+                .to_string(),
+            api_key: v
+                .get("api_key")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(ToOwned::to_owned),
             api_key_env_var: v
                 .get("api_key_env_var")
                 .and_then(|v| v.as_str())
                 .map(str::trim)
                 .filter(|v| !v.is_empty())
                 .map(ToOwned::to_owned),
-            max_concurrent: v.get("max_concurrent")?.as_i64()?,
-            enabled: v.get("enabled")?.as_bool()?,
+            max_concurrent: v
+                .get("max_concurrent")
+                .and_then(|value| value.as_i64())
+                .ok_or_else(|| anyhow::anyhow!("max_concurrent is required"))?,
+            enabled: v
+                .get("enabled")
+                .and_then(|value| value.as_bool())
+                .ok_or_else(|| anyhow::anyhow!("enabled is required"))?,
+            supports_tool_calls: v
+                .get("supports_tool_calls")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(true),
+            supports_streaming: v
+                .get("supports_streaming")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(true),
+            supports_structured_outputs: v
+                .get("supports_structured_outputs")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false),
+            supports_json_schema: v
+                .get("supports_json_schema")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false),
+            models: v
+                .get("models")
+                .and_then(|value| value.as_array())
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(|row| row.as_str())
+                        .map(ToOwned::to_owned)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default(),
             probe_status: v
                 .get("probe_status")
                 .and_then(|v| v.as_str())
@@ -156,7 +217,7 @@ pub(crate) async fn lookup_backend_record(
 ) -> Result<Option<(String, InferenceBackend)>> {
     let escaped_id = escape_graphql_string(backend_id);
     let query = format!(
-        r#"query {{ InferenceBackend(filter: {{backend_id: {{_eq: "{}"}}}}) {{ _docID backend_id name endpoint api_key_env_var max_concurrent enabled probe_status }} }}"#,
+        r#"query {{ InferenceBackend(filter: {{backend_id: {{_eq: "{}"}}}}) {{ _docID backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent enabled supports_tool_calls supports_streaming supports_structured_outputs supports_json_schema models probe_status }} }}"#,
         escaped_id
     );
 
@@ -171,12 +232,16 @@ pub(crate) async fn lookup_backend_record(
         .and_then(|d| d.get("InferenceBackend"))
         .and_then(|v| v.as_array())
         .and_then(|arr| arr.first())
-        .and_then(|row| {
-            Some((
-                row.get("_docID")?.as_str()?.to_string(),
+        .map(|row| {
+            Ok::<_, anyhow::Error>((
+                row.get("_docID")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("InferenceBackend row is missing _docID"))?
+                    .to_string(),
                 InferenceBackend::from_value(row)?,
             ))
-        });
+        })
+        .transpose()?;
 
     Ok(backend)
 }
@@ -187,7 +252,7 @@ pub(crate) async fn lookup_backend_by_doc_id(
 ) -> Result<Option<(String, InferenceBackend)>> {
     let escaped_id = escape_graphql_string(doc_id);
     let query = format!(
-        r#"query {{ InferenceBackend(filter: {{_docID: {{_eq: "{}"}}}}, limit: 1) {{ _docID backend_id name endpoint api_key_env_var max_concurrent enabled probe_status }} }}"#,
+        r#"query {{ InferenceBackend(filter: {{_docID: {{_eq: "{}"}}}}, limit: 1) {{ _docID backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent enabled supports_tool_calls supports_streaming supports_structured_outputs supports_json_schema models probe_status }} }}"#,
         escaped_id
     );
 
@@ -202,12 +267,16 @@ pub(crate) async fn lookup_backend_by_doc_id(
         .and_then(|d| d.get("InferenceBackend"))
         .and_then(|v| v.as_array())
         .and_then(|arr| arr.first())
-        .and_then(|row| {
-            Some((
-                row.get("_docID")?.as_str()?.to_string(),
+        .map(|row| {
+            Ok::<_, anyhow::Error>((
+                row.get("_docID")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("InferenceBackend row is missing _docID"))?
+                    .to_string(),
                 InferenceBackend::from_value(row)?,
             ))
-        });
+        })
+        .transpose()?;
 
     Ok(backend)
 }
@@ -220,10 +289,17 @@ pub(crate) async fn list_backend_records(
             _docID
             backend_id
             name
+            provider_kind
             endpoint
+            api_key
             api_key_env_var
             max_concurrent
             enabled
+            supports_tool_calls
+            supports_streaming
+            supports_structured_outputs
+            supports_json_schema
+            models
             probe_status
         }
     }"#;
@@ -240,14 +316,20 @@ pub(crate) async fn list_backend_records(
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|row| {
-                    Some((
-                        row.get("_docID")?.as_str()?.to_string(),
+                .map(|row| {
+                    Ok::<_, anyhow::Error>((
+                        row.get("_docID")
+                            .and_then(|value| value.as_str())
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("InferenceBackend row is missing _docID")
+                            })?
+                            .to_string(),
                         InferenceBackend::from_value(row)?,
                     ))
                 })
-                .collect()
+                .collect::<Result<Vec<_>>>()
         })
+        .transpose()?
         .unwrap_or_default();
 
     Ok(backends)
@@ -255,7 +337,7 @@ pub(crate) async fn list_backend_records(
 
 /// Query all enabled backends from DefraDB.
 pub async fn list_enabled_backends(node: &EmbeddedNode) -> Result<Vec<InferenceBackend>> {
-    let query = r#"query { InferenceBackend(filter: {enabled: {_eq: true}}) { backend_id name endpoint api_key_env_var max_concurrent enabled probe_status models last_probe } }"#;
+    let query = r#"query { InferenceBackend(filter: {enabled: {_eq: true}}) { backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent enabled supports_tool_calls supports_streaming supports_structured_outputs supports_json_schema probe_status models last_probe } }"#;
 
     let resp = node.execute(query).await;
     if resp.has_errors() {
@@ -269,9 +351,10 @@ pub async fn list_enabled_backends(node: &EmbeddedNode) -> Result<Vec<InferenceB
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(InferenceBackend::from_value)
-                .collect()
+                .map(InferenceBackend::from_value)
+                .collect::<Result<Vec<_>>>()
         })
+        .transpose()?
         .unwrap_or_default();
 
     Ok(backends)

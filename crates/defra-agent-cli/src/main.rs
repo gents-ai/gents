@@ -18,9 +18,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{
-    cli_tool, default_behavior_id_for_agent, ensure_agent_principal, ensure_runtime_schemas,
-    AgentIdentity, BashMode, DefraAgent, DocumentRuntimeOptions, FileToolMode, McpPool,
-    ProcessLifecycleObserver, ProcessLifecycleState, SimpleIdentity, ToolCeiling,
+    cli_tool, default_behavior_id_for_agent, discover_backend_models, ensure_agent_principal,
+    ensure_runtime_schemas, AgentIdentity, BackendProviderKind, BashMode, DefraAgent,
+    DocumentRuntimeOptions, FileToolMode, McpPool, ProcessLifecycleObserver, ProcessLifecycleState,
+    SimpleIdentity, ToolCeiling,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -171,7 +172,7 @@ const EXPORT_AGENT_PRINCIPAL_FIELDS: &str =
 const EXPORT_AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled created_at";
 const EXPORT_TOOL_SELECTION_FIELDS: &str = "selection_id agent_did display_name enable_file_tools file_tools_mode enable_bash bash_mode cli_tool_names enable_meta_tools delegate_to";
 const EXPORT_INFERENCE_BACKEND_FIELDS: &str =
-    "backend_id name endpoint api_key_env_var max_concurrent enabled models last_probe probe_status";
+    "backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent enabled supports_tool_calls supports_streaming supports_structured_outputs supports_json_schema models last_probe probe_status";
 const EXPORT_INFERENCE_PROFILE_FIELDS: &str =
     "profile_id display_name context_window max_output_tokens max_turns temperature stream_batch_ms deadline_duration_secs";
 
@@ -1072,8 +1073,15 @@ struct BackendUpsertArgs {
     backend_id: String,
     #[arg(long)]
     name: String,
+    #[arg(
+        long,
+        help = "Backend provider kind. OpenAiCompatible covers OpenAI-style local and hosted endpoints"
+    )]
+    provider_kind: Option<String>,
     #[arg(long, help = "OpenAI-compatible backend base URL, including /v1")]
     endpoint: String,
+    #[arg(long, help = "Raw API key stored directly in the backend document")]
+    api_key: Option<String>,
     #[arg(
         long,
         help = "Environment variable name holding this backend's API key"
@@ -1083,6 +1091,14 @@ struct BackendUpsertArgs {
     max_concurrent: i64,
     #[arg(long, default_value_t = true)]
     enabled: bool,
+    #[arg(long)]
+    supports_tool_calls: Option<bool>,
+    #[arg(long)]
+    supports_streaming: Option<bool>,
+    #[arg(long)]
+    supports_structured_outputs: Option<bool>,
+    #[arg(long)]
+    supports_json_schema: Option<bool>,
     #[arg(long, default_value = "healthy")]
     probe_status: String,
 }
@@ -1623,6 +1639,26 @@ async fn chat(args: ChatArgs) -> Result<()> {
 }
 
 async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
+    if args
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+        && args
+            .api_key_env_var
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+    {
+        anyhow::bail!("provide either --api-key or --api-key-env-var, not both");
+    }
+    let provider_kind = BackendProviderKind::parse_optional(args.provider_kind.as_deref())?;
+    let supports_tool_calls = args.supports_tool_calls.unwrap_or(true);
+    let supports_streaming = args.supports_streaming.unwrap_or(true);
+    let supports_structured_outputs = args.supports_structured_outputs.unwrap_or(false);
+    let supports_json_schema = args.supports_json_schema.unwrap_or(false);
     let mutation = format!(
         r#"mutation {{
             upsert_InferenceBackend(
@@ -1630,20 +1666,32 @@ async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
                 add: {{
                     backend_id: "{backend_id}",
                     name: "{name}",
+                    provider_kind: "{provider_kind}",
                     endpoint: "{endpoint}",
+                    {api_key_add},
                     {api_key_env_var_add},
                     max_concurrent: {max_concurrent},
                     enabled: {enabled},
+                    supports_tool_calls: {supports_tool_calls},
+                    supports_streaming: {supports_streaming},
+                    supports_structured_outputs: {supports_structured_outputs},
+                    supports_json_schema: {supports_json_schema},
                     models: ["default"],
                     last_probe: "{now}",
                     probe_status: "{probe_status}"
                 }},
                 update: {{
                     name: "{name}",
+                    provider_kind: "{provider_kind}",
                     endpoint: "{endpoint}",
+                    {api_key_update},
                     {api_key_env_var_update},
                     max_concurrent: {max_concurrent},
                     enabled: {enabled},
+                    supports_tool_calls: {supports_tool_calls},
+                    supports_streaming: {supports_streaming},
+                    supports_structured_outputs: {supports_structured_outputs},
+                    supports_json_schema: {supports_json_schema},
                     last_probe: "{now}",
                     probe_status: "{probe_status}"
                 }}
@@ -1651,13 +1699,20 @@ async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
         }}"#,
         backend_id = escape_graphql_string(&args.backend_id),
         name = escape_graphql_string(&args.name),
+        provider_kind = provider_kind,
         endpoint = escape_graphql_string(&args.endpoint),
+        api_key_add = nullable_string_field("api_key", args.api_key.as_deref()),
+        api_key_update = nullable_string_field("api_key", args.api_key.as_deref()),
         api_key_env_var_add =
             nullable_string_field("api_key_env_var", args.api_key_env_var.as_deref()),
         api_key_env_var_update =
             nullable_string_field("api_key_env_var", args.api_key_env_var.as_deref()),
         max_concurrent = args.max_concurrent,
         enabled = if args.enabled { "true" } else { "false" },
+        supports_tool_calls = graphql_bool_literal(supports_tool_calls),
+        supports_streaming = graphql_bool_literal(supports_streaming),
+        supports_structured_outputs = graphql_bool_literal(supports_structured_outputs),
+        supports_json_schema = graphql_bool_literal(supports_json_schema),
         probe_status = escape_graphql_string(&args.probe_status),
         now = chrono::Utc::now().to_rfc3339(),
     );
@@ -1666,10 +1721,16 @@ async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
     let output = json!({
         "doc_id": doc_id,
         "backend_id": args.backend_id,
+        "provider_kind": provider_kind.as_str(),
         "endpoint": args.endpoint,
+        "api_key": args.api_key.as_ref().map(|_| "<redacted>"),
         "api_key_env_var": args.api_key_env_var,
         "max_concurrent": args.max_concurrent,
         "enabled": args.enabled,
+        "supports_tool_calls": supports_tool_calls,
+        "supports_streaming": supports_streaming,
+        "supports_structured_outputs": supports_structured_outputs,
+        "supports_json_schema": supports_json_schema,
         "probe_status": args.probe_status,
     });
     print_json(&output)?;
@@ -3338,6 +3399,19 @@ async fn diagnose_backend(backend: &Value, required_models: Vec<String>) -> Valu
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    let provider_kind = match BackendProviderKind::parse_optional(
+        backend.get("provider_kind").and_then(Value::as_str),
+    ) {
+        Ok(kind) => kind,
+        Err(error) => {
+            return json!({
+                "backend_id": backend_id,
+                "ok": false,
+                "provider_kind": backend.get("provider_kind"),
+                "error": error.to_string(),
+            });
+        }
+    };
     let endpoint = backend
         .get("endpoint")
         .and_then(Value::as_str)
@@ -3358,13 +3432,44 @@ async fn diagnose_backend(backend: &Value, required_models: Vec<String>) -> Valu
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
+    let raw_api_key = backend
+        .get("api_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let supports_tool_calls = backend
+        .get("supports_tool_calls")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let supports_streaming = backend
+        .get("supports_streaming")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let supports_structured_outputs = backend
+        .get("supports_structured_outputs")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let supports_json_schema = backend
+        .get("supports_json_schema")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     let mut ok = enabled && probe_status == "healthy";
     let mut error = None::<String>;
     let mut discovered_models = Vec::<String>::new();
 
-    let api_key = match api_key_env_var.as_deref() {
-        Some(name) => match std::env::var(name) {
+    let api_key = match (raw_api_key.as_ref(), api_key_env_var.as_deref()) {
+        (Some(raw), Some(name)) => {
+            ok = false;
+            error = Some(format!(
+                "backend {} sets both raw api_key and api_key_env_var {}",
+                backend_id, name
+            ));
+            Some(raw.clone())
+        }
+        (Some(raw), None) => Some(raw.clone()),
+        (None, Some(name)) => match std::env::var(name) {
             Ok(value) if !value.trim().is_empty() => Some(value),
             _ => {
                 ok = false;
@@ -3375,11 +3480,10 @@ async fn diagnose_backend(backend: &Value, required_models: Vec<String>) -> Valu
                 None
             }
         },
-        None => None,
+        (None, None) => None,
     };
 
     if ok {
-        let models_url = format!("{}/models", endpoint.trim_end_matches('/'));
         let client = match reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
             .build()
@@ -3391,62 +3495,46 @@ async fn diagnose_backend(backend: &Value, required_models: Vec<String>) -> Valu
                 return json!({
                     "backend_id": backend_id,
                     "ok": ok,
+                    "provider_kind": provider_kind.as_str(),
                     "endpoint": endpoint,
                     "enabled": enabled,
                     "probe_status": probe_status,
+                    "api_key": raw_api_key.as_ref().map(|_| "<redacted>"),
                     "api_key_env_var": api_key_env_var,
+                    "supports_tool_calls": supports_tool_calls,
+                    "supports_streaming": supports_streaming,
+                    "supports_structured_outputs": supports_structured_outputs,
+                    "supports_json_schema": supports_json_schema,
                     "required_models": required_models,
                     "discovered_models": discovered_models,
                     "error": error,
                 });
             }
         };
-        let mut request = client.get(&models_url);
-        if let Some(api_key) = api_key.as_deref() {
-            request = request.bearer_auth(api_key);
-        }
-        match request.send().await {
-            Ok(response) => {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                if !status.is_success() {
+        match discover_backend_models(&client, provider_kind, &endpoint, api_key.as_deref()).await {
+            Ok(models) => {
+                discovered_models = models;
+                let missing_models = required_models
+                    .iter()
+                    .filter(|model| {
+                        !discovered_models
+                            .iter()
+                            .any(|candidate| candidate == *model)
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if !missing_models.is_empty() {
                     ok = false;
-                    error = Some(format!("GET {} returned {}: {}", models_url, status, body));
-                } else {
-                    let parsed = serde_json::from_str::<Value>(&body).ok();
-                    discovered_models = parsed
-                        .as_ref()
-                        .and_then(|value| value.get("data"))
-                        .and_then(Value::as_array)
-                        .map(|rows| {
-                            rows.iter()
-                                .filter_map(|row| row.get("id").and_then(Value::as_str))
-                                .map(ToOwned::to_owned)
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default();
-                    let missing_models = required_models
-                        .iter()
-                        .filter(|model| {
-                            !discovered_models
-                                .iter()
-                                .any(|candidate| candidate == *model)
-                        })
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    if !missing_models.is_empty() {
-                        ok = false;
-                        error = Some(format!(
-                            "backend {} is missing required models: {}",
-                            backend_id,
-                            missing_models.join(", ")
-                        ));
-                    }
+                    error = Some(format!(
+                        "backend {} is missing required models: {}",
+                        backend_id,
+                        missing_models.join(", ")
+                    ));
                 }
             }
             Err(request_error) => {
                 ok = false;
-                error = Some(format!("probing {} failed: {}", models_url, request_error));
+                error = Some(format!("backend discovery failed: {}", request_error));
             }
         }
     }
@@ -3454,10 +3542,16 @@ async fn diagnose_backend(backend: &Value, required_models: Vec<String>) -> Valu
     json!({
         "backend_id": backend_id,
         "ok": ok,
+        "provider_kind": provider_kind.as_str(),
         "endpoint": endpoint,
         "enabled": enabled,
         "probe_status": probe_status,
+        "api_key": raw_api_key.as_ref().map(|_| "<redacted>"),
         "api_key_env_var": api_key_env_var,
+        "supports_tool_calls": supports_tool_calls,
+        "supports_streaming": supports_streaming,
+        "supports_structured_outputs": supports_structured_outputs,
+        "supports_json_schema": supports_json_schema,
         "required_models": required_models,
         "discovered_models": discovered_models,
         "error": error,
@@ -4082,6 +4176,14 @@ fn nullable_string_field(name: &str, value: Option<&str>) -> String {
     match value.map(str::trim).filter(|value| !value.is_empty()) {
         Some(value) => format!(r#"{name}: "{}""#, escape_graphql_string(value)),
         None => format!("{name}: null"),
+    }
+}
+
+fn graphql_bool_literal(value: bool) -> &'static str {
+    if value {
+        "true"
+    } else {
+        "false"
     }
 }
 

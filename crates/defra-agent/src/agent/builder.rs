@@ -7,6 +7,7 @@ use defra_node::EmbeddedNode;
 use rig::tool::ToolDyn;
 
 use super::{runtime, DefraAgent, ProcessLifecycleObserver};
+use crate::backend_provider::BackendProviderKind;
 use crate::backend_registry::lookup_backend;
 use crate::compaction::CompactionStrategy;
 use crate::config::{
@@ -394,8 +395,14 @@ impl PendingBehaviorConfig {
         self.build_with_resolved_backend(
             identity,
             Some(backend.backend_id),
+            backend.provider_kind,
             backend.endpoint,
+            backend.api_key,
             backend.api_key_env_var,
+            backend.supports_tool_calls,
+            backend.supports_streaming,
+            backend.supports_structured_outputs,
+            backend.supports_json_schema,
             tool_ceiling,
         )
     }
@@ -404,8 +411,14 @@ impl PendingBehaviorConfig {
         self,
         identity: Arc<dyn AgentIdentity>,
         backend_id: Option<String>,
+        backend_provider_kind: BackendProviderKind,
         backend_endpoint: String,
+        backend_api_key: Option<String>,
         backend_api_key_env_var: Option<String>,
+        backend_supports_tool_calls: bool,
+        backend_supports_streaming: bool,
+        backend_supports_structured_outputs: bool,
+        backend_supports_json_schema: bool,
         tool_ceiling: &ToolCeiling,
     ) -> Result<BehaviorConfig> {
         let behavior_name = self.name.clone();
@@ -414,8 +427,14 @@ impl PendingBehaviorConfig {
             name: self.name,
             identity,
             backend_id,
+            backend_provider_kind,
             backend_endpoint,
+            backend_api_key,
             backend_api_key_env_var,
+            backend_supports_tool_calls,
+            backend_supports_streaming,
+            backend_supports_structured_outputs,
+            backend_supports_json_schema,
             model_name: self.model_name,
             context_window: self.context_window,
             max_output_tokens: self.max_output_tokens,
@@ -448,8 +467,14 @@ impl PendingBehaviorConfig {
         self.build_with_resolved_backend(
             resolved_identity,
             backend_id,
+            BackendProviderKind::OpenAiCompatible,
             backend_endpoint,
             None,
+            None,
+            true,
+            true,
+            false,
+            false,
             &ToolCeiling::meta_only(),
         )
         .unwrap()
