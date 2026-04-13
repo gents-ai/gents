@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+axum = "0.7"
 chrono.workspace = true
 clap.workspace = true
 crossterm = "0.29"

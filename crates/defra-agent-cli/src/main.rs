@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{self, BufRead, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -6,6 +7,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use axum::{
+    extract::State,
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
+    routing::get,
+    Router,
+};
 use clap::{Parser, Subcommand, ValueEnum};
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
@@ -19,10 +27,12 @@ use serde_json::{json, Value};
 use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
 
+mod desired_state;
 mod tui;
 
 const DEFAULT_AGENT_NAME: &str = "default";
 const DEFAULT_HTTP_PORT: u16 = 9191;
+const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 const DEFAULT_LOG_FILTER: &str = concat!(
     "warn,",
     "defra_agent::agent::runtime=info,",
@@ -89,6 +99,9 @@ Examples:
   defra-agent show response REQUEST_ID";
 const CONFIG_AFTER_HELP: &str = "\
 Examples:
+  defra-agent config validate --root infra/agents/default
+  defra-agent config diff --root infra/agents/default --home /path/to/home
+  defra-agent config apply --root infra/agents/default --home /path/to/home
   defra-agent config backend set --graphql URL --backend-id default-backend --name default-backend --endpoint http://HOST:PORT/v1 --max-concurrent 1
   defra-agent config behavior set --graphql URL --agent-did did:defra-agent:default --backend-id default-backend --model-name MODEL
   defra-agent config tools set --graphql URL --agent-did did:defra-agent:default --selection-id did:defra-agent:default:default:tools --enable-file-tools";
@@ -205,7 +218,7 @@ enum Command {
     Status(StatusArgs),
     #[command(about = "Run local configuration and runtime diagnostics", after_help = DIAGNOSE_AFTER_HELP)]
     Diagnose(DiagnoseArgs),
-    #[command(about = "Write runtime configuration documents", after_help = CONFIG_AFTER_HELP)]
+    #[command(about = "Inspect and write runtime configuration documents", after_help = CONFIG_AFTER_HELP)]
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
@@ -385,6 +398,12 @@ struct RuntimeShowArgs {
 
 #[derive(Subcommand)]
 enum ConfigCommand {
+    #[command(about = "Validate desired-state manifests under a repository root")]
+    Validate(ConfigValidateArgs),
+    #[command(about = "Diff desired-state manifests against live configuration")]
+    Diff(ConfigDiffArgs),
+    #[command(about = "Apply desired-state manifests to live configuration")]
+    Apply(ConfigApplyArgs),
     #[command(about = "Write an InferenceBackend document")]
     Backend {
         #[command(subcommand)]
@@ -481,6 +500,75 @@ struct ConfigExportBundle {
     inference_profiles: Vec<Value>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct ConfigApplyCounts {
+    agent_principal: usize,
+    agent_behaviors: usize,
+    tool_selections: usize,
+    inference_backends: usize,
+    inference_profiles: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ConfigApplyReport {
+    status: &'static str,
+    ok: bool,
+    exact_match: bool,
+    changed: bool,
+    root: String,
+    access_mode: String,
+    agent_did: String,
+    planned: desired_state::DesiredStateDiffCollectionsCounts,
+    applied: ConfigApplyCounts,
+    remaining: desired_state::DesiredStateDiffCollectionsCounts,
+}
+
+#[derive(Clone)]
+struct MetricsState {
+    graphql: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MetricsQueryData {
+    #[serde(rename = "AgentRuntime", default)]
+    agent_runtimes: Vec<MetricsRuntimeRow>,
+    #[serde(rename = "InferenceBackend", default)]
+    inference_backends: Vec<MetricsBackendRow>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MetricsRuntimeRow {
+    agent_did: String,
+    #[serde(default)]
+    process_state: String,
+    #[serde(default)]
+    reconcile_phase: String,
+    #[serde(default)]
+    active_generation: i64,
+    #[serde(default)]
+    router_generation: i64,
+    #[serde(default)]
+    runnable_behavior_count: i64,
+    #[serde(default)]
+    unavailable_behavior_count: i64,
+    #[serde(default)]
+    last_reconcile_result: String,
+    #[serde(default)]
+    last_reconcile_completed_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MetricsBackendRow {
+    backend_id: String,
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    max_concurrent: i64,
+    #[serde(default)]
+    probe_status: String,
+    last_probe: Option<String>,
+}
+
 enum ConfigAccess {
     Graphql(String),
     Local(EmbeddedNode),
@@ -508,6 +596,284 @@ impl ConfigAccess {
             }
         }
     }
+}
+
+fn metrics_router(graphql: String) -> Router {
+    Router::new()
+        .route("/metrics", get(metrics_handler))
+        .with_state(MetricsState { graphql })
+}
+
+async fn metrics_handler(State(state): State<MetricsState>) -> Response {
+    match render_prometheus_metrics(&state.graphql).await {
+        Ok(body) => ([(header::CONTENT_TYPE, PROMETHEUS_CONTENT_TYPE)], body).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            format!("metrics render failed: {error}"),
+        )
+            .into_response(),
+    }
+}
+
+async fn render_prometheus_metrics(graphql: &str) -> Result<String> {
+    let response = post_graphql(
+        graphql,
+        r#"{
+            AgentRuntime {
+                agent_did
+                process_state
+                reconcile_phase
+                active_generation
+                router_generation
+                runnable_behavior_count
+                unavailable_behavior_count
+                last_reconcile_result
+                last_reconcile_completed_at
+            }
+            InferenceBackend {
+                backend_id
+                enabled
+                max_concurrent
+                probe_status
+                last_probe
+            }
+        }"#,
+    )
+    .await?;
+    let data = response
+        .get("data")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(Default::default()));
+    let data: MetricsQueryData =
+        serde_json::from_value(data).context("decoding metrics query response")?;
+
+    let mut lines = Vec::new();
+    push_metric_prelude(
+        &mut lines,
+        "defra_agent_up",
+        "Whether the defra-agent process is serving.",
+    );
+    push_metric_sample(&mut lines, "defra_agent_up", &[], 1);
+
+    push_metric_prelude(
+        &mut lines,
+        "defra_agent_runtime_process_state",
+        "One-hot process lifecycle state for each agent runtime.",
+    );
+    push_metric_prelude(
+        &mut lines,
+        "defra_agent_runtime_reconcile_phase",
+        "One-hot reconcile phase for each agent runtime.",
+    );
+    push_metric_prelude(
+        &mut lines,
+        "defra_agent_runtime_last_reconcile_result",
+        "One-hot last reconcile result for each agent runtime.",
+    );
+    push_metric_prelude(
+        &mut lines,
+        "defra_agent_runtime_active_generation",
+        "Current active runtime generation.",
+    );
+    push_metric_prelude(
+        &mut lines,
+        "defra_agent_runtime_router_generation",
+        "Current router-observed runtime generation.",
+    );
+    push_metric_prelude(
+        &mut lines,
+        "defra_agent_runtime_runnable_behaviors",
+        "Number of runnable behaviors in the active runtime snapshot.",
+    );
+    push_metric_prelude(
+        &mut lines,
+        "defra_agent_runtime_unavailable_behaviors",
+        "Number of unavailable behaviors in the active runtime snapshot.",
+    );
+    push_metric_prelude(
+        &mut lines,
+        "defra_agent_runtime_last_reconcile_completed_at_seconds",
+        "Unix timestamp of the last completed reconcile.",
+    );
+
+    for runtime in &data.agent_runtimes {
+        let agent_did = runtime.agent_did.clone();
+        for state in [
+            "uninitialized",
+            "recovering",
+            "ready",
+            "shuttingDown",
+            "shutdown",
+        ] {
+            push_metric_sample(
+                &mut lines,
+                "defra_agent_runtime_process_state",
+                &[
+                    ("agent_did", agent_did.clone()),
+                    ("state", state.to_string()),
+                ],
+                i64::from(runtime.process_state == state),
+            );
+        }
+        for phase in ["idle", "debouncing", "resolving", "diffing", "applying"] {
+            push_metric_sample(
+                &mut lines,
+                "defra_agent_runtime_reconcile_phase",
+                &[
+                    ("agent_did", agent_did.clone()),
+                    ("phase", phase.to_string()),
+                ],
+                i64::from(runtime.reconcile_phase == phase),
+            );
+        }
+        for result in ["startup", "noop", "applied", "error"] {
+            push_metric_sample(
+                &mut lines,
+                "defra_agent_runtime_last_reconcile_result",
+                &[
+                    ("agent_did", agent_did.clone()),
+                    ("result", result.to_string()),
+                ],
+                i64::from(runtime.last_reconcile_result == result),
+            );
+        }
+        push_metric_sample(
+            &mut lines,
+            "defra_agent_runtime_active_generation",
+            &[("agent_did", agent_did.clone())],
+            runtime.active_generation,
+        );
+        push_metric_sample(
+            &mut lines,
+            "defra_agent_runtime_router_generation",
+            &[("agent_did", agent_did.clone())],
+            runtime.router_generation,
+        );
+        push_metric_sample(
+            &mut lines,
+            "defra_agent_runtime_runnable_behaviors",
+            &[("agent_did", agent_did.clone())],
+            runtime.runnable_behavior_count,
+        );
+        push_metric_sample(
+            &mut lines,
+            "defra_agent_runtime_unavailable_behaviors",
+            &[("agent_did", agent_did.clone())],
+            runtime.unavailable_behavior_count,
+        );
+        if let Some(timestamp) = rfc3339_timestamp_seconds(&runtime.last_reconcile_completed_at) {
+            push_metric_sample(
+                &mut lines,
+                "defra_agent_runtime_last_reconcile_completed_at_seconds",
+                &[("agent_did", agent_did)],
+                timestamp,
+            );
+        }
+    }
+
+    push_metric_prelude(
+        &mut lines,
+        "defra_agent_backend_enabled",
+        "Whether an inference backend is enabled.",
+    );
+    push_metric_prelude(
+        &mut lines,
+        "defra_agent_backend_max_concurrent",
+        "Configured maximum concurrency for an inference backend.",
+    );
+    push_metric_prelude(
+        &mut lines,
+        "defra_agent_backend_probe_status",
+        "Current probe status for an inference backend.",
+    );
+    push_metric_prelude(
+        &mut lines,
+        "defra_agent_backend_last_probe_seconds",
+        "Unix timestamp of the last backend probe.",
+    );
+
+    for backend in &data.inference_backends {
+        push_metric_sample(
+            &mut lines,
+            "defra_agent_backend_enabled",
+            &[("backend_id", backend.backend_id.clone())],
+            i64::from(backend.enabled),
+        );
+        push_metric_sample(
+            &mut lines,
+            "defra_agent_backend_max_concurrent",
+            &[("backend_id", backend.backend_id.clone())],
+            backend.max_concurrent,
+        );
+        push_metric_sample(
+            &mut lines,
+            "defra_agent_backend_probe_status",
+            &[
+                ("backend_id", backend.backend_id.clone()),
+                ("status", backend.probe_status.clone()),
+            ],
+            1,
+        );
+        if let Some(timestamp) = backend
+            .last_probe
+            .as_deref()
+            .and_then(rfc3339_timestamp_seconds)
+        {
+            push_metric_sample(
+                &mut lines,
+                "defra_agent_backend_last_probe_seconds",
+                &[("backend_id", backend.backend_id.clone())],
+                timestamp,
+            );
+        }
+    }
+
+    lines.push(String::new());
+    Ok(lines.join("\n"))
+}
+
+fn push_metric_prelude(lines: &mut Vec<String>, name: &str, help: &str) {
+    lines.push(format!("# HELP {name} {help}"));
+    lines.push(format!("# TYPE {name} gauge"));
+}
+
+fn push_metric_sample(
+    lines: &mut Vec<String>,
+    name: &str,
+    labels: &[(&str, String)],
+    value: impl std::fmt::Display,
+) {
+    lines.push(format!("{name}{} {value}", format_metric_labels(labels),));
+}
+
+fn format_metric_labels(labels: &[(&str, String)]) -> String {
+    if labels.is_empty() {
+        return String::new();
+    }
+    let rendered = labels
+        .iter()
+        .map(|(key, value)| format!(r#"{key}="{}""#, escape_prometheus_label(value)))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("{{{rendered}}}")
+}
+
+fn escape_prometheus_label(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('"', "\\\"")
+}
+
+fn rfc3339_timestamp_seconds(value: &str) -> Option<i64> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|timestamp| timestamp.timestamp())
 }
 
 #[derive(Clone, Copy)]
@@ -737,6 +1103,32 @@ struct ConfigImportArgs {
     path: Option<PathBuf>,
 }
 
+#[derive(clap::Args)]
+struct ConfigValidateArgs {
+    #[arg(long, value_name = "ROOT")]
+    root: PathBuf,
+}
+
+#[derive(clap::Args)]
+struct ConfigDiffArgs {
+    #[arg(long, value_name = "ROOT")]
+    root: PathBuf,
+    #[arg(long)]
+    home: Option<PathBuf>,
+    #[arg(long)]
+    graphql: Option<String>,
+}
+
+#[derive(clap::Args)]
+struct ConfigApplyArgs {
+    #[arg(long, value_name = "ROOT")]
+    root: PathBuf,
+    #[arg(long)]
+    home: Option<PathBuf>,
+    #[arg(long)]
+    graphql: Option<String>,
+}
+
 #[derive(Subcommand)]
 enum RequestCommand {
     #[command(
@@ -840,6 +1232,9 @@ async fn main() -> Result<()> {
         Command::Status(args) => status(args).await,
         Command::Diagnose(args) => diagnose(args).await,
         Command::Config { command } => match command {
+            ConfigCommand::Validate(args) => config_validate(args).await,
+            ConfigCommand::Diff(args) => config_diff(args).await,
+            ConfigCommand::Apply(args) => config_apply(args).await,
             ConfigCommand::Backend { command } => match command {
                 BackendCommand::Set(args) => backend_set(args).await,
             },
@@ -942,10 +1337,18 @@ async fn serve(args: ServeArgs) -> Result<()> {
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
     let http_addr = SocketAddr::new(args.http_addr, args.http_port);
+    let graphql_url = format!(
+        "http://{}:{}/api/v0/graphql",
+        display_host(args.http_addr),
+        args.http_port
+    );
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(&data_dir)
-            .with_http(defra_node::HttpConfig::with_addr(http_addr))
+            .with_http(
+                defra_node::HttpConfig::with_addr(http_addr)
+                    .with_extra_routes(metrics_router(graphql_url.clone())),
+            )
             .build()
             .await
             .context("building embedded defra node")?,
@@ -1040,11 +1443,6 @@ async fn serve(args: ServeArgs) -> Result<()> {
         .collect::<Vec<_>>();
     let default_behavior_id = agent.default_behavior_id().to_string();
     let unavailable_behaviors = agent.unavailable_behaviors().clone();
-    let graphql_url = format!(
-        "http://{}:{}/api/v0/graphql",
-        display_host(args.http_addr),
-        args.http_port
-    );
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     tokio::spawn(async move {
@@ -1900,6 +2298,99 @@ async fn config_import(args: ConfigImportArgs) -> Result<()> {
     Ok(())
 }
 
+async fn config_validate(args: ConfigValidateArgs) -> Result<()> {
+    let report = desired_state::validate_manifest_root(&args.root);
+    print_json(&serde_json::to_value(&report)?)?;
+    if report.is_ok() {
+        Ok(())
+    } else {
+        anyhow::bail!("desired-state manifest validation failed")
+    }
+}
+
+fn load_desired_manifest_or_bail(root: &Path) -> Result<desired_state::DesiredStateManifest> {
+    let (desired_manifest, validation_report) = desired_state::load_manifest_root(root);
+    if !validation_report.is_ok() {
+        print_json(&serde_json::to_value(&validation_report)?)?;
+        anyhow::bail!("desired-state manifest validation failed")
+    }
+    desired_manifest.ok_or_else(|| anyhow::anyhow!("validated manifest root produced no manifest"))
+}
+
+async fn config_diff(args: ConfigDiffArgs) -> Result<()> {
+    let desired_manifest = load_desired_manifest_or_bail(&args.root)?;
+
+    let (access, _) =
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+    let live_bundle = build_desired_state_live_bundle(&access, &desired_manifest).await?;
+    let (live_principal, live_manifest) =
+        live_manifest_from_bundle(&desired_manifest, &live_bundle)?;
+    let report = desired_state::diff_manifests(
+        &args.root,
+        access.mode(),
+        &desired_manifest,
+        live_principal.as_ref(),
+        &live_manifest,
+    );
+    print_json(&serde_json::to_value(&report)?)?;
+    Ok(())
+}
+
+async fn config_apply(args: ConfigApplyArgs) -> Result<()> {
+    let desired_manifest = load_desired_manifest_or_bail(&args.root)?;
+    let (access, _) =
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+    let desired_bundle =
+        desired_state::export_bundle_from_manifest(&desired_manifest, access.mode())?;
+
+    let live_bundle = build_desired_state_live_bundle(&access, &desired_manifest).await?;
+    let (live_principal, live_manifest) =
+        live_manifest_from_bundle(&desired_manifest, &live_bundle)?;
+    let planned = desired_state::diff_manifests(
+        &args.root,
+        access.mode(),
+        &desired_manifest,
+        live_principal.as_ref(),
+        &live_manifest,
+    );
+
+    let applied = apply_desired_state_changes(&access, &desired_bundle, &planned).await?;
+
+    let remaining_bundle = build_desired_state_live_bundle(&access, &desired_manifest).await?;
+    let (remaining_principal, remaining_manifest) =
+        live_manifest_from_bundle(&desired_manifest, &remaining_bundle)?;
+    let remaining = desired_state::diff_manifests(
+        &args.root,
+        access.mode(),
+        &desired_manifest,
+        remaining_principal.as_ref(),
+        &remaining_manifest,
+    );
+
+    let report = ConfigApplyReport {
+        status: if config_apply_counts_changed(&applied) {
+            "applied"
+        } else {
+            "noop"
+        },
+        ok: !diff_has_pending_apply(&remaining.counts),
+        exact_match: remaining.ok,
+        changed: config_apply_counts_changed(&applied),
+        root: args.root.display().to_string(),
+        access_mode: access.mode().to_string(),
+        agent_did: desired_manifest.agent_principal.agent_did.clone(),
+        planned: planned.counts.clone(),
+        applied,
+        remaining: remaining.counts.clone(),
+    };
+    print_json(&serde_json::to_value(&report)?)?;
+    if report.ok {
+        Ok(())
+    } else {
+        anyhow::bail!("desired-state apply did not converge")
+    }
+}
+
 async fn load_runtime_status_output(
     home: Option<&Path>,
     graphql: &str,
@@ -2182,6 +2673,184 @@ async fn build_config_export_bundle(
     })
 }
 
+async fn build_desired_state_live_bundle(
+    access: &ConfigAccess,
+    desired_manifest: &desired_state::DesiredStateManifest,
+) -> Result<ConfigExportBundle> {
+    let agent_did = desired_manifest.agent_principal.agent_did.as_str();
+    let principal_rows = graphql_rows(
+        access,
+        "AgentPrincipal",
+        &format!(
+            r#"{{
+                AgentPrincipal(
+                    filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                    limit: 1
+                ) {{
+                    {fields}
+                }}
+            }}"#,
+            agent_did = escape_graphql_string(agent_did),
+            fields = EXPORT_AGENT_PRINCIPAL_FIELDS,
+        ),
+    )
+    .await?;
+    let mut behavior_rows = graphql_rows(
+        access,
+        "AgentBehavior",
+        &format!(
+            r#"{{
+                AgentBehavior(
+                    filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                    order: {{ created_at: ASC }}
+                ) {{
+                    {fields}
+                }}
+            }}"#,
+            agent_did = escape_graphql_string(agent_did),
+            fields = EXPORT_AGENT_BEHAVIOR_FIELDS,
+        ),
+    )
+    .await?;
+    sort_document_rows(&mut behavior_rows, "behavior_id");
+
+    let tool_selection_ids = collect_string_field_values(&behavior_rows, "tool_selection_id")
+        .into_iter()
+        .chain(
+            desired_manifest
+                .tool_selections
+                .iter()
+                .map(|value| value.selection_id.clone()),
+        )
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let backend_ids = collect_string_field_values(&behavior_rows, "backend_id")
+        .into_iter()
+        .chain(
+            desired_manifest
+                .inference_backends
+                .iter()
+                .map(|value| value.backend_id.clone()),
+        )
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let profile_ids = collect_string_field_values(&behavior_rows, "inference_profile_id")
+        .into_iter()
+        .chain(
+            desired_manifest
+                .inference_profiles
+                .iter()
+                .map(|value| value.profile_id.clone()),
+        )
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+
+    let mut tool_selection_rows = if tool_selection_ids.is_empty() {
+        Vec::new()
+    } else {
+        graphql_rows(
+            access,
+            "ToolSelection",
+            &format!(
+                r#"{{
+                    ToolSelection(
+                        filter: {{ selection_id: {{ _in: {} }} }}
+                    ) {{
+                        {fields}
+                    }}
+                }}"#,
+                graphql_string_list_literal(&tool_selection_ids),
+                fields = EXPORT_TOOL_SELECTION_FIELDS,
+            ),
+        )
+        .await?
+    };
+    sort_document_rows(&mut tool_selection_rows, "selection_id");
+
+    let mut backend_rows = if backend_ids.is_empty() {
+        Vec::new()
+    } else {
+        graphql_rows(
+            access,
+            "InferenceBackend",
+            &format!(
+                r#"{{
+                    InferenceBackend(
+                        filter: {{ backend_id: {{ _in: {} }} }}
+                    ) {{
+                        {fields}
+                    }}
+                }}"#,
+                graphql_string_list_literal(&backend_ids),
+                fields = EXPORT_INFERENCE_BACKEND_FIELDS,
+            ),
+        )
+        .await?
+    };
+    sort_document_rows(&mut backend_rows, "backend_id");
+
+    let mut profile_rows = if profile_ids.is_empty() {
+        Vec::new()
+    } else {
+        graphql_rows(
+            access,
+            "InferenceProfile",
+            &format!(
+                r#"{{
+                    InferenceProfile(
+                        filter: {{ profile_id: {{ _in: {} }} }}
+                    ) {{
+                        {fields}
+                    }}
+                }}"#,
+                graphql_string_list_literal(&profile_ids),
+                fields = EXPORT_INFERENCE_PROFILE_FIELDS,
+            ),
+        )
+        .await?
+    };
+    sort_document_rows(&mut profile_rows, "profile_id");
+
+    Ok(ConfigExportBundle {
+        format: CONFIG_EXPORT_FORMAT.to_string(),
+        agent_did: agent_did.to_string(),
+        exported_at: chrono::Utc::now().to_rfc3339(),
+        access_mode: access.mode().to_string(),
+        agent_principal: principal_rows.into_iter().next(),
+        agent_behaviors: behavior_rows,
+        tool_selections: tool_selection_rows,
+        inference_backends: backend_rows,
+        inference_profiles: profile_rows,
+    })
+}
+
+fn live_manifest_from_bundle(
+    desired_manifest: &desired_state::DesiredStateManifest,
+    live_bundle: &ConfigExportBundle,
+) -> Result<(
+    Option<desired_state::DesiredAgentPrincipal>,
+    desired_state::DesiredStateManifest,
+)> {
+    if live_bundle.agent_principal.is_some() {
+        let live_manifest = desired_state::manifest_from_export_bundle(live_bundle)?;
+        Ok((Some(live_manifest.agent_principal.clone()), live_manifest))
+    } else {
+        Ok((
+            None,
+            desired_state::DesiredStateManifest {
+                agent_principal: desired_manifest.agent_principal.clone(),
+                agent_behaviors: Vec::new(),
+                tool_selections: Vec::new(),
+                inference_backends: Vec::new(),
+                inference_profiles: Vec::new(),
+            },
+        ))
+    }
+}
+
 fn sort_document_rows(rows: &mut [Value], key: &str) {
     rows.sort_by(|left, right| {
         let left_key = left.get(key).and_then(Value::as_str).unwrap_or_default();
@@ -2305,6 +2974,162 @@ async fn apply_import_collection(
     }
 
     Ok(docs.len())
+}
+
+fn diff_has_pending_apply(counts: &desired_state::DesiredStateDiffCollectionsCounts) -> bool {
+    [
+        &counts.agent_principal,
+        &counts.agent_behaviors,
+        &counts.tool_selections,
+        &counts.inference_backends,
+        &counts.inference_profiles,
+    ]
+    .iter()
+    .any(|count| count.create > 0 || count.update > 0)
+}
+
+fn config_apply_counts_changed(counts: &ConfigApplyCounts) -> bool {
+    counts.agent_principal > 0
+        || counts.agent_behaviors > 0
+        || counts.tool_selections > 0
+        || counts.inference_backends > 0
+        || counts.inference_profiles > 0
+}
+
+fn select_apply_collection_docs(
+    docs: &[Value],
+    unique_field: &str,
+    collection_name: &str,
+    diff: &desired_state::DesiredStateCollectionDiff,
+) -> Result<Vec<Value>> {
+    let requested_ids = diff
+        .create
+        .iter()
+        .chain(diff.update.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if requested_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut selected = docs
+        .iter()
+        .filter(|doc| {
+            doc.get(unique_field)
+                .and_then(Value::as_str)
+                .is_some_and(|value| requested_ids.contains(value))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    sort_document_rows(&mut selected, unique_field);
+
+    let found_ids = selected
+        .iter()
+        .filter_map(|doc| doc.get(unique_field).and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>();
+    let missing_ids = requested_ids
+        .difference(&found_ids)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing_ids.is_empty() {
+        anyhow::bail!(
+            "desired-state apply missing {collection_name} documents for ids: {}",
+            missing_ids.join(", ")
+        );
+    }
+
+    Ok(selected)
+}
+
+fn select_apply_principal_docs(
+    doc: Option<&Value>,
+    diff: &desired_state::DesiredStateCollectionDiff,
+) -> Result<Vec<Value>> {
+    if diff.create.is_empty() && diff.update.is_empty() {
+        return Ok(Vec::new());
+    }
+    let doc =
+        doc.ok_or_else(|| anyhow::anyhow!("desired-state apply is missing AgentPrincipal"))?;
+    Ok(vec![doc.clone()])
+}
+
+async fn apply_desired_state_changes(
+    access: &ConfigAccess,
+    desired_bundle: &ConfigExportBundle,
+    planned: &desired_state::DesiredStateDiffReport,
+) -> Result<ConfigApplyCounts> {
+    let backend_docs = select_apply_collection_docs(
+        &desired_bundle.inference_backends,
+        "backend_id",
+        "InferenceBackend",
+        &planned.collections.inference_backends,
+    )?;
+    let profile_docs = select_apply_collection_docs(
+        &desired_bundle.inference_profiles,
+        "profile_id",
+        "InferenceProfile",
+        &planned.collections.inference_profiles,
+    )?;
+    let tool_selection_docs = select_apply_collection_docs(
+        &desired_bundle.tool_selections,
+        "selection_id",
+        "ToolSelection",
+        &planned.collections.tool_selections,
+    )?;
+    let behavior_docs = select_apply_collection_docs(
+        &desired_bundle.agent_behaviors,
+        "behavior_id",
+        "AgentBehavior",
+        &planned.collections.agent_behaviors,
+    )?;
+    let principal_docs = select_apply_principal_docs(
+        desired_bundle.agent_principal.as_ref(),
+        &planned.collections.agent_principal,
+    )?;
+
+    Ok(ConfigApplyCounts {
+        inference_backends: apply_import_collection(
+            access,
+            "InferenceBackend",
+            "backend_id",
+            &backend_docs,
+            true,
+        )
+        .await?,
+        inference_profiles: apply_import_collection(
+            access,
+            "InferenceProfile",
+            "profile_id",
+            &profile_docs,
+            true,
+        )
+        .await?,
+        tool_selections: apply_import_collection(
+            access,
+            "ToolSelection",
+            "selection_id",
+            &tool_selection_docs,
+            true,
+        )
+        .await?,
+        agent_behaviors: apply_import_collection(
+            access,
+            "AgentBehavior",
+            "behavior_id",
+            &behavior_docs,
+            true,
+        )
+        .await?,
+        agent_principal: apply_import_collection(
+            access,
+            "AgentPrincipal",
+            "agent_did",
+            &principal_docs,
+            true,
+        )
+        .await?,
+    })
 }
 
 fn graphql_input_literal(value: &Value) -> Result<String> {

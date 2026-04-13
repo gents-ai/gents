@@ -710,6 +710,547 @@ async fn diagnose_works_from_local_home_without_server() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("default");
+    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&root)?;
+
+    let agent_did = format!("did:defra-agent:{}", Uuid::new_v4().simple());
+    let default_behavior_id = format!("{agent_did}:default");
+    let tool_selection_id = format!("{default_behavior_id}:tools");
+
+    write_json_file(
+        &root.join("agent-principal.json"),
+        &serde_json::json!({
+            "agent_did": agent_did.clone(),
+            "display_name": "Default Agent",
+            "default_behavior_id": default_behavior_id.clone(),
+            "enabled": true
+        }),
+    )?;
+    write_json_file(
+        &root.join("agent-behaviors.json"),
+        &serde_json::json!([
+            {
+                "behavior_id": default_behavior_id.clone(),
+                "agent_did": agent_did.clone(),
+                "display_name": "Default",
+                "system_prompt": "Keep responses short.",
+                "backend_id": "default-backend",
+                "model_name": "mock-model",
+                "tool_selection_id": tool_selection_id.clone(),
+                "inference_profile_id": null,
+                "compaction_strategy": null,
+                "compaction_threshold": null,
+                "enabled": true
+            }
+        ]),
+    )?;
+    write_json_file(
+        &root.join("tool-selections.json"),
+        &serde_json::json!([
+            {
+                "selection_id": tool_selection_id.clone(),
+                "agent_did": agent_did.clone(),
+                "display_name": "Standard",
+                "enable_file_tools": true,
+                "file_tools_mode": "ReadOnly",
+                "enable_bash": true,
+                "bash_mode": "ReadOnly",
+                "cli_tool_names": [],
+                "enable_meta_tools": true,
+                "delegate_to": []
+            }
+        ]),
+    )?;
+    write_json_file(
+        &root.join("inference-backends.json"),
+        &serde_json::json!([
+            {
+                "backend_id": "default-backend",
+                "name": "default-backend",
+                "endpoint": "http://127.0.0.1:8000/v1",
+                "api_key_env_var": "AGENT_DAEMON_API_KEY",
+                "max_concurrent": 1,
+                "enabled": true,
+                "models": ["mock-model"]
+            }
+        ]),
+    )?;
+
+    let output = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "validate",
+            "--root",
+            root.to_str().expect("utf-8 manifest root"),
+        ],
+    )?;
+
+    assert_eq!(
+        output.get("status").and_then(Value::as_str),
+        Some("validated")
+    );
+    assert_eq!(output.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        output.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+    assert_eq!(
+        output
+            .pointer("/counts/agent_principal")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        output
+            .pointer("/counts/agent_behaviors")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        output
+            .pointer("/counts/tool_selections")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        output
+            .pointer("/counts/inference_backends")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        output
+            .pointer("/counts/inference_profiles")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        output.get("errors").and_then(Value::as_array).map(Vec::len),
+        Some(0)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_validate_reports_reference_errors_and_fails_nonzero() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("broken");
+    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&root)?;
+
+    let agent_did = format!("did:defra-agent:{}", Uuid::new_v4().simple());
+
+    write_json_file(
+        &root.join("agent-principal.json"),
+        &serde_json::json!({
+            "agent_did": agent_did.clone(),
+            "display_name": "Broken Agent",
+            "default_behavior_id": format!("{agent_did}:default"),
+            "enabled": true
+        }),
+    )?;
+    write_json_file(
+        &root.join("agent-behaviors.json"),
+        &serde_json::json!([
+            {
+                "behavior_id": "other-behavior",
+                "agent_did": agent_did.clone(),
+                "display_name": "Other",
+                "system_prompt": "Broken config.",
+                "backend_id": "missing-backend",
+                "model_name": "mock-model",
+                "tool_selection_id": "missing-tools",
+                "inference_profile_id": "missing-profile",
+                "compaction_strategy": null,
+                "compaction_threshold": null,
+                "enabled": true
+            }
+        ]),
+    )?;
+    write_json_file(&root.join("tool-selections.json"), &serde_json::json!([]))?;
+    write_json_file(
+        &root.join("inference-backends.json"),
+        &serde_json::json!([]),
+    )?;
+
+    let output = run_cli_failure_stdout_json(
+        &home_dir,
+        &[
+            "config",
+            "validate",
+            "--root",
+            root.to_str().expect("utf-8 manifest root"),
+        ],
+    )?;
+
+    assert_eq!(
+        output.get("status").and_then(Value::as_str),
+        Some("invalid")
+    );
+    assert_eq!(output.get("ok").and_then(Value::as_bool), Some(false));
+    let errors = output
+        .get("errors")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("validate output missing errors array: {output}"))?;
+    let messages = errors
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        messages.contains("default_behavior_id"),
+        "expected default behavior validation error, got:\n{messages}"
+    );
+    assert!(
+        messages.contains("missing backend_id missing-backend"),
+        "expected missing backend validation error, got:\n{messages}"
+    );
+    assert!(
+        messages.contains("missing tool_selection_id missing-tools"),
+        "expected missing tool selection validation error, got:\n{messages}"
+    );
+    assert!(
+        messages.contains("missing inference_profile_id missing-profile"),
+        "expected missing profile validation error, got:\n{messages}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_diff_reports_no_changes_for_matching_live_state() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("default");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-diff-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-diff-{}", Uuid::new_v4().simple());
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    let exported = run_cli_json(&home_dir, &["config", "export"])?;
+    write_manifest_root_from_export(&root, &exported)?;
+
+    let output = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "diff",
+            "--root",
+            root.to_str().expect("utf-8 manifest root"),
+        ],
+    )?;
+
+    assert_eq!(output.get("status").and_then(Value::as_str), Some("diffed"));
+    assert_eq!(output.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        output.get("access_mode").and_then(Value::as_str),
+        Some("local")
+    );
+    assert_eq!(
+        output
+            .pointer("/counts/agent_principal/unchanged")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        output
+            .pointer("/counts/agent_behaviors/unchanged")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        output
+            .pointer("/counts/tool_selections/unchanged")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        output
+            .pointer("/counts/inference_backends/unchanged")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        output
+            .pointer("/counts/inference_profiles/unchanged")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_diff_reports_updates_for_changed_backend_manifest() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("default");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-diff-update-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-diff-update-{}", Uuid::new_v4().simple());
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    let exported = run_cli_json(&home_dir, &["config", "export"])?;
+    write_manifest_root_from_export(&root, &exported)?;
+
+    let backends_path = root.join("inference-backends.json");
+    let mut backends = read_json_file(&backends_path)?;
+    backends[0]["endpoint"] = Value::String("http://127.0.0.1:9000/v1".to_string());
+    write_json_file(&backends_path, &backends)?;
+
+    let backend_id = exported
+        .pointer("/inference_backends/0/backend_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("exported bundle missing inference_backends[0].backend_id"))?;
+
+    let output = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "diff",
+            "--root",
+            root.to_str().expect("utf-8 manifest root"),
+        ],
+    )?;
+
+    assert_eq!(output.get("status").and_then(Value::as_str), Some("diffed"));
+    assert_eq!(output.get("ok").and_then(Value::as_bool), Some(false));
+    assert_eq!(
+        output
+            .pointer("/counts/inference_backends/update")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        output
+            .pointer("/collections/inference_backends/update/0")
+            .and_then(Value::as_str),
+        Some(backend_id)
+    );
+    assert_eq!(
+        output
+            .pointer("/counts/agent_behaviors/unchanged")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_apply_reconciles_running_runtime_without_restart() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("default");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-apply-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let agent_name = format!("cli-apply-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    let exported = run_cli_json(&home_dir, &["config", "export"])?;
+    write_manifest_root_from_export(&root, &exported)?;
+
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve.child)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let behaviors_path = root.join("agent-behaviors.json");
+    let mut behaviors = read_json_file(&behaviors_path)?;
+    let updated_prompt = "Keep responses terse. Mention that desired state was applied.";
+    behaviors[0]["system_prompt"] = Value::String(updated_prompt.to_string());
+    write_json_file(&behaviors_path, &behaviors)?;
+
+    let root_str = root
+        .to_str()
+        .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
+    let applied = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
+    assert_eq!(
+        applied.get("status").and_then(Value::as_str),
+        Some("applied")
+    );
+    assert_eq!(applied.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(applied.get("changed").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        applied
+            .pointer("/applied/agent_behaviors")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        applied
+            .pointer("/remaining/agent_behaviors/update")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+
+    let generation_after_apply =
+        wait_for_runtime_quiescence(&graphql, &agent_did, 2, Duration::from_secs(6)).await?;
+    let response = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{
+                AgentBehavior(
+                    filter: {{ agent_did: {{ _eq: "{}" }} }},
+                    limit: 1
+                ) {{
+                    system_prompt
+                }}
+            }}"#,
+            escape_graphql_string(&agent_did),
+        ),
+    )
+    .await?;
+    let behavior_row = first_graphql_row(&response, "AgentBehavior")?;
+    assert_eq!(
+        behavior_row.get("system_prompt").and_then(Value::as_str),
+        Some(updated_prompt)
+    );
+
+    let noop = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
+    assert_eq!(noop.get("status").and_then(Value::as_str), Some("noop"));
+    assert_eq!(noop.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(noop.get("changed").and_then(Value::as_bool), Some(false));
+    assert_eq!(
+        noop.pointer("/applied/agent_behaviors")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+
+    let generation_after_noop = wait_for_runtime_quiescence(
+        &graphql,
+        &agent_did,
+        generation_after_apply,
+        Duration::from_secs(3),
+    )
+    .await?;
+    assert_eq!(generation_after_noop, generation_after_apply);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-metrics-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let agent_name = format!("cli-metrics-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+    let graphql = graphql_url(port);
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve.child)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let response = reqwest::Client::new()
+        .get(format!("http://127.0.0.1:{port}/metrics"))
+        .send()
+        .await
+        .context("fetching /metrics")?;
+    assert!(
+        response.status().is_success(),
+        "unexpected status: {response:?}"
+    );
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        content_type.starts_with("text/plain"),
+        "unexpected content-type: {content_type}"
+    );
+    let body = response.text().await.context("reading /metrics body")?;
+    assert!(
+        body.contains("# HELP defra_agent_up"),
+        "expected defra_agent_up help text in metrics body:\n{body}"
+    );
+    assert!(
+        body.contains(r#"defra_agent_up 1"#),
+        "expected defra_agent_up sample in metrics body:\n{body}"
+    );
+    assert!(
+        body.contains(&format!(
+            r#"defra_agent_runtime_process_state{{agent_did="{agent_did}",state="ready"}} 1"#
+        )),
+        "expected ready process-state metric in metrics body:\n{body}"
+    );
+    assert!(
+        body.contains(&format!(
+            r#"defra_agent_runtime_active_generation{{agent_did="{agent_did}"}}"#
+        )),
+        "expected active-generation metric in metrics body:\n{body}"
+    );
+    assert!(
+        body.contains("defra_agent_backend_enabled"),
+        "expected backend metrics in metrics body:\n{body}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_export_import_round_trips_offline_and_requires_override() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let source_home = tempdir.path().join("source-home");
@@ -2261,6 +2802,171 @@ fn run_cli_failure_stderr(home_dir: &Path, args: &[&str]) -> Result<String> {
 
     String::from_utf8(output.stderr)
         .with_context(|| format!("parsing stderr from defra-agent {}", args.join(" ")))
+}
+
+fn run_cli_failure_stdout_json(home_dir: &Path, args: &[&str]) -> Result<Value> {
+    let output = Command::new(cli_bin())
+        .env("HOME", home_dir)
+        .env("RUST_LOG", "error")
+        .current_dir(home_dir)
+        .args(args)
+        .output()
+        .with_context(|| format!("running defra-agent {}", args.join(" ")))?;
+    if output.status.success() {
+        bail!(
+            "expected defra-agent {} to fail\nstdout:\n{}\nstderr:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    serde_json::from_slice(&output.stdout).with_context(|| {
+        format!(
+            "parsing failure JSON from defra-agent {}\nstdout:\n{}\nstderr:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })
+}
+
+fn write_json_file(path: &Path, value: &Value) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating parent directory {}", parent.display()))?;
+    }
+    fs::write(path, serde_json::to_vec_pretty(value)?)
+        .with_context(|| format!("writing JSON file {}", path.display()))?;
+    Ok(())
+}
+
+fn read_json_file(path: &Path) -> Result<Value> {
+    let bytes = fs::read(path).with_context(|| format!("reading JSON file {}", path.display()))?;
+    serde_json::from_slice(&bytes).with_context(|| format!("decoding JSON file {}", path.display()))
+}
+
+fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<()> {
+    write_json_file(
+        &root.join("agent-principal.json"),
+        &project_object_fields(
+            exported
+                .get("agent_principal")
+                .ok_or_else(|| anyhow!("exported bundle missing agent_principal"))?,
+            &[
+                "agent_did",
+                "display_name",
+                "default_behavior_id",
+                "enabled",
+            ],
+        )?,
+    )?;
+    write_json_file(
+        &root.join("agent-behaviors.json"),
+        &project_array_fields(
+            exported
+                .get("agent_behaviors")
+                .ok_or_else(|| anyhow!("exported bundle missing agent_behaviors"))?,
+            &[
+                "behavior_id",
+                "agent_did",
+                "display_name",
+                "system_prompt",
+                "backend_id",
+                "model_name",
+                "tool_selection_id",
+                "inference_profile_id",
+                "compaction_strategy",
+                "compaction_threshold",
+                "enabled",
+            ],
+        )?,
+    )?;
+    write_json_file(
+        &root.join("tool-selections.json"),
+        &project_array_fields(
+            exported
+                .get("tool_selections")
+                .ok_or_else(|| anyhow!("exported bundle missing tool_selections"))?,
+            &[
+                "selection_id",
+                "agent_did",
+                "display_name",
+                "enable_file_tools",
+                "file_tools_mode",
+                "enable_bash",
+                "bash_mode",
+                "cli_tool_names",
+                "enable_meta_tools",
+                "delegate_to",
+            ],
+        )?,
+    )?;
+    write_json_file(
+        &root.join("inference-backends.json"),
+        &project_array_fields(
+            exported
+                .get("inference_backends")
+                .ok_or_else(|| anyhow!("exported bundle missing inference_backends"))?,
+            &[
+                "backend_id",
+                "name",
+                "endpoint",
+                "api_key_env_var",
+                "max_concurrent",
+                "enabled",
+                "models",
+            ],
+        )?,
+    )?;
+
+    let inference_profiles = project_array_fields(
+        exported
+            .get("inference_profiles")
+            .ok_or_else(|| anyhow!("exported bundle missing inference_profiles"))?,
+        &[
+            "profile_id",
+            "display_name",
+            "context_window",
+            "max_output_tokens",
+            "max_turns",
+            "temperature",
+            "stream_batch_ms",
+            "deadline_duration_secs",
+        ],
+    )?;
+    if inference_profiles
+        .as_array()
+        .is_some_and(|rows| !rows.is_empty())
+    {
+        write_json_file(&root.join("inference-profiles.json"), &inference_profiles)?;
+    }
+
+    Ok(())
+}
+
+fn project_array_fields(value: &Value, fields: &[&str]) -> Result<Value> {
+    let rows = value
+        .as_array()
+        .ok_or_else(|| anyhow!("expected array while projecting manifest fields: {value}"))?;
+    Ok(Value::Array(
+        rows.iter()
+            .map(|row| project_object_fields(row, fields))
+            .collect::<Result<Vec<_>>>()?,
+    ))
+}
+
+fn project_object_fields(value: &Value, fields: &[&str]) -> Result<Value> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow!("expected object while projecting manifest fields: {value}"))?;
+    let mut projected = serde_json::Map::new();
+    for field in fields {
+        if let Some(value) = object.get(*field) {
+            projected.insert((*field).to_string(), value.clone());
+        }
+    }
+    Ok(Value::Object(projected))
 }
 
 async fn wait_for_request(
