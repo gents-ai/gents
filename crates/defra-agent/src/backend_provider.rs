@@ -138,6 +138,19 @@ pub fn build_completion_client(
     adapter_for(kind).build_completion_client(endpoint, api_key)
 }
 
+pub fn build_openrouter_client(
+    endpoint: &str,
+    api_key: &str,
+) -> Result<rig::providers::openrouter::Client> {
+    rig::providers::openrouter::Client::builder()
+        .api_key(api_key)
+        .base_url(endpoint)
+        .build()
+        .with_context(|| {
+            format!("building OpenRouter completion client for backend endpoint {endpoint}")
+        })
+}
+
 pub async fn discover_models(
     client: &Client,
     kind: BackendProviderKind,

@@ -1,5 +1,8 @@
 use super::*;
-use crate::backend_provider::build_completion_client;
+use crate::backend_provider::{
+    build_completion_client, build_openrouter_client, BackendProviderKind,
+};
+use crate::completion_factory::build_agent;
 use crate::config::BehaviorConfig;
 use crate::tool_surface::ToolSurface;
 
@@ -95,18 +98,6 @@ async fn execute_materialized_task(
     let tool_names = tool_surface.tool_names();
     behavior.ensure_tool_calling_support_for_names(&tool_names)?;
     let tools = tool_surface.build_tools(tool_runtime)?;
-    let openai_client = build_completion_client(
-        behavior.backend_provider_kind,
-        &behavior.backend_endpoint,
-        &api_key,
-    )?;
-
-    let agent = openai_client
-        .agent(&behavior.model_name)
-        .preamble(&preamble)
-        .default_max_turns(behavior.max_turns)
-        .tools(tools)
-        .build();
 
     let stream_writer = DefraStreamWriter::new(
         node.clone(),
@@ -127,17 +118,42 @@ async fn execute_materialized_task(
     lifecycle.set_response_doc_id(&doc_id);
     lifecycle.advance().await?;
 
-    let response_text = prompt_scheduled_task(
-        task,
-        behavior,
-        node,
-        &prompt_builder,
-        &agent,
-        lifecycle.request().session_id.as_str(),
-        full_prompt,
-        cancel,
-    )
-    .await?;
+    let response_text = match behavior.backend_provider_kind {
+        BackendProviderKind::OpenAiCompatible => {
+            let client = build_completion_client(
+                behavior.backend_provider_kind,
+                &behavior.backend_endpoint,
+                &api_key,
+            )?;
+            let agent = build_agent(&client, behavior, &preamble, tools);
+            prompt_scheduled_task(
+                task,
+                behavior,
+                node,
+                &prompt_builder,
+                &agent,
+                lifecycle.request().session_id.as_str(),
+                full_prompt,
+                cancel,
+            )
+            .await?
+        }
+        BackendProviderKind::OpenRouter => {
+            let client = build_openrouter_client(&behavior.backend_endpoint, &api_key)?;
+            let agent = build_agent(&client, behavior, &preamble, tools);
+            prompt_scheduled_task(
+                task,
+                behavior,
+                node,
+                &prompt_builder,
+                &agent,
+                lifecycle.request().session_id.as_str(),
+                full_prompt,
+                cancel,
+            )
+            .await?
+        }
+    };
 
     if !response_text.is_empty() {
         let _ = stream_writer.write_tokens(&doc_id, &response_text).await?;

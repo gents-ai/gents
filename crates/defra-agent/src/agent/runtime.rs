@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use defra_node::EventName;
 use rig::client::CompletionClient;
+use rig::tool::ToolDyn;
 use tokio::sync::{mpsc, watch, Mutex, Notify};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -12,8 +13,11 @@ use tokio_util::sync::CancellationToken;
 use super::daemon::BehaviorDaemon;
 use super::reconcile::GenerationSupervisor;
 use super::{DefraAgent, ProcessLifecycleState};
-use crate::backend_provider::{build_completion_client, discover_models};
+use crate::backend_provider::{
+    build_completion_client, build_openrouter_client, discover_models, BackendProviderKind,
+};
 use crate::backend_registry::BackendTracker;
+use crate::completion_factory::build_agent;
 use crate::health_checker::{spawn_health_checker, ServiceHealthMap};
 use crate::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
 use crate::prompt::LayeredPromptBuilder;
@@ -101,11 +105,6 @@ impl RuntimeContext {
         let preamble = prompt_builder.preamble().to_string();
         let tools = tool_surface.build_tools(&self.tool_runtime)?;
         behavior.ensure_runtime_compatibility(tool_surface.as_ref())?;
-        let openai_client = build_completion_client(
-            behavior.backend_provider_kind,
-            &behavior.backend_endpoint,
-            &api_key,
-        )?;
         tracing::info!(
             behavior_id = %behavior.name,
             did = %behavior.did(),
@@ -114,12 +113,55 @@ impl RuntimeContext {
             "building behavior runtime"
         );
 
-        let agent = openai_client
-            .agent(&behavior.model_name)
-            .preamble(&preamble)
-            .default_max_turns(behavior.max_turns)
-            .tools(tools)
-            .build();
+        match behavior.backend_provider_kind {
+            BackendProviderKind::OpenAiCompatible => {
+                let client = build_completion_client(
+                    behavior.backend_provider_kind,
+                    &behavior.backend_endpoint,
+                    &api_key,
+                )?;
+                self.run_behavior_with_client(
+                    behavior,
+                    request_rx,
+                    shutdown,
+                    prompt_builder,
+                    preamble,
+                    tools,
+                    client,
+                )
+                .await
+            }
+            BackendProviderKind::OpenRouter => {
+                let client = build_openrouter_client(&behavior.backend_endpoint, &api_key)?;
+                self.run_behavior_with_client(
+                    behavior,
+                    request_rx,
+                    shutdown,
+                    prompt_builder,
+                    preamble,
+                    tools,
+                    client,
+                )
+                .await
+            }
+        }
+    }
+
+    async fn run_behavior_with_client<C>(
+        &self,
+        behavior: Arc<crate::config::BehaviorConfig>,
+        request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+        shutdown: watch::Receiver<bool>,
+        prompt_builder: LayeredPromptBuilder,
+        preamble: String,
+        tools: Vec<Box<dyn ToolDyn>>,
+        client: C,
+    ) -> Result<()>
+    where
+        C: CompletionClient,
+        C::CompletionModel: 'static,
+    {
+        let agent = build_agent(&client, behavior.as_ref(), &preamble, tools);
         let mut daemon = BehaviorDaemon::new(
             self.node.clone(),
             behavior,

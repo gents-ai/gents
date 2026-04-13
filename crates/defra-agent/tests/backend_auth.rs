@@ -7,7 +7,7 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use defra_agent::compaction::CompactionStrategy;
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
@@ -24,13 +24,16 @@ struct MockModelEndpoint {
     endpoint: String,
     port: u16,
     stop: Arc<AtomicBool>,
+    requests: Arc<Mutex<Vec<HttpRequestData>>>,
     handle: Option<JoinHandle<()>>,
 }
 
+#[derive(Clone)]
 struct HttpRequestData {
     method: String,
     path: String,
     headers: HashMap<String, String>,
+    body: String,
 }
 
 #[derive(Default)]
@@ -57,6 +60,8 @@ impl MockModelEndpoint {
         let port = listener.local_addr()?.port();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_for_thread = stop.clone();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let requests_for_thread = requests.clone();
         let model_name = model_name.to_string();
         let required_bearer = required_bearer.map(ToOwned::to_owned);
         let handle = thread::spawn(move || {
@@ -70,6 +75,10 @@ impl MockModelEndpoint {
                                 continue;
                             }
                         };
+                        requests_for_thread
+                            .lock()
+                            .expect("mock request log mutex poisoned")
+                            .push(request.clone());
                         let authorized = required_bearer.as_ref().is_none_or(|expected| {
                             request
                                 .headers
@@ -81,6 +90,55 @@ impl MockModelEndpoint {
                         {
                             if authorized {
                                 ("200 OK", format!(r#"{{"data":[{{"id":"{model_name}"}}]}}"#))
+                            } else {
+                                (
+                                    "401 Unauthorized",
+                                    r#"{"error":"unauthorized"}"#.to_string(),
+                                )
+                            }
+                        } else if request.method == "GET"
+                            && (request.path == "/v1/key" || request.path == "/key")
+                        {
+                            if authorized {
+                                ("200 OK", r#"{"data":{"label":"test-key"}}"#.to_string())
+                            } else {
+                                (
+                                    "401 Unauthorized",
+                                    r#"{"error":"unauthorized"}"#.to_string(),
+                                )
+                            }
+                        } else if request.method == "POST"
+                            && (request.path == "/v1/chat/completions"
+                                || request.path == "/chat/completions")
+                        {
+                            if authorized {
+                                (
+                                    "200 OK",
+                                    format!(
+                                        r#"{{
+                                            "id":"chatcmpl-test",
+                                            "provider":"Mock",
+                                            "object":"chat.completion",
+                                            "created":1710000000,
+                                            "model":"{model_name}",
+                                            "choices":[{{
+                                                "index":0,
+                                                "finish_reason":"stop",
+                                                "message":{{
+                                                    "role":"assistant",
+                                                    "content":"mock response",
+                                                    "refusal":null,
+                                                    "reasoning":null
+                                                }}
+                                            }}],
+                                            "usage":{{
+                                                "prompt_tokens":10,
+                                                "completion_tokens":2,
+                                                "total_tokens":12
+                                            }}
+                                        }}"#
+                                    ),
+                                )
                             } else {
                                 (
                                     "401 Unauthorized",
@@ -105,12 +163,20 @@ impl MockModelEndpoint {
             endpoint: format!("http://127.0.0.1:{port}/v1"),
             port,
             stop,
+            requests,
             handle: Some(handle),
         })
     }
 
     fn endpoint(&self) -> &str {
         &self.endpoint
+    }
+
+    fn recorded_requests(&self) -> Vec<HttpRequestData> {
+        self.requests
+            .lock()
+            .expect("mock request log mutex poisoned")
+            .clone()
     }
 }
 
@@ -265,17 +331,30 @@ fn read_http_request(stream: &mut TcpStream) -> anyhow::Result<HttpRequestData> 
         .next()
         .ok_or_else(|| anyhow::anyhow!("missing request path"))?
         .to_string();
-    let headers = lines
+    let headers: HashMap<String, String> = lines
         .filter_map(|line| {
             let (name, value) = line.split_once(':')?;
             Some((name.trim().to_ascii_lowercase(), value.trim().to_string()))
         })
         .collect();
+    let content_length = headers
+        .get("content-length")
+        .and_then(|value: &String| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    let mut body = buffer[header_end..].to_vec();
+    while body.len() < content_length {
+        let read = stream.read(&mut temp)?;
+        if read == 0 {
+            anyhow::bail!("connection closed before request body");
+        }
+        body.extend_from_slice(&temp[..read]);
+    }
 
     Ok(HttpRequestData {
         method,
         path,
         headers,
+        body: String::from_utf8_lossy(&body[..content_length]).to_string(),
     })
 }
 
@@ -420,6 +499,65 @@ async fn run_agent_uses_backend_specific_api_key_env_var_for_startup_probe() -> 
             ProcessLifecycleState::Shutdown,
         ]
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
+    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    ensure_runtime_schemas(node.as_ref()).await?;
+    let mock_endpoint = MockModelEndpoint::start_with_required_bearer(
+        "openai/gpt-4o-mini",
+        Some("openrouter-key"),
+    )?;
+    let mut behavior = test_behavior("openrouter-oneshot", "backend-openrouter", None);
+    behavior.backend_provider_kind = BackendProviderKind::OpenRouter;
+    behavior.backend_endpoint = mock_endpoint.endpoint().to_string();
+    behavior.backend_api_key = Some("openrouter-key".to_string());
+    behavior.model_name = "openai/gpt-4o-mini".to_string();
+
+    let result =
+        defra_agent::run_openai_oneshot(node, &behavior, "Say hello in one sentence.").await?;
+    assert_eq!(result.response_text, "mock response");
+
+    let completion_request = mock_endpoint
+        .recorded_requests()
+        .into_iter()
+        .find(|request| request.method == "POST" && request.path.ends_with("/chat/completions"))
+        .expect("completion request should be recorded");
+    let body: Value = serde_json::from_str(&completion_request.body)?;
+
+    assert_eq!(body["provider"]["require_parameters"], true);
+    assert_eq!(body["model"], "openai/gpt-4o-mini");
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "hits the live OpenRouter API and requires OPENROUTER_API_KEY"]
+async fn live_openrouter_oneshot_succeeds() -> Result<()> {
+    let api_key = std::env::var("OPENROUTER_API_KEY")
+        .context("set OPENROUTER_API_KEY to run the live OpenRouter smoke test")?;
+    let model_name = std::env::var("DEFRA_AGENT_TEST_OPENROUTER_MODEL")
+        .unwrap_or_else(|_| "openai/gpt-4o-mini".to_string());
+
+    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    ensure_runtime_schemas(node.as_ref()).await?;
+    let mut behavior = test_behavior("openrouter-live", "backend-openrouter-live", None);
+    behavior.backend_provider_kind = BackendProviderKind::OpenRouter;
+    behavior.backend_endpoint = "https://openrouter.ai/api/v1".to_string();
+    behavior.backend_api_key = Some(api_key);
+    behavior.model_name = model_name;
+
+    let result = defra_agent::run_openai_oneshot(
+        node,
+        &behavior,
+        "Reply with exactly the word READY and nothing else.",
+    )
+    .await?;
+
+    assert!(!result.response_text.trim().is_empty());
 
     Ok(())
 }

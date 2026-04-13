@@ -8,7 +8,10 @@ use rig::completion::CompletionModel;
 use rig::completion::Prompt;
 use rig::tool::ToolDyn;
 
-use crate::backend_provider::build_completion_client;
+use crate::backend_provider::{
+    build_completion_client, build_openrouter_client, BackendProviderKind,
+};
+use crate::completion_factory::build_agent;
 use crate::config::BehaviorConfig;
 use crate::hook::{DefraSessionHook, FailurePolicy};
 use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
@@ -50,33 +53,66 @@ pub async fn run_openai_oneshot_with_tools(
         .map(|tool| tool.name().to_string())
         .collect::<Vec<_>>();
     behavior.ensure_tool_calling_support_for_names(&tool_names)?;
-    let openai_client = build_completion_client(
-        behavior.backend_provider_kind,
-        &behavior.backend_endpoint,
-        &api_key,
-    )
-    .with_context(|| {
-        format!(
-            "building completion client for behavior {} against {}",
-            behavior.name, behavior.backend_endpoint
-        )
-    })?;
 
-    let agent = if tools.is_empty() {
-        openai_client
-            .agent(&behavior.model_name)
-            .preamble(&preamble)
-            .default_max_turns(behavior.max_turns)
-            .build()
-    } else {
-        openai_client
-            .agent(&behavior.model_name)
-            .preamble(&preamble)
-            .default_max_turns(behavior.max_turns)
-            .tools(tools)
-            .build()
-    };
+    match behavior.backend_provider_kind {
+        BackendProviderKind::OpenAiCompatible => {
+            let client = build_completion_client(
+                behavior.backend_provider_kind,
+                &behavior.backend_endpoint,
+                &api_key,
+            )
+            .with_context(|| {
+                format!(
+                    "building completion client for behavior {} against {}",
+                    behavior.name, behavior.backend_endpoint
+                )
+            })?;
+            run_oneshot_with_completion_client(
+                node,
+                behavior,
+                prompt,
+                prompt_builder,
+                preamble,
+                tools,
+                client,
+            )
+            .await
+        }
+        BackendProviderKind::OpenRouter => {
+            let client = build_openrouter_client(&behavior.backend_endpoint, &api_key)
+                .with_context(|| {
+                    format!(
+                        "building OpenRouter completion client for behavior {} against {}",
+                        behavior.name, behavior.backend_endpoint
+                    )
+                })?;
+            run_oneshot_with_completion_client(
+                node,
+                behavior,
+                prompt,
+                prompt_builder,
+                preamble,
+                tools,
+                client,
+            )
+            .await
+        }
+    }
+}
 
+async fn run_oneshot_with_completion_client<C>(
+    node: Arc<EmbeddedNode>,
+    behavior: &BehaviorConfig,
+    prompt: &str,
+    prompt_builder: LayeredPromptBuilder,
+    preamble: String,
+    tools: Vec<Box<dyn ToolDyn>>,
+    client: C,
+) -> Result<OneshotRunResult>
+where
+    C: CompletionClient,
+{
+    let agent = build_agent(&client, behavior, &preamble, tools);
     run_oneshot_with_agent(node, behavior, &prompt_builder, &agent, prompt).await
 }
 

@@ -4,7 +4,6 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
-use rig::client::CompletionClient;
 use rig::completion::Prompt;
 use tokio_util::sync::CancellationToken;
 
