@@ -231,7 +231,7 @@ theorem bootState_coherent
     simpa [bootState] using h_generation
   · intro generation h_generation
     simp [bootState] at h_generation
-    simpa [h_generation, bootState, ResolvedSnapshot.activate]
+    simp [h_generation, bootState, ResolvedSnapshot.activate]
   · intro candidate h_candidate
     simp [bootState] at h_candidate
   · intro rid h_rid
@@ -424,7 +424,7 @@ theorem coherent_preserved
       · intro generation h_generation
         simp at h_generation
         rcases h_generation with h_new | h_old
-        · simpa [h_new, ResolvedSnapshot.activate]
+        · simp [h_new, ResolvedSnapshot.activate]
         · have h_old_bound := h_live_bound generation h_old
           exact Nat.le_trans h_old_bound (Nat.le_succ _)
       · intro candidate h_candidate
