@@ -105,7 +105,28 @@ The server reads the initialized home directory, starts the local node, and prin
 - `default_behavior_id`
 - `tool_ceiling`
 
+If you start the runtime with P2P enabled, the readiness JSON also includes:
+
+- `p2p_transport`
+- `p2p_peer_id`
+- `p2p_listen_addresses`
+
+The same connectivity fields are persisted to `runtime.json` under the agent home, usually `~/.defra-agent/runtime.json`.
+
 `server` stays in the foreground until you stop it with `Ctrl-C`. By default it keeps logs quiet and prints the readiness JSON plus a short status line. If you want debug output, set `RUST_LOG=info` or a more specific filter before starting it.
+
+The default behavior stays local-only. If you do not pass any P2P flags, `p2p_transport` stays `none`.
+
+To enable operator-facing P2P bring-up with iroh:
+
+```bash
+$AGENT server \
+  --p2p-transport iroh \
+  --p2p-bind-addr 127.0.0.1 \
+  --p2p-port 4017 \
+  --p2p-relay-mode disabled \
+  --p2p-discovery disabled
+```
 
 ### 5. Start chatting
 
@@ -168,6 +189,38 @@ $AGENT config behavior set \
 ```
 
 After that, the agent can use read-only file tools on new requests. This change is live; no restart is required.
+
+## Connected Runtime Bring-Up
+
+To bring up two runtimes and connect them through the operator CLI:
+
+```bash
+$AGENT server --home /tmp/amy --p2p-transport iroh --p2p-bind-addr 127.0.0.1 --p2p-port 4017
+$AGENT server --home /tmp/coding --p2p-transport iroh --p2p-bind-addr 127.0.0.1 --p2p-port 4018
+```
+
+Read Amy's startup JSON or `/tmp/amy/runtime.json` and take one of the values from `p2p_listen_addresses`.
+
+Then connect Coding to Amy:
+
+```bash
+$AGENT p2p connect --home /tmp/coding --peer "<peer-id-or-listen-address>"
+```
+
+Inspect connectivity from either runtime:
+
+```bash
+$AGENT p2p status --home /tmp/amy
+$AGENT p2p peers --home /tmp/coding
+$AGENT status --home /tmp/coding
+```
+
+The most useful fields for bring-up are:
+
+- `p2p_transport`
+- `p2p_peer_id`
+- `p2p_listen_addresses`
+- `p2p_connected_peers`
 
 ## Useful Commands
 

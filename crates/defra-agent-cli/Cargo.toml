@@ -22,6 +22,7 @@ hostname.workspace = true
 opentelemetry.workspace = true
 opentelemetry-otlp.workspace = true
 opentelemetry_sdk.workspace = true
+p2p.workspace = true
 ratatui = "0.29"
 reqwest.workspace = true
 rig-core = "0.31"

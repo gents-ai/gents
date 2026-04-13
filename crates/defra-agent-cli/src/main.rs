@@ -23,6 +23,7 @@ use defra_agent::{
     DocumentRuntimeOptions, FileToolMode, McpPool, ProcessLifecycleObserver, ProcessLifecycleState,
     SimpleIdentity, ToolCeiling,
 };
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::watch;
@@ -34,6 +35,10 @@ mod tui;
 const DEFAULT_AGENT_NAME: &str = "default";
 const DEFAULT_HTTP_PORT: u16 = 9191;
 const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
+const DEFAULT_P2P_MAX_CONCURRENT_DAG_FETCHES: usize = 4;
+const DEFAULT_P2P_MAX_CONCURRENT_PUSH_TASKS: usize = 8;
+const DEFAULT_P2P_RATE_LIMIT_BURST: u32 = 500;
+const DEFAULT_P2P_RATE_LIMIT_RATE: f64 = 50.0;
 const DEFAULT_LOG_FILTER: &str = concat!(
     "warn,",
     "defra_agent::agent::runtime=info,",
@@ -79,6 +84,7 @@ const SERVER_AFTER_HELP: &str = "\
 Common flow:
   defra-agent init http://HOST:PORT/v1 --model-name MODEL
   defra-agent server
+  defra-agent server --p2p-transport iroh --p2p-port 4017
   defra-agent chat";
 const CHAT_AFTER_HELP: &str = "\
 Examples:
@@ -89,6 +95,11 @@ Examples:
 Diagnostics:
   defra-agent status
   defra-agent show response REQUEST_ID";
+const P2P_AFTER_HELP: &str = "\
+Examples:
+  defra-agent p2p status
+  defra-agent p2p peers --home /path/to/home
+  defra-agent p2p connect --graphql http://127.0.0.1:9191/api/v0/graphql --peer <peer-id-or-address>";
 const STATUS_AFTER_HELP: &str = "\
 Status reads the local runtime by default.
 
@@ -212,6 +223,11 @@ enum Command {
     Server(ServeArgs),
     #[command(about = "Chat with the local agent in the terminal", after_help = CHAT_AFTER_HELP)]
     Chat(ChatArgs),
+    #[command(about = "Inspect and control live P2P runtime connectivity", after_help = P2P_AFTER_HELP)]
+    P2p {
+        #[command(subcommand)]
+        command: P2pCommand,
+    },
     #[command(about = "Experimental terminal UI", hide = true)]
     Tui(TuiArgs),
     #[command(about = "Show stored runtime, request, or response state", after_help = SHOW_AFTER_HELP)]
@@ -335,6 +351,18 @@ struct ServeArgs {
     cli_tools: Vec<String>,
     #[arg(long, help = "Root directory for readwrite tool ceilings")]
     tool_root: Option<PathBuf>,
+    #[arg(long, value_enum, default_value_t = P2pTransportArg::None)]
+    p2p_transport: P2pTransportArg,
+    #[arg(long)]
+    p2p_bind_addr: Option<IpAddr>,
+    #[arg(long)]
+    p2p_port: Option<u16>,
+    #[arg(long)]
+    p2p_secret_key_path: Option<PathBuf>,
+    #[arg(long, value_enum, default_value_t = P2pRelayModeArg::Default)]
+    p2p_relay_mode: P2pRelayModeArg,
+    #[arg(long, value_enum, default_value_t = P2pDiscoveryArg::N0)]
+    p2p_discovery: P2pDiscoveryArg,
 }
 
 #[derive(clap::Args)]
@@ -412,6 +440,34 @@ struct StatusArgs {
 enum ChatOutputFormat {
     Text,
     Json,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum P2pTransportArg {
+    None,
+    Iroh,
+}
+
+impl P2pTransportArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Iroh => "iroh",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum P2pRelayModeArg {
+    Default,
+    Disabled,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum P2pDiscoveryArg {
+    #[value(name = "n0")]
+    N0,
+    Disabled,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -619,6 +675,23 @@ struct StoredRuntimeState {
     agent_name: String,
     agent_did: String,
     default_behavior_id: String,
+    #[serde(default = "default_p2p_transport")]
+    p2p_transport: String,
+    #[serde(default)]
+    p2p_peer_id: Option<String>,
+    #[serde(default)]
+    p2p_listen_addresses: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NodeIdentityResponse {
+    #[serde(rename = "PeerID")]
+    peer_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct P2pPeerRow {
+    id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1322,6 +1395,34 @@ struct ConfigApplyArgs {
 }
 
 #[derive(Subcommand)]
+enum P2pCommand {
+    #[command(about = "Show live P2P connectivity for the running runtime")]
+    Status(P2pAccessArgs),
+    #[command(about = "List connected peers for the running runtime")]
+    Peers(P2pAccessArgs),
+    #[command(about = "Connect the running runtime to another peer")]
+    Connect(P2pConnectArgs),
+}
+
+#[derive(clap::Args)]
+struct P2pAccessArgs {
+    #[arg(long)]
+    home: Option<PathBuf>,
+    #[arg(long)]
+    graphql: Option<String>,
+}
+
+#[derive(clap::Args)]
+struct P2pConnectArgs {
+    #[arg(long)]
+    home: Option<PathBuf>,
+    #[arg(long)]
+    graphql: Option<String>,
+    #[arg(long)]
+    peer: String,
+}
+
+#[derive(Subcommand)]
 enum RequestCommand {
     #[command(
         about = "Create an AgentRequest document and optionally wait for the final AgentResponse"
@@ -1413,6 +1514,11 @@ async fn main() -> Result<()> {
         Command::Init(args) => init(args).await,
         Command::Server(args) => serve(args).await,
         Command::Chat(args) => chat(args).await,
+        Command::P2p { command } => match command {
+            P2pCommand::Status(args) => p2p_status(args).await,
+            P2pCommand::Peers(args) => p2p_peers(args).await,
+            P2pCommand::Connect(args) => p2p_connect(args).await,
+        },
         Command::Tui(args) => tui::run(args).await,
         Command::Show { command } => match command {
             ShowCommand::Request(args) => request_show(args).await,
@@ -1541,13 +1647,16 @@ async fn serve(args: ServeArgs) -> Result<()> {
         display_host(args.http_addr),
         args.http_port
     );
+    let p2p_config = resolve_server_p2p_config(&home_dir, &args)?;
+    let mut node_builder = EmbeddedNode::builder().data_path(&data_dir).with_http(
+        defra_node::HttpConfig::with_addr(http_addr)
+            .with_extra_routes(metrics_router(graphql_url.clone())),
+    );
+    if let Some(config) = p2p_config {
+        node_builder = node_builder.with_p2p(config);
+    }
     let node = Arc::new(
-        EmbeddedNode::builder()
-            .data_path(&data_dir)
-            .with_http(
-                defra_node::HttpConfig::with_addr(http_addr)
-                    .with_extra_routes(metrics_router(graphql_url.clone())),
-            )
+        node_builder
             .build()
             .await
             .context("building embedded defra node")?,
@@ -1611,7 +1720,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
     let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
 
     let agent = DefraAgent::from_default_behavior_documents(
-        node,
+        node.clone(),
         identity.clone(),
         DocumentRuntimeOptions {
             mcp_pool: McpPool::new(),
@@ -1669,6 +1778,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
         }
     }
 
+    let p2p_status = load_local_server_p2p_status(node.as_ref(), args.p2p_transport).await?;
     write_runtime_state(
         &home_dir,
         &StoredRuntimeState {
@@ -1677,6 +1787,25 @@ async fn serve(args: ServeArgs) -> Result<()> {
             agent_name: agent_name.clone(),
             agent_did: identity.did().to_string(),
             default_behavior_id: default_behavior_id.clone(),
+            p2p_transport: p2p_status
+                .get("p2p_transport")
+                .and_then(Value::as_str)
+                .unwrap_or(P2pTransportArg::None.as_str())
+                .to_string(),
+            p2p_peer_id: p2p_status
+                .get("p2p_peer_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            p2p_listen_addresses: p2p_status
+                .get("p2p_listen_addresses")
+                .and_then(Value::as_array)
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default(),
         },
     )?;
 
@@ -1691,6 +1820,9 @@ async fn serve(args: ServeArgs) -> Result<()> {
         "runnable_behaviors": runnable_behaviors,
         "unavailable_behaviors": unavailable_behaviors,
         "graphql": graphql_url,
+        "p2p_transport": p2p_status.get("p2p_transport").cloned().unwrap_or(Value::String(default_p2p_transport())),
+        "p2p_peer_id": p2p_status.get("p2p_peer_id").cloned().unwrap_or(Value::Null),
+        "p2p_listen_addresses": p2p_status.get("p2p_listen_addresses").cloned().unwrap_or_else(|| json!([])),
     });
     print_json(&output)?;
     eprintln!(
@@ -1700,6 +1832,110 @@ async fn serve(args: ServeArgs) -> Result<()> {
     run_handle
         .await
         .context("joining defra-agent runtime task")?
+}
+
+fn default_p2p_transport() -> String {
+    P2pTransportArg::None.as_str().to_string()
+}
+
+fn default_p2p_secret_key_path(home_dir: &Path) -> PathBuf {
+    home_dir.join("p2p-secret-key")
+}
+
+fn resolve_server_p2p_config(
+    home_dir: &Path,
+    args: &ServeArgs,
+) -> Result<Option<defra_node::P2PConfig>> {
+    match args.p2p_transport {
+        P2pTransportArg::None => {
+            if args.p2p_bind_addr.is_some()
+                || args.p2p_port.is_some()
+                || args.p2p_secret_key_path.is_some()
+                || args.p2p_relay_mode != P2pRelayModeArg::Default
+                || args.p2p_discovery != P2pDiscoveryArg::N0
+            {
+                anyhow::bail!("P2P-specific flags require `--p2p-transport iroh`");
+            }
+            Ok(None)
+        }
+        P2pTransportArg::Iroh => {
+            let secret_key_path = args
+                .p2p_secret_key_path
+                .clone()
+                .unwrap_or_else(|| default_p2p_secret_key_path(home_dir));
+            if let Some(parent) = secret_key_path.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("creating P2P key directory {}", parent.display()))?;
+            }
+            Ok(Some(defra_node::P2PConfig {
+                port: args.p2p_port.unwrap_or(0),
+                bind_addr: args.p2p_bind_addr,
+                relay_mode: match args.p2p_relay_mode {
+                    P2pRelayModeArg::Default => p2p::iroh::IrohRelayModeConfig::Default,
+                    P2pRelayModeArg::Disabled => p2p::iroh::IrohRelayModeConfig::Disabled,
+                },
+                discovery: match args.p2p_discovery {
+                    P2pDiscoveryArg::N0 => p2p::iroh::IrohDiscoveryConfig::N0,
+                    P2pDiscoveryArg::Disabled => p2p::iroh::IrohDiscoveryConfig::Disabled,
+                },
+                secret_key_path: Some(secret_key_path),
+                load_persisted_collections: true,
+                max_concurrent_dag_fetches: DEFAULT_P2P_MAX_CONCURRENT_DAG_FETCHES,
+                max_concurrent_push_tasks: DEFAULT_P2P_MAX_CONCURRENT_PUSH_TASKS,
+                rate_limit_burst: DEFAULT_P2P_RATE_LIMIT_BURST,
+                rate_limit_rate: DEFAULT_P2P_RATE_LIMIT_RATE,
+            }))
+        }
+    }
+}
+
+async fn load_local_server_p2p_status(
+    node: &EmbeddedNode,
+    transport: P2pTransportArg,
+) -> Result<Value> {
+    match transport {
+        P2pTransportArg::None => Ok(json!({
+            "enabled": false,
+            "p2p_transport": transport.as_str(),
+            "p2p_peer_id": Value::Null,
+            "p2p_listen_addresses": [],
+            "p2p_connected_peers": [],
+        })),
+        P2pTransportArg::Iroh => {
+            let p2p = node.p2p().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "P2P transport was requested but is not available on the embedded node"
+                )
+            })?;
+            let peer_id = p2p.local_peer_id().await;
+            let listen_addresses = wait_for_p2p_listen_addresses(p2p).await?;
+            let connected_peers = p2p
+                .connected_peers()
+                .await
+                .context("loading connected P2P peers from the embedded node")?;
+            Ok(json!({
+                "enabled": true,
+                "p2p_transport": transport.as_str(),
+                "p2p_peer_id": peer_id,
+                "p2p_listen_addresses": listen_addresses,
+                "p2p_connected_peers": connected_peers,
+            }))
+        }
+    }
+}
+
+async fn wait_for_p2p_listen_addresses(p2p: &dyn defra_node::P2POps) -> Result<Vec<String>> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let listen_addresses = p2p.listen_addresses().await;
+        if !listen_addresses.is_empty() {
+            return Ok(listen_addresses);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(listen_addresses);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 async fn chat(args: ChatArgs) -> Result<()> {
@@ -2506,6 +2742,77 @@ async fn status(args: StatusArgs) -> Result<()> {
     Ok(())
 }
 
+async fn p2p_status(args: P2pAccessArgs) -> Result<()> {
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let p2p = fetch_live_http_p2p_status(args.home.as_deref(), &graphql).await?;
+    let home_dir = resolve_home_dir(args.home.as_deref());
+    let mut output = json!({
+        "home": home_dir,
+        "graphql": graphql,
+        "p2p": p2p,
+    });
+    if let Some(map) = output.as_object_mut() {
+        let p2p_value = map.get("p2p").cloned().unwrap_or(Value::Null);
+        flatten_p2p_fields(map, &p2p_value);
+    }
+    print_json(&output)?;
+    Ok(())
+}
+
+async fn p2p_peers(args: P2pAccessArgs) -> Result<()> {
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let p2p = fetch_live_http_p2p_status(args.home.as_deref(), &graphql).await?;
+    let peers = p2p
+        .get("p2p_connected_peers")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    let count = peers.as_array().map(|rows| rows.len()).unwrap_or(0);
+    let home_dir = resolve_home_dir(args.home.as_deref());
+    let mut output = json!({
+        "home": home_dir,
+        "graphql": graphql,
+        "p2p": p2p,
+        "peers": peers,
+        "count": count,
+    });
+    if let Some(map) = output.as_object_mut() {
+        let p2p_value = map.get("p2p").cloned().unwrap_or(Value::Null);
+        flatten_p2p_fields(map, &p2p_value);
+    }
+    print_json(&output)?;
+    Ok(())
+}
+
+async fn p2p_connect(args: P2pConnectArgs) -> Result<()> {
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .context("building P2P connect HTTP client")?;
+    let api_base = p2p_api_base(&graphql)?;
+    http_post_json(
+        &client,
+        &format!("{api_base}/p2p/connect"),
+        &vec![args.peer.clone()],
+    )
+    .await?;
+    let p2p = fetch_live_http_p2p_status(args.home.as_deref(), &graphql).await?;
+    let home_dir = resolve_home_dir(args.home.as_deref());
+    let mut output = json!({
+        "status": "connect_requested",
+        "home": home_dir,
+        "graphql": graphql,
+        "peer": args.peer,
+        "p2p": p2p,
+    });
+    if let Some(map) = output.as_object_mut() {
+        let p2p_value = map.get("p2p").cloned().unwrap_or(Value::Null);
+        flatten_p2p_fields(map, &p2p_value);
+    }
+    print_json(&output)?;
+    Ok(())
+}
+
 async fn show_runtime(args: RuntimeShowArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
@@ -2584,6 +2891,37 @@ async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     };
     let tool_ceiling_check = diagnose_tool_ceiling(init_config.as_ref());
     let backend_reports = diagnose_backends(&bundle).await;
+    let matching_runtime_state = runtime_state.as_ref().filter(|state| {
+        graphql
+            .as_deref()
+            .is_some_and(|endpoint| endpoint == state.graphql)
+    });
+    let p2p_status = match graphql.as_deref().filter(|_| graphql_reachable) {
+        Some(endpoint) => load_live_http_p2p_status(args.home.as_deref(), endpoint).await,
+        None => persisted_p2p_status(matching_runtime_state),
+    };
+    let p2p_transport = p2p_status
+        .get("p2p_transport")
+        .and_then(Value::as_str)
+        .unwrap_or(P2pTransportArg::None.as_str());
+    let p2p_peer_id = p2p_status
+        .get("p2p_peer_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let p2p_connected_peers = p2p_status
+        .get("p2p_connected_peers")
+        .and_then(Value::as_array)
+        .map(|rows| rows.len())
+        .unwrap_or(0);
+    let p2p_error = p2p_status
+        .get("p2p_error")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let p2p_ok = if p2p_transport == P2pTransportArg::None.as_str() {
+        true
+    } else {
+        p2p_peer_id.is_some() && p2p_error.is_none()
+    };
     let schemas_ok = schema_checks
         .iter()
         .all(|check| check.get("ok").and_then(Value::as_bool) == Some(true));
@@ -2604,6 +2942,7 @@ async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         && default_behavior_ok
         && tool_ceiling_ok
         && backends_ok
+        && p2p_ok
         && config_load_error.is_none()
     {
         "ok"
@@ -2611,7 +2950,7 @@ async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         "degraded"
     };
 
-    let output = json!({
+    let mut output = json!({
         "status": status,
         "home": home_dir,
         "agent_did": agent_did,
@@ -2619,6 +2958,7 @@ async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         "graphql": graphql,
         "graphql_reachable": graphql_reachable,
         "runtime": runtime_row,
+        "p2p": p2p_status,
         "checks": {
             "schemas": schema_checks,
             "config_documents_loadable": {
@@ -2629,6 +2969,13 @@ async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "default_behavior": default_behavior_check,
             "tool_ceiling": tool_ceiling_check,
             "backends": backend_reports,
+            "p2p": {
+                "ok": p2p_ok,
+                "transport": p2p_transport,
+                "peer_id": p2p_peer_id,
+                "connected_peer_count": p2p_connected_peers,
+                "error": p2p_error,
+            },
         },
         "config_counts": {
             "agent_behaviors": bundle.agent_behaviors.len(),
@@ -2637,6 +2984,10 @@ async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "inference_profiles": bundle.inference_profiles.len(),
         },
     });
+    if let Some(map) = output.as_object_mut() {
+        let p2p_value = map.get("p2p").cloned().unwrap_or(Value::Null);
+        flatten_p2p_fields(map, &p2p_value);
+    }
     print_json(&output)?;
     Ok(())
 }
@@ -2848,12 +3199,14 @@ async fn load_runtime_status_output(
         .unwrap_or(Value::Null);
     let home_dir = resolve_home_dir(home);
     let runtime_state = read_runtime_state(&home_dir)?;
+    let p2p_status = load_live_http_p2p_status(home, graphql).await;
     let mut output = json!({
         "home": home_dir,
         "graphql": graphql,
         "agent_did": agent_did,
         "runtime_state": runtime_state,
         "runtime": runtime_row,
+        "p2p": p2p_status,
     });
     if let Some(map) = output.as_object_mut() {
         for field in [
@@ -2873,8 +3226,163 @@ async fn load_runtime_status_output(
                 runtime_row.get(field).cloned().unwrap_or(Value::Null),
             );
         }
+        let p2p_value = map.get("p2p").cloned().unwrap_or(Value::Null);
+        flatten_p2p_fields(map, &p2p_value);
     }
     Ok(output)
+}
+
+fn persisted_p2p_status(runtime_state: Option<&StoredRuntimeState>) -> Value {
+    match runtime_state {
+        Some(runtime_state) => json!({
+            "enabled": runtime_state.p2p_transport != P2pTransportArg::None.as_str(),
+            "p2p_transport": runtime_state.p2p_transport,
+            "p2p_peer_id": runtime_state.p2p_peer_id,
+            "p2p_listen_addresses": runtime_state.p2p_listen_addresses,
+            "p2p_connected_peers": [],
+            "p2p_error": Value::Null,
+        }),
+        None => json!({
+            "enabled": false,
+            "p2p_transport": default_p2p_transport(),
+            "p2p_peer_id": Value::Null,
+            "p2p_listen_addresses": [],
+            "p2p_connected_peers": [],
+            "p2p_error": Value::Null,
+        }),
+    }
+}
+
+async fn load_live_http_p2p_status(home: Option<&Path>, graphql: &str) -> Value {
+    let home_dir = resolve_home_dir(home);
+    let runtime_state = read_runtime_state(&home_dir)
+        .ok()
+        .flatten()
+        .filter(|state| state.graphql == graphql);
+    match fetch_live_http_p2p_status(home, graphql).await {
+        Ok(status) => status,
+        Err(error) => {
+            let mut status = persisted_p2p_status(runtime_state.as_ref());
+            if let Some(map) = status.as_object_mut() {
+                map.insert("p2p_error".to_string(), Value::String(error.to_string()));
+            }
+            status
+        }
+    }
+}
+
+async fn fetch_live_http_p2p_status(home: Option<&Path>, graphql: &str) -> Result<Value> {
+    let home_dir = resolve_home_dir(home);
+    let runtime_state = read_runtime_state(&home_dir)?.filter(|state| state.graphql == graphql);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .context("building P2P status HTTP client")?;
+    let api_base = p2p_api_base(graphql)?;
+    let identity: NodeIdentityResponse =
+        http_get_json(&client, &format!("{api_base}/node/identity")).await?;
+    let transport = runtime_state
+        .as_ref()
+        .map(|state| state.p2p_transport.as_str())
+        .filter(|transport| !transport.is_empty())
+        .unwrap_or(P2pTransportArg::None.as_str());
+    let Some(peer_id) = identity.peer_id else {
+        return Ok(json!({
+            "enabled": false,
+            "p2p_transport": transport,
+            "p2p_peer_id": Value::Null,
+            "p2p_listen_addresses": [],
+            "p2p_connected_peers": [],
+            "p2p_error": Value::Null,
+        }));
+    };
+    let listen_addresses: Vec<String> =
+        http_get_json(&client, &format!("{api_base}/p2p/info")).await?;
+    let peer_rows: Vec<P2pPeerRow> =
+        http_get_json(&client, &format!("{api_base}/p2p/peers")).await?;
+    let connected_peers = peer_rows.into_iter().map(|row| row.id).collect::<Vec<_>>();
+    Ok(json!({
+        "enabled": true,
+        "p2p_transport": if transport == P2pTransportArg::None.as_str() {
+            P2pTransportArg::Iroh.as_str()
+        } else {
+            transport
+        },
+        "p2p_peer_id": peer_id,
+        "p2p_listen_addresses": listen_addresses,
+        "p2p_connected_peers": connected_peers,
+        "p2p_error": Value::Null,
+    }))
+}
+
+fn p2p_api_base(graphql: &str) -> Result<String> {
+    graphql
+        .trim()
+        .strip_suffix("/graphql")
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            anyhow::anyhow!("expected GraphQL endpoint ending in /graphql, got {graphql}")
+        })
+}
+
+async fn http_get_json<T: DeserializeOwned>(client: &reqwest::Client, url: &str) -> Result<T> {
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .with_context(|| format!("sending GET request to {url}"))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .await
+        .with_context(|| format!("reading GET response body from {url}"))?;
+    if !status.is_success() {
+        anyhow::bail!(
+            "GET {url} failed with {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+    serde_json::from_slice(&body).with_context(|| format!("decoding JSON response from {url}"))
+}
+
+async fn http_post_json<B: Serialize>(client: &reqwest::Client, url: &str, body: &B) -> Result<()> {
+    let response = client
+        .post(url)
+        .json(body)
+        .send()
+        .await
+        .with_context(|| format!("sending POST request to {url}"))?;
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .await
+        .with_context(|| format!("reading POST response body from {url}"))?;
+    if !status.is_success() {
+        anyhow::bail!(
+            "POST {url} failed with {status}: {}",
+            String::from_utf8_lossy(&bytes)
+        );
+    }
+    Ok(())
+}
+
+fn flatten_p2p_fields(map: &mut serde_json::Map<String, Value>, p2p: &Value) {
+    map.insert(
+        "p2p_enabled".to_string(),
+        p2p.get("enabled").cloned().unwrap_or(Value::Bool(false)),
+    );
+    for field in [
+        "p2p_transport",
+        "p2p_peer_id",
+        "p2p_listen_addresses",
+        "p2p_connected_peers",
+        "p2p_error",
+    ] {
+        map.insert(
+            field.to_string(),
+            p2p.get(field).cloned().unwrap_or(Value::Null),
+        );
+    }
 }
 
 async fn resolve_config_access(

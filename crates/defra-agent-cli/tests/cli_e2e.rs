@@ -1,10 +1,10 @@
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -2289,6 +2289,393 @@ async fn status_reads_local_runtime_context_by_default() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-p2p-ready-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+
+    let port = allocate_port()?;
+    let agent_name = format!("cli-p2p-ready-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+    let graphql = graphql_url(port);
+    let default_behavior_id = format!("{agent_did}:default");
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let (mut serve, readiness) = spawn_server_with_ready_json(
+        &home_dir,
+        port,
+        &[
+            "--p2p-transport",
+            "iroh",
+            "--p2p-bind-addr",
+            "127.0.0.1",
+            "--p2p-port",
+            "0",
+            "--p2p-relay-mode",
+            "disabled",
+            "--p2p-discovery",
+            "disabled",
+        ],
+        &[],
+    )?;
+    wait_for_port(port, &mut serve.child)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    assert_eq!(
+        readiness.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+    assert_eq!(
+        readiness.get("graphql").and_then(Value::as_str),
+        Some(graphql.as_str())
+    );
+    assert_eq!(
+        readiness.get("default_behavior_id").and_then(Value::as_str),
+        Some(default_behavior_id.as_str())
+    );
+    assert_eq!(
+        readiness.get("p2p_transport").and_then(Value::as_str),
+        Some("iroh")
+    );
+    assert!(readiness
+        .get("p2p_peer_id")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty()));
+    assert!(readiness
+        .get("p2p_listen_addresses")
+        .and_then(Value::as_array)
+        .is_some_and(|rows| !rows.is_empty()));
+
+    let runtime_state = read_runtime_state_json(&home_dir)?;
+    assert_eq!(
+        runtime_state.get("p2p_transport").and_then(Value::as_str),
+        Some("iroh")
+    );
+    assert_eq!(
+        runtime_state.get("p2p_peer_id"),
+        readiness.get("p2p_peer_id")
+    );
+    assert_eq!(
+        runtime_state.get("p2p_listen_addresses"),
+        readiness.get("p2p_listen_addresses")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_startup_defaults_to_local_only_when_p2p_disabled() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-local-only-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+
+    let port = allocate_port()?;
+    let agent_name = format!("cli-local-only-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+    let graphql = graphql_url(port);
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let (mut serve, readiness) = spawn_server_with_ready_json(&home_dir, port, &[], &[])?;
+    wait_for_port(port, &mut serve.child)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    assert_eq!(
+        readiness.get("p2p_transport").and_then(Value::as_str),
+        Some("none")
+    );
+    assert!(readiness.get("p2p_peer_id").is_none_or(Value::is_null));
+    assert_eq!(
+        readiness
+            .get("p2p_listen_addresses")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(0)
+    );
+
+    let runtime_state = read_runtime_state_json(&home_dir)?;
+    assert_eq!(
+        runtime_state.get("p2p_transport").and_then(Value::as_str),
+        Some("none")
+    );
+    assert!(runtime_state.get("p2p_peer_id").is_none_or(Value::is_null));
+    assert_eq!(
+        runtime_state
+            .get("p2p_listen_addresses")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(0)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn status_includes_p2p_runtime_info() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-p2p-status-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+
+    let port = allocate_port()?;
+    let agent_name = format!("cli-p2p-status-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+    let graphql = graphql_url(port);
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let (mut serve, _) = spawn_server_with_ready_json(
+        &home_dir,
+        port,
+        &[
+            "--p2p-transport",
+            "iroh",
+            "--p2p-bind-addr",
+            "127.0.0.1",
+            "--p2p-port",
+            "0",
+            "--p2p-relay-mode",
+            "disabled",
+            "--p2p-discovery",
+            "disabled",
+        ],
+        &[],
+    )?;
+    wait_for_port(port, &mut serve.child)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let output = run_cli_json(&home_dir, &["status"])?;
+    assert_eq!(
+        output.get("p2p_transport").and_then(Value::as_str),
+        Some("iroh")
+    );
+    assert_eq!(
+        output.pointer("/p2p/p2p_transport").and_then(Value::as_str),
+        Some("iroh")
+    );
+    assert_eq!(
+        output.get("p2p_enabled").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert!(output
+        .get("p2p_peer_id")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty()));
+    assert!(output
+        .get("p2p_listen_addresses")
+        .and_then(Value::as_array)
+        .is_some_and(|rows| !rows.is_empty()));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn diagnose_with_explicit_graphql_does_not_reuse_unrelated_local_p2p_state() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-p2p-diagnose-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+
+    let port = allocate_port()?;
+    let agent_name = format!("cli-p2p-diagnose-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+    let graphql = graphql_url(port);
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let (mut serve, _) = spawn_server_with_ready_json(
+        &home_dir,
+        port,
+        &[
+            "--p2p-transport",
+            "iroh",
+            "--p2p-bind-addr",
+            "127.0.0.1",
+            "--p2p-port",
+            "0",
+            "--p2p-relay-mode",
+            "disabled",
+            "--p2p-discovery",
+            "disabled",
+        ],
+        &[],
+    )?;
+    wait_for_port(port, &mut serve.child)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let output = run_cli_json(
+        &home_dir,
+        &["diagnose", "--graphql", "http://127.0.0.1:1/api/v0/graphql"],
+    )?;
+    assert_eq!(
+        output.get("p2p_transport").and_then(Value::as_str),
+        Some("none")
+    );
+    assert!(output.get("p2p_peer_id").is_none_or(Value::is_null));
+    assert_eq!(
+        output
+            .pointer("/checks/p2p/transport")
+            .and_then(Value::as_str),
+        Some("none")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p2p_connects_two_local_servers_via_operator_commands() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_a = tempdir.path().join("amy");
+    let home_b = tempdir.path().join("coding");
+    fs::create_dir_all(&home_a)?;
+    fs::create_dir_all(&home_b)?;
+
+    let model_name = format!("mock-p2p-connect-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+
+    let port_a = allocate_port()?;
+    let port_b = allocate_port()?;
+    let agent_name_a = format!("cli-amy-{}", Uuid::new_v4().simple());
+    let agent_name_b = format!("cli-coding-{}", Uuid::new_v4().simple());
+    let agent_did_a = format!("did:defra-agent:{agent_name_a}");
+    let agent_did_b = format!("did:defra-agent:{agent_name_b}");
+    let graphql_a = graphql_url(port_a);
+    let graphql_b = graphql_url(port_b);
+
+    for (home_dir, agent_name) in [(&home_a, &agent_name_a), (&home_b, &agent_name_b)] {
+        run_init_json(
+            home_dir,
+            &[
+                "--agent-name",
+                agent_name,
+                "--model-name",
+                &model_name,
+                mock_endpoint.endpoint(),
+            ],
+        )?;
+    }
+
+    let (mut serve_a, readiness_a) = spawn_server_with_ready_json(
+        &home_a,
+        port_a,
+        &[
+            "--p2p-transport",
+            "iroh",
+            "--p2p-bind-addr",
+            "127.0.0.1",
+            "--p2p-port",
+            "0",
+            "--p2p-relay-mode",
+            "disabled",
+            "--p2p-discovery",
+            "disabled",
+        ],
+        &[],
+    )?;
+    let (mut serve_b, readiness_b) = spawn_server_with_ready_json(
+        &home_b,
+        port_b,
+        &[
+            "--p2p-transport",
+            "iroh",
+            "--p2p-bind-addr",
+            "127.0.0.1",
+            "--p2p-port",
+            "0",
+            "--p2p-relay-mode",
+            "disabled",
+            "--p2p-discovery",
+            "disabled",
+        ],
+        &[],
+    )?;
+    wait_for_port(port_a, &mut serve_a.child)?;
+    wait_for_port(port_b, &mut serve_b.child)?;
+    wait_for_runtime_ready(&graphql_a, &agent_did_a, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql_b, &agent_did_b, Duration::from_secs(30)).await?;
+
+    let peer_id_a = readiness_a
+        .get("p2p_peer_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("Amy readiness JSON missing p2p_peer_id: {readiness_a}"))?;
+    let peer_id_b = readiness_b
+        .get("p2p_peer_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("Coding readiness JSON missing p2p_peer_id: {readiness_b}"))?;
+    let peer_addr_a = readiness_a
+        .get("p2p_listen_addresses")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("Amy readiness JSON missing P2P listen address: {readiness_a}"))?;
+
+    let connect = run_cli_json(&home_b, &["p2p", "connect", "--peer", peer_addr_a])?;
+    assert_eq!(
+        connect.get("status").and_then(Value::as_str),
+        Some("connect_requested")
+    );
+
+    let status_b = wait_for_connected_peer(&home_b, peer_id_a, Duration::from_secs(20)).await?;
+    let status_a = wait_for_connected_peer(&home_a, peer_id_b, Duration::from_secs(20)).await?;
+    assert!(status_b
+        .get("p2p_connected_peers")
+        .and_then(Value::as_array)
+        .is_some_and(|rows| rows.iter().any(|row| row.as_str() == Some(peer_id_a))));
+    assert!(status_a
+        .get("p2p_connected_peers")
+        .and_then(Value::as_array)
+        .is_some_and(|rows| rows.iter().any(|row| row.as_str() == Some(peer_id_b))));
+
+    let peers_b = run_cli_json(&home_b, &["p2p", "peers"])?;
+    assert_eq!(peers_b.get("count").and_then(Value::as_u64), Some(1));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn init_openrouter_preset_applies_hosted_defaults() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -3062,6 +3449,76 @@ fn spawn_server(home_dir: &Path, port: u16) -> Result<ServeProcess> {
     spawn_server_with_env(home_dir, port, &[], &[])
 }
 
+fn spawn_server_with_ready_json(
+    home_dir: &Path,
+    port: u16,
+    extra_args: &[&str],
+    envs: &[(&str, &str)],
+) -> Result<(ServeProcess, Value)> {
+    let mut command = Command::new(cli_bin());
+    command
+        .env("HOME", home_dir)
+        .env("RUST_LOG", "error")
+        .current_dir(home_dir)
+        .arg("server")
+        .arg("--http-port")
+        .arg(port.to_string())
+        .args(extra_args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    for (name, value) in envs {
+        command.env(name, value);
+    }
+    let mut child = command.spawn().context("spawning defra-agent server")?;
+    let stdout = child
+        .stdout
+        .take()
+        .context("capturing defra-agent server stdout")?;
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut reader = std::io::BufReader::new(stdout);
+        let mut buffer = String::new();
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => {
+                    let _ = tx.send(Err(anyhow!(
+                        "server stdout closed before readiness JSON was emitted"
+                    )));
+                    break;
+                }
+                Ok(_) => {
+                    buffer.push_str(&line);
+                    if let Ok(value) = serde_json::from_str::<Value>(&buffer) {
+                        let _ = tx.send(Ok(value));
+                        break;
+                    }
+                }
+                Err(error) => {
+                    let _ = tx.send(Err(anyhow!("reading server stdout: {error}")));
+                    break;
+                }
+            }
+        }
+    });
+
+    let readiness = match rx.recv_timeout(Duration::from_secs(30)) {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("timed out waiting for defra-agent server readiness JSON");
+        }
+    };
+
+    Ok((ServeProcess { child }, readiness))
+}
+
 fn spawn_server_with_env(
     home_dir: &Path,
     port: u16,
@@ -3084,6 +3541,16 @@ fn spawn_server_with_env(
     }
     let child = command.spawn().context("spawning defra-agent server")?;
     Ok(ServeProcess { child })
+}
+
+fn read_runtime_state_json(home_dir: &Path) -> Result<Value> {
+    let path = if home_dir.join("runtime.json").exists() {
+        home_dir.join("runtime.json")
+    } else {
+        home_dir.join(".defra-agent").join("runtime.json")
+    };
+    let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_slice(&bytes).with_context(|| format!("decoding {}", path.display()))
 }
 
 async fn assert_runtime_init_state(
@@ -3795,6 +4262,28 @@ async fn wait_for_runtime_doc_id(graphql: &str, agent_did: &str) -> Result<Strin
         }
         if Instant::now() >= deadline {
             bail!("timed out waiting for AgentRuntime _docID for {agent_did}");
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+async fn wait_for_connected_peer(
+    home_dir: &Path,
+    peer_id: &str,
+    timeout: Duration,
+) -> Result<Value> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let status = run_cli_json(home_dir, &["p2p", "status"])?;
+        if status
+            .get("p2p_connected_peers")
+            .and_then(Value::as_array)
+            .is_some_and(|rows| rows.iter().any(|row| row.as_str() == Some(peer_id)))
+        {
+            return Ok(status);
+        }
+        if Instant::now() >= deadline {
+            bail!("timed out waiting for connected peer {peer_id}");
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
