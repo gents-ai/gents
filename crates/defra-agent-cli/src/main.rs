@@ -66,7 +66,8 @@ Bootstrap a local home directory with one default backend, one default behavior,
 
 Examples:
   defra-agent init http://HOST:PORT/v1 --model-name MODEL
-  defra-agent init https://openrouter.ai/api/v1 --provider-kind OpenRouter --api-key-env-var OPENROUTER_API_KEY --model-name MODEL
+  defra-agent init --backend-preset openrouter --model-name MODEL
+  defra-agent init --backend-preset openai --model-name MODEL
   defra-agent init $INFERENCE_ENDPOINT --model-name MODEL --write-tools
 
 Next:
@@ -105,7 +106,8 @@ Examples:
   defra-agent config validate --root infra/agents/default
   defra-agent config diff --root infra/agents/default --home /path/to/home
   defra-agent config apply --root infra/agents/default --home /path/to/home
-  defra-agent config backend set --graphql URL --backend-id default-backend --name default-backend --endpoint http://HOST:PORT/v1 --max-concurrent 1
+  defra-agent config backend set --graphql URL --backend-id default-backend --name default-backend --backend-preset openrouter --max-concurrent 1
+  defra-agent config backend discover-models --backend-preset openrouter
   defra-agent config behavior set --graphql URL --agent-did did:defra-agent:default --backend-id default-backend --model-name MODEL
   defra-agent config tools set --graphql URL --agent-did did:defra-agent:default --selection-id did:defra-agent:default:default:tools --enable-file-tools";
 const REQUEST_AFTER_HELP: &str = "\
@@ -271,6 +273,12 @@ struct InitArgs {
     backend_name: Option<String>,
     #[arg(
         long,
+        value_enum,
+        help = "Backend preset with provider/auth defaults for common local and hosted backends"
+    )]
+    backend_preset: Option<BackendPresetArg>,
+    #[arg(
+        long,
         help = "Backend provider kind. OpenAiCompatible covers OpenAI-style local and hosted endpoints"
     )]
     provider_kind: Option<String>,
@@ -406,6 +414,22 @@ enum ChatOutputFormat {
     Json,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum BackendPresetArg {
+    #[value(name = "generic-openai-compatible")]
+    GenericOpenAiCompatible,
+    #[value(name = "openai")]
+    OpenAi,
+    #[value(name = "openrouter")]
+    OpenRouter,
+    #[value(name = "ollama")]
+    Ollama,
+    #[value(name = "vllm")]
+    Vllm,
+    #[value(name = "llama-cpp")]
+    LlamaCpp,
+}
+
 #[derive(clap::Args)]
 struct DiagnoseArgs {
     #[arg(long)]
@@ -470,6 +494,71 @@ enum ToolCeilingArg {
     MetaOnly,
     Readonly,
     Readwrite,
+}
+
+impl BackendPresetArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::GenericOpenAiCompatible => "generic-openai-compatible",
+            Self::OpenAi => "openai",
+            Self::OpenRouter => "openrouter",
+            Self::Ollama => "ollama",
+            Self::Vllm => "vllm",
+            Self::LlamaCpp => "llama-cpp",
+        }
+    }
+
+    fn provider_kind(self) -> BackendProviderKind {
+        match self {
+            Self::OpenRouter => BackendProviderKind::OpenRouter,
+            Self::GenericOpenAiCompatible
+            | Self::OpenAi
+            | Self::Ollama
+            | Self::Vllm
+            | Self::LlamaCpp => BackendProviderKind::OpenAiCompatible,
+        }
+    }
+
+    fn default_endpoint(self) -> Option<&'static str> {
+        match self {
+            Self::GenericOpenAiCompatible => None,
+            Self::OpenAi => Some("https://api.openai.com/v1"),
+            Self::OpenRouter => Some("https://openrouter.ai/api/v1"),
+            Self::Ollama => Some("http://127.0.0.1:11434/v1"),
+            Self::Vllm => Some("http://127.0.0.1:8000/v1"),
+            Self::LlamaCpp => Some("http://127.0.0.1:8080/v1"),
+        }
+    }
+
+    fn default_api_key_env_var(self) -> Option<&'static str> {
+        match self {
+            Self::OpenAi => Some("OPENAI_API_KEY"),
+            Self::OpenRouter => Some("OPENROUTER_API_KEY"),
+            Self::GenericOpenAiCompatible | Self::Ollama | Self::Vllm | Self::LlamaCpp => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedBackendConfig {
+    provider_kind: BackendProviderKind,
+    endpoint: String,
+    api_key: Option<String>,
+    api_key_env_var: Option<String>,
+    supports_tool_calls: bool,
+    supports_streaming: bool,
+    supports_structured_outputs: bool,
+    supports_json_schema: bool,
+}
+
+#[derive(Debug, Clone)]
+struct DiscoveredBackendTarget {
+    backend_id: Option<String>,
+    preset: Option<BackendPresetArg>,
+    provider_kind: BackendProviderKind,
+    endpoint: String,
+    api_key: Option<String>,
+    api_key_env_var: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -972,6 +1061,8 @@ const STANDARD_READWRITE_BOOTSTRAP: &[BootstrapMutationTemplate] = &[
 enum BackendCommand {
     #[command(name = "set")]
     Set(BackendUpsertArgs),
+    #[command(name = "discover-models")]
+    DiscoverModels(BackendDiscoverModelsArgs),
 }
 
 #[derive(Subcommand)]
@@ -1110,11 +1201,20 @@ struct BackendUpsertArgs {
     name: String,
     #[arg(
         long,
+        value_enum,
+        help = "Backend preset with provider/auth defaults for common local and hosted backends"
+    )]
+    backend_preset: Option<BackendPresetArg>,
+    #[arg(
+        long,
         help = "Backend provider kind. OpenAiCompatible covers OpenAI-style local and hosted endpoints"
     )]
     provider_kind: Option<String>,
-    #[arg(long, help = "OpenAI-compatible backend base URL, including /v1")]
-    endpoint: String,
+    #[arg(
+        long,
+        help = "Inference backend base URL, usually including /v1. Falls back to the preset default when available"
+    )]
+    endpoint: Option<String>,
     #[arg(long, help = "Raw API key stored directly in the backend document")]
     api_key: Option<String>,
     #[arg(
@@ -1136,6 +1236,34 @@ struct BackendUpsertArgs {
     supports_json_schema: Option<bool>,
     #[arg(long, default_value = "healthy")]
     probe_status: String,
+}
+
+#[derive(clap::Args)]
+struct BackendDiscoverModelsArgs {
+    #[arg(long)]
+    graphql: Option<String>,
+    #[arg(long)]
+    backend_id: Option<String>,
+    #[arg(
+        long,
+        value_enum,
+        help = "Backend preset with provider/auth defaults for common local and hosted backends"
+    )]
+    backend_preset: Option<BackendPresetArg>,
+    #[arg(
+        long,
+        help = "Backend provider kind. OpenAiCompatible covers OpenAI-style local and hosted endpoints"
+    )]
+    provider_kind: Option<String>,
+    #[arg(
+        long,
+        help = "Inference backend base URL, usually including /v1. Falls back to the preset default when available"
+    )]
+    endpoint: Option<String>,
+    #[arg(long, help = "Raw API key to use for this probe only")]
+    api_key: Option<String>,
+    #[arg(long, help = "Environment variable name holding the probe API key")]
+    api_key_env_var: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -1299,6 +1427,7 @@ async fn main() -> Result<()> {
             ConfigCommand::Apply(args) => config_apply(args).await,
             ConfigCommand::Backend { command } => match command {
                 BackendCommand::Set(args) => backend_set(args).await,
+                BackendCommand::DiscoverModels(args) => backend_discover_models(args).await,
             },
             ConfigCommand::Behavior { command } => match command {
                 BehaviorCommand::Set(args) => behavior_set(args).await,
@@ -1680,26 +1809,7 @@ async fn chat(args: ChatArgs) -> Result<()> {
 }
 
 async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
-    if args
-        .api_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .is_some()
-        && args
-            .api_key_env_var
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_some()
-    {
-        anyhow::bail!("provide either --api-key or --api-key-env-var, not both");
-    }
-    let provider_kind = BackendProviderKind::parse_optional(args.provider_kind.as_deref())?;
-    let supports_tool_calls = args.supports_tool_calls.unwrap_or(true);
-    let supports_streaming = args.supports_streaming.unwrap_or(true);
-    let supports_structured_outputs = args.supports_structured_outputs.unwrap_or(false);
-    let supports_json_schema = args.supports_json_schema.unwrap_or(false);
+    let backend = resolve_backend_upsert_config(&args)?;
     let mutation = format!(
         r#"mutation {{
             upsert_InferenceBackend(
@@ -1740,20 +1850,20 @@ async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
         }}"#,
         backend_id = escape_graphql_string(&args.backend_id),
         name = escape_graphql_string(&args.name),
-        provider_kind = provider_kind,
-        endpoint = escape_graphql_string(&args.endpoint),
-        api_key_add = nullable_string_field("api_key", args.api_key.as_deref()),
-        api_key_update = nullable_string_field("api_key", args.api_key.as_deref()),
+        provider_kind = backend.provider_kind,
+        endpoint = escape_graphql_string(&backend.endpoint),
+        api_key_add = nullable_string_field("api_key", backend.api_key.as_deref()),
+        api_key_update = nullable_string_field("api_key", backend.api_key.as_deref()),
         api_key_env_var_add =
-            nullable_string_field("api_key_env_var", args.api_key_env_var.as_deref()),
+            nullable_string_field("api_key_env_var", backend.api_key_env_var.as_deref()),
         api_key_env_var_update =
-            nullable_string_field("api_key_env_var", args.api_key_env_var.as_deref()),
+            nullable_string_field("api_key_env_var", backend.api_key_env_var.as_deref()),
         max_concurrent = args.max_concurrent,
         enabled = if args.enabled { "true" } else { "false" },
-        supports_tool_calls = graphql_bool_literal(supports_tool_calls),
-        supports_streaming = graphql_bool_literal(supports_streaming),
-        supports_structured_outputs = graphql_bool_literal(supports_structured_outputs),
-        supports_json_schema = graphql_bool_literal(supports_json_schema),
+        supports_tool_calls = graphql_bool_literal(backend.supports_tool_calls),
+        supports_streaming = graphql_bool_literal(backend.supports_streaming),
+        supports_structured_outputs = graphql_bool_literal(backend.supports_structured_outputs),
+        supports_json_schema = graphql_bool_literal(backend.supports_json_schema),
         probe_status = escape_graphql_string(&args.probe_status),
         now = chrono::Utc::now().to_rfc3339(),
     );
@@ -1762,20 +1872,176 @@ async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
     let output = json!({
         "doc_id": doc_id,
         "backend_id": args.backend_id,
-        "provider_kind": provider_kind.as_str(),
-        "endpoint": args.endpoint,
-        "api_key": args.api_key.as_ref().map(|_| "<redacted>"),
-        "api_key_env_var": args.api_key_env_var,
+        "backend_preset": args.backend_preset.map(BackendPresetArg::as_str),
+        "provider_kind": backend.provider_kind.as_str(),
+        "endpoint": backend.endpoint,
+        "api_key": backend.api_key.as_ref().map(|_| "<redacted>"),
+        "api_key_env_var": backend.api_key_env_var,
         "max_concurrent": args.max_concurrent,
         "enabled": args.enabled,
-        "supports_tool_calls": supports_tool_calls,
-        "supports_streaming": supports_streaming,
-        "supports_structured_outputs": supports_structured_outputs,
-        "supports_json_schema": supports_json_schema,
+        "supports_tool_calls": backend.supports_tool_calls,
+        "supports_streaming": backend.supports_streaming,
+        "supports_structured_outputs": backend.supports_structured_outputs,
+        "supports_json_schema": backend.supports_json_schema,
         "probe_status": args.probe_status,
     });
     print_json(&output)?;
     Ok(())
+}
+
+async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> Result<()> {
+    let target = resolve_backend_discovery_target(&args).await?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .context("building backend discovery client")?;
+    let discovered_models = discover_backend_models(
+        &client,
+        target.provider_kind,
+        &target.endpoint,
+        target.api_key.as_deref(),
+    )
+    .await?;
+
+    let output = json!({
+        "backend_id": target.backend_id,
+        "backend_preset": target.preset.map(BackendPresetArg::as_str),
+        "provider_kind": target.provider_kind.as_str(),
+        "endpoint": target.endpoint,
+        "api_key": target.api_key.as_ref().map(|_| "<redacted>"),
+        "api_key_env_var": target.api_key_env_var,
+        "discovered_models": discovered_models,
+    });
+    print_json(&output)?;
+    Ok(())
+}
+
+async fn resolve_backend_discovery_target(
+    args: &BackendDiscoverModelsArgs,
+) -> Result<DiscoveredBackendTarget> {
+    if let Some(backend_id) = normalize_optional_string(args.backend_id.as_deref()) {
+        if args.graphql.is_none() {
+            anyhow::bail!("--graphql is required when --backend-id is set");
+        }
+        if args.backend_preset.is_some()
+            || normalize_optional_string(args.provider_kind.as_deref()).is_some()
+            || normalize_optional_string(args.endpoint.as_deref()).is_some()
+            || normalize_optional_string(args.api_key.as_deref()).is_some()
+            || normalize_optional_string(args.api_key_env_var.as_deref()).is_some()
+        {
+            anyhow::bail!(
+                "--backend-id uses the stored backend document; do not combine it with explicit preset, endpoint, provider, or auth flags"
+            );
+        }
+        let backend = load_backend_row(
+            args.graphql
+                .as_deref()
+                .expect("checked graphql when backend_id is set"),
+            &backend_id,
+        )
+        .await?;
+        let provider_kind = BackendProviderKind::parse_optional(
+            backend.get("provider_kind").and_then(Value::as_str),
+        )?;
+        let endpoint = backend
+            .get("endpoint")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("backend {backend_id} is missing endpoint"))?
+            .to_string();
+        let api_key = normalize_optional_string(backend.get("api_key").and_then(Value::as_str));
+        let api_key_env_var =
+            normalize_optional_string(backend.get("api_key_env_var").and_then(Value::as_str));
+        if api_key.is_some() && api_key_env_var.is_some() {
+            anyhow::bail!(
+                "backend {backend_id} sets both raw api_key and api_key_env_var; discovery is ambiguous"
+            );
+        }
+        let resolved_api_key = match (api_key, api_key_env_var.clone()) {
+            (Some(raw), None) => Some(raw),
+            (None, Some(name)) => Some(resolve_required_env_api_key(&name)?),
+            (None, None) => None,
+            (Some(_), Some(_)) => unreachable!("guarded above"),
+        };
+        return Ok(DiscoveredBackendTarget {
+            backend_id: Some(backend_id),
+            preset: None,
+            provider_kind,
+            endpoint,
+            api_key: resolved_api_key,
+            api_key_env_var,
+        });
+    }
+
+    let preset = args.backend_preset;
+    let api_key = normalize_optional_string(args.api_key.as_deref());
+    let explicit_api_key_env_var = normalize_optional_string(args.api_key_env_var.as_deref());
+    if api_key.is_some() && explicit_api_key_env_var.is_some() {
+        anyhow::bail!("provide either --api-key or --api-key-env-var, not both");
+    }
+    let endpoint = resolve_backend_endpoint(
+        args.endpoint.as_deref(),
+        preset,
+        BackendResolutionMode::ConfigWrite,
+    )?;
+    let provider_kind = resolve_backend_provider_kind(args.provider_kind.as_deref(), preset)?;
+    let api_key_env_var = resolve_backend_api_key_env_var(
+        explicit_api_key_env_var,
+        api_key.is_some(),
+        preset,
+        BackendResolutionMode::ConfigWrite,
+    );
+    let resolved_api_key = match (api_key, api_key_env_var.clone()) {
+        (Some(raw), None) => Some(raw),
+        (None, Some(name)) => Some(resolve_required_env_api_key(&name)?),
+        (None, None) => None,
+        (Some(_), Some(_)) => unreachable!("guarded above"),
+    };
+    Ok(DiscoveredBackendTarget {
+        backend_id: None,
+        preset,
+        provider_kind,
+        endpoint,
+        api_key: resolved_api_key,
+        api_key_env_var,
+    })
+}
+
+fn resolve_required_env_api_key(name: &str) -> Result<String> {
+    let value = std::env::var(name)
+        .with_context(|| format!("required backend API key env var {name} is not set"))?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("required backend API key env var {name} is empty");
+    }
+    Ok(trimmed.to_string())
+}
+
+async fn load_backend_row(graphql: &str, backend_id: &str) -> Result<Value> {
+    let response = post_graphql(
+        graphql,
+        &format!(
+            r#"{{
+                InferenceBackend(
+                    filter: {{ backend_id: {{ _eq: "{}" }} }},
+                    limit: 1
+                ) {{
+                    {}
+                }}
+            }}"#,
+            escape_graphql_string(backend_id),
+            EXPORT_INFERENCE_BACKEND_FIELDS,
+        ),
+    )
+    .await?;
+    response
+        .get("data")
+        .and_then(|data| data.get("InferenceBackend"))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("backend {backend_id} not found"))
 }
 
 async fn behavior_set(args: BehaviorUpsertArgs) -> Result<()> {
@@ -3680,28 +3946,7 @@ async fn initialize_runtime_home(
         anyhow::bail!("--tool-root requires --write-tools");
     }
 
-    let endpoint = resolve_init_endpoint(args.inference_endpoint.as_deref())?;
-    let provider_kind = BackendProviderKind::parse_optional(args.provider_kind.as_deref())?;
-    let api_key = resolve_init_api_key(args.api_key.as_deref());
-    if api_key.is_some()
-        && args
-            .api_key_env_var
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
-    {
-        anyhow::bail!("--api-key and --api-key-env-var cannot both be set");
-    }
-    let api_key_env_var =
-        resolve_init_api_key_env_var(args.api_key_env_var.as_deref(), api_key.is_some());
-    let supports_tool_calls = args
-        .supports_tool_calls
-        .unwrap_or_else(default_backend_supports_tool_calls);
-    let supports_streaming = args
-        .supports_streaming
-        .unwrap_or_else(default_backend_supports_streaming);
-    let supports_structured_outputs = args.supports_structured_outputs.unwrap_or(false);
-    let supports_json_schema = args.supports_json_schema.unwrap_or(false);
+    let backend = resolve_init_backend_config(args)?;
     let backend_id = explicit_backend_id
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| format!("{}-backend", args.agent_name));
@@ -3728,16 +3973,16 @@ async fn initialize_runtime_home(
         &args.agent_name,
         &backend_id,
         &backend_name,
-        provider_kind,
-        &endpoint,
-        api_key.as_deref(),
-        api_key_env_var.as_deref(),
+        backend.provider_kind,
+        &backend.endpoint,
+        backend.api_key.as_deref(),
+        backend.api_key_env_var.as_deref(),
         model_name,
         args.max_concurrent,
-        supports_tool_calls,
-        supports_streaming,
-        supports_structured_outputs,
-        supports_json_schema,
+        backend.supports_tool_calls,
+        backend.supports_streaming,
+        backend.supports_structured_outputs,
+        backend.supports_json_schema,
         &default_behavior_id,
         &tool_selection_id,
     );
@@ -3746,16 +3991,16 @@ async fn initialize_runtime_home(
     Ok(InitSummary {
         backend_id,
         backend_name,
-        provider_kind,
-        endpoint,
-        api_key: api_key.map(|_| "<redacted>".to_string()),
-        api_key_env_var,
+        provider_kind: backend.provider_kind,
+        endpoint: backend.endpoint,
+        api_key: backend.api_key.map(|_| "<redacted>".to_string()),
+        api_key_env_var: backend.api_key_env_var,
         model_name: model_name.to_string(),
         max_concurrent: args.max_concurrent,
-        supports_tool_calls,
-        supports_streaming,
-        supports_structured_outputs,
-        supports_json_schema,
+        supports_tool_calls: backend.supports_tool_calls,
+        supports_streaming: backend.supports_streaming,
+        supports_structured_outputs: backend.supports_structured_outputs,
+        supports_json_schema: backend.supports_json_schema,
         default_behavior_id,
         tool_selection_id,
         tool_ceiling,
@@ -3765,46 +4010,148 @@ async fn initialize_runtime_home(
     })
 }
 
-fn resolve_init_endpoint(explicit: Option<&str>) -> Result<String> {
-    explicit
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
+fn resolve_init_backend_config(args: &InitArgs) -> Result<ResolvedBackendConfig> {
+    resolve_backend_config_with_preset(
+        args.backend_preset,
+        args.inference_endpoint.as_deref(),
+        args.provider_kind.as_deref(),
+        args.api_key.as_deref(),
+        args.api_key_env_var.as_deref(),
+        args.supports_tool_calls,
+        args.supports_streaming,
+        args.supports_structured_outputs,
+        args.supports_json_schema,
+        BackendResolutionMode::Init,
+    )
+}
+
+fn resolve_backend_upsert_config(args: &BackendUpsertArgs) -> Result<ResolvedBackendConfig> {
+    resolve_backend_config_with_preset(
+        args.backend_preset,
+        args.endpoint.as_deref(),
+        args.provider_kind.as_deref(),
+        args.api_key.as_deref(),
+        args.api_key_env_var.as_deref(),
+        args.supports_tool_calls,
+        args.supports_streaming,
+        args.supports_structured_outputs,
+        args.supports_json_schema,
+        BackendResolutionMode::ConfigWrite,
+    )
+}
+
+fn resolve_backend_config_with_preset(
+    preset: Option<BackendPresetArg>,
+    explicit_endpoint: Option<&str>,
+    explicit_provider_kind: Option<&str>,
+    explicit_api_key: Option<&str>,
+    explicit_api_key_env_var: Option<&str>,
+    explicit_supports_tool_calls: Option<bool>,
+    explicit_supports_streaming: Option<bool>,
+    explicit_supports_structured_outputs: Option<bool>,
+    explicit_supports_json_schema: Option<bool>,
+    mode: BackendResolutionMode,
+) -> Result<ResolvedBackendConfig> {
+    let api_key = normalize_optional_string(explicit_api_key);
+    let explicit_api_key_env_var = normalize_optional_string(explicit_api_key_env_var);
+    if api_key.is_some() && explicit_api_key_env_var.is_some() {
+        anyhow::bail!("provide either --api-key or --api-key-env-var, not both");
+    }
+
+    let endpoint = resolve_backend_endpoint(explicit_endpoint, preset, mode)?;
+    let provider_kind = resolve_backend_provider_kind(explicit_provider_kind, preset)?;
+    let api_key_env_var =
+        resolve_backend_api_key_env_var(explicit_api_key_env_var, api_key.is_some(), preset, mode);
+
+    Ok(ResolvedBackendConfig {
+        provider_kind,
+        endpoint,
+        api_key,
+        api_key_env_var,
+        supports_tool_calls: explicit_supports_tool_calls
+            .unwrap_or_else(default_backend_supports_tool_calls),
+        supports_streaming: explicit_supports_streaming
+            .unwrap_or_else(default_backend_supports_streaming),
+        supports_structured_outputs: explicit_supports_structured_outputs.unwrap_or(false),
+        supports_json_schema: explicit_supports_json_schema.unwrap_or(false),
+    })
+}
+
+fn resolve_backend_endpoint(
+    explicit: Option<&str>,
+    preset: Option<BackendPresetArg>,
+    mode: BackendResolutionMode,
+) -> Result<String> {
+    normalize_optional_string(explicit)
+        .or_else(|| preset.and_then(|candidate| candidate.default_endpoint().map(str::to_string)))
         .or_else(|| {
-            std::env::var("INFERENCE_ENDPOINT")
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
+            (mode == BackendResolutionMode::Init)
+                .then(|| std::env::var("INFERENCE_ENDPOINT").ok())
+                .flatten()
+                .and_then(|value| {
+                    let trimmed = value.trim();
+                    (!trimmed.is_empty()).then(|| trimmed.to_string())
+                })
         })
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "an inference endpoint is required\nNext:\n  1. Pass it explicitly: `defra-agent init http://HOST:PORT/v1 --model-name MODEL`\n  2. Or set INFERENCE_ENDPOINT before running `defra-agent init`"
-            )
+        .ok_or_else(|| match mode {
+            BackendResolutionMode::Init => anyhow::anyhow!(
+                "an inference endpoint is required\nNext:\n  1. Pass it explicitly: `defra-agent init http://HOST:PORT/v1 --model-name MODEL`\n  2. Or choose a preset with a default endpoint: `defra-agent init --backend-preset openrouter --model-name MODEL`\n  3. Or set INFERENCE_ENDPOINT before running `defra-agent init`"
+            ),
+            BackendResolutionMode::ConfigWrite => anyhow::anyhow!(
+                "an inference endpoint is required\nNext:\n  1. Pass --endpoint explicitly\n  2. Or choose a preset with a default endpoint, such as --backend-preset openrouter"
+            ),
         })
 }
 
-fn resolve_init_api_key_env_var(
+fn resolve_backend_provider_kind(
     explicit: Option<&str>,
+    preset: Option<BackendPresetArg>,
+) -> Result<BackendProviderKind> {
+    match normalize_optional_string(explicit) {
+        Some(value) => BackendProviderKind::parse_optional(Some(&value)),
+        None => Ok(
+            preset.map_or_else(BackendProviderKind::default, |candidate| {
+                candidate.provider_kind()
+            }),
+        ),
+    }
+}
+
+fn resolve_backend_api_key_env_var(
+    explicit: Option<String>,
     raw_api_key_present: bool,
+    preset: Option<BackendPresetArg>,
+    mode: BackendResolutionMode,
 ) -> Option<String> {
     explicit
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
         .or_else(|| {
-            (!raw_api_key_present).then_some(()).and_then(|_| {
-                std::env::var_os("AGENT_DAEMON_API_KEY")
-                    .is_some()
-                    .then(|| "AGENT_DAEMON_API_KEY".to_string())
-            })
+            (!raw_api_key_present)
+                .then(|| preset.and_then(|candidate| candidate.default_api_key_env_var()))
+                .flatten()
+                .map(ToOwned::to_owned)
+        })
+        .or_else(|| {
+            (mode == BackendResolutionMode::Init && !raw_api_key_present)
+                .then_some(())
+                .and_then(|_| {
+                    std::env::var_os("AGENT_DAEMON_API_KEY")
+                        .is_some()
+                        .then(|| "AGENT_DAEMON_API_KEY".to_string())
+                })
         })
 }
 
-fn resolve_init_api_key(explicit: Option<&str>) -> Option<String> {
-    explicit
+fn normalize_optional_string(value: Option<&str>) -> Option<String> {
+    value
         .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .filter(|candidate| !candidate.is_empty())
         .map(ToOwned::to_owned)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BackendResolutionMode {
+    Init,
+    ConfigWrite,
 }
 
 fn default_backend_max_concurrent() -> i64 {
