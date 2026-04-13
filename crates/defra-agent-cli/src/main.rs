@@ -66,6 +66,7 @@ Bootstrap a local home directory with one default backend, one default behavior,
 
 Examples:
   defra-agent init http://HOST:PORT/v1 --model-name MODEL
+  defra-agent init https://openrouter.ai/api/v1 --provider-kind OpenRouter --api-key-env-var OPENROUTER_API_KEY --model-name MODEL
   defra-agent init $INFERENCE_ENDPOINT --model-name MODEL --write-tools
 
 Next:
@@ -255,7 +256,7 @@ struct InitArgs {
     key_path: Option<PathBuf>,
     #[arg(
         value_name = "INFERENCE_ENDPOINT",
-        help = "OpenAI-compatible inference base URL, including /v1. Falls back to INFERENCE_ENDPOINT."
+        help = "Inference backend base URL, usually including /v1. Falls back to INFERENCE_ENDPOINT."
     )]
     inference_endpoint: Option<String>,
     #[arg(
@@ -268,12 +269,27 @@ struct InitArgs {
         help = "Optional backend display name. Defaults to the backend id"
     )]
     backend_name: Option<String>,
+    #[arg(
+        long,
+        help = "Backend provider kind. OpenAiCompatible covers OpenAI-style local and hosted endpoints"
+    )]
+    provider_kind: Option<String>,
+    #[arg(long, help = "Raw API key stored directly in the backend document")]
+    api_key: Option<String>,
     #[arg(long, help = "Environment variable name holding the backend API key")]
     api_key_env_var: Option<String>,
     #[arg(long, help = "Required model id to bind to the default behavior")]
     model_name: String,
     #[arg(long, default_value_t = 1)]
     max_concurrent: i64,
+    #[arg(long)]
+    supports_tool_calls: Option<bool>,
+    #[arg(long)]
+    supports_streaming: Option<bool>,
+    #[arg(long)]
+    supports_structured_outputs: Option<bool>,
+    #[arg(long)]
+    supports_json_schema: Option<bool>,
     #[arg(
         long,
         default_value_t = false,
@@ -460,9 +476,16 @@ enum ToolCeilingArg {
 struct InitSummary {
     backend_id: String,
     backend_name: String,
+    provider_kind: BackendProviderKind,
     endpoint: String,
+    api_key: Option<String>,
     api_key_env_var: Option<String>,
     model_name: String,
+    max_concurrent: i64,
+    supports_tool_calls: bool,
+    supports_streaming: bool,
+    supports_structured_outputs: bool,
+    supports_json_schema: bool,
     default_behavior_id: String,
     tool_selection_id: String,
     tool_ceiling: ToolCeilingArg,
@@ -479,9 +502,21 @@ struct StoredInitConfig {
     key_path: Option<String>,
     backend_id: String,
     backend_name: String,
+    #[serde(default)]
+    provider_kind: BackendProviderKind,
     endpoint: String,
     api_key_env_var: Option<String>,
     model_name: String,
+    #[serde(default = "default_backend_max_concurrent")]
+    max_concurrent: i64,
+    #[serde(default = "default_backend_supports_tool_calls")]
+    supports_tool_calls: bool,
+    #[serde(default = "default_backend_supports_streaming")]
+    supports_streaming: bool,
+    #[serde(default)]
+    supports_structured_outputs: bool,
+    #[serde(default)]
+    supports_json_schema: bool,
     default_behavior_id: String,
     tool_selection_id: String,
     tool_ceiling: ToolCeilingArg,
@@ -1330,9 +1365,15 @@ async fn init(args: InitArgs) -> Result<()> {
         key_path: Some(key_path.to_string_lossy().to_string()),
         backend_id: summary.backend_id.clone(),
         backend_name: summary.backend_name.clone(),
+        provider_kind: summary.provider_kind,
         endpoint: summary.endpoint.clone(),
         api_key_env_var: summary.api_key_env_var.clone(),
         model_name: summary.model_name.clone(),
+        max_concurrent: summary.max_concurrent,
+        supports_tool_calls: summary.supports_tool_calls,
+        supports_streaming: summary.supports_streaming,
+        supports_structured_outputs: summary.supports_structured_outputs,
+        supports_json_schema: summary.supports_json_schema,
         default_behavior_id: summary.default_behavior_id.clone(),
         tool_selection_id: summary.tool_selection_id.clone(),
         tool_ceiling: summary.tool_ceiling,
@@ -3640,7 +3681,27 @@ async fn initialize_runtime_home(
     }
 
     let endpoint = resolve_init_endpoint(args.inference_endpoint.as_deref())?;
-    let api_key_env_var = resolve_init_api_key_env_var(args.api_key_env_var.as_deref());
+    let provider_kind = BackendProviderKind::parse_optional(args.provider_kind.as_deref())?;
+    let api_key = resolve_init_api_key(args.api_key.as_deref());
+    if api_key.is_some()
+        && args
+            .api_key_env_var
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+    {
+        anyhow::bail!("--api-key and --api-key-env-var cannot both be set");
+    }
+    let api_key_env_var =
+        resolve_init_api_key_env_var(args.api_key_env_var.as_deref(), api_key.is_some());
+    let supports_tool_calls = args
+        .supports_tool_calls
+        .unwrap_or_else(default_backend_supports_tool_calls);
+    let supports_streaming = args
+        .supports_streaming
+        .unwrap_or_else(default_backend_supports_streaming);
+    let supports_structured_outputs = args.supports_structured_outputs.unwrap_or(false);
+    let supports_json_schema = args.supports_json_schema.unwrap_or(false);
     let backend_id = explicit_backend_id
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| format!("{}-backend", args.agent_name));
@@ -3667,10 +3728,16 @@ async fn initialize_runtime_home(
         &args.agent_name,
         &backend_id,
         &backend_name,
+        provider_kind,
         &endpoint,
+        api_key.as_deref(),
         api_key_env_var.as_deref(),
         model_name,
         args.max_concurrent,
+        supports_tool_calls,
+        supports_streaming,
+        supports_structured_outputs,
+        supports_json_schema,
         &default_behavior_id,
         &tool_selection_id,
     );
@@ -3679,9 +3746,16 @@ async fn initialize_runtime_home(
     Ok(InitSummary {
         backend_id,
         backend_name,
+        provider_kind,
         endpoint,
+        api_key: api_key.map(|_| "<redacted>".to_string()),
         api_key_env_var,
         model_name: model_name.to_string(),
+        max_concurrent: args.max_concurrent,
+        supports_tool_calls,
+        supports_streaming,
+        supports_structured_outputs,
+        supports_json_schema,
         default_behavior_id,
         tool_selection_id,
         tool_ceiling,
@@ -3709,16 +3783,40 @@ fn resolve_init_endpoint(explicit: Option<&str>) -> Result<String> {
         })
 }
 
-fn resolve_init_api_key_env_var(explicit: Option<&str>) -> Option<String> {
+fn resolve_init_api_key_env_var(
+    explicit: Option<&str>,
+    raw_api_key_present: bool,
+) -> Option<String> {
     explicit
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .or_else(|| {
-            std::env::var_os("AGENT_DAEMON_API_KEY")
-                .is_some()
-                .then(|| "AGENT_DAEMON_API_KEY".to_string())
+            (!raw_api_key_present).then_some(()).and_then(|_| {
+                std::env::var_os("AGENT_DAEMON_API_KEY")
+                    .is_some()
+                    .then(|| "AGENT_DAEMON_API_KEY".to_string())
+            })
         })
+}
+
+fn resolve_init_api_key(explicit: Option<&str>) -> Option<String> {
+    explicit
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn default_backend_max_concurrent() -> i64 {
+    1
+}
+
+fn default_backend_supports_tool_calls() -> bool {
+    true
+}
+
+fn default_backend_supports_streaming() -> bool {
+    true
 }
 
 fn resolve_default_write_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
@@ -3748,10 +3846,16 @@ fn bootstrap_template_vars(
     agent_name: &str,
     backend_id: &str,
     backend_name: &str,
+    provider_kind: BackendProviderKind,
     endpoint: &str,
+    api_key: Option<&str>,
     api_key_env_var: Option<&str>,
     model_name: &str,
     max_concurrent: i64,
+    supports_tool_calls: bool,
+    supports_streaming: bool,
+    supports_structured_outputs: bool,
+    supports_json_schema: bool,
     default_behavior_id: &str,
     tool_selection_id: &str,
 ) -> std::collections::BTreeMap<String, String> {
@@ -3767,7 +3871,17 @@ fn bootstrap_template_vars(
         "BACKEND_NAME".to_string(),
         graphql_string_literal(backend_name),
     );
+    vars.insert(
+        "PROVIDER_KIND".to_string(),
+        graphql_string_literal(provider_kind.as_str()),
+    );
     vars.insert("ENDPOINT".to_string(), graphql_string_literal(endpoint));
+    vars.insert(
+        "API_KEY".to_string(),
+        api_key
+            .map(graphql_string_literal)
+            .unwrap_or_else(|| "null".to_string()),
+    );
     vars.insert(
         "API_KEY_ENV_VAR".to_string(),
         api_key_env_var
@@ -3776,6 +3890,22 @@ fn bootstrap_template_vars(
     );
     vars.insert("MODEL_NAME".to_string(), graphql_string_literal(model_name));
     vars.insert("MAX_CONCURRENT".to_string(), max_concurrent.to_string());
+    vars.insert(
+        "SUPPORTS_TOOL_CALLS".to_string(),
+        graphql_bool_literal(supports_tool_calls).to_string(),
+    );
+    vars.insert(
+        "SUPPORTS_STREAMING".to_string(),
+        graphql_bool_literal(supports_streaming).to_string(),
+    );
+    vars.insert(
+        "SUPPORTS_STRUCTURED_OUTPUTS".to_string(),
+        graphql_bool_literal(supports_structured_outputs).to_string(),
+    );
+    vars.insert(
+        "SUPPORTS_JSON_SCHEMA".to_string(),
+        graphql_bool_literal(supports_json_schema).to_string(),
+    );
     vars.insert(
         "DEFAULT_BEHAVIOR_ID".to_string(),
         graphql_string_literal(default_behavior_id),

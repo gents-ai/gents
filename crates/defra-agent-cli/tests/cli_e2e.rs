@@ -1937,7 +1937,13 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
         &agent_did,
         &backend_id,
         mock_endpoint.endpoint(),
+        "OpenAiCompatible",
         None,
+        None,
+        true,
+        true,
+        false,
+        false,
         &model_name,
         &tool_selection_id,
         "ReadOnly",
@@ -1967,7 +1973,13 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
         &agent_did,
         &backend_id,
         mock_endpoint.endpoint(),
+        "OpenAiCompatible",
         None,
+        None,
+        true,
+        true,
+        false,
+        false,
         &model_name,
         &tool_selection_id,
         "ReadOnly",
@@ -2091,7 +2103,13 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
         &agent_did,
         &backend_id,
         mock_endpoint.endpoint(),
+        "OpenAiCompatible",
+        None,
         Some("DEFRA_AGENT_TEST_CLI_BACKEND_KEY"),
+        true,
+        true,
+        false,
+        false,
         &model_name,
         &tool_selection_id,
         "ReadOnly",
@@ -2111,6 +2129,100 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
         output.contains(expected_reply),
         "expected chat output to contain {expected_reply}, got:\n{output}"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn init_supports_provider_auth_and_capability_backend_fields() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-openrouter-model-{}", Uuid::new_v4().simple());
+    let raw_api_key = "openrouter-raw-key";
+    let mock_endpoint = MockChatEndpoint::start_with_required_bearer(
+        &model_name,
+        "OPENROUTER_BACKEND_OK",
+        Some(raw_api_key),
+    )?;
+
+    let port = allocate_port()?;
+    let agent_name = format!("cli-openrouter-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+    let backend_id = format!("{agent_name}-backend");
+    let graphql = graphql_url(port);
+    let tool_selection_id = format!("{agent_did}:default:tools");
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--provider-kind",
+            "OpenRouter",
+            "--api-key",
+            raw_api_key,
+            "--supports-tool-calls",
+            "true",
+            "--supports-streaming",
+            "true",
+            "--supports-structured-outputs",
+            "true",
+            "--supports-json-schema",
+            "true",
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    assert_eq!(
+        init.pointer("/init/provider_kind").and_then(Value::as_str),
+        Some("OpenRouter")
+    );
+    assert_eq!(
+        init.pointer("/init/api_key").and_then(Value::as_str),
+        Some("<redacted>")
+    );
+    assert_eq!(
+        init.pointer("/init/supports_tool_calls")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        init.pointer("/init/supports_structured_outputs")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        init.pointer("/init/supports_json_schema")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve.child)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    assert_runtime_init_state(
+        &graphql,
+        &agent_did,
+        &backend_id,
+        mock_endpoint.endpoint(),
+        "OpenRouter",
+        Some(raw_api_key),
+        None,
+        true,
+        true,
+        true,
+        true,
+        &model_name,
+        &tool_selection_id,
+        "ReadOnly",
+        "ReadOnly",
+        "read-only operating mode",
+    )
+    .await?;
 
     Ok(())
 }
@@ -2195,6 +2307,36 @@ async fn init_requires_model_name() -> Result<()> {
     assert!(
         stderr.contains("--model-name <MODEL_NAME>"),
         "expected clap missing-argument error, got:\n{stderr}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn init_rejects_setting_both_api_key_and_api_key_env_var() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let output = Command::new(cli_bin())
+        .env("HOME", &home_dir)
+        .env("RUST_LOG", "error")
+        .arg("init")
+        .arg("--model-name")
+        .arg("test-model")
+        .arg("--api-key")
+        .arg("raw-key")
+        .arg("--api-key-env-var")
+        .arg("TEST_BACKEND_KEY")
+        .arg("http://127.0.0.1:65535/v1")
+        .output()
+        .context("running defra-agent init with conflicting backend auth flags")?;
+
+    assert!(!output.status.success(), "init should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--api-key and --api-key-env-var cannot both be set"),
+        "expected conflicting auth error, got:\n{stderr}"
     );
 
     Ok(())
@@ -2287,7 +2429,13 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
         &agent_did,
         &backend_id,
         mock_endpoint.endpoint(),
+        "OpenAiCompatible",
         None,
+        None,
+        true,
+        true,
+        false,
+        false,
         &model_name,
         &tool_selection_id,
         "ReadOnly",
@@ -2340,7 +2488,13 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
         &agent_did,
         &backend_id,
         mock_endpoint.endpoint(),
+        "OpenAiCompatible",
         None,
+        None,
+        true,
+        true,
+        false,
+        false,
         &model_name,
         &tool_selection_id,
         "ReadWrite",
@@ -2729,7 +2883,13 @@ async fn assert_runtime_init_state(
     agent_did: &str,
     backend_id: &str,
     endpoint: &str,
+    expected_provider_kind: &str,
+    expected_api_key: Option<&str>,
     expected_api_key_env_var: Option<&str>,
+    expected_supports_tool_calls: bool,
+    expected_supports_streaming: bool,
+    expected_supports_structured_outputs: bool,
+    expected_supports_json_schema: bool,
     model_name: &str,
     tool_selection_id: &str,
     expected_file_tools_mode: &str,
@@ -2753,9 +2913,15 @@ async fn assert_runtime_init_state(
             }}
             InferenceBackend(filter: {{ backend_id: {{ _eq: "{}" }} }}, limit: 1) {{
                 backend_id
+                provider_kind
                 endpoint
+                api_key
                 api_key_env_var
                 enabled
+                supports_tool_calls
+                supports_streaming
+                supports_structured_outputs
+                supports_json_schema
                 probe_status
                 models
             }}
@@ -2827,10 +2993,36 @@ async fn assert_runtime_init_state(
         Some(endpoint)
     );
     assert_eq!(
+        backend.get("provider_kind").and_then(Value::as_str),
+        Some(expected_provider_kind)
+    );
+    assert_eq!(
+        backend.get("api_key").and_then(Value::as_str),
+        expected_api_key
+    );
+    assert_eq!(
         backend.get("api_key_env_var").and_then(Value::as_str),
         expected_api_key_env_var
     );
     assert_eq!(backend.get("enabled").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        backend.get("supports_tool_calls").and_then(Value::as_bool),
+        Some(expected_supports_tool_calls)
+    );
+    assert_eq!(
+        backend.get("supports_streaming").and_then(Value::as_bool),
+        Some(expected_supports_streaming)
+    );
+    assert_eq!(
+        backend
+            .get("supports_structured_outputs")
+            .and_then(Value::as_bool),
+        Some(expected_supports_structured_outputs)
+    );
+    assert_eq!(
+        backend.get("supports_json_schema").and_then(Value::as_bool),
+        Some(expected_supports_json_schema)
+    );
     assert_eq!(
         backend.get("probe_status").and_then(Value::as_str),
         Some("healthy")

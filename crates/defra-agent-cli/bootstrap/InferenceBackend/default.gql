@@ -4,20 +4,32 @@ mutation {
     add: {
       backend_id: ${BACKEND_ID}
       name: ${BACKEND_NAME}
+      provider_kind: ${PROVIDER_KIND}
       endpoint: ${ENDPOINT}
+      api_key: ${API_KEY}
       api_key_env_var: ${API_KEY_ENV_VAR}
       max_concurrent: ${MAX_CONCURRENT}
       enabled: true
+      supports_tool_calls: ${SUPPORTS_TOOL_CALLS}
+      supports_streaming: ${SUPPORTS_STREAMING}
+      supports_structured_outputs: ${SUPPORTS_STRUCTURED_OUTPUTS}
+      supports_json_schema: ${SUPPORTS_JSON_SCHEMA}
       models: [${MODEL_NAME}]
       last_probe: ${LAST_PROBE_AT}
       probe_status: "healthy"
     }
     update: {
       name: ${BACKEND_NAME}
+      provider_kind: ${PROVIDER_KIND}
       endpoint: ${ENDPOINT}
+      api_key: ${API_KEY}
       api_key_env_var: ${API_KEY_ENV_VAR}
       max_concurrent: ${MAX_CONCURRENT}
       enabled: true
+      supports_tool_calls: ${SUPPORTS_TOOL_CALLS}
+      supports_streaming: ${SUPPORTS_STREAMING}
+      supports_structured_outputs: ${SUPPORTS_STRUCTURED_OUTPUTS}
+      supports_json_schema: ${SUPPORTS_JSON_SCHEMA}
       models: [${MODEL_NAME}]
       last_probe: ${LAST_PROBE_AT}
       probe_status: "healthy"
