@@ -10,7 +10,7 @@ A second client (CLI, web, or desktop) implementing the same logic would have to
 
 ## What This Specifies
 
-A formal Lean model for how any client derives a deterministic view of a single agent turn from observed documents, with proven properties (monotonicity, terminal coherence, convergence) that tie the client projection back to the existing server proofs.
+A formal Lean model for how any client derives a deterministic view of a single agent turn from observed documents, with proven monotonicity, terminal coherence, totality, and turn-replacement properties plus an explicit merge-layer convergence assumption that ties the client projection back to the existing server proofs.
 
 Plus an informal protocol reference covering the parallel observation surfaces (tool calls, messages, conversation) and the subscription model that clients need to implement.
 
@@ -29,7 +29,7 @@ Plus an informal protocol reference covering the parallel observation surfaces (
 - **Turn identity = retry chain root.** `TurnId` is `retry_root_request_id` (or `request_id` if no retry parent). All retry attempts for a user's original message collapse into one logical turn. Supersession is a cross-turn event.
 - **Response can be more current than request (non-terminal only).** Under P2P replication lag, the client may observe `AgentResponse.status = complete` before `AgentRequest.lifecycle_state` transitions to `completed`. The derivation trusts the response **only when the request's lifecycle is non-terminal**. Once the request lifecycle is terminal (`completed`, `failed`, `superseded`, or `dead`), it always wins over any response — this preserves monotonicity (T2) against stale streaming responses arriving alongside a terminal request. This matches Amy's working behavior for the common case.
 - **5 client states, no ideal-only states in v1.** `awaitingInput` and `dead` are annotated in the derivation as mapping to existing states (`waitingForClaim` and `failed` respectively). When the runtime implements those (Deviations #2 and #3), clients can introduce additional states without breaking the existing projection.
-- **Trivial merge, nontrivial derive.** The merge function (accepting incoming document snapshots into the observation store) is trivial under the DefraDB merged-snapshot assumption. The formal content lives in the derivation and its 5 theorems. This is honest — we explicitly defer P2P merge proofs to defradb.rs.
+- **Trivial merge, nontrivial derive.** The merge function (accepting incoming document snapshots into the observation store) is trivial under the DefraDB merged-snapshot assumption. The formal content lives in the derivation and T2-T5; T1 is documented as an assumption about the merge layer rather than a proved permutation theorem. This is honest — we explicitly defer P2P merge proofs to defradb.rs.
 - **Stalled is a UI affordance, not a turn state.** If a client wants to show "checking server..." after N seconds of no updates on a non-terminal turn, that is a per-client UX decision layered on top of the projection. Each client owns its own staleness heuristic.
 
 ## Lean Model: `Proofs/Client.lean`
@@ -95,6 +95,8 @@ structure TurnObservation where
 
 `TurnId` is `retry_root_request_id`. All attempts sharing the same root are part of one turn. The tip of the retry chain is the attempt whose `request_id` is not referenced as `retry_parent_request` by any other attempt in the observation.
 
+The current Lean artifact assumes the attempt list has already been normalized root-first, tip-last by the merge layer. The Rust reference implementation resolves the tip from `request_id` / `retry_parent_request` metadata before applying the same single-attempt derivation.
+
 ### Derivation: Two Layers
 
 **Layer 1 — single attempt:**
@@ -154,11 +156,11 @@ When the runtime catches up, the Lean model gains new `ClientTurnState` construc
 
 ## Theorems
 
-### T1: Convergence
+### T1: Merge Convergence Assumption
 
-Any permutation of the same set of document snapshots yields the same `TurnObservation`.
+Under the merged-snapshot assumption, any permutation of equivalent document snapshots should collapse to the same `TurnObservation`.
 
-Trivially true under the merged-snapshot assumption (map keyed by `request_id`, each entry is the latest merged value). States the assumption explicitly so it can be strengthened later if we model raw DAG commits.
+The current Lean artifact does not prove that permutation property. It records only that `deriveTurn` is deterministic once the observation has already been normalized by the merge layer. This states the dependency explicitly so it can be strengthened later if we model raw DAG commits.
 
 ### T2: Monotonicity
 
@@ -202,7 +204,7 @@ Mirrors the existing `state_machine_conformance.rs` pattern.
 ### Structure
 
 1. **Purpose** — what this protocol specifies and who it is for (CLI, mobile, web, desktop implementers).
-2. **Formal model reference** — "the source of truth is `Proofs/Client.lean`; this document explains it."
+2. **Formal model reference** — `Proofs/Client.lean` defines the derivation semantics; the Rust reference implementation performs retry-tip resolution before applying them.
 3. **Derivation table** — human-readable mapping from document fields to client states, with examples.
 4. **Current deviations** — references `Proofs/Conformance/Deviations.lean`, explains how the derivation handles each.
 5. **Parallel observation surfaces** (informal):
@@ -220,7 +222,7 @@ Mirrors the existing `state_machine_conformance.rs` pattern.
 
 ## Implementation Order
 
-1. **Lean model** — `crates/defra-agent/proofs/Proofs/Client.lean`. Define types, write `deriveAttempt` and `deriveTurn`, prove T1-T5.
+1. **Lean model** — `crates/defra-agent/proofs/Proofs/Client.lean`. Define types, write `deriveAttempt` and `deriveTurn`, prove T2-T5, and document T1 as a merge-layer assumption until a richer observation-store model exists.
 2. **Conformance tests** — `tests/client_state_conformance.rs`. Bridge Lean semantics to Rust with concrete document shapes.
 3. **Protocol doc** — `docs/protocols/client-state-machine.md`. Explain the model, add parallel surfaces and subscription guidance.
 4. **(Future, separate issue)** Retrofit Amy's `RequestLifecycle.swift` to align with the formal derivation. Currently Amy uses `status` strings; the formal model uses `lifecycle_state` from the proven enum.

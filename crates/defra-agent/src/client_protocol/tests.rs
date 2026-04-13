@@ -1,15 +1,27 @@
 use super::*;
 
-fn req(lifecycle: &str) -> RequestSnapshot {
+fn lc(lifecycle: &str) -> RequestLifecycleState {
+    RequestLifecycleState::try_from(lifecycle).unwrap()
+}
+
+fn req(request_id: &str, retry_parent_request: Option<&str>, lifecycle: &str) -> RequestSnapshot {
     RequestSnapshot {
-        lifecycle_state: lifecycle.to_string(),
+        request_id: request_id.to_string(),
+        retry_parent_request: retry_parent_request.map(str::to_string),
+        lifecycle_state: lc(lifecycle),
         is_superseded: false,
     }
 }
 
-fn req_superseded(lifecycle: &str) -> RequestSnapshot {
+fn req_superseded(
+    request_id: &str,
+    retry_parent_request: Option<&str>,
+    lifecycle: &str,
+) -> RequestSnapshot {
     RequestSnapshot {
-        lifecycle_state: lifecycle.to_string(),
+        request_id: request_id.to_string(),
+        retry_parent_request: retry_parent_request.map(str::to_string),
+        lifecycle_state: lc(lifecycle),
         is_superseded: true,
     }
 }
@@ -18,9 +30,14 @@ fn resp(status: ResponseStatus) -> Option<ResponseSnapshot> {
     Some(ResponseSnapshot { status })
 }
 
-fn attempt(lifecycle: &str, response: Option<ResponseSnapshot>) -> AttemptView {
+fn attempt(
+    request_id: &str,
+    retry_parent_request: Option<&str>,
+    lifecycle: &str,
+    response: Option<ResponseSnapshot>,
+) -> AttemptView {
     AttemptView {
-        request: req(lifecycle),
+        request: req(request_id, retry_parent_request, lifecycle),
         response,
     }
 }
@@ -30,7 +47,7 @@ fn attempt(lifecycle: &str, response: Option<ResponseSnapshot>) -> AttemptView {
 #[test]
 fn pending_no_response() {
     assert_eq!(
-        derive_attempt(&attempt("pending", None)),
+        derive_attempt(&attempt("req-1", None, "pending", None)),
         ClientTurnState::WaitingForClaim
     );
 }
@@ -38,7 +55,7 @@ fn pending_no_response() {
 #[test]
 fn claimed_no_response() {
     assert_eq!(
-        derive_attempt(&attempt("claimed", None)),
+        derive_attempt(&attempt("req-1", None, "claimed", None)),
         ClientTurnState::WaitingForClaim
     );
 }
@@ -46,7 +63,7 @@ fn claimed_no_response() {
 #[test]
 fn processing_no_response() {
     assert_eq!(
-        derive_attempt(&attempt("processing", None)),
+        derive_attempt(&attempt("req-1", None, "processing", None)),
         ClientTurnState::WaitingForClaim
     );
 }
@@ -54,7 +71,7 @@ fn processing_no_response() {
 #[test]
 fn input_required_no_response() {
     assert_eq!(
-        derive_attempt(&attempt("inputRequired", None)),
+        derive_attempt(&attempt("req-1", None, "inputRequired", None)),
         ClientTurnState::WaitingForClaim
     );
 }
@@ -62,7 +79,12 @@ fn input_required_no_response() {
 #[test]
 fn processing_streaming_response() {
     assert_eq!(
-        derive_attempt(&attempt("processing", resp(ResponseStatus::Streaming))),
+        derive_attempt(&attempt(
+            "req-1",
+            None,
+            "processing",
+            resp(ResponseStatus::Streaming)
+        )),
         ClientTurnState::Streaming
     );
 }
@@ -70,7 +92,12 @@ fn processing_streaming_response() {
 #[test]
 fn processing_complete_response() {
     assert_eq!(
-        derive_attempt(&attempt("processing", resp(ResponseStatus::Complete))),
+        derive_attempt(&attempt(
+            "req-1",
+            None,
+            "processing",
+            resp(ResponseStatus::Complete)
+        )),
         ClientTurnState::Completed
     );
 }
@@ -78,7 +105,12 @@ fn processing_complete_response() {
 #[test]
 fn processing_error_response() {
     assert_eq!(
-        derive_attempt(&attempt("processing", resp(ResponseStatus::Error))),
+        derive_attempt(&attempt(
+            "req-1",
+            None,
+            "processing",
+            resp(ResponseStatus::Error)
+        )),
         ClientTurnState::Failed
     );
 }
@@ -86,7 +118,7 @@ fn processing_error_response() {
 #[test]
 fn completed_lifecycle() {
     assert_eq!(
-        derive_attempt(&attempt("completed", None)),
+        derive_attempt(&attempt("req-1", None, "completed", None)),
         ClientTurnState::Completed
     );
 }
@@ -94,7 +126,12 @@ fn completed_lifecycle() {
 #[test]
 fn completed_lifecycle_ignores_stale_streaming() {
     assert_eq!(
-        derive_attempt(&attempt("completed", resp(ResponseStatus::Streaming))),
+        derive_attempt(&attempt(
+            "req-1",
+            None,
+            "completed",
+            resp(ResponseStatus::Streaming)
+        )),
         ClientTurnState::Completed
     );
 }
@@ -102,7 +139,7 @@ fn completed_lifecycle_ignores_stale_streaming() {
 #[test]
 fn failed_lifecycle() {
     assert_eq!(
-        derive_attempt(&attempt("failed", None)),
+        derive_attempt(&attempt("req-1", None, "failed", None)),
         ClientTurnState::Failed
     );
 }
@@ -110,7 +147,12 @@ fn failed_lifecycle() {
 #[test]
 fn failed_lifecycle_ignores_stale_streaming() {
     assert_eq!(
-        derive_attempt(&attempt("failed", resp(ResponseStatus::Streaming))),
+        derive_attempt(&attempt(
+            "req-1",
+            None,
+            "failed",
+            resp(ResponseStatus::Streaming)
+        )),
         ClientTurnState::Failed
     );
 }
@@ -118,7 +160,7 @@ fn failed_lifecycle_ignores_stale_streaming() {
 #[test]
 fn dead_lifecycle() {
     assert_eq!(
-        derive_attempt(&attempt("dead", None)),
+        derive_attempt(&attempt("req-1", None, "dead", None)),
         ClientTurnState::Failed
     );
 }
@@ -126,7 +168,7 @@ fn dead_lifecycle() {
 #[test]
 fn superseded_lifecycle() {
     assert_eq!(
-        derive_attempt(&attempt("superseded", None)),
+        derive_attempt(&attempt("req-1", None, "superseded", None)),
         ClientTurnState::Superseded
     );
 }
@@ -134,7 +176,7 @@ fn superseded_lifecycle() {
 #[test]
 fn superseded_flag_overrides_everything() {
     let view = AttemptView {
-        request: req_superseded("processing"),
+        request: req_superseded("req-1", None, "processing"),
         response: resp(ResponseStatus::Streaming),
     };
     assert_eq!(derive_attempt(&view), ClientTurnState::Superseded);
@@ -145,7 +187,12 @@ fn superseded_flag_overrides_everything() {
 #[test]
 fn pending_with_complete_response_trusts_response() {
     assert_eq!(
-        derive_attempt(&attempt("pending", resp(ResponseStatus::Complete))),
+        derive_attempt(&attempt(
+            "req-1",
+            None,
+            "pending",
+            resp(ResponseStatus::Complete)
+        )),
         ClientTurnState::Completed
     );
 }
@@ -153,7 +200,12 @@ fn pending_with_complete_response_trusts_response() {
 #[test]
 fn claimed_with_streaming_response_trusts_response() {
     assert_eq!(
-        derive_attempt(&attempt("claimed", resp(ResponseStatus::Streaming))),
+        derive_attempt(&attempt(
+            "req-1",
+            None,
+            "claimed",
+            resp(ResponseStatus::Streaming)
+        )),
         ClientTurnState::Streaming
     );
 }
@@ -167,15 +219,20 @@ fn derive_turn_empty() {
 
 #[test]
 fn derive_turn_single() {
-    let chain = vec![attempt("processing", resp(ResponseStatus::Streaming))];
+    let chain = vec![attempt(
+        "req-1",
+        None,
+        "processing",
+        resp(ResponseStatus::Streaming),
+    )];
     assert_eq!(derive_turn(&chain), Some(ClientTurnState::Streaming));
 }
 
 #[test]
 fn derive_turn_uses_tip() {
     let chain = vec![
-        attempt("failed", None),
-        attempt("pending", None),
+        attempt("req-1", None, "failed", None),
+        attempt("req-2", Some("req-1"), "pending", None),
     ];
     assert_eq!(derive_turn(&chain), Some(ClientTurnState::WaitingForClaim));
 }
@@ -183,11 +240,40 @@ fn derive_turn_uses_tip() {
 #[test]
 fn derive_turn_three_attempt_chain() {
     let chain = vec![
-        attempt("failed", None),
-        attempt("failed", None),
-        attempt("processing", resp(ResponseStatus::Streaming)),
+        attempt("req-1", None, "failed", None),
+        attempt("req-2", Some("req-1"), "failed", None),
+        attempt(
+            "req-3",
+            Some("req-2"),
+            "processing",
+            resp(ResponseStatus::Streaming),
+        ),
     ];
     assert_eq!(derive_turn(&chain), Some(ClientTurnState::Streaming));
+}
+
+#[test]
+fn derive_turn_resolves_tip_independent_of_slice_order() {
+    let root = attempt("req-1", None, "failed", None);
+    let retry = attempt("req-2", Some("req-1"), "pending", None);
+
+    let root_first = vec![root.clone(), retry.clone()];
+    let retry_first = vec![retry, root];
+
+    assert_eq!(
+        derive_turn(&root_first),
+        Some(ClientTurnState::WaitingForClaim)
+    );
+    assert_eq!(
+        derive_turn(&retry_first),
+        Some(ClientTurnState::WaitingForClaim)
+    );
+}
+
+#[test]
+fn request_lifecycle_state_rejects_response_status_strings() {
+    let error = RequestLifecycleState::try_from("error").unwrap_err();
+    assert_eq!(error.value(), "error");
 }
 
 // ── Monotonicity spot checks (T2) ───────────────────────────────
@@ -195,21 +281,21 @@ fn derive_turn_three_attempt_chain() {
 /// All valid server lifecycle transition pairs and their expected
 /// rank relationship.
 const LIFECYCLE_TRANSITIONS: &[(&str, &str)] = &[
-    ("pending", "claimed"),       // claim
-    ("pending", "superseded"),    // dedup_lose
-    ("claimed", "processing"),    // begin_inference
-    ("processing", "completed"),  // finish
-    ("processing", "failed"),     // fail
-    ("claimed", "failed"),        // fail_before_stream
-    ("processing", "dead"),       // deadline_expire
-    ("failed", "dead"),           // exhaust
+    ("pending", "claimed"),      // claim
+    ("pending", "superseded"),   // dedup_lose
+    ("claimed", "processing"),   // begin_inference
+    ("processing", "completed"), // finish
+    ("processing", "failed"),    // fail
+    ("claimed", "failed"),       // fail_before_stream
+    ("processing", "dead"),      // deadline_expire
+    ("failed", "dead"),          // exhaust
 ];
 
 #[test]
 fn monotonicity_no_response() {
     for (pre, post) in LIFECYCLE_TRANSITIONS {
-        let pre_state = derive_attempt(&attempt(pre, None));
-        let post_state = derive_attempt(&attempt(post, None));
+        let pre_state = derive_attempt(&attempt("req-1", None, pre, None));
+        let post_state = derive_attempt(&attempt("req-1", None, post, None));
         assert!(
             post_state.rank() >= pre_state.rank(),
             "rank decreased: {pre} ({}) → {post} ({})",
@@ -224,11 +310,11 @@ fn monotonicity_with_streaming_response() {
     for (pre, post) in LIFECYCLE_TRANSITIONS {
         let r = resp(ResponseStatus::Streaming);
         let pre_state = derive_attempt(&AttemptView {
-            request: req(pre),
+            request: req("req-1", None, pre),
             response: r.clone(),
         });
         let post_state = derive_attempt(&AttemptView {
-            request: req(post),
+            request: req("req-1", None, post),
             response: r,
         });
         assert!(
@@ -243,8 +329,13 @@ fn monotonicity_with_streaming_response() {
 #[test]
 fn monotonicity_response_none_to_streaming() {
     for lifecycle in &["pending", "claimed", "processing", "inputRequired"] {
-        let pre = derive_attempt(&attempt(lifecycle, None));
-        let post = derive_attempt(&attempt(lifecycle, resp(ResponseStatus::Streaming)));
+        let pre = derive_attempt(&attempt("req-1", None, lifecycle, None));
+        let post = derive_attempt(&attempt(
+            "req-1",
+            None,
+            lifecycle,
+            resp(ResponseStatus::Streaming),
+        ));
         assert!(
             post.rank() >= pre.rank(),
             "response none→streaming decreased rank for {lifecycle}"
@@ -255,8 +346,18 @@ fn monotonicity_response_none_to_streaming() {
 #[test]
 fn monotonicity_response_streaming_to_complete() {
     for lifecycle in &["pending", "claimed", "processing", "inputRequired"] {
-        let pre = derive_attempt(&attempt(lifecycle, resp(ResponseStatus::Streaming)));
-        let post = derive_attempt(&attempt(lifecycle, resp(ResponseStatus::Complete)));
+        let pre = derive_attempt(&attempt(
+            "req-1",
+            None,
+            lifecycle,
+            resp(ResponseStatus::Streaming),
+        ));
+        let post = derive_attempt(&attempt(
+            "req-1",
+            None,
+            lifecycle,
+            resp(ResponseStatus::Complete),
+        ));
         assert!(
             post.rank() >= pre.rank(),
             "response streaming→complete decreased rank for {lifecycle}"
@@ -267,8 +368,18 @@ fn monotonicity_response_streaming_to_complete() {
 #[test]
 fn monotonicity_response_streaming_to_error() {
     for lifecycle in &["pending", "claimed", "processing", "inputRequired"] {
-        let pre = derive_attempt(&attempt(lifecycle, resp(ResponseStatus::Streaming)));
-        let post = derive_attempt(&attempt(lifecycle, resp(ResponseStatus::Error)));
+        let pre = derive_attempt(&attempt(
+            "req-1",
+            None,
+            lifecycle,
+            resp(ResponseStatus::Streaming),
+        ));
+        let post = derive_attempt(&attempt(
+            "req-1",
+            None,
+            lifecycle,
+            resp(ResponseStatus::Error),
+        ));
         assert!(
             post.rank() >= pre.rank(),
             "response streaming→error decreased rank for {lifecycle}"
@@ -281,7 +392,7 @@ fn monotonicity_response_streaming_to_error() {
 #[test]
 fn terminal_coherence_terminal_lifecycle_states() {
     for lifecycle in &["completed", "failed", "dead", "superseded"] {
-        let state = derive_attempt(&attempt(lifecycle, None));
+        let state = derive_attempt(&attempt("req-1", None, lifecycle, None));
         assert!(
             state.is_terminal(),
             "terminal lifecycle {lifecycle} did not produce terminal client state"
@@ -292,7 +403,7 @@ fn terminal_coherence_terminal_lifecycle_states() {
 #[test]
 fn terminal_coherence_nonterminal_lifecycle_no_response() {
     for lifecycle in &["pending", "claimed", "processing", "inputRequired"] {
-        let state = derive_attempt(&attempt(lifecycle, None));
+        let state = derive_attempt(&attempt("req-1", None, lifecycle, None));
         assert!(
             !state.is_terminal(),
             "non-terminal lifecycle {lifecycle} with no response produced terminal client state"
@@ -303,7 +414,12 @@ fn terminal_coherence_nonterminal_lifecycle_no_response() {
 #[test]
 fn terminal_coherence_nonterminal_lifecycle_streaming_response() {
     for lifecycle in &["pending", "claimed", "processing", "inputRequired"] {
-        let state = derive_attempt(&attempt(lifecycle, resp(ResponseStatus::Streaming)));
+        let state = derive_attempt(&attempt(
+            "req-1",
+            None,
+            lifecycle,
+            resp(ResponseStatus::Streaming),
+        ));
         assert!(
             !state.is_terminal(),
             "non-terminal lifecycle {lifecycle} with streaming response produced terminal client state"
@@ -314,7 +430,12 @@ fn terminal_coherence_nonterminal_lifecycle_streaming_response() {
 #[test]
 fn terminal_coherence_nonterminal_lifecycle_complete_response() {
     for lifecycle in &["pending", "claimed", "processing", "inputRequired"] {
-        let state = derive_attempt(&attempt(lifecycle, resp(ResponseStatus::Complete)));
+        let state = derive_attempt(&attempt(
+            "req-1",
+            None,
+            lifecycle,
+            resp(ResponseStatus::Complete),
+        ));
         assert!(
             state.is_terminal(),
             "non-terminal {lifecycle} + complete response should be effectively terminal"
@@ -325,7 +446,7 @@ fn terminal_coherence_nonterminal_lifecycle_complete_response() {
 #[test]
 fn terminal_coherence_superseded_flag() {
     let view = AttemptView {
-        request: req_superseded("pending"),
+        request: req_superseded("req-1", None, "pending"),
         response: None,
     };
     assert!(derive_attempt(&view).is_terminal());
@@ -335,8 +456,8 @@ fn terminal_coherence_superseded_flag() {
 
 #[test]
 fn turn_replacement_retry_restart() {
-    let old_tip = attempt("failed", None);
-    let new_tip = attempt("pending", None);
+    let old_tip = attempt("req-1", None, "failed", None);
+    let new_tip = attempt("req-2", Some("req-1"), "pending", None);
     let old_state = derive_attempt(&old_tip);
     let new_state = derive_attempt(&new_tip);
 
@@ -349,7 +470,7 @@ fn turn_replacement_retry_restart() {
 #[test]
 fn turn_replacement_supersession_rank() {
     let view = AttemptView {
-        request: req_superseded("processing"),
+        request: req_superseded("req-1", None, "processing"),
         response: resp(ResponseStatus::Streaming),
     };
     assert_eq!(derive_attempt(&view).rank(), 2);

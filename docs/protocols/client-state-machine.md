@@ -1,10 +1,15 @@
 # Client Turn Observation Protocol
 
-Formal source of truth: `crates/defra-agent/proofs/Proofs/Client.lean`
+Formal derivation reference: `crates/defra-agent/proofs/Proofs/Client.lean`
 
 This document explains the formal model for client implementers building
 CLI, web, mobile, or desktop applications against the defra-agent
 document surface.
+
+The Lean file captures the client-state derivation rules and their
+monotonicity/terminality properties. The Rust reference implementation
+additionally resolves the retry tip from `request_id` /
+`retry_parent_request` links before applying those rules.
 
 ## Turn State
 
@@ -31,6 +36,9 @@ collapse into one logical user turn.
 The tip of the chain (the attempt the client renders) is the most
 recent attempt: the one whose `request_id` is not referenced as
 `retry_parent_request` by any other observed attempt.
+
+The Rust reference implementation derives this tip from the request-link
+metadata rather than trusting input slice order.
 
 ## Derivation Rules
 
@@ -67,6 +75,10 @@ than the request under P2P replication lag. Trust the response:
 ### 4. No response (lowest priority)
 
 Non-terminal request, no response observed → `waitingForClaim`.
+
+In Rust, `lifecycle_state` is parsed into a closed
+`RequestLifecycleState` enum first so persisted request lifecycle values
+cannot be confused with request or response `status` strings.
 
 ## Current Deviations
 
@@ -140,13 +152,15 @@ For turn-scoped observation, filter `AgentRequest` by
 Polling interval: 500-1000ms for active turns (streaming), 5-10s for
 idle session monitoring.
 
-## Proven Properties
+## Formal Notes
 
-These are proven in `Proofs/Client.lean`:
+T2-T5 are proven in `Proofs/Client.lean`. T1 is documented there as a
+merge-layer assumption; the current theorem only states that
+`deriveTurn` is deterministic on an already-normalized attempt list.
 
 | Property | Statement |
 |---|---|
-| T1 Convergence | Pure function of input; same documents → same state |
+| T1 Merge assumption | Equivalent merged observations are expected to converge before derivation; Lean currently records only `deriveTurn` determinism |
 | T2 Monotonicity | Valid server transitions never decrease client rank |
 | T3 Terminal coherence | Client terminal ↔ server effectively terminal |
 | T4 Totality | Defined for every observation with ≥1 attempt |
@@ -197,7 +211,7 @@ function deriveAttempt(
 ### Rust
 
 See `crates/defra-agent/src/client_protocol.rs` for the full reference
-implementation, including types, the derivation function, and chain
-resolution. The 32-test conformance suite in
+implementation, including typed lifecycle parsing, the derivation
+function, and metadata-based chain resolution. The conformance suite in
 `crates/defra-agent/src/client_protocol/tests.rs` exercises the full
 derivation table plus T2/T3/T5 spot checks against the Lean model.

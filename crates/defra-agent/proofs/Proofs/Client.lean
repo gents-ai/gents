@@ -106,9 +106,10 @@ def deriveAttempt : AttemptView → ClientTurnState
 
 /-- Derive client turn state from a full turn observation.
 
-    The turn is a retry chain: a list of attempts ordered root-first,
-    tip-last. The tip is the most recent attempt — the one the client
-    should render.
+    The turn is a retry chain that has already been normalized by the
+    merge layer into root-first, tip-last order. The Rust reference
+    implementation performs that tip resolution from request metadata
+    before applying the same derivation rules.
 
     Returns `none` for empty observations (no turn exists). -/
 def deriveTurn : List AttemptView → Option ClientTurnState
@@ -547,27 +548,28 @@ theorem terminal_coherence (view : AttemptView) :
     · -- isSuperseded = true
       simp [deriveAttempt, h_super, ClientTurnState.isTerminal]
 
-/-! ## Theorem T1: Convergence
+/-! ## T1: Merge Assumption / Determinism
 
     Under the merged-snapshot assumption (DefraDB delivers CRDT-merged
-    latest per document), `deriveTurn` is a deterministic function of
-    its input. Observation order does not affect the result.
+    latest per document), equivalent document sets are expected to be
+    normalized to the same observation list before `deriveTurn` runs.
 
     The proof below is `rfl` — it is purely declarative, restating that
-    a pure function is deterministic. The real convergence guarantee is
-    carried by DefraDB's CRDT merge semantics, which live outside this
-    Lean model. This theorem's purpose is to document the dependency so
-    a reader knows convergence is *assumed* here, not *proven* here.
+    a pure function is deterministic on that normalized list. The real
+    convergence guarantee is carried by DefraDB's CRDT merge semantics,
+    which live outside this Lean model. This theorem's purpose is to
+    document the dependency so a reader knows merge convergence is
+    *assumed* here, not *proven* here.
 -/
 
-/-- T1: deriveTurn is deterministic (pure function of input). -/
+/-- T1 support: deriveTurn is deterministic on a normalized observation list. -/
 theorem deriveTurn_deterministic
     (attempts : List AttemptView) :
     deriveTurn attempts = deriveTurn attempts := rfl
 
 /-! ## Theorem T5: Turn Replacement
 
-    Adding a retry attempt to the chain changes the tip.
+    Adding a retry attempt to the end of a normalized chain changes the tip.
     deriveTurn of the extended chain equals deriveAttempt of the new tip.
 
     The rank relationship depends on the scenario:

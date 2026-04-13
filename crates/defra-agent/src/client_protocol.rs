@@ -8,6 +8,10 @@
 //! stale streaming responses from demoting a failed/completed request, and
 //! preserves the monotonicity property proven in the Lean model.
 
+use std::collections::HashSet;
+use std::error::Error;
+use std::fmt::{Display, Formatter};
+
 /// The 5 client-visible turn states, mirroring `ClientTurnState` in Client.lean.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientTurnState {
@@ -36,6 +40,74 @@ impl ClientTurnState {
     }
 }
 
+/// Persisted request lifecycle state, distinct from request `status`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestLifecycleState {
+    Pending,
+    Claimed,
+    Processing,
+    InputRequired,
+    Completed,
+    Failed,
+    Superseded,
+    Dead,
+}
+
+impl RequestLifecycleState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Claimed => "claimed",
+            Self::Processing => "processing",
+            Self::InputRequired => "inputRequired",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Superseded => "superseded",
+            Self::Dead => "dead",
+        }
+    }
+}
+
+/// Parse error for invalid request lifecycle strings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidRequestLifecycleState {
+    state: String,
+}
+
+impl InvalidRequestLifecycleState {
+    pub fn value(&self) -> &str {
+        &self.state
+    }
+}
+
+impl Display for InvalidRequestLifecycleState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid request lifecycle state: {}", self.state)
+    }
+}
+
+impl Error for InvalidRequestLifecycleState {}
+
+impl TryFrom<&str> for RequestLifecycleState {
+    type Error = InvalidRequestLifecycleState;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "claimed" => Ok(Self::Claimed),
+            "processing" => Ok(Self::Processing),
+            "inputRequired" => Ok(Self::InputRequired),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "superseded" => Ok(Self::Superseded),
+            "dead" => Ok(Self::Dead),
+            _ => Err(InvalidRequestLifecycleState {
+                state: value.to_string(),
+            }),
+        }
+    }
+}
+
 /// Response status as observed by the client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResponseStatus {
@@ -47,7 +119,9 @@ pub enum ResponseStatus {
 /// Snapshot of an AgentRequest, containing only derivation-relevant fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestSnapshot {
-    pub lifecycle_state: String,
+    pub request_id: String,
+    pub retry_parent_request: Option<String>,
+    pub lifecycle_state: RequestLifecycleState,
     pub is_superseded: bool,
 }
 
@@ -76,13 +150,14 @@ pub fn derive_attempt(view: &AttemptView) -> ClientTurnState {
         return ClientTurnState::Superseded;
     }
 
-    match view.request.lifecycle_state.as_str() {
-        "superseded" => ClientTurnState::Superseded,
-        "completed" => ClientTurnState::Completed,
-        "failed" => ClientTurnState::Failed,
-        "dead" => ClientTurnState::Failed,
-        // Non-terminal: defer to response
-        _ => match &view.response {
+    match view.request.lifecycle_state {
+        RequestLifecycleState::Superseded => ClientTurnState::Superseded,
+        RequestLifecycleState::Completed => ClientTurnState::Completed,
+        RequestLifecycleState::Failed | RequestLifecycleState::Dead => ClientTurnState::Failed,
+        RequestLifecycleState::Pending
+        | RequestLifecycleState::Claimed
+        | RequestLifecycleState::Processing
+        | RequestLifecycleState::InputRequired => match &view.response {
             Some(resp) => match resp.status {
                 ResponseStatus::Complete => ClientTurnState::Completed,
                 ResponseStatus::Error => ClientTurnState::Failed,
@@ -93,12 +168,37 @@ pub fn derive_attempt(view: &AttemptView) -> ClientTurnState {
     }
 }
 
+fn resolve_tip<'a>(attempts: &'a [AttemptView]) -> Option<&'a AttemptView> {
+    if attempts.is_empty() {
+        return None;
+    }
+
+    let referenced_request_ids: HashSet<&str> = attempts
+        .iter()
+        .filter_map(|attempt| attempt.request.retry_parent_request.as_deref())
+        .filter(|request_id| !request_id.is_empty())
+        .collect();
+
+    attempts
+        .iter()
+        .filter(|attempt| !referenced_request_ids.contains(attempt.request.request_id.as_str()))
+        .max_by(|left, right| left.request.request_id.cmp(&right.request.request_id))
+        .or_else(|| {
+            // Malformed observations can contain cycles or multiple disconnected
+            // attempts. Fall back to a deterministic request_id ordering rather
+            // than reintroducing slice-order dependence.
+            attempts
+                .iter()
+                .max_by(|left, right| left.request.request_id.cmp(&right.request.request_id))
+        })
+}
+
 /// Derive client turn state from a full retry chain.
 ///
-/// The last element is the tip (most recent attempt). Returns `None`
-/// for empty chains.
+/// Resolves the tip using `request_id` / `retry_parent_request` links and
+/// derives the state from that attempt. Returns `None` for empty chains.
 pub fn derive_turn(attempts: &[AttemptView]) -> Option<ClientTurnState> {
-    attempts.last().map(derive_attempt)
+    resolve_tip(attempts).map(derive_attempt)
 }
 
 #[cfg(test)]
