@@ -5,6 +5,7 @@
 
 pub mod agent;
 pub mod backend_registry;
+pub mod client_protocol;
 pub mod compaction;
 pub mod config;
 pub mod document_config;
