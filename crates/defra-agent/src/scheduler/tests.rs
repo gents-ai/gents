@@ -490,7 +490,12 @@ async fn scheduled_execution_succeeds_without_external_ops_service() {
     .expect("scheduled execution should not depend on external ops service");
 }
 
-async fn insert_due_task(node: &EmbeddedNode, task_id: &str, behavior_id: &str, prompt: &str) {
+async fn insert_due_task(
+    node: &EmbeddedNode,
+    task_id: &str,
+    behavior_id: &str,
+    prompt: &str,
+) -> String {
     let mutation = format!(
         r#"mutation {{
             create_ScheduledTask(input: {{
@@ -511,6 +516,223 @@ async fn insert_due_task(node: &EmbeddedNode, task_id: &str, behavior_id: &str, 
     );
     let resp = node.execute(&mutation).await;
     assert!(!resp.has_errors(), "{:?}", resp.errors);
+    let data = resp.data.clone();
+    ["create_ScheduledTask", "add_ScheduledTask"]
+        .iter()
+        .find_map(|field| {
+            data.as_ref()
+                .and_then(|data| data.get(*field))
+                .and_then(|value| {
+                    value
+                        .get("_docID")
+                        .and_then(serde_json::Value::as_str)
+                        .or_else(|| {
+                            value
+                                .as_array()
+                                .and_then(|rows| rows.first())
+                                .and_then(|row| row.get("_docID"))
+                                .and_then(serde_json::Value::as_str)
+                        })
+                })
+        })
+        .unwrap_or_else(|| panic!("ScheduledTask create should return _docID: {:?}", data))
+        .to_string()
+}
+
+async fn query_task_row(
+    node: &EmbeddedNode,
+    task_id: &str,
+    show_deleted: bool,
+) -> Option<serde_json::Value> {
+    let show_deleted_arg = if show_deleted {
+        "showDeleted: true, "
+    } else {
+        ""
+    };
+    let query = format!(
+        r#"query {{
+            ScheduledTask(
+                {show_deleted_arg}filter: {{ task_id: {{ _eq: "{task_id}" }} }},
+                limit: 4
+            ) {{
+                _docID
+                _deleted
+                task_id
+                name
+                behavior_id
+                prompt
+                interval_secs
+                enabled
+                next_run_at
+                last_run_at
+                last_status
+                last_error
+                run_count
+            }}
+        }}"#,
+        show_deleted_arg = show_deleted_arg,
+        task_id = escape_graphql_string(task_id),
+    );
+    let response = node.execute(&query).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("ScheduledTask"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .cloned()
+}
+
+async fn delete_task(node: &EmbeddedNode, doc_id: &str) {
+    let mutation = format!(
+        r#"mutation {{ delete_ScheduledTask(docID: "{doc_id}") {{ _docID }} }}"#,
+        doc_id = escape_graphql_string(doc_id),
+    );
+    let response = node.execute(&mutation).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+}
+
+#[tokio::test]
+async fn scheduled_execution_updates_live_task_runtime_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let mock_endpoint = MockCompletionEndpoint::start("scheduled-model", "scheduled-ok").unwrap();
+    insert_backend(node.as_ref(), "backend-runtime", mock_endpoint.endpoint()).await;
+
+    let identity = Arc::new(SimpleIdentity::new(
+        "scheduled-test",
+        dir.path().join("identity.key"),
+        None,
+    ));
+    let behavior = BehaviorConfig {
+        name: "did:defra-agent:scheduled-test:default".to_string(),
+        identity,
+        backend_id: Some("backend-runtime".to_string()),
+        backend_provider_kind: BackendProviderKind::OpenAiCompatible,
+        backend_endpoint: mock_endpoint.endpoint().to_string(),
+        backend_api_key: None,
+        backend_api_key_env_var: None,
+        backend_supports_tool_calls: true,
+        backend_supports_streaming: true,
+        backend_supports_structured_outputs: false,
+        backend_supports_json_schema: false,
+        model_name: "scheduled-model".to_string(),
+        context_window: DEFAULT_CONTEXT_WINDOW,
+        max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
+        max_turns: DEFAULT_MAX_TURNS,
+        system_prompt: "You are a scheduler test agent.".to_string(),
+        tools: BehaviorToolConfig::meta_only(),
+        compaction_threshold: DEFAULT_COMPACTION_THRESHOLD,
+        compaction_strategy: CompactionStrategy::StripThenSummarize,
+        stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
+        deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
+    };
+
+    let tool_surface = behavior.tools.resolve(node.as_ref()).await.unwrap();
+    let tool_runtime = ToolRuntimeContext::oneshot(node.clone());
+    insert_due_task(
+        node.as_ref(),
+        "task-runtime-state",
+        &behavior.name,
+        "Say scheduled-ok",
+    )
+    .await;
+    let task = ScheduledTask::from_value(
+        &query_task_row(node.as_ref(), "task-runtime-state", false)
+            .await
+            .expect("task should exist"),
+    )
+    .expect("task row should parse");
+
+    super::execution::execute_task_standalone(
+        &task,
+        &behavior,
+        &tool_surface,
+        &tool_runtime,
+        &node,
+        Arc::new(BackendTracker::new()),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("scheduled execution should succeed");
+
+    let updated = query_task_row(node.as_ref(), "task-runtime-state", false)
+        .await
+        .expect("updated task should exist");
+    assert_eq!(
+        updated
+            .get("last_status")
+            .and_then(serde_json::Value::as_str),
+        Some("success")
+    );
+    assert_eq!(
+        updated
+            .get("last_error")
+            .and_then(serde_json::Value::as_str),
+        Some("")
+    );
+    assert_eq!(
+        updated.get("run_count").and_then(serde_json::Value::as_i64),
+        Some(1)
+    );
+    let last_run_at = updated
+        .get("last_run_at")
+        .and_then(serde_json::Value::as_str)
+        .expect("last_run_at should be set");
+    let next_run_at = updated
+        .get("next_run_at")
+        .and_then(serde_json::Value::as_str)
+        .expect("next_run_at should be set");
+    let last_run = chrono::DateTime::parse_from_rfc3339(last_run_at).unwrap();
+    let next_run = chrono::DateTime::parse_from_rfc3339(next_run_at).unwrap();
+    assert!(next_run > last_run);
+}
+
+#[tokio::test]
+async fn stale_runtime_bookkeeping_is_skipped_after_task_delete() {
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let doc_id = insert_due_task(
+        node.as_ref(),
+        "task-stale-delete",
+        "did:defra-agent:scheduled-test:default",
+        "Say scheduled-ok",
+    )
+    .await;
+    let task = ScheduledTask::from_value(
+        &query_task_row(node.as_ref(), "task-stale-delete", false)
+            .await
+            .expect("task should exist"),
+    )
+    .expect("task row should parse");
+
+    delete_task(node.as_ref(), &doc_id).await;
+    super::update_task_runtime_state(&node, &task, "success", None)
+        .await
+        .expect("deleted task bookkeeping should be skipped cleanly");
+
+    assert!(
+        query_task_row(node.as_ref(), "task-stale-delete", false)
+            .await
+            .is_none(),
+        "deleted task should not reappear in live queries"
+    );
+    let deleted = query_task_row(node.as_ref(), "task-stale-delete", true)
+        .await
+        .expect("showDeleted should return tombstone");
+    assert_eq!(
+        deleted.get("_deleted").and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+    assert!(deleted.get("last_status").is_none() || deleted.get("last_status").unwrap().is_null());
+    assert_eq!(
+        deleted.get("run_count").and_then(serde_json::Value::as_i64),
+        Some(0)
+    );
 }
 
 #[tokio::test]

@@ -198,30 +198,6 @@ impl Scheduler {
     }
 
     async fn update_task_failure(&self, task: &ScheduledTask, error_msg: &str) -> Result<()> {
-        let now = Utc::now();
-        let next_run = now + chrono::Duration::seconds(task.interval_secs);
-        let now_str = now.to_rfc3339_opts(SecondsFormat::Secs, true);
-        let next_str = next_run.to_rfc3339_opts(SecondsFormat::Secs, true);
-        let new_run_count = task.run_count + 1;
-
-        let mutation = format!(
-            r#"mutation {{ update_ScheduledTask(docID: "{doc_id}", input: {{last_status: "error", last_run_at: "{last_run}", next_run_at: "{next_run}", run_count: {count}, last_error: "{error}"}}) {{ _docID }} }}"#,
-            doc_id = task.doc_id,
-            last_run = now_str,
-            next_run = next_str,
-            count = new_run_count,
-            error = escape_graphql_string(error_msg),
-        );
-
-        let resp = self.node.execute(&mutation).await;
-        if resp.has_errors() {
-            anyhow::bail!(
-                "failed to update task '{}' failure: {:?}",
-                task.name,
-                resp.errors
-            );
-        }
-
-        Ok(())
+        super::update_task_runtime_state(&self.node, task, "error", Some(error_msg)).await
     }
 }

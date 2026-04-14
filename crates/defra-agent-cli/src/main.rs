@@ -25,7 +25,7 @@ use defra_agent::{
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use tokio::sync::watch;
 
 mod desired_state;
@@ -817,6 +817,289 @@ impl ConfigAccess {
             }
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct ExistingDocumentRef {
+    doc_id: String,
+    deleted: bool,
+}
+
+async fn query_documents_by_unique_value(
+    access: &ConfigAccess,
+    collection_name: &str,
+    unique_field: &str,
+    unique_value: &str,
+    show_deleted: bool,
+) -> Result<Vec<ExistingDocumentRef>> {
+    let show_deleted_arg = if show_deleted {
+        "showDeleted: true, "
+    } else {
+        ""
+    };
+    let query = format!(
+        r#"{{
+            {collection_name}(
+                {show_deleted_arg}filter: {{ {unique_field}: {{ _eq: "{unique_value}" }} }},
+                limit: 16
+            ) {{
+                _docID
+                _deleted
+            }}
+        }}"#,
+        collection_name = collection_name,
+        show_deleted_arg = show_deleted_arg,
+        unique_field = unique_field,
+        unique_value = escape_graphql_string(unique_value),
+    );
+    let response = access.execute(&query).await?;
+    let rows = response
+        .get("data")
+        .and_then(|data| data.get(collection_name))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(ExistingDocumentRef {
+                doc_id: row
+                    .get("_docID")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "{collection_name} lookup row missing _docID for {unique_field}={unique_value}: {row}"
+                        )
+                    })?
+                    .to_string(),
+                deleted: row.get("_deleted").and_then(Value::as_bool).unwrap_or(false),
+            })
+        })
+        .collect()
+}
+
+fn select_existing_document(
+    collection_name: &str,
+    unique_field: &str,
+    unique_value: &str,
+    rows: &[ExistingDocumentRef],
+) -> Result<Option<ExistingDocumentRef>> {
+    let live_rows = rows.iter().filter(|row| !row.deleted).collect::<Vec<_>>();
+    if live_rows.len() > 1 {
+        anyhow::bail!(
+            "multiple live {collection_name} documents share {unique_field}={unique_value}"
+        );
+    }
+    if let Some(row) = live_rows.first() {
+        return Ok(Some((*row).clone()));
+    }
+
+    let deleted_rows = rows.iter().filter(|row| row.deleted).collect::<Vec<_>>();
+    if deleted_rows.len() > 1 {
+        anyhow::bail!(
+            "multiple deleted {collection_name} tombstones share {unique_field}={unique_value}"
+        );
+    }
+
+    Ok(deleted_rows.first().map(|row| (*row).clone()))
+}
+
+async fn write_scheduled_task_document(
+    access: &ConfigAccess,
+    task_id: &str,
+    add_doc: &Value,
+    update_doc: &Value,
+) -> Result<String> {
+    let existing = select_existing_document(
+        "ScheduledTask",
+        "task_id",
+        task_id,
+        &query_documents_by_unique_value(access, "ScheduledTask", "task_id", task_id, true).await?,
+    )?;
+
+    let Some(existing) = existing.as_ref() else {
+        return create_scheduled_task_document(access, task_id, add_doc).await;
+    };
+    if existing.deleted {
+        return create_scheduled_task_document(access, task_id, add_doc).await;
+    }
+
+    let input_literal = graphql_input_literal(update_doc)?;
+    let mutation = format!(
+        r#"mutation {{
+            update_ScheduledTask(docID: "{doc_id}", input: {input_literal}) {{ _docID }}
+        }}"#,
+        doc_id = escape_graphql_string(&existing.doc_id),
+        input_literal = input_literal,
+    );
+
+    let response = access.execute(&mutation).await?;
+    match extract_mutation_doc_id(&response, "ScheduledTask") {
+        Ok(doc_id) => Ok(doc_id),
+        Err(extract_error) => {
+            let current = select_matching_scheduled_task_row(access, task_id, update_doc).await?;
+            if let Some(row) = current {
+                let current_doc_id = row
+                    .get("_docID")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let deleted = row
+                    .get("_deleted")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                if !deleted
+                    && current_doc_id == existing.doc_id
+                    && scheduled_task_row_matches_expected(&row, update_doc)?
+                {
+                    return Ok(current_doc_id);
+                }
+                return Err(anyhow::anyhow!(
+                    "{}\nScheduledTask post-update row did not converge for task_id {}: {}",
+                    extract_error,
+                    task_id,
+                    row
+                ));
+            }
+            Err(anyhow::anyhow!(
+                "{}\nScheduledTask task_id {} has no row after update attempt",
+                extract_error,
+                task_id
+            ))
+        }
+    }
+}
+
+async fn create_scheduled_task_document(
+    access: &ConfigAccess,
+    task_id: &str,
+    add_doc: &Value,
+) -> Result<String> {
+    let input_literal = graphql_input_literal(add_doc)?;
+    let mutation = format!(
+        r#"mutation {{
+            create_ScheduledTask(input: {input_literal}) {{ _docID }}
+        }}"#,
+        input_literal = input_literal,
+    );
+    let response = access.execute(&mutation).await?;
+    match extract_mutation_doc_id(&response, "ScheduledTask") {
+        Ok(doc_id) => Ok(doc_id),
+        Err(extract_error) => {
+            let current = select_matching_scheduled_task_row(access, task_id, add_doc).await?;
+            if let Some(row) = current {
+                let deleted = row
+                    .get("_deleted")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                if !deleted && scheduled_task_row_matches_expected(&row, add_doc)? {
+                    return row
+                        .get("_docID")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "ScheduledTask live row missing _docID after recreate: {}",
+                                row
+                            )
+                        });
+                }
+                return Err(anyhow::anyhow!(
+                    "{}\nScheduledTask post-create row did not converge for task_id {}: {}",
+                    extract_error,
+                    task_id,
+                    row
+                ));
+            }
+            Err(anyhow::anyhow!(
+                "{}\nScheduledTask task_id {} has no live row after create attempt",
+                extract_error,
+                task_id
+            ))
+        }
+    }
+}
+
+async fn select_matching_scheduled_task_row(
+    access: &ConfigAccess,
+    task_id: &str,
+    expected: &Value,
+) -> Result<Option<Value>> {
+    let rows = query_scheduled_task_rows(access, task_id, true).await?;
+    let live_rows = rows
+        .into_iter()
+        .filter(|row| row.get("_deleted").and_then(Value::as_bool) != Some(true))
+        .collect::<Vec<_>>();
+    if live_rows.len() > 1 {
+        anyhow::bail!(
+            "multiple live ScheduledTask rows share task_id {} during post-write verification",
+            task_id
+        );
+    }
+    if let Some(row) = live_rows.into_iter().next() {
+        if scheduled_task_row_matches_expected(&row, expected)? {
+            return Ok(Some(row));
+        }
+    }
+    Ok(None)
+}
+
+async fn query_scheduled_task_rows(
+    access: &ConfigAccess,
+    task_id: &str,
+    show_deleted: bool,
+) -> Result<Vec<Value>> {
+    let show_deleted_arg = if show_deleted {
+        "showDeleted: true, "
+    } else {
+        ""
+    };
+    let query = format!(
+        r#"{{
+            ScheduledTask(
+                {show_deleted_arg}filter: {{ task_id: {{ _eq: "{task_id}" }} }},
+                limit: 4
+            ) {{
+                _docID
+                _deleted
+                task_id
+                agent_did
+                behavior_id
+                name
+                prompt
+                interval_secs
+                enabled
+                next_run_at
+                last_run_at
+                last_status
+                last_error
+                run_count
+                created_at
+                updated_at
+            }}
+        }}"#,
+        show_deleted_arg = show_deleted_arg,
+        task_id = escape_graphql_string(task_id),
+    );
+    let response = access.execute(&query).await?;
+    Ok(response
+        .get("data")
+        .and_then(|data| data.get("ScheduledTask"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default())
+}
+
+fn scheduled_task_row_matches_expected(row: &Value, expected: &Value) -> Result<bool> {
+    let expected = expected
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("ScheduledTask expected document must be an object"))?;
+    let actual = row
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("ScheduledTask row must be an object"))?;
+    Ok(expected
+        .iter()
+        .all(|(key, value)| actual.get(key).is_some_and(|actual| actual == value)))
 }
 
 fn metrics_router(graphql: String) -> Router {
@@ -2538,6 +2821,7 @@ async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> Result<()> {
 
 async fn scheduled_task_set(args: ScheduledTaskSetArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let access = ConfigAccess::Graphql(graphql.clone());
     let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
     let task_id = require_non_empty("task_id", &args.task_id)?;
     let name = require_non_empty("name", &args.name)?;
@@ -2550,73 +2834,30 @@ async fn scheduled_task_set(args: ScheduledTaskSetArgs) -> Result<()> {
         resolve_scheduled_task_behavior_id(&graphql, &agent_did, args.behavior_id.as_deref())
             .await?;
     let next_run_at = normalize_optional_rfc3339(args.next_run_at.as_deref())?;
-    let next_run_at_field = nullable_string_field("next_run_at", next_run_at.as_deref());
-
-    let add_fields = vec![
-        Some(format!(r#"task_id: "{}""#, escape_graphql_string(task_id))),
-        Some(format!(
-            r#"agent_did: "{}""#,
-            escape_graphql_string(&agent_did)
-        )),
-        Some(format!(
-            r#"behavior_id: "{}""#,
-            escape_graphql_string(&behavior_id)
-        )),
-        Some(format!(r#"name: "{}""#, escape_graphql_string(name))),
-        Some(format!(r#"prompt: "{}""#, escape_graphql_string(&prompt))),
-        Some(format!("interval_secs: {}", args.interval_secs)),
-        Some(format!(
-            "enabled: {}",
-            if args.enabled { "true" } else { "false" }
-        )),
-        Some(next_run_at_field.clone()),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join(",\n                    ");
-
-    let update_fields = vec![
-        Some(format!(
-            r#"agent_did: "{}""#,
-            escape_graphql_string(&agent_did)
-        )),
-        Some(format!(
-            r#"behavior_id: "{}""#,
-            escape_graphql_string(&behavior_id)
-        )),
-        Some(format!(r#"name: "{}""#, escape_graphql_string(name))),
-        Some(format!(r#"prompt: "{}""#, escape_graphql_string(&prompt))),
-        Some(format!("interval_secs: {}", args.interval_secs)),
-        Some(format!(
-            "enabled: {}",
-            if args.enabled { "true" } else { "false" }
-        )),
-        Some(next_run_at_field),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join(",\n                    ");
-
-    let mutation = format!(
-        r#"mutation {{
-            upsert_ScheduledTask(
-                filter: {{ task_id: {{ _eq: "{task_id}" }} }},
-                add: {{
-                    {add_fields}
-                }},
-                update: {{
-                    {update_fields}
-                }}
-            ) {{ _docID }}
-        }}"#,
-        task_id = escape_graphql_string(task_id),
-        add_fields = add_fields,
-        update_fields = update_fields,
+    let mut add_doc = Map::new();
+    add_doc.insert("task_id".to_string(), Value::String(task_id.to_string()));
+    add_doc.insert("agent_did".to_string(), Value::String(agent_did.clone()));
+    add_doc.insert(
+        "behavior_id".to_string(),
+        Value::String(behavior_id.clone()),
     );
-    let response = post_graphql(&graphql, &mutation).await?;
-    let doc_id = extract_mutation_doc_id(&response, "ScheduledTask")?;
+    add_doc.insert("name".to_string(), Value::String(name.to_string()));
+    add_doc.insert("prompt".to_string(), Value::String(prompt.clone()));
+    add_doc.insert("interval_secs".to_string(), Value::from(args.interval_secs));
+    add_doc.insert("enabled".to_string(), Value::Bool(args.enabled));
+    if let Some(next_run_at) = next_run_at.as_ref() {
+        add_doc.insert(
+            "next_run_at".to_string(),
+            Value::String(next_run_at.clone()),
+        );
+    }
+
+    let update_doc = add_doc.clone();
+
+    let add_doc = Value::Object(add_doc);
+    let update_doc = Value::Object(update_doc);
+
+    let doc_id = write_scheduled_task_document(&access, task_id, &add_doc, &update_doc).await?;
     let output = json!({
         "doc_id": doc_id,
         "task_id": task_id,
@@ -3984,6 +4225,25 @@ async fn apply_import_collection(
                 )
             })?;
         let add_doc = sanitize_import_document(collection_name, doc, false)?;
+        if override_existing && collection_name == "ScheduledTask" {
+            let update_doc = sanitize_import_document(collection_name, doc, true)?;
+            let doc_id = write_scheduled_task_document(access, unique_value, &add_doc, &update_doc)
+                .await
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "importing {collection_name} {} failed: {error}",
+                        unique_value
+                    )
+                })?;
+            if doc_id.trim().is_empty() {
+                anyhow::bail!(
+                    "importing {collection_name} {} returned an empty _docID",
+                    unique_value
+                );
+            }
+            continue;
+        }
+
         let add_literal = graphql_input_literal(&add_doc)?;
         let mutation = if override_existing {
             let update_doc = sanitize_import_document(collection_name, doc, true)?;
@@ -4614,6 +4874,7 @@ fn extract_mutation_doc_id(response: &Value, collection_name: &str) -> Result<St
         .ok_or_else(|| anyhow::anyhow!("graphql response missing data: {response}"))?;
     for field_name in [
         format!("upsert_{collection_name}"),
+        format!("update_{collection_name}"),
         format!("create_{collection_name}"),
         format!("add_{collection_name}"),
     ] {

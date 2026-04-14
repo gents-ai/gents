@@ -350,28 +350,5 @@ async fn update_task_success_standalone(
     task: &ScheduledTask,
     node: &Arc<EmbeddedNode>,
 ) -> Result<()> {
-    let now = Utc::now();
-    let next_run = now + chrono::Duration::seconds(task.interval_secs);
-    let now_str = now.to_rfc3339_opts(SecondsFormat::Secs, true);
-    let next_str = next_run.to_rfc3339_opts(SecondsFormat::Secs, true);
-    let new_run_count = task.run_count + 1;
-
-    let mutation = format!(
-        r#"mutation {{ update_ScheduledTask(docID: "{doc_id}", input: {{last_status: "success", last_run_at: "{last_run}", next_run_at: "{next_run}", run_count: {count}, last_error: ""}}) {{ _docID }} }}"#,
-        doc_id = task.doc_id,
-        last_run = now_str,
-        next_run = next_str,
-        count = new_run_count,
-    );
-
-    let resp = node.execute(&mutation).await;
-    if resp.has_errors() {
-        anyhow::bail!(
-            "failed to update task '{}' success: {:?}",
-            task.name,
-            resp.errors
-        );
-    }
-
-    Ok(())
+    super::update_task_runtime_state(node, task, "success", None).await
 }
