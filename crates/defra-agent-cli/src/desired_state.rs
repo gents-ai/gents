@@ -12,6 +12,10 @@ const AGENT_BEHAVIORS_FILE: &str = "agent-behaviors.json";
 const TOOL_SELECTIONS_FILE: &str = "tool-selections.json";
 const INFERENCE_BACKENDS_FILE: &str = "inference-backends.json";
 const INFERENCE_PROFILES_FILE: &str = "inference-profiles.json";
+const TOOL_SERVICES_FILE: &str = "tool-services.json";
+const TOOL_SERVICES_DIR: &str = "tool-services";
+const SCHEDULED_TASKS_FILE: &str = "scheduled-tasks.json";
+const SCHEDULED_TASKS_DIR: &str = "scheduled-tasks";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -92,6 +96,31 @@ pub(crate) struct DesiredInferenceProfile {
     pub(crate) deadline_duration_secs: Option<i64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DesiredToolServiceRegistry {
+    pub(crate) service_id: String,
+    pub(crate) display_name: Option<String>,
+    pub(crate) description: Option<String>,
+    pub(crate) hostname: Option<String>,
+    pub(crate) tailscale_ip: Option<String>,
+    pub(crate) lan_ip: Option<String>,
+    pub(crate) mcp_port: Option<i64>,
+    pub(crate) mcp_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DesiredScheduledTask {
+    pub(crate) task_id: String,
+    pub(crate) agent_did: String,
+    pub(crate) behavior_id: String,
+    pub(crate) name: String,
+    pub(crate) prompt: String,
+    pub(crate) interval_secs: i64,
+    pub(crate) enabled: bool,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct DesiredStateManifest {
     pub(crate) agent_principal: DesiredAgentPrincipal,
@@ -99,6 +128,8 @@ pub(crate) struct DesiredStateManifest {
     pub(crate) tool_selections: Vec<DesiredToolSelection>,
     pub(crate) inference_backends: Vec<DesiredInferenceBackend>,
     pub(crate) inference_profiles: Vec<DesiredInferenceProfile>,
+    pub(crate) tool_service_registries: Vec<DesiredToolServiceRegistry>,
+    pub(crate) scheduled_tasks: Vec<DesiredScheduledTask>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -135,6 +166,8 @@ pub(crate) struct DesiredStateDiffCollections {
     pub(crate) tool_selections: DesiredStateCollectionDiff,
     pub(crate) inference_backends: DesiredStateCollectionDiff,
     pub(crate) inference_profiles: DesiredStateCollectionDiff,
+    pub(crate) tool_service_registries: DesiredStateCollectionDiff,
+    pub(crate) scheduled_tasks: DesiredStateCollectionDiff,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -144,6 +177,8 @@ pub(crate) struct DesiredStateDiffCollectionsCounts {
     pub(crate) tool_selections: DesiredStateDiffCounts,
     pub(crate) inference_backends: DesiredStateDiffCounts,
     pub(crate) inference_profiles: DesiredStateDiffCounts,
+    pub(crate) tool_service_registries: DesiredStateDiffCounts,
+    pub(crate) scheduled_tasks: DesiredStateDiffCounts,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -164,6 +199,8 @@ pub(crate) struct DesiredStateCounts {
     pub(crate) tool_selections: usize,
     pub(crate) inference_backends: usize,
     pub(crate) inference_profiles: usize,
+    pub(crate) tool_service_registries: usize,
+    pub(crate) scheduled_tasks: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -207,6 +244,8 @@ pub(crate) fn load_manifest_root(
                     tool_selections: 0,
                     inference_backends: 0,
                     inference_profiles: 0,
+                    tool_service_registries: 0,
+                    scheduled_tasks: 0,
                 },
                 errors,
             },
@@ -227,6 +266,8 @@ pub(crate) fn load_manifest_root(
                     tool_selections: 0,
                     inference_backends: 0,
                     inference_profiles: 0,
+                    tool_service_registries: 0,
+                    scheduled_tasks: 0,
                 },
                 errors,
             },
@@ -250,6 +291,20 @@ pub(crate) fn load_manifest_root(
         &mut errors,
     )
     .unwrap_or_default();
+    let tool_service_registries = load_optional_json_collection::<DesiredToolServiceRegistry>(
+        root,
+        TOOL_SERVICES_FILE,
+        TOOL_SERVICES_DIR,
+        &mut errors,
+    )
+    .unwrap_or_default();
+    let scheduled_tasks = load_optional_json_collection::<DesiredScheduledTask>(
+        root,
+        SCHEDULED_TASKS_FILE,
+        SCHEDULED_TASKS_DIR,
+        &mut errors,
+    )
+    .unwrap_or_default();
 
     let counts = DesiredStateCounts {
         agent_principal: usize::from(principal.is_some()),
@@ -257,6 +312,8 @@ pub(crate) fn load_manifest_root(
         tool_selections: tool_selections.as_ref().map_or(0, Vec::len),
         inference_backends: backends.as_ref().map_or(0, Vec::len),
         inference_profiles: inference_profiles.len(),
+        tool_service_registries: tool_service_registries.len(),
+        scheduled_tasks: scheduled_tasks.len(),
     };
 
     let agent_did = principal.as_ref().map(|value| value.agent_did.clone());
@@ -271,6 +328,8 @@ pub(crate) fn load_manifest_root(
                 tool_selections,
                 inference_backends: backends,
                 inference_profiles,
+                tool_service_registries,
+                scheduled_tasks,
             };
             normalize_manifest(&mut manifest);
             validate_manifest(&manifest, &mut errors);
@@ -329,6 +388,24 @@ where
     }
 }
 
+fn load_optional_json_collection<T>(
+    root: &Path,
+    file_name: &str,
+    dir_name: &str,
+    errors: &mut Vec<String>,
+) -> Option<Vec<T>>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    match load_json_collection(root, file_name, dir_name) {
+        Ok(value) => value,
+        Err(error) => {
+            errors.push(error);
+            None
+        }
+    }
+}
+
 fn load_json_file<T>(root: &Path, file_name: &str) -> Result<Option<T>, String>
 where
     T: for<'de> Deserialize<'de>,
@@ -345,6 +422,67 @@ where
         .map_err(|error| format!("invalid {}: {error}", path.display()))
 }
 
+fn load_json_collection<T>(
+    root: &Path,
+    file_name: &str,
+    dir_name: &str,
+) -> Result<Option<Vec<T>>, String>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let file_path = root.join(file_name);
+    let dir_path = root.join(dir_name);
+
+    if file_path.exists() && dir_path.exists() {
+        return Err(format!(
+            "manifest root must not contain both {} and {}",
+            file_path.display(),
+            dir_path.display()
+        ));
+    }
+
+    if file_path.exists() {
+        return load_json_file(root, file_name);
+    }
+
+    if !dir_path.exists() {
+        return Ok(None);
+    }
+    if !dir_path.is_dir() {
+        return Err(format!(
+            "manifest collection path is not a directory: {}",
+            dir_path.display()
+        ));
+    }
+
+    let mut entry_paths = fs::read_dir(&dir_path)
+        .map_err(|error| format!("reading {} failed: {error}", dir_path.display()))?
+        .map(|entry| {
+            entry
+                .map(|entry| entry.path())
+                .map_err(|error| format!("reading {} failed: {error}", dir_path.display()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    entry_paths.sort();
+
+    let mut values = Vec::new();
+    for path in entry_paths {
+        if !path.is_file() {
+            continue;
+        }
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let bytes = fs::read(&path)
+            .map_err(|error| format!("reading {} failed: {error}", path.display()))?;
+        let value = serde_json::from_slice::<T>(&bytes)
+            .map_err(|error| format!("invalid {}: {error}", path.display()))?;
+        values.push(value);
+    }
+
+    Ok(Some(values))
+}
+
 fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Vec<String>) {
     let principal_agent_did = manifest.agent_principal.agent_did.trim();
     if principal_agent_did.is_empty() {
@@ -355,6 +493,8 @@ fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Vec<String>) 
     let mut backend_ids = BTreeSet::new();
     let mut tool_selection_ids = BTreeSet::new();
     let mut profile_ids = BTreeSet::new();
+    let mut service_ids = BTreeSet::new();
+    let mut task_ids = BTreeSet::new();
 
     for backend in &manifest.inference_backends {
         let backend_id = backend.backend_id.trim();
@@ -441,6 +581,36 @@ fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Vec<String>) 
         }
     }
 
+    for service in &manifest.tool_service_registries {
+        let service_id = service.service_id.trim();
+        if service_id.is_empty() {
+            errors.push(
+                "tool-services manifest contains a service with an empty service_id".to_string(),
+            );
+        } else if !service_ids.insert(service_id.to_string()) {
+            errors.push(format!(
+                "duplicate service_id in tool-services manifest: {service_id}"
+            ));
+        }
+
+        if service.mcp_port.unwrap_or_default() <= 0 {
+            errors.push(format!(
+                "service {} in tool-services manifest must contain a positive mcp_port",
+                service.service_id
+            ));
+        }
+
+        if non_empty(&service.hostname).is_none()
+            && non_empty(&service.tailscale_ip).is_none()
+            && non_empty(&service.lan_ip).is_none()
+        {
+            errors.push(format!(
+                "service {} in tool-services manifest must contain at least one of hostname, tailscale_ip, or lan_ip",
+                service.service_id
+            ));
+        }
+    }
+
     for behavior in &manifest.agent_behaviors {
         let behavior_id = behavior.behavior_id.trim();
         if behavior_id.is_empty() {
@@ -499,6 +669,53 @@ fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Vec<String>) 
         }
         None => errors
             .push("agent-principal.json must contain a non-empty default_behavior_id".to_string()),
+    }
+
+    for task in &manifest.scheduled_tasks {
+        let task_id = task.task_id.trim();
+        if task_id.is_empty() {
+            errors
+                .push("scheduled-tasks manifest contains a task with an empty task_id".to_string());
+        } else if !task_ids.insert(task_id.to_string()) {
+            errors.push(format!(
+                "duplicate task_id in scheduled-tasks manifest: {task_id}"
+            ));
+        }
+
+        if !principal_agent_did.is_empty() && task.agent_did.trim() != principal_agent_did {
+            errors.push(format!(
+                "scheduled task {} belongs to {} not {}",
+                task.task_id, task.agent_did, manifest.agent_principal.agent_did
+            ));
+        }
+
+        if task.name.trim().is_empty() {
+            errors.push(format!(
+                "scheduled task {} in scheduled-tasks manifest must contain a non-empty name",
+                task.task_id
+            ));
+        }
+
+        if task.prompt.trim().is_empty() {
+            errors.push(format!(
+                "scheduled task {} in scheduled-tasks manifest must contain a non-empty prompt",
+                task.task_id
+            ));
+        }
+
+        if task.interval_secs <= 0 {
+            errors.push(format!(
+                "scheduled task {} in scheduled-tasks manifest must contain interval_secs > 0",
+                task.task_id
+            ));
+        }
+
+        if !behavior_ids.contains(task.behavior_id.trim()) {
+            errors.push(format!(
+                "scheduled task {} references missing behavior_id {}",
+                task.task_id, task.behavior_id
+            ));
+        }
     }
 }
 
@@ -613,6 +830,43 @@ pub(crate) fn manifest_from_export_bundle(
                 )
             })
             .collect::<Result<Vec<_>>>()?,
+        tool_service_registries: bundle
+            .tool_service_registries
+            .iter()
+            .map(|value| {
+                desired_from_value(
+                    value,
+                    &[
+                        "service_id",
+                        "display_name",
+                        "description",
+                        "hostname",
+                        "tailscale_ip",
+                        "lan_ip",
+                        "mcp_port",
+                        "mcp_path",
+                    ],
+                )
+            })
+            .collect::<Result<Vec<_>>>()?,
+        scheduled_tasks: bundle
+            .scheduled_tasks
+            .iter()
+            .map(|value| {
+                desired_from_value(
+                    value,
+                    &[
+                        "task_id",
+                        "agent_did",
+                        "behavior_id",
+                        "name",
+                        "prompt",
+                        "interval_secs",
+                        "enabled",
+                    ],
+                )
+            })
+            .collect::<Result<Vec<_>>>()?,
     };
     normalize_manifest(&mut manifest);
     Ok(manifest)
@@ -645,6 +899,16 @@ pub(crate) fn export_bundle_from_manifest(
             .collect::<serde_json::Result<Vec<_>>>()?,
         inference_profiles: manifest
             .inference_profiles
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<serde_json::Result<Vec<_>>>()?,
+        tool_service_registries: manifest
+            .tool_service_registries
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<serde_json::Result<Vec<_>>>()?,
+        scheduled_tasks: manifest
+            .scheduled_tasks
             .iter()
             .map(serde_json::to_value)
             .collect::<serde_json::Result<Vec<_>>>()?,
@@ -707,6 +971,28 @@ pub(crate) fn diff_manifests(
             .map(|value| (value.profile_id.clone(), value))
             .collect(),
     );
+    let tool_service_registries = diff_collection(
+        desired
+            .tool_service_registries
+            .iter()
+            .map(|value| (value.service_id.clone(), value))
+            .collect(),
+        live.tool_service_registries
+            .iter()
+            .map(|value| (value.service_id.clone(), value))
+            .collect(),
+    );
+    let scheduled_tasks = diff_collection(
+        desired
+            .scheduled_tasks
+            .iter()
+            .map(|value| (value.task_id.clone(), value))
+            .collect(),
+        live.scheduled_tasks
+            .iter()
+            .map(|value| (value.task_id.clone(), value))
+            .collect(),
+    );
 
     let counts = DesiredStateDiffCollectionsCounts {
         agent_principal: agent_principal.counts(),
@@ -714,6 +1000,8 @@ pub(crate) fn diff_manifests(
         tool_selections: tool_selections.counts(),
         inference_backends: inference_backends.counts(),
         inference_profiles: inference_profiles.counts(),
+        tool_service_registries: tool_service_registries.counts(),
+        scheduled_tasks: scheduled_tasks.counts(),
     };
     let ok = [
         &counts.agent_principal,
@@ -721,6 +1009,8 @@ pub(crate) fn diff_manifests(
         &counts.tool_selections,
         &counts.inference_backends,
         &counts.inference_profiles,
+        &counts.tool_service_registries,
+        &counts.scheduled_tasks,
     ]
     .iter()
     .all(|count| count.create == 0 && count.update == 0 && count.live_only == 0);
@@ -738,6 +1028,8 @@ pub(crate) fn diff_manifests(
             tool_selections,
             inference_backends,
             inference_profiles,
+            tool_service_registries,
+            scheduled_tasks,
         },
     }
 }
@@ -755,6 +1047,12 @@ fn normalize_manifest(manifest: &mut DesiredStateManifest) {
     manifest
         .inference_profiles
         .sort_by(|left, right| left.profile_id.cmp(&right.profile_id));
+    manifest
+        .tool_service_registries
+        .sort_by(|left, right| left.service_id.cmp(&right.service_id));
+    manifest
+        .scheduled_tasks
+        .sort_by(|left, right| left.task_id.cmp(&right.task_id));
 
     for selection in &mut manifest.tool_selections {
         selection.cli_tool_names.sort();

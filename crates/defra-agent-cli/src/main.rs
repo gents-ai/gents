@@ -189,6 +189,10 @@ const EXPORT_INFERENCE_BACKEND_FIELDS: &str =
     "backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent enabled supports_tool_calls supports_streaming supports_structured_outputs supports_json_schema models last_probe probe_status";
 const EXPORT_INFERENCE_PROFILE_FIELDS: &str =
     "profile_id display_name context_window max_output_tokens max_turns temperature stream_batch_ms deadline_duration_secs";
+const EXPORT_TOOL_SERVICE_REGISTRY_FIELDS: &str =
+    "service_id display_name description hostname tailscale_ip lan_ip mcp_port mcp_path";
+const EXPORT_SCHEDULED_TASK_FIELDS: &str =
+    "task_id agent_did behavior_id name prompt interval_secs enabled";
 
 struct CliReadyObserver {
     tx: watch::Sender<ProcessLifecycleState>,
@@ -709,6 +713,10 @@ struct ConfigExportBundle {
     inference_backends: Vec<Value>,
     #[serde(default)]
     inference_profiles: Vec<Value>,
+    #[serde(default)]
+    tool_service_registries: Vec<Value>,
+    #[serde(default)]
+    scheduled_tasks: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -718,6 +726,8 @@ struct ConfigApplyCounts {
     tool_selections: usize,
     inference_backends: usize,
     inference_profiles: usize,
+    tool_service_registries: usize,
+    scheduled_tasks: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2540,7 +2550,6 @@ async fn scheduled_task_set(args: ScheduledTaskSetArgs) -> Result<()> {
         resolve_scheduled_task_behavior_id(&graphql, &agent_did, args.behavior_id.as_deref())
             .await?;
     let next_run_at = normalize_optional_rfc3339(args.next_run_at.as_deref())?;
-    let now = chrono::Utc::now().to_rfc3339();
     let next_run_at_field = nullable_string_field("next_run_at", next_run_at.as_deref());
 
     let add_fields = vec![
@@ -2561,11 +2570,6 @@ async fn scheduled_task_set(args: ScheduledTaskSetArgs) -> Result<()> {
             if args.enabled { "true" } else { "false" }
         )),
         Some(next_run_at_field.clone()),
-        Some(r#"last_status: """#.to_string()),
-        Some(r#"last_error: """#.to_string()),
-        Some("run_count: 0".to_string()),
-        Some(format!(r#"created_at: "{}""#, escape_graphql_string(&now))),
-        Some(format!(r#"updated_at: "{}""#, escape_graphql_string(&now))),
     ]
     .into_iter()
     .flatten()
@@ -2589,7 +2593,6 @@ async fn scheduled_task_set(args: ScheduledTaskSetArgs) -> Result<()> {
             if args.enabled { "true" } else { "false" }
         )),
         Some(next_run_at_field),
-        Some(format!(r#"updated_at: "{}""#, escape_graphql_string(&now))),
     ]
     .into_iter()
     .flatten()
@@ -2847,6 +2850,8 @@ async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         tool_selections: Vec::new(),
         inference_backends: Vec::new(),
         inference_profiles: Vec::new(),
+        tool_service_registries: Vec::new(),
+        scheduled_tasks: Vec::new(),
     });
     let runtime_row = match load_runtime_row(&access, &agent_did).await {
         Ok(Some(row)) => row,
@@ -2979,6 +2984,8 @@ async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "tool_selections": bundle.tool_selections.len(),
             "inference_backends": bundle.inference_backends.len(),
             "inference_profiles": bundle.inference_profiles.len(),
+            "tool_service_registries": bundle.tool_service_registries.len(),
+            "scheduled_tasks": bundle.scheduled_tasks.len(),
         },
     });
     if let Some(map) = output.as_object_mut() {
@@ -3020,6 +3027,14 @@ async fn config_import(args: ConfigImportArgs) -> Result<()> {
         args.override_existing,
     )
     .await?;
+    let imported_tool_service_registries = apply_import_collection(
+        &access,
+        "ToolServiceRegistry",
+        "service_id",
+        &bundle.tool_service_registries,
+        args.override_existing,
+    )
+    .await?;
     let imported_tool_selections = apply_import_collection(
         &access,
         "ToolSelection",
@@ -3033,6 +3048,14 @@ async fn config_import(args: ConfigImportArgs) -> Result<()> {
         "AgentBehavior",
         "behavior_id",
         &bundle.agent_behaviors,
+        args.override_existing,
+    )
+    .await?;
+    let imported_scheduled_tasks = apply_import_collection(
+        &access,
+        "ScheduledTask",
+        "task_id",
+        &bundle.scheduled_tasks,
         args.override_existing,
     )
     .await?;
@@ -3061,6 +3084,8 @@ async fn config_import(args: ConfigImportArgs) -> Result<()> {
             "tool_selections": imported_tool_selections,
             "inference_backends": imported_backends,
             "inference_profiles": imported_profiles,
+            "tool_service_registries": imported_tool_service_registries,
+            "scheduled_tasks": imported_scheduled_tasks,
         },
     });
     print_json(&output)?;
@@ -3476,6 +3501,23 @@ async fn graphql_rows(
         .unwrap_or_default())
 }
 
+async fn graphql_rows_or_empty_if_collection_missing(
+    access: &ConfigAccess,
+    collection_name: &str,
+    query: &str,
+) -> Result<Vec<Value>> {
+    match graphql_rows(access, collection_name, query).await {
+        Ok(rows) => Ok(rows),
+        Err(error) if is_collection_missing_error(collection_name, &error) => Ok(Vec::new()),
+        Err(error) => Err(error),
+    }
+}
+
+fn is_collection_missing_error(collection_name: &str, error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    message.contains("collection not found") && message.contains(collection_name)
+}
+
 async fn build_config_export_bundle(
     access: &ConfigAccess,
     agent_did: &str,
@@ -3585,6 +3627,37 @@ async fn build_config_export_bundle(
         .await?
     };
     sort_document_rows(&mut profile_rows, "profile_id");
+    let mut tool_service_registry_rows = graphql_rows_or_empty_if_collection_missing(
+        access,
+        "ToolServiceRegistry",
+        &format!(
+            r#"{{
+                ToolServiceRegistry {{
+                    {fields}
+                }}
+            }}"#,
+            fields = EXPORT_TOOL_SERVICE_REGISTRY_FIELDS,
+        ),
+    )
+    .await?;
+    sort_document_rows(&mut tool_service_registry_rows, "service_id");
+    let mut scheduled_task_rows = graphql_rows_or_empty_if_collection_missing(
+        access,
+        "ScheduledTask",
+        &format!(
+            r#"{{
+                ScheduledTask(
+                    filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}
+                ) {{
+                    {fields}
+                }}
+            }}"#,
+            agent_did = escape_graphql_string(agent_did),
+            fields = EXPORT_SCHEDULED_TASK_FIELDS,
+        ),
+    )
+    .await?;
+    sort_document_rows(&mut scheduled_task_rows, "task_id");
 
     Ok(ConfigExportBundle {
         format: CONFIG_EXPORT_FORMAT.to_string(),
@@ -3596,6 +3669,8 @@ async fn build_config_export_bundle(
         tool_selections: tool_selection_rows,
         inference_backends: backend_rows,
         inference_profiles: profile_rows,
+        tool_service_registries: tool_service_registry_rows,
+        scheduled_tasks: scheduled_task_rows,
     })
 }
 
@@ -3739,6 +3814,51 @@ async fn build_desired_state_live_bundle(
         .await?
     };
     sort_document_rows(&mut profile_rows, "profile_id");
+    let tool_service_ids = desired_manifest
+        .tool_service_registries
+        .iter()
+        .map(|value| value.service_id.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let mut tool_service_registry_rows = if tool_service_ids.is_empty() {
+        Vec::new()
+    } else {
+        graphql_rows_or_empty_if_collection_missing(
+            access,
+            "ToolServiceRegistry",
+            &format!(
+                r#"{{
+                    ToolServiceRegistry(
+                        filter: {{ service_id: {{ _in: {} }} }}
+                    ) {{
+                        {fields}
+                    }}
+                }}"#,
+                graphql_string_list_literal(&tool_service_ids),
+                fields = EXPORT_TOOL_SERVICE_REGISTRY_FIELDS,
+            ),
+        )
+        .await?
+    };
+    sort_document_rows(&mut tool_service_registry_rows, "service_id");
+    let mut scheduled_task_rows = graphql_rows_or_empty_if_collection_missing(
+        access,
+        "ScheduledTask",
+        &format!(
+            r#"{{
+                ScheduledTask(
+                    filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}
+                ) {{
+                    {fields}
+                }}
+            }}"#,
+            agent_did = escape_graphql_string(agent_did),
+            fields = EXPORT_SCHEDULED_TASK_FIELDS,
+        ),
+    )
+    .await?;
+    sort_document_rows(&mut scheduled_task_rows, "task_id");
 
     Ok(ConfigExportBundle {
         format: CONFIG_EXPORT_FORMAT.to_string(),
@@ -3750,6 +3870,8 @@ async fn build_desired_state_live_bundle(
         tool_selections: tool_selection_rows,
         inference_backends: backend_rows,
         inference_profiles: profile_rows,
+        tool_service_registries: tool_service_registry_rows,
+        scheduled_tasks: scheduled_task_rows,
     })
 }
 
@@ -3772,6 +3894,8 @@ fn live_manifest_from_bundle(
                 tool_selections: Vec::new(),
                 inference_backends: Vec::new(),
                 inference_profiles: Vec::new(),
+                tool_service_registries: Vec::new(),
+                scheduled_tasks: Vec::new(),
             },
         ))
     }
@@ -3907,18 +4031,52 @@ async fn apply_import_collection(
 }
 
 fn sanitize_import_document(collection_name: &str, doc: &Value, for_update: bool) -> Result<Value> {
-    if collection_name != "InferenceBackend" {
-        return Ok(doc.clone());
+    let mut object = match collection_name {
+        "InferenceBackend" | "ScheduledTask" | "ToolServiceRegistry" => {
+            doc.as_object().cloned().ok_or_else(|| {
+                anyhow::anyhow!("{collection_name} import document must be an object")
+            })?
+        }
+        _ => return Ok(doc.clone()),
+    };
+
+    match collection_name {
+        "InferenceBackend" => {
+            object.remove("last_probe");
+            if for_update {
+                object.insert("last_probe".to_string(), Value::Null);
+            }
+        }
+        "ScheduledTask" => {
+            for field in [
+                "next_run_at",
+                "last_run_at",
+                "last_status",
+                "last_error",
+                "run_count",
+                "created_at",
+                "updated_at",
+            ] {
+                object.remove(field);
+            }
+            if for_update {
+                object.insert("next_run_at".to_string(), Value::Null);
+                object.insert("last_run_at".to_string(), Value::Null);
+                object.insert("created_at".to_string(), Value::Null);
+                object.insert("updated_at".to_string(), Value::Null);
+            }
+        }
+        "ToolServiceRegistry" => {
+            for field in ["tools", "status", "version", "updated_at"] {
+                object.remove(field);
+            }
+            if for_update {
+                object.insert("updated_at".to_string(), Value::Null);
+            }
+        }
+        _ => unreachable!(),
     }
 
-    let mut object = doc
-        .as_object()
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("InferenceBackend import document must be an object"))?;
-    object.remove("last_probe");
-    if for_update {
-        object.insert("last_probe".to_string(), Value::Null);
-    }
     Ok(Value::Object(object))
 }
 
@@ -3929,6 +4087,8 @@ fn diff_has_pending_apply(counts: &desired_state::DesiredStateDiffCollectionsCou
         &counts.tool_selections,
         &counts.inference_backends,
         &counts.inference_profiles,
+        &counts.tool_service_registries,
+        &counts.scheduled_tasks,
     ]
     .iter()
     .any(|count| count.create > 0 || count.update > 0)
@@ -3940,6 +4100,8 @@ fn config_apply_counts_changed(counts: &ConfigApplyCounts) -> bool {
         || counts.tool_selections > 0
         || counts.inference_backends > 0
         || counts.inference_profiles > 0
+        || counts.tool_service_registries > 0
+        || counts.scheduled_tasks > 0
 }
 
 fn select_apply_collection_docs(
@@ -4023,11 +4185,23 @@ async fn apply_desired_state_changes(
         "ToolSelection",
         &planned.collections.tool_selections,
     )?;
+    let tool_service_registry_docs = select_apply_collection_docs(
+        &desired_bundle.tool_service_registries,
+        "service_id",
+        "ToolServiceRegistry",
+        &planned.collections.tool_service_registries,
+    )?;
     let behavior_docs = select_apply_collection_docs(
         &desired_bundle.agent_behaviors,
         "behavior_id",
         "AgentBehavior",
         &planned.collections.agent_behaviors,
+    )?;
+    let scheduled_task_docs = select_apply_collection_docs(
+        &desired_bundle.scheduled_tasks,
+        "task_id",
+        "ScheduledTask",
+        &planned.collections.scheduled_tasks,
     )?;
     let principal_docs = select_apply_principal_docs(
         desired_bundle.agent_principal.as_ref(),
@@ -4051,6 +4225,14 @@ async fn apply_desired_state_changes(
             true,
         )
         .await?,
+        tool_service_registries: apply_import_collection(
+            access,
+            "ToolServiceRegistry",
+            "service_id",
+            &tool_service_registry_docs,
+            true,
+        )
+        .await?,
         tool_selections: apply_import_collection(
             access,
             "ToolSelection",
@@ -4064,6 +4246,14 @@ async fn apply_desired_state_changes(
             "AgentBehavior",
             "behavior_id",
             &behavior_docs,
+            true,
+        )
+        .await?,
+        scheduled_tasks: apply_import_collection(
+            access,
+            "ScheduledTask",
+            "task_id",
+            &scheduled_task_docs,
             true,
         )
         .await?,

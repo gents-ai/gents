@@ -925,6 +925,135 @@ async fn config_validate_reports_reference_errors_and_fails_nonzero() -> Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_validate_accepts_tool_services_dir_and_scheduled_tasks_dir() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("fleet");
+    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&root)?;
+    fs::create_dir_all(root.join("tool-services"))?;
+    fs::create_dir_all(root.join("scheduled-tasks"))?;
+
+    let agent_did = format!("did:defra-agent:{}", Uuid::new_v4().simple());
+    let default_behavior_id = format!("{agent_did}:default");
+    let tool_selection_id = format!("{default_behavior_id}:tools");
+
+    write_json_file(
+        &root.join("agent-principal.json"),
+        &serde_json::json!({
+            "agent_did": agent_did.clone(),
+            "display_name": "Fleet Agent",
+            "default_behavior_id": default_behavior_id.clone(),
+            "enabled": true
+        }),
+    )?;
+    write_json_file(
+        &root.join("agent-behaviors.json"),
+        &serde_json::json!([
+            {
+                "behavior_id": default_behavior_id.clone(),
+                "agent_did": agent_did.clone(),
+                "display_name": "Default",
+                "system_prompt": "Stay focused.",
+                "backend_id": "default-backend",
+                "model_name": "mock-model",
+                "tool_selection_id": tool_selection_id.clone(),
+                "inference_profile_id": null,
+                "compaction_strategy": null,
+                "compaction_threshold": null,
+                "enabled": true
+            }
+        ]),
+    )?;
+    write_json_file(
+        &root.join("tool-selections.json"),
+        &serde_json::json!([
+            {
+                "selection_id": tool_selection_id.clone(),
+                "agent_did": agent_did.clone(),
+                "display_name": "Standard",
+                "enable_file_tools": true,
+                "file_tools_mode": "ReadOnly",
+                "enable_bash": true,
+                "bash_mode": "ReadOnly",
+                "cli_tool_names": [],
+                "enable_meta_tools": true,
+                "delegate_to": []
+            }
+        ]),
+    )?;
+    write_json_file(
+        &root.join("inference-backends.json"),
+        &serde_json::json!([
+            {
+                "backend_id": "default-backend",
+                "name": "default-backend",
+                "endpoint": "http://127.0.0.1:8000/v1",
+                "api_key_env_var": "AGENT_DAEMON_API_KEY",
+                "max_concurrent": 1,
+                "enabled": true,
+                "models": ["mock-model"]
+            }
+        ]),
+    )?;
+    write_json_file(
+        &root.join("tool-services").join("ops-mcp.json"),
+        &serde_json::json!({
+            "service_id": "ops-mcp",
+            "display_name": "Ops MCP",
+            "description": "Operational tooling",
+            "hostname": "ops.internal",
+            "tailscale_ip": "100.64.0.10",
+            "lan_ip": "192.168.1.10",
+            "mcp_port": 8080,
+            "mcp_path": "/mcp"
+        }),
+    )?;
+    write_json_file(
+        &root.join("scheduled-tasks").join("nightly-audit.json"),
+        &serde_json::json!({
+            "task_id": "nightly-audit",
+            "agent_did": agent_did.clone(),
+            "behavior_id": default_behavior_id.clone(),
+            "name": "Nightly Audit",
+            "prompt": "Audit the fleet state and summarize drift.",
+            "interval_secs": 3600,
+            "enabled": false
+        }),
+    )?;
+
+    let output = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "validate",
+            "--root",
+            root.to_str().expect("utf-8 manifest root"),
+        ],
+    )?;
+
+    assert_eq!(
+        output.get("status").and_then(Value::as_str),
+        Some("validated")
+    );
+    assert_eq!(output.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        output
+            .pointer("/counts/tool_service_registries")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        output
+            .pointer("/counts/scheduled_tasks")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_diff_reports_no_changes_for_matching_live_state() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -1596,6 +1725,539 @@ async fn config_export_import_round_trips_offline_and_requires_override() -> Res
     assert_eq!(
         overridden.get("override").and_then(Value::as_bool),
         Some(true)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_export_import_round_trips_tool_services_and_scheduled_tasks() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let source_home = tempdir.path().join("source-home");
+    let target_home = tempdir.path().join("target-home");
+    fs::create_dir_all(&source_home)?;
+    fs::create_dir_all(&target_home)?;
+
+    let model_name = format!("mock-export-extra-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-export-extra-{}", Uuid::new_v4().simple());
+    let export_path = tempdir.path().join("agent-config-extra.json");
+
+    run_init_json(
+        &source_home,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    let mut seeded_bundle = run_cli_json(&source_home, &["config", "export"])?;
+    let agent_did = seeded_bundle
+        .get("agent_did")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("seeded export missing agent_did"))?
+        .to_string();
+    let behavior_id = seeded_bundle
+        .pointer("/agent_principal/default_behavior_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("seeded export missing default behavior id"))?
+        .to_string();
+    let service_id = format!("ops-mcp-{}", Uuid::new_v4().simple());
+    let task_id = format!("nightly-audit-{}", Uuid::new_v4().simple());
+
+    seeded_bundle
+        .get_mut("tool_service_registries")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| anyhow!("seeded export missing tool_service_registries array"))?
+        .push(serde_json::json!({
+            "service_id": service_id.clone(),
+            "display_name": "Ops MCP",
+            "description": "Operational tooling",
+            "hostname": "ops.internal",
+            "tailscale_ip": "100.64.0.10",
+            "lan_ip": "192.168.1.10",
+            "mcp_port": 8080,
+            "mcp_path": "/mcp"
+        }));
+    seeded_bundle
+        .get_mut("scheduled_tasks")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| anyhow!("seeded export missing scheduled_tasks array"))?
+        .push(serde_json::json!({
+            "task_id": task_id.clone(),
+            "agent_did": agent_did.clone(),
+            "behavior_id": behavior_id.clone(),
+            "name": "Nightly Audit",
+            "prompt": "Audit the fleet state and summarize drift.",
+            "interval_secs": 3600,
+            "enabled": false
+        }));
+
+    fs::write(&export_path, serde_json::to_vec_pretty(&seeded_bundle)?)
+        .context("writing config export fixture with task and tool service")?;
+
+    let seeded_import = run_cli_json(
+        &source_home,
+        &[
+            "config",
+            "import",
+            export_path.to_str().expect("utf-8 export path"),
+            "--override",
+        ],
+    )?;
+    assert_eq!(
+        seeded_import
+            .pointer("/counts/tool_service_registries")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        seeded_import
+            .pointer("/counts/scheduled_tasks")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let exported = run_cli_json(&source_home, &["config", "export"])?;
+    assert_eq!(
+        exported
+            .pointer("/tool_service_registries/0/service_id")
+            .and_then(Value::as_str),
+        Some(service_id.as_str())
+    );
+    assert_eq!(
+        exported
+            .pointer("/scheduled_tasks/0/task_id")
+            .and_then(Value::as_str),
+        Some(task_id.as_str())
+    );
+    assert!(
+        exported
+            .pointer("/tool_service_registries/0/status")
+            .is_none(),
+        "tool-service export should omit runtime status: {exported}"
+    );
+    assert!(
+        exported
+            .pointer("/tool_service_registries/0/tools")
+            .is_none(),
+        "tool-service export should omit discovered tools: {exported}"
+    );
+    assert!(
+        exported.pointer("/scheduled_tasks/0/created_at").is_none(),
+        "scheduled-task export should omit runtime timestamps: {exported}"
+    );
+    assert!(
+        exported.pointer("/scheduled_tasks/0/last_status").is_none(),
+        "scheduled-task export should omit runtime scheduler fields: {exported}"
+    );
+
+    fs::write(&export_path, serde_json::to_vec_pretty(&exported)?)
+        .context("writing round-trip config export fixture")?;
+
+    let imported = run_cli_json(
+        &target_home,
+        &[
+            "config",
+            "import",
+            export_path.to_str().expect("utf-8 export path"),
+        ],
+    )?;
+    assert_eq!(
+        imported
+            .pointer("/counts/tool_service_registries")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        imported
+            .pointer("/counts/scheduled_tasks")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let reexported = run_cli_json(
+        &target_home,
+        &[
+            "config",
+            "export",
+            "--agent-did",
+            seeded_bundle
+                .get("agent_did")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("seeded bundle missing agent_did"))?,
+        ],
+    )?;
+    assert_eq!(
+        reexported
+            .pointer("/tool_service_registries/0/service_id")
+            .and_then(Value::as_str),
+        Some(service_id.as_str())
+    );
+    assert_eq!(
+        reexported
+            .pointer("/scheduled_tasks/0/task_id")
+            .and_then(Value::as_str),
+        Some(task_id.as_str())
+    );
+    assert_eq!(
+        reexported
+            .pointer("/scheduled_tasks/0/prompt")
+            .and_then(Value::as_str),
+        Some("Audit the fleet state and summarize drift.")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_apply_reconciles_tool_services_and_scheduled_tasks_end_to_end() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("default");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-apply-extra-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let agent_name = format!("cli-apply-extra-{}", Uuid::new_v4().simple());
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    let exported = run_cli_json(&home_dir, &["config", "export"])?;
+    write_manifest_root_from_export(&root, &exported)?;
+
+    let agent_did = exported
+        .get("agent_did")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("exported bundle missing agent_did"))?
+        .to_string();
+    let behavior_id = exported
+        .pointer("/agent_principal/default_behavior_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("exported bundle missing default behavior id"))?
+        .to_string();
+    let service_id = format!("ops-mcp-{}", Uuid::new_v4().simple());
+    let task_id = format!("nightly-audit-{}", Uuid::new_v4().simple());
+    let service_path = root.join("tool-services").join("ops-mcp.json");
+    let task_path = root.join("scheduled-tasks").join("nightly-audit.json");
+
+    write_json_file(
+        &service_path,
+        &serde_json::json!({
+            "service_id": service_id.clone(),
+            "display_name": "Ops MCP",
+            "description": "Operational tooling",
+            "hostname": "ops.internal",
+            "tailscale_ip": "100.64.0.10",
+            "lan_ip": "192.168.1.10",
+            "mcp_port": 8080,
+            "mcp_path": "/mcp"
+        }),
+    )?;
+    write_json_file(
+        &task_path,
+        &serde_json::json!({
+            "task_id": task_id.clone(),
+            "agent_did": agent_did.clone(),
+            "behavior_id": behavior_id.clone(),
+            "name": "Nightly Audit",
+            "prompt": "Audit the fleet state and summarize drift.",
+            "interval_secs": 3600,
+            "enabled": false
+        }),
+    )?;
+
+    let root_str = root
+        .to_str()
+        .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
+    let validated = run_cli_json(&home_dir, &["config", "validate", "--root", root_str])?;
+    assert_eq!(
+        validated
+            .pointer("/counts/tool_service_registries")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        validated
+            .pointer("/counts/scheduled_tasks")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve.child)?;
+    wait_for_runtime_ready(
+        &graphql,
+        &format!("did:defra-agent:{agent_name}"),
+        Duration::from_secs(30),
+    )
+    .await?;
+
+    let planned = run_cli_json(&home_dir, &["config", "diff", "--root", root_str])?;
+    assert_eq!(
+        planned
+            .pointer("/counts/tool_service_registries/create")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        planned
+            .pointer("/counts/scheduled_tasks/create")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let applied = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
+    assert_eq!(
+        applied.get("status").and_then(Value::as_str),
+        Some("applied")
+    );
+    assert_eq!(applied.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        applied
+            .pointer("/applied/tool_service_registries")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        applied
+            .pointer("/applied/scheduled_tasks")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let task_response = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{
+                ScheduledTask(filter: {{ task_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    _docID
+                    task_id
+                    prompt
+                    interval_secs
+                    enabled
+                    next_run_at
+                    last_status
+                    last_error
+                    run_count
+                }}
+            }}"#,
+            escape_graphql_string(&task_id),
+        ),
+    )
+    .await?;
+    let task_row = first_graphql_row(&task_response, "ScheduledTask")?;
+    let initial_task_doc_id = task_row
+        .get("_docID")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("scheduled task row missing _docID: {task_row}"))?
+        .to_string();
+
+    let service_response = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{
+                ToolServiceRegistry(filter: {{ service_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    _docID
+                    service_id
+                    description
+                    hostname
+                    status
+                    version
+                    updated_at
+                }}
+            }}"#,
+            escape_graphql_string(&service_id),
+        ),
+    )
+    .await?;
+    let service_row = first_graphql_row(&service_response, "ToolServiceRegistry")?;
+    let initial_service_doc_id = service_row
+        .get("_docID")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("tool service row missing _docID: {service_row}"))?
+        .to_string();
+
+    let noop = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
+    assert_eq!(noop.get("status").and_then(Value::as_str), Some("noop"));
+    assert_eq!(
+        noop.pointer("/applied/tool_service_registries")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        noop.pointer("/applied/scheduled_tasks")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{
+                update_ScheduledTask(
+                    docID: "{doc_id}",
+                    input: {{
+                        next_run_at: "2026-04-15T00:00:00Z",
+                        last_status: "error",
+                        last_error: "boom",
+                        run_count: 7
+                    }}
+                ) {{ _docID }}
+            }}"#,
+            doc_id = escape_graphql_string(&initial_task_doc_id),
+        ),
+    )
+    .await?;
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{
+                update_ToolServiceRegistry(
+                    docID: "{doc_id}",
+                    input: {{
+                        status: "online",
+                        version: "1.2.3",
+                        updated_at: "2026-04-15T00:00:00Z"
+                    }}
+                ) {{ _docID }}
+            }}"#,
+            doc_id = escape_graphql_string(&initial_service_doc_id),
+        ),
+    )
+    .await?;
+
+    let runtime_noop = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
+    assert_eq!(
+        runtime_noop.get("status").and_then(Value::as_str),
+        Some("noop")
+    );
+    assert_eq!(
+        runtime_noop
+            .pointer("/applied/tool_service_registries")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        runtime_noop
+            .pointer("/applied/scheduled_tasks")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+
+    let mut task_manifest = read_json_file(&task_path)?;
+    task_manifest["prompt"] =
+        Value::String("Audit the fleet state for drift and incidents.".to_string());
+    task_manifest["interval_secs"] = Value::from(7200);
+    write_json_file(&task_path, &task_manifest)?;
+
+    let mut service_manifest = read_json_file(&service_path)?;
+    service_manifest["description"] =
+        Value::String("Operational tooling and diagnostics".to_string());
+    service_manifest["hostname"] = Value::String("ops-router.internal".to_string());
+    write_json_file(&service_path, &service_manifest)?;
+
+    let updated = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
+    assert_eq!(
+        updated.get("status").and_then(Value::as_str),
+        Some("applied")
+    );
+    assert_eq!(
+        updated
+            .pointer("/applied/tool_service_registries")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        updated
+            .pointer("/applied/scheduled_tasks")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let reexported = run_cli_json(&home_dir, &["config", "export"])?;
+    assert_eq!(
+        reexported
+            .pointer("/tool_service_registries/0/hostname")
+            .and_then(Value::as_str),
+        Some("ops-router.internal")
+    );
+    assert_eq!(
+        reexported
+            .pointer("/scheduled_tasks/0/prompt")
+            .and_then(Value::as_str),
+        Some("Audit the fleet state for drift and incidents.")
+    );
+    assert_eq!(
+        reexported
+            .pointer("/scheduled_tasks/0/interval_secs")
+            .and_then(Value::as_i64),
+        Some(7200)
+    );
+
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{ delete_ScheduledTask(docID: "{}") {{ _docID }} }}"#,
+            escape_graphql_string(&initial_task_doc_id),
+        ),
+    )
+    .await?;
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{ delete_ToolServiceRegistry(docID: "{}") {{ _docID }} }}"#,
+            escape_graphql_string(&initial_service_doc_id),
+        ),
+    )
+    .await?;
+
+    let reapplied = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
+    assert_eq!(
+        reapplied.get("status").and_then(Value::as_str),
+        Some("applied")
+    );
+    assert_eq!(reapplied.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        reapplied
+            .pointer("/applied/tool_service_registries")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        reapplied
+            .pointer("/applied/scheduled_tasks")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let exact = run_cli_json(&home_dir, &["config", "diff", "--root", root_str])?;
+    assert_eq!(exact.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        exact
+            .pointer("/counts/tool_service_registries/unchanged")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        exact
+            .pointer("/counts/scheduled_tasks/unchanged")
+            .and_then(Value::as_u64),
+        Some(1)
     );
 
     Ok(())
@@ -4197,6 +4859,49 @@ fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<()> 
         .is_some_and(|rows| !rows.is_empty())
     {
         write_json_file(&root.join("inference-profiles.json"), &inference_profiles)?;
+    }
+
+    let tool_service_registries = project_array_fields(
+        exported
+            .get("tool_service_registries")
+            .ok_or_else(|| anyhow!("exported bundle missing tool_service_registries"))?,
+        &[
+            "service_id",
+            "display_name",
+            "description",
+            "hostname",
+            "tailscale_ip",
+            "lan_ip",
+            "mcp_port",
+            "mcp_path",
+        ],
+    )?;
+    if tool_service_registries
+        .as_array()
+        .is_some_and(|rows| !rows.is_empty())
+    {
+        write_json_file(&root.join("tool-services.json"), &tool_service_registries)?;
+    }
+
+    let scheduled_tasks = project_array_fields(
+        exported
+            .get("scheduled_tasks")
+            .ok_or_else(|| anyhow!("exported bundle missing scheduled_tasks"))?,
+        &[
+            "task_id",
+            "agent_did",
+            "behavior_id",
+            "name",
+            "prompt",
+            "interval_secs",
+            "enabled",
+        ],
+    )?;
+    if scheduled_tasks
+        .as_array()
+        .is_some_and(|rows| !rows.is_empty())
+    {
+        write_json_file(&root.join("scheduled-tasks.json"), &scheduled_tasks)?;
     }
 
     Ok(())
