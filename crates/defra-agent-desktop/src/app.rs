@@ -1031,6 +1031,50 @@ mod tests {
     }
 
     #[test]
+    fn desktop_app_renders_request_only_transcript_fallback() -> Result<()> {
+        let runtime = test_runtime()?;
+        let tempdir = tempfile::tempdir()?;
+        let core = runtime.block_on(ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(tempdir.path()),
+            ClientCoreOptions::local_only(),
+        ))?;
+
+        runtime.block_on(insert_agent_principal(
+            &core,
+            "did:defra:amy",
+            "Amy",
+            "amy-default",
+        ))?;
+        let created =
+            runtime.block_on(core.create_conversation("did:defra:amy", Some("amy-default")))?;
+        runtime.block_on(core.submit_request(
+            &created.session_id,
+            "did:defra:amy",
+            "request only transcript row",
+            None,
+        ))?;
+
+        let mut driver = build_driver(
+            Arc::clone(&runtime),
+            core,
+            Arc::new(DesktopLogStore::new(64)),
+        );
+        driver.app.state.activity = Activity::Chat;
+        let texts = driver.render();
+
+        assert_eq!(
+            driver.app.state.chat.selected_session_id.as_deref(),
+            Some(created.session_id.as_str())
+        );
+        assert!(texts
+            .iter()
+            .any(|text| text.contains("request only transcript row")));
+        assert!(texts.iter().any(|text| text.contains("waiting for claim")));
+        assert!(!texts.iter().any(|text| text.contains("Transcript Empty")));
+        Ok(())
+    }
+
+    #[test]
     fn desktop_app_chat_header_retry_export_controls_stay_disabled() -> Result<()> {
         let runtime = test_runtime()?;
         let tempdir = tempfile::tempdir()?;
@@ -1746,6 +1790,108 @@ mod tests {
             .responses
             .iter()
             .any(|row| row.request_id.as_deref() == Some(request_id.as_str())));
+
+        runtime.block_on(running_agent.shutdown())?;
+        Ok(())
+    }
+
+    #[test]
+    fn desktop_app_clicks_through_live_agent_multi_turn_conversation() -> Result<()> {
+        let runtime = test_runtime()?;
+        let tempdir = tempfile::tempdir()?;
+        let core = runtime.block_on(ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(tempdir.path().join("desktop")),
+            ClientCoreOptions::local_only(),
+        ))?;
+        let mock_endpoint = MockModelEndpoint::start("default")?;
+        let running_agent = runtime.block_on(spawn_backed_agent(
+            core.node_arc(),
+            tempdir.path().join("agent").join("audit-live-multi.key"),
+            "audit-live-multi",
+            &AgentBackendConfig::mock(mock_endpoint.endpoint()),
+        ))?;
+        runtime.block_on(core.refresh_store())?;
+
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = DesktopApp::from_parts(
+            &cc,
+            Arc::clone(&runtime),
+            Some(Arc::new(core)),
+            Vec::new(),
+            Arc::new(DesktopLogStore::new(64)),
+        );
+        app.state.activity = Activity::Chat;
+        let mut driver = AuditDriver::new(app, ctx);
+
+        wait_for_value(
+            "chat first-conversation nudge for multi-turn audit",
+            Duration::from_secs(5),
+            || {
+                let texts = driver.render();
+                texts
+                    .iter()
+                    .any(|text| text.contains("Start First Conversation"))
+                    .then_some(())
+            },
+        )?;
+        driver.click_target(audit::targets::CHAT_CREATE_CONVERSATION);
+        wait_for_value(
+            "session selected for multi-turn audit",
+            Duration::from_secs(5),
+            || driver.app.state.chat.selected_session_id.clone(),
+        )?;
+        let session_id = driver
+            .app
+            .state
+            .chat
+            .selected_session_id
+            .clone()
+            .ok_or_else(|| anyhow!("missing selected session after create conversation"))?;
+
+        let (_first_request_id, first_response) =
+            submit_chat_message_and_wait_for_response(&mut driver, "first desktop audit turn")?;
+        let (second_request_id, second_response) = submit_chat_message_and_wait_for_response(
+            &mut driver,
+            "follow up desktop audit turn",
+        )?;
+        assert_eq!(first_response, "mock response");
+        assert_eq!(second_response, "mock response");
+
+        wait_for_value(
+            "multi-turn conversation state persisted",
+            Duration::from_secs(10),
+            || {
+                driver.app.client.as_ref().and_then(|client| {
+                    let snapshot = client.store().snapshot();
+                    let conversation = snapshot
+                        .conversations
+                        .iter()
+                        .find(|row| row.session_id == session_id)?;
+                    (snapshot.requests_for_session(&session_id).len() == 2
+                        && snapshot
+                            .responses
+                            .iter()
+                            .filter(|row| row.session_id.as_deref() == Some(session_id.as_str()))
+                            .count()
+                            >= 2
+                        && conversation.latest_request_id.as_deref()
+                            == Some(second_request_id.as_str())
+                        && conversation.preview_text.as_deref()
+                            == Some("follow up desktop audit turn"))
+                    .then_some(())
+                })
+            },
+        )?;
+
+        let final_texts = driver.render();
+        assert!(final_texts
+            .iter()
+            .any(|text| text.contains("first desktop audit turn")));
+        assert!(final_texts
+            .iter()
+            .any(|text| text.contains("follow up desktop audit turn")));
+        assert!(final_texts.iter().any(|text| text.contains("completed")));
 
         runtime.block_on(running_agent.shutdown())?;
         Ok(())
@@ -3152,6 +3298,74 @@ mod tests {
 
     fn shutdown_core(runtime: &Runtime, core: ClientCore) -> Result<()> {
         runtime.block_on(core.shutdown())
+    }
+
+    fn submit_chat_message_and_wait_for_response(
+        driver: &mut AuditDriver,
+        prompt: &str,
+    ) -> Result<(String, String)> {
+        let prior_request_count = driver
+            .app
+            .client
+            .as_ref()
+            .map(|client| client.store().snapshot().requests.len())
+            .ok_or_else(|| anyhow!("desktop client missing"))?;
+        let prior_response_count = driver
+            .app
+            .client
+            .as_ref()
+            .map(|client| client.store().snapshot().responses.len())
+            .ok_or_else(|| anyhow!("desktop client missing"))?;
+
+        driver.click_target(audit::targets::CHAT_COMPOSER_TEXT);
+        driver.type_text(prompt);
+        driver.click_target(audit::targets::CHAT_SEND);
+        assert_eq!(driver.app.state.chat.last_submission_error, None);
+        assert!(driver.app.state.chat.composer_text.is_empty());
+
+        let request_id = wait_for_value("focused request id after submission", Duration::from_secs(5), || {
+            driver.app.client.as_ref().and_then(|client| {
+                let snapshot = client.store().snapshot();
+                (snapshot.requests.len() > prior_request_count)
+                    .then(|| client.store().focused_request_id())
+                    .flatten()
+            })
+        })?;
+        let response_text = wait_for_value(
+            "response content in client store after submission",
+            Duration::from_secs(10),
+            || {
+                driver.app.client.as_ref().and_then(|client| {
+                    let snapshot = client.store().snapshot();
+                    if snapshot.responses.len() <= prior_response_count {
+                        return None;
+                    }
+                    snapshot
+                        .latest_response_for_request(&request_id)
+                        .and_then(|row| row.content.as_deref())
+                        .filter(|content| !content.trim().is_empty())
+                        .map(str::to_string)
+                })
+            },
+        )?;
+        wait_for_value(
+            "submitted prompt and response in transcript",
+            Duration::from_secs(10),
+            || {
+                let texts = driver.render();
+                texts
+                    .iter()
+                    .any(|text| text.contains(prompt))
+                    .then_some(())
+                    .and_then(|_| {
+                        texts.iter()
+                            .any(|text| text.contains(response_text.as_str()))
+                            .then_some(())
+                    })
+            },
+        )?;
+
+        Ok((request_id, response_text))
     }
 
     fn render_once(app: &mut DesktopApp, ctx: &egui::Context) -> Vec<String> {

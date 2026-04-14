@@ -3,9 +3,10 @@ use chrono::{Duration, Utc};
 use defra_agent_desktop::client::{
     ClientCore, ClientCoreOptions, ClientStore, ClientStoreRows, DesktopPaths,
 };
+use defra_agent_desktop::state::ShellState;
 use defra_agent_desktop::views::chat::{
-    build_conversation_buckets, build_deployment_entries, markdown_theme_names, send_disabled,
-    turn_state_label,
+    build_conversation_buckets, build_deployment_entries, markdown_theme_names, prepare_state,
+    send_disabled, turn_state_label,
 };
 use defra_agent_protocol::client_protocol::ClientTurnState;
 use defra_agent_protocol::row::{AgentConversationRow, AgentPrincipalRow};
@@ -140,6 +141,63 @@ fn configured_markdown_themes_exist_in_syntect_defaults() {
 
     assert!(themes.themes.contains_key(light));
     assert!(themes.themes.contains_key(dark));
+}
+
+#[test]
+fn chat_prepare_state_reselects_first_available_agent_and_session() {
+    let store = ClientStore::from_rows(ClientStoreRows {
+        agent_principals: vec![AgentPrincipalRow {
+            agent_did: "did:defra:amy".to_string(),
+            display_name: Some("Amy".to_string()),
+            default_behavior_id: Some("amy-default".to_string()),
+            enabled: Some(true),
+            created_at: None,
+            created_by: None,
+        }],
+        conversations: vec![
+            AgentConversationRow {
+                session_id: "session-older".to_string(),
+                agent_name: Some("Amy".to_string()),
+                agent_did: Some("did:defra:amy".to_string()),
+                behavior_id: Some("amy-default".to_string()),
+                title: Some("Older".to_string()),
+                preview_text: Some("older".to_string()),
+                status: Some("active".to_string()),
+                created_at: Some("2026-04-14T00:00:00Z".to_string()),
+                updated_at: Some("2026-04-14T00:01:00Z".to_string()),
+                latest_request_id: Some("req-older".to_string()),
+            },
+            AgentConversationRow {
+                session_id: "session-latest".to_string(),
+                agent_name: Some("Amy".to_string()),
+                agent_did: Some("did:defra:amy".to_string()),
+                behavior_id: Some("amy-default".to_string()),
+                title: Some("Latest".to_string()),
+                preview_text: Some("latest".to_string()),
+                status: Some("active".to_string()),
+                created_at: Some("2026-04-14T00:00:00Z".to_string()),
+                updated_at: Some("2026-04-14T00:05:00Z".to_string()),
+                latest_request_id: Some("req-latest".to_string()),
+            },
+        ],
+        ..ClientStoreRows::default()
+    });
+    let mut state = ShellState::default();
+    state.chat.selected_peer_id = Some("peer-missing".to_string());
+    state.chat.selected_agent_did = Some("did:defra:missing".to_string());
+    state.chat.selected_session_id = Some("session-missing".to_string());
+
+    prepare_state(&mut state, None, Some(&store));
+
+    assert_eq!(state.chat.selected_peer_id, None);
+    assert_eq!(
+        state.chat.selected_agent_did.as_deref(),
+        Some("did:defra:amy")
+    );
+    assert_eq!(
+        state.chat.selected_session_id.as_deref(),
+        Some("session-latest")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
