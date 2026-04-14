@@ -2044,6 +2044,11 @@ async fn serve(args: ServeArgs) -> Result<()> {
         .collect::<Vec<_>>();
     let default_behavior_id = agent.default_behavior_id().to_string();
     let unavailable_behaviors = agent.unavailable_behaviors().clone();
+    let behavior_readiness = if unavailable_behaviors.is_empty() {
+        "ready"
+    } else {
+        "degraded"
+    };
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     tokio::spawn(async move {
@@ -2104,6 +2109,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
 
     let output = json!({
         "status": "serving",
+        "behavior_readiness": behavior_readiness,
         "home": home_dir,
         "agent_name": agent_name,
         "agent_did": identity.did(),

@@ -14,7 +14,7 @@ use super::daemon::BehaviorDaemon;
 use super::reconcile::GenerationSupervisor;
 use super::{DefraAgent, ProcessLifecycleState};
 use crate::backend_provider::{
-    build_completion_client, build_openrouter_client, discover_models, BackendProviderKind,
+    build_completion_client, build_openrouter_client, BackendProviderKind,
 };
 use crate::backend_registry::BackendTracker;
 use crate::completion_factory::build_agent;
@@ -54,8 +54,6 @@ enum BackgroundTaskResult {
     Reconcile(Result<()>),
     Control(Result<()>),
 }
-
-const STARTUP_BACKEND_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl StartupBarrier {
     fn new(behaviors: &[Arc<crate::config::BehaviorConfig>]) -> Self {
@@ -206,7 +204,7 @@ pub(super) async fn run_agent(
             return Err(error);
         }
     };
-    if let Err(error) = validate_startup_snapshot(&agent, &tool_runtime, &resolved_snapshot).await {
+    if let Err(error) = validate_startup_snapshot(&tool_runtime, &resolved_snapshot).await {
         runtime_status.publish_error(&format!("{error:#}")).await;
         return Err(error);
     }
@@ -470,34 +468,9 @@ async fn log_recovery(node: &defra_node::EmbeddedNode, agent_did: &str, default_
 }
 
 async fn validate_startup_snapshot(
-    agent: &DefraAgent,
     tool_runtime: &ToolRuntimeContext,
     snapshot: &ResolvedRuntimeSnapshot,
 ) -> Result<()> {
-    if snapshot.behaviors.is_empty() {
-        let mut unavailable = snapshot
-            .unavailable_behaviors
-            .iter()
-            .map(|(behavior_id, reason)| format!("{behavior_id}: {reason}"))
-            .collect::<Vec<_>>();
-        unavailable.sort();
-        if unavailable.is_empty() {
-            anyhow::bail!(
-                "agent {} has no runnable behaviors at startup",
-                agent.agent_did()
-            );
-        }
-        anyhow::bail!(
-            "agent {} has no runnable behaviors at startup ({})",
-            agent.agent_did(),
-            unavailable.join("; ")
-        );
-    }
-
-    let client = reqwest::Client::builder()
-        .timeout(STARTUP_BACKEND_PROBE_TIMEOUT)
-        .build()
-        .context("building startup readiness probe client")?;
     let mut behavior_ids = snapshot.behaviors.keys().cloned().collect::<Vec<_>>();
     behavior_ids.sort();
 
@@ -514,38 +487,6 @@ async fn validate_startup_snapshot(
         tool_surface
             .build_tools(tool_runtime)
             .with_context(|| format!("building startup tool surface for behavior {behavior_id}"))?;
-        let api_key = behavior.resolve_backend_api_key()?;
-        probe_behavior_backend(&client, api_key.as_deref(), behavior.as_ref())
-            .await
-            .with_context(|| format!("validating startup backend for behavior {behavior_id}"))?;
-    }
-
-    Ok(())
-}
-
-async fn probe_behavior_backend(
-    client: &reqwest::Client,
-    api_key: Option<&str>,
-    behavior: &crate::config::BehaviorConfig,
-) -> Result<()> {
-    let discovered_models = discover_models(
-        client,
-        behavior.backend_provider_kind,
-        &behavior.backend_endpoint,
-        api_key,
-    )
-    .await?;
-    if !discovered_models
-        .iter()
-        .any(|model| model == &behavior.model_name)
-    {
-        anyhow::bail!(
-            "startup readiness probe for behavior {} did not advertise model {} on backend {} ({})",
-            behavior.name,
-            behavior.model_name,
-            behavior.backend_id.as_deref().unwrap_or("<unbound>"),
-            behavior.backend_provider_kind
-        );
     }
 
     Ok(())

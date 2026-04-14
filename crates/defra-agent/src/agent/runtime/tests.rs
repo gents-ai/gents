@@ -39,6 +39,8 @@ struct RuntimeStatusRow {
     process_state: String,
     reconcile_phase: String,
     active_generation: i64,
+    runnable_behavior_count: i64,
+    unavailable_behavior_count: i64,
     last_reconcile_result: String,
     last_reconcile_error: String,
 }
@@ -54,6 +56,8 @@ async fn fetch_runtime_status(
                 process_state
                 reconcile_phase
                 active_generation
+                runnable_behavior_count
+                unavailable_behavior_count
                 last_reconcile_result
                 last_reconcile_error
             }}
@@ -263,7 +267,10 @@ async fn bind_default_behavior_backend(
     backend_id: &str,
     endpoint: &str,
 ) {
-    bind_default_behavior_backend_with_capacity(node, agent_did, backend_id, endpoint, 1).await;
+    bind_default_behavior_backend_with_capacity_and_probe_status(
+        node, agent_did, backend_id, endpoint, 1, "healthy",
+    )
+    .await;
 }
 
 async fn bind_default_behavior_backend_with_capacity(
@@ -273,11 +280,31 @@ async fn bind_default_behavior_backend_with_capacity(
     endpoint: &str,
     max_concurrent: i64,
 ) {
+    bind_default_behavior_backend_with_capacity_and_probe_status(
+        node,
+        agent_did,
+        backend_id,
+        endpoint,
+        max_concurrent,
+        "healthy",
+    )
+    .await;
+}
+
+async fn bind_default_behavior_backend_with_capacity_and_probe_status(
+    node: &defra_node::EmbeddedNode,
+    agent_did: &str,
+    backend_id: &str,
+    endpoint: &str,
+    max_concurrent: i64,
+    probe_status: &str,
+) {
     let bootstrap = crate::ensure_agent_principal(node, agent_did)
         .await
         .unwrap();
     let escaped_backend_id = escape_graphql_string(backend_id);
     let escaped_endpoint = escape_graphql_string(endpoint);
+    let escaped_probe_status = escape_graphql_string(probe_status);
     let mutation = format!(
         r#"mutation {{
             upsert_InferenceBackend(
@@ -289,14 +316,14 @@ async fn bind_default_behavior_backend_with_capacity(
                     max_concurrent: {max_concurrent},
                     enabled: true,
                     models: ["default"],
-                    probe_status: "healthy"
+                    probe_status: "{escaped_probe_status}"
                 }},
                 update: {{
                     name: "{escaped_backend_id}",
                     endpoint: "{escaped_endpoint}",
                     max_concurrent: {max_concurrent},
                     enabled: true,
-                    probe_status: "healthy"
+                    probe_status: "{escaped_probe_status}"
                 }}
             ) {{ _docID }}
         }}"#
@@ -383,6 +410,29 @@ async fn create_agent_request(
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .expect("AgentRequest _docID")
+}
+
+async fn update_backend_probe_status(
+    node: &defra_node::EmbeddedNode,
+    backend_id: &str,
+    probe_status: &str,
+) {
+    let escaped_backend_id = escape_graphql_string(backend_id);
+    let escaped_probe_status = escape_graphql_string(probe_status);
+    let mutation = format!(
+        r#"mutation {{
+            update_InferenceBackend(
+                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
+                input: {{ probe_status: "{escaped_probe_status}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "update InferenceBackend probe_status failed: {:?}",
+        response.errors
+    );
 }
 
 struct ScriptedWatcher {
@@ -824,7 +874,7 @@ async fn control_watcher_resolves_tool_selection_into_reconciled_tool_surface() 
 }
 
 #[tokio::test]
-async fn run_agent_fails_before_ready_when_startup_probe_rejects_model() {
+async fn run_agent_starts_when_startup_probe_cannot_validate_model() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("startup-probe-rejects-model"));
@@ -848,16 +898,22 @@ async fn run_agent_fails_before_ready_when_startup_probe_rejects_model() {
     )
     .await
     .unwrap();
-    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let handle = tokio::spawn(agent.run(shutdown_rx));
 
-    let error = agent
-        .run(shutdown_rx)
+    wait_for_runtime_process_state(node.as_ref(), identity.did(), "ready").await;
+    let status = fetch_runtime_status(node.as_ref(), identity.did()).await;
+    assert_eq!(status.process_state, "ready");
+    assert_eq!(status.reconcile_phase, "idle");
+    assert_eq!(status.active_generation, 1);
+    assert_eq!(status.last_reconcile_result, "startup");
+    assert!(status.last_reconcile_error.is_empty());
+
+    let _ = shutdown_tx.send(true);
+    handle
         .await
-        .expect_err("startup should fail");
-    assert!(
-        format!("{error:#}").contains("did not advertise model default"),
-        "{error:#}"
-    );
+        .expect("agent task should join")
+        .expect("agent run should return ok");
 
     let observed = observer
         .states
@@ -866,17 +922,166 @@ async fn run_agent_fails_before_ready_when_startup_probe_rejects_model() {
         .clone();
     assert_eq!(
         observed,
-        vec![crate::agent::ProcessLifecycleState::Recovering]
+        vec![
+            crate::agent::ProcessLifecycleState::Recovering,
+            crate::agent::ProcessLifecycleState::Ready,
+            crate::agent::ProcessLifecycleState::ShuttingDown,
+            crate::agent::ProcessLifecycleState::Shutdown,
+        ]
+    );
+}
+
+#[tokio::test]
+async fn run_agent_starts_with_all_behaviors_unavailable_and_rejects_requests_at_runtime() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("startup-all-unavailable"));
+    bind_default_behavior_backend_with_capacity_and_probe_status(
+        node.as_ref(),
+        identity.did(),
+        "backend-unavailable",
+        "http://127.0.0.1:9/v1",
+        1,
+        "unknown",
+    )
+    .await;
+    let agent = crate::DefraAgent::from_default_behavior_documents(
+        node.clone(),
+        identity.clone(),
+        crate::agent::DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(agent.behaviors().is_empty());
+    assert_eq!(agent.unavailable_behaviors().len(), 1);
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let handle = tokio::spawn(agent.run(shutdown_rx));
+
+    wait_for_runtime_process_state(node.as_ref(), identity.did(), "ready").await;
+    let status = fetch_runtime_status(node.as_ref(), identity.did()).await;
+    assert_eq!(status.process_state, "ready");
+    assert_eq!(status.reconcile_phase, "idle");
+    assert_eq!(status.active_generation, 1);
+    assert_eq!(status.runnable_behavior_count, 0);
+    assert_eq!(status.unavailable_behavior_count, 1);
+    assert_eq!(status.last_reconcile_result, "startup");
+    assert!(status.last_reconcile_error.is_empty());
+
+    let request_doc_id = create_agent_request(
+        node.as_ref(),
+        identity.did(),
+        "req-unavailable-runtime",
+        "session-unavailable-runtime",
+        "hello",
+    )
+    .await;
+    wait_for_request_state(node.as_ref(), &request_doc_id, "error", "released").await;
+
+    let request_query = format!(
+        r#"{{
+            AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{
+                failure_reason
+            }}
+        }}"#,
+        escape_graphql_string(&request_doc_id),
+    );
+    let request_response = node.execute(&request_query).await;
+    assert!(
+        !request_response.has_errors(),
+        "AgentRequest failure query failed: {:?}",
+        request_response.errors
+    );
+    let failure_reason = request_response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("failure_reason"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        failure_reason.contains("backend backend-unavailable is unavailable"),
+        "unexpected failure reason: {failure_reason}"
     );
 
-    let status = fetch_runtime_status(node.as_ref(), identity.did()).await;
-    assert_eq!(status.process_state, "recovering");
-    assert_eq!(status.reconcile_phase, "idle");
-    assert_eq!(status.active_generation, 0);
-    assert_eq!(status.last_reconcile_result, "error");
-    assert!(status
-        .last_reconcile_error
-        .contains("did not advertise model default"));
+    let _ = shutdown_tx.send(true);
+    handle
+        .await
+        .expect("agent task should join")
+        .expect("agent run should return ok");
+}
+
+#[tokio::test]
+async fn run_agent_recovers_backend_availability_without_restart() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("startup-backend-recovers"));
+    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
+    bind_default_behavior_backend_with_capacity_and_probe_status(
+        node.as_ref(),
+        identity.did(),
+        "backend-recovers",
+        mock_endpoint.endpoint(),
+        1,
+        "unknown",
+    )
+    .await;
+    let agent = crate::DefraAgent::from_default_behavior_documents(
+        node.clone(),
+        identity.clone(),
+        crate::agent::DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(agent.behaviors().is_empty());
+    assert_eq!(agent.unavailable_behaviors().len(), 1);
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let handle = tokio::spawn(agent.run(shutdown_rx));
+
+    wait_for_runtime_process_state(node.as_ref(), identity.did(), "ready").await;
+    let startup_status = fetch_runtime_status(node.as_ref(), identity.did()).await;
+    assert_eq!(startup_status.active_generation, 1);
+    assert_eq!(startup_status.runnable_behavior_count, 0);
+    assert_eq!(startup_status.unavailable_behavior_count, 1);
+    assert_eq!(startup_status.last_reconcile_result, "startup");
+
+    update_backend_probe_status(node.as_ref(), "backend-recovers", "healthy").await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        let status = fetch_runtime_status(node.as_ref(), identity.did()).await;
+        if status.process_state == "ready"
+            && status.active_generation >= 2
+            && status.runnable_behavior_count == 1
+            && status.unavailable_behavior_count == 0
+            && status.last_reconcile_result == "applied"
+            && status.last_reconcile_error.is_empty()
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for runtime to recover backend availability; last status: {:?}",
+            status
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let _ = shutdown_tx.send(true);
+    handle
+        .await
+        .expect("agent task should join")
+        .expect("agent run should return ok");
 }
 
 async fn update_agent_principal_enabled(

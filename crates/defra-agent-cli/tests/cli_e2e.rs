@@ -3461,6 +3461,123 @@ async fn server_startup_defaults_to_local_only_when_p2p_disabled() -> Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-degraded-model-{}", Uuid::new_v4().simple());
+    let warm_port = allocate_port()?;
+    let port = allocate_port()?;
+    let agent_name = format!("cli-degraded-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+    let graphql = graphql_url(port);
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            "http://127.0.0.1:9/v1",
+        ],
+    )?;
+    let backend_id = init
+        .pointer("/init/backend_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing backend_id: {init}"))?
+        .to_string();
+
+    let mut warm_server = spawn_server(&home_dir, warm_port)?;
+    wait_for_port(warm_port, &mut warm_server.child)?;
+    wait_for_runtime_ready(&graphql_url(warm_port), &agent_did, Duration::from_secs(30)).await?;
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "backend",
+            "set",
+            "--graphql",
+            &graphql_url(warm_port),
+            "--backend-id",
+            &backend_id,
+            "--name",
+            &backend_id,
+            "--provider-kind",
+            "OpenAiCompatible",
+            "--endpoint",
+            "http://127.0.0.1:9/v1",
+            "--max-concurrent",
+            "1",
+            "--probe-status",
+            "unknown",
+        ],
+    )?;
+    warm_server
+        .child
+        .kill()
+        .context("stopping warm server after backend downgrade")?;
+    warm_server
+        .child
+        .wait()
+        .context("waiting for warm server shutdown")?;
+
+    let (mut serve, readiness) = spawn_server_with_ready_json(&home_dir, port, &[], &[])?;
+    wait_for_port(port, &mut serve.child)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    assert_eq!(
+        readiness.get("status").and_then(Value::as_str),
+        Some("serving")
+    );
+    assert_eq!(
+        readiness.get("behavior_readiness").and_then(Value::as_str),
+        Some("degraded")
+    );
+    assert_eq!(
+        readiness
+            .get("runnable_behaviors")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(0)
+    );
+    let unavailable = readiness
+        .get("unavailable_behaviors")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("readiness missing unavailable_behaviors: {readiness}"))?;
+    assert_eq!(unavailable.len(), 1);
+    let reason = unavailable
+        .values()
+        .next()
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        reason.contains("probe_status=unknown"),
+        "unexpected unavailable reason: {reason}"
+    );
+    assert_eq!(
+        readiness.get("graphql").and_then(Value::as_str),
+        Some(graphql.as_str())
+    );
+
+    let status = run_cli_json(&home_dir, &["status"])?;
+    assert_eq!(
+        status.get("process_state").and_then(Value::as_str),
+        Some("ready")
+    );
+    assert_eq!(
+        status
+            .get("runnable_behavior_count")
+            .and_then(Value::as_i64),
+        Some(0)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn status_includes_p2p_runtime_info() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -4492,7 +4609,7 @@ fn spawn_server_with_ready_json(
         .arg(port.to_string())
         .args(extra_args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     for (name, value) in envs {
         command.env(name, value);
     }
@@ -4533,13 +4650,25 @@ fn spawn_server_with_ready_json(
         Ok(Ok(value)) => value,
         Ok(Err(error)) => {
             let _ = child.kill();
-            let _ = child.wait();
-            return Err(error);
+            let output = child
+                .wait_with_output()
+                .context("waiting for failed defra-agent server process")?;
+            return Err(anyhow!(
+                "{error}\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ));
         }
         Err(_) => {
             let _ = child.kill();
-            let _ = child.wait();
-            bail!("timed out waiting for defra-agent server readiness JSON");
+            let output = child
+                .wait_with_output()
+                .context("waiting for timed out defra-agent server process")?;
+            bail!(
+                "timed out waiting for defra-agent server readiness JSON\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
     };
 
