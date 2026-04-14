@@ -3568,10 +3568,29 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
         Some("ready")
     );
     assert_eq!(
+        status.get("behavior_readiness").and_then(Value::as_str),
+        Some("degraded")
+    );
+    assert_eq!(
         status
             .get("runnable_behavior_count")
             .and_then(Value::as_i64),
         Some(0)
+    );
+    let status_unavailable = status
+        .get("unavailable_behaviors")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("status output missing unavailable_behaviors: {status}"))?;
+    assert_eq!(status_unavailable.len(), 1);
+    let status_reason = status_unavailable
+        .values()
+        .next()
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        status_reason.contains("probe_status=unknown"),
+        "unexpected status unavailable reason: {status_reason}"
     );
 
     Ok(())

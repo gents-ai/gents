@@ -204,7 +204,7 @@ pub(super) async fn run_agent(
             return Err(error);
         }
     };
-    if let Err(error) = validate_startup_snapshot(&tool_runtime, &resolved_snapshot).await {
+    if let Err(error) = validate_startup_snapshot(&agent, &tool_runtime, &resolved_snapshot).await {
         runtime_status.publish_error(&format!("{error:#}")).await;
         return Err(error);
     }
@@ -467,10 +467,50 @@ async fn log_recovery(node: &defra_node::EmbeddedNode, agent_did: &str, default_
     }
 }
 
+fn is_degraded_startup_unavailable_reason(reason: &str) -> bool {
+    let reason = reason.trim();
+    reason.ends_with(" is disabled")
+        || (reason.contains(" backend ")
+            && reason.contains(" is unavailable (enabled=")
+            && reason.contains(" probe_status="))
+        || reason.contains("did not advertise model")
+        || reason.contains("startup readiness probe")
+}
+
 async fn validate_startup_snapshot(
+    agent: &DefraAgent,
     tool_runtime: &ToolRuntimeContext,
     snapshot: &ResolvedRuntimeSnapshot,
 ) -> Result<()> {
+    if snapshot.behaviors.is_empty() {
+        let mut unavailable = snapshot
+            .unavailable_behaviors
+            .iter()
+            .map(|(behavior_id, reason)| (behavior_id.clone(), reason.clone()))
+            .collect::<Vec<_>>();
+        unavailable.sort_by(|left, right| left.0.cmp(&right.0));
+
+        if unavailable.is_empty() {
+            anyhow::bail!(
+                "agent {} has no runnable behaviors at startup",
+                agent.agent_did()
+            );
+        }
+
+        let blocking = unavailable
+            .iter()
+            .filter(|(_, reason)| !is_degraded_startup_unavailable_reason(reason))
+            .map(|(behavior_id, reason)| format!("{behavior_id}: {reason}"))
+            .collect::<Vec<_>>();
+        if !blocking.is_empty() {
+            anyhow::bail!(
+                "agent {} has no runnable behaviors at startup due to invalid configuration ({})",
+                agent.agent_did(),
+                blocking.join("; ")
+            );
+        }
+    }
+
     let mut behavior_ids = snapshot.behaviors.keys().cloned().collect::<Vec<_>>();
     behavior_ids.sort();
 

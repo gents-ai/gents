@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, BufRead, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -3437,6 +3437,7 @@ async fn load_runtime_status_output(
     graphql: &str,
     agent_did: &str,
 ) -> Result<Value> {
+    let unavailable_behaviors = load_live_unavailable_behaviors(graphql, agent_did).await;
     let query = format!(
         r#"{{
             AgentRuntime(
@@ -3476,6 +3477,8 @@ async fn load_runtime_status_output(
         "runtime_state": runtime_state,
         "runtime": runtime_row,
         "p2p": p2p_status,
+        "behavior_readiness": if unavailable_behaviors.is_empty() { "ready" } else { "degraded" },
+        "unavailable_behaviors": unavailable_behaviors,
     });
     if let Some(map) = output.as_object_mut() {
         for field in [
@@ -3499,6 +3502,158 @@ async fn load_runtime_status_output(
         flatten_p2p_fields(map, &p2p_value);
     }
     Ok(output)
+}
+
+async fn load_live_unavailable_behaviors(
+    graphql: &str,
+    agent_did: &str,
+) -> BTreeMap<String, String> {
+    let access = ConfigAccess::Graphql(graphql.to_string());
+    match build_config_export_bundle(&access, agent_did).await {
+        Ok(bundle) => collect_unavailable_behaviors_from_bundle(&bundle),
+        Err(_) => BTreeMap::new(),
+    }
+}
+
+fn collect_unavailable_behaviors_from_bundle(
+    bundle: &ConfigExportBundle,
+) -> BTreeMap<String, String> {
+    let backend_rows = bundle
+        .inference_backends
+        .iter()
+        .filter_map(|row| string_field(row, "backend_id").map(|backend_id| (backend_id, row)))
+        .collect::<BTreeMap<_, _>>();
+    let tool_selection_rows = bundle
+        .tool_selections
+        .iter()
+        .filter_map(|row| string_field(row, "selection_id").map(|selection_id| (selection_id, row)))
+        .collect::<BTreeMap<_, _>>();
+    let inference_profile_rows = bundle
+        .inference_profiles
+        .iter()
+        .filter_map(|row| string_field(row, "profile_id").map(|profile_id| (profile_id, row)))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut unavailable = BTreeMap::new();
+    for behavior in &bundle.agent_behaviors {
+        let Some(behavior_id) = string_field(behavior, "behavior_id") else {
+            continue;
+        };
+        if !bool_field(behavior, "enabled", true) {
+            unavailable.insert(
+                behavior_id.clone(),
+                format!("behavior {behavior_id} is disabled"),
+            );
+            continue;
+        }
+
+        let Some(backend_id) = string_field(behavior, "backend_id") else {
+            unavailable.insert(
+                behavior_id.clone(),
+                format!("behavior {behavior_id} has no backend binding"),
+            );
+            continue;
+        };
+        let Some(backend) = backend_rows.get(&backend_id) else {
+            unavailable.insert(
+                behavior_id.clone(),
+                format!("behavior {behavior_id} references missing backend {backend_id}"),
+            );
+            continue;
+        };
+
+        let provider_kind = string_field(backend, "provider_kind")
+            .unwrap_or_else(|| "OpenAiCompatible".to_string());
+        let probe_status =
+            string_field(backend, "probe_status").unwrap_or_else(|| "unknown".to_string());
+        let backend_enabled = bool_field(backend, "enabled", true);
+        if !backend_enabled || probe_status != "healthy" {
+            unavailable.insert(
+                behavior_id.clone(),
+                format!(
+                    "behavior {behavior_id} backend {backend_id} is unavailable (enabled={backend_enabled} probe_status={probe_status})"
+                ),
+            );
+            continue;
+        }
+
+        if let Some(profile_id) = string_field(behavior, "inference_profile_id") {
+            if !inference_profile_rows.contains_key(&profile_id) {
+                unavailable.insert(
+                    behavior_id.clone(),
+                    format!(
+                        "behavior {behavior_id} references missing inference profile {profile_id}"
+                    ),
+                );
+                continue;
+            }
+        }
+
+        let tool_selection = match string_field(behavior, "tool_selection_id") {
+            Some(selection_id) => match tool_selection_rows.get(&selection_id) {
+                Some(row) => Some(*row),
+                None => {
+                    unavailable.insert(
+                        behavior_id.clone(),
+                        format!(
+                            "behavior {behavior_id} references missing tool selection {selection_id}"
+                        ),
+                    );
+                    continue;
+                }
+            },
+            None => None,
+        };
+
+        if !bool_field(backend, "supports_streaming", true) {
+            unavailable.insert(
+                behavior_id.clone(),
+                format!(
+                    "behavior {behavior_id} backend {backend_id} ({provider_kind}) does not support streaming and cannot serve interactive runtime requests"
+                ),
+            );
+            continue;
+        }
+
+        if selection_requires_tool_calling(tool_selection)
+            && !bool_field(backend, "supports_tool_calls", true)
+        {
+            unavailable.insert(
+                behavior_id.clone(),
+                format!(
+                    "behavior {behavior_id} backend {backend_id} ({provider_kind}) does not support tool calling but resolved tools are enabled"
+                ),
+            );
+        }
+    }
+
+    unavailable
+}
+
+fn string_field(row: &Value, field: &str) -> Option<String> {
+    normalize_optional_string(row.get(field).and_then(Value::as_str))
+}
+
+fn bool_field(row: &Value, field: &str, default: bool) -> bool {
+    row.get(field).and_then(Value::as_bool).unwrap_or(default)
+}
+
+fn selection_requires_tool_calling(selection: Option<&Value>) -> bool {
+    let Some(selection) = selection else {
+        return true;
+    };
+
+    bool_field(selection, "enable_meta_tools", true)
+        || bool_field(selection, "enable_file_tools", false)
+        || bool_field(selection, "enable_bash", false)
+        || selection
+            .get("cli_tool_names")
+            .and_then(Value::as_array)
+            .is_some_and(|rows| !rows.is_empty())
+        || selection
+            .get("delegate_to")
+            .and_then(Value::as_array)
+            .is_some_and(|rows| !rows.is_empty())
 }
 
 fn persisted_p2p_status(runtime_state: Option<&StoredRuntimeState>) -> Value {
@@ -6253,4 +6408,116 @@ fn preview_compact_text(value: &str) -> Option<String> {
         trimmed.to_string()
     };
     Some(preview)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bundle_with_rows(
+        agent_behaviors: Vec<Value>,
+        tool_selections: Vec<Value>,
+        inference_backends: Vec<Value>,
+        inference_profiles: Vec<Value>,
+    ) -> ConfigExportBundle {
+        ConfigExportBundle {
+            format: CONFIG_EXPORT_FORMAT.to_string(),
+            agent_did: "did:defra-agent:test".to_string(),
+            exported_at: "2026-04-14T00:00:00Z".to_string(),
+            access_mode: "graphql".to_string(),
+            agent_principal: None,
+            agent_behaviors,
+            tool_selections,
+            inference_backends,
+            inference_profiles,
+            tool_service_registries: Vec::new(),
+            scheduled_tasks: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn collect_unavailable_behaviors_from_bundle_reports_config_and_backend_issues() {
+        let bundle = bundle_with_rows(
+            vec![
+                json!({
+                    "behavior_id": "did:defra-agent:test:default",
+                    "enabled": true,
+                    "backend_id": "",
+                    "tool_selection_id": "",
+                    "inference_profile_id": ""
+                }),
+                json!({
+                    "behavior_id": "did:defra-agent:test:ops",
+                    "enabled": true,
+                    "backend_id": "backend-unhealthy",
+                    "tool_selection_id": "",
+                    "inference_profile_id": ""
+                }),
+                json!({
+                    "behavior_id": "did:defra-agent:test:broken-tools",
+                    "enabled": true,
+                    "backend_id": "backend-healthy",
+                    "tool_selection_id": "missing-tools",
+                    "inference_profile_id": ""
+                }),
+            ],
+            Vec::new(),
+            vec![
+                json!({
+                    "backend_id": "backend-unhealthy",
+                    "provider_kind": "OpenAiCompatible",
+                    "enabled": true,
+                    "probe_status": "unknown",
+                    "supports_streaming": true,
+                    "supports_tool_calls": true
+                }),
+                json!({
+                    "backend_id": "backend-healthy",
+                    "provider_kind": "OpenAiCompatible",
+                    "enabled": true,
+                    "probe_status": "healthy",
+                    "supports_streaming": true,
+                    "supports_tool_calls": true
+                }),
+            ],
+            Vec::new(),
+        );
+
+        let unavailable = collect_unavailable_behaviors_from_bundle(&bundle);
+        assert_eq!(
+            unavailable.get("did:defra-agent:test:default"),
+            Some(&"behavior did:defra-agent:test:default has no backend binding".to_string())
+        );
+        assert_eq!(
+            unavailable.get("did:defra-agent:test:ops"),
+            Some(
+                &"behavior did:defra-agent:test:ops backend backend-unhealthy is unavailable (enabled=true probe_status=unknown)".to_string()
+            )
+        );
+        assert_eq!(
+            unavailable.get("did:defra-agent:test:broken-tools"),
+            Some(
+                &"behavior did:defra-agent:test:broken-tools references missing tool selection missing-tools".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn selection_requires_tool_calling_defaults_meta_tools_on() {
+        assert!(selection_requires_tool_calling(None));
+        assert!(selection_requires_tool_calling(Some(&json!({
+            "enable_meta_tools": true,
+            "enable_file_tools": false,
+            "enable_bash": false,
+            "cli_tool_names": [],
+            "delegate_to": []
+        }))));
+        assert!(!selection_requires_tool_calling(Some(&json!({
+            "enable_meta_tools": false,
+            "enable_file_tools": false,
+            "enable_bash": false,
+            "cli_tool_names": [],
+            "delegate_to": []
+        }))));
+    }
 }

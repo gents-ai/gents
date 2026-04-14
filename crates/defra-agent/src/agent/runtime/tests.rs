@@ -932,6 +932,51 @@ async fn run_agent_starts_when_startup_probe_cannot_validate_model() {
 }
 
 #[tokio::test]
+async fn run_agent_fails_when_all_behaviors_are_unavailable_due_to_invalid_config() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("startup-invalid-config"));
+    let agent = crate::DefraAgent::from_default_behavior_documents(
+        node.clone(),
+        identity.clone(),
+        crate::agent::DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(agent.behaviors().is_empty());
+    assert_eq!(agent.unavailable_behaviors().len(), 1);
+
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let error = agent
+        .run(shutdown_rx)
+        .await
+        .expect_err("startup should fail for structurally invalid config");
+    let error_text = format!("{error:#}");
+    assert!(
+        error_text.contains("no runnable behaviors at startup due to invalid configuration"),
+        "unexpected startup error: {error_text}"
+    );
+    assert!(
+        error_text.contains("has no backend binding"),
+        "unexpected startup error: {error_text}"
+    );
+
+    let status = fetch_runtime_status(node.as_ref(), identity.did()).await;
+    assert_eq!(status.process_state, "recovering");
+    assert_eq!(status.reconcile_phase, "idle");
+    assert_eq!(status.active_generation, 0);
+    assert_eq!(status.runnable_behavior_count, 0);
+    assert_eq!(status.unavailable_behavior_count, 0);
+    assert_eq!(status.last_reconcile_result, "error");
+    assert!(status
+        .last_reconcile_error
+        .contains("has no backend binding"));
+}
+
+#[tokio::test]
 async fn run_agent_starts_with_all_behaviors_unavailable_and_rejects_requests_at_runtime() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
