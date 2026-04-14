@@ -139,7 +139,7 @@ The mockup at `./2026-04-13-desktop-dashboard-mockup.html` is the canonical refe
 ### Chat activity
 
 Sidebar:
-- `Deployments` section: each deployment row (one peer = one IROH node in the local address book) shows connection health + "N agents" metadata. Agents are indented beneath their deployment, connected by a 1px tree line. Tree grouping is display-only — it records which peer we most recently observed replicating an agent's state; it is **not** a primary key. `AgentConversation` and `AgentRequest` carry `agent_did` and no peer provenance (see `crates/defra-agent/schemas/agent/agent_conversation.graphql`), so selection routes by `agent_did` alone. Clicking an agent selects it as the active principal.
+- `Deployments` section: each deployment row (one peer = one IROH node in the local address book) shows connection health + "N agents" metadata. Agents are indented beneath their deployment, connected by a 1px tree line. Tree grouping is display-only — it records which peer we most recently observed replicating an agent's state; it is **not** a primary key. `AgentConversation` and `AgentRequest` carry `agent_did` and no peer provenance (see `crates/defra-agent-protocol/schemas/agent/agent_conversation.graphql`), so selection routes by `agent_did` alone. Clicking an agent selects it as the active principal.
 - `Conversations` section: filtered by `agent_did` only. Grouped Today / Yesterday / Earlier. Each row shows title, session meta, relative timestamp.
 
 Main pane:

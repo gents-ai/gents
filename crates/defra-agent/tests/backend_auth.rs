@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -21,21 +21,20 @@ use defra_agent::{
 use serde_json::Value;
 use tokio::sync::watch;
 
-static ENV_LOCK: Mutex<()> = Mutex::new(());
+static ENV_VAR_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 struct TestEnvGuard {
-    _lock: MutexGuard<'static, ()>,
     saved: Vec<(&'static str, Option<OsString>)>,
 }
 
 impl TestEnvGuard {
     fn new(names: &[&'static str]) -> Self {
-        let lock = ENV_LOCK.lock().expect("env lock poisoned");
         let saved = names
             .iter()
             .map(|name| (*name, std::env::var_os(name)))
             .collect();
-        Self { _lock: lock, saved }
+        Self { saved }
     }
 
     fn set(&mut self, name: &'static str, value: &str) {
@@ -416,6 +415,7 @@ fn write_http_response(
 
 #[test]
 fn behavior_config_prefers_raw_backend_api_key() {
+    let _env_guard = ENV_VAR_LOCK.blocking_lock();
     let mut behavior = test_behavior("behavior-raw", "backend-raw", Some("IGNORED_ENV_KEY"));
     behavior.backend_api_key = Some("raw-key".to_string());
 
@@ -428,6 +428,7 @@ fn behavior_config_prefers_raw_backend_api_key() {
 
 #[test]
 fn behavior_config_prefers_backend_specific_api_key_env_var() {
+    let _env_guard = ENV_VAR_LOCK.blocking_lock();
     let behavior = test_behavior(
         "behavior-a",
         "backend-a",
@@ -442,16 +443,20 @@ fn behavior_config_prefers_backend_specific_api_key_env_var() {
 }
 
 #[test]
-fn behavior_config_without_api_key_returns_none() {
+fn behavior_config_falls_back_to_legacy_global_api_key_env_var() {
+    let _env_guard = ENV_VAR_LOCK.blocking_lock();
+    let mut env = TestEnvGuard::new(&["AGENT_DAEMON_API_KEY"]);
     let behavior = test_behavior("behavior-b", "backend-b", None);
 
+    env.set("AGENT_DAEMON_API_KEY", "legacy-key");
     let resolved = behavior.resolve_backend_api_key().expect("resolve api key");
 
-    assert_eq!(resolved, None);
+    assert_eq!(resolved.as_deref(), Some("legacy-key"));
 }
 
 #[tokio::test]
 async fn run_agent_uses_backend_specific_api_key_env_var_for_startup_probe() -> Result<()> {
+    let _env_guard = ENV_VAR_LOCK.lock().await;
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     ensure_runtime_schemas(node.as_ref()).await?;
     let identity = Arc::new(test_identity("startup-probe-backend-auth"));

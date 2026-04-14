@@ -4,7 +4,7 @@
 
 **Goal:** Extract a new `defra-agent-protocol` crate from `defra-agent` containing GraphQL schema strings, the client turn-observation protocol, and serde row mirrors for every replicated collection. The runtime keeps its existing surface via re-exports.
 
-**Architecture:** The new crate is dependency-light — `serde` only — with no `defra-node`, no `tokio`, no `rig`. It is the shared substrate for any DefraDB peer participating in a `defra-agent` control plane (runtime, CLI, and forthcoming `defra-agent-desktop`). `defra-agent` re-exports `client_protocol` and keeps its `schema::ensure_schemas` / `schema::ensure_runtime_schemas` helpers, which now delegate their schema string arrays to `defra_agent_protocol::schemas::{ALL, RUNTIME_ALL}`.
+**Architecture:** The new crate is dependency-light — `serde` only — with no `defra-node`, no `tokio`, no `rig`. It is the shared substrate for any DefraDB peer participating in a `defra-agent` control plane (runtime, CLI, and forthcoming `defra-agent-desktop`). `defra-agent` re-exports `client_protocol` and keeps its `schema::ensure_schemas` / `schema::ensure_runtime_schemas` helpers. The `schema` module also preserves the legacy `*_SCHEMA` constant surface by aliasing the canonical exports from `defra_agent_protocol::schemas`, while delegating registration arrays to `defra_agent_protocol::schemas::{ALL, RUNTIME_ALL}`.
 
 **Tech Stack:** Rust 2021, `serde`, `serde_json` (dev), Cargo workspaces.
 
@@ -35,7 +35,7 @@ This plan runs on `main` directly — no worktree. Each task commits a coherent 
 - `Cargo.toml` (workspace root) — add new member + path dep
 - `crates/defra-agent/Cargo.toml` — add `defra-agent-protocol` dep
 - `crates/defra-agent/src/lib.rs` — swap `pub mod client_protocol;` for `pub use defra_agent_protocol::client_protocol;`
-- `crates/defra-agent/src/schema.rs` — delete local `include_str!` consts, import `ALL`/`RUNTIME_ALL` from `defra_agent_protocol::schemas`, keep `ensure_*` helpers
+- `crates/defra-agent/src/schema.rs` — replace local `include_str!` consts with `pub use` aliases to `defra_agent_protocol::schemas`, import `ALL`/`RUNTIME_ALL`, keep `ensure_*` helpers
 
 **Deleted files:**
 
@@ -345,6 +345,8 @@ git commit -m "Move client_protocol to defra-agent-protocol"
 
 - Modify: `crates/defra-agent-protocol/src/row.rs`
 
+**Implementation note:** The generated row mirrors are a wire-shape layer, not a runtime invariant layer. Nullable GraphQL scalars should not be modeled as required Rust fields unless they are stable identity keys for the document, and collection/list fields must deserialize both omitted fields and explicit `null` values as empty vectors.
+
 ### Steps
 
 - [ ] **Step 1: Write the failing tests**
@@ -400,6 +402,19 @@ mod tests {
         assert!(row.cli_tool_names.is_empty());
         assert!(row.delegate_to.is_empty());
     }
+
+    #[test]
+    fn tool_selection_row_handles_null_arrays() {
+        let json = r#"{
+            "selection_id": "sel-2",
+            "agent_did": "did:defra:amy",
+            "cli_tool_names": null,
+            "delegate_to": null
+        }"#;
+        let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
+        assert!(row.cli_tool_names.is_empty());
+        assert!(row.delegate_to.is_empty());
+    }
 }
 ```
 
@@ -417,11 +432,19 @@ Replace `crates/defra-agent-protocol/src/row.rs` with the complete file below (p
 //!
 //! These types are deliberately permissive: most scalar fields are wrapped
 //! in `Option<T>` because DefraDB may omit unpopulated fields from GraphQL
-//! responses, and list fields use `#[serde(default)]` so missing arrays
-//! deserialize as empty vectors. Callers should treat these as the wire
-//! shape, not a runtime invariant.
+//! responses. Collection/list fields use a custom deserializer so both
+//! missing arrays and explicit `null` values deserialize as empty vectors.
+//! Callers should treat these as the wire shape, not a runtime invariant.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
 
 // ── agent domain ────────────────────────────────────────────────
 
@@ -528,9 +551,12 @@ pub struct AgentRequestRow {
     pub retry_root_request: Option<String>,
     #[serde(default)]
     pub superseded_by_request: Option<String>,
-    pub content: String,
-    pub status: String,
-    pub lifecycle_state: String,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub lifecycle_state: Option<String>,
     #[serde(default)]
     pub backend_id: Option<String>,
     #[serde(default)]
@@ -561,7 +587,8 @@ pub struct AgentResponseRow {
     pub content: Option<String>,
     #[serde(default)]
     pub reasoning: Option<String>,
-    pub status: String,
+    #[serde(default)]
+    pub status: Option<String>,
     #[serde(default)]
     pub error_message: Option<String>,
     #[serde(default)]
@@ -579,7 +606,8 @@ pub struct AgentMessageRow {
     pub message_key: String,
     pub session_id: String,
     pub sequence: i64,
-    pub role: String,
+    #[serde(default)]
+    pub role: Option<String>,
     #[serde(default)]
     pub content: Option<String>,
     #[serde(default)]
@@ -705,11 +733,11 @@ pub struct ToolSelectionRow {
     pub enable_bash: Option<bool>,
     #[serde(default)]
     pub bash_mode: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     pub cli_tool_names: Vec<String>,
     #[serde(default)]
     pub enable_meta_tools: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     pub delegate_to: Vec<String>,
 }
 
@@ -740,7 +768,7 @@ pub struct InferenceBackendRow {
     pub supports_structured_outputs: Option<bool>,
     #[serde(default)]
     pub supports_json_schema: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     pub models: Vec<String>,
     #[serde(default)]
     pub last_probe: Option<String>,
@@ -794,7 +822,7 @@ pub struct ToolServiceRegistryRow {
     pub mcp_port: Option<i64>,
     #[serde(default)]
     pub mcp_path: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     pub tools: Vec<ToolServiceEntry>,
     #[serde(default)]
     pub status: Option<String>,
@@ -953,11 +981,31 @@ Replace `crates/defra-agent/src/schema.rs` with:
 //! Runtime-side schema registration helpers.
 //!
 //! Schema strings are the canonical exports of `defra_agent_protocol::schemas`.
-//! This module wires them to an `EmbeddedNode` via `ensure_schemas` and
-//! `ensure_runtime_schemas`.
+//! This module preserves the legacy `*_SCHEMA` names via re-exported aliases
+//! and wires the canonical arrays to an `EmbeddedNode` via `ensure_schemas`
+//! and `ensure_runtime_schemas`.
 
 use anyhow::Result;
-use defra_agent_protocol::schemas::{ALL, RUNTIME_ALL};
+pub use defra_agent_protocol::schemas::{
+    AGENT_BEHAVIOR as AGENT_BEHAVIOR_SCHEMA,
+    AGENT_CONVERSATION as AGENT_CONVERSATION_SCHEMA,
+    AGENT_MESSAGE as AGENT_MESSAGE_SCHEMA,
+    AGENT_PRINCIPAL as AGENT_PRINCIPAL_SCHEMA,
+    AGENT_REQUEST as AGENT_REQUEST_SCHEMA,
+    AGENT_RESPONSE as AGENT_RESPONSE_SCHEMA,
+    AGENT_RUNTIME as AGENT_RUNTIME_SCHEMA,
+    AGENT_SESSION as AGENT_SESSION_SCHEMA,
+    AGENT_TOOL_CALL as AGENT_TOOL_CALL_SCHEMA,
+    AGENT_TOOL_RESULT as AGENT_TOOL_RESULT_SCHEMA,
+    COMPACTION_ENTRY as COMPACTION_ENTRY_SCHEMA,
+    INFERENCE_BACKEND as INFERENCE_BACKEND_SCHEMA,
+    INFERENCE_PROFILE as INFERENCE_PROFILE_SCHEMA,
+    SCHEDULED_TASK as SCHEDULED_TASK_SCHEMA,
+    TOOL_SELECTION as TOOL_SELECTION_SCHEMA,
+    TOOL_SERVICE_REGISTRY as TOOL_SERVICE_REGISTRY_SCHEMA,
+    ALL,
+    RUNTIME_ALL,
+};
 use defra_node::EmbeddedNode;
 
 async fn ensure_schema_set(node: &EmbeddedNode, schemas: &[&str]) -> Result<()> {

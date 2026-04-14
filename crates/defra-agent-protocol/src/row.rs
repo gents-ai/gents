@@ -1,0 +1,483 @@
+//! Serde mirrors for replicated collection rows.
+//!
+//! These types are deliberately permissive: stable identity keys remain
+//! required, while other nullable scalars are wrapped in `Option<T>` because
+//! DefraDB may omit unpopulated fields from GraphQL responses. Collection/list
+//! fields use a custom deserializer so both missing arrays and explicit `null`
+//! values deserialize as empty vectors. Callers should treat these as the wire
+//! shape, not a runtime invariant.
+
+use serde::{Deserialize, Deserializer, Serialize};
+
+fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentPrincipalRow {
+    pub agent_did: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub default_behavior_id: Option<String>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub created_by: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentBehaviorRow {
+    pub behavior_id: String,
+    #[serde(default)]
+    pub agent_did: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+    #[serde(default)]
+    pub backend_id: Option<String>,
+    #[serde(default)]
+    pub model_name: Option<String>,
+    #[serde(default)]
+    pub tool_selection_id: Option<String>,
+    #[serde(default)]
+    pub inference_profile_id: Option<String>,
+    #[serde(default)]
+    pub compaction_strategy: Option<String>,
+    #[serde(default)]
+    pub compaction_threshold: Option<f64>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentRuntimeRow {
+    pub agent_did: String,
+    #[serde(default)]
+    pub process_state: Option<String>,
+    #[serde(default)]
+    pub reconcile_phase: Option<String>,
+    #[serde(default)]
+    pub active_generation: Option<i64>,
+    #[serde(default)]
+    pub router_generation: Option<i64>,
+    #[serde(default)]
+    pub default_behavior_id: Option<String>,
+    #[serde(default)]
+    pub runnable_behavior_count: Option<i64>,
+    #[serde(default)]
+    pub unavailable_behavior_count: Option<i64>,
+    #[serde(default)]
+    pub last_reconcile_result: Option<String>,
+    #[serde(default)]
+    pub last_reconcile_error: Option<String>,
+    #[serde(default)]
+    pub last_reconcile_completed_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentConversationRow {
+    pub session_id: String,
+    #[serde(default)]
+    pub agent_name: Option<String>,
+    #[serde(default)]
+    pub agent_did: Option<String>,
+    #[serde(default)]
+    pub behavior_id: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub preview_text: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    #[serde(default)]
+    pub latest_request_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentRequestRow {
+    pub request_id: String,
+    #[serde(default)]
+    pub agent_did: Option<String>,
+    #[serde(default)]
+    pub behavior_id: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub retry_parent_request: Option<String>,
+    #[serde(default)]
+    pub retry_root_request: Option<String>,
+    #[serde(default)]
+    pub superseded_by_request: Option<String>,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub lifecycle_state: Option<String>,
+    #[serde(default)]
+    pub admission_state: Option<String>,
+    #[serde(default)]
+    pub backend_id: Option<String>,
+    #[serde(default)]
+    pub execution_origin: Option<String>,
+    #[serde(default)]
+    pub failure_reason: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub claimed_at: Option<String>,
+    #[serde(default)]
+    pub deadline: Option<String>,
+    #[serde(default)]
+    pub retry_count: Option<i64>,
+    #[serde(default)]
+    pub max_retries: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentResponseRow {
+    pub response_key: String,
+    #[serde(default)]
+    pub request_id: Option<String>,
+    #[serde(default)]
+    pub agent_did: Option<String>,
+    #[serde(default)]
+    pub behavior_id: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub reasoning: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub error_message: Option<String>,
+    #[serde(default)]
+    pub token_count: Option<i64>,
+    #[serde(default)]
+    pub progress_seq: Option<i64>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentMessageRow {
+    pub message_key: String,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub sequence: Option<i64>,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub timestamp: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentSessionRow {
+    pub session_id: String,
+    #[serde(default)]
+    pub agent_name: Option<String>,
+    #[serde(default)]
+    pub behavior_id: Option<String>,
+    #[serde(default)]
+    pub started: Option<String>,
+    #[serde(default)]
+    pub ended: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentToolCallRow {
+    pub tool_call_key: String,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub message_sequence: Option<i64>,
+    #[serde(default)]
+    pub tool_name: Option<String>,
+    #[serde(default)]
+    pub tool_call_id: Option<String>,
+    #[serde(default)]
+    pub args: Option<String>,
+    #[serde(default)]
+    pub result: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentToolResultRow {
+    #[serde(default)]
+    pub agent_did: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub tool_name: Option<String>,
+    #[serde(default)]
+    pub tool_input: Option<String>,
+    #[serde(default)]
+    pub output_text: Option<String>,
+    #[serde(default)]
+    pub truncated: Option<bool>,
+    #[serde(default)]
+    pub truncation_metadata: Option<String>,
+    #[serde(default)]
+    pub conversation_doc_id: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompactionEntryRow {
+    pub compaction_key: String,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub sequence: Option<i64>,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub files_read: Option<String>,
+    #[serde(default)]
+    pub files_modified: Option<String>,
+    #[serde(default)]
+    pub messages_compacted: Option<i64>,
+    #[serde(default)]
+    pub original_tokens: Option<i64>,
+    #[serde(default)]
+    pub compacted_tokens: Option<i64>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScheduledTaskRow {
+    pub task_id: String,
+    #[serde(default)]
+    pub agent_did: Option<String>,
+    #[serde(default)]
+    pub behavior_id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub interval_secs: Option<i64>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub next_run_at: Option<String>,
+    #[serde(default)]
+    pub last_run_at: Option<String>,
+    #[serde(default)]
+    pub last_status: Option<String>,
+    #[serde(default)]
+    pub last_error: Option<String>,
+    #[serde(default)]
+    pub run_count: Option<i64>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolSelectionRow {
+    pub selection_id: String,
+    #[serde(default)]
+    pub agent_did: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub enable_file_tools: Option<bool>,
+    #[serde(default)]
+    pub file_tools_mode: Option<String>,
+    #[serde(default)]
+    pub enable_bash: Option<bool>,
+    #[serde(default)]
+    pub bash_mode: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub cli_tool_names: Vec<String>,
+    #[serde(default)]
+    pub enable_meta_tools: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub delegate_to: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InferenceBackendRow {
+    pub backend_id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub provider_kind: Option<String>,
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub api_key_env_var: Option<String>,
+    #[serde(default)]
+    pub max_concurrent: Option<i64>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub supports_tool_calls: Option<bool>,
+    #[serde(default)]
+    pub supports_streaming: Option<bool>,
+    #[serde(default)]
+    pub supports_structured_outputs: Option<bool>,
+    #[serde(default)]
+    pub supports_json_schema: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub models: Vec<String>,
+    #[serde(default)]
+    pub last_probe: Option<String>,
+    #[serde(default)]
+    pub probe_status: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InferenceProfileRow {
+    pub profile_id: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub context_window: Option<i64>,
+    #[serde(default)]
+    pub max_output_tokens: Option<i64>,
+    #[serde(default)]
+    pub max_turns: Option<i64>,
+    #[serde(default)]
+    pub temperature: Option<f64>,
+    #[serde(default)]
+    pub stream_batch_ms: Option<i64>,
+    #[serde(default)]
+    pub deadline_duration_secs: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolServiceEntry {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolServiceRegistryRow {
+    pub service_id: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub hostname: Option<String>,
+    #[serde(default)]
+    pub tailscale_ip: Option<String>,
+    #[serde(default)]
+    pub lan_ip: Option<String>,
+    #[serde(default)]
+    pub mcp_port: Option<i64>,
+    #[serde(default)]
+    pub mcp_path: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub tools: Vec<ToolServiceEntry>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_request_row_roundtrips() {
+        let json = r#"{
+            "request_id": "req-1",
+            "agent_did": "did:defra:amy",
+            "behavior_id": "amy-code",
+            "session_id": "s-1",
+            "retry_parent_request": "",
+            "retry_root_request": "req-1",
+            "superseded_by_request": "",
+            "content": "hello",
+            "status": "pending",
+            "lifecycle_state": "pending",
+            "admission_state": "released",
+            "backend_id": "",
+            "execution_origin": "interactive",
+            "failure_reason": "",
+            "created_at": "2026-04-13T12:00:00Z",
+            "retry_count": 0,
+            "max_retries": 3
+        }"#;
+        let row: AgentRequestRow = serde_json::from_str(json).expect("parse");
+        assert_eq!(row.request_id, "req-1");
+        assert_eq!(row.retry_count, Some(0));
+        let re: String = serde_json::to_string(&row).expect("serialize");
+        let round: AgentRequestRow = serde_json::from_str(&re).expect("reparse");
+        assert_eq!(row, round);
+    }
+
+    #[test]
+    fn tool_selection_row_handles_missing_arrays() {
+        let json = r#"{
+            "selection_id": "sel-1",
+            "agent_did": "did:defra:amy",
+            "display_name": "tools-engineering",
+            "enable_file_tools": true,
+            "file_tools_mode": "read",
+            "enable_bash": false,
+            "bash_mode": "deny",
+            "enable_meta_tools": true
+        }"#;
+        let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
+        assert!(row.cli_tool_names.is_empty());
+        assert!(row.delegate_to.is_empty());
+    }
+
+    #[test]
+    fn tool_selection_row_handles_null_arrays() {
+        let json = r#"{
+            "selection_id": "sel-2",
+            "agent_did": "did:defra:amy",
+            "cli_tool_names": null,
+            "delegate_to": null
+        }"#;
+        let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
+        assert!(row.cli_tool_names.is_empty());
+        assert!(row.delegate_to.is_empty());
+    }
+}

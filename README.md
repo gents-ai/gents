@@ -294,7 +294,7 @@ That flow already has a mocked end-to-end harness in [crates/defra-agent-cli/tes
 
 ## Further Reading
 
-- Schema/data model: `crates/defra-agent/schemas/README.md`
+- Schema/data model: `crates/defra-agent-protocol/schemas/README.md`
 - Lean proof guide: `crates/defra-agent/proofs/README.md`
 
 Run the mocked binary-flow suite locally with:

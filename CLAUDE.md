@@ -44,7 +44,7 @@ Key proven properties: terminal irreversibility (S1), monotonic progress (S3), d
 
 ### Document-Driven Control Plane
 
-All state lives in DefraDB as GraphQL collections (schemas in `crates/defra-agent/schemas/`). The runtime reads configuration from documents and writes results back to documents. A CLI can validate, diff, and apply manifests from checked-in files into the DB (see sourcenetwork/defra-agent#8).
+All state lives in DefraDB as GraphQL collections (schemas in `crates/defra-agent-protocol/schemas/`). The runtime reads configuration from documents and writes results back to documents. A CLI can validate, diff, and apply manifests from checked-in files into the DB (see sourcenetwork/defra-agent#8).
 
 Field ownership matters: the apply path owns desired-state fields (config, prompts, backend references), while the runtime owns live-state fields (probe_status, run counts, lifecycle state). Neither clobbers the other.
 
