@@ -812,9 +812,21 @@ pub(super) fn default_hostname() -> String {
         .unwrap_or_else(|_| "unknown".to_string())
 }
 
+fn format_pending_visibility_error(details: &[String]) -> String {
+    if details.is_empty() {
+        return "waiting for referenced control documents to become visible".to_string();
+    }
+    format!(
+        "waiting for referenced control documents to become visible: {}",
+        details.join("; ")
+    )
+}
+
 const CONTROL_RECONCILE_DEBOUNCE: Duration = Duration::from_secs(5);
-const CONTROL_RECONCILE_SETTLE_RETRY: Duration = Duration::from_millis(500);
-const CONTROL_RECONCILE_SETTLE_WINDOW: Duration = Duration::from_secs(5);
+const CONTROL_RECONCILE_SETTLE_RETRY: Duration = Duration::from_secs(1);
+// Replicated control docs can arrive before their referenced DAGs materialize.
+// Keep polling past the initial debounce instead of immediately marking the behavior unavailable.
+const CONTROL_RECONCILE_SETTLE_WINDOW: Duration = Duration::from_secs(60);
 const CONTROL_WATCHER_IDLE_SLEEP: Duration = Duration::from_secs(60 * 60 * 24 * 365);
 
 async fn run_control_watcher(
@@ -839,7 +851,7 @@ async fn run_control_watcher(
         tokio::select! {
             _ = shutdown.changed() => return Ok(()),
             _ = &mut sleep, if dirty => {
-                if pending_visibility {
+                if pending_visibility || settle_deadline.is_some() {
                     match super::document_view::load_document_runtime_view(node.as_ref(), &agent_did).await {
                         Ok(reloaded) => {
                             document_view = reloaded;
@@ -849,7 +861,7 @@ async fn run_control_watcher(
                             tracing::error!(
                                 agent_did = %agent_did,
                                 error = %error,
-                                "runtime control watcher failed to refresh document view for pending visibility"
+                                "runtime control watcher failed to refresh document view during settle window"
                             );
                             runtime_status.publish_error(&format!("{error:#}")).await;
                             if settle_deadline.is_some_and(|deadline| tokio::time::Instant::now() < deadline) {
@@ -865,7 +877,20 @@ async fn run_control_watcher(
                     }
                 }
                 if pending_visibility
-                    && settle_deadline.is_some_and(|deadline| tokio::time::Instant::now() < deadline)
+                    && settle_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
+                {
+                    let pending_details = document_view.pending_visibility_details();
+                    let pending_summary = format_pending_visibility_error(&pending_details);
+                    tracing::warn!(
+                        agent_did = %agent_did,
+                        pending_references = %pending_details.join("; "),
+                        "runtime control watcher is still waiting for referenced control documents"
+                    );
+                    runtime_status
+                        .publish_error(&pending_summary)
+                        .await;
+                }
+                if pending_visibility
                 {
                     dirty = true;
                     sleep.as_mut().reset(tokio::time::Instant::now() + CONTROL_RECONCILE_SETTLE_RETRY);
@@ -874,6 +899,7 @@ async fn run_control_watcher(
                 runtime_status
                     .set_reconcile_phase(ReconcilePhase::Resolving)
                     .await;
+                let mut proposed_update = false;
                 match super::document_view::resolve_document_runtime_snapshot_from_view(
                     node.as_ref(),
                     &resolve_context,
@@ -888,6 +914,7 @@ async fn run_control_watcher(
                                 return Ok(());
                             }
                             last_proposed_fingerprint = Some(fingerprint);
+                            proposed_update = true;
                         }
                     }
                     Err(error) => {
@@ -898,6 +925,11 @@ async fn run_control_watcher(
                         );
                         runtime_status.publish_error(&format!("{error:#}")).await;
                     }
+                }
+                if !proposed_update {
+                    runtime_status
+                        .set_reconcile_phase(ReconcilePhase::Idle)
+                        .await;
                 }
                 if settle_deadline.is_some_and(|deadline| tokio::time::Instant::now() < deadline) {
                     dirty = true;

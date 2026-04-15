@@ -179,6 +179,15 @@ where
                     unavailable_changed = diff.unavailable_changed,
                     "runtime reconcile applied"
                 );
+                if diff.unavailable_changed {
+                    for (behavior_id, reason) in &self.current_snapshot.unavailable_behaviors {
+                        tracing::warn!(
+                            behavior_id = %behavior_id,
+                            reason = %reason,
+                            "behavior unavailable after runtime reconcile"
+                        );
+                    }
+                }
                 self.runtime_status
                     .publish_applied(self.current_snapshot.as_ref())
                     .await;

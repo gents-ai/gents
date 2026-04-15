@@ -1,30 +1,23 @@
+//! Runtime-side schema registration helpers.
+//!
+//! Schema strings are the canonical exports of `defra_agent_protocol::schemas`.
+//! This module preserves the legacy `*_SCHEMA` names via re-exported aliases
+//! and wires the canonical arrays to an `EmbeddedNode` via `ensure_schemas`
+//! and `ensure_runtime_schemas`.
+
 use anyhow::Result;
+pub use defra_agent_protocol::schemas::{
+    AGENT_BEHAVIOR as AGENT_BEHAVIOR_SCHEMA, AGENT_CONVERSATION as AGENT_CONVERSATION_SCHEMA,
+    AGENT_MESSAGE as AGENT_MESSAGE_SCHEMA, AGENT_PRINCIPAL as AGENT_PRINCIPAL_SCHEMA,
+    AGENT_REQUEST as AGENT_REQUEST_SCHEMA, AGENT_RESPONSE as AGENT_RESPONSE_SCHEMA,
+    AGENT_RUNTIME as AGENT_RUNTIME_SCHEMA, AGENT_SESSION as AGENT_SESSION_SCHEMA,
+    AGENT_TOOL_CALL as AGENT_TOOL_CALL_SCHEMA, AGENT_TOOL_RESULT as AGENT_TOOL_RESULT_SCHEMA, ALL,
+    COMPACTION_ENTRY as COMPACTION_ENTRY_SCHEMA, INFERENCE_BACKEND as INFERENCE_BACKEND_SCHEMA,
+    INFERENCE_CALL as INFERENCE_CALL_SCHEMA, INFERENCE_PROFILE as INFERENCE_PROFILE_SCHEMA,
+    RUNTIME_ALL, SCHEDULED_TASK as SCHEDULED_TASK_SCHEMA, TOOL_SELECTION as TOOL_SELECTION_SCHEMA,
+    TOOL_SERVICE_REGISTRY as TOOL_SERVICE_REGISTRY_SCHEMA,
+};
 use defra_node::EmbeddedNode;
-
-pub const INFERENCE_BACKEND_SCHEMA: &str =
-    include_str!("../schemas/inference/inference_backend.graphql");
-pub const INFERENCE_CALL_SCHEMA: &str = include_str!("../schemas/inference/inference_call.graphql");
-pub const INFERENCE_PROFILE_SCHEMA: &str =
-    include_str!("../schemas/inference/inference_profile.graphql");
-pub const AGENT_PRINCIPAL_SCHEMA: &str = include_str!("../schemas/agent/agent_principal.graphql");
-pub const AGENT_BEHAVIOR_SCHEMA: &str = include_str!("../schemas/agent/agent_behavior.graphql");
-pub const AGENT_RUNTIME_SCHEMA: &str = include_str!("../schemas/agent/agent_runtime.graphql");
-pub const TOOL_SELECTION_SCHEMA: &str = include_str!("../schemas/agent/tool_selection.graphql");
-pub const AGENT_CONVERSATION_SCHEMA: &str =
-    include_str!("../schemas/agent/agent_conversation.graphql");
-pub const AGENT_REQUEST_SCHEMA: &str = include_str!("../schemas/agent/agent_request.graphql");
-pub const AGENT_RESPONSE_SCHEMA: &str = include_str!("../schemas/agent/agent_response.graphql");
-pub const AGENT_TOOL_RESULT_SCHEMA: &str =
-    include_str!("../schemas/agent/agent_tool_result.graphql");
-pub const AGENT_SESSION_SCHEMA: &str = include_str!("../schemas/agent/agent_session.graphql");
-pub const AGENT_MESSAGE_SCHEMA: &str = include_str!("../schemas/agent/agent_message.graphql");
-pub const AGENT_TOOL_CALL_SCHEMA: &str = include_str!("../schemas/agent/agent_tool_call.graphql");
-pub const COMPACTION_ENTRY_SCHEMA: &str = include_str!("../schemas/agent/compaction_entry.graphql");
-pub const SCHEDULED_TASK_SCHEMA: &str = include_str!("../schemas/agent/scheduled_task.graphql");
-pub const TOOL_SERVICE_REGISTRY_SCHEMA: &str =
-    include_str!("../schemas/services/tool_service_registry.graphql");
-
-pub const RUNTIME_ALL: &[&str] = &[INFERENCE_BACKEND_SCHEMA];
 
 pub const CONFIG_BOOTSTRAP: &[&str] = &[
     AGENT_PRINCIPAL_SCHEMA,
@@ -32,26 +25,6 @@ pub const CONFIG_BOOTSTRAP: &[&str] = &[
     TOOL_SELECTION_SCHEMA,
     INFERENCE_BACKEND_SCHEMA,
 ];
-
-pub const ALL: &[&str] = &[
-    AGENT_PRINCIPAL_SCHEMA,
-    AGENT_BEHAVIOR_SCHEMA,
-    AGENT_RUNTIME_SCHEMA,
-    TOOL_SELECTION_SCHEMA,
-    INFERENCE_PROFILE_SCHEMA,
-    INFERENCE_CALL_SCHEMA,
-    AGENT_CONVERSATION_SCHEMA,
-    AGENT_REQUEST_SCHEMA,
-    AGENT_RESPONSE_SCHEMA,
-    AGENT_TOOL_RESULT_SCHEMA,
-    AGENT_SESSION_SCHEMA,
-    AGENT_MESSAGE_SCHEMA,
-    AGENT_TOOL_CALL_SCHEMA,
-    COMPACTION_ENTRY_SCHEMA,
-    SCHEDULED_TASK_SCHEMA,
-    TOOL_SERVICE_REGISTRY_SCHEMA,
-];
-
 async fn ensure_schema_set(node: &EmbeddedNode, schemas: &[&str]) -> Result<()> {
     for sdl in schemas {
         match node.add_schema(sdl).await {

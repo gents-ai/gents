@@ -4949,7 +4949,8 @@ async fn graphql_rows_or_empty_if_collection_missing(
 
 fn is_collection_missing_error(collection_name: &str, error: &anyhow::Error) -> bool {
     let message = error.to_string();
-    message.contains("collection not found") && message.contains(collection_name)
+    message.contains(collection_name)
+        && (message.contains("collection not found") || message.contains("Cannot query field"))
 }
 
 async fn build_config_export_bundle(

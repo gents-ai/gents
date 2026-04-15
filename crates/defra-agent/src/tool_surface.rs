@@ -851,6 +851,71 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn selection_cli_tools_require_ceiling_entries() {
+        let operator_root = temp_root("defra-agent-operator-root");
+
+        let config = BehaviorToolConfig::from_selection(
+            "ops",
+            ToolSelection {
+                file_tools: FileToolMode::Off,
+                file_tool_root: None,
+                bash: BashMode::Off,
+                cli_tool_names: vec!["rg".to_string()],
+                enable_meta_tools: false,
+                delegate_to: Vec::new(),
+            },
+            &ToolCeiling::readwrite(operator_root),
+            Vec::new(),
+        )
+        .unwrap();
+
+        assert!(!config.host_tools().tool_names().contains(&"rg".to_string()));
+        assert!(config
+            .host_tools()
+            .native_tools()
+            .iter()
+            .all(|tool| !matches!(tool, crate::toolset::NativeTool::Cli(_))));
+    }
+
+    #[test]
+    fn selection_cli_tools_expose_only_ceiling_entries() {
+        let operator_root = temp_root("defra-agent-operator-root");
+        let ceiling = ToolCeiling::readwrite(operator_root).with_cli_tool(cli_tool(
+            "rg",
+            "/usr/bin/rg",
+            "Search files with ripgrep",
+        ));
+
+        let config = BehaviorToolConfig::from_selection(
+            "ops",
+            ToolSelection {
+                file_tools: FileToolMode::Off,
+                file_tool_root: None,
+                bash: BashMode::Off,
+                cli_tool_names: vec!["rg".to_string(), "cargo".to_string()],
+                enable_meta_tools: false,
+                delegate_to: Vec::new(),
+            },
+            &ceiling,
+            Vec::new(),
+        )
+        .unwrap();
+
+        let tool_names = config.host_tools().tool_names();
+        assert!(tool_names.contains(&"rg".to_string()));
+        assert!(!tool_names.contains(&"cargo".to_string()));
+        assert_eq!(
+            config
+                .host_tools()
+                .native_tools()
+                .iter()
+                .filter(|tool| matches!(tool, crate::toolset::NativeTool::Cli(_)))
+                .count(),
+            1
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
