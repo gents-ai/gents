@@ -49,19 +49,15 @@ pub(super) fn escape_graphql(value: &str) -> String {
 
 #[derive(Debug, Clone, Deserialize)]
 struct RegistryServiceEntry {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
     hostname: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
     tailscale_ip: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
     lan_ip: String,
     mcp_port: Option<u16>,
-    #[serde(default = "default_mcp_path")]
+    #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
     mcp_path: String,
-}
-
-fn default_mcp_path() -> String {
-    "/mcp".to_string()
 }
 
 pub(super) fn lookup_service_query(service_id: &str) -> String {
@@ -205,4 +201,31 @@ pub(super) async fn enforce_health_gate(
     }
 
     Ok(health)
+}
+
+#[cfg(test)]
+mod registry_parsing_tests {
+    use super::RegistryServiceEntry;
+    use serde_json::json;
+
+    #[test]
+    fn tolerates_null_address_fields() {
+        let raw = json!({
+            "service_id": "observability-mcp",
+            "hostname": null,
+            "tailscale_ip": null,
+            "lan_ip": null,
+            "mcp_port": 9201,
+            "mcp_path": null,
+        });
+
+        let entry: RegistryServiceEntry =
+            serde_json::from_value(raw).expect("null address fields must parse");
+
+        assert_eq!(entry.hostname, "");
+        assert_eq!(entry.tailscale_ip, "");
+        assert_eq!(entry.lan_ip, "");
+        assert_eq!(entry.mcp_port, Some(9201));
+        assert!(entry.mcp_path.is_empty() || entry.mcp_path == "/mcp");
+    }
 }

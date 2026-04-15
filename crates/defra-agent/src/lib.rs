@@ -21,6 +21,7 @@ pub mod mcp_pool;
 pub mod meta_tools;
 pub mod oneshot;
 pub mod prompt;
+pub(crate) mod registry;
 pub mod retry;
 pub(crate) mod runtime_snapshot;
 pub(crate) mod runtime_status;

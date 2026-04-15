@@ -180,6 +180,7 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
             display_name: Some("Ops".to_string()),
             enable_file_tools: Some(true),
             file_tools_mode: Some("ReadWrite".to_string()),
+            file_tool_root: None,
             enable_bash: Some(true),
             bash_mode: Some("Unrestricted".to_string()),
             cli_tool_names: Some(Vec::new()),

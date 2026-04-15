@@ -63,6 +63,35 @@ async fn read_file_returns_numbered_contents() {
 }
 
 #[tokio::test]
+async fn read_file_rejects_paths_outside_root() {
+    let root = temp_root("defra-agent-read-file-rooted");
+    std::fs::create_dir_all(root.join("workspace")).unwrap();
+    std::fs::write(root.join("outside.txt"), "nope").unwrap();
+    std::fs::write(root.join("workspace").join("notes.txt"), "alpha\n").unwrap();
+    let tool = ReadFileTool::new(
+        ToolContext::new(root.join("workspace"), false).unwrap(),
+        DEFAULT_MAX_FILE_CHARS,
+    );
+
+    let error = rig::tool::Tool::call(
+        &tool,
+        ReadFileArgs {
+            path: "../outside.txt".to_string(),
+            start_line: None,
+            end_line: None,
+            max_chars: DEFAULT_MAX_FILE_CHARS,
+        },
+    )
+    .await
+    .expect_err("path escape should be rejected");
+
+    assert!(
+        error.to_string().contains("outside the allowed tool root"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
 async fn write_and_edit_file_work_under_root() {
     let root = temp_root("defra-agent-write-edit");
     let context = ToolContext::new(root.clone(), true).unwrap();

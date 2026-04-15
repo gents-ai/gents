@@ -50,6 +50,7 @@ pub(crate) struct DesiredToolSelection {
     pub(crate) display_name: Option<String>,
     pub(crate) enable_file_tools: bool,
     pub(crate) file_tools_mode: String,
+    pub(crate) file_tool_root: Option<String>,
     pub(crate) enable_bash: bool,
     pub(crate) bash_mode: String,
     #[serde(default)]
@@ -778,6 +779,7 @@ pub(crate) fn manifest_from_export_bundle(
                         "display_name",
                         "enable_file_tools",
                         "file_tools_mode",
+                        "file_tool_root",
                         "enable_bash",
                         "bash_mode",
                         "cli_tool_names",

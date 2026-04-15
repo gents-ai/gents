@@ -184,7 +184,7 @@ const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
 const EXPORT_AGENT_PRINCIPAL_FIELDS: &str =
     "agent_did display_name default_behavior_id enabled created_at created_by";
 const EXPORT_AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled created_at";
-const EXPORT_TOOL_SELECTION_FIELDS: &str = "selection_id agent_did display_name enable_file_tools file_tools_mode enable_bash bash_mode cli_tool_names enable_meta_tools delegate_to";
+const EXPORT_TOOL_SELECTION_FIELDS: &str = "selection_id agent_did display_name enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode cli_tool_names enable_meta_tools delegate_to";
 const EXPORT_INFERENCE_BACKEND_FIELDS: &str =
     "backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent enabled supports_tool_calls supports_streaming supports_structured_outputs supports_json_schema models last_probe probe_status";
 const EXPORT_INFERENCE_PROFILE_FIELDS: &str =
@@ -1485,6 +1485,8 @@ struct ToolSelectionUpsertArgs {
     enable_file_tools: bool,
     #[arg(long)]
     file_tools_mode: Option<String>,
+    #[arg(long)]
+    file_tool_root: Option<PathBuf>,
     #[arg(long, default_value_t = false)]
     enable_bash: bool,
     #[arg(long)]
@@ -2673,6 +2675,10 @@ async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<()> {
     let file_tools_mode =
         normalize_file_tools_mode(args.enable_file_tools, args.file_tools_mode.as_deref())?;
     let bash_mode = normalize_bash_mode(args.enable_bash, args.bash_mode.as_deref())?;
+    let file_tool_root = args
+        .file_tool_root
+        .as_ref()
+        .map(|path| path.to_string_lossy().to_string());
     let add_fields = vec![
         Some(format!(
             r#"selection_id: "{}""#,
@@ -2697,6 +2703,10 @@ async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<()> {
         Some(format!(
             r#"file_tools_mode: "{}""#,
             escape_graphql_string(&file_tools_mode)
+        )),
+        Some(nullable_string_field(
+            "file_tool_root",
+            file_tool_root.as_deref(),
         )),
         Some(format!(
             "enable_bash: {}",
@@ -2745,6 +2755,7 @@ async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<()> {
         "agent_did": args.agent_did,
         "enable_file_tools": args.enable_file_tools,
         "file_tools_mode": file_tools_mode,
+        "file_tool_root": file_tool_root,
         "enable_bash": args.enable_bash,
         "bash_mode": bash_mode,
         "cli_tool_names": args.cli_tool_names,
@@ -4488,11 +4499,17 @@ fn sanitize_import_document(collection_name: &str, doc: &Value, for_update: bool
             }
         }
         "ToolServiceRegistry" => {
-            for field in ["tools", "status", "version", "updated_at"] {
+            for field in ["tools", "version", "updated_at"] {
                 object.remove(field);
             }
             if for_update {
                 object.insert("updated_at".to_string(), Value::Null);
+            }
+            match object.get("status") {
+                Some(Value::String(s)) if !s.is_empty() => {}
+                _ => {
+                    object.insert("status".to_string(), Value::String("online".to_string()));
+                }
             }
         }
         _ => unreachable!(),
@@ -6519,5 +6536,89 @@ mod tests {
             "cli_tool_names": [],
             "delegate_to": []
         }))));
+    }
+
+    #[test]
+    fn sanitize_tool_service_registry_defaults_status_online_when_absent() {
+        let input = json!({
+            "service_id": "observability-mcp",
+            "hostname": "studio-1",
+            "tailscale_ip": "100.69.4.79",
+            "mcp_port": 9201
+        });
+        let out = sanitize_import_document("ToolServiceRegistry", &input, false).unwrap();
+        let obj = out.as_object().unwrap();
+        assert_eq!(obj.get("status").and_then(|v| v.as_str()), Some("online"));
+    }
+
+    #[test]
+    fn sanitize_tool_service_registry_fills_status_when_null() {
+        let input = json!({
+            "service_id": "observability-mcp",
+            "status": null,
+            "hostname": "studio-1",
+            "mcp_port": 9201
+        });
+        let out = sanitize_import_document("ToolServiceRegistry", &input, false).unwrap();
+        let obj = out.as_object().unwrap();
+        assert_eq!(obj.get("status").and_then(|v| v.as_str()), Some("online"));
+    }
+
+    #[test]
+    fn sanitize_tool_service_registry_preserves_explicit_status() {
+        let input = json!({
+            "service_id": "observability-mcp",
+            "status": "offline",
+            "mcp_port": 9201
+        });
+        let out = sanitize_import_document("ToolServiceRegistry", &input, false).unwrap();
+        let obj = out.as_object().unwrap();
+        assert_eq!(obj.get("status").and_then(|v| v.as_str()), Some("offline"));
+    }
+
+    #[test]
+    fn sanitize_tool_service_registry_preserves_null_address_fields_for_diff_convergence() {
+        // apply/diff compare live rows against the desired manifest. If sanitize
+        // rewrites null address fields to empty strings on the live side but the
+        // manifest serializes None as JSON null, the diff sees a false delta and
+        // `config apply` reports "did not converge". Null-tolerance is handled at
+        // the parser layer (see registry::null_as_empty_string), so sanitize keeps
+        // these fields unchanged.
+        let input = json!({
+            "service_id": "observability-mcp",
+            "hostname": null,
+            "tailscale_ip": "100.69.4.79",
+            "lan_ip": null,
+            "mcp_port": 9201,
+            "mcp_path": null
+        });
+        let out = sanitize_import_document("ToolServiceRegistry", &input, false).unwrap();
+        let obj = out.as_object().unwrap();
+        assert!(obj.get("hostname").unwrap().is_null());
+        assert!(obj.get("lan_ip").unwrap().is_null());
+        assert!(obj.get("mcp_path").unwrap().is_null());
+        assert_eq!(
+            obj.get("tailscale_ip").and_then(|v| v.as_str()),
+            Some("100.69.4.79")
+        );
+    }
+
+    #[test]
+    fn sanitize_tool_service_registry_still_strips_runtime_owned_fields() {
+        let input = json!({
+            "service_id": "observability-mcp",
+            "mcp_port": 9201,
+            "tools": [{"name": "x", "description": "y"}],
+            "version": "1.2.3",
+            "updated_at": "2026-04-14T00:00:00Z"
+        });
+        let out = sanitize_import_document("ToolServiceRegistry", &input, false).unwrap();
+        let obj = out.as_object().unwrap();
+        assert!(obj.get("tools").is_none(), "tools should be stripped");
+        assert!(obj.get("version").is_none(), "version should be stripped");
+        assert!(
+            obj.get("updated_at").is_none(),
+            "updated_at should be stripped on create"
+        );
     }
 }

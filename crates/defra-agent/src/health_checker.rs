@@ -92,20 +92,16 @@ impl Default for ServiceHealthMap {
 #[derive(Debug, Clone, Deserialize)]
 struct RegistryServiceEntry {
     service_id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
     hostname: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
     tailscale_ip: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
     lan_ip: String,
     mcp_port: Option<u16>,
-    #[serde(default = "default_mcp_path")]
+    #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
     mcp_path: String,
     updated_at: Option<String>,
-}
-
-fn default_mcp_path() -> String {
-    "/mcp".to_string()
 }
 
 /// Spawn the background health checker task.
@@ -321,4 +317,53 @@ fn parse_updated_at(value: Option<&str>) -> Option<DateTime<Utc>> {
     chrono::DateTime::parse_from_rfc3339(value)
         .ok()
         .map(|dt| dt.with_timezone(&Utc))
+}
+
+#[cfg(test)]
+mod registry_parsing_tests {
+    use super::RegistryServiceEntry;
+    use serde_json::json;
+
+    #[test]
+    fn tolerates_null_address_fields() {
+        let raw = json!({
+            "service_id": "observability-mcp",
+            "hostname": null,
+            "tailscale_ip": null,
+            "lan_ip": null,
+            "mcp_port": 9201,
+            "mcp_path": null,
+            "updated_at": null,
+        });
+
+        let entry: RegistryServiceEntry =
+            serde_json::from_value(raw).expect("null address fields must parse");
+
+        assert_eq!(entry.service_id, "observability-mcp");
+        assert_eq!(entry.hostname, "");
+        assert_eq!(entry.tailscale_ip, "");
+        assert_eq!(entry.lan_ip, "");
+        assert_eq!(entry.mcp_port, Some(9201));
+    }
+
+    #[test]
+    fn tolerates_null_array_from_health_query() {
+        let raw = json!([
+            {
+                "service_id": "s1",
+                "hostname": "studio-1",
+                "tailscale_ip": "100.69.4.79",
+                "lan_ip": null,
+                "mcp_port": 9201,
+                "mcp_path": "/mcp",
+                "updated_at": "2026-04-14T00:00:00Z"
+            }
+        ]);
+
+        let entries: Vec<RegistryServiceEntry> =
+            serde_json::from_value(raw).expect("null lan_ip must not fail the batch parse");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].lan_ip, "");
+        assert_eq!(entries[0].tailscale_ip, "100.69.4.79");
+    }
 }

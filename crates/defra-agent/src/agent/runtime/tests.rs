@@ -835,6 +835,7 @@ async fn control_watcher_resolves_tool_selection_into_reconciled_tool_surface() 
             display_name: Some("Read tools".to_string()),
             enable_file_tools: Some(true),
             file_tools_mode: Some("ReadOnly".to_string()),
+            file_tool_root: None,
             enable_bash: Some(false),
             bash_mode: Some("Off".to_string()),
             cli_tool_names: Some(Vec::new()),

@@ -125,7 +125,7 @@ impl ToolSet {
 
     pub fn build_native_tools(&self) -> Result<Vec<Box<dyn ToolDyn>>> {
         let read_context = match &self.read_root {
-            Some(root) => ToolContext::new(root.clone(), false)?,
+            Some(root) => ToolContext::new(root.clone(), read_root_requires_create(&self.tools))?,
             None => ToolContext::from_default_read_root()?,
         };
 
@@ -163,6 +163,17 @@ impl ToolSet {
         }
         Ok(built)
     }
+}
+
+fn read_root_requires_create(tools: &[NativeTool]) -> bool {
+    tools.iter().any(|tool| {
+        matches!(
+            tool,
+            NativeTool::WriteFile { .. }
+                | NativeTool::EditFile { .. }
+                | NativeTool::BashUnrestricted { .. }
+        )
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
