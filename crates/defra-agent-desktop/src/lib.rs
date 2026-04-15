@@ -1,6 +1,7 @@
 pub mod app;
 pub(crate) mod audit;
 pub mod client;
+pub mod local_runtime;
 pub mod state;
 pub mod telemetry;
 pub mod theme;

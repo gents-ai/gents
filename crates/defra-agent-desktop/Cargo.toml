@@ -9,15 +9,18 @@ description = "Native egui desktop dashboard for defra-agent"
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
+clap.workspace = true
 crypto.workspace = true
 defra-agent-protocol.workspace = true
 defra-node = { workspace = true, features = ["p2p"] }
+defra-p2p-adapter.workspace = true
 dirs.workspace = true
 eframe.workspace = true
 egui.workspace = true
 egui_commonmark.workspace = true
 identity.workspace = true
 p2p.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 syntect.workspace = true

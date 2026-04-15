@@ -708,7 +708,7 @@ async fn configure_live_test_replicators(
 async fn wait_for_connectable_iroh_addr(core: &ClientCore, label: &str) -> Result<String> {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        let addrs = core.p2p().listen_addresses().await;
+        let addrs = core.p2p().listen_addresses().await?;
         if let Some(addr) = addrs
             .iter()
             .find(|addr| addr.contains("/p2p/") || addr.starts_with("endpoint"))
@@ -778,7 +778,11 @@ async fn set_replicator_with_retry(
 ) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        match core.p2p().set_replicator(addr, collections.clone()).await {
+        match core
+            .p2p()
+            .add_replicator(collections.clone(), Some(addr), Vec::new(), None)
+            .await
+        {
             Ok(()) => return Ok(()),
             Err(error) => {
                 if Instant::now() >= deadline {

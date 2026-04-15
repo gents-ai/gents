@@ -7,7 +7,8 @@ use defra_agent_protocol::row::{
     AgentBehaviorRow, AgentRequestRow, InferenceBackendRow, InferenceProfileRow, ScheduledTaskRow,
     ToolSelectionRow,
 };
-use defra_node::{EmbeddedNode, NodeBuilder, P2PConfig, P2POps};
+use defra_node::{EmbeddedNode, NodeBuilder, P2PConfig};
+use defra_p2p_adapter::P2POperations as P2POps;
 use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
 use tokio::sync::{Mutex, RwLock};
 
@@ -20,6 +21,7 @@ use super::query::load_full_snapshot;
 use super::schema::{
     ensure_runtime_schemas, subscribe_all_collections, subscribed_collection_names,
 };
+use crate::local_runtime;
 
 #[derive(Debug, Clone)]
 pub struct ClientCoreOptions {
@@ -136,8 +138,16 @@ impl ClientCore {
         let p2p = node
             .p2p_arc()
             .context("desktop node started without P2P support")?;
-        let local_peer_id = p2p.local_peer_id().await;
-        let listen_addresses = p2p.listen_addresses().await;
+        let local_peer_id = p2p
+            .local_peer_id()
+            .await
+            .map_err(anyhow::Error::msg)
+            .context("reading desktop P2P peer id")?;
+        let listen_addresses = p2p
+            .listen_addresses()
+            .await
+            .map_err(anyhow::Error::msg)
+            .context("reading desktop P2P listen addresses")?;
 
         let (peer_statuses, peer_errors) =
             bootstrap_saved_peers(&p2p, peer_directory.records(), &options).await;
@@ -383,12 +393,14 @@ impl ClientCore {
         let (connected, warning) = match self.p2p.connect_peer(&record.addr).await {
             Ok(()) => match self
                 .p2p
-                .set_replicator(
-                    &record.addr,
+                .add_replicator(
                     subscribed_collection_names()
                         .into_iter()
                         .map(str::to_owned)
                         .collect(),
+                    Some(&record.addr),
+                    Vec::new(),
+                    None,
                 )
                 .await
             {
@@ -648,12 +660,14 @@ async fn bootstrap_saved_peers(
 
                 if options.install_replicators_on_bootstrap {
                     if let Err(error) = p2p
-                        .set_replicator(
-                            &record.addr,
+                        .add_replicator(
                             subscribed_collection_names()
                                 .into_iter()
                                 .map(str::to_owned)
                                 .collect(),
+                            Some(&record.addr),
+                            Vec::new(),
+                            None,
                         )
                         .await
                     {
@@ -663,6 +677,20 @@ async fn bootstrap_saved_peers(
                         );
                         status.last_error = Some(message.clone());
                         errors.push(message);
+                    }
+                }
+
+                if let Some(graphql) = record.graphql.as_deref() {
+                    match configure_local_runtime_pairing(p2p, graphql).await {
+                        Ok(()) => {}
+                        Err(error) => {
+                            let message = format!(
+                                "peer {} local runtime pairing failed: {}",
+                                record.label, error
+                            );
+                            status.last_error = Some(message.clone());
+                            errors.push(message);
+                        }
                     }
                 }
             }
@@ -677,6 +705,26 @@ async fn bootstrap_saved_peers(
     }
 
     (statuses, errors)
+}
+
+async fn configure_local_runtime_pairing(p2p: &Arc<dyn P2POps>, graphql: &str) -> Result<()> {
+    let desktop_listen_address = p2p
+        .listen_addresses()
+        .await
+        .map_err(anyhow::Error::msg)
+        .context("reading desktop P2P listen addresses for local runtime pairing")?
+        .into_iter()
+        .find(|addr| !addr.trim().is_empty())
+        .context("desktop node has no IROH listen address for local runtime pairing")?;
+    local_runtime::complete_runtime_pairing(
+        graphql,
+        &desktop_listen_address,
+        subscribed_collection_names()
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+    )
+    .await
 }
 
 fn normalize_required<'a>(field: &str, value: &'a str) -> Result<&'a str> {

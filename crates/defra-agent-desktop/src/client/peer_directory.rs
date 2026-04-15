@@ -11,6 +11,10 @@ pub struct PeerRecord {
     pub label: String,
     pub addr: String,
     pub agent_did: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graphql: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -27,9 +31,23 @@ impl PeerRecord {
             label: label.into(),
             addr: addr.into(),
             agent_did: agent_did.into(),
+            source: None,
+            graphql: None,
             created_at: now.clone(),
             updated_at: now,
         }
+    }
+
+    pub fn local_standard(
+        label: impl Into<String>,
+        addr: impl Into<String>,
+        agent_did: impl Into<String>,
+        graphql: impl Into<String>,
+    ) -> Self {
+        let mut record = Self::new(label, addr, agent_did);
+        record.source = Some("local-standard".to_string());
+        record.graphql = Some(graphql.into());
+        record
     }
 }
 
@@ -96,6 +114,34 @@ impl PeerDirectory {
         record.label = label.to_string();
         record.addr = addr.to_string();
         record.agent_did = agent_did.to_string();
+
+        self.upsert(record.clone()).await?;
+        Ok(record)
+    }
+
+    pub async fn upsert_local_standard_peer(
+        &mut self,
+        label: &str,
+        addr: &str,
+        agent_did: &str,
+        graphql: &str,
+    ) -> Result<PeerRecord> {
+        let label = normalize_non_empty("label", label)?;
+        let addr = normalize_non_empty("addr", addr)?;
+        let agent_did = normalize_non_empty("agent_did", agent_did)?;
+        let graphql = normalize_non_empty("graphql", graphql)?;
+
+        let mut record = self
+            .peers
+            .iter()
+            .find(|existing| existing.source.as_deref() == Some("local-standard"))
+            .cloned()
+            .unwrap_or_else(|| PeerRecord::local_standard(label, addr, agent_did, graphql));
+        record.label = label.to_string();
+        record.addr = addr.to_string();
+        record.agent_did = agent_did.to_string();
+        record.source = Some("local-standard".to_string());
+        record.graphql = Some(graphql.to_string());
 
         self.upsert(record.clone()).await?;
         Ok(record)
@@ -249,5 +295,48 @@ mod tests {
         assert_eq!(first.peer_id, second.peer_id);
         assert_eq!(directory.records().len(), 1);
         assert_eq!(directory.records()[0].label, "Workshop Bay Updated");
+    }
+
+    #[tokio::test]
+    async fn upsert_local_standard_peer_tracks_graphql_and_source() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let mut directory = PeerDirectory::load(&path).await.unwrap();
+
+        let first = directory
+            .upsert_local_standard_peer(
+                "Local Agent",
+                "iroh://first",
+                "did:defra-agent:default",
+                "http://127.0.0.1:9191/api/v0/graphql",
+            )
+            .await
+            .unwrap();
+        let second = directory
+            .upsert_local_standard_peer(
+                "Local Agent Updated",
+                "iroh://second",
+                "did:defra-agent:default",
+                "http://127.0.0.1:9192/api/v0/graphql",
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(first.peer_id, second.peer_id);
+        assert_eq!(directory.records().len(), 1);
+        assert_eq!(
+            directory.records()[0].source.as_deref(),
+            Some("local-standard")
+        );
+        assert_eq!(
+            directory.records()[0].graphql.as_deref(),
+            Some("http://127.0.0.1:9192/api/v0/graphql")
+        );
+
+        let reloaded = PeerDirectory::load(&path).await.unwrap();
+        assert_eq!(
+            reloaded.records()[0].graphql.as_deref(),
+            Some("http://127.0.0.1:9192/api/v0/graphql")
+        );
     }
 }

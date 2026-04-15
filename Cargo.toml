@@ -17,20 +17,21 @@ repository = "https://github.com/sourcenetwork/defra-agent"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
-crypto = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "52b2b86c" }
+crypto = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "8ad38101" }
 defra-agent-protocol = { path = "crates/defra-agent-protocol" }
-defra-node = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "52b2b86c" }
+defra-node = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "8ad38101" }
+defra-p2p-adapter = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "8ad38101" }
 dirs = "5"
 eframe = "0.34.1"
 egui = "0.34.1"
 egui_commonmark = { version = "0.23.0", features = ["better_syntax_highlighting"] }
-events = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "52b2b86c" }
+events = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "8ad38101" }
 hostname = "0.4"
-identity = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "52b2b86c" }
+identity = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "8ad38101" }
 opentelemetry = { version = "0.31", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"] }
-p2p = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "52b2b86c" }
+p2p = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "8ad38101" }
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }

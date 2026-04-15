@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::{BufRead, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -13,7 +13,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
-const DEFAULT_MODEL_ENDPOINT: &str = "http://100.73.235.38:8000/v1";
+const DEFAULT_MODEL_ENDPOINT: &str = "http://workstation-1:8000/v1";
+const DEFAULT_MODEL_NAME: &str = "MiniMax-M2.7-NVFP4";
 
 struct ServeProcess {
     child: Child,
@@ -3529,8 +3530,6 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
         &home_dir,
         port,
         &[
-            "--p2p-transport",
-            "iroh",
             "--p2p-bind-addr",
             "127.0.0.1",
             "--p2p-port",
@@ -3588,7 +3587,7 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn server_startup_defaults_to_local_only_when_p2p_disabled() -> Result<()> {
+async fn server_startup_defaults_to_iroh_p2p_for_desktop_pairing() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
@@ -3617,29 +3616,29 @@ async fn server_startup_defaults_to_local_only_when_p2p_disabled() -> Result<()>
 
     assert_eq!(
         readiness.get("p2p_transport").and_then(Value::as_str),
-        Some("none")
+        Some("iroh")
     );
-    assert!(readiness.get("p2p_peer_id").is_none_or(Value::is_null));
-    assert_eq!(
-        readiness
-            .get("p2p_listen_addresses")
-            .and_then(Value::as_array)
-            .map(Vec::len),
-        Some(0)
-    );
+    assert!(readiness
+        .get("p2p_peer_id")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty()));
+    assert!(readiness
+        .get("p2p_listen_addresses")
+        .and_then(Value::as_array)
+        .is_some_and(|rows| !rows.is_empty()));
 
     let runtime_state = read_runtime_state_json(&home_dir)?;
     assert_eq!(
         runtime_state.get("p2p_transport").and_then(Value::as_str),
-        Some("none")
+        Some("iroh")
     );
-    assert!(runtime_state.get("p2p_peer_id").is_none_or(Value::is_null));
     assert_eq!(
-        runtime_state
-            .get("p2p_listen_addresses")
-            .and_then(Value::as_array)
-            .map(Vec::len),
-        Some(0)
+        runtime_state.get("p2p_peer_id"),
+        readiness.get("p2p_peer_id")
+    );
+    assert_eq!(
+        runtime_state.get("p2p_listen_addresses"),
+        readiness.get("p2p_listen_addresses")
     );
 
     Ok(())
@@ -3809,8 +3808,6 @@ async fn status_includes_p2p_runtime_info() -> Result<()> {
         &home_dir,
         port,
         &[
-            "--p2p-transport",
-            "iroh",
             "--p2p-bind-addr",
             "127.0.0.1",
             "--p2p-port",
@@ -3878,8 +3875,6 @@ async fn diagnose_with_explicit_graphql_does_not_reuse_unrelated_local_p2p_state
         &home_dir,
         port,
         &[
-            "--p2p-transport",
-            "iroh",
             "--p2p-bind-addr",
             "127.0.0.1",
             "--p2p-port",
@@ -3950,8 +3945,6 @@ async fn p2p_connects_two_local_servers_via_operator_commands() -> Result<()> {
         &home_a,
         port_a,
         &[
-            "--p2p-transport",
-            "iroh",
             "--p2p-bind-addr",
             "127.0.0.1",
             "--p2p-port",
@@ -3967,8 +3960,6 @@ async fn p2p_connects_two_local_servers_via_operator_commands() -> Result<()> {
         &home_b,
         port_b,
         &[
-            "--p2p-transport",
-            "iroh",
             "--p2p-bind-addr",
             "127.0.0.1",
             "--p2p-port",
@@ -4011,11 +4002,17 @@ async fn p2p_connects_two_local_servers_via_operator_commands() -> Result<()> {
     assert!(status_b
         .get("p2p_connected_peers")
         .and_then(Value::as_array)
-        .is_some_and(|rows| rows.iter().any(|row| row.as_str() == Some(peer_id_a))));
+        .is_some_and(|rows| rows
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|row| row.contains(peer_id_a))));
     assert!(status_a
         .get("p2p_connected_peers")
         .and_then(Value::as_array)
-        .is_some_and(|rows| rows.iter().any(|row| row.as_str() == Some(peer_id_b))));
+        .is_some_and(|rows| rows
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|row| row.contains(peer_id_b))));
 
     let peers_b = run_cli_json(&home_b, &["p2p", "peers"])?;
     assert_eq!(peers_b.get("count").and_then(Value::as_u64), Some(1));
@@ -4058,18 +4055,28 @@ async fn p2p_connects_two_local_servers_via_operator_commands() -> Result<()> {
         Some(true)
     );
     for path in [
-        "/checks/p2p/collections/error",
-        "/checks/p2p/replicators/error",
-        "/checks/p2p/documents/error",
+        "/checks/p2p/info/ok",
+        "/checks/p2p/peers/ok",
+        "/checks/p2p/collections/ok",
+        "/checks/p2p/replicators/ok",
+        "/checks/p2p/documents/ok",
     ] {
         assert!(
             diagnose_b
                 .pointer(path)
-                .and_then(Value::as_str)
-                .is_some_and(|error| error.contains("not supported")),
-            "expected unsupported diagnostic at {path}: {diagnose_b}"
+                .and_then(Value::as_bool)
+                .is_some_and(|ok| ok),
+            "expected successful diagnostic at {path}: {diagnose_b}"
         );
     }
+    assert!(diagnose_b
+        .pointer("/checks/p2p/collections/value")
+        .and_then(Value::as_array)
+        .is_some_and(|rows| !rows.is_empty()));
+    assert!(diagnose_b
+        .pointer("/checks/p2p/replicators/value")
+        .and_then(Value::as_array)
+        .is_some_and(|rows| !rows.is_empty()));
 
     Ok(())
 }
@@ -4846,8 +4853,12 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
 async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools() -> Result<()>
 {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let home_dir = tempdir.path().join("home");
+    let home_dir = tempdir.path().join("agent-home");
+    let desktop_home = tempdir.path().join("desktop-home");
     fs::create_dir_all(&home_dir)?;
+    let home_arg = home_dir
+        .to_str()
+        .ok_or_else(|| anyhow!("demo home path is not UTF-8"))?;
 
     let files_dir = home_dir.join("demo-files");
     fs::create_dir_all(&files_dir)?;
@@ -4866,28 +4877,20 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     let graphql = graphql_url(port);
     let agent_name = format!("cli-live-demo-{}", Uuid::new_v4().simple());
     let agent_did = format!("did:defra-agent:{agent_name}");
-    let live_api_key_available =
-        std::env::var("DEFRA_AGENT_CLI_E2E_API_KEY").is_ok_and(|value| !value.trim().is_empty());
 
-    let mut init_args = vec![
+    let init_args = vec![
+        "--home".to_string(),
+        home_arg.to_string(),
         "--agent-name".to_string(),
         agent_name.clone(),
+        "--model-name".to_string(),
+        DEFAULT_MODEL_NAME.to_string(),
         "--max-concurrent".to_string(),
         "2".to_string(),
         "--max-queue-depth".to_string(),
         "4".to_string(),
+        DEFAULT_MODEL_ENDPOINT.to_string(),
     ];
-    if live_api_key_available {
-        init_args.push("--api-key-env-var".to_string());
-        init_args.push("DEFRA_AGENT_CLI_E2E_API_KEY".to_string());
-    }
-    if let Ok(model_name) = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME") {
-        init_args.push("--model-name".to_string());
-        init_args.push(model_name);
-    }
-    if let Ok(model_endpoint) = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT") {
-        init_args.push(model_endpoint);
-    }
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
     let init = run_init_json(&home_dir, &init_arg_refs)?;
     let backend_id = init
@@ -4921,11 +4924,61 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         .ok_or_else(|| anyhow!("init output missing tool_selection_id: {init}"))?
         .to_string();
 
-    let mut serve = spawn_server(&home_dir, port)?;
+    let (mut serve, readiness) =
+        spawn_server_with_ready_json(&home_dir, port, &["--home", home_arg], &[])?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    assert_eq!(
+        readiness.get("p2p_transport").and_then(Value::as_str),
+        Some("iroh")
+    );
 
-    let mut backend_args = vec![
+    let desktop_init = run_desktop_init_json(&home_dir, &desktop_home, "Standard Onboarding Demo")?;
+    assert_eq!(
+        desktop_init.get("status").and_then(Value::as_str),
+        Some("initialized")
+    );
+    assert_eq!(
+        desktop_init.get("source").and_then(Value::as_str),
+        Some("local-standard")
+    );
+    assert_eq!(
+        desktop_init.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+    assert_eq!(
+        desktop_init.get("graphql").and_then(Value::as_str),
+        Some(graphql.as_str())
+    );
+    assert_eq!(
+        desktop_init.get("p2p_transport").and_then(Value::as_str),
+        Some("iroh")
+    );
+    let peer_directory_path = desktop_home.join("peers.json");
+    let peer_directory: Value = serde_json::from_slice(
+        &fs::read(&peer_directory_path)
+            .with_context(|| format!("reading {}", peer_directory_path.display()))?,
+    )
+    .with_context(|| format!("decoding {}", peer_directory_path.display()))?;
+    let peer = peer_directory
+        .get("peers")
+        .and_then(Value::as_array)
+        .and_then(|peers| peers.first())
+        .ok_or_else(|| anyhow!("desktop init did not persist a peer: {peer_directory}"))?;
+    assert_eq!(
+        peer.get("source").and_then(Value::as_str),
+        Some("local-standard")
+    );
+    assert_eq!(
+        peer.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+    assert_eq!(
+        peer.get("graphql").and_then(Value::as_str),
+        Some(graphql.as_str())
+    );
+
+    let backend_args = vec![
         "config",
         "backend",
         "set",
@@ -4944,10 +4997,6 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         "--max-queue-depth",
         "4",
     ];
-    if live_api_key_available {
-        backend_args.push("--api-key-env-var");
-        backend_args.push("DEFRA_AGENT_CLI_E2E_API_KEY");
-    }
     run_cli_json(&home_dir, &backend_args)?;
 
     run_cli_json(
@@ -5011,6 +5060,8 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         &home_dir,
         &[
             "chat",
+            "--home",
+            home_arg,
             "--session-id",
             &session_id,
             "--output-format",
@@ -5040,6 +5091,8 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         &home_dir,
         &[
             "chat",
+            "--home",
+            home_arg,
             "--session-id",
             &session_id,
             "--output-format",
@@ -5132,7 +5185,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     let model_endpoint = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT")
         .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
     let model_name = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME")
-        .context("set DEFRA_AGENT_CLI_E2E_MODEL_NAME for the live CLI e2e test")?;
+        .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
     let mut init_args = vec![
         "--agent-name".to_string(),
         agent_name.clone(),
@@ -5301,6 +5354,62 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
 
 fn cli_bin() -> &'static str {
     env!("CARGO_BIN_EXE_defra-agent")
+}
+
+fn desktop_bin() -> Result<PathBuf> {
+    let cli_path = Path::new(cli_bin());
+    let binary_name = format!("defra-agent-desktop{}", std::env::consts::EXE_SUFFIX);
+    let desktop_path = cli_path
+        .parent()
+        .ok_or_else(|| anyhow!("unable to resolve defra-agent binary directory"))?
+        .join(binary_name);
+    if desktop_path.exists() {
+        return Ok(desktop_path);
+    }
+
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| anyhow!("unable to resolve workspace root from CARGO_MANIFEST_DIR"))?;
+    let status = Command::new("cargo")
+        .current_dir(workspace_root)
+        .args([
+            "build",
+            "-p",
+            "defra-agent-desktop",
+            "--bin",
+            "defra-agent-desktop",
+        ])
+        .status()
+        .context("building defra-agent-desktop binary for demo e2e")?;
+    if !status.success() {
+        bail!("cargo build -p defra-agent-desktop --bin defra-agent-desktop failed");
+    }
+    Ok(desktop_path)
+}
+
+fn run_desktop_init_json(agent_home: &Path, desktop_home: &Path, label: &str) -> Result<Value> {
+    let output = Command::new(desktop_bin()?)
+        .env("RUST_LOG", "error")
+        .arg("init")
+        .arg("--agent-home")
+        .arg(agent_home)
+        .arg("--desktop-home")
+        .arg(desktop_home)
+        .arg("--label")
+        .arg(label)
+        .arg("--json")
+        .output()
+        .context("running defra-agent-desktop init")?;
+    if !output.status.success() {
+        bail!(
+            "defra-agent-desktop init failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    serde_json::from_slice(&output.stdout).context("parsing JSON from defra-agent-desktop init")
 }
 
 fn allocate_port() -> Result<u16> {
@@ -6210,7 +6319,11 @@ async fn wait_for_connected_peer(
         if status
             .get("p2p_connected_peers")
             .and_then(Value::as_array)
-            .is_some_and(|rows| rows.iter().any(|row| row.as_str() == Some(peer_id)))
+            .is_some_and(|rows| {
+                rows.iter()
+                    .filter_map(Value::as_str)
+                    .any(|row| row.contains(peer_id))
+            })
         {
             return Ok(status);
         }

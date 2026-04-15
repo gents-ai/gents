@@ -18,6 +18,7 @@ clap.workspace = true
 crossterm = "0.29"
 defra-agent = { path = "../defra-agent" }
 defra-node.workspace = true
+defra-p2p-adapter.workspace = true
 hostname.workspace = true
 opentelemetry.workspace = true
 opentelemetry-otlp.workspace = true

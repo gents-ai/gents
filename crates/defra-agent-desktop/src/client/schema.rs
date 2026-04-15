@@ -37,7 +37,7 @@ pub async fn subscribe_all_collections(node: &EmbeddedNode) -> Result<()> {
     let p2p = node.p2p().context("desktop node missing P2P support")?;
 
     for name in subscribed_collection_names() {
-        match p2p.subscribe_collection(name).await {
+        match p2p.add_collections(vec![name.to_owned()]).await {
             Ok(()) => {}
             Err(error) => {
                 if error.to_string().contains("already") {
