@@ -79,14 +79,18 @@ pub fn show(
                             state.chat.selected_session_id = None;
                         }
 
-                        if views::tree_row(
+                        let response = views::tree_row(
                             ui,
                             &deployment.agent_label,
                             if deployment.connected { "live" } else { "lag" },
                             selected_agent_did == Some(deployment.agent_did.as_str()),
-                        )
-                        .clicked()
-                        {
+                        );
+                        audit::record(
+                            ui,
+                            &audit::targets::chat_agent(&deployment.agent_did),
+                            &response,
+                        );
+                        if response.clicked() {
                             state.chat.selected_peer_id = Some(deployment.peer_id.clone());
                             state.chat.selected_agent_did = Some(deployment.agent_did.clone());
                             state.chat.selected_session_id = None;

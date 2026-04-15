@@ -194,6 +194,29 @@ impl ClientCore {
             .clone()
     }
 
+    #[cfg(test)]
+    pub(crate) fn add_test_peer_status(
+        &self,
+        label: impl Into<String>,
+        addr: impl Into<String>,
+        agent_did: impl Into<String>,
+        dial_succeeded: bool,
+    ) -> ClientPeerStatus {
+        let status = ClientPeerStatus {
+            peer_id: uuid::Uuid::new_v4().to_string(),
+            label: label.into(),
+            agent_did: agent_did.into(),
+            addr: addr.into(),
+            dial_succeeded,
+            last_error: None,
+        };
+        self.peer_statuses
+            .write()
+            .expect("peer status lock poisoned")
+            .push(status.clone());
+        status
+    }
+
     pub async fn peer_records(&self) -> Vec<super::peer_directory::PeerRecord> {
         self.peer_directory.read().await.records().to_vec()
     }

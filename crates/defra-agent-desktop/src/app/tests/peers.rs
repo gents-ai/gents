@@ -36,7 +36,7 @@ fn desktop_app_clicks_through_peers_selection_toggle_clear_and_remove() -> Resul
         .first()
         .cloned()
         .ok_or_else(|| anyhow!("peer three missing listen address"))?;
-    let _added_one =
+    let added_one =
         runtime.block_on(core.add_peer("Workshop Bay", &peer_one_addr, "did:defra:peer-one"))?;
     let _added_two =
         runtime.block_on(core.add_peer("Night Shift", &peer_two_addr, "did:defra:peer-two"))?;
@@ -145,6 +145,15 @@ fn desktop_app_clicks_through_peers_selection_toggle_clear_and_remove() -> Resul
         Some(added_three.peer_id.as_str())
     );
 
+    let added_three_agent_target = audit::targets::peers_agent(&added_three.peer_id);
+    driver.click_target(&audit::targets::peers_peer(&added_one.peer_id));
+    driver.click_interactable_target(&added_three_agent_target)?;
+    driver.render();
+    assert_eq!(
+        driver.app.state.peers.selected_peer_id.as_deref(),
+        Some(added_three.peer_id.as_str())
+    );
+
     let chat_texts = driver.open_activity(Activity::Chat);
     let chat_deployment_target = audit::targets::chat_deployment(&added_three.peer_id);
     assert!(driver.has_target(&chat_deployment_target));
@@ -157,6 +166,11 @@ fn desktop_app_clicks_through_peers_selection_toggle_clear_and_remove() -> Resul
     assert_eq!(
         driver.app.state.chat.selected_agent_did.as_deref(),
         Some("did:defra:peer-three")
+    );
+    driver.click_target(&audit::targets::chat_agent("did:defra:peer-three"));
+    assert_eq!(
+        driver.app.state.chat.selected_peer_id.as_deref(),
+        Some(added_three.peer_id.as_str())
     );
 
     let operator_texts = driver.open_activity(Activity::Operator);

@@ -74,6 +74,10 @@ pub(crate) mod targets {
         format!("chat.deployment.{peer_id}")
     }
 
+    pub(crate) fn chat_agent(agent_did: &str) -> String {
+        format!("chat.agent.{agent_did}")
+    }
+
     pub(crate) fn chat_reasoning(response_key: &str) -> String {
         format!("{CHAT_REASONING_PREFIX}.{response_key}")
     }
@@ -108,6 +112,10 @@ pub(crate) mod targets {
 
     pub(crate) fn peers_peer(record_id: &str) -> String {
         format!("peers.peer.{record_id}")
+    }
+
+    pub(crate) fn peers_agent(record_id: &str) -> String {
+        format!("peers.agent.{record_id}")
     }
 }
 

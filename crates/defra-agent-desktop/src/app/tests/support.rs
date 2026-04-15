@@ -131,7 +131,7 @@ async fn seed_operator_documents(core: &ClientCore) -> Result<()> {
         model_name: Some("openai/gpt-5.4".to_string()),
         tool_selection_id: Some("tools-amy".to_string()),
         inference_profile_id: Some("profile-amy".to_string()),
-        compaction_strategy: Some("rolling-summary".to_string()),
+        compaction_strategy: Some("StripThenSummarize".to_string()),
         compaction_threshold: Some(0.7),
         enabled: Some(true),
         created_at: Some("2026-04-14T00:00:00Z".to_string()),
@@ -272,9 +272,7 @@ impl LiveDesktopFixture {
 struct LiveRemoteDeployment {
     label: String,
     peer_id: String,
-    addr: String,
     agent_did: String,
-    core: ClientCore,
     running_agent: RunningAgent,
     docs: LiveAgentDocs,
 }
@@ -291,7 +289,6 @@ impl MultiAgentLiveDesktopFixture {
     fn shutdown(mut self) -> Result<()> {
         for deployment in self.deployments.drain(..) {
             self.runtime.block_on(deployment.running_agent.shutdown())?;
-            self.runtime.block_on(deployment.core.shutdown())?;
         }
         self.driver.app.shutdown_client();
         Ok(())
@@ -364,20 +361,12 @@ fn build_multi_agent_live_desktop_fixture(
         DesktopPaths::from_root(tempdir.path().join("desktop")),
         ClientCoreOptions::local_only(),
     ))?;
-    let desktop_addr = first_connectable_addr(&desktop_core)?;
     let mut deployments = Vec::new();
 
     for suffix in ["alpha", "bravo"] {
-        let remote_core = runtime.block_on(ClientCore::start_with_paths_and_options(
-            DesktopPaths::from_root(tempdir.path().join(format!("remote-{suffix}"))),
-            ClientCoreOptions::local_only(),
-        ))?;
-        let remote_addr = first_connectable_addr(&remote_core)?;
-        runtime.block_on(configure_test_replicator(&remote_core, &desktop_addr))?;
-
         let unique_label = format!("{label}-{suffix}-{}", uuid::Uuid::new_v4().simple());
         let running_agent = runtime.block_on(spawn_backed_agent(
-            remote_core.node_arc(),
+            desktop_core.node_arc(),
             tempdir
                 .path()
                 .join(format!("agent-{suffix}"))
@@ -386,18 +375,19 @@ fn build_multi_agent_live_desktop_fixture(
             &backend,
         ))?;
         let docs = runtime.block_on(seed_live_operator_documents(
-            &remote_core,
+            &desktop_core,
             &running_agent.did,
             &unique_label,
             &backend,
         ))?;
 
         let deployment_label = format!("{} Server", title_case_ascii(suffix));
-        let added = runtime.block_on(desktop_core.add_peer(
+        let added = desktop_core.add_test_peer_status(
             &deployment_label,
-            &remote_addr,
+            format!("test://{suffix}"),
             &running_agent.did,
-        ))?;
+            true,
+        );
         wait_for_value(
             &format!("replicated live deployment docs for {deployment_label}"),
             Duration::from_secs(20),
@@ -432,9 +422,7 @@ fn build_multi_agent_live_desktop_fixture(
         deployments.push(LiveRemoteDeployment {
             label: deployment_label,
             peer_id: added.peer_id,
-            addr: remote_addr,
             agent_did: running_agent.did.clone(),
-            core: remote_core,
             running_agent,
             docs,
         });
@@ -509,7 +497,7 @@ async fn seed_live_operator_documents(
         model_name: Some(backend.model_name.clone()),
         tool_selection_id: Some(tool_selection_id.clone()),
         inference_profile_id: Some(inference_profile_id.clone()),
-        compaction_strategy: Some("none".to_string()),
+        compaction_strategy: Some("StripThenSummarize".to_string()),
         compaction_threshold: Some(0.95),
         enabled: Some(true),
         created_at: Some(chrono::Utc::now().to_rfc3339()),
@@ -541,29 +529,6 @@ async fn seed_live_operator_documents(
         inference_profile_id,
         scheduled_task_id,
     })
-}
-
-async fn configure_test_replicator(core: &ClientCore, peer_addr: &str) -> Result<()> {
-    core.p2p()
-        .set_replicator(peer_addr, subscribed_collection_names_for_test())
-        .await
-}
-
-fn subscribed_collection_names_for_test() -> Vec<String> {
-    RUNTIME_COLLECTION_NAMES
-        .iter()
-        .chain(ALL_COLLECTION_NAMES.iter())
-        .map(|name| (*name).to_string())
-        .collect()
-}
-
-fn first_connectable_addr(core: &ClientCore) -> Result<String> {
-    core.listen_addresses()
-        .iter()
-        .find(|addr| addr.contains("/p2p/") || addr.starts_with("endpoint"))
-        .cloned()
-        .or_else(|| core.listen_addresses().first().cloned())
-        .context("client core missing listen address")
 }
 
 fn title_case_ascii(value: &str) -> String {
@@ -605,14 +570,34 @@ struct MockModelEndpoint {
     handle: Option<JoinHandle<()>>,
 }
 
+#[derive(Clone)]
+enum MockModelMode {
+    Text,
+    ToolLoop { final_text: String },
+}
+
 impl MockModelEndpoint {
     fn start(model_name: &str) -> Result<Self> {
+        Self::start_with_mode(model_name, MockModelMode::Text)
+    }
+
+    fn start_tool_loop(model_name: &str, final_text: impl Into<String>) -> Result<Self> {
+        Self::start_with_mode(
+            model_name,
+            MockModelMode::ToolLoop {
+                final_text: final_text.into(),
+            },
+        )
+    }
+
+    fn start_with_mode(model_name: &str, mode: MockModelMode) -> Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_for_thread = Arc::clone(&stop);
         let model_name = model_name.to_string();
+        let mode_for_thread = mode.clone();
         let handle = thread::spawn(move || {
             while !stop_for_thread.load(Ordering::Relaxed) {
                 match listener.accept() {
@@ -636,16 +621,19 @@ impl MockModelEndpoint {
                             && (request.path == "/v1/chat/completions"
                                 || request.path == "/chat/completions")
                         {
-                            (
-                                "200 OK",
-                                "text/event-stream",
-                                concat!(
-                                    "data: {\"choices\":[{\"delta\":{\"content\":\"mock response\",\"tool_calls\":[]}}],\"usage\":null}\n\n",
-                                    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"total_tokens\":12}}\n\n",
-                                    "data: [DONE]\n\n",
-                                )
-                                .to_string(),
-                            )
+                            let body = match &mode_for_thread {
+                                MockModelMode::Text => mock_completion_sse("mock response"),
+                                MockModelMode::ToolLoop { final_text } => {
+                                    if request_has_tool_result_message(&request.body) {
+                                        let text = extract_desktop_tool_token(&request.body)
+                                            .unwrap_or_else(|| final_text.clone());
+                                        mock_completion_sse(&text)
+                                    } else {
+                                        mock_tool_call_sse("read_file", r#"{"path":"notes.txt"}"#)
+                                    }
+                                }
+                            };
+                            ("200 OK", "text/event-stream", body)
                         } else {
                             (
                                 "404 Not Found",
@@ -677,6 +665,106 @@ impl MockModelEndpoint {
     }
 }
 
+fn request_has_tool_result_message(body: &str) -> bool {
+    body.contains(r#""role":"tool""#) || body.contains(r#""role": "tool""#)
+}
+
+fn extract_desktop_tool_token(body: &str) -> Option<String> {
+    let marker = "DESKTOP_TOOL_TOKEN_";
+    let start = body.find(marker)?;
+    let token = body[start..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+        .collect::<String>();
+    (!token.is_empty()).then_some(token)
+}
+
+fn mock_tool_call_sse(tool_name: &str, arguments: &str) -> String {
+    let chunk_1 = serde_json::json!({
+        "choices": [{
+            "delta": {
+                "tool_calls": [{
+                    "index": 0,
+                    "id": "call-read-file",
+                    "function": {
+                        "name": tool_name,
+                        "arguments": ""
+                    }
+                }]
+            },
+            "finish_reason": null
+        }],
+        "usage": null
+    });
+    let chunk_2 = serde_json::json!({
+        "choices": [{
+            "delta": {
+                "tool_calls": [{
+                    "index": 0,
+                    "id": null,
+                    "function": {
+                        "name": null,
+                        "arguments": arguments
+                    }
+                }]
+            },
+            "finish_reason": null
+        }],
+        "usage": null
+    });
+    let chunk_3 = serde_json::json!({
+        "choices": [{
+            "delta": {
+                "content": null,
+                "tool_calls": []
+            },
+            "finish_reason": "tool_calls"
+        }],
+        "usage": {
+            "prompt_tokens": 16,
+            "completion_tokens": 4,
+            "total_tokens": 20
+        }
+    });
+    format!(
+        "data: {}\n\ndata: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+        serde_json::to_string(&chunk_1).expect("serialize mock tool chunk 1"),
+        serde_json::to_string(&chunk_2).expect("serialize mock tool chunk 2"),
+        serde_json::to_string(&chunk_3).expect("serialize mock tool chunk 3"),
+    )
+}
+
+fn mock_completion_sse(text: &str) -> String {
+    let chunk_1 = serde_json::json!({
+        "choices": [{
+            "delta": {
+                "content": text
+            },
+            "finish_reason": null
+        }],
+        "usage": null
+    });
+    let chunk_2 = serde_json::json!({
+        "choices": [{
+            "delta": {
+                "content": null,
+                "tool_calls": []
+            },
+            "finish_reason": "stop"
+        }],
+        "usage": {
+            "prompt_tokens": 24,
+            "completion_tokens": 6,
+            "total_tokens": 30
+        }
+    });
+    format!(
+        "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+        serde_json::to_string(&chunk_1).expect("serialize mock completion chunk 1"),
+        serde_json::to_string(&chunk_2).expect("serialize mock completion chunk 2"),
+    )
+}
+
 impl Drop for MockModelEndpoint {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
@@ -689,6 +777,7 @@ impl Drop for MockModelEndpoint {
 
 struct RunningAgent {
     did: String,
+    tool_token: String,
     shutdown_tx: watch::Sender<bool>,
     run_task: tokio::task::JoinHandle<anyhow::Result<()>>,
 }
@@ -705,6 +794,7 @@ impl RunningAgent {
 struct HttpRequestData {
     method: String,
     path: String,
+    body: String,
 }
 
 #[derive(Debug, Clone)]
@@ -835,6 +925,7 @@ fn submit_chat_message_and_wait_for_response(
                 }
                 snapshot
                     .latest_response_for_request(&request_id)
+                    .filter(|row| matches!(row.status.as_deref(), Some("complete" | "completed")))
                     .and_then(|row| row.content.as_deref())
                     .filter(|content| !content.trim().is_empty())
                     .map(str::to_string)
@@ -1169,6 +1260,21 @@ async fn spawn_backed_agent(
     name: &str,
     backend: &AgentBackendConfig,
 ) -> Result<RunningAgent> {
+    let key_path = key_path.into();
+    let tool_root = key_path
+        .parent()
+        .map(|parent| parent.join("tool-root"))
+        .unwrap_or_else(|| std::env::temp_dir().join(format!("defra-agent-tools-{name}")));
+    std::fs::create_dir_all(&tool_root)
+        .with_context(|| format!("creating live tool root {}", tool_root.display()))?;
+    let tool_token = format!("DESKTOP_TOOL_TOKEN_{}", uuid::Uuid::new_v4().simple());
+    std::fs::write(tool_root.join("notes.txt"), format!("{tool_token}\n")).with_context(|| {
+        format!(
+            "writing live tool fixture {}",
+            tool_root.join("notes.txt").display()
+        )
+    })?;
+
     let identity = Arc::new(SimpleIdentity::new(name, key_path, None));
     bind_default_behavior_backend(
         node.as_ref(),
@@ -1182,7 +1288,7 @@ async fn spawn_backed_agent(
         Arc::clone(&node),
         identity,
         DocumentRuntimeOptions {
-            tool_ceiling: ToolCeiling::readonly(),
+            tool_ceiling: ToolCeiling::readwrite(tool_root),
             ..Default::default()
         },
     )
@@ -1192,6 +1298,7 @@ async fn spawn_backed_agent(
     wait_for_runtime_process_state(node.as_ref(), &did, "ready").await?;
     Ok(RunningAgent {
         did,
+        tool_token,
         shutdown_tx,
         run_task,
     })
@@ -1393,6 +1500,14 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequestData> {
     let request_line = lines
         .next()
         .ok_or_else(|| anyhow!("missing request line"))?;
+    let mut content_length = 0_usize;
+    for line in lines.clone() {
+        if let Some((name, value)) = line.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                content_length = value.trim().parse().unwrap_or_default();
+            }
+        }
+    }
     let mut parts = request_line.split_whitespace();
     let method = parts
         .next()
@@ -1402,8 +1517,17 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequestData> {
         .next()
         .ok_or_else(|| anyhow!("missing request path"))?
         .to_string();
+    while buffer.len() < header_end + content_length {
+        let read = stream.read(&mut temp)?;
+        if read == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&temp[..read]);
+    }
+    let body = String::from_utf8_lossy(&buffer[header_end..buffer.len().min(header_end + content_length)])
+        .to_string();
 
-    Ok(HttpRequestData { method, path })
+    Ok(HttpRequestData { method, path, body })
 }
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {

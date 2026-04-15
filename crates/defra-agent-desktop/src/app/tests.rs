@@ -19,7 +19,6 @@ use defra_agent::{
 use defra_agent_protocol::row::{
     AgentBehaviorRow, InferenceBackendRow, InferenceProfileRow, ScheduledTaskRow, ToolSelectionRow,
 };
-use defra_agent_protocol::schemas::{ALL_COLLECTION_NAMES, RUNTIME_COLLECTION_NAMES};
 use eframe::App as _;
 use serde_json::Value;
 use tokio::sync::watch;

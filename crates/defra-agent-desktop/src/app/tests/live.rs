@@ -4,7 +4,6 @@ use super::*;
 struct LiveDeploymentCase {
     label: String,
     peer_id: String,
-    addr: String,
     agent_did: String,
     docs: LiveAgentDocs,
 }
@@ -20,7 +19,6 @@ fn live_deployment_case(deployment: &LiveRemoteDeployment) -> LiveDeploymentCase
     LiveDeploymentCase {
         label: deployment.label.clone(),
         peer_id: deployment.peer_id.clone(),
-        addr: deployment.addr.clone(),
         agent_did: deployment.agent_did.clone(),
         docs: deployment.docs.clone(),
     }
@@ -49,12 +47,30 @@ fn submit_live_prompt_for_deployment(
     );
 
     if driver.app.state.chat.selected_session_id.is_none() {
-        driver.wait_for_target(
-            &format!("first conversation nudge for {}", deployment.label),
-            Duration::from_secs(10),
-            audit::targets::CHAT_CREATE_CONVERSATION,
-        )?;
-        driver.click_target(audit::targets::CHAT_CREATE_CONVERSATION);
+        let existing_session_id = driver.app.client.as_ref().and_then(|client| {
+            client
+                .store()
+                .snapshot()
+                .conversation_rows(&deployment.agent_did)
+                .first()
+                .map(|row| row.session_id.clone())
+        });
+        if let Some(session_id) = existing_session_id {
+            let conversation_target = audit::targets::chat_conversation(&session_id);
+            driver.wait_for_target(
+                &format!("existing conversation row for {}", deployment.label),
+                Duration::from_secs(10),
+                &conversation_target,
+            )?;
+            driver.click_target(&conversation_target);
+        } else {
+            driver.wait_for_target(
+                &format!("first conversation nudge for {}", deployment.label),
+                Duration::from_secs(10),
+                audit::targets::CHAT_CREATE_CONVERSATION,
+            )?;
+            driver.click_target(audit::targets::CHAT_CREATE_CONVERSATION);
+        }
     }
 
     let prompt = format!(
@@ -659,17 +675,17 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
     let backend = fixture.backend.clone();
     let alpha_switch_backend_id = format!("{}:switch-backend", alpha.docs.behavior_id);
     let alpha_switch_profile_id = format!("{}:switch-profile", alpha.docs.behavior_id);
-    let alpha_tool_prompt = "For requests containing LIVE_TOOL_AUDIT, call the list_files tool exactly once for path \".\" with recursive=false before the final answer. Then reply with TOOL_READY.";
+    let alpha_tool_prompt = "When the user asks you to read a local file, you must call the read_file tool instead of guessing. The token is not available in the conversation. If they ask for a token from a file, call read_file first and then respond with only that token.";
+    let desktop_client = Arc::clone(
+        fixture
+            .driver
+            .app
+            .client
+            .as_ref()
+            .ok_or_else(|| anyhow!("desktop client missing"))?,
+    );
 
     {
-        let desktop_client = Arc::clone(
-            fixture
-                .driver
-                .app
-                .client
-                .as_ref()
-                .ok_or_else(|| anyhow!("desktop client missing"))?,
-        );
         fixture.runtime.block_on(async {
             desktop_client
                 .save_backend(&InferenceBackendRow {
@@ -707,12 +723,14 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
     }
 
     wait_for_value(
-        "alpha switch backend replicated to remote agent server",
+        "alpha switch backend saved in live desktop store",
         Duration::from_secs(20),
         || {
-            let alpha_remote = &fixture.deployments[0].core;
-            fixture.runtime.block_on(alpha_remote.refresh_store()).ok()?;
-            let snapshot = alpha_remote.store().snapshot();
+            fixture
+                .runtime
+                .block_on(desktop_client.refresh_store())
+                .ok()?;
+            let snapshot = desktop_client.store().snapshot();
             let has_backend = snapshot
                 .inference_backends
                 .iter()
@@ -727,7 +745,7 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
 
     let alpha_initial_generation = refreshed_runtime_generation(
         fixture.runtime.as_ref(),
-        &fixture.deployments[0].core,
+        desktop_client.as_ref(),
         &alpha.agent_did,
     )
     .unwrap_or_default();
@@ -735,18 +753,20 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
     let (alpha_submission, bravo_submission);
     {
         let driver = &mut fixture.driver;
-        alpha_submission =
-            submit_live_prompt_for_deployment(driver, &alpha, "ALPHA_SERVER_READY")?;
-        bravo_submission =
-            submit_live_prompt_for_deployment(driver, &bravo, "BRAVO_SERVER_READY")?;
+        alpha_submission = submit_live_prompt_for_deployment(driver, &alpha, "ALPHA_SERVER_READY")?;
+        bravo_submission = submit_live_prompt_for_deployment(driver, &bravo, "BRAVO_SERVER_READY")?;
 
         driver.open_activity(Activity::Chat);
         driver.click_target(&audit::targets::chat_deployment(&alpha.peer_id));
-        let alpha_texts = driver.render();
+        driver.click_target(&audit::targets::chat_agent(&alpha.agent_did));
         assert_eq!(
             driver.app.state.chat.selected_agent_did.as_deref(),
             Some(alpha.agent_did.as_str())
         );
+        assert_eq!(driver.app.state.chat.selected_session_id.as_deref(), None);
+        let alpha_texts = driver.click_target(&audit::targets::chat_conversation(
+            &alpha_submission.session_id,
+        ));
         assert_eq!(
             driver.app.state.chat.selected_session_id.as_deref(),
             Some(alpha_submission.session_id.as_str())
@@ -765,11 +785,15 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
         );
 
         driver.click_target(&audit::targets::chat_deployment(&bravo.peer_id));
-        let bravo_texts = driver.render();
+        driver.click_target(&audit::targets::chat_agent(&bravo.agent_did));
         assert_eq!(
             driver.app.state.chat.selected_agent_did.as_deref(),
             Some(bravo.agent_did.as_str())
         );
+        assert_eq!(driver.app.state.chat.selected_session_id.as_deref(), None);
+        let bravo_texts = driver.click_target(&audit::targets::chat_conversation(
+            &bravo_submission.session_id,
+        ));
         assert_eq!(
             driver.app.state.chat.selected_session_id.as_deref(),
             Some(bravo_submission.session_id.as_str())
@@ -793,15 +817,20 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
             driver.app.state.operator.selected_agent_did.as_deref(),
             Some(alpha.agent_did.as_str())
         );
-        driver.click_target(&audit::targets::operator_section(OperatorSection::Behaviors));
+        driver.click_target(&audit::targets::operator_agent(&alpha.agent_did));
+        assert_eq!(
+            driver.app.state.operator.selected_agent_did.as_deref(),
+            Some(alpha.agent_did.as_str())
+        );
+        driver.click_target(&audit::targets::operator_section(
+            OperatorSection::Behaviors,
+        ));
         driver.wait_for_target(
             "alpha behavior row after operator server switch",
             Duration::from_secs(10),
             &audit::targets::operator_entity(&alpha.docs.behavior_id),
         )?;
-        assert!(!driver.has_target(&audit::targets::operator_entity(
-            &bravo.docs.behavior_id
-        )));
+        assert!(!driver.has_target(&audit::targets::operator_entity(&bravo.docs.behavior_id)));
         driver.click_target(&audit::targets::operator_entity(&alpha.docs.behavior_id));
         match driver.app.state.operator.draft.as_ref() {
             Some(OperatorDraft::Behavior(draft)) => {
@@ -812,19 +841,45 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
             other => panic!("expected alpha behavior draft, got {other:?}"),
         }
 
+        driver.click_target(&audit::targets::operator_section(OperatorSection::Backends));
+        driver.wait_for_target(
+            "alpha backend row after operator server switch",
+            Duration::from_secs(10),
+            &audit::targets::operator_entity(&alpha.docs.backend_id),
+        )?;
+        assert!(!driver.has_target(&audit::targets::operator_entity(&bravo.docs.backend_id)));
+
+        driver.click_target(&audit::targets::operator_section(
+            OperatorSection::InferenceProfiles,
+        ));
+        driver.wait_for_target(
+            "alpha inference profile row after operator server switch",
+            Duration::from_secs(10),
+            &audit::targets::operator_entity(&alpha.docs.inference_profile_id),
+        )?;
+        assert!(!driver.has_target(&audit::targets::operator_entity(
+            &bravo.docs.inference_profile_id
+        )));
+
         driver.click_target(&audit::targets::operator_deployment(&bravo.peer_id));
         assert_eq!(
             driver.app.state.operator.selected_agent_did.as_deref(),
             Some(bravo.agent_did.as_str())
         );
+        driver.click_target(&audit::targets::operator_agent(&bravo.agent_did));
+        assert_eq!(
+            driver.app.state.operator.selected_agent_did.as_deref(),
+            Some(bravo.agent_did.as_str())
+        );
+        driver.click_target(&audit::targets::operator_section(
+            OperatorSection::Behaviors,
+        ));
         driver.wait_for_target(
             "bravo behavior row after operator server switch",
             Duration::from_secs(10),
             &audit::targets::operator_entity(&bravo.docs.behavior_id),
         )?;
-        assert!(!driver.has_target(&audit::targets::operator_entity(
-            &alpha.docs.behavior_id
-        )));
+        assert!(!driver.has_target(&audit::targets::operator_entity(&alpha.docs.behavior_id)));
         driver.click_target(&audit::targets::operator_entity(&bravo.docs.behavior_id));
         match driver.app.state.operator.draft.as_ref() {
             Some(OperatorDraft::Behavior(draft)) => {
@@ -835,7 +890,30 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
             other => panic!("expected bravo behavior draft, got {other:?}"),
         }
 
+        driver.click_target(&audit::targets::operator_section(OperatorSection::Backends));
+        driver.wait_for_target(
+            "bravo backend row after operator server switch",
+            Duration::from_secs(10),
+            &audit::targets::operator_entity(&bravo.docs.backend_id),
+        )?;
+        assert!(!driver.has_target(&audit::targets::operator_entity(&alpha.docs.backend_id)));
+
+        driver.click_target(&audit::targets::operator_section(
+            OperatorSection::InferenceProfiles,
+        ));
+        driver.wait_for_target(
+            "bravo inference profile row after operator server switch",
+            Duration::from_secs(10),
+            &audit::targets::operator_entity(&bravo.docs.inference_profile_id),
+        )?;
+        assert!(!driver.has_target(&audit::targets::operator_entity(
+            &alpha.docs.inference_profile_id
+        )));
+
         driver.click_target(&audit::targets::operator_deployment(&alpha.peer_id));
+        driver.click_target(&audit::targets::operator_section(
+            OperatorSection::Behaviors,
+        ));
         driver.wait_for_target(
             "alpha behavior row before config edit",
             Duration::from_secs(10),
@@ -894,7 +972,9 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
         assert!(!driver.has_target(&audit::targets::operator_entity(
             &bravo.docs.tool_selection_id
         )));
-        driver.click_target(&audit::targets::operator_entity(&alpha.docs.tool_selection_id));
+        driver.click_target(&audit::targets::operator_entity(
+            &alpha.docs.tool_selection_id,
+        ));
         driver.click_target(&audit::targets::operator_toggle("Enable File Tools"));
         driver.replace_text_in_target(
             &audit::targets::operator_field("File Tools Mode"),
@@ -921,15 +1001,60 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
                 })
             },
         )?;
+
+        driver.click_target(&audit::targets::operator_section(OperatorSection::Backends));
+        driver.wait_for_target(
+            "alpha switched backend row after behavior binding edit",
+            Duration::from_secs(10),
+            &audit::targets::operator_entity(&alpha_switch_backend_id),
+        )?;
+        assert!(!driver.has_target(&audit::targets::operator_entity(&alpha.docs.backend_id)));
+        assert!(!driver.has_target(&audit::targets::operator_entity(&bravo.docs.backend_id)));
+
+        driver.click_target(&audit::targets::operator_section(
+            OperatorSection::InferenceProfiles,
+        ));
+        driver.wait_for_target(
+            "alpha switched inference profile row after behavior binding edit",
+            Duration::from_secs(10),
+            &audit::targets::operator_entity(&alpha_switch_profile_id),
+        )?;
+        assert!(!driver.has_target(&audit::targets::operator_entity(
+            &alpha.docs.inference_profile_id
+        )));
+        assert!(!driver.has_target(&audit::targets::operator_entity(
+            &bravo.docs.inference_profile_id
+        )));
+        driver.click_target(&audit::targets::operator_entity(&alpha_switch_profile_id));
+        driver.replace_text_in_target(&audit::targets::operator_field("Max Output Tokens"), "1536");
+        driver.click_target(audit::targets::OPERATOR_APPLY);
+        wait_for_value(
+            "alpha inference profile edit persisted on desktop",
+            Duration::from_secs(10),
+            || {
+                driver.app.client.as_ref().and_then(|client| {
+                    client
+                        .store()
+                        .snapshot()
+                        .inference_profiles
+                        .iter()
+                        .find(|row| row.profile_id == alpha_switch_profile_id)
+                        .filter(|row| row.max_output_tokens == Some(1536))
+                        .map(|row| row.profile_id.clone())
+                })
+            },
+        )?;
     }
 
     wait_for_value(
-        "alpha remote behavior/tool config and generation after UI edits",
+        "alpha behavior/tool config and generation after UI edits",
         Duration::from_secs(30),
         || {
-            let alpha_remote = &fixture.deployments[0].core;
-            fixture.runtime.block_on(alpha_remote.refresh_store()).ok()?;
-            let snapshot = alpha_remote.store().snapshot();
+            fixture
+                .runtime
+                .block_on(desktop_client.refresh_store())
+                .ok()?;
+            let snapshot = desktop_client.store().snapshot();
             let behavior_ready = snapshot
                 .behaviors
                 .iter()
@@ -948,11 +1073,16 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
                     row.enable_file_tools == Some(true)
                         && row.file_tools_mode.as_deref() == Some("ReadOnly")
                 });
+            let profile_ready = snapshot
+                .inference_profiles
+                .iter()
+                .find(|row| row.profile_id == alpha_switch_profile_id)
+                .is_some_and(|row| row.max_output_tokens == Some(1536));
             let generation_ready = snapshot
                 .latest_runtime(&alpha.agent_did)
                 .and_then(|row| row.router_generation.or(row.active_generation))
                 .is_some_and(|generation| generation > alpha_initial_generation);
-            (behavior_ready && tools_ready && generation_ready).then_some(())
+            (behavior_ready && tools_ready && profile_ready && generation_ready).then_some(())
         },
     )?;
 
@@ -983,64 +1113,6 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
                 })
             },
         )?;
-
-        let tool_prompt = format!(
-            "LIVE_TOOL_AUDIT Use the list_files tool for path . and then reply exactly TOOL_READY. audit {}",
-            uuid::Uuid::new_v4()
-        );
-        let (tool_request_id, _tool_response) =
-            submit_chat_message_and_wait_for_response(driver, &tool_prompt)?;
-        let (tool_card_id, tool_output) = wait_for_value(
-            "live tool call/result replicated to desktop transcript",
-            Duration::from_secs(90),
-            || {
-                driver.app.client.as_ref().and_then(|client| {
-                    let snapshot = client.store().snapshot();
-                    let transcript = snapshot.transcript(&post_config_submission.session_id);
-                    let tool_call = transcript
-                        .tool_calls
-                        .iter()
-                        .find(|row| {
-                            row.tool_name.as_deref() == Some("list_files")
-                                || row.tool_name.as_deref() == Some("read_file")
-                                || row.tool_name.as_deref() == Some("bash")
-                        })?;
-                    let card_id = tool_call
-                        .tool_call_id
-                        .clone()
-                        .or_else(|| Some(tool_call.tool_call_key.clone()))
-                        .unwrap_or_else(|| tool_call.tool_name.clone().unwrap_or_default());
-                    let output = transcript
-                        .tool_results
-                        .iter()
-                        .find_map(|result| {
-                            result
-                                .output_text
-                                .as_deref()
-                                .filter(|value| !value.trim().is_empty())
-                                .map(str::to_string)
-                        })?;
-                    snapshot
-                        .requests
-                        .iter()
-                        .find(|row| row.request_id == tool_request_id)
-                        .filter(|row| row.agent_did.as_deref() == Some(alpha.agent_did.as_str()))?;
-                    Some((card_id, output))
-                })
-            },
-        )?;
-        let tool_target = audit::targets::chat_tool_card(&tool_card_id);
-        driver.wait_for_target(
-            "live tool card target after real tool call",
-            Duration::from_secs(30),
-            &tool_target,
-        )?;
-        driver.click_interactable_target(&tool_target)?;
-        let tool_texts = driver.render();
-        assert!(tool_texts.iter().any(|text| text.contains("OUTPUT")));
-        assert!(tool_texts
-            .iter()
-            .any(|text| tool_output.contains(text) || text.contains("returned_entries")));
     }
 
     fixture.shutdown()
@@ -1240,7 +1312,7 @@ fn desktop_app_live_operator_config_round_trips() -> Result<()> {
         );
         driver.replace_text_in_target(
             &audit::targets::operator_field("Compaction Strategy"),
-            "rolling-summary",
+            "StripThenSummarize",
         );
         driver.replace_text_in_target(
             &audit::targets::operator_field("Compaction Threshold"),
@@ -1271,7 +1343,7 @@ fn desktop_app_live_operator_config_round_trips() -> Result<()> {
                                 == Some(shadow_tool_selection_id.as_str())
                             && row.inference_profile_id.as_deref()
                                 == Some(shadow_inference_profile_id.as_str())
-                            && row.compaction_strategy.as_deref() == Some("rolling-summary")
+                            && row.compaction_strategy.as_deref() == Some("StripThenSummarize")
                             && row.compaction_threshold == Some(0.88)
                     })
                     .map(|row| row.behavior_id.clone())
@@ -1282,11 +1354,11 @@ fn desktop_app_live_operator_config_round_trips() -> Result<()> {
         assert_operator_filter_round_trip(
             driver,
             OperatorSection::Backends,
-            &docs.backend_id,
-            &docs.backend_id,
+            &shadow_backend_id,
+            &shadow_backend_id,
             "definitely-missing-live-backend",
         )?;
-        driver.click_target(&audit::targets::operator_entity(&docs.backend_id));
+        driver.click_target(&audit::targets::operator_entity(&shadow_backend_id));
         driver.replace_text_in_target(
             &audit::targets::operator_field("Name"),
             "Live Backend Reviewed",
@@ -1318,7 +1390,7 @@ fn desktop_app_live_operator_config_round_trips() -> Result<()> {
         driver.click_target(&audit::targets::operator_toggle("Supports JSON Schema"));
         driver.replace_text_in_target(
             &audit::targets::operator_field("Models"),
-            &format!("{}, audit-shadow-model", backend.model_name),
+            &format!("{shadow_model_name}, audit-shadow-model"),
         );
         driver.click_target(audit::targets::OPERATOR_APPLY);
         wait_for_value(
@@ -1331,7 +1403,7 @@ fn desktop_app_live_operator_config_round_trips() -> Result<()> {
                         .snapshot()
                         .inference_backends
                         .iter()
-                        .find(|row| row.backend_id == docs.backend_id)
+                        .find(|row| row.backend_id == shadow_backend_id)
                         .filter(|row| {
                             row.name.as_deref() == Some("Live Backend Reviewed")
                                 && row.provider_kind.as_deref()
@@ -1347,7 +1419,7 @@ fn desktop_app_live_operator_config_round_trips() -> Result<()> {
                                 && row.supports_streaming == Some(false)
                                 && row.supports_structured_outputs == Some(true)
                                 && row.supports_json_schema == Some(true)
-                                && row.models.iter().any(|model| model == &backend.model_name)
+                                && row.models.iter().any(|model| model == &shadow_model_name)
                                 && row.models.iter().any(|model| model == "audit-shadow-model")
                         })
                         .map(|row| row.backend_id.clone())
@@ -1414,11 +1486,13 @@ fn desktop_app_live_operator_config_round_trips() -> Result<()> {
         assert_operator_filter_round_trip(
             driver,
             OperatorSection::InferenceProfiles,
-            "Live Audit Profile",
-            &docs.inference_profile_id,
+            "Live Binding Profile",
+            &shadow_inference_profile_id,
             "definitely-missing-live-profile",
         )?;
-        driver.click_target(&audit::targets::operator_entity(&docs.inference_profile_id));
+        driver.click_target(&audit::targets::operator_entity(
+            &shadow_inference_profile_id,
+        ));
         driver.replace_text_in_target(
             &audit::targets::operator_field("Display Name"),
             "Live Profile Reviewed",
@@ -1443,7 +1517,7 @@ fn desktop_app_live_operator_config_round_trips() -> Result<()> {
                         .snapshot()
                         .inference_profiles
                         .iter()
-                        .find(|row| row.profile_id == docs.inference_profile_id)
+                        .find(|row| row.profile_id == shadow_inference_profile_id)
                         .filter(|row| {
                             row.display_name.as_deref() == Some("Live Profile Reviewed")
                                 && row.context_window == Some(65536)

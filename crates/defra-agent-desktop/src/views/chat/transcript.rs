@@ -153,26 +153,26 @@ pub fn show(
                                             &fenced_code_block(args, None),
                                         );
                                     }
-                                    if let Some(result) =
-                                        transcript.tool_results.iter().find(|result| {
-                                            result.tool_name == tool_call.tool_name
-                                        })
-                                    {
-                                        let output = result.output_text.as_deref().unwrap_or("");
-                                        if !output.trim().is_empty() {
-                                            ui.add_space(6.0);
-                                            ui.label(
-                                                RichText::new("OUTPUT")
-                                                    .monospace()
-                                                    .size(10.5)
-                                                    .color(palette.text_2),
-                                            );
-                                            render_markdown(
-                                                ui,
-                                                markdown_cache,
-                                                &fenced_code_block(output, None),
-                                            );
-                                        }
+                                    let output = transcript
+                                        .tool_results
+                                        .iter()
+                                        .find(|result| result.tool_name == tool_call.tool_name)
+                                        .and_then(|result| result.output_text.as_deref())
+                                        .or(tool_call.result.as_deref())
+                                        .unwrap_or("");
+                                    if !output.trim().is_empty() {
+                                        ui.add_space(6.0);
+                                        ui.label(
+                                            RichText::new("OUTPUT")
+                                                .monospace()
+                                                .size(10.5)
+                                                .color(palette.text_2),
+                                        );
+                                        render_markdown(
+                                            ui,
+                                            markdown_cache,
+                                            &fenced_code_block(output, None),
+                                        );
                                     }
                                 }
                             });

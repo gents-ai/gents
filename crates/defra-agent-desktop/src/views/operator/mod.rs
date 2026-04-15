@@ -1186,7 +1186,12 @@ fn entity_summaries(
                 .collect()
         }
         OperatorSection::Backends => {
-            let mut rows = store.inference_backends.iter().collect::<Vec<_>>();
+            let backend_ids = backend_ids_for_agent(store, selected_agent_did);
+            let mut rows = store
+                .inference_backends
+                .iter()
+                .filter(|row| backend_ids.contains(&row.backend_id.as_str()))
+                .collect::<Vec<_>>();
             rows.sort_by(|left, right| left.backend_id.cmp(&right.backend_id));
             rows.into_iter()
                 .map(|row| EntitySummary {
@@ -1225,7 +1230,12 @@ fn entity_summaries(
                 .collect()
         }
         OperatorSection::InferenceProfiles => {
-            let mut rows = store.inference_profiles.iter().collect::<Vec<_>>();
+            let profile_ids = inference_profile_ids_for_agent(store, selected_agent_did);
+            let mut rows = store
+                .inference_profiles
+                .iter()
+                .filter(|row| profile_ids.contains(&row.profile_id.as_str()))
+                .collect::<Vec<_>>();
             rows.sort_by(|left, right| left.profile_id.cmp(&right.profile_id));
             rows.into_iter()
                 .map(|row| EntitySummary {
@@ -1290,6 +1300,30 @@ fn entity_summaries(
     }
 }
 
+fn backend_ids_for_agent<'a>(
+    store: &'a ClientStore,
+    selected_agent_did: Option<&str>,
+) -> Vec<&'a str> {
+    store
+        .behaviors
+        .iter()
+        .filter(|row| row.agent_did.as_deref() == selected_agent_did)
+        .filter_map(|row| row.backend_id.as_deref())
+        .collect()
+}
+
+fn inference_profile_ids_for_agent<'a>(
+    store: &'a ClientStore,
+    selected_agent_did: Option<&str>,
+) -> Vec<&'a str> {
+    store
+        .behaviors
+        .iter()
+        .filter(|row| row.agent_did.as_deref() == selected_agent_did)
+        .filter_map(|row| row.inference_profile_id.as_deref())
+        .collect()
+}
+
 fn filter_entity_summaries(entries: Vec<EntitySummary>, filter: &str) -> Vec<EntitySummary> {
     let filter = filter.trim().to_lowercase();
     if filter.is_empty() {
@@ -1332,7 +1366,10 @@ fn section_meta(
         ),
         OperatorSection::Backends => (
             "Backends",
-            format!("{} inference backends", store.inference_backends.len()),
+            format!(
+                "{} inference backends",
+                backend_ids_for_agent(store, selected_agent_did).len()
+            ),
         ),
         OperatorSection::ToolSelections => (
             "Tool selections",
@@ -1347,7 +1384,10 @@ fn section_meta(
         ),
         OperatorSection::InferenceProfiles => (
             "Inference profiles",
-            format!("{} profiles", store.inference_profiles.len()),
+            format!(
+                "{} profiles",
+                inference_profile_ids_for_agent(store, selected_agent_did).len()
+            ),
         ),
         OperatorSection::ScheduledTasks => (
             "Scheduled Tasks",
@@ -1428,31 +1468,38 @@ fn draft_for_selection(
                     created_at: row.created_at.clone().unwrap_or_default(),
                 })
             }),
-        OperatorSection::Backends => store
-            .inference_backends
-            .iter()
-            .find(|row| row.backend_id == entity_id)
-            .map(|row| {
-                OperatorDraft::Backend(BackendDraft {
-                    backend_id: row.backend_id.clone(),
-                    name: row.name.clone().unwrap_or_default(),
-                    provider_kind: row.provider_kind.clone().unwrap_or_default(),
-                    endpoint: row.endpoint.clone().unwrap_or_default(),
-                    api_key: row.api_key.clone().unwrap_or_default(),
-                    api_key_env_var: row.api_key_env_var.clone().unwrap_or_default(),
-                    max_concurrent: row
-                        .max_concurrent
-                        .map(|value| value.to_string())
-                        .unwrap_or_default(),
-                    enabled: row.enabled.unwrap_or(true),
-                    supports_tool_calls: row.supports_tool_calls.unwrap_or(true),
-                    supports_streaming: row.supports_streaming.unwrap_or(true),
-                    supports_structured_outputs: row.supports_structured_outputs.unwrap_or(false),
-                    supports_json_schema: row.supports_json_schema.unwrap_or(false),
-                    models: row.models.join(", "),
-                    probe_status: row.probe_status.clone().unwrap_or_default(),
+        OperatorSection::Backends => {
+            let backend_ids = backend_ids_for_agent(store, selected_agent_did);
+            store
+                .inference_backends
+                .iter()
+                .find(|row| {
+                    row.backend_id == entity_id && backend_ids.contains(&row.backend_id.as_str())
                 })
-            }),
+                .map(|row| {
+                    OperatorDraft::Backend(BackendDraft {
+                        backend_id: row.backend_id.clone(),
+                        name: row.name.clone().unwrap_or_default(),
+                        provider_kind: row.provider_kind.clone().unwrap_or_default(),
+                        endpoint: row.endpoint.clone().unwrap_or_default(),
+                        api_key: row.api_key.clone().unwrap_or_default(),
+                        api_key_env_var: row.api_key_env_var.clone().unwrap_or_default(),
+                        max_concurrent: row
+                            .max_concurrent
+                            .map(|value| value.to_string())
+                            .unwrap_or_default(),
+                        enabled: row.enabled.unwrap_or(true),
+                        supports_tool_calls: row.supports_tool_calls.unwrap_or(true),
+                        supports_streaming: row.supports_streaming.unwrap_or(true),
+                        supports_structured_outputs: row
+                            .supports_structured_outputs
+                            .unwrap_or(false),
+                        supports_json_schema: row.supports_json_schema.unwrap_or(false),
+                        models: row.models.join(", "),
+                        probe_status: row.probe_status.clone().unwrap_or_default(),
+                    })
+                })
+        }
         OperatorSection::ToolSelections => store
             .tool_selections
             .iter()
@@ -1473,40 +1520,45 @@ fn draft_for_selection(
                     delegate_to: row.delegate_to.join(", "),
                 })
             }),
-        OperatorSection::InferenceProfiles => store
-            .inference_profiles
-            .iter()
-            .find(|row| row.profile_id == entity_id)
-            .map(|row| {
-                OperatorDraft::InferenceProfile(InferenceProfileDraft {
-                    profile_id: row.profile_id.clone(),
-                    display_name: row.display_name.clone().unwrap_or_default(),
-                    context_window: row
-                        .context_window
-                        .map(|value| value.to_string())
-                        .unwrap_or_default(),
-                    max_output_tokens: row
-                        .max_output_tokens
-                        .map(|value| value.to_string())
-                        .unwrap_or_default(),
-                    max_turns: row
-                        .max_turns
-                        .map(|value| value.to_string())
-                        .unwrap_or_default(),
-                    temperature: row
-                        .temperature
-                        .map(|value| value.to_string())
-                        .unwrap_or_default(),
-                    stream_batch_ms: row
-                        .stream_batch_ms
-                        .map(|value| value.to_string())
-                        .unwrap_or_default(),
-                    deadline_duration_secs: row
-                        .deadline_duration_secs
-                        .map(|value| value.to_string())
-                        .unwrap_or_default(),
+        OperatorSection::InferenceProfiles => {
+            let profile_ids = inference_profile_ids_for_agent(store, selected_agent_did);
+            store
+                .inference_profiles
+                .iter()
+                .find(|row| {
+                    row.profile_id == entity_id && profile_ids.contains(&row.profile_id.as_str())
                 })
-            }),
+                .map(|row| {
+                    OperatorDraft::InferenceProfile(InferenceProfileDraft {
+                        profile_id: row.profile_id.clone(),
+                        display_name: row.display_name.clone().unwrap_or_default(),
+                        context_window: row
+                            .context_window
+                            .map(|value| value.to_string())
+                            .unwrap_or_default(),
+                        max_output_tokens: row
+                            .max_output_tokens
+                            .map(|value| value.to_string())
+                            .unwrap_or_default(),
+                        max_turns: row
+                            .max_turns
+                            .map(|value| value.to_string())
+                            .unwrap_or_default(),
+                        temperature: row
+                            .temperature
+                            .map(|value| value.to_string())
+                            .unwrap_or_default(),
+                        stream_batch_ms: row
+                            .stream_batch_ms
+                            .map(|value| value.to_string())
+                            .unwrap_or_default(),
+                        deadline_duration_secs: row
+                            .deadline_duration_secs
+                            .map(|value| value.to_string())
+                            .unwrap_or_default(),
+                    })
+                })
+        }
         OperatorSection::ScheduledTasks => store
             .scheduled_tasks
             .iter()

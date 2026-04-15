@@ -198,21 +198,20 @@ pub fn show_sidebar(
                             Some(accessory),
                         );
                         audit::record(ui, &audit::targets::peers_peer(&peer.record_id), &response);
-                        if response.clicked()
-                        {
+                        if response.clicked() {
                             state.peers.selected_peer_id = Some(peer.record_id.clone());
                         }
 
                         let tree_tag = if peer.connected { "live" } else { "saved" };
-                        if views::tree_row(
+                        let response = views::tree_row(
                             ui,
                             &peer.agent_label,
                             tree_tag,
                             state.peers.selected_peer_id.as_deref()
                                 == Some(peer.record_id.as_str()),
-                        )
-                        .clicked()
-                        {
+                        );
+                        audit::record(ui, &audit::targets::peers_agent(&peer.record_id), &response);
+                        if response.clicked() {
                             state.peers.selected_peer_id = Some(peer.record_id.clone());
                         }
                     });
