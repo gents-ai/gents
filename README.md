@@ -130,9 +130,6 @@ The server reads the initialized home directory, starts the local node, and prin
 - `graphql`
 - `default_behavior_id`
 - `tool_ceiling`
-
-If you start the runtime with P2P enabled, the readiness JSON also includes:
-
 - `p2p_transport`
 - `p2p_peer_id`
 - `p2p_listen_addresses`
@@ -147,13 +144,12 @@ The runtime HTTP port also exposes a stable machine-readable operations surface:
 
 `server` stays in the foreground until you stop it with `Ctrl-C`. By default it keeps logs quiet and prints the readiness JSON plus a short status line. If you want debug output, set `RUST_LOG=info` or a more specific filter before starting it.
 
-The default behavior stays local-only. If you do not pass any P2P flags, `p2p_transport` stays `none`.
+The standard server path always starts the IROH P2P transport for local desktop pairing. It binds to localhost on an ephemeral P2P port by default, with relay and discovery disabled.
 
-To enable operator-facing P2P bring-up with iroh:
+To pin the local P2P socket for demos:
 
 ```bash
 $AGENT server \
-  --p2p-transport iroh \
   --p2p-bind-addr 127.0.0.1 \
   --p2p-port 4017 \
   --p2p-relay-mode disabled \
@@ -221,8 +217,8 @@ After that, the agent can use read-only file tools on new requests. This change 
 To bring up two runtimes and connect them through the operator CLI:
 
 ```bash
-$AGENT server --home /tmp/amy --p2p-transport iroh --p2p-bind-addr 127.0.0.1 --p2p-port 4017
-$AGENT server --home /tmp/coding --p2p-transport iroh --p2p-bind-addr 127.0.0.1 --p2p-port 4018
+$AGENT server --home /tmp/amy --p2p-bind-addr 127.0.0.1 --p2p-port 4017
+$AGENT server --home /tmp/coding --p2p-bind-addr 127.0.0.1 --p2p-port 4018
 ```
 
 Read Amy's startup JSON or `/tmp/amy/runtime.json` and take one of the values from `p2p_listen_addresses`.
@@ -324,8 +320,8 @@ cd crates/defra-agent/proofs && lake build
 There is also an ignored live smoke test for the real binary flow against an external inference endpoint:
 
 ```bash
-export DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT=http://100.73.235.38:8000/v1
-export DEFRA_AGENT_CLI_E2E_MODEL_NAME=your-model-name
+export DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT=http://workstation-1:8000/v1
+export DEFRA_AGENT_CLI_E2E_MODEL_NAME=MiniMax-M2.7-NVFP4
 # export DEFRA_AGENT_CLI_E2E_API_KEY=...   # if your endpoint requires auth
 
 cargo test -p defra-agent-cli \

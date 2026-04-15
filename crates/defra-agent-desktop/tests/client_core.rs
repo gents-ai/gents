@@ -85,7 +85,7 @@ async fn two_client_cores_connect_over_iroh() -> Result<()> {
 async fn wait_for_connectable_iroh_addr(core: &ClientCore) -> Result<String> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let addrs = core.p2p().listen_addresses().await;
+        let addrs = core.p2p().listen_addresses().await?;
         if let Some(addr) = addrs
             .into_iter()
             .find(|addr| addr.contains("/p2p/") || addr.starts_with("endpoint"))

@@ -92,12 +92,13 @@ Examples:
   defra-agent reset
   defra-agent reset --home /path/to/home";
 const SERVER_AFTER_HELP: &str = "\
-`server` reads the initialized home directory, starts the embedded DefraDB runtime, and serves GraphQL locally.
+`server` reads the initialized home directory, starts the embedded DefraDB runtime, serves GraphQL locally, and starts IROH P2P for desktop pairing.
 
 Common flow:
   defra-agent init
   defra-agent server
-  defra-agent server --p2p-transport iroh --p2p-port 4017
+  defra-agent-desktop init
+  defra-agent-desktop
   defra-agent chat";
 const CHAT_AFTER_HELP: &str = "\
 Examples:
@@ -436,17 +437,15 @@ struct ServeArgs {
         help = "Root directory for readonly/readwrite tool ceilings. Readonly defaults to the current working directory when unset"
     )]
     tool_root: Option<PathBuf>,
-    #[arg(long, value_enum, default_value_t = P2pTransportArg::None)]
-    p2p_transport: P2pTransportArg,
     #[arg(long)]
     p2p_bind_addr: Option<IpAddr>,
     #[arg(long)]
     p2p_port: Option<u16>,
     #[arg(long)]
     p2p_secret_key_path: Option<PathBuf>,
-    #[arg(long, value_enum, default_value_t = P2pRelayModeArg::Default)]
+    #[arg(long, value_enum, default_value_t = P2pRelayModeArg::Disabled)]
     p2p_relay_mode: P2pRelayModeArg,
-    #[arg(long, value_enum, default_value_t = P2pDiscoveryArg::N0)]
+    #[arg(long, value_enum, default_value_t = P2pDiscoveryArg::Disabled)]
     p2p_discovery: P2pDiscoveryArg,
 }
 
@@ -2808,7 +2807,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
         }
     }
 
-    let p2p_status = load_local_server_p2p_status(node.as_ref(), args.p2p_transport).await?;
+    let p2p_status = load_local_server_p2p_status(node.as_ref(), P2pTransportArg::Iroh).await?;
     write_runtime_state(
         &home_dir,
         &StoredRuntimeState {
@@ -2857,7 +2856,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
     });
     print_json(&output)?;
     eprintln!(
-        "defra-agent server is running. Press Ctrl-C to stop. Run `defra-agent chat` in another terminal."
+        "defra-agent server is running with IROH P2P. Press Ctrl-C to stop. Run `defra-agent-desktop init` or `defra-agent chat` in another terminal."
     );
 
     run_handle
@@ -2866,7 +2865,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
 }
 
 fn default_p2p_transport() -> String {
-    P2pTransportArg::None.as_str().to_string()
+    P2pTransportArg::Iroh.as_str().to_string()
 }
 
 fn default_p2p_secret_key_path(home_dir: &Path) -> PathBuf {
@@ -2877,47 +2876,35 @@ fn resolve_server_p2p_config(
     home_dir: &Path,
     args: &ServeArgs,
 ) -> Result<Option<defra_node::P2PConfig>> {
-    match args.p2p_transport {
-        P2pTransportArg::None => {
-            if args.p2p_bind_addr.is_some()
-                || args.p2p_port.is_some()
-                || args.p2p_secret_key_path.is_some()
-                || args.p2p_relay_mode != P2pRelayModeArg::Default
-                || args.p2p_discovery != P2pDiscoveryArg::N0
-            {
-                anyhow::bail!("P2P-specific flags require `--p2p-transport iroh`");
-            }
-            Ok(None)
-        }
-        P2pTransportArg::Iroh => {
-            let secret_key_path = args
-                .p2p_secret_key_path
-                .clone()
-                .unwrap_or_else(|| default_p2p_secret_key_path(home_dir));
-            if let Some(parent) = secret_key_path.parent() {
-                fs::create_dir_all(parent)
-                    .with_context(|| format!("creating P2P key directory {}", parent.display()))?;
-            }
-            Ok(Some(defra_node::P2PConfig {
-                port: args.p2p_port.unwrap_or(0),
-                bind_addr: args.p2p_bind_addr,
-                relay_mode: match args.p2p_relay_mode {
-                    P2pRelayModeArg::Default => p2p::iroh::IrohRelayModeConfig::Default,
-                    P2pRelayModeArg::Disabled => p2p::iroh::IrohRelayModeConfig::Disabled,
-                },
-                discovery: match args.p2p_discovery {
-                    P2pDiscoveryArg::N0 => p2p::iroh::IrohDiscoveryConfig::N0,
-                    P2pDiscoveryArg::Disabled => p2p::iroh::IrohDiscoveryConfig::Disabled,
-                },
-                secret_key_path: Some(secret_key_path),
-                load_persisted_collections: true,
-                max_concurrent_dag_fetches: DEFAULT_P2P_MAX_CONCURRENT_DAG_FETCHES,
-                max_concurrent_push_tasks: DEFAULT_P2P_MAX_CONCURRENT_PUSH_TASKS,
-                rate_limit_burst: DEFAULT_P2P_RATE_LIMIT_BURST,
-                rate_limit_rate: DEFAULT_P2P_RATE_LIMIT_RATE,
-            }))
-        }
+    let secret_key_path = args
+        .p2p_secret_key_path
+        .clone()
+        .unwrap_or_else(|| default_p2p_secret_key_path(home_dir));
+    if let Some(parent) = secret_key_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating P2P key directory {}", parent.display()))?;
     }
+    Ok(Some(defra_node::P2PConfig {
+        port: args.p2p_port.unwrap_or(0),
+        bind_addr: Some(
+            args.p2p_bind_addr
+                .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        ),
+        relay_mode: match args.p2p_relay_mode {
+            P2pRelayModeArg::Default => p2p::iroh::IrohRelayModeConfig::Default,
+            P2pRelayModeArg::Disabled => p2p::iroh::IrohRelayModeConfig::Disabled,
+        },
+        discovery: match args.p2p_discovery {
+            P2pDiscoveryArg::N0 => p2p::iroh::IrohDiscoveryConfig::N0,
+            P2pDiscoveryArg::Disabled => p2p::iroh::IrohDiscoveryConfig::Disabled,
+        },
+        secret_key_path: Some(secret_key_path),
+        load_persisted_collections: true,
+        max_concurrent_dag_fetches: DEFAULT_P2P_MAX_CONCURRENT_DAG_FETCHES,
+        max_concurrent_push_tasks: DEFAULT_P2P_MAX_CONCURRENT_PUSH_TASKS,
+        rate_limit_burst: DEFAULT_P2P_RATE_LIMIT_BURST,
+        rate_limit_rate: DEFAULT_P2P_RATE_LIMIT_RATE,
+    }))
 }
 
 async fn load_local_server_p2p_status(
@@ -2938,7 +2925,10 @@ async fn load_local_server_p2p_status(
                     "P2P transport was requested but is not available on the embedded node"
                 )
             })?;
-            let peer_id = p2p.local_peer_id().await;
+            let peer_id = p2p
+                .local_peer_id()
+                .await
+                .context("loading local P2P peer id from the embedded node")?;
             let listen_addresses = wait_for_p2p_listen_addresses(p2p).await?;
             let connected_peers = p2p
                 .connected_peers()
@@ -2955,10 +2945,15 @@ async fn load_local_server_p2p_status(
     }
 }
 
-async fn wait_for_p2p_listen_addresses(p2p: &dyn defra_node::P2POps) -> Result<Vec<String>> {
+async fn wait_for_p2p_listen_addresses(
+    p2p: &dyn defra_p2p_adapter::P2POperations,
+) -> Result<Vec<String>> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
-        let listen_addresses = p2p.listen_addresses().await;
+        let listen_addresses = p2p
+            .listen_addresses()
+            .await
+            .context("loading local P2P listen addresses from the embedded node")?;
         if !listen_addresses.is_empty() {
             return Ok(listen_addresses);
         }
@@ -4532,7 +4527,7 @@ fn persisted_p2p_status(runtime_state: Option<&StoredRuntimeState>) -> Value {
         }),
         None => json!({
             "enabled": false,
-            "p2p_transport": default_p2p_transport(),
+            "p2p_transport": P2pTransportArg::None.as_str(),
             "p2p_peer_id": Value::Null,
             "p2p_listen_addresses": [],
             "p2p_connected_peers": [],
