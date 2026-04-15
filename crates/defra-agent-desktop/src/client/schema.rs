@@ -43,7 +43,7 @@ pub async fn subscribe_all_collections(node: &EmbeddedNode) -> Result<()> {
                 if error.to_string().contains("already") {
                     tracing::debug!(collection = name, "collection already subscribed");
                 } else {
-                    return Err(error);
+                    return Err(error.into());
                 }
             }
         }
