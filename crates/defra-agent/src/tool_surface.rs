@@ -96,6 +96,15 @@ impl ToolCeiling {
         }
     }
 
+    pub fn readonly_at(root: impl Into<PathBuf>) -> Self {
+        Self {
+            file_tools: FileToolMode::ReadOnly,
+            bash: BashMode::ReadOnly,
+            cli_tools: Vec::new(),
+            root: Some(root.into()),
+        }
+    }
+
     pub fn readwrite(root: impl Into<PathBuf>) -> Self {
         Self {
             file_tools: FileToolMode::ReadWrite,
@@ -500,8 +509,13 @@ fn build_host_tools(
     ceiling: &ToolCeiling,
 ) -> Result<ToolSet> {
     let mut builder = ToolSetBuilder::default();
-    let effective_root =
-        resolve_effective_tool_root(behavior_name, file_tool_root, ceiling.root())?;
+    let needs_file_tool_root =
+        !matches!(file_tools, FileToolMode::Off) || !matches!(bash, BashMode::Off);
+    let effective_root = if needs_file_tool_root {
+        resolve_effective_tool_root(behavior_name, file_tool_root, ceiling.root())?
+    } else {
+        None
+    };
     if let Some(root) = effective_root.clone() {
         builder = builder.read_root(root.clone());
     }
@@ -750,6 +764,56 @@ mod tests {
             error.to_string().contains("escapes operator tool root"),
             "{error:#}"
         );
+    }
+
+    #[test]
+    fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
+        let operator_root = temp_root("defra-agent-operator-root");
+        let outside_root = temp_root("defra-agent-outside-root");
+
+        let error = BehaviorToolConfig::from_selection(
+            "ops",
+            ToolSelection {
+                file_tools: FileToolMode::ReadOnly,
+                file_tool_root: Some(outside_root),
+                bash: BashMode::ReadOnly,
+                cli_tool_names: Vec::new(),
+                enable_meta_tools: false,
+                delegate_to: Vec::new(),
+            },
+            &ToolCeiling::readonly_at(operator_root),
+            Vec::new(),
+        )
+        .expect_err("readonly selection root outside operator ceiling should fail");
+
+        assert!(
+            error.to_string().contains("escapes operator tool root"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn downgraded_off_selection_ignores_stale_file_tool_root() {
+        let stale_root =
+            std::env::temp_dir().join(format!("defra-agent-stale-root-{}", uuid::Uuid::new_v4()));
+
+        let config = BehaviorToolConfig::from_selection(
+            "ops",
+            ToolSelection {
+                file_tools: FileToolMode::ReadOnly,
+                file_tool_root: Some(stale_root),
+                bash: BashMode::ReadOnly,
+                cli_tool_names: Vec::new(),
+                enable_meta_tools: false,
+                delegate_to: Vec::new(),
+            },
+            &ToolCeiling::meta_only(),
+            Vec::new(),
+        )
+        .unwrap();
+
+        assert!(config.host_tools().native_tools().is_empty());
+        assert!(config.host_tools().build_native_tools().unwrap().is_empty());
     }
 
     #[test]

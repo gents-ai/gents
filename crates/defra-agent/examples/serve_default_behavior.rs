@@ -122,6 +122,7 @@ async fn seed_demo_documents(
             display_name: Some("Demo Tools".to_string()),
             enable_file_tools: Some(true),
             file_tools_mode: Some("ReadOnly".to_string()),
+            file_tool_root: None,
             enable_bash: Some(true),
             bash_mode: Some("ReadOnly".to_string()),
             cli_tool_names: Some(Vec::new()),

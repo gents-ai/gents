@@ -1057,7 +1057,7 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
                 "backend_id": "default-backend",
                 "name": "default-backend",
                 "endpoint": "http://127.0.0.1:8000/v1",
-                "api_key_env_var": "AGENT_DAEMON_API_KEY",
+                "api_key_env_var": "DEFRA_AGENT_TEST_MANIFEST_API_KEY",
                 "max_concurrent": 1,
                 "enabled": true,
                 "models": ["mock-model"]
@@ -1274,7 +1274,7 @@ async fn config_validate_accepts_tool_services_dir_and_scheduled_tasks_dir() -> 
                 "backend_id": "default-backend",
                 "name": "default-backend",
                 "endpoint": "http://127.0.0.1:8000/v1",
-                "api_key_env_var": "AGENT_DAEMON_API_KEY",
+                "api_key_env_var": "DEFRA_AGENT_TEST_MANIFEST_API_KEY",
                 "max_concurrent": 1,
                 "enabled": true,
                 "models": ["mock-model"]
@@ -4337,6 +4337,43 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn init_accepts_tool_root_for_readonly_defaults() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let readonly_root = tempdir.path().join("readonly-root");
+    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&readonly_root)?;
+
+    let model_name = format!("readonly-root-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-readonly-root-{}", Uuid::new_v4().simple());
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            "--tool-root",
+            readonly_root.to_str().expect("utf-8 readonly root"),
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    assert_eq!(
+        init.pointer("/init/tool_ceiling").and_then(Value::as_str),
+        Some("Readonly")
+    );
+    assert_eq!(
+        init.pointer("/init/tool_root").and_then(Value::as_str),
+        Some(readonly_root.to_str().expect("utf-8 readonly root"))
+    );
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -4634,16 +4671,19 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
         .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
     let model_name = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME")
         .context("set DEFRA_AGENT_CLI_E2E_MODEL_NAME for the live CLI e2e test")?;
-    let init = run_init_json(
-        &home_dir,
-        &[
-            "--agent-name",
-            &agent_name,
-            "--model-name",
-            &model_name,
-            &model_endpoint,
-        ],
-    )?;
+    let mut init_args = vec![
+        "--agent-name".to_string(),
+        agent_name.clone(),
+        "--model-name".to_string(),
+        model_name.clone(),
+    ];
+    if std::env::var_os("DEFRA_AGENT_CLI_E2E_API_KEY").is_some() {
+        init_args.push("--api-key-env-var".to_string());
+        init_args.push("DEFRA_AGENT_CLI_E2E_API_KEY".to_string());
+    }
+    init_args.push(model_endpoint.clone());
+    let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
+    let init = run_init_json(&home_dir, &init_arg_refs)?;
     let backend_id = init
         .pointer("/init/backend_id")
         .and_then(Value::as_str)

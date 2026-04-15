@@ -15,7 +15,7 @@ Prerequisites:
 - Rust toolchain
 - one reachable OpenAI-compatible inference endpoint
 - one model name served by that endpoint
-- if your endpoint requires auth, set `AGENT_DAEMON_API_KEY`
+- if your endpoint requires auth, pass `--api-key` or `--api-key-env-var` during `init`
 
 The backend endpoint must be the OpenAI-compatible base URL, including `/v1`.
 
@@ -55,13 +55,15 @@ This is idempotent. It provisions a standard safe home directory under `~/.defra
 - a CLI-oriented default system prompt
 - read-only file and bash tools by default
 
+The default tool root is the current directory where you run `init`. Pass `--tool-root /path/to/root` if you want a different read-only scope.
+
 If you want write-capable local tools for a demo, opt in explicitly:
 
 ```bash
 $AGENT init "$INFERENCE_ENDPOINT" --model-name "$MODEL_NAME" --write-tools
 ```
 
-With `--write-tools`, the default tool root is the current directory where you run `init`. Pass `--tool-root /path/to/root` if you want a different scope.
+With `--write-tools`, the same tool root also caps write/edit and unrestricted bash access.
 
 If you want to wipe and recreate the configured agent home from scratch:
 
@@ -88,7 +90,7 @@ The init output is JSON. The most useful fields are:
 - `init.model_name`
 - `init.tool_selection_id`
 
-If your inference endpoint requires auth, export `AGENT_DAEMON_API_KEY` before running `init`.
+If your inference endpoint requires auth, pass `--api-key-env-var NAME` or `--api-key VALUE` when running `init`.
 
 ### 4. Start the server
 
@@ -300,7 +302,7 @@ There is also an ignored live smoke test for the real binary flow against an ext
 ```bash
 export DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT=http://100.73.235.38:8000/v1
 export DEFRA_AGENT_CLI_E2E_MODEL_NAME=your-model-name
-# export AGENT_DAEMON_API_KEY=...   # if your endpoint requires auth
+# export DEFRA_AGENT_CLI_E2E_API_KEY=...   # if your endpoint requires auth
 
 cargo test -p defra-agent-cli \
   --test cli_e2e \

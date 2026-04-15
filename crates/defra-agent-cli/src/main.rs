@@ -326,7 +326,7 @@ struct InitArgs {
     write_tools: bool,
     #[arg(
         long,
-        help = "Root directory for write-capable tools. Defaults to the current working directory"
+        help = "Root directory for local file/bash tools. Defaults to the current working directory"
     )]
     tool_root: Option<PathBuf>,
 }
@@ -353,7 +353,10 @@ struct ServeArgs {
     tool_ceiling: Option<ToolCeilingArg>,
     #[arg(long = "cli-tool")]
     cli_tools: Vec<String>,
-    #[arg(long, help = "Root directory for readwrite tool ceilings")]
+    #[arg(
+        long,
+        help = "Root directory for readonly/readwrite tool ceilings. Readonly defaults to the current working directory when unset"
+    )]
     tool_root: Option<PathBuf>,
     #[arg(long, value_enum, default_value_t = P2pTransportArg::None)]
     p2p_transport: P2pTransportArg,
@@ -1996,20 +1999,33 @@ async fn serve(args: ServeArgs) -> Result<()> {
         .tool_ceiling
         .or_else(|| init_config.as_ref().map(|config| config.tool_ceiling))
         .unwrap_or(ToolCeilingArg::MetaOnly);
-    let effective_tool_root = args.tool_root.clone().or_else(|| {
+    let configured_tool_root = args.tool_root.clone().or_else(|| {
         init_config
             .as_ref()
             .and_then(|config| config.tool_root.as_ref().map(PathBuf::from))
     });
+    let effective_tool_root = match effective_tool_ceiling {
+        ToolCeilingArg::MetaOnly => configured_tool_root,
+        ToolCeilingArg::Readonly => Some(match configured_tool_root {
+            Some(root) => root,
+            None => resolve_default_tool_root(None)?,
+        }),
+        ToolCeilingArg::Readwrite => Some(configured_tool_root.ok_or_else(|| {
+            anyhow::anyhow!("--tool-root is required when --tool-ceiling readwrite")
+        })?),
+    };
     let mut tool_ceiling = match effective_tool_ceiling {
         ToolCeilingArg::MetaOnly => ToolCeiling::meta_only(),
-        ToolCeilingArg::Readonly => ToolCeiling::readonly(),
-        ToolCeilingArg::Readwrite => {
-            let root = effective_tool_root.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("--tool-root is required when --tool-ceiling readwrite")
-            })?;
-            ToolCeiling::readwrite(root)
-        }
+        ToolCeilingArg::Readonly => ToolCeiling::readonly_at(
+            effective_tool_root
+                .as_ref()
+                .expect("readonly root resolved"),
+        ),
+        ToolCeilingArg::Readwrite => ToolCeiling::readwrite(
+            effective_tool_root
+                .as_ref()
+                .expect("readwrite root resolved"),
+        ),
     };
     for cli_tool_arg in &args.cli_tools {
         tool_ceiling = tool_ceiling.with_cli_tool(parse_cli_tool_arg(cli_tool_arg)?);
@@ -2523,12 +2539,8 @@ async fn resolve_backend_discovery_target(
         BackendResolutionMode::ConfigWrite,
     )?;
     let provider_kind = resolve_backend_provider_kind(args.provider_kind.as_deref(), preset)?;
-    let api_key_env_var = resolve_backend_api_key_env_var(
-        explicit_api_key_env_var,
-        api_key.is_some(),
-        preset,
-        BackendResolutionMode::ConfigWrite,
-    );
+    let api_key_env_var =
+        resolve_backend_api_key_env_var(explicit_api_key_env_var, api_key.is_some(), preset);
     let resolved_api_key = match (api_key, api_key_env_var.clone()) {
         (Some(raw), None) => Some(raw),
         (None, Some(name)) => Some(resolve_required_env_api_key(&name)?),
@@ -4760,16 +4772,19 @@ fn diagnose_tool_ceiling(init_config: Option<&StoredInitConfig>) -> Value {
         Some(config) => {
             let tool_root = config.tool_root.as_deref();
             let ok = match config.tool_ceiling {
-                ToolCeilingArg::Readwrite => tool_root
+                ToolCeilingArg::Readonly | ToolCeilingArg::Readwrite => tool_root
                     .map(Path::new)
                     .map(|path| path.is_dir())
                     .unwrap_or(false),
-                _ => true,
+                ToolCeilingArg::MetaOnly => true,
             };
             let error = if ok {
                 None
             } else {
-                Some("readwrite tool ceiling requires an existing tool_root directory".to_string())
+                Some(
+                    "readonly/readwrite tool ceiling requires an existing tool_root directory"
+                        .to_string(),
+                )
             };
             json!({
                 "ok": ok,
@@ -5099,10 +5114,6 @@ async fn initialize_runtime_home(
     if model_name.is_empty() {
         anyhow::bail!("--model-name must not be empty");
     }
-    if args.tool_root.is_some() && !args.write_tools {
-        anyhow::bail!("--tool-root requires --write-tools");
-    }
-
     let backend = resolve_init_backend_config(args)?;
     let backend_id = explicit_backend_id
         .map(ToOwned::to_owned)
@@ -5118,11 +5129,7 @@ async fn initialize_runtime_home(
     } else {
         ToolCeilingArg::Readonly
     };
-    let tool_root = if args.write_tools {
-        Some(resolve_default_write_tool_root(args.tool_root.as_deref())?)
-    } else {
-        None
-    };
+    let tool_root = Some(resolve_default_tool_root(args.tool_root.as_deref())?);
     let templates = bootstrap_templates_for_ceiling(tool_ceiling);
     let template_vars = bootstrap_template_vars(
         home_dir,
@@ -5218,7 +5225,7 @@ fn resolve_backend_config_with_preset(
     let endpoint = resolve_backend_endpoint(explicit_endpoint, preset, mode)?;
     let provider_kind = resolve_backend_provider_kind(explicit_provider_kind, preset)?;
     let api_key_env_var =
-        resolve_backend_api_key_env_var(explicit_api_key_env_var, api_key.is_some(), preset, mode);
+        resolve_backend_api_key_env_var(explicit_api_key_env_var, api_key.is_some(), preset);
 
     Ok(ResolvedBackendConfig {
         provider_kind,
@@ -5278,24 +5285,13 @@ fn resolve_backend_api_key_env_var(
     explicit: Option<String>,
     raw_api_key_present: bool,
     preset: Option<BackendPresetArg>,
-    mode: BackendResolutionMode,
 ) -> Option<String> {
-    explicit
-        .or_else(|| {
-            (!raw_api_key_present)
-                .then(|| preset.and_then(|candidate| candidate.default_api_key_env_var()))
-                .flatten()
-                .map(ToOwned::to_owned)
-        })
-        .or_else(|| {
-            (mode == BackendResolutionMode::Init && !raw_api_key_present)
-                .then_some(())
-                .and_then(|_| {
-                    std::env::var_os("AGENT_DAEMON_API_KEY")
-                        .is_some()
-                        .then(|| "AGENT_DAEMON_API_KEY".to_string())
-                })
-        })
+    explicit.or_else(|| {
+        (!raw_api_key_present)
+            .then(|| preset.and_then(|candidate| candidate.default_api_key_env_var()))
+            .flatten()
+            .map(ToOwned::to_owned)
+    })
 }
 
 fn normalize_optional_string(value: Option<&str>) -> Option<String> {
@@ -5323,7 +5319,7 @@ fn default_backend_supports_streaming() -> bool {
     true
 }
 
-fn resolve_default_write_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
+fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
     if let Some(path) = explicit {
         return Ok(path.to_path_buf());
     }
@@ -5331,7 +5327,7 @@ fn resolve_default_write_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
     std::env::current_dir()
         .ok()
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-        .ok_or_else(|| anyhow::anyhow!("unable to determine a default tool root for write tools"))
+        .ok_or_else(|| anyhow::anyhow!("unable to determine a default tool root for local tools"))
 }
 
 fn bootstrap_templates_for_ceiling(

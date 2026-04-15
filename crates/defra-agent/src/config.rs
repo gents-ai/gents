@@ -16,7 +16,6 @@ pub const DEFAULT_COMPACTION_THRESHOLD: f64 = 0.75;
 pub const DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS: u64 = 300;
 pub const DEFAULT_DEADLINE_DURATION_SECS: u64 = 900;
 pub const DEFAULT_MODEL_NAME: &str = "default";
-const LEGACY_GLOBAL_BACKEND_API_KEY_ENV_VAR: &str = "AGENT_DAEMON_API_KEY";
 
 /// Runtime configuration for one loaded behavior executor.
 #[derive(Clone)]
@@ -118,10 +117,7 @@ impl BehaviorConfig {
             return Ok(Some(value.to_string()));
         }
 
-        Ok(std::env::var(LEGACY_GLOBAL_BACKEND_API_KEY_ENV_VAR)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()))
+        Ok(None)
     }
 
     pub fn completion_client_api_key(&self) -> Result<String> {
