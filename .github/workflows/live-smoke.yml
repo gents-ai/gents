@@ -30,7 +30,6 @@ jobs:
       - name: Rewrite Git SSH dependencies to HTTPS
         run: |
           git config --global url."https://github.com/".insteadOf ssh://git@github.com/
-          git config --global http.https://github.com/.extraheader "$(git config --local --get http.https://github.com/.extraheader)"
 
       - uses: dtolnay/rust-toolchain@stable
 

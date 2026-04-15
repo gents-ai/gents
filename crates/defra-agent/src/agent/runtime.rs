@@ -899,6 +899,7 @@ async fn run_control_watcher(
                 runtime_status
                     .set_reconcile_phase(ReconcilePhase::Resolving)
                     .await;
+                let mut proposed_update = false;
                 match super::document_view::resolve_document_runtime_snapshot_from_view(
                     node.as_ref(),
                     &resolve_context,
@@ -913,6 +914,7 @@ async fn run_control_watcher(
                                 return Ok(());
                             }
                             last_proposed_fingerprint = Some(fingerprint);
+                            proposed_update = true;
                         }
                     }
                     Err(error) => {
@@ -923,6 +925,11 @@ async fn run_control_watcher(
                         );
                         runtime_status.publish_error(&format!("{error:#}")).await;
                     }
+                }
+                if !proposed_update {
+                    runtime_status
+                        .set_reconcile_phase(ReconcilePhase::Idle)
+                        .await;
                 }
                 if settle_deadline.is_some_and(|deadline| tokio::time::Instant::now() < deadline) {
                     dirty = true;
