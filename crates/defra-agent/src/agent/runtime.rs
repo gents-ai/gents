@@ -814,7 +814,9 @@ pub(super) fn default_hostname() -> String {
 
 const CONTROL_RECONCILE_DEBOUNCE: Duration = Duration::from_secs(5);
 const CONTROL_RECONCILE_SETTLE_RETRY: Duration = Duration::from_millis(500);
-const CONTROL_RECONCILE_SETTLE_WINDOW: Duration = Duration::from_secs(5);
+// Replicated control docs can arrive before their referenced DAGs materialize.
+// Keep polling past the initial debounce instead of immediately marking the behavior unavailable.
+const CONTROL_RECONCILE_SETTLE_WINDOW: Duration = Duration::from_secs(60);
 const CONTROL_WATCHER_IDLE_SLEEP: Duration = Duration::from_secs(60 * 60 * 24 * 365);
 
 async fn run_control_watcher(

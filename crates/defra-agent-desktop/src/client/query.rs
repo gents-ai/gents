@@ -72,7 +72,7 @@ pub async fn load_agent_requests(node: &EmbeddedNode) -> Result<Vec<AgentRequest
     load_rows(
         node,
         "AgentRequest",
-        "query { AgentRequest { request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content status lifecycle_state admission_state backend_id execution_origin failure_reason created_at claimed_at deadline retry_count max_retries } }",
+        "query { AgentRequest { request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content status lifecycle_state backend_id execution_origin failure_reason created_at claimed_at deadline retry_count max_retries } }",
     )
     .await
 }
@@ -153,7 +153,7 @@ pub async fn load_inference_backends(node: &EmbeddedNode) -> Result<Vec<Inferenc
     load_rows(
         node,
         "InferenceBackend",
-        "query { InferenceBackend { backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent enabled supports_tool_calls supports_streaming supports_structured_outputs supports_json_schema models last_probe probe_status } }",
+        "query { InferenceBackend { backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models last_probe probe_status } }",
     )
     .await
 }
@@ -204,8 +204,21 @@ where
 
     match rows {
         Value::Null => Ok(Vec::new()),
-        Value::Array(_) => serde_json::from_value(rows.clone())
-            .with_context(|| format!("deserializing {root} rows")),
+        Value::Array(rows) => {
+            let mut parsed = Vec::with_capacity(rows.len());
+            for row in rows {
+                match serde_json::from_value(row.clone()) {
+                    Ok(row) => parsed.push(row),
+                    Err(error) => tracing::warn!(
+                        target: "defra_agent_desktop::query",
+                        root,
+                        error = %error,
+                        "skipping malformed observed row"
+                    ),
+                }
+            }
+            Ok(parsed)
+        }
         other => Err(anyhow!(
             "query for {root} returned non-array payload: {other}"
         )),

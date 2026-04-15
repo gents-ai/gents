@@ -88,11 +88,8 @@ async fn seed_operator_documents(core: &ClientCore) -> Result<()> {
         api_key: None,
         api_key_env_var: Some("OPENROUTER_API_KEY".to_string()),
         max_concurrent: Some(2),
+        max_queue_depth: Some(100),
         enabled: Some(true),
-        supports_tool_calls: Some(true),
-        supports_streaming: Some(true),
-        supports_structured_outputs: Some(true),
-        supports_json_schema: Some(true),
         models: vec!["openai/gpt-5.4".to_string()],
         last_probe: None,
         probe_status: Some("healthy".to_string()),
@@ -272,7 +269,9 @@ impl LiveDesktopFixture {
 struct LiveRemoteDeployment {
     label: String,
     peer_id: String,
+    addr: String,
     agent_did: String,
+    core: ClientCore,
     running_agent: RunningAgent,
     docs: LiveAgentDocs,
 }
@@ -289,6 +288,7 @@ impl MultiAgentLiveDesktopFixture {
     fn shutdown(mut self) -> Result<()> {
         for deployment in self.deployments.drain(..) {
             self.runtime.block_on(deployment.running_agent.shutdown())?;
+            self.runtime.block_on(deployment.core.shutdown())?;
         }
         self.driver.app.shutdown_client();
         Ok(())
@@ -359,14 +359,24 @@ fn build_multi_agent_live_desktop_fixture(
     let tempdir = tempfile::tempdir()?;
     let desktop_core = runtime.block_on(ClientCore::start_with_paths_and_options(
         DesktopPaths::from_root(tempdir.path().join("desktop")),
-        ClientCoreOptions::local_only(),
+        live_multi_server_core_options(),
     ))?;
     let mut deployments = Vec::new();
 
     for suffix in ["alpha", "bravo"] {
+        let remote_core = runtime.block_on(ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(tempdir.path().join(format!("remote-{suffix}"))),
+            live_multi_server_core_options(),
+        ))?;
+        let remote_addr = runtime.block_on(configure_live_test_replicators(
+            &desktop_core,
+            &remote_core,
+            suffix,
+        ))?;
+
         let unique_label = format!("{label}-{suffix}-{}", uuid::Uuid::new_v4().simple());
         let running_agent = runtime.block_on(spawn_backed_agent(
-            desktop_core.node_arc(),
+            remote_core.node_arc(),
             tempdir
                 .path()
                 .join(format!("agent-{suffix}"))
@@ -375,7 +385,7 @@ fn build_multi_agent_live_desktop_fixture(
             &backend,
         ))?;
         let docs = runtime.block_on(seed_live_operator_documents(
-            &desktop_core,
+            &remote_core,
             &running_agent.did,
             &unique_label,
             &backend,
@@ -384,51 +394,34 @@ fn build_multi_agent_live_desktop_fixture(
         let deployment_label = format!("{} Server", title_case_ascii(suffix));
         let added = desktop_core.add_test_peer_status(
             &deployment_label,
-            format!("test://{suffix}"),
+            remote_addr.clone(),
             &running_agent.did,
             true,
         );
-        wait_for_value(
-            &format!("replicated live deployment docs for {deployment_label}"),
-            Duration::from_secs(20),
-            || {
-                runtime.block_on(desktop_core.refresh_store()).ok()?;
-                let snapshot = desktop_core.store().snapshot();
-                let has_agent = snapshot
-                    .agent_principals
-                    .iter()
-                    .any(|row| row.agent_did == running_agent.did);
-                let has_behavior = snapshot
-                    .behaviors
-                    .iter()
-                    .any(|row| row.behavior_id == docs.behavior_id);
-                let has_backend = snapshot
-                    .inference_backends
-                    .iter()
-                    .any(|row| row.backend_id == docs.backend_id);
-                let has_tool_selection = snapshot
-                    .tool_selections
-                    .iter()
-                    .any(|row| row.selection_id == docs.tool_selection_id);
-                let has_profile = snapshot
-                    .inference_profiles
-                    .iter()
-                    .any(|row| row.profile_id == docs.inference_profile_id);
-                (has_agent && has_behavior && has_backend && has_tool_selection && has_profile)
-                    .then_some(())
-            },
+        wait_for_replicated_live_deployment_docs(
+            runtime.as_ref(),
+            &desktop_core,
+            &deployment_label,
+            &running_agent.did,
+            &docs,
         )?;
-
         deployments.push(LiveRemoteDeployment {
             label: deployment_label,
             peer_id: added.peer_id,
+            addr: remote_addr,
             agent_did: running_agent.did.clone(),
+            core: remote_core,
             running_agent,
             docs,
         });
     }
 
-    runtime.block_on(desktop_core.refresh_store())?;
+    wait_for_refreshed_desktop_snapshot(
+        runtime.as_ref(),
+        &desktop_core,
+        "multi-server desktop snapshot after remote setup",
+        Duration::from_secs(60),
+    )?;
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = DesktopApp::from_parts(
@@ -447,6 +440,132 @@ fn build_multi_agent_live_desktop_fixture(
         deployments,
         backend,
     })
+}
+
+fn wait_for_replicated_live_deployment_docs(
+    runtime: &Runtime,
+    desktop_core: &ClientCore,
+    deployment_label: &str,
+    agent_did: &str,
+    docs: &LiveAgentDocs,
+) -> Result<()> {
+    let mut last_error = None;
+    let result = wait_for_value(
+        &format!("replicated live deployment docs for {deployment_label}"),
+        Duration::from_secs(180),
+        || match runtime.block_on(live_deployment_docs_available(
+            desktop_core,
+            agent_did,
+            docs,
+        )) {
+            Ok(true) => Some(()),
+            Ok(false) => None,
+            Err(error) => {
+                last_error = Some(error.to_string());
+                None
+            }
+        },
+    );
+
+    result.with_context(|| {
+        last_error.map_or_else(
+            || format!("last {deployment_label} replication probe saw missing rows"),
+            |error| format!("last {deployment_label} replication probe failed: {error}"),
+        )
+    })?;
+    wait_for_refreshed_desktop_snapshot(
+        runtime,
+        desktop_core,
+        &format!("desktop snapshot containing {deployment_label} docs"),
+        Duration::from_secs(60),
+    )
+}
+
+fn wait_for_refreshed_desktop_snapshot(
+    runtime: &Runtime,
+    desktop_core: &ClientCore,
+    label: &str,
+    timeout: Duration,
+) -> Result<()> {
+    let mut last_error = None;
+    wait_for_value(label, timeout, || {
+        match runtime.block_on(desktop_core.refresh_store()) {
+            Ok(_) => Some(()),
+            Err(error) => {
+                last_error = Some(error.to_string());
+                None
+            }
+        }
+    })
+    .with_context(|| {
+        last_error.map_or_else(
+            || format!("desktop snapshot did not refresh for {label}"),
+            |error| format!("last desktop snapshot refresh failed for {label}: {error}"),
+        )
+    })
+}
+
+async fn live_deployment_docs_available(
+    desktop_core: &ClientCore,
+    agent_did: &str,
+    docs: &LiveAgentDocs,
+) -> Result<bool> {
+    for (root, field, value) in [
+        ("AgentPrincipal", "agent_did", agent_did),
+        ("AgentBehavior", "behavior_id", docs.behavior_id.as_str()),
+        ("InferenceBackend", "backend_id", docs.backend_id.as_str()),
+        ("ToolSelection", "selection_id", docs.tool_selection_id.as_str()),
+        (
+            "InferenceProfile",
+            "profile_id",
+            docs.inference_profile_id.as_str(),
+        ),
+    ] {
+        if !query_has_row_by_unique_field(desktop_core, root, field, value).await? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+async fn query_has_row_by_unique_field(
+    core: &ClientCore,
+    root: &str,
+    field: &str,
+    value: &str,
+) -> Result<bool> {
+    let escaped_value = escape_graphql_string(value);
+    let query = format!(
+        r#"{{
+            {root}(
+                filter: {{ {field}: {{ _eq: "{escaped_value}" }} }},
+                limit: 1
+            ) {{
+                {field}
+            }}
+        }}"#
+    );
+    let response = core.node().execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query {root}.{field}={value} failed: {}",
+            response
+                .errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get(root))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get(field))
+        .and_then(Value::as_str)
+        == Some(value))
 }
 
 async fn seed_live_operator_documents(
@@ -529,6 +648,168 @@ async fn seed_live_operator_documents(
         inference_profile_id,
         scheduled_task_id,
     })
+}
+
+fn live_multi_server_core_options() -> ClientCoreOptions {
+    let mut options = ClientCoreOptions::local_only();
+    options.max_concurrent_dag_fetches = 64;
+    options.max_concurrent_push_tasks = 64;
+    options.rate_limit_burst = 50_000;
+    options.rate_limit_rate = 50_000.0;
+    options.install_replicators_on_bootstrap = false;
+    options
+}
+
+async fn configure_live_test_replicators(
+    desktop_core: &ClientCore,
+    remote_core: &ClientCore,
+    label: &str,
+) -> Result<String> {
+    let desktop_addr =
+        wait_for_connectable_iroh_addr(desktop_core, &format!("{label} desktop")).await?;
+    let remote_addr = wait_for_connectable_iroh_addr(remote_core, label).await?;
+    let desktop_peer_id = desktop_core.local_peer_id().to_string();
+    let remote_peer_id = remote_core.local_peer_id().to_string();
+
+    connect_peer_with_retry(
+        desktop_core,
+        &remote_addr,
+        &remote_peer_id,
+        &format!("desktop -> {label}"),
+    )
+    .await?;
+    connect_peer_with_retry(
+        remote_core,
+        &desktop_addr,
+        &desktop_peer_id,
+        &format!("{label} -> desktop"),
+    )
+    .await?;
+
+    set_replicator_with_retry(
+        remote_core,
+        &desktop_addr,
+        &format!("{label} -> desktop replicator"),
+        subscribed_collection_names_for_test(),
+    )
+    .await?;
+    set_replicator_with_retry(
+        desktop_core,
+        &remote_addr,
+        &format!("desktop -> {label} replicator"),
+        desktop_origin_collection_names_for_test(),
+    )
+    .await?;
+
+    Ok(remote_addr)
+}
+
+async fn wait_for_connectable_iroh_addr(core: &ClientCore, label: &str) -> Result<String> {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let addrs = core.p2p().listen_addresses().await;
+        if let Some(addr) = addrs
+            .iter()
+            .find(|addr| addr.contains("/p2p/") || addr.starts_with("endpoint"))
+        {
+            return Ok(addr.clone());
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for {label} listen address");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn connect_peer_with_retry(
+    core: &ClientCore,
+    addr: &str,
+    peer_id: &str,
+    label: &str,
+) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if is_connected_peer(core, peer_id).await? {
+            return Ok(());
+        }
+
+        match core.p2p().connect_peer(addr).await {
+            Ok(()) => {
+                wait_for_connected_peer(core, peer_id, label).await?;
+                return Ok(());
+            }
+            Err(error) => {
+                if is_connected_peer(core, peer_id).await? {
+                    return Ok(());
+                }
+                if Instant::now() >= deadline {
+                    anyhow::bail!("timed out connecting {label} to {peer_id}: {error}");
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        }
+    }
+}
+
+async fn is_connected_peer(core: &ClientCore, peer_id: &str) -> Result<bool> {
+    let peers = core.p2p().connected_peers().await?;
+    Ok(peers.iter().any(|peer| peer.contains(peer_id)))
+}
+
+async fn wait_for_connected_peer(core: &ClientCore, peer_id: &str, label: &str) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if is_connected_peer(core, peer_id).await? {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for connected peer {peer_id} on {label}");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn set_replicator_with_retry(
+    core: &ClientCore,
+    addr: &str,
+    label: &str,
+    collections: Vec<String>,
+) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        match core.p2p().set_replicator(addr, collections.clone()).await {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                if Instant::now() >= deadline {
+                    anyhow::bail!("timed out configuring {label}: {error}");
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        }
+    }
+}
+
+fn subscribed_collection_names_for_test() -> Vec<String> {
+    defra_agent_protocol::schemas::RUNTIME_COLLECTION_NAMES
+        .iter()
+        .chain(defra_agent_protocol::schemas::ALL_COLLECTION_NAMES.iter())
+        .map(|name| (*name).to_string())
+        .collect()
+}
+
+fn desktop_origin_collection_names_for_test() -> Vec<String> {
+    [
+        defra_agent_protocol::schemas::INFERENCE_BACKEND_NAME,
+        defra_agent_protocol::schemas::AGENT_BEHAVIOR_NAME,
+        defra_agent_protocol::schemas::TOOL_SELECTION_NAME,
+        defra_agent_protocol::schemas::INFERENCE_PROFILE_NAME,
+        defra_agent_protocol::schemas::AGENT_CONVERSATION_NAME,
+        defra_agent_protocol::schemas::AGENT_SESSION_NAME,
+        defra_agent_protocol::schemas::AGENT_REQUEST_NAME,
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 fn title_case_ascii(value: &str) -> String {
@@ -883,6 +1164,14 @@ fn submit_chat_message_and_wait_for_response(
     driver: &mut AuditDriver,
     prompt: &str,
 ) -> Result<(String, String)> {
+    submit_chat_message_and_wait_for_response_after_request(driver, prompt, |_, _| Ok(()))
+}
+
+fn submit_chat_message_and_wait_for_response_after_request(
+    driver: &mut AuditDriver,
+    prompt: &str,
+    mut after_request: impl FnMut(&mut AuditDriver, &str) -> Result<()>,
+) -> Result<(String, String)> {
     let prior_request_count = driver
         .app
         .client
@@ -914,24 +1203,68 @@ fn submit_chat_message_and_wait_for_response(
             })
         },
     )?;
-    let response_text = wait_for_value(
-        "response content in client store after submission",
-        Duration::from_secs(90),
-        || {
-            driver.app.client.as_ref().and_then(|client| {
-                let snapshot = client.store().snapshot();
-                if snapshot.responses.len() <= prior_response_count {
-                    return None;
+    after_request(driver, &request_id)?;
+
+    let mut next_response_refresh = Instant::now();
+    let response_deadline = Instant::now() + Duration::from_secs(180);
+    let response_text = loop {
+        let client = Arc::clone(
+            driver
+                .app
+                .client
+                .as_ref()
+                .ok_or_else(|| anyhow!("desktop client missing while waiting for response"))?,
+        );
+        if Instant::now() >= next_response_refresh {
+            driver.app.block_on_runtime(client.refresh_store())?;
+            next_response_refresh = Instant::now() + Duration::from_secs(1);
+        }
+
+        let snapshot = client.store().snapshot();
+        let request = snapshot
+            .requests
+            .iter()
+            .find(|row| row.request_id == request_id);
+        let response = snapshot.latest_response_for_request(&request_id);
+        if let Some(response) = response {
+            if matches!(response.status.as_deref(), Some("complete" | "completed")) {
+                if let Some(content) = response.content.as_deref() {
+                    if !content.trim().is_empty() {
+                        break content.to_string();
+                    }
                 }
-                snapshot
-                    .latest_response_for_request(&request_id)
-                    .filter(|row| matches!(row.status.as_deref(), Some("complete" | "completed")))
-                    .and_then(|row| row.content.as_deref())
-                    .filter(|content| !content.trim().is_empty())
-                    .map(str::to_string)
-            })
-        },
-    )?;
+            }
+
+            if matches!(response.status.as_deref(), Some("error" | "failed" | "failure")) {
+                anyhow::bail!(
+                    "response for request {request_id} reached error status while waiting for content: {}",
+                    describe_response_wait_state(request, Some(response), prior_response_count, snapshot.responses.len())
+                );
+            }
+        }
+
+        if let Some(request) = request {
+            if matches!(
+                request.lifecycle_state.as_deref(),
+                Some("failed" | "dead" | "superseded")
+            ) {
+                anyhow::bail!(
+                    "request {request_id} reached terminal lifecycle before response content: {}",
+                    describe_response_wait_state(Some(request), response, prior_response_count, snapshot.responses.len())
+                );
+            }
+        }
+
+        if Instant::now() >= response_deadline {
+            anyhow::bail!(
+                "timed out waiting for response content in client store after submission: {}",
+                describe_response_wait_state(request, response, prior_response_count, snapshot.responses.len())
+            );
+        }
+
+        std::thread::sleep(Duration::from_millis(50));
+    };
+
     wait_for_value(
         "submitted prompt and response in transcript",
         Duration::from_secs(30),
@@ -951,6 +1284,56 @@ fn submit_chat_message_and_wait_for_response(
     )?;
 
     Ok((request_id, response_text))
+}
+
+fn describe_response_wait_state(
+    request: Option<&defra_agent_protocol::row::AgentRequestRow>,
+    response: Option<&defra_agent_protocol::row::AgentResponseRow>,
+    prior_response_count: usize,
+    current_response_count: usize,
+) -> String {
+    let request_summary = request.map_or_else(
+        || "request=<missing>".to_string(),
+        |row| {
+            format!(
+                "request={{status={}, lifecycle_state={}, agent_did={}, behavior_id={}, backend_id={}, execution_origin={}, failure_reason={}, claimed_at={}, deadline={}}}",
+                optional_str(row.status.as_deref()),
+                optional_str(row.lifecycle_state.as_deref()),
+                optional_str(row.agent_did.as_deref()),
+                optional_str(row.behavior_id.as_deref()),
+                optional_str(row.backend_id.as_deref()),
+                optional_str(row.execution_origin.as_deref()),
+                optional_str(row.failure_reason.as_deref()),
+                optional_str(row.claimed_at.as_deref()),
+                optional_str(row.deadline.as_deref()),
+            )
+        },
+    );
+    let response_summary = response.map_or_else(
+        || "response=<missing>".to_string(),
+        |row| {
+            format!(
+                "response={{key={}, status={}, agent_did={}, behavior_id={}, error_message={}, content_len={}, progress_seq={}, completed_at={}}}",
+                row.response_key,
+                optional_str(row.status.as_deref()),
+                optional_str(row.agent_did.as_deref()),
+                optional_str(row.behavior_id.as_deref()),
+                optional_str(row.error_message.as_deref()),
+                row.content.as_deref().map(str::len).unwrap_or_default(),
+                row.progress_seq.unwrap_or_default(),
+                optional_str(row.completed_at.as_deref()),
+            )
+        },
+    );
+    format!(
+        "{request_summary}; {response_summary}; responses_before_submit={prior_response_count}; responses_now={current_response_count}"
+    )
+}
+
+fn optional_str(value: Option<&str>) -> &str {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("<empty>")
 }
 
 fn assert_operator_filter_round_trip(
@@ -1330,9 +1713,8 @@ async fn bind_default_behavior_backend(
                     {api_key_field}
                     {api_key_env_var_field}
                     max_concurrent: 1,
+                    max_queue_depth: 100,
                     enabled: true,
-                    supports_tool_calls: true,
-                    supports_streaming: true,
                     models: ["{escaped_model_name}"],
                     probe_status: "healthy"
                 }},
@@ -1343,9 +1725,8 @@ async fn bind_default_behavior_backend(
                     {api_key_field}
                     {api_key_env_var_field}
                     max_concurrent: 1,
+                    max_queue_depth: 100,
                     enabled: true,
-                    supports_tool_calls: true,
-                    supports_streaming: true,
                     models: ["{escaped_model_name}"],
                     probe_status: "healthy"
                 }}

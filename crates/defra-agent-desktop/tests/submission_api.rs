@@ -34,7 +34,6 @@ struct RequestRow {
     content: String,
     status: String,
     lifecycle_state: String,
-    admission_state: String,
     execution_origin: String,
     retry_root_request: String,
     retry_parent_request: String,
@@ -141,7 +140,6 @@ async fn submit_request_writes_request_and_updates_conversation_summary() -> Res
                     content
                     status
                     lifecycle_state
-                    admission_state
                     execution_origin
                     retry_root_request
                     retry_parent_request
@@ -161,7 +159,6 @@ async fn submit_request_writes_request_and_updates_conversation_summary() -> Res
     assert_eq!(request.content, "hello   there\noperator");
     assert_eq!(request.status, "pending");
     assert_eq!(request.lifecycle_state, "pending");
-    assert_eq!(request.admission_state, "released");
     assert_eq!(request.execution_origin, "interactive");
     assert_eq!(request.retry_root_request, submitted.request_id);
     assert!(request.retry_parent_request.is_empty());

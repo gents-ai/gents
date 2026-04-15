@@ -924,11 +924,6 @@ fn render_request_detail(
     );
     read_only_field(
         ui,
-        "Admission State",
-        request.admission_state.as_deref().unwrap_or("unset"),
-    );
-    read_only_field(
-        ui,
         "Execution Origin",
         request.execution_origin.as_deref().unwrap_or("unset"),
     );
@@ -1488,13 +1483,11 @@ fn draft_for_selection(
                             .max_concurrent
                             .map(|value| value.to_string())
                             .unwrap_or_default(),
+                        max_queue_depth: row
+                            .max_queue_depth
+                            .map(|value| value.to_string())
+                            .unwrap_or_default(),
                         enabled: row.enabled.unwrap_or(true),
-                        supports_tool_calls: row.supports_tool_calls.unwrap_or(true),
-                        supports_streaming: row.supports_streaming.unwrap_or(true),
-                        supports_structured_outputs: row
-                            .supports_structured_outputs
-                            .unwrap_or(false),
-                        supports_json_schema: row.supports_json_schema.unwrap_or(false),
                         models: row.models.join(", "),
                         probe_status: row.probe_status.clone().unwrap_or_default(),
                     })
@@ -1615,15 +1608,8 @@ fn render_backend_editor(ui: &mut Ui, draft: &mut BackendDraft) {
     text_field(ui, "API Key", &mut draft.api_key);
     text_field(ui, "API Key Env Var", &mut draft.api_key_env_var);
     text_field(ui, "Max Concurrent", &mut draft.max_concurrent);
+    text_field(ui, "Max Queue Depth", &mut draft.max_queue_depth);
     toggle_field(ui, "Enabled", &mut draft.enabled);
-    toggle_field(ui, "Supports Tool Calls", &mut draft.supports_tool_calls);
-    toggle_field(ui, "Supports Streaming", &mut draft.supports_streaming);
-    toggle_field(
-        ui,
-        "Supports Structured Outputs",
-        &mut draft.supports_structured_outputs,
-    );
-    toggle_field(ui, "Supports JSON Schema", &mut draft.supports_json_schema);
     multiline_field(ui, "Models", &mut draft.models, 4);
     text_field(ui, "Probe Status", &mut draft.probe_status);
 }
@@ -1805,11 +1791,8 @@ fn backend_row(draft: &BackendDraft) -> Result<InferenceBackendRow> {
         api_key: normalize_optional_owned(&draft.api_key),
         api_key_env_var: normalize_optional_owned(&draft.api_key_env_var),
         max_concurrent: parse_optional_i64("max_concurrent", &draft.max_concurrent)?,
+        max_queue_depth: parse_optional_i64("max_queue_depth", &draft.max_queue_depth)?,
         enabled: Some(draft.enabled),
-        supports_tool_calls: Some(draft.supports_tool_calls),
-        supports_streaming: Some(draft.supports_streaming),
-        supports_structured_outputs: Some(draft.supports_structured_outputs),
-        supports_json_schema: Some(draft.supports_json_schema),
         models: split_csv(&draft.models),
         last_probe: None,
         probe_status: normalize_optional_owned(&draft.probe_status),

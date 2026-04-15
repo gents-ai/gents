@@ -137,11 +137,8 @@ pub struct BackendDraft {
     pub api_key: String,
     pub api_key_env_var: String,
     pub max_concurrent: String,
+    pub max_queue_depth: String,
     pub enabled: bool,
-    pub supports_tool_calls: bool,
-    pub supports_streaming: bool,
-    pub supports_structured_outputs: bool,
-    pub supports_json_schema: bool,
     pub models: String,
     pub probe_status: String,
 }

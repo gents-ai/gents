@@ -1,11 +1,13 @@
 use super::*;
 
 #[derive(Clone)]
-struct LiveDeploymentCase {
+struct LiveDeploymentCase<'a> {
     label: String,
     peer_id: String,
+    addr: String,
     agent_did: String,
     docs: LiveAgentDocs,
+    remote_core: &'a ClientCore,
 }
 
 struct LiveSubmissionCase {
@@ -15,18 +17,20 @@ struct LiveSubmissionCase {
     session_id: String,
 }
 
-fn live_deployment_case(deployment: &LiveRemoteDeployment) -> LiveDeploymentCase {
+fn live_deployment_case(deployment: &LiveRemoteDeployment) -> LiveDeploymentCase<'_> {
     LiveDeploymentCase {
         label: deployment.label.clone(),
         peer_id: deployment.peer_id.clone(),
+        addr: deployment.addr.clone(),
         agent_did: deployment.agent_did.clone(),
         docs: deployment.docs.clone(),
+        remote_core: &deployment.core,
     }
 }
 
 fn submit_live_prompt_for_deployment(
     driver: &mut AuditDriver,
-    deployment: &LiveDeploymentCase,
+    deployment: &LiveDeploymentCase<'_>,
     exact_token: &str,
 ) -> Result<LiveSubmissionCase> {
     driver.open_activity(Activity::Chat);
@@ -77,7 +81,11 @@ fn submit_live_prompt_for_deployment(
         "Reply with exactly {exact_token} and nothing else. Multi-agent server isolation audit {}",
         uuid::Uuid::new_v4()
     );
-    let (request_id, response) = submit_chat_message_and_wait_for_response(driver, &prompt)?;
+    let (request_id, response) = submit_chat_message_and_wait_for_response_after_request(
+        driver,
+        &prompt,
+        |driver, request_id| nudge_live_request_replication(driver, &deployment, request_id),
+    )?;
     let session_id = driver
         .app
         .state
@@ -116,6 +124,65 @@ fn submit_live_prompt_for_deployment(
     })
 }
 
+fn nudge_live_request_replication(
+    driver: &mut AuditDriver,
+    deployment: &LiveDeploymentCase<'_>,
+    request_id: &str,
+) -> Result<()> {
+    let desktop_client = Arc::clone(
+        driver
+            .app
+            .client
+            .as_ref()
+            .ok_or_else(|| anyhow!("desktop client missing for live request replication"))?,
+    );
+    let desktop_addr = desktop_client
+        .listen_addresses()
+        .first()
+        .cloned()
+        .ok_or_else(|| anyhow!("desktop client missing listen address"))?;
+
+    driver.app.block_on_runtime(async {
+        let remote_core = deployment.remote_core;
+        connect_peer_with_retry(
+            desktop_client.as_ref(),
+            &deployment.addr,
+            remote_core.local_peer_id(),
+            &format!("desktop -> {} after request {request_id}", deployment.label),
+        )
+        .await?;
+        connect_peer_with_retry(
+            remote_core,
+            &desktop_addr,
+            desktop_client.local_peer_id(),
+            &format!("{} -> desktop after request {request_id}", deployment.label),
+        )
+        .await?;
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    wait_for_value(
+        &format!(
+            "remote {} replica to receive request {request_id}",
+            deployment.label
+        ),
+        Duration::from_secs(30),
+        || {
+            driver
+                .app
+                .block_on_runtime(query_has_row_by_unique_field(
+                    deployment.remote_core,
+                    "AgentRequest",
+                    "request_id",
+                    request_id,
+                ))
+                .ok()
+                .filter(|has_row| *has_row)
+                .map(|_| ())
+        },
+    )
+}
+
 fn refreshed_runtime_generation(
     runtime: &tokio::runtime::Runtime,
     core: &ClientCore,
@@ -126,6 +193,110 @@ fn refreshed_runtime_generation(
         .snapshot()
         .latest_runtime(agent_did)
         .and_then(|row| row.router_generation.or(row.active_generation))
+}
+
+#[test]
+fn desktop_app_p2p_replicates_chat_request_path_to_remote_core() -> Result<()> {
+    let _live_guard = live_desktop_test_guard();
+    init_test_tracing();
+
+    let runtime = test_runtime()?;
+    let tempdir = tempfile::tempdir()?;
+    let desktop_core = runtime.block_on(ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path().join("desktop")),
+        live_multi_server_core_options(),
+    ))?;
+    let remote_core = runtime.block_on(ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path().join("remote")),
+        live_multi_server_core_options(),
+    ))?;
+
+    let remote_addr = runtime.block_on(async {
+        let remote_addr =
+            wait_for_connectable_iroh_addr(&remote_core, "request-path remote").await?;
+        connect_peer_with_retry(
+            &desktop_core,
+            &remote_addr,
+            remote_core.local_peer_id(),
+            "request-path desktop -> remote",
+        )
+        .await?;
+        set_replicator_with_retry(
+            &desktop_core,
+            &remote_addr,
+            "request-path desktop -> remote replicator",
+            vec![
+                defra_agent_protocol::schemas::AGENT_CONVERSATION_NAME.to_string(),
+                defra_agent_protocol::schemas::AGENT_SESSION_NAME.to_string(),
+                defra_agent_protocol::schemas::AGENT_REQUEST_NAME.to_string(),
+            ],
+        )
+        .await?;
+        Ok::<_, anyhow::Error>(remote_addr)
+    })?;
+
+    let agent_did = format!("did:defra:p2p-repro-{}", uuid::Uuid::new_v4().simple());
+    let conversation = runtime.block_on(desktop_core.create_conversation(&agent_did, None))?;
+    let request = runtime.block_on(desktop_core.submit_request(
+        &conversation.session_id,
+        &agent_did,
+        "replicate this request to the remote core",
+        None,
+    ))?;
+
+    wait_for_value(
+        "remote replicated AgentConversation",
+        Duration::from_secs(60),
+        || {
+            runtime
+                .block_on(query_has_row_by_unique_field(
+                    &remote_core,
+                    "AgentConversation",
+                    "session_id",
+                    &conversation.session_id,
+                ))
+                .ok()
+                .filter(|has_row| *has_row)
+                .map(|_| ())
+        },
+    )
+    .with_context(|| format!("remote addr was {remote_addr}"))?;
+    wait_for_value(
+        "remote replicated AgentSession",
+        Duration::from_secs(60),
+        || {
+            runtime
+                .block_on(query_has_row_by_unique_field(
+                    &remote_core,
+                    "AgentSession",
+                    "session_id",
+                    &conversation.session_id,
+                ))
+                .ok()
+                .filter(|has_row| *has_row)
+                .map(|_| ())
+        },
+    )?;
+    wait_for_value(
+        "remote replicated AgentRequest",
+        Duration::from_secs(60),
+        || {
+            runtime
+                .block_on(query_has_row_by_unique_field(
+                    &remote_core,
+                    "AgentRequest",
+                    "request_id",
+                    &request.request_id,
+                ))
+                .ok()
+                .filter(|has_row| *has_row)
+                .map(|_| ())
+        },
+    )?;
+
+    runtime.block_on(remote_core.shutdown())?;
+    runtime.block_on(desktop_core.shutdown())?;
+    Ok(())
 }
 
 #[test]
@@ -508,8 +679,7 @@ fn desktop_app_live_inference_smoke() -> Result<()> {
             assert_eq!(draft.endpoint, backend.endpoint);
             assert_eq!(draft.models, backend.model_name);
             assert!(draft.enabled);
-            assert!(draft.supports_tool_calls);
-            assert!(draft.supports_streaming);
+            assert_eq!(draft.max_queue_depth, "100");
         }
         other => panic!("expected backend draft in live smoke, got {other:?}"),
     }
@@ -696,11 +866,8 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
                     api_key: backend.api_key.clone(),
                     api_key_env_var: backend.api_key_env_var.clone(),
                     max_concurrent: Some(1),
+                    max_queue_depth: Some(100),
                     enabled: Some(true),
-                    supports_tool_calls: Some(true),
-                    supports_streaming: Some(true),
-                    supports_structured_outputs: Some(false),
-                    supports_json_schema: Some(false),
                     models: vec![backend.model_name.clone()],
                     last_probe: None,
                     probe_status: Some("healthy".to_string()),
@@ -746,6 +913,12 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
     let alpha_initial_generation = refreshed_runtime_generation(
         fixture.runtime.as_ref(),
         desktop_client.as_ref(),
+        &alpha.agent_did,
+    )
+    .unwrap_or_default();
+    let alpha_remote_initial_generation = refreshed_runtime_generation(
+        fixture.runtime.as_ref(),
+        alpha.remote_core,
         &alpha.agent_did,
     )
     .unwrap_or_default();
@@ -1048,7 +1221,7 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
 
     wait_for_value(
         "alpha behavior/tool config and generation after UI edits",
-        Duration::from_secs(30),
+        Duration::from_secs(120),
         || {
             fixture
                 .runtime
@@ -1078,11 +1251,81 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
                 .iter()
                 .find(|row| row.profile_id == alpha_switch_profile_id)
                 .is_some_and(|row| row.max_output_tokens == Some(1536));
-            let generation_ready = snapshot
+            let runtime_ready = snapshot
                 .latest_runtime(&alpha.agent_did)
-                .and_then(|row| row.router_generation.or(row.active_generation))
-                .is_some_and(|generation| generation > alpha_initial_generation);
-            (behavior_ready && tools_ready && profile_ready && generation_ready).then_some(())
+                .is_some_and(|row| {
+                    row.router_generation
+                        .or(row.active_generation)
+                        .is_some_and(|generation| generation > alpha_initial_generation)
+                        && row.runnable_behavior_count == Some(1)
+                        && row.unavailable_behavior_count == Some(0)
+                        && row
+                            .last_reconcile_error
+                            .as_deref()
+                            .unwrap_or_default()
+                            .trim()
+                            .is_empty()
+                });
+            (behavior_ready && tools_ready && profile_ready && runtime_ready).then_some(())
+        },
+    )?;
+    wait_for_value(
+        "alpha behavior/tool config replicated to remote runtime",
+        Duration::from_secs(120),
+        || {
+            fixture
+                .runtime
+                .block_on(alpha.remote_core.refresh_store())
+                .ok()?;
+            let snapshot = alpha.remote_core.store().snapshot();
+            let behavior_ready = snapshot
+                .behaviors
+                .iter()
+                .find(|row| row.behavior_id == alpha.docs.behavior_id)
+                .is_some_and(|row| {
+                    row.backend_id.as_deref() == Some(alpha_switch_backend_id.as_str())
+                        && row.inference_profile_id.as_deref()
+                            == Some(alpha_switch_profile_id.as_str())
+                        && row.system_prompt.as_deref() == Some(alpha_tool_prompt)
+                });
+            let backend_ready = snapshot
+                .inference_backends
+                .iter()
+                .find(|row| row.backend_id == alpha_switch_backend_id)
+                .is_some_and(|row| {
+                    row.endpoint.as_deref() == Some(backend.endpoint.as_str())
+                        && row.models.iter().any(|model| model == &backend.model_name)
+                });
+            let tools_ready = snapshot
+                .tool_selections
+                .iter()
+                .find(|row| row.selection_id == alpha.docs.tool_selection_id)
+                .is_some_and(|row| {
+                    row.enable_file_tools == Some(true)
+                        && row.file_tools_mode.as_deref() == Some("ReadOnly")
+                });
+            let profile_ready = snapshot
+                .inference_profiles
+                .iter()
+                .find(|row| row.profile_id == alpha_switch_profile_id)
+                .is_some_and(|row| row.max_output_tokens == Some(1536));
+            let runtime_ready = snapshot
+                .latest_runtime(&alpha.agent_did)
+                .is_some_and(|row| {
+                    row.router_generation
+                        .or(row.active_generation)
+                        .is_some_and(|generation| generation > alpha_remote_initial_generation)
+                        && row.runnable_behavior_count == Some(1)
+                        && row.unavailable_behavior_count == Some(0)
+                        && row
+                            .last_reconcile_error
+                            .as_deref()
+                            .unwrap_or_default()
+                            .trim()
+                            .is_empty()
+                });
+            (behavior_ready && backend_ready && tools_ready && profile_ready && runtime_ready)
+                .then_some(())
         },
     )?;
 
@@ -1155,11 +1398,8 @@ fn desktop_app_live_operator_config_round_trips() -> Result<()> {
                     api_key: backend.api_key.clone(),
                     api_key_env_var: backend.api_key_env_var.clone(),
                     max_concurrent: Some(1),
+                    max_queue_depth: Some(100),
                     enabled: Some(true),
-                    supports_tool_calls: Some(true),
-                    supports_streaming: Some(true),
-                    supports_structured_outputs: Some(false),
-                    supports_json_schema: Some(false),
                     models: vec![shadow_model_name.clone()],
                     last_probe: None,
                     probe_status: Some("healthy".to_string()),
@@ -1380,14 +1620,9 @@ fn desktop_app_live_operator_config_round_trips() -> Result<()> {
             "DEFRA_AGENT_DESKTOP_AUDIT_API_KEY",
         );
         driver.replace_text_in_target(&audit::targets::operator_field("Max Concurrent"), "2");
+        driver.replace_text_in_target(&audit::targets::operator_field("Max Queue Depth"), "200");
         driver.replace_text_in_target(&audit::targets::operator_field("Probe Status"), "reviewed");
         driver.click_target(&audit::targets::operator_toggle("Enabled"));
-        driver.click_target(&audit::targets::operator_toggle("Supports Tool Calls"));
-        driver.click_target(&audit::targets::operator_toggle("Supports Streaming"));
-        driver.click_target(&audit::targets::operator_toggle(
-            "Supports Structured Outputs",
-        ));
-        driver.click_target(&audit::targets::operator_toggle("Supports JSON Schema"));
         driver.replace_text_in_target(
             &audit::targets::operator_field("Models"),
             &format!("{shadow_model_name}, audit-shadow-model"),
@@ -1413,12 +1648,9 @@ fn desktop_app_live_operator_config_round_trips() -> Result<()> {
                                 && row.api_key_env_var.as_deref()
                                     == Some("DEFRA_AGENT_DESKTOP_AUDIT_API_KEY")
                                 && row.max_concurrent == Some(2)
+                                && row.max_queue_depth == Some(200)
                                 && row.probe_status.as_deref() == Some("reviewed")
                                 && row.enabled == Some(false)
-                                && row.supports_tool_calls == Some(false)
-                                && row.supports_streaming == Some(false)
-                                && row.supports_structured_outputs == Some(true)
-                                && row.supports_json_schema == Some(true)
                                 && row.models.iter().any(|model| model == &shadow_model_name)
                                 && row.models.iter().any(|model| model == "audit-shadow-model")
                         })

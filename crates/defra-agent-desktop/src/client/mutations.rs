@@ -350,23 +350,11 @@ pub async fn upsert_inference_backend(
             "max_concurrent",
             row.max_concurrent,
         )),
+        Some(graphql_optional_int_field(
+            "max_queue_depth",
+            row.max_queue_depth,
+        )),
         Some(graphql_optional_bool_field("enabled", row.enabled)),
-        Some(graphql_optional_bool_field(
-            "supports_tool_calls",
-            row.supports_tool_calls,
-        )),
-        Some(graphql_optional_bool_field(
-            "supports_streaming",
-            row.supports_streaming,
-        )),
-        Some(graphql_optional_bool_field(
-            "supports_structured_outputs",
-            row.supports_structured_outputs,
-        )),
-        Some(graphql_optional_bool_field(
-            "supports_json_schema",
-            row.supports_json_schema,
-        )),
         Some(graphql_string_list_field("models", &row.models)),
         Some(graphql_string_field(
             "last_probe",
@@ -393,23 +381,11 @@ pub async fn upsert_inference_backend(
             "max_concurrent",
             row.max_concurrent,
         )),
+        Some(graphql_optional_int_field(
+            "max_queue_depth",
+            row.max_queue_depth,
+        )),
         Some(graphql_optional_bool_field("enabled", row.enabled)),
-        Some(graphql_optional_bool_field(
-            "supports_tool_calls",
-            row.supports_tool_calls,
-        )),
-        Some(graphql_optional_bool_field(
-            "supports_streaming",
-            row.supports_streaming,
-        )),
-        Some(graphql_optional_bool_field(
-            "supports_structured_outputs",
-            row.supports_structured_outputs,
-        )),
-        Some(graphql_optional_bool_field(
-            "supports_json_schema",
-            row.supports_json_schema,
-        )),
         Some(graphql_string_list_field("models", &row.models)),
         Some(graphql_string_field(
             "last_probe",
@@ -662,7 +638,6 @@ pub async fn submit_request(
                 content: "{escaped_content}",
                 status: "pending",
                 lifecycle_state: "pending",
-                admission_state: "released",
                 backend_id: "",
                 execution_origin: "interactive",
                 failure_reason: "",
@@ -766,7 +741,6 @@ pub async fn retry_request(
                 content: "{escaped_content}",
                 status: "pending",
                 lifecycle_state: "pending",
-                admission_state: "released",
                 backend_id: "",
                 execution_origin: "interactive",
                 failure_reason: "",

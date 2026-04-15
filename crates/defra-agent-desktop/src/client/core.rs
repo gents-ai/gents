@@ -273,6 +273,7 @@ impl ClientCore {
         if let Some(observer) = self.observer.lock().await.take() {
             observer.shutdown().await;
         }
+        self.node.shutdown().await;
 
         Ok(())
     }

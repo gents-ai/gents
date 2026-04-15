@@ -7,6 +7,9 @@
 //! values deserialize as empty vectors. Callers should treat these as the wire
 //! shape, not a runtime invariant.
 
+use std::fmt;
+
+use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
 fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
@@ -15,6 +18,66 @@ where
     T: Deserialize<'de> + Default,
 {
     Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+fn deserialize_string_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct StringVecVisitor;
+
+    impl<'de> Visitor<'de> for StringVecVisitor {
+        type Value = Vec<String>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a string list, null, or empty string")
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(Vec::new())
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(Vec::new())
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            if value.trim().is_empty() {
+                Ok(Vec::new())
+            } else {
+                Ok(vec![value.to_string()])
+            }
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            self.visit_str(&value)
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let mut values = Vec::new();
+            while let Some(value) = seq.next_element::<String>()? {
+                values.push(value);
+            }
+            Ok(values)
+        }
+    }
+
+    deserializer.deserialize_any(StringVecVisitor)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -130,8 +193,6 @@ pub struct AgentRequestRow {
     pub status: Option<String>,
     #[serde(default)]
     pub lifecycle_state: Option<String>,
-    #[serde(default)]
-    pub admission_state: Option<String>,
     #[serde(default)]
     pub backend_id: Option<String>,
     #[serde(default)]
@@ -323,11 +384,11 @@ pub struct ToolSelectionRow {
     pub enable_bash: Option<bool>,
     #[serde(default)]
     pub bash_mode: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_null_default")]
+    #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub cli_tool_names: Vec<String>,
     #[serde(default)]
     pub enable_meta_tools: Option<bool>,
-    #[serde(default, deserialize_with = "deserialize_null_default")]
+    #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub delegate_to: Vec<String>,
 }
 
@@ -347,16 +408,10 @@ pub struct InferenceBackendRow {
     #[serde(default)]
     pub max_concurrent: Option<i64>,
     #[serde(default)]
+    pub max_queue_depth: Option<i64>,
+    #[serde(default)]
     pub enabled: Option<bool>,
-    #[serde(default)]
-    pub supports_tool_calls: Option<bool>,
-    #[serde(default)]
-    pub supports_streaming: Option<bool>,
-    #[serde(default)]
-    pub supports_structured_outputs: Option<bool>,
-    #[serde(default)]
-    pub supports_json_schema: Option<bool>,
-    #[serde(default, deserialize_with = "deserialize_null_default")]
+    #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub models: Vec<String>,
     #[serde(default)]
     pub last_probe: Option<String>,
@@ -435,7 +490,6 @@ mod tests {
             "content": "hello",
             "status": "pending",
             "lifecycle_state": "pending",
-            "admission_state": "released",
             "backend_id": "",
             "execution_origin": "interactive",
             "failure_reason": "",
@@ -475,6 +529,19 @@ mod tests {
             "agent_did": "did:defra:amy",
             "cli_tool_names": null,
             "delegate_to": null
+        }"#;
+        let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
+        assert!(row.cli_tool_names.is_empty());
+        assert!(row.delegate_to.is_empty());
+    }
+
+    #[test]
+    fn tool_selection_row_handles_empty_string_arrays() {
+        let json = r#"{
+            "selection_id": "sel-3",
+            "agent_did": "did:defra:amy",
+            "cli_tool_names": "",
+            "delegate_to": ""
         }"#;
         let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
         assert!(row.cli_tool_names.is_empty());
