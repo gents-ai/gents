@@ -110,7 +110,12 @@ const P2P_AFTER_HELP: &str = "\
 Examples:
   defra-agent p2p status
   defra-agent p2p peers --home /path/to/home
-  defra-agent p2p connect --graphql http://127.0.0.1:9191/api/v0/graphql --peer <peer-id-or-address>";
+  defra-agent p2p connect --graphql http://127.0.0.1:9191/api/v0/graphql --peer <peer-id-or-address>
+  defra-agent p2p collections add --profile chat-requests
+  defra-agent p2p collections sync-versions --version-id <collection-version-id>
+  defra-agent p2p replicators add --peer <peer-id-or-address> --profile runtime
+  defra-agent p2p documents sync --collection AgentRequest --doc-id <doc-id>
+  defra-agent p2p diagnose";
 const STATUS_AFTER_HELP: &str = "\
 Status reads the local runtime by default.
 
@@ -212,6 +217,34 @@ const CONFIG_SCHEMA_COLLECTIONS: &[&str] = &[
     "ToolSelection",
     "InferenceBackend",
 ];
+const P2P_AGENT_COLLECTIONS: &[&str] = &[
+    "AgentPrincipal",
+    "AgentBehavior",
+    "AgentRuntime",
+    "ToolSelection",
+    "InferenceBackend",
+    "InferenceProfile",
+];
+const P2P_DESKTOP_CONFIG_COLLECTIONS: &[&str] = &[
+    "AgentPrincipal",
+    "AgentBehavior",
+    "ToolSelection",
+    "InferenceBackend",
+    "InferenceProfile",
+    "ToolServiceRegistry",
+    "ScheduledTask",
+];
+const P2P_CHAT_REQUEST_COLLECTIONS: &[&str] = &[
+    "AgentConversation",
+    "AgentRequest",
+    "AgentResponse",
+    "AgentToolResult",
+    "AgentSession",
+    "AgentMessage",
+    "AgentToolCall",
+    "CompactionEntry",
+];
+const P2P_TOOL_SERVICE_COLLECTIONS: &[&str] = &["ToolServiceRegistry"];
 const EXPORT_AGENT_PRINCIPAL_FIELDS: &str =
     "agent_did display_name default_behavior_id enabled created_at created_by";
 const EXPORT_AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled created_at";
@@ -719,6 +752,67 @@ struct NodeIdentityResponse {
 #[derive(Debug, Deserialize)]
 struct P2pPeerRow {
     id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct P2pCollectionSubscriptionRow {
+    id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct P2pReplicatorRow {
+    #[serde(rename = "ID", default)]
+    id: Option<String>,
+    #[serde(rename = "Addresses", default)]
+    addresses: Vec<String>,
+    #[serde(rename = "CollectionIDs", default)]
+    collection_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct P2pReplicatorOutputRow {
+    id: Option<String>,
+    addresses: Vec<String>,
+    collection_ids: Vec<String>,
+    collection_names: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct P2pReplicatorRequest {
+    #[serde(rename = "Collections")]
+    collections: Vec<String>,
+    #[serde(rename = "Addresses")]
+    addresses: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct P2pReplicatorDeleteRequest {
+    #[serde(rename = "ID")]
+    id: String,
+    #[serde(rename = "Collections")]
+    collections: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct P2pSyncDocumentsRequest {
+    #[serde(rename = "collectionName")]
+    collection_name: String,
+    #[serde(rename = "docIDs")]
+    doc_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct P2pSyncBranchableRequest {
+    #[serde(rename = "collectionID")]
+    collection_id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct P2pSyncVersionsRequest {
+    #[serde(rename = "versionIDs")]
+    version_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1945,6 +2039,23 @@ enum P2pCommand {
     Peers(P2pAccessArgs),
     #[command(about = "Connect the running runtime to another peer")]
     Connect(P2pConnectArgs),
+    #[command(about = "Manage collection subscriptions for the running runtime")]
+    Collections {
+        #[command(subcommand)]
+        command: P2pCollectionsCommand,
+    },
+    #[command(about = "Manage push replicators for the running runtime")]
+    Replicators {
+        #[command(subcommand)]
+        command: P2pReplicatorsCommand,
+    },
+    #[command(about = "Manage document subscriptions and document sync")]
+    Documents {
+        #[command(subcommand)]
+        command: P2pDocumentsCommand,
+    },
+    #[command(about = "Run P2P HTTP endpoint diagnostics")]
+    Diagnose(P2pAccessArgs),
 }
 
 #[derive(clap::Args)]
@@ -1963,6 +2074,133 @@ struct P2pConnectArgs {
     graphql: Option<String>,
     #[arg(long)]
     peer: String,
+}
+
+#[derive(Subcommand)]
+enum P2pCollectionsCommand {
+    #[command(about = "List subscribed P2P collections")]
+    List(P2pAccessArgs),
+    #[command(about = "Subscribe collections or collection profiles for P2P replication")]
+    Add(P2pCollectionsMutateArgs),
+    #[command(about = "Remove subscribed P2P collections")]
+    Remove(P2pCollectionsMutateArgs),
+    #[command(about = "Fetch a branchable collection DAG from connected peers")]
+    SyncBranchable(P2pSyncBranchableArgs),
+    #[command(about = "Fetch collection-version DAG blocks from connected peers")]
+    SyncVersions(P2pSyncVersionsArgs),
+}
+
+#[derive(Subcommand)]
+enum P2pReplicatorsCommand {
+    #[command(about = "List configured P2P replicators")]
+    List(P2pAccessArgs),
+    #[command(about = "Configure a peer replicator for collections or profiles")]
+    Add(P2pReplicatorAddArgs),
+    #[command(about = "Remove a peer replicator for collections or profiles")]
+    Remove(P2pReplicatorRemoveArgs),
+}
+
+#[derive(Subcommand)]
+enum P2pDocumentsCommand {
+    #[command(about = "List document subscriptions for P2P replication")]
+    List(P2pAccessArgs),
+    #[command(about = "Subscribe documents for P2P replication")]
+    Add(P2pDocumentsMutateArgs),
+    #[command(about = "Remove document subscriptions from P2P replication")]
+    Remove(P2pDocumentsMutateArgs),
+    #[command(about = "Fetch documents from connected peers")]
+    Sync(P2pDocumentsSyncArgs),
+}
+
+#[derive(clap::Args)]
+struct P2pCollectionsMutateArgs {
+    #[arg(long)]
+    home: Option<PathBuf>,
+    #[arg(long)]
+    graphql: Option<String>,
+    #[arg(long = "collection", value_name = "COLLECTION")]
+    collections: Vec<String>,
+    #[arg(long = "profile", value_enum, value_name = "PROFILE")]
+    profiles: Vec<P2pCollectionProfileArg>,
+}
+
+#[derive(clap::Args)]
+struct P2pSyncBranchableArgs {
+    #[arg(long)]
+    home: Option<PathBuf>,
+    #[arg(long)]
+    graphql: Option<String>,
+    #[arg(long = "collection-id", value_name = "COLLECTION_ID")]
+    collection_id: String,
+}
+
+#[derive(clap::Args)]
+struct P2pSyncVersionsArgs {
+    #[arg(long)]
+    home: Option<PathBuf>,
+    #[arg(long)]
+    graphql: Option<String>,
+    #[arg(long = "version-id", value_name = "VERSION_ID")]
+    version_ids: Vec<String>,
+}
+
+#[derive(clap::Args)]
+struct P2pReplicatorAddArgs {
+    #[arg(long)]
+    home: Option<PathBuf>,
+    #[arg(long)]
+    graphql: Option<String>,
+    #[arg(long)]
+    peer: String,
+    #[arg(long = "collection", value_name = "COLLECTION")]
+    collections: Vec<String>,
+    #[arg(long = "profile", value_enum, value_name = "PROFILE")]
+    profiles: Vec<P2pCollectionProfileArg>,
+}
+
+#[derive(clap::Args)]
+struct P2pReplicatorRemoveArgs {
+    #[arg(long)]
+    home: Option<PathBuf>,
+    #[arg(long)]
+    graphql: Option<String>,
+    #[arg(long)]
+    peer: String,
+    #[arg(long = "collection", value_name = "COLLECTION")]
+    collections: Vec<String>,
+    #[arg(long = "profile", value_enum, value_name = "PROFILE")]
+    profiles: Vec<P2pCollectionProfileArg>,
+}
+
+#[derive(clap::Args)]
+struct P2pDocumentsMutateArgs {
+    #[arg(long)]
+    home: Option<PathBuf>,
+    #[arg(long)]
+    graphql: Option<String>,
+    #[arg(long = "doc-id", value_name = "DOC_ID")]
+    doc_ids: Vec<String>,
+}
+
+#[derive(clap::Args)]
+struct P2pDocumentsSyncArgs {
+    #[arg(long)]
+    home: Option<PathBuf>,
+    #[arg(long)]
+    graphql: Option<String>,
+    #[arg(long, value_name = "COLLECTION")]
+    collection: String,
+    #[arg(long = "doc-id", value_name = "DOC_ID")]
+    doc_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum P2pCollectionProfileArg {
+    Runtime,
+    Agent,
+    DesktopConfig,
+    ChatRequests,
+    ToolServices,
 }
 
 #[derive(Subcommand)]
@@ -2072,6 +2310,29 @@ async fn main() -> Result<()> {
             P2pCommand::Status(args) => p2p_status(args).await,
             P2pCommand::Peers(args) => p2p_peers(args).await,
             P2pCommand::Connect(args) => p2p_connect(args).await,
+            P2pCommand::Collections { command } => match command {
+                P2pCollectionsCommand::List(args) => p2p_collections_list(args).await,
+                P2pCollectionsCommand::Add(args) => p2p_collections_add(args).await,
+                P2pCollectionsCommand::Remove(args) => p2p_collections_remove(args).await,
+                P2pCollectionsCommand::SyncBranchable(args) => {
+                    p2p_collections_sync_branchable(args).await
+                }
+                P2pCollectionsCommand::SyncVersions(args) => {
+                    p2p_collections_sync_versions(args).await
+                }
+            },
+            P2pCommand::Replicators { command } => match command {
+                P2pReplicatorsCommand::List(args) => p2p_replicators_list(args).await,
+                P2pReplicatorsCommand::Add(args) => p2p_replicators_add(args).await,
+                P2pReplicatorsCommand::Remove(args) => p2p_replicators_remove(args).await,
+            },
+            P2pCommand::Documents { command } => match command {
+                P2pDocumentsCommand::List(args) => p2p_documents_list(args).await,
+                P2pDocumentsCommand::Add(args) => p2p_documents_add(args).await,
+                P2pDocumentsCommand::Remove(args) => p2p_documents_remove(args).await,
+                P2pDocumentsCommand::Sync(args) => p2p_documents_sync(args).await,
+            },
+            P2pCommand::Diagnose(args) => p2p_diagnose(args).await,
         },
         Command::Tui(args) => tui::run(args).await,
         Command::Show { command } => match command {
@@ -3224,6 +3485,306 @@ async fn p2p_connect(args: P2pConnectArgs) -> Result<()> {
     Ok(())
 }
 
+async fn p2p_collections_list(args: P2pAccessArgs) -> Result<()> {
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let client = p2p_http_client()?;
+    let api_base = p2p_api_base(&graphql)?;
+    let collection_ids: Vec<String> =
+        http_get_json(&client, &format!("{api_base}/p2p/collections")).await?;
+    let collection_names_by_id = load_collection_name_by_id(&client, &api_base).await;
+    let collections = p2p_collection_rows(&collection_ids, &collection_names_by_id);
+    let collection_names = p2p_collection_names(&collection_ids, &collection_names_by_id);
+    let count = collections.len();
+    let home_dir = resolve_home_dir(args.home.as_deref());
+    print_json(&json!({
+        "status": "ok",
+        "home": home_dir,
+        "graphql": graphql,
+        "collections": collections,
+        "collection_ids": collection_ids,
+        "collection_names": collection_names,
+        "count": count,
+    }))?;
+    Ok(())
+}
+
+async fn p2p_collections_add(args: P2pCollectionsMutateArgs) -> Result<()> {
+    let collections = expand_p2p_collection_args(&args.collections, &args.profiles)?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let client = p2p_http_client()?;
+    let api_base = p2p_api_base(&graphql)?;
+    http_post_json(
+        &client,
+        &format!("{api_base}/p2p/collections"),
+        &collections,
+    )
+    .await?;
+    let p2p = fetch_live_http_p2p_status(args.home.as_deref(), &graphql).await?;
+    let home_dir = resolve_home_dir(args.home.as_deref());
+    let mut output = json!({
+        "status": "collections_added",
+        "home": home_dir,
+        "graphql": graphql,
+        "collections": collections,
+        "p2p": p2p,
+    });
+    if let Some(map) = output.as_object_mut() {
+        let p2p_value = map.get("p2p").cloned().unwrap_or(Value::Null);
+        flatten_p2p_fields(map, &p2p_value);
+    }
+    print_json(&output)?;
+    Ok(())
+}
+
+async fn p2p_collections_remove(args: P2pCollectionsMutateArgs) -> Result<()> {
+    let collections = expand_p2p_collection_args(&args.collections, &args.profiles)?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let client = p2p_http_client()?;
+    let api_base = p2p_api_base(&graphql)?;
+    http_delete_json(
+        &client,
+        &format!("{api_base}/p2p/collections"),
+        &collections,
+    )
+    .await?;
+    let home_dir = resolve_home_dir(args.home.as_deref());
+    print_json(&json!({
+        "status": "collections_removed",
+        "home": home_dir,
+        "graphql": graphql,
+        "collections": collections,
+    }))?;
+    Ok(())
+}
+
+async fn p2p_collections_sync_branchable(args: P2pSyncBranchableArgs) -> Result<()> {
+    let collection_id = args.collection_id.trim().to_string();
+    if collection_id.is_empty() {
+        anyhow::bail!("provide --collection-id");
+    }
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let client = p2p_http_client()?;
+    let api_base = p2p_api_base(&graphql)?;
+    let request = P2pSyncBranchableRequest {
+        collection_id: collection_id.clone(),
+    };
+    http_post_json(
+        &client,
+        &format!("{api_base}/p2p/collections/sync-branchable"),
+        &request,
+    )
+    .await?;
+    let home_dir = resolve_home_dir(args.home.as_deref());
+    print_json(&json!({
+        "status": "collection_sync_requested",
+        "home": home_dir,
+        "graphql": graphql,
+        "collection_id": collection_id,
+    }))?;
+    Ok(())
+}
+
+async fn p2p_collections_sync_versions(args: P2pSyncVersionsArgs) -> Result<()> {
+    let version_ids = expand_nonempty_values(&args.version_ids, "--version-id")?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let client = p2p_http_client()?;
+    let api_base = p2p_api_base(&graphql)?;
+    let request = P2pSyncVersionsRequest {
+        version_ids: version_ids.clone(),
+    };
+    http_post_json(
+        &client,
+        &format!("{api_base}/p2p/collections/sync-versions"),
+        &request,
+    )
+    .await?;
+    let home_dir = resolve_home_dir(args.home.as_deref());
+    print_json(&json!({
+        "status": "collection_versions_sync_requested",
+        "home": home_dir,
+        "graphql": graphql,
+        "version_ids": version_ids,
+    }))?;
+    Ok(())
+}
+
+async fn p2p_replicators_list(args: P2pAccessArgs) -> Result<()> {
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let client = p2p_http_client()?;
+    let api_base = p2p_api_base(&graphql)?;
+    let raw_replicators: Vec<P2pReplicatorRow> =
+        http_get_json(&client, &format!("{api_base}/p2p/replicators")).await?;
+    let collection_names_by_id = load_collection_name_by_id(&client, &api_base).await;
+    let replicators = p2p_replicator_rows(raw_replicators, &collection_names_by_id);
+    let count = replicators.len();
+    let home_dir = resolve_home_dir(args.home.as_deref());
+    print_json(&json!({
+        "status": "ok",
+        "home": home_dir,
+        "graphql": graphql,
+        "replicators": replicators,
+        "count": count,
+    }))?;
+    Ok(())
+}
+
+async fn p2p_replicators_add(args: P2pReplicatorAddArgs) -> Result<()> {
+    let collections = expand_p2p_collection_args(&args.collections, &args.profiles)?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let client = p2p_http_client()?;
+    let api_base = p2p_api_base(&graphql)?;
+    let request = P2pReplicatorRequest {
+        collections: collections.clone(),
+        addresses: vec![args.peer.clone()],
+    };
+    http_post_json(&client, &format!("{api_base}/p2p/replicators"), &request).await?;
+    let p2p = fetch_live_http_p2p_status(args.home.as_deref(), &graphql).await?;
+    let home_dir = resolve_home_dir(args.home.as_deref());
+    let mut output = json!({
+        "status": "replicator_added",
+        "home": home_dir,
+        "graphql": graphql,
+        "peer": args.peer,
+        "collections": collections,
+        "p2p": p2p,
+    });
+    if let Some(map) = output.as_object_mut() {
+        let p2p_value = map.get("p2p").cloned().unwrap_or(Value::Null);
+        flatten_p2p_fields(map, &p2p_value);
+    }
+    print_json(&output)?;
+    Ok(())
+}
+
+async fn p2p_replicators_remove(args: P2pReplicatorRemoveArgs) -> Result<()> {
+    let collections = expand_p2p_collection_args(&args.collections, &args.profiles)?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let client = p2p_http_client()?;
+    let api_base = p2p_api_base(&graphql)?;
+    let request = P2pReplicatorDeleteRequest {
+        id: args.peer.clone(),
+        collections: collections.clone(),
+    };
+    http_delete_json(&client, &format!("{api_base}/p2p/replicators"), &request).await?;
+    let home_dir = resolve_home_dir(args.home.as_deref());
+    print_json(&json!({
+        "status": "replicator_removed",
+        "home": home_dir,
+        "graphql": graphql,
+        "peer": args.peer,
+        "collections": collections,
+    }))?;
+    Ok(())
+}
+
+async fn p2p_documents_list(args: P2pAccessArgs) -> Result<()> {
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let client = p2p_http_client()?;
+    let api_base = p2p_api_base(&graphql)?;
+    let doc_ids: Vec<String> = http_get_json(&client, &format!("{api_base}/p2p/documents")).await?;
+    let count = doc_ids.len();
+    let home_dir = resolve_home_dir(args.home.as_deref());
+    print_json(&json!({
+        "status": "ok",
+        "home": home_dir,
+        "graphql": graphql,
+        "doc_ids": doc_ids,
+        "count": count,
+    }))?;
+    Ok(())
+}
+
+async fn p2p_documents_add(args: P2pDocumentsMutateArgs) -> Result<()> {
+    let doc_ids = expand_nonempty_values(&args.doc_ids, "--doc-id")?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let client = p2p_http_client()?;
+    let api_base = p2p_api_base(&graphql)?;
+    http_post_json(&client, &format!("{api_base}/p2p/documents"), &doc_ids).await?;
+    let home_dir = resolve_home_dir(args.home.as_deref());
+    print_json(&json!({
+        "status": "documents_added",
+        "home": home_dir,
+        "graphql": graphql,
+        "doc_ids": doc_ids,
+    }))?;
+    Ok(())
+}
+
+async fn p2p_documents_remove(args: P2pDocumentsMutateArgs) -> Result<()> {
+    let doc_ids = expand_nonempty_values(&args.doc_ids, "--doc-id")?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let client = p2p_http_client()?;
+    let api_base = p2p_api_base(&graphql)?;
+    http_delete_json(&client, &format!("{api_base}/p2p/documents"), &doc_ids).await?;
+    let home_dir = resolve_home_dir(args.home.as_deref());
+    print_json(&json!({
+        "status": "documents_removed",
+        "home": home_dir,
+        "graphql": graphql,
+        "doc_ids": doc_ids,
+    }))?;
+    Ok(())
+}
+
+async fn p2p_documents_sync(args: P2pDocumentsSyncArgs) -> Result<()> {
+    let collection = args.collection.trim().to_string();
+    if collection.is_empty() {
+        anyhow::bail!("provide --collection");
+    }
+    let doc_ids = expand_nonempty_values(&args.doc_ids, "--doc-id")?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let client = p2p_http_client()?;
+    let api_base = p2p_api_base(&graphql)?;
+    let request = P2pSyncDocumentsRequest {
+        collection_name: collection.clone(),
+        doc_ids: doc_ids.clone(),
+    };
+    http_post_json(&client, &format!("{api_base}/p2p/documents/sync"), &request).await?;
+    let home_dir = resolve_home_dir(args.home.as_deref());
+    print_json(&json!({
+        "status": "documents_sync_requested",
+        "home": home_dir,
+        "graphql": graphql,
+        "collection": collection,
+        "doc_ids": doc_ids,
+    }))?;
+    Ok(())
+}
+
+async fn p2p_diagnose(args: P2pAccessArgs) -> Result<()> {
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let client = p2p_http_client()?;
+    let api_base = p2p_api_base(&graphql)?;
+    let p2p = load_live_http_p2p_status(args.home.as_deref(), &graphql).await;
+    let checks = json!({
+        "info": p2p_probe_get(&client, &format!("{api_base}/p2p/info")).await,
+        "peers": p2p_probe_get(&client, &format!("{api_base}/p2p/peers")).await,
+        "collections": p2p_probe_get(&client, &format!("{api_base}/p2p/collections")).await,
+        "replicators": p2p_probe_get(&client, &format!("{api_base}/p2p/replicators")).await,
+        "documents": p2p_probe_get(&client, &format!("{api_base}/p2p/documents")).await,
+    });
+    let ok = checks.as_object().is_some_and(|map| {
+        map.values()
+            .all(|value| value.get("ok") == Some(&Value::Bool(true)))
+    });
+    let home_dir = resolve_home_dir(args.home.as_deref());
+    let mut output = json!({
+        "status": if ok { "ok" } else { "degraded" },
+        "home": home_dir,
+        "graphql": graphql,
+        "p2p": p2p,
+        "checks": {
+            "p2p": checks
+        }
+    });
+    if let Some(map) = output.as_object_mut() {
+        let p2p_value = map.get("p2p").cloned().unwrap_or(Value::Null);
+        flatten_p2p_fields(map, &p2p_value);
+    }
+    print_json(&output)?;
+    Ok(())
+}
+
 async fn show_runtime(args: RuntimeShowArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
@@ -3801,6 +4362,129 @@ fn persisted_p2p_status(runtime_state: Option<&StoredRuntimeState>) -> Value {
     }
 }
 
+fn expand_p2p_collection_args(
+    explicit_collections: &[String],
+    profiles: &[P2pCollectionProfileArg],
+) -> Result<Vec<String>> {
+    let mut collections = explicit_collections
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>();
+
+    for profile in profiles {
+        for collection in p2p_collection_profile_names(*profile) {
+            collections.insert(collection.to_string());
+        }
+    }
+
+    if collections.is_empty() {
+        anyhow::bail!("provide at least one --collection or --profile");
+    }
+
+    Ok(collections.into_iter().collect())
+}
+
+fn p2p_collection_profile_names(profile: P2pCollectionProfileArg) -> Vec<&'static str> {
+    match profile {
+        P2pCollectionProfileArg::Runtime => SCHEMA_COLLECTION_CHECKS
+            .iter()
+            .map(|(collection, _)| *collection)
+            .collect(),
+        P2pCollectionProfileArg::Agent => P2P_AGENT_COLLECTIONS.to_vec(),
+        P2pCollectionProfileArg::DesktopConfig => P2P_DESKTOP_CONFIG_COLLECTIONS.to_vec(),
+        P2pCollectionProfileArg::ChatRequests => P2P_CHAT_REQUEST_COLLECTIONS.to_vec(),
+        P2pCollectionProfileArg::ToolServices => P2P_TOOL_SERVICE_COLLECTIONS.to_vec(),
+    }
+}
+
+fn expand_nonempty_values(values: &[String], flag_name: &str) -> Result<Vec<String>> {
+    let values = values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>();
+
+    if values.is_empty() {
+        anyhow::bail!("provide at least one {flag_name}");
+    }
+
+    Ok(values.into_iter().collect())
+}
+
+async fn load_collection_name_by_id(
+    client: &reqwest::Client,
+    api_base: &str,
+) -> BTreeMap<String, String> {
+    let Ok(collections) =
+        http_get_json::<Vec<Value>>(client, &format!("{api_base}/collections/versions")).await
+    else {
+        return BTreeMap::new();
+    };
+
+    collections
+        .into_iter()
+        .filter_map(|row| {
+            let id = collection_version_string_field(&row, &["CollectionID", "collection_id"])?;
+            let name = collection_version_string_field(&row, &["Name", "name"])?;
+            Some((id, name))
+        })
+        .collect()
+}
+
+fn collection_version_string_field(row: &Value, names: &[&str]) -> Option<String> {
+    names.iter().find_map(|name| {
+        row.get(*name)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn p2p_collection_rows(
+    collection_ids: &[String],
+    collection_names_by_id: &BTreeMap<String, String>,
+) -> Vec<P2pCollectionSubscriptionRow> {
+    collection_ids
+        .iter()
+        .map(|id| P2pCollectionSubscriptionRow {
+            id: id.clone(),
+            name: collection_names_by_id.get(id).cloned(),
+        })
+        .collect()
+}
+
+fn p2p_collection_names(
+    collection_ids: &[String],
+    collection_names_by_id: &BTreeMap<String, String>,
+) -> Vec<String> {
+    collection_ids
+        .iter()
+        .filter_map(|id| collection_names_by_id.get(id).cloned())
+        .collect()
+}
+
+fn p2p_replicator_rows(
+    rows: Vec<P2pReplicatorRow>,
+    collection_names_by_id: &BTreeMap<String, String>,
+) -> Vec<P2pReplicatorOutputRow> {
+    rows.into_iter()
+        .map(|row| {
+            let collection_names =
+                p2p_collection_names(&row.collection_ids, collection_names_by_id);
+            P2pReplicatorOutputRow {
+                id: row.id,
+                addresses: row.addresses,
+                collection_ids: row.collection_ids,
+                collection_names,
+            }
+        })
+        .collect()
+}
+
 async fn load_live_http_p2p_status(home: Option<&Path>, graphql: &str) -> Value {
     let home_dir = resolve_home_dir(home);
     let runtime_state = read_runtime_state(&home_dir)
@@ -3863,6 +4547,26 @@ async fn fetch_live_http_p2p_status(home: Option<&Path>, graphql: &str) -> Resul
     }))
 }
 
+fn p2p_http_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .context("building P2P HTTP client")
+}
+
+async fn p2p_probe_get(client: &reqwest::Client, url: &str) -> Value {
+    match http_get_json::<Value>(client, url).await {
+        Ok(value) => json!({
+            "ok": true,
+            "value": value,
+        }),
+        Err(error) => json!({
+            "ok": false,
+            "error": error.to_string(),
+        }),
+    }
+}
+
 fn p2p_api_base(graphql: &str) -> Result<String> {
     graphql
         .trim()
@@ -3908,6 +4612,31 @@ async fn http_post_json<B: Serialize>(client: &reqwest::Client, url: &str, body:
     if !status.is_success() {
         anyhow::bail!(
             "POST {url} failed with {status}: {}",
+            String::from_utf8_lossy(&bytes)
+        );
+    }
+    Ok(())
+}
+
+async fn http_delete_json<B: Serialize>(
+    client: &reqwest::Client,
+    url: &str,
+    body: &B,
+) -> Result<()> {
+    let response = client
+        .delete(url)
+        .json(body)
+        .send()
+        .await
+        .with_context(|| format!("sending DELETE request to {url}"))?;
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .await
+        .with_context(|| format!("reading DELETE response body from {url}"))?;
+    if !status.is_success() {
+        anyhow::bail!(
+            "DELETE {url} failed with {status}: {}",
             String::from_utf8_lossy(&bytes)
         );
     }
@@ -6796,5 +7525,73 @@ mod tests {
             obj.get("updated_at").is_none(),
             "updated_at should be stripped on create"
         );
+    }
+
+    #[test]
+    fn p2p_collection_profiles_expand_and_dedupe_collection_names() {
+        let collections = expand_p2p_collection_args(
+            &[
+                " AgentRequest ".to_string(),
+                "AgentRequest".to_string(),
+                "".to_string(),
+            ],
+            &[
+                P2pCollectionProfileArg::ChatRequests,
+                P2pCollectionProfileArg::ToolServices,
+            ],
+        )
+        .unwrap();
+
+        assert!(collections.iter().any(|name| name == "AgentRequest"));
+        assert!(collections.iter().any(|name| name == "AgentResponse"));
+        assert!(collections.iter().any(|name| name == "ToolServiceRegistry"));
+        assert_eq!(
+            collections
+                .iter()
+                .filter(|name| name.as_str() == "AgentRequest")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn p2p_collection_args_require_collection_or_profile() {
+        let error = expand_p2p_collection_args(&[], &[]).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("provide at least one --collection or --profile"));
+    }
+
+    #[test]
+    fn p2p_collection_rows_include_human_readable_names_when_known() {
+        let mut names_by_id = BTreeMap::new();
+        names_by_id.insert("bafk-agent-request".to_string(), "AgentRequest".to_string());
+        let rows = p2p_collection_rows(
+            &["bafk-agent-request".to_string(), "bafk-unknown".to_string()],
+            &names_by_id,
+        );
+
+        assert_eq!(rows[0].id, "bafk-agent-request");
+        assert_eq!(rows[0].name.as_deref(), Some("AgentRequest"));
+        assert_eq!(rows[1].id, "bafk-unknown");
+        assert!(rows[1].name.is_none());
+    }
+
+    #[test]
+    fn p2p_replicator_rows_resolve_collection_names() {
+        let mut names_by_id = BTreeMap::new();
+        names_by_id.insert("bafk-agent-runtime".to_string(), "AgentRuntime".to_string());
+        let rows = p2p_replicator_rows(
+            vec![P2pReplicatorRow {
+                id: Some("peer-1".to_string()),
+                addresses: vec!["iroh://peer-1".to_string()],
+                collection_ids: vec!["bafk-agent-runtime".to_string(), "bafk-missing".to_string()],
+            }],
+            &names_by_id,
+        );
+
+        assert_eq!(rows[0].id.as_deref(), Some("peer-1"));
+        assert_eq!(rows[0].collection_names, vec!["AgentRuntime"]);
+        assert_eq!(rows[0].collection_ids.len(), 2);
     }
 }

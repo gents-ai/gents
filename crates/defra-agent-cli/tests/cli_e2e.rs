@@ -3949,6 +3949,57 @@ async fn p2p_connects_two_local_servers_via_operator_commands() -> Result<()> {
     let peers_b = run_cli_json(&home_b, &["p2p", "peers"])?;
     assert_eq!(peers_b.get("count").and_then(Value::as_u64), Some(1));
 
+    let collections_add = run_cli_json(
+        &home_b,
+        &["p2p", "collections", "add", "--profile", "chat-requests"],
+    )?;
+    assert_eq!(
+        collections_add.get("status").and_then(Value::as_str),
+        Some("collections_added")
+    );
+    assert!(collections_add
+        .get("collections")
+        .and_then(Value::as_array)
+        .is_some_and(|rows| rows.iter().any(|row| row.as_str() == Some("AgentRequest"))));
+
+    let replicator_add = run_cli_json(
+        &home_b,
+        &[
+            "p2p",
+            "replicators",
+            "add",
+            "--peer",
+            peer_addr_a,
+            "--profile",
+            "chat-requests",
+        ],
+    )?;
+    assert_eq!(
+        replicator_add.get("status").and_then(Value::as_str),
+        Some("replicator_added")
+    );
+
+    let diagnose_b = run_cli_json(&home_b, &["p2p", "diagnose"])?;
+    assert_eq!(
+        diagnose_b
+            .pointer("/checks/p2p/info/ok")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    for path in [
+        "/checks/p2p/collections/error",
+        "/checks/p2p/replicators/error",
+        "/checks/p2p/documents/error",
+    ] {
+        assert!(
+            diagnose_b
+                .pointer(path)
+                .and_then(Value::as_str)
+                .is_some_and(|error| error.contains("not supported")),
+            "expected unsupported diagnostic at {path}: {diagnose_b}"
+        );
+    }
+
     Ok(())
 }
 
