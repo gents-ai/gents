@@ -118,10 +118,9 @@ impl DefraStreamWriter {
             token_count = snapshot.token_count,
         );
 
-        let resp = self.node.execute(&mutation).await;
-        if resp.has_errors() {
-            anyhow::bail!("updating AgentResponse failed: {:?}", resp.errors);
-        }
+        let resp =
+            execute_mutation_with_retry(&self.node, &mutation, "flush_streaming_response_snapshot")
+                .await?;
 
         if !resp
             .data
@@ -154,13 +153,13 @@ impl DefraStreamWriter {
             }}"#
         );
 
-        let resp = self.node.execute(&mutation).await;
-        if resp.has_errors() {
-            anyhow::bail!(
-                "updating AgentResponse error_message for doc_id={doc_id}: {:?}",
-                resp.errors
-            );
-        }
+        execute_mutation_with_retry(&self.node, &mutation, "set_streaming_response_error")
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "updating AgentResponse error_message for doc_id={doc_id}: {error:#}"
+                )
+            })?;
 
         Ok(())
     }
@@ -201,10 +200,9 @@ impl StreamWriter for DefraStreamWriter {
             agent_did = self.agent_did,
         );
 
-        let resp = self.node.execute(&mutation).await;
-        if resp.has_errors() {
-            anyhow::bail!("creating AgentResponse failed: {:?}", resp.errors);
-        }
+        let resp = execute_mutation_with_retry(&self.node, &mutation, "begin_streaming_response")
+            .await
+            .map_err(|error| anyhow::anyhow!("creating AgentResponse failed: {error:#}"))?;
 
         let doc_id = resp
             .data
