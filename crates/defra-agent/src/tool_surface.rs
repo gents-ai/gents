@@ -586,30 +586,37 @@ fn resolve_configured_tool_root(path: &Path) -> Result<PathBuf> {
             .join(path)
     };
 
-    canonicalize_or_normalize_path(&absolute)
+    resolve_path_with_canonical_prefix(&absolute)
 }
 
-fn canonicalize_or_normalize_path(path: &Path) -> Result<PathBuf> {
-    if path.exists() {
-        std::fs::canonicalize(path)
-            .with_context(|| format!("canonicalizing tool root {}", path.display()))
-    } else {
-        Ok(normalize_absolute_path(path))
-    }
-}
+fn resolve_path_with_canonical_prefix(path: &Path) -> Result<PathBuf> {
+    let mut resolved = PathBuf::new();
+    let mut missing_tail = false;
 
-fn normalize_absolute_path(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
     for component in path.components() {
         match component {
-            std::path::Component::ParentDir => {
-                normalized.pop();
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
+                resolved.push(component.as_os_str());
             }
             std::path::Component::CurDir => {}
-            _ => normalized.push(component.as_os_str()),
+            std::path::Component::ParentDir => {
+                resolved.pop();
+            }
+            std::path::Component::Normal(name) => {
+                let candidate = resolved.join(name);
+                if !missing_tail && candidate.exists() {
+                    resolved = std::fs::canonicalize(&candidate).with_context(|| {
+                        format!("canonicalizing tool root {}", candidate.display())
+                    })?;
+                } else {
+                    missing_tail = true;
+                    resolved.push(name);
+                }
+            }
         }
     }
-    normalized
+
+    Ok(resolved)
 }
 
 fn dedupe_strings(values: Vec<String>) -> Vec<String> {
@@ -738,6 +745,70 @@ mod tests {
             Vec::new(),
         )
         .expect_err("selection root outside operator ceiling should fail");
+
+        assert!(
+            error.to_string().contains("escapes operator tool root"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn selection_without_root_inherits_operator_root() {
+        let operator_root = temp_root("defra-agent-operator-root");
+
+        let config = BehaviorToolConfig::from_selection(
+            "ops",
+            ToolSelection {
+                file_tools: FileToolMode::ReadWrite,
+                file_tool_root: None,
+                bash: BashMode::Unrestricted,
+                cli_tool_names: Vec::new(),
+                enable_meta_tools: false,
+                delegate_to: Vec::new(),
+            },
+            &ToolCeiling::readwrite(operator_root.clone()),
+            Vec::new(),
+        )
+        .unwrap();
+
+        let canonical_operator_root = std::fs::canonicalize(&operator_root).unwrap();
+        let native_tools = config.host_tools().native_tools();
+        assert!(matches!(
+            native_tools[4],
+            crate::toolset::NativeTool::WriteFile { ref root } if root == &canonical_operator_root
+        ));
+        assert!(matches!(
+            native_tools[5],
+            crate::toolset::NativeTool::EditFile { ref root } if root == &canonical_operator_root
+        ));
+        assert!(matches!(
+            native_tools[6],
+            crate::toolset::NativeTool::BashUnrestricted { ref root, .. } if root == &canonical_operator_root
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
+        let operator_root = temp_root("defra-agent-operator-root");
+        let outside_root = temp_root("defra-agent-outside-root");
+        let symlink_path = operator_root.join("link-out");
+        std::os::unix::fs::symlink(&outside_root, &symlink_path).unwrap();
+
+        let error = BehaviorToolConfig::from_selection(
+            "ops",
+            ToolSelection {
+                file_tools: FileToolMode::ReadWrite,
+                file_tool_root: Some(symlink_path.join("workspace")),
+                bash: BashMode::Unrestricted,
+                cli_tool_names: Vec::new(),
+                enable_meta_tools: false,
+                delegate_to: Vec::new(),
+            },
+            &ToolCeiling::readwrite(operator_root),
+            Vec::new(),
+        )
+        .expect_err("selection root through symlink should fail");
 
         assert!(
             error.to_string().contains("escapes operator tool root"),

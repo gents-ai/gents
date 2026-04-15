@@ -1485,7 +1485,10 @@ struct ToolSelectionUpsertArgs {
     enable_file_tools: bool,
     #[arg(long)]
     file_tools_mode: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Optional per-behavior file-tool root; relative paths resolve from the daemon cwd and must stay within any node-level tool root"
+    )]
     file_tool_root: Option<PathBuf>,
     #[arg(long, default_value_t = false)]
     enable_bash: bool,
