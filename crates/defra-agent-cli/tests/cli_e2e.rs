@@ -1849,7 +1849,78 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
-    let response = reqwest::Client::new()
+    let client = reqwest::Client::new();
+
+    let version_response = client
+        .get(format!("http://127.0.0.1:{port}/version"))
+        .send()
+        .await
+        .context("fetching /version")?;
+    assert!(
+        version_response.status().is_success(),
+        "unexpected /version status: {version_response:?}"
+    );
+    let version: Value = version_response
+        .json()
+        .await
+        .context("reading /version body")?;
+    assert_eq!(
+        version.get("service").and_then(Value::as_str),
+        Some("defra-agent")
+    );
+    assert_eq!(
+        version.get("binary").and_then(Value::as_str),
+        Some("defra-agent")
+    );
+    assert_eq!(
+        version.get("package").and_then(Value::as_str),
+        Some("defra-agent-cli")
+    );
+    assert_eq!(
+        version.get("version").and_then(Value::as_str),
+        Some(env!("CARGO_PKG_VERSION"))
+    );
+    assert!(
+        version.get("build").and_then(Value::as_object).is_some(),
+        "expected build metadata in /version body: {version}"
+    );
+
+    let health_response = client
+        .get(format!("http://127.0.0.1:{port}/healthz"))
+        .send()
+        .await
+        .context("fetching /healthz")?;
+    assert!(
+        health_response.status().is_success(),
+        "unexpected /healthz status: {health_response:?}"
+    );
+    let health: Value = health_response
+        .json()
+        .await
+        .context("reading /healthz body")?;
+    assert_eq!(health.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(health.get("status").and_then(Value::as_str), Some("ok"));
+    assert_eq!(
+        health.get("service").and_then(Value::as_str),
+        Some("defra-agent")
+    );
+    assert_eq!(
+        health
+            .pointer("/checks/runtime/ready")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert!(
+        health
+            .get("runtimes")
+            .and_then(Value::as_array)
+            .is_some_and(|runtimes| runtimes.iter().any(|runtime| {
+                runtime.get("agent_did").and_then(Value::as_str) == Some(agent_did.as_str())
+            })),
+        "expected runtime row for {agent_did} in /healthz body: {health}"
+    );
+
+    let response = client
         .get(format!("http://127.0.0.1:{port}/metrics"))
         .send()
         .await

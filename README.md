@@ -139,6 +139,12 @@ If you start the runtime with P2P enabled, the readiness JSON also includes:
 
 The same connectivity fields are persisted to `runtime.json` under the agent home, usually `~/.defra-agent/runtime.json`. Use `defra-agent reset` to remove that file.
 
+The runtime HTTP port also exposes a stable machine-readable operations surface:
+
+- `GET /version`: build and package metadata for the running `defra-agent` binary.
+- `GET /healthz`: JSON process/runtime health. It returns HTTP 200 when the runtime is serving, including degraded-but-running states, and HTTP 503 when the runtime status cannot be read or no runtime is ready.
+- `GET /metrics`: Prometheus metrics for runtime state, backend health, and admission settings.
+
 `server` stays in the foreground until you stop it with `Ctrl-C`. By default it keeps logs quiet and prints the readiness JSON plus a short status line. If you want debug output, set `RUST_LOG=info` or a more specific filter before starting it.
 
 The default behavior stays local-only. If you do not pass any P2P flags, `p2p_transport` stays `none`.
