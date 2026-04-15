@@ -159,6 +159,36 @@ async fn upsert_helpers_roundtrip_behavior_and_profile() {
     assert_eq!(profile.deadline_duration_secs, Some(120));
 }
 
+#[tokio::test]
+async fn tool_service_registry_schema_does_not_expose_broken_tools_relation() {
+    let db = test_db("tool-service-registry-tools-relation").await;
+    let response = db
+        .node
+        .execute(
+            r#"{
+                ToolServiceRegistry {
+                    service_id
+                    tools { name }
+                }
+            }"#,
+        )
+        .await;
+
+    assert!(
+        response.has_errors(),
+        "querying the removed tools relation should fail validation"
+    );
+    let errors = format!("{:?}", response.errors);
+    assert!(
+        errors.contains("tools"),
+        "expected validation error to mention tools field, got {errors}"
+    );
+    assert!(
+        !errors.contains("TypeJoinMany"),
+        "schema should not expose a tools relation that fails during join planning: {errors}"
+    );
+}
+
 async fn insert_principal(
     node: &defra_agent::defra_node::EmbeddedNode,
     agent_did: &str,

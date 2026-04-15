@@ -135,8 +135,10 @@ pub(crate) struct DesiredInferenceProfile {
     pub(crate) deadline_duration_secs: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+const DEFAULT_TOOL_SERVICE_MCP_PATH: &str = "/mcp";
+const TOOL_SERVICE_ADDRESS_FIELDS: &[&str] = &["hostname", "tailscale_ip", "lan_ip"];
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct DesiredToolServiceRegistry {
     pub(crate) service_id: String,
     pub(crate) display_name: Option<String>,
@@ -146,6 +148,38 @@ pub(crate) struct DesiredToolServiceRegistry {
     pub(crate) lan_ip: Option<String>,
     pub(crate) mcp_port: Option<i64>,
     pub(crate) mcp_path: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for DesiredToolServiceRegistry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            service_id: String,
+            display_name: Option<String>,
+            description: Option<String>,
+            hostname: Option<String>,
+            tailscale_ip: Option<String>,
+            lan_ip: Option<String>,
+            mcp_port: Option<i64>,
+            mcp_path: Option<String>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        Ok(Self {
+            service_id: wire.service_id,
+            display_name: wire.display_name,
+            description: wire.description,
+            hostname: Some(normalize_tool_service_string(wire.hostname)),
+            tailscale_ip: Some(normalize_tool_service_string(wire.tailscale_ip)),
+            lan_ip: Some(normalize_tool_service_string(wire.lan_ip)),
+            mcp_port: wire.mcp_port,
+            mcp_path: Some(normalize_tool_service_mcp_path(wire.mcp_path)),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -765,6 +799,84 @@ fn non_empty(value: &Option<String>) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
+fn normalize_tool_service_string(value: Option<String>) -> String {
+    value.unwrap_or_default().trim().to_string()
+}
+
+fn normalize_tool_service_mcp_path(value: Option<String>) -> String {
+    let trimmed = value.as_deref().unwrap_or_default().trim();
+    if trimmed.is_empty() {
+        DEFAULT_TOOL_SERVICE_MCP_PATH.to_string()
+    } else if trimmed.starts_with('/') {
+        trimmed.to_string()
+    } else {
+        format!("/{trimmed}")
+    }
+}
+
+fn optional_string_from_value(field: &str, value: Option<&Value>) -> Result<Option<String>> {
+    match value {
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(Value::Null) | None => Ok(None),
+        Some(value) => Err(anyhow!(
+            "ToolServiceRegistry field {field} must be a string or null, got {value}"
+        )),
+    }
+}
+
+fn optional_i64_from_value(field: &str, value: Option<&Value>) -> Result<Option<i64>> {
+    match value {
+        Some(Value::Number(value)) => value
+            .as_i64()
+            .map(Some)
+            .ok_or_else(|| anyhow!("ToolServiceRegistry field {field} must be an integer")),
+        Some(Value::Null) | None => Ok(None),
+        Some(value) => Err(anyhow!(
+            "ToolServiceRegistry field {field} must be an integer or null, got {value}"
+        )),
+    }
+}
+
+fn tool_service_registry_from_live_value(value: &Value) -> Result<DesiredToolServiceRegistry> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow!("expected ToolServiceRegistry live row to be an object"))?;
+    let service_id = object
+        .get("service_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("ToolServiceRegistry live row is missing service_id"))?
+        .to_string();
+
+    Ok(DesiredToolServiceRegistry {
+        service_id,
+        display_name: optional_string_from_value("display_name", object.get("display_name"))?,
+        description: optional_string_from_value("description", object.get("description"))?,
+        hostname: optional_string_from_value("hostname", object.get("hostname"))?,
+        tailscale_ip: optional_string_from_value("tailscale_ip", object.get("tailscale_ip"))?,
+        lan_ip: optional_string_from_value("lan_ip", object.get("lan_ip"))?,
+        mcp_port: optional_i64_from_value("mcp_port", object.get("mcp_port"))?,
+        mcp_path: optional_string_from_value("mcp_path", object.get("mcp_path"))?,
+    })
+}
+
+pub(crate) fn normalize_tool_service_registry_storage_fields(
+    object: &mut Map<String, Value>,
+) -> Result<()> {
+    for field in TOOL_SERVICE_ADDRESS_FIELDS {
+        let normalized =
+            normalize_tool_service_string(optional_string_from_value(field, object.get(*field))?);
+        object.insert((*field).to_string(), Value::String(normalized));
+    }
+
+    let mcp_path = normalize_tool_service_mcp_path(optional_string_from_value(
+        "mcp_path",
+        object.get("mcp_path"),
+    )?);
+    object.insert("mcp_path".to_string(), Value::String(mcp_path));
+
+    Ok(())
+}
+
 pub(crate) fn manifest_from_export_bundle(
     bundle: &super::ConfigExportBundle,
 ) -> Result<DesiredStateManifest> {
@@ -870,21 +982,7 @@ pub(crate) fn manifest_from_export_bundle(
         tool_service_registries: bundle
             .tool_service_registries
             .iter()
-            .map(|value| {
-                desired_from_value(
-                    value,
-                    &[
-                        "service_id",
-                        "display_name",
-                        "description",
-                        "hostname",
-                        "tailscale_ip",
-                        "lan_ip",
-                        "mcp_port",
-                        "mcp_path",
-                    ],
-                )
-            })
+            .map(tool_service_registry_from_live_value)
             .collect::<Result<Vec<_>>>()?,
         scheduled_tasks: bundle
             .scheduled_tasks
@@ -1232,6 +1330,71 @@ where
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn desired_tool_service_registry_normalizes_address_storage_fields() {
+        let service: DesiredToolServiceRegistry = serde_json::from_value(json!({
+            "service_id": "observability-mcp",
+            "display_name": "Observability",
+            "description": null,
+            "hostname": null,
+            "tailscale_ip": " 100.64.0.10 ",
+            "lan_ip": null,
+            "mcp_port": 9201,
+            "mcp_path": "mcp"
+        }))
+        .expect("desired tool service should deserialize");
+
+        assert_eq!(service.hostname.as_deref(), Some(""));
+        assert_eq!(service.tailscale_ip.as_deref(), Some("100.64.0.10"));
+        assert_eq!(service.lan_ip.as_deref(), Some(""));
+        assert_eq!(service.mcp_path.as_deref(), Some("/mcp"));
+    }
+
+    #[test]
+    fn live_tool_service_registry_preserves_null_storage_for_diff() {
+        let service = tool_service_registry_from_live_value(&json!({
+            "service_id": "observability-mcp",
+            "hostname": null,
+            "tailscale_ip": null,
+            "lan_ip": null,
+            "mcp_port": 9201,
+            "mcp_path": null
+        }))
+        .expect("live tool service should parse");
+
+        assert_eq!(service.hostname, None);
+        assert_eq!(service.tailscale_ip, None);
+        assert_eq!(service.lan_ip, None);
+        assert_eq!(service.mcp_path, None);
+    }
+
+    #[test]
+    fn diff_marks_live_null_tool_service_storage_for_update() {
+        let desired: DesiredToolServiceRegistry = serde_json::from_value(json!({
+            "service_id": "observability-mcp",
+            "hostname": "studio-1",
+            "mcp_port": 9201
+        }))
+        .expect("desired tool service should deserialize");
+        let live = tool_service_registry_from_live_value(&json!({
+            "service_id": "observability-mcp",
+            "hostname": "studio-1",
+            "tailscale_ip": null,
+            "lan_ip": null,
+            "mcp_port": 9201,
+            "mcp_path": null
+        }))
+        .expect("live tool service should parse");
+
+        let diff = diff_collection(
+            vec![(desired.service_id.clone(), &desired)],
+            vec![(live.service_id.clone(), &live)],
+        );
+
+        assert_eq!(diff.update, vec!["observability-mcp"]);
+        assert!(diff.unchanged.is_empty());
+    }
 
     #[test]
     fn deprecated_backend_capability_fields_are_ignored_for_diff_equality() {

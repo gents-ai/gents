@@ -1,8 +1,3 @@
-type ToolServiceEntry {
-    name: String
-    description: String
-}
-
 type ToolServiceRegistry {
     service_id: String @index(unique: true)
     display_name: String
@@ -12,7 +7,6 @@ type ToolServiceRegistry {
     lan_ip: String
     mcp_port: Int
     mcp_path: String
-    tools: [ToolServiceEntry]
     status: String @index
     version: String
     updated_at: DateTime @index(direction: DESC)
