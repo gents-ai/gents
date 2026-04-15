@@ -1,11 +1,10 @@
 use super::*;
 use crate::admission::{self, AdmissionCallContext, AdmissionRegistry, CallKind};
-use crate::backend_provider::{
-    build_completion_client, build_openrouter_client, BackendProviderKind,
-};
+use crate::backend_provider::BackendProviderKind;
 use crate::completion_factory::build_admitted_agent;
 use crate::config::BehaviorConfig;
 use crate::tool_surface::ToolSurface;
+use anyhow::Context;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn execute_task_standalone(
@@ -96,8 +95,6 @@ async fn execute_materialized_task(
     let api_key = behavior.completion_client_api_key()?;
     let prompt_builder = LayeredPromptBuilder::new(behavior, tool_surface);
     let preamble = prompt_builder.preamble().to_string();
-    let tool_names = tool_surface.tool_names();
-    behavior.ensure_tool_calling_support_for_names(&tool_names)?;
     let tools = tool_surface.build_tools(tool_runtime)?;
 
     let stream_writer = DefraStreamWriter::new(
@@ -119,11 +116,16 @@ async fn execute_materialized_task(
 
     let response_text = match behavior.backend_provider_kind {
         BackendProviderKind::OpenAiCompatible => {
-            let client = build_completion_client(
-                behavior.backend_provider_kind,
-                &behavior.backend_endpoint,
-                &api_key,
-            )?;
+            let build_context = format!(
+                "building OpenAI-compatible completion client for behavior {} against {}",
+                behavior.name, behavior.backend_endpoint
+            );
+            let client: rig::providers::openai::CompletionsClient =
+                rig::providers::openai::CompletionsClient::builder()
+                    .api_key(&api_key)
+                    .base_url(&behavior.backend_endpoint)
+                    .build()
+                    .with_context(|| build_context.clone())?;
             let agent = build_admitted_agent(
                 client,
                 admission_registry.clone(),
@@ -152,7 +154,16 @@ async fn execute_materialized_task(
             .await?
         }
         BackendProviderKind::OpenRouter => {
-            let client = build_openrouter_client(&behavior.backend_endpoint, &api_key)?;
+            let build_context = format!(
+                "building OpenRouter completion client for behavior {} against {}",
+                behavior.name, behavior.backend_endpoint
+            );
+            let client: rig::providers::openrouter::Client =
+                rig::providers::openrouter::Client::builder()
+                    .api_key(&api_key)
+                    .base_url(&behavior.backend_endpoint)
+                    .build()
+                    .with_context(|| build_context.clone())?;
             let agent = build_admitted_agent(
                 client,
                 admission_registry.clone(),

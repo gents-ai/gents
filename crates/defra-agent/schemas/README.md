@@ -51,7 +51,7 @@ These documents describe what the agent is and how it should run.
 | `AgentPrincipal` | `agent_did`, `default_behavior_id`, `enabled` | `default_behavior_id -> AgentBehavior.behavior_id` | `init`, config/bootstrap code | document boot, reconcile, scheduler/task defaulting |
 | `AgentBehavior` | `behavior_id`, `agent_did`, `backend_id`, `model_name`, `tool_selection_id`, `inference_profile_id`, `enabled` | `backend_id -> InferenceBackend.backend_id`, `tool_selection_id -> ToolSelection.selection_id`, `inference_profile_id -> InferenceProfile.profile_id` | `init`, `config behavior set`, library builder/document bootstrap | runtime resolution, request routing, scheduler |
 | `ToolSelection` | `selection_id`, `agent_did`, file/bash/meta/delegate fields | selected by `AgentBehavior.tool_selection_id` | `init`, `config tools set` | tool-surface resolution |
-| `InferenceBackend` | `backend_id`, `provider_kind`, `endpoint`, `api_key`, `api_key_env_var`, capability flags, `max_concurrent`, `max_queue_depth`, `enabled`, `models`, `probe_status` | selected by `AgentBehavior.backend_id` | `init`, `config backend set`, desired-state manifests, health/probe updates | startup readiness, runtime execution, scheduler execution |
+| `InferenceBackend` | `backend_id`, `provider_kind`, `endpoint`, `api_key`, `api_key_env_var`, `max_concurrent`, `max_queue_depth`, `enabled`, `models`, `probe_status` | selected by `AgentBehavior.backend_id` | `init`, `config backend set`, desired-state manifests, health/probe updates | startup readiness, runtime execution, scheduler execution |
 | `InferenceProfile` | `profile_id`, context/output/temperature/deadline fields | selected by `AgentBehavior.inference_profile_id` | `config profile set` | runtime resolution |
 
 ### Runtime Observability
@@ -169,6 +169,9 @@ Some boundaries are deliberate:
   runtime.
 - backend credentials may currently be stored either directly in
   `InferenceBackend.api_key` or indirectly via `InferenceBackend.api_key_env_var`.
+- backend capability metadata is not stored in `InferenceBackend`; provider
+  behavior is delegated to rig and deprecated manifest/import fields are
+  ignored during config migration.
 - `AgentRuntime` is the runtime’s published observability surface, not desired
   configuration.
 

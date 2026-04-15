@@ -8,9 +8,7 @@ use rig::completion::CompletionModel;
 use rig::completion::Prompt;
 use rig::tool::ToolDyn;
 
-use crate::backend_provider::{
-    build_completion_client, build_openrouter_client, BackendProviderKind,
-};
+use crate::backend_provider::BackendProviderKind;
 use crate::completion_factory::build_agent;
 use crate::config::BehaviorConfig;
 use crate::hook::{DefraSessionHook, FailurePolicy};
@@ -48,25 +46,19 @@ pub async fn run_openai_oneshot_with_tools(
 
     let mut tools = tool_surface.build_tools(&tool_runtime)?;
     tools.extend(extra_tools);
-    let tool_names = tools
-        .iter()
-        .map(|tool| tool.name().to_string())
-        .collect::<Vec<_>>();
-    behavior.ensure_tool_calling_support_for_names(&tool_names)?;
 
     match behavior.backend_provider_kind {
         BackendProviderKind::OpenAiCompatible => {
-            let client = build_completion_client(
-                behavior.backend_provider_kind,
-                &behavior.backend_endpoint,
-                &api_key,
-            )
-            .with_context(|| {
-                format!(
-                    "building completion client for behavior {} against {}",
-                    behavior.name, behavior.backend_endpoint
-                )
-            })?;
+            let build_context = format!(
+                "building OpenAI-compatible completion client for behavior {} against {}",
+                behavior.name, behavior.backend_endpoint
+            );
+            let client: rig::providers::openai::CompletionsClient =
+                rig::providers::openai::CompletionsClient::builder()
+                    .api_key(&api_key)
+                    .base_url(&behavior.backend_endpoint)
+                    .build()
+                    .with_context(|| build_context.clone())?;
             run_oneshot_with_completion_client(
                 node,
                 behavior,
@@ -79,13 +71,16 @@ pub async fn run_openai_oneshot_with_tools(
             .await
         }
         BackendProviderKind::OpenRouter => {
-            let client = build_openrouter_client(&behavior.backend_endpoint, &api_key)
-                .with_context(|| {
-                    format!(
-                        "building OpenRouter completion client for behavior {} against {}",
-                        behavior.name, behavior.backend_endpoint
-                    )
-                })?;
+            let build_context = format!(
+                "building OpenRouter completion client for behavior {} against {}",
+                behavior.name, behavior.backend_endpoint
+            );
+            let client: rig::providers::openrouter::Client =
+                rig::providers::openrouter::Client::builder()
+                    .api_key(&api_key)
+                    .base_url(&behavior.backend_endpoint)
+                    .build()
+                    .with_context(|| build_context.clone())?;
             run_oneshot_with_completion_client(
                 node,
                 behavior,

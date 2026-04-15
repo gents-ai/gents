@@ -4,7 +4,8 @@ use std::path::Path;
 
 use anyhow::{anyhow, Result};
 use defra_agent::BackendProviderKind;
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
 const AGENT_PRINCIPAL_FILE: &str = "agent-principal.json";
@@ -60,8 +61,7 @@ pub(crate) struct DesiredToolSelection {
     pub(crate) delegate_to: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct DesiredInferenceBackend {
     pub(crate) backend_id: String,
     pub(crate) name: String,
@@ -74,16 +74,52 @@ pub(crate) struct DesiredInferenceBackend {
     #[serde(default = "default_max_queue_depth")]
     pub(crate) max_queue_depth: i64,
     pub(crate) enabled: bool,
-    #[serde(default = "default_true")]
-    pub(crate) supports_tool_calls: bool,
-    #[serde(default = "default_true")]
-    pub(crate) supports_streaming: bool,
-    #[serde(default)]
-    pub(crate) supports_structured_outputs: bool,
-    #[serde(default)]
-    pub(crate) supports_json_schema: bool,
     #[serde(default)]
     pub(crate) models: Vec<String>,
+}
+
+impl<'de> Deserialize<'de> for DesiredInferenceBackend {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            backend_id: String,
+            name: String,
+            #[serde(default)]
+            provider_kind: BackendProviderKind,
+            endpoint: String,
+            api_key: Option<String>,
+            api_key_env_var: Option<String>,
+            max_concurrent: i64,
+            #[serde(default = "default_max_queue_depth")]
+            max_queue_depth: i64,
+            enabled: bool,
+            #[serde(default)]
+            models: Vec<String>,
+        }
+
+        let mut value = Value::deserialize(deserializer)?;
+        if let Value::Object(object) = &mut value {
+            strip_deprecated_inference_backend_fields(object);
+        }
+        let wire = Wire::deserialize(value).map_err(D::Error::custom)?;
+
+        Ok(Self {
+            backend_id: wire.backend_id,
+            name: wire.name,
+            provider_kind: wire.provider_kind,
+            endpoint: wire.endpoint,
+            api_key: wire.api_key,
+            api_key_env_var: wire.api_key_env_var,
+            max_concurrent: wire.max_concurrent,
+            max_queue_depth: wire.max_queue_depth,
+            enabled: wire.enabled,
+            models: wire.models,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -807,10 +843,6 @@ pub(crate) fn manifest_from_export_bundle(
                         "max_concurrent",
                         "max_queue_depth",
                         "enabled",
-                        "supports_tool_calls",
-                        "supports_streaming",
-                        "supports_structured_outputs",
-                        "supports_json_schema",
                         "models",
                     ],
                 )
@@ -1071,12 +1103,21 @@ fn normalize_manifest(manifest: &mut DesiredStateManifest) {
     }
 }
 
-fn default_true() -> bool {
-    true
-}
-
 fn default_max_queue_depth() -> i64 {
     100
+}
+
+pub(crate) fn strip_deprecated_inference_backend_fields(object: &mut Map<String, Value>) {
+    for field in [
+        "supports_tool_calls",
+        "supports_streaming",
+        "supports_structured_outputs",
+        "supports_json_schema",
+        "context_window",
+        "max_output_tokens",
+    ] {
+        object.remove(field);
+    }
 }
 
 fn desired_from_value<T>(value: &Value, allowed_fields: &[&str]) -> Result<T>
@@ -1184,5 +1225,132 @@ where
         update,
         unchanged,
         live_only,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn deprecated_backend_capability_fields_are_ignored_for_diff_equality() {
+        let with_deprecated: DesiredInferenceBackend = serde_json::from_value(json!({
+            "backend_id": "local",
+            "name": "Local",
+            "provider_kind": "OpenAiCompatible",
+            "endpoint": "http://127.0.0.1:11434/v1",
+            "api_key": null,
+            "api_key_env_var": null,
+            "max_concurrent": 1,
+            "max_queue_depth": 100,
+            "enabled": true,
+            "supports_tool_calls": false,
+            "supports_streaming": false,
+            "supports_structured_outputs": true,
+            "supports_json_schema": true,
+            "context_window": 32768,
+            "max_output_tokens": 4096,
+            "models": ["test-model"]
+        }))
+        .expect("deprecated fields should deserialize");
+
+        let current: DesiredInferenceBackend = serde_json::from_value(json!({
+            "backend_id": "local",
+            "name": "Local",
+            "provider_kind": "OpenAiCompatible",
+            "endpoint": "http://127.0.0.1:11434/v1",
+            "api_key": null,
+            "api_key_env_var": null,
+            "max_concurrent": 1,
+            "max_queue_depth": 100,
+            "enabled": true,
+            "models": ["test-model"]
+        }))
+        .expect("current fields should deserialize");
+
+        assert_eq!(with_deprecated, current);
+        assert_eq!(
+            serde_json::to_value(with_deprecated).unwrap(),
+            serde_json::to_value(current).unwrap()
+        );
+    }
+
+    #[test]
+    fn validate_manifest_accepts_deprecated_backend_capability_fields() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let root = tempdir.path();
+
+        fs::write(
+            root.join(AGENT_PRINCIPAL_FILE),
+            r#"{
+                "agent_did": "did:defra-agent:test",
+                "display_name": "Test",
+                "default_behavior_id": "did:defra-agent:test:default",
+                "enabled": true
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join(AGENT_BEHAVIORS_FILE),
+            r#"[{
+                "behavior_id": "did:defra-agent:test:default",
+                "agent_did": "did:defra-agent:test",
+                "display_name": "Default",
+                "system_prompt": null,
+                "backend_id": "local",
+                "model_name": "test-model",
+                "tool_selection_id": "tools",
+                "inference_profile_id": null,
+                "compaction_strategy": null,
+                "compaction_threshold": null,
+                "enabled": true
+            }]"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join(TOOL_SELECTIONS_FILE),
+            r#"[{
+                "selection_id": "tools",
+                "agent_did": "did:defra-agent:test",
+                "display_name": "Tools",
+                "enable_file_tools": false,
+                "file_tools_mode": "ReadOnly",
+                "file_tool_root": null,
+                "enable_bash": false,
+                "bash_mode": "Off",
+                "cli_tool_names": [],
+                "enable_meta_tools": true,
+                "delegate_to": []
+            }]"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join(INFERENCE_BACKENDS_FILE),
+            r#"[{
+                "backend_id": "local",
+                "name": "Local",
+                "provider_kind": "OpenAiCompatible",
+                "endpoint": "http://127.0.0.1:11434/v1",
+                "api_key": null,
+                "api_key_env_var": null,
+                "max_concurrent": 1,
+                "max_queue_depth": 100,
+                "enabled": true,
+                "supports_tool_calls": true,
+                "supports_streaming": true,
+                "supports_structured_outputs": false,
+                "supports_json_schema": false,
+                "models": ["test-model"]
+            }]"#,
+        )
+        .unwrap();
+
+        let report = validate_manifest_root(root);
+        assert!(
+            report.ok,
+            "expected valid manifest, got {:?}",
+            report.errors
+        );
     }
 }

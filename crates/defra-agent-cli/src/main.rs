@@ -163,7 +163,8 @@ Examples:
   defra-agent config import agent-config.json
   cat agent-config.json | defra-agent config import
   defra-agent config import agent-config.json --override";
-const CONFIG_EXPORT_FORMAT: &str = "defra-agent-config/v1";
+const CONFIG_EXPORT_FORMAT_V1: &str = "defra-agent-config/v1";
+const CONFIG_EXPORT_FORMAT: &str = "defra-agent-config/v2";
 const STANDARD_READONLY_SYSTEM_PROMPT: &str = r#"You are a terminal-native engineering and operations agent running for the user inside a local DefraDB runtime.
 
 Your job is to help with software work, debugging, codebase inspection, incident triage, release checks, infrastructure investigation, and general computer operations tasks. Build your conclusions from real evidence: inspect files, logs, command output, and tool results before making claims.
@@ -216,7 +217,7 @@ const EXPORT_AGENT_PRINCIPAL_FIELDS: &str =
 const EXPORT_AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled created_at";
 const EXPORT_TOOL_SELECTION_FIELDS: &str = "selection_id agent_did display_name enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode cli_tool_names enable_meta_tools delegate_to";
 const EXPORT_INFERENCE_BACKEND_FIELDS: &str =
-    "backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled supports_tool_calls supports_streaming supports_structured_outputs supports_json_schema models last_probe probe_status";
+    "backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models last_probe probe_status";
 const EXPORT_INFERENCE_PROFILE_FIELDS: &str =
     "profile_id display_name context_window max_output_tokens max_turns temperature stream_batch_ms deadline_duration_secs";
 const EXPORT_TOOL_SERVICE_REGISTRY_FIELDS: &str =
@@ -354,14 +355,6 @@ struct InitArgs {
     max_concurrent: i64,
     #[arg(long, default_value_t = default_backend_max_queue_depth())]
     max_queue_depth: i64,
-    #[arg(long)]
-    supports_tool_calls: Option<bool>,
-    #[arg(long)]
-    supports_streaming: Option<bool>,
-    #[arg(long)]
-    supports_structured_outputs: Option<bool>,
-    #[arg(long)]
-    supports_json_schema: Option<bool>,
     #[arg(
         long,
         default_value_t = false,
@@ -658,10 +651,6 @@ struct ResolvedBackendConfig {
     endpoint: String,
     api_key: Option<String>,
     api_key_env_var: Option<String>,
-    supports_tool_calls: bool,
-    supports_streaming: bool,
-    supports_structured_outputs: bool,
-    supports_json_schema: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -685,10 +674,6 @@ struct InitSummary {
     model_name: String,
     max_concurrent: i64,
     max_queue_depth: i64,
-    supports_tool_calls: bool,
-    supports_streaming: bool,
-    supports_structured_outputs: bool,
-    supports_json_schema: bool,
     default_behavior_id: String,
     tool_selection_id: String,
     tool_ceiling: ToolCeilingArg,
@@ -876,10 +861,6 @@ struct InferenceBackendUpsertDocument {
     max_concurrent: i64,
     max_queue_depth: i64,
     enabled: bool,
-    supports_tool_calls: bool,
-    supports_streaming: bool,
-    supports_structured_outputs: bool,
-    supports_json_schema: bool,
     models_on_add: Vec<String>,
     models_on_update: Option<Vec<String>>,
     probe_status: String,
@@ -919,22 +900,6 @@ async fn write_inference_backend_document(
             "enabled: {}",
             graphql_bool_literal(backend.enabled)
         )),
-        Some(format!(
-            "supports_tool_calls: {}",
-            graphql_bool_literal(backend.supports_tool_calls)
-        )),
-        Some(format!(
-            "supports_streaming: {}",
-            graphql_bool_literal(backend.supports_streaming)
-        )),
-        Some(format!(
-            "supports_structured_outputs: {}",
-            graphql_bool_literal(backend.supports_structured_outputs)
-        )),
-        Some(format!(
-            "supports_json_schema: {}",
-            graphql_bool_literal(backend.supports_json_schema)
-        )),
         models_update,
         Some(format!(
             r#"probe_status: "{}""#,
@@ -959,10 +924,6 @@ async fn write_inference_backend_document(
                     max_concurrent: {max_concurrent},
                     max_queue_depth: {max_queue_depth},
                     enabled: {enabled},
-                    supports_tool_calls: {supports_tool_calls},
-                    supports_streaming: {supports_streaming},
-                    supports_structured_outputs: {supports_structured_outputs},
-                    supports_json_schema: {supports_json_schema},
                     {models_add},
                     probe_status: "{probe_status}"
                 }},
@@ -981,10 +942,6 @@ async fn write_inference_backend_document(
         max_concurrent = backend.max_concurrent,
         max_queue_depth = backend.max_queue_depth,
         enabled = graphql_bool_literal(backend.enabled),
-        supports_tool_calls = graphql_bool_literal(backend.supports_tool_calls),
-        supports_streaming = graphql_bool_literal(backend.supports_streaming),
-        supports_structured_outputs = graphql_bool_literal(backend.supports_structured_outputs),
-        supports_json_schema = graphql_bool_literal(backend.supports_json_schema),
         models_add = models_add,
         probe_status = escape_graphql_string(&backend.probe_status),
         update_fields = update_fields,
@@ -1893,14 +1850,6 @@ struct BackendUpsertArgs {
     max_queue_depth: i64,
     #[arg(long, default_value_t = true)]
     enabled: bool,
-    #[arg(long)]
-    supports_tool_calls: Option<bool>,
-    #[arg(long)]
-    supports_streaming: Option<bool>,
-    #[arg(long)]
-    supports_structured_outputs: Option<bool>,
-    #[arg(long)]
-    supports_json_schema: Option<bool>,
     #[arg(long, default_value = "healthy")]
     probe_status: String,
 }
@@ -2689,10 +2638,6 @@ async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
         max_concurrent: args.max_concurrent,
         max_queue_depth: args.max_queue_depth,
         enabled: args.enabled,
-        supports_tool_calls: backend.supports_tool_calls,
-        supports_streaming: backend.supports_streaming,
-        supports_structured_outputs: backend.supports_structured_outputs,
-        supports_json_schema: backend.supports_json_schema,
         models_on_add: vec!["default".to_string()],
         models_on_update: None,
         probe_status: args.probe_status.clone(),
@@ -2709,10 +2654,6 @@ async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
         "max_concurrent": args.max_concurrent,
         "max_queue_depth": args.max_queue_depth,
         "enabled": args.enabled,
-        "supports_tool_calls": backend.supports_tool_calls,
-        "supports_streaming": backend.supports_streaming,
-        "supports_structured_outputs": backend.supports_structured_outputs,
-        "supports_json_schema": backend.supports_json_schema,
         "probe_status": args.probe_status,
     });
     print_json(&output)?;
@@ -3759,8 +3700,6 @@ fn collect_unavailable_behaviors_from_bundle(
             continue;
         };
 
-        let provider_kind = string_field(backend, "provider_kind")
-            .unwrap_or_else(|| "OpenAiCompatible".to_string());
         let probe_status =
             string_field(backend, "probe_status").unwrap_or_else(|| "unknown".to_string());
         let backend_enabled = bool_field(backend, "enabled", true);
@@ -3786,7 +3725,7 @@ fn collect_unavailable_behaviors_from_bundle(
             }
         }
 
-        let tool_selection = match string_field(behavior, "tool_selection_id") {
+        let _tool_selection = match string_field(behavior, "tool_selection_id") {
             Some(selection_id) => match tool_selection_rows.get(&selection_id) {
                 Some(row) => Some(*row),
                 None => {
@@ -3801,27 +3740,6 @@ fn collect_unavailable_behaviors_from_bundle(
             },
             None => None,
         };
-
-        if !bool_field(backend, "supports_streaming", true) {
-            unavailable.insert(
-                behavior_id.clone(),
-                format!(
-                    "behavior {behavior_id} backend {backend_id} ({provider_kind}) does not support streaming and cannot serve interactive runtime requests"
-                ),
-            );
-            continue;
-        }
-
-        if selection_requires_tool_calling(tool_selection)
-            && !bool_field(backend, "supports_tool_calls", true)
-        {
-            unavailable.insert(
-                behavior_id.clone(),
-                format!(
-                    "behavior {behavior_id} backend {backend_id} ({provider_kind}) does not support tool calling but resolved tools are enabled"
-                ),
-            );
-        }
     }
 
     unavailable
@@ -3833,24 +3751,6 @@ fn string_field(row: &Value, field: &str) -> Option<String> {
 
 fn bool_field(row: &Value, field: &str, default: bool) -> bool {
     row.get(field).and_then(Value::as_bool).unwrap_or(default)
-}
-
-fn selection_requires_tool_calling(selection: Option<&Value>) -> bool {
-    let Some(selection) = selection else {
-        return true;
-    };
-
-    bool_field(selection, "enable_meta_tools", true)
-        || bool_field(selection, "enable_file_tools", false)
-        || bool_field(selection, "enable_bash", false)
-        || selection
-            .get("cli_tool_names")
-            .and_then(Value::as_array)
-            .is_some_and(|rows| !rows.is_empty())
-        || selection
-            .get("delegate_to")
-            .and_then(Value::as_array)
-            .is_some_and(|rows| !rows.is_empty())
 }
 
 fn persisted_p2p_status(runtime_state: Option<&StoredRuntimeState>) -> Value {
@@ -4544,11 +4444,17 @@ fn read_config_import_bundle(path: Option<&Path>) -> Result<ConfigExportBundle> 
             contents
         }
     };
-    serde_json::from_str(&contents).context("decoding config import JSON")
+    let mut bundle: ConfigExportBundle =
+        serde_json::from_str(&contents).context("decoding config import JSON")?;
+    migrate_config_import_bundle(&mut bundle);
+    Ok(bundle)
 }
 
 fn validate_config_import_bundle(bundle: &ConfigExportBundle) -> Result<()> {
-    if bundle.format != CONFIG_EXPORT_FORMAT {
+    if !matches!(
+        bundle.format.as_str(),
+        CONFIG_EXPORT_FORMAT | CONFIG_EXPORT_FORMAT_V1
+    ) {
         anyhow::bail!(
             "unsupported config import format {}; expected {}",
             bundle.format,
@@ -4559,6 +4465,17 @@ fn validate_config_import_bundle(bundle: &ConfigExportBundle) -> Result<()> {
         anyhow::bail!("config import is missing agent_did");
     }
     Ok(())
+}
+
+fn migrate_config_import_bundle(bundle: &mut ConfigExportBundle) {
+    for backend in &mut bundle.inference_backends {
+        if let Some(object) = backend.as_object_mut() {
+            desired_state::strip_deprecated_inference_backend_fields(object);
+        }
+    }
+    if bundle.format == CONFIG_EXPORT_FORMAT_V1 {
+        bundle.format = CONFIG_EXPORT_FORMAT.to_string();
+    }
 }
 
 async fn apply_import_collection(
@@ -4660,6 +4577,7 @@ fn sanitize_import_document(collection_name: &str, doc: &Value, for_update: bool
 
     match collection_name {
         "InferenceBackend" => {
+            desired_state::strip_deprecated_inference_backend_fields(&mut object);
             object.remove("last_probe");
             if for_update {
                 object.insert("last_probe".to_string(), Value::Null);
@@ -5090,23 +5008,6 @@ async fn diagnose_backend(backend: &Value, required_models: Vec<String>) -> Valu
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let supports_tool_calls = backend
-        .get("supports_tool_calls")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
-    let supports_streaming = backend
-        .get("supports_streaming")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
-    let supports_structured_outputs = backend
-        .get("supports_structured_outputs")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let supports_json_schema = backend
-        .get("supports_json_schema")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-
     let mut ok = enabled && probe_status == "healthy";
     let mut error = None::<String>;
     let mut discovered_models = Vec::<String>::new();
@@ -5153,10 +5054,6 @@ async fn diagnose_backend(backend: &Value, required_models: Vec<String>) -> Valu
                     "probe_status": probe_status,
                     "api_key": raw_api_key.as_ref().map(|_| "<redacted>"),
                     "api_key_env_var": api_key_env_var,
-                    "supports_tool_calls": supports_tool_calls,
-                    "supports_streaming": supports_streaming,
-                    "supports_structured_outputs": supports_structured_outputs,
-                    "supports_json_schema": supports_json_schema,
                     "required_models": required_models,
                     "discovered_models": discovered_models,
                     "error": error,
@@ -5200,10 +5097,6 @@ async fn diagnose_backend(backend: &Value, required_models: Vec<String>) -> Valu
         "probe_status": probe_status,
         "api_key": raw_api_key.as_ref().map(|_| "<redacted>"),
         "api_key_env_var": api_key_env_var,
-        "supports_tool_calls": supports_tool_calls,
-        "supports_streaming": supports_streaming,
-        "supports_structured_outputs": supports_structured_outputs,
-        "supports_json_schema": supports_json_schema,
         "required_models": required_models,
         "discovered_models": discovered_models,
         "error": error,
@@ -5346,10 +5239,6 @@ async fn initialize_runtime_home(
         max_concurrent: args.max_concurrent,
         max_queue_depth: args.max_queue_depth,
         enabled: true,
-        supports_tool_calls: backend.supports_tool_calls,
-        supports_streaming: backend.supports_streaming,
-        supports_structured_outputs: backend.supports_structured_outputs,
-        supports_json_schema: backend.supports_json_schema,
         models_on_add: vec![model_name.to_string()],
         models_on_update: Some(vec![model_name.to_string()]),
         probe_status: "healthy".to_string(),
@@ -5385,10 +5274,6 @@ async fn initialize_runtime_home(
         model_name: model_name.to_string(),
         max_concurrent: args.max_concurrent,
         max_queue_depth: args.max_queue_depth,
-        supports_tool_calls: backend.supports_tool_calls,
-        supports_streaming: backend.supports_streaming,
-        supports_structured_outputs: backend.supports_structured_outputs,
-        supports_json_schema: backend.supports_json_schema,
         default_behavior_id,
         tool_selection_id,
         tool_ceiling,
@@ -5456,10 +5341,6 @@ fn resolve_init_backend_config(args: &InitArgs) -> Result<ResolvedBackendConfig>
         args.provider_kind.as_deref(),
         args.api_key.as_deref(),
         args.api_key_env_var.as_deref(),
-        args.supports_tool_calls,
-        args.supports_streaming,
-        args.supports_structured_outputs,
-        args.supports_json_schema,
         BackendResolutionMode::Init,
     )
 }
@@ -5471,10 +5352,6 @@ fn resolve_backend_upsert_config(args: &BackendUpsertArgs) -> Result<ResolvedBac
         args.provider_kind.as_deref(),
         args.api_key.as_deref(),
         args.api_key_env_var.as_deref(),
-        args.supports_tool_calls,
-        args.supports_streaming,
-        args.supports_structured_outputs,
-        args.supports_json_schema,
         BackendResolutionMode::ConfigWrite,
     )
 }
@@ -5485,10 +5362,6 @@ fn resolve_backend_config_with_preset(
     explicit_provider_kind: Option<&str>,
     explicit_api_key: Option<&str>,
     explicit_api_key_env_var: Option<&str>,
-    explicit_supports_tool_calls: Option<bool>,
-    explicit_supports_streaming: Option<bool>,
-    explicit_supports_structured_outputs: Option<bool>,
-    explicit_supports_json_schema: Option<bool>,
     mode: BackendResolutionMode,
 ) -> Result<ResolvedBackendConfig> {
     let api_key = normalize_optional_string(explicit_api_key);
@@ -5507,12 +5380,6 @@ fn resolve_backend_config_with_preset(
         endpoint,
         api_key,
         api_key_env_var,
-        supports_tool_calls: explicit_supports_tool_calls
-            .unwrap_or_else(default_backend_supports_tool_calls),
-        supports_streaming: explicit_supports_streaming
-            .unwrap_or_else(default_backend_supports_streaming),
-        supports_structured_outputs: explicit_supports_structured_outputs.unwrap_or(false),
-        supports_json_schema: explicit_supports_json_schema.unwrap_or(false),
     })
 }
 
@@ -5587,14 +5454,6 @@ enum BackendResolutionMode {
 
 fn default_backend_max_queue_depth() -> i64 {
     100
-}
-
-fn default_backend_supports_tool_calls() -> bool {
-    true
-}
-
-fn default_backend_supports_streaming() -> bool {
-    true
 }
 
 fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
@@ -6637,17 +6496,13 @@ mod tests {
                     "backend_id": "backend-unhealthy",
                     "provider_kind": "OpenAiCompatible",
                     "enabled": true,
-                    "probe_status": "unknown",
-                    "supports_streaming": true,
-                    "supports_tool_calls": true
+                    "probe_status": "unknown"
                 }),
                 json!({
                     "backend_id": "backend-healthy",
                     "provider_kind": "OpenAiCompatible",
                     "enabled": true,
-                    "probe_status": "healthy",
-                    "supports_streaming": true,
-                    "supports_tool_calls": true
+                    "probe_status": "healthy"
                 }),
             ],
             Vec::new(),
@@ -6673,22 +6528,91 @@ mod tests {
     }
 
     #[test]
-    fn selection_requires_tool_calling_defaults_meta_tools_on() {
-        assert!(selection_requires_tool_calling(None));
-        assert!(selection_requires_tool_calling(Some(&json!({
-            "enable_meta_tools": true,
-            "enable_file_tools": false,
-            "enable_bash": false,
-            "cli_tool_names": [],
-            "delegate_to": []
-        }))));
-        assert!(!selection_requires_tool_calling(Some(&json!({
-            "enable_meta_tools": false,
-            "enable_file_tools": false,
-            "enable_bash": false,
-            "cli_tool_names": [],
-            "delegate_to": []
-        }))));
+    fn sanitize_inference_backend_drops_deprecated_capability_fields() {
+        let input = json!({
+            "backend_id": "local",
+            "name": "Local",
+            "provider_kind": "OpenAiCompatible",
+            "endpoint": "http://127.0.0.1:11434/v1",
+            "api_key": null,
+            "api_key_env_var": null,
+            "max_concurrent": 1,
+            "max_queue_depth": 100,
+            "enabled": true,
+            "supports_tool_calls": true,
+            "supports_streaming": true,
+            "supports_structured_outputs": false,
+            "supports_json_schema": false,
+            "context_window": 32768,
+            "max_output_tokens": 4096,
+            "last_probe": "2026-04-15T00:00:00Z",
+            "models": ["test-model"],
+            "probe_status": "healthy"
+        });
+
+        let out = sanitize_import_document("InferenceBackend", &input, false).unwrap();
+        let obj = out.as_object().unwrap();
+        for field in [
+            "supports_tool_calls",
+            "supports_streaming",
+            "supports_structured_outputs",
+            "supports_json_schema",
+            "context_window",
+            "max_output_tokens",
+            "last_probe",
+        ] {
+            assert!(!obj.contains_key(field), "{field} should be stripped");
+        }
+        assert_eq!(obj.get("backend_id").and_then(Value::as_str), Some("local"));
+    }
+
+    #[test]
+    fn read_config_import_bundle_migrates_v1_backend_capability_fields() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("config.json");
+        fs::write(
+            &path,
+            serde_json::to_string(&json!({
+                "format": CONFIG_EXPORT_FORMAT_V1,
+                "agent_did": "did:defra-agent:test",
+                "exported_at": "2026-04-15T00:00:00Z",
+                "access_mode": "local",
+                "agent_principal": null,
+                "agent_behaviors": [],
+                "tool_selections": [],
+                "inference_backends": [{
+                    "backend_id": "local",
+                    "name": "Local",
+                    "provider_kind": "OpenAiCompatible",
+                    "endpoint": "http://127.0.0.1:11434/v1",
+                    "api_key": null,
+                    "api_key_env_var": null,
+                    "max_concurrent": 1,
+                    "max_queue_depth": 100,
+                    "enabled": true,
+                    "supports_tool_calls": true,
+                    "supports_streaming": true,
+                    "supports_structured_outputs": false,
+                    "supports_json_schema": false,
+                    "models": ["test-model"],
+                    "probe_status": "healthy"
+                }],
+                "inference_profiles": [],
+                "tool_service_registries": [],
+                "scheduled_tasks": []
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let bundle = read_config_import_bundle(Some(&path)).unwrap();
+        validate_config_import_bundle(&bundle).unwrap();
+        assert_eq!(bundle.format, CONFIG_EXPORT_FORMAT);
+        let backend = bundle.inference_backends[0].as_object().unwrap();
+        assert!(!backend.contains_key("supports_tool_calls"));
+        assert!(!backend.contains_key("supports_streaming"));
+        assert!(!backend.contains_key("supports_structured_outputs"));
+        assert!(!backend.contains_key("supports_json_schema"));
     }
 
     #[test]

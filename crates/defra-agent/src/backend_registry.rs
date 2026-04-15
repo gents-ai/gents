@@ -23,10 +23,6 @@ pub struct InferenceBackend {
     pub max_concurrent: i64,
     pub max_queue_depth: i64,
     pub enabled: bool,
-    pub supports_tool_calls: bool,
-    pub supports_streaming: bool,
-    pub supports_structured_outputs: bool,
-    pub supports_json_schema: bool,
     pub models: Vec<String>,
     pub probe_status: String,
 }
@@ -77,22 +73,6 @@ impl InferenceBackend {
                 .get("enabled")
                 .and_then(|value| value.as_bool())
                 .ok_or_else(|| anyhow::anyhow!("enabled is required"))?,
-            supports_tool_calls: v
-                .get("supports_tool_calls")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(true),
-            supports_streaming: v
-                .get("supports_streaming")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(true),
-            supports_structured_outputs: v
-                .get("supports_structured_outputs")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false),
-            supports_json_schema: v
-                .get("supports_json_schema")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false),
             models: v
                 .get("models")
                 .and_then(|value| value.as_array())
@@ -133,7 +113,7 @@ pub(crate) async fn lookup_backend_record(
 ) -> Result<Option<(String, InferenceBackend)>> {
     let escaped_id = escape_graphql_string(backend_id);
     let query = format!(
-        r#"query {{ InferenceBackend(filter: {{backend_id: {{_eq: "{}"}}}}) {{ _docID backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled supports_tool_calls supports_streaming supports_structured_outputs supports_json_schema models probe_status }} }}"#,
+        r#"query {{ InferenceBackend(filter: {{backend_id: {{_eq: "{}"}}}}) {{ _docID backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models probe_status }} }}"#,
         escaped_id
     );
 
@@ -168,7 +148,7 @@ pub(crate) async fn lookup_backend_by_doc_id(
 ) -> Result<Option<(String, InferenceBackend)>> {
     let escaped_id = escape_graphql_string(doc_id);
     let query = format!(
-        r#"query {{ InferenceBackend(filter: {{_docID: {{_eq: "{}"}}}}, limit: 1) {{ _docID backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled supports_tool_calls supports_streaming supports_structured_outputs supports_json_schema models probe_status }} }}"#,
+        r#"query {{ InferenceBackend(filter: {{_docID: {{_eq: "{}"}}}}, limit: 1) {{ _docID backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models probe_status }} }}"#,
         escaped_id
     );
 
@@ -212,10 +192,6 @@ pub(crate) async fn list_backend_records(
             max_concurrent
             max_queue_depth
             enabled
-            supports_tool_calls
-            supports_streaming
-            supports_structured_outputs
-            supports_json_schema
             models
             probe_status
         }
@@ -254,7 +230,7 @@ pub(crate) async fn list_backend_records(
 
 /// Query all enabled backends from DefraDB.
 pub async fn list_enabled_backends(node: &EmbeddedNode) -> Result<Vec<InferenceBackend>> {
-    let query = r#"query { InferenceBackend(filter: {enabled: {_eq: true}}) { backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled supports_tool_calls supports_streaming supports_structured_outputs supports_json_schema probe_status models last_probe } }"#;
+    let query = r#"query { InferenceBackend(filter: {enabled: {_eq: true}}) { backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled probe_status models last_probe } }"#;
 
     let resp = node.execute(query).await;
     if resp.has_errors() {

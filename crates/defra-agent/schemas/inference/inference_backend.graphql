@@ -12,10 +12,6 @@ type InferenceBackend {
     max_concurrent: Int
     max_queue_depth: Int
     enabled: Boolean @index
-    supports_tool_calls: Boolean
-    supports_streaming: Boolean
-    supports_structured_outputs: Boolean
-    supports_json_schema: Boolean
     models: [String]
     last_probe: DateTime
     probe_status: String @index
