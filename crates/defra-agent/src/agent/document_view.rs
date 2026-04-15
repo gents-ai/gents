@@ -9,10 +9,10 @@ use crate::backend_registry::{list_backend_records, lookup_backend_by_doc_id, In
 use crate::config::BehaviorConfig;
 use crate::document_config::{
     default_behavior_id_for_agent, ensure_agent_principal, list_agent_behavior_records,
-    list_inference_profile_records, list_tool_selection_records, load_agent_behavior_by_doc_id,
-    load_agent_principal_by_doc_id, load_agent_principal_record, load_inference_profile_by_doc_id,
-    load_tool_selection_by_doc_id, AgentBehavior, AgentPrincipal, InferenceProfile,
-    ToolSelectionDocument,
+    list_all_tool_selection_records, list_inference_profile_records, list_tool_selection_records,
+    load_agent_behavior_by_doc_id, load_agent_principal_by_doc_id, load_agent_principal_record,
+    load_inference_profile_by_doc_id, load_tool_selection_by_doc_id, load_tool_selection_record,
+    AgentBehavior, AgentPrincipal, InferenceProfile, ToolSelectionDocument,
 };
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::tool_surface::ToolSelection;
@@ -119,9 +119,33 @@ impl DocumentRuntimeView {
     }
 
     pub(crate) fn has_unresolved_behavior_references(&self) -> bool {
-        self.behaviors
-            .values()
-            .any(|record| !behavior_references_ready(self, &record.value))
+        !self.pending_visibility_details().is_empty()
+    }
+
+    pub(crate) fn pending_visibility_details(&self) -> Vec<String> {
+        let mut details = Vec::new();
+
+        if let Some(default_behavior_id) = self
+            .principal
+            .value
+            .default_behavior_id
+            .as_deref()
+            .and_then(non_empty)
+        {
+            if !self.behaviors.contains_key(default_behavior_id) {
+                details.push(format!(
+                    "principal {} references missing default behavior {}",
+                    self.principal.value.agent_did, default_behavior_id
+                ));
+            }
+        }
+
+        for record in self.behaviors.values() {
+            collect_unresolved_behavior_references(self, &record.value, &mut details);
+        }
+
+        details.sort();
+        details
     }
 }
 
@@ -186,7 +210,97 @@ pub(crate) async fn load_document_runtime_view(
         );
     }
 
+    hydrate_referenced_tool_selections(node, agent_did, &mut view).await?;
+
     Ok(view)
+}
+
+async fn hydrate_referenced_tool_selections(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    view: &mut DocumentRuntimeView,
+) -> Result<()> {
+    let missing_selection_ids = view
+        .behaviors
+        .values()
+        .filter_map(|record| {
+            record
+                .value
+                .tool_selection_id
+                .as_deref()
+                .and_then(non_empty)
+        })
+        .filter(|selection_id| !view.tool_selections.contains_key(*selection_id))
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+
+    for selection_id in missing_selection_ids {
+        let selection = match load_tool_selection_record(node, &selection_id).await? {
+            Some(selection) => selection,
+            None => match find_tool_selection_by_scan(node, &selection_id).await? {
+                Some(selection) => {
+                    tracing::warn!(
+                        agent_did = %agent_did,
+                        selection_id = %selection_id,
+                        "runtime document view recovered referenced tool selection through unfiltered scan"
+                    );
+                    selection
+                }
+                None => continue,
+            },
+        };
+        let (doc_id, selection) = selection;
+        if selection.agent_did != agent_did {
+            tracing::warn!(
+                agent_did = %agent_did,
+                selection_id = %selection_id,
+                selection_agent_did = %selection.agent_did,
+                "runtime document view ignored referenced tool selection owned by another agent"
+            );
+            continue;
+        }
+        tracing::warn!(
+            agent_did = %agent_did,
+            selection_id = %selection_id,
+            doc_id = %doc_id,
+            "runtime document view recovered referenced tool selection missing from agent filter query"
+        );
+        view.tool_selections.insert(
+            selection.selection_id.clone(),
+            DocumentRecord {
+                doc_id,
+                value: selection,
+            },
+        );
+    }
+
+    Ok(())
+}
+
+async fn find_tool_selection_by_scan(
+    node: &EmbeddedNode,
+    selection_id: &str,
+) -> Result<Option<(String, ToolSelectionDocument)>> {
+    let rows = list_all_tool_selection_records(node).await?;
+    let available = rows
+        .iter()
+        .take(8)
+        .map(|(_, selection)| format!("{}@{}", selection.selection_id, selection.agent_did))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let available_count = rows.len();
+    let found = rows
+        .into_iter()
+        .find(|(_, selection)| selection.selection_id == selection_id);
+    if found.is_none() {
+        tracing::warn!(
+            selection_id = %selection_id,
+            available_count = available_count,
+            available = %available,
+            "runtime document view scan did not find referenced tool selection"
+        );
+    }
+    Ok(found)
 }
 
 pub(crate) async fn apply_control_update(
@@ -438,26 +552,48 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     ))
 }
 
+fn collect_unresolved_behavior_references(
+    view: &DocumentRuntimeView,
+    behavior: &AgentBehavior,
+    details: &mut Vec<String>,
+) {
+    if let Some(selection_id) = behavior.tool_selection_id.as_deref().and_then(non_empty) {
+        if !view.tool_selections.contains_key(selection_id) {
+            details.push(format!(
+                "behavior {} references missing tool selection {}",
+                behavior.behavior_id, selection_id
+            ));
+        }
+    }
+
+    if let Some(profile_id) = behavior.inference_profile_id.as_deref().and_then(non_empty) {
+        if !view.inference_profiles.contains_key(profile_id) {
+            details.push(format!(
+                "behavior {} references missing inference profile {}",
+                behavior.behavior_id, profile_id
+            ));
+        }
+    }
+
+    if let Some(backend_id) = behavior.backend_id.as_deref().and_then(non_empty) {
+        if !view.backends.contains_key(backend_id) {
+            details.push(format!(
+                "behavior {} references missing backend {}",
+                behavior.behavior_id, backend_id
+            ));
+        }
+    }
+}
+
 fn behavior_references_ready(view: &DocumentRuntimeView, behavior: &AgentBehavior) -> bool {
-    let tool_selection_ready = behavior
-        .tool_selection_id
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .is_none_or(|selection_id| view.tool_selections.contains_key(selection_id));
+    let mut details = Vec::new();
+    collect_unresolved_behavior_references(view, behavior, &mut details);
+    details.is_empty()
+}
 
-    let inference_profile_ready = behavior
-        .inference_profile_id
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .is_none_or(|profile_id| view.inference_profiles.contains_key(profile_id));
-
-    let backend_ready = behavior
-        .backend_id
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .is_none_or(|backend_id| view.backends.contains_key(backend_id));
-
-    tool_selection_ready && inference_profile_ready && backend_ready
+fn non_empty(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
 }
 
 #[cfg(test)]

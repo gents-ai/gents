@@ -17,6 +17,48 @@ struct LiveSubmissionCase {
     session_id: String,
 }
 
+fn assert_chat_context(
+    driver: &AuditDriver,
+    deployment: &LiveDeploymentCase<'_>,
+    session_id: Option<&str>,
+) {
+    assert_eq!(
+        driver.app.state.chat.selected_peer_id.as_deref(),
+        Some(deployment.peer_id.as_str())
+    );
+    assert_eq!(
+        driver.app.state.chat.selected_agent_did.as_deref(),
+        Some(deployment.agent_did.as_str())
+    );
+    assert_eq!(
+        driver.app.state.chat.selected_session_id.as_deref(),
+        session_id
+    );
+    assert_eq!(driver.app.state.chat.selected_behavior_override, None);
+    assert_eq!(driver.app.state.chat.last_submission_error, None);
+}
+
+fn assert_operator_context(
+    driver: &AuditDriver,
+    deployment: &LiveDeploymentCase<'_>,
+    section: OperatorSection,
+    entity_id: Option<&str>,
+) {
+    assert_eq!(
+        driver.app.state.operator.selected_peer_id.as_deref(),
+        Some(deployment.peer_id.as_str())
+    );
+    assert_eq!(
+        driver.app.state.operator.selected_agent_did.as_deref(),
+        Some(deployment.agent_did.as_str())
+    );
+    assert_eq!(driver.app.state.operator.selected_section, section);
+    assert_eq!(
+        driver.app.state.operator.selected_entity_id.as_deref(),
+        entity_id
+    );
+}
+
 fn live_deployment_case(deployment: &LiveRemoteDeployment) -> LiveDeploymentCase<'_> {
     LiveDeploymentCase {
         label: deployment.label.clone(),
@@ -41,14 +83,7 @@ fn submit_live_prompt_for_deployment(
         &deployment_target,
     )?;
     driver.click_target(&deployment_target);
-    assert_eq!(
-        driver.app.state.chat.selected_peer_id.as_deref(),
-        Some(deployment.peer_id.as_str())
-    );
-    assert_eq!(
-        driver.app.state.chat.selected_agent_did.as_deref(),
-        Some(deployment.agent_did.as_str())
-    );
+    assert_chat_context(driver, deployment, None);
 
     if driver.app.state.chat.selected_session_id.is_none() {
         let existing_session_id = driver.app.client.as_ref().and_then(|client| {
@@ -93,6 +128,7 @@ fn submit_live_prompt_for_deployment(
         .selected_session_id
         .clone()
         .ok_or_else(|| anyhow!("missing selected session after live submission"))?;
+    assert_chat_context(driver, deployment, Some(session_id.as_str()));
 
     wait_for_value(
         &format!("request {request_id} bound to {}", deployment.label),
@@ -193,6 +229,317 @@ fn refreshed_runtime_generation(
         .snapshot()
         .latest_runtime(agent_did)
         .and_then(|row| row.router_generation.or(row.active_generation))
+}
+
+fn compact_field(value: Option<&str>) -> String {
+    match value {
+        Some(value) if value.len() > 96 => format!("{}...", &value[..96]),
+        Some(value) => value.to_string(),
+        None => "<none>".to_string(),
+    }
+}
+
+fn describe_live_config_state(
+    runtime: &tokio::runtime::Runtime,
+    core: &ClientCore,
+    label: &str,
+    agent_did: &str,
+    docs: &LiveAgentDocs,
+    switch_backend_id: &str,
+    switch_profile_id: &str,
+) -> String {
+    let refresh = runtime
+        .block_on(core.refresh_store())
+        .map(|_| "ok".to_string())
+        .unwrap_or_else(|error| format!("error={error:#}"));
+    let snapshot = core.store().snapshot();
+    let behavior = snapshot
+        .behaviors
+        .iter()
+        .find(|row| row.behavior_id == docs.behavior_id)
+        .map(|row| {
+            format!(
+                "behavior(agent={:?}, backend={:?}, model={:?}, tool_selection={:?}, profile={:?}, enabled={:?}, prompt={})",
+                row.agent_did,
+                row.backend_id,
+                row.model_name,
+                row.tool_selection_id,
+                row.inference_profile_id,
+                row.enabled,
+                compact_field(row.system_prompt.as_deref())
+            )
+        })
+        .unwrap_or_else(|| "behavior=<missing>".to_string());
+    let original_backend = snapshot
+        .inference_backends
+        .iter()
+        .find(|row| row.backend_id == docs.backend_id)
+        .map(|row| {
+            format!(
+                "original_backend(enabled={:?}, probe={:?}, endpoint={}, models={:?})",
+                row.enabled,
+                row.probe_status.as_deref(),
+                compact_field(row.endpoint.as_deref()),
+                row.models
+            )
+        })
+        .unwrap_or_else(|| "original_backend=<missing>".to_string());
+    let switch_backend = snapshot
+        .inference_backends
+        .iter()
+        .find(|row| row.backend_id == switch_backend_id)
+        .map(|row| {
+            format!(
+                "switch_backend(enabled={:?}, probe={:?}, endpoint={}, models={:?})",
+                row.enabled,
+                row.probe_status.as_deref(),
+                compact_field(row.endpoint.as_deref()),
+                row.models
+            )
+        })
+        .unwrap_or_else(|| "switch_backend=<missing>".to_string());
+    let tool_selection = snapshot
+        .tool_selections
+        .iter()
+        .find(|row| row.selection_id == docs.tool_selection_id)
+        .map(|row| {
+            format!(
+                "tools(agent={:?}, enable_file={:?}, file_mode={:?}, enable_bash={:?}, bash_mode={:?}, cli={:?}, meta={:?})",
+                row.agent_did,
+                row.enable_file_tools,
+                row.file_tools_mode,
+                row.enable_bash,
+                row.bash_mode,
+                row.cli_tool_names,
+                row.enable_meta_tools
+            )
+        })
+        .unwrap_or_else(|| "tools=<missing>".to_string());
+    let switch_profile = snapshot
+        .inference_profiles
+        .iter()
+        .find(|row| row.profile_id == switch_profile_id)
+        .map(|row| {
+            format!(
+                "switch_profile(max_output={:?}, max_turns={:?}, temp={:?})",
+                row.max_output_tokens, row.max_turns, row.temperature
+            )
+        })
+        .unwrap_or_else(|| "switch_profile=<missing>".to_string());
+    let runtime_row = snapshot
+        .latest_runtime(agent_did)
+        .map(|row| {
+            format!(
+                "runtime(process={:?}, phase={:?}, active={:?}, router={:?}, default={:?}, runnable={:?}, unavailable={:?}, result={:?}, error={})",
+                row.process_state,
+                row.reconcile_phase,
+                row.active_generation,
+                row.router_generation,
+                row.default_behavior_id,
+                row.runnable_behavior_count,
+                row.unavailable_behavior_count,
+                row.last_reconcile_result,
+                compact_field(row.last_reconcile_error.as_deref())
+            )
+        })
+        .unwrap_or_else(|| "runtime=<missing>".to_string());
+
+    format!(
+        "{label}: refresh={refresh}; {runtime_row}; {behavior}; {original_backend}; {switch_backend}; {tool_selection}; {switch_profile}"
+    )
+}
+
+fn wait_for_stable_runtime_ready(
+    runtime: &tokio::runtime::Runtime,
+    core: &ClientCore,
+    label: &str,
+    agent_did: &str,
+    stable_for: Duration,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    let mut stable_since = None;
+    let mut stable_generation = None;
+    let mut last_state = "runtime=<missing>".to_string();
+
+    loop {
+        runtime.block_on(core.refresh_store())?;
+        let snapshot = core.store().snapshot();
+        let runtime_row = snapshot.latest_runtime(agent_did);
+        let ready = runtime_row.is_some_and(|row| {
+            let generation = row.router_generation.or(row.active_generation);
+            last_state = format!(
+                "generation={generation:?} runnable={:?} unavailable={:?} result={:?} error={}",
+                row.runnable_behavior_count,
+                row.unavailable_behavior_count,
+                row.last_reconcile_result,
+                compact_field(row.last_reconcile_error.as_deref())
+            );
+            generation.is_some()
+                && row.runnable_behavior_count == Some(1)
+                && row.unavailable_behavior_count == Some(0)
+                && row
+                    .last_reconcile_error
+                    .as_deref()
+                    .unwrap_or_default()
+                    .trim()
+                    .is_empty()
+        });
+        let generation =
+            runtime_row.and_then(|row| row.router_generation.or(row.active_generation));
+
+        if ready {
+            match (stable_generation, generation) {
+                (Some(stable), Some(current)) if stable == current => {}
+                (_, Some(current)) => {
+                    stable_generation = Some(current);
+                    stable_since = Some(Instant::now());
+                }
+                _ => {
+                    stable_generation = None;
+                    stable_since = None;
+                }
+            }
+            if stable_since.is_some_and(|since| since.elapsed() >= stable_for) {
+                return Ok(());
+            }
+        } else {
+            stable_generation = None;
+            stable_since = None;
+        }
+
+        if Instant::now() >= deadline {
+            anyhow::bail!(
+                "timed out waiting for stable runtime ready for {label}; last={last_state}"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
+fn assert_live_submission_rows(
+    runtime: &tokio::runtime::Runtime,
+    core: &ClientCore,
+    label: &str,
+    deployment: &LiveDeploymentCase<'_>,
+    submission: &LiveSubmissionCase,
+    expected_backend_id: Option<&str>,
+) -> Result<()> {
+    wait_for_value(
+        &format!("{label} submission rows for {}", deployment.label),
+        Duration::from_secs(30),
+        || {
+            runtime.block_on(core.refresh_store()).ok()?;
+            let snapshot = core.store().snapshot();
+            let request = snapshot
+                .requests
+                .iter()
+                .find(|row| row.request_id == submission.request_id)?;
+            let request_ok = request.agent_did.as_deref() == Some(deployment.agent_did.as_str())
+                && request.behavior_id.as_deref() == Some(deployment.docs.behavior_id.as_str())
+                && request.session_id.as_deref() == Some(submission.session_id.as_str())
+                && expected_backend_id
+                    .is_none_or(|backend_id| request.backend_id.as_deref() == Some(backend_id))
+                && request.content.as_deref() == Some(submission.prompt.as_str())
+                && request
+                    .failure_reason
+                    .as_deref()
+                    .unwrap_or_default()
+                    .trim()
+                    .is_empty()
+                && !matches!(
+                    request.lifecycle_state.as_deref(),
+                    Some("failed" | "dead" | "superseded")
+                );
+
+            let response = snapshot.latest_response_for_request(&submission.request_id)?;
+            let response_ok = response.agent_did.as_deref() == Some(deployment.agent_did.as_str())
+                && response.behavior_id.as_deref() == Some(deployment.docs.behavior_id.as_str())
+                && response.session_id.as_deref() == Some(submission.session_id.as_str())
+                && matches!(response.status.as_deref(), Some("complete" | "completed"))
+                && response
+                    .error_message
+                    .as_deref()
+                    .unwrap_or_default()
+                    .trim()
+                    .is_empty()
+                && response
+                    .content
+                    .as_deref()
+                    .is_some_and(|content| content.contains(submission.response.trim()));
+
+            let conversation_ok = snapshot
+                .conversations
+                .iter()
+                .find(|row| row.session_id == submission.session_id)
+                .is_some_and(|row| {
+                    row.agent_did.as_deref() == Some(deployment.agent_did.as_str())
+                        && row.behavior_id.as_deref() == Some(deployment.docs.behavior_id.as_str())
+                        && row.latest_request_id.as_deref() == Some(submission.request_id.as_str())
+                });
+            let session_ok = snapshot
+                .sessions
+                .iter()
+                .find(|row| row.session_id == submission.session_id)
+                .is_some_and(|row| {
+                    row.behavior_id.as_deref() == Some(deployment.docs.behavior_id.as_str())
+                });
+
+            (request_ok && response_ok && conversation_ok && session_ok).then_some(())
+        },
+    )
+}
+
+fn assert_live_deployment_default_config(
+    runtime: &tokio::runtime::Runtime,
+    core: &ClientCore,
+    label: &str,
+    deployment: &LiveDeploymentCase<'_>,
+    expected_model_name: &str,
+) -> Result<()> {
+    wait_for_value(
+        &format!("{label} default config remains isolated"),
+        Duration::from_secs(30),
+        || {
+            runtime.block_on(core.refresh_store()).ok()?;
+            let snapshot = core.store().snapshot();
+            let behavior_ok = snapshot
+                .behaviors
+                .iter()
+                .find(|row| row.behavior_id == deployment.docs.behavior_id)
+                .is_some_and(|row| {
+                    row.agent_did.as_deref() == Some(deployment.agent_did.as_str())
+                        && row.backend_id.as_deref() == Some(deployment.docs.backend_id.as_str())
+                        && row.inference_profile_id.as_deref()
+                            == Some(deployment.docs.inference_profile_id.as_str())
+                        && row.tool_selection_id.as_deref()
+                            == Some(deployment.docs.tool_selection_id.as_str())
+                        && row.model_name.as_deref() == Some(expected_model_name)
+                        && row.enabled == Some(true)
+                });
+            let tools_ok = snapshot
+                .tool_selections
+                .iter()
+                .find(|row| row.selection_id == deployment.docs.tool_selection_id)
+                .is_some_and(|row| {
+                    row.agent_did.as_deref() == Some(deployment.agent_did.as_str())
+                        && row.enable_file_tools == Some(false)
+                        && row.enable_bash == Some(false)
+                        && row.cli_tool_names.is_empty()
+                        && row.delegate_to.is_empty()
+                });
+            let profile_ok = snapshot
+                .inference_profiles
+                .iter()
+                .find(|row| row.profile_id == deployment.docs.inference_profile_id)
+                .is_some_and(|row| {
+                    row.max_output_tokens == Some(1024)
+                        && row.max_turns == Some(12)
+                        && row.temperature == Some(0.0)
+                });
+            (behavior_ok && tools_ok && profile_ok).then_some(())
+        },
+    )
 }
 
 #[test]
@@ -297,6 +644,187 @@ fn desktop_app_p2p_replicates_chat_request_path_to_remote_core() -> Result<()> {
     runtime.block_on(remote_core.shutdown())?;
     runtime.block_on(desktop_core.shutdown())?;
     Ok(())
+}
+
+#[test]
+fn desktop_app_p2p_replicates_config_docs_to_multiple_remote_cores() -> Result<()> {
+    init_test_tracing();
+
+    let runtime = test_runtime()?;
+    let tempdir = tempfile::tempdir()?;
+    let desktop_core = runtime.block_on(ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path().join("desktop")),
+        live_multi_server_core_options(),
+    ))?;
+    let alpha_core = runtime.block_on(ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path().join("remote-alpha")),
+        live_multi_server_core_options(),
+    ))?;
+    let bravo_core = runtime.block_on(ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path().join("remote-bravo")),
+        live_multi_server_core_options(),
+    ))?;
+
+    runtime.block_on(configure_live_test_replicators(
+        &desktop_core,
+        &alpha_core,
+        "config alpha",
+    ))?;
+    runtime.block_on(configure_live_test_replicators(
+        &desktop_core,
+        &bravo_core,
+        "config bravo",
+    ))?;
+
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let alpha_agent_did = format!("did:defra:p2p-config-alpha-{suffix}");
+    let bravo_agent_did = format!("did:defra:p2p-config-bravo-{suffix}");
+    let alpha_docs =
+        seed_desktop_origin_config_docs(&runtime, &desktop_core, "alpha", &alpha_agent_did)?;
+    let bravo_docs =
+        seed_desktop_origin_config_docs(&runtime, &desktop_core, "bravo", &bravo_agent_did)?;
+
+    wait_for_remote_config_docs(
+        &runtime,
+        &alpha_core,
+        "alpha remote owner config docs",
+        &alpha_docs,
+    )?;
+    wait_for_remote_config_docs(
+        &runtime,
+        &bravo_core,
+        "bravo remote owner config docs",
+        &bravo_docs,
+    )?;
+
+    runtime.block_on(desktop_core.shutdown())?;
+    runtime.block_on(alpha_core.shutdown())?;
+    runtime.block_on(bravo_core.shutdown())?;
+    Ok(())
+}
+
+fn seed_desktop_origin_config_docs(
+    runtime: &tokio::runtime::Runtime,
+    core: &ClientCore,
+    label: &str,
+    agent_did: &str,
+) -> Result<LiveAgentDocs> {
+    let behavior_id = format!("{agent_did}:default");
+    let backend_id = format!("{label}-desktop-origin-backend");
+    let tool_selection_id = format!("{behavior_id}:tools");
+    let inference_profile_id = format!("{behavior_id}:profile");
+    let scheduled_task_id = format!("{behavior_id}:scheduled-task");
+
+    runtime.block_on(async {
+        core.save_backend(&InferenceBackendRow {
+            backend_id: backend_id.clone(),
+            name: Some(format!("{label} Desktop Origin Backend")),
+            provider_kind: Some("openai-compatible".to_string()),
+            endpoint: Some("http://127.0.0.1:65535/v1".to_string()),
+            api_key: None,
+            api_key_env_var: None,
+            max_concurrent: Some(1),
+            max_queue_depth: Some(10),
+            enabled: Some(true),
+            models: vec!["local-test-model".to_string()],
+            last_probe: None,
+            probe_status: Some("healthy".to_string()),
+        })
+        .await?;
+        core.save_inference_profile(&InferenceProfileRow {
+            profile_id: inference_profile_id.clone(),
+            display_name: Some(format!("{label} Desktop Origin Profile")),
+            context_window: Some(8192),
+            max_output_tokens: Some(256),
+            max_turns: Some(8),
+            temperature: Some(0.0),
+            stream_batch_ms: Some(50),
+            deadline_duration_secs: Some(60),
+        })
+        .await?;
+        core.save_tool_selection(&ToolSelectionRow {
+            selection_id: tool_selection_id.clone(),
+            agent_did: Some(agent_did.to_string()),
+            display_name: Some(format!("{label} Desktop Origin Tools")),
+            enable_file_tools: Some(true),
+            file_tools_mode: Some("ReadOnly".to_string()),
+            enable_bash: Some(false),
+            bash_mode: Some("Off".to_string()),
+            cli_tool_names: vec![],
+            enable_meta_tools: Some(false),
+            delegate_to: vec![],
+        })
+        .await?;
+        core.save_behavior(&AgentBehaviorRow {
+            behavior_id: behavior_id.clone(),
+            agent_did: Some(agent_did.to_string()),
+            display_name: Some(format!("{label} Desktop Origin Behavior")),
+            system_prompt: Some(format!("{label} desktop-origin config replication probe")),
+            backend_id: Some(backend_id.clone()),
+            model_name: Some("local-test-model".to_string()),
+            tool_selection_id: Some(tool_selection_id.clone()),
+            inference_profile_id: Some(inference_profile_id.clone()),
+            compaction_strategy: Some("StripThenSummarize".to_string()),
+            compaction_threshold: Some(0.9),
+            enabled: Some(true),
+            created_at: Some(chrono::Utc::now().to_rfc3339()),
+        })
+        .await?;
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    Ok(LiveAgentDocs {
+        behavior_id,
+        backend_id,
+        tool_selection_id,
+        inference_profile_id,
+        scheduled_task_id,
+    })
+}
+
+fn wait_for_remote_config_docs(
+    runtime: &tokio::runtime::Runtime,
+    remote_core: &ClientCore,
+    label: &str,
+    docs: &LiveAgentDocs,
+) -> Result<()> {
+    wait_for_value(label, Duration::from_secs(60), || {
+        let has_rows = runtime
+            .block_on(async {
+                Ok::<_, anyhow::Error>(
+                    query_has_row_by_unique_field(
+                        remote_core,
+                        "InferenceBackend",
+                        "backend_id",
+                        &docs.backend_id,
+                    )
+                    .await?
+                        && query_has_row_by_unique_field(
+                            remote_core,
+                            "InferenceProfile",
+                            "profile_id",
+                            &docs.inference_profile_id,
+                        )
+                        .await?
+                        && query_has_row_by_unique_field(
+                            remote_core,
+                            "ToolSelection",
+                            "selection_id",
+                            &docs.tool_selection_id,
+                        )
+                        .await?
+                        && query_has_row_by_unique_field(
+                            remote_core,
+                            "AgentBehavior",
+                            "behavior_id",
+                            &docs.behavior_id,
+                        )
+                        .await?,
+                )
+            })
+            .ok()?;
+        has_rows.then_some(())
+    })
 }
 
 #[test]
@@ -928,22 +1456,50 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
         let driver = &mut fixture.driver;
         alpha_submission = submit_live_prompt_for_deployment(driver, &alpha, "ALPHA_SERVER_READY")?;
         bravo_submission = submit_live_prompt_for_deployment(driver, &bravo, "BRAVO_SERVER_READY")?;
+    }
+    assert_live_submission_rows(
+        fixture.runtime.as_ref(),
+        desktop_client.as_ref(),
+        "desktop alpha initial",
+        &alpha,
+        &alpha_submission,
+        None,
+    )?;
+    assert_live_submission_rows(
+        fixture.runtime.as_ref(),
+        alpha.remote_core,
+        "remote alpha initial",
+        &alpha,
+        &alpha_submission,
+        None,
+    )?;
+    assert_live_submission_rows(
+        fixture.runtime.as_ref(),
+        desktop_client.as_ref(),
+        "desktop bravo initial",
+        &bravo,
+        &bravo_submission,
+        None,
+    )?;
+    assert_live_submission_rows(
+        fixture.runtime.as_ref(),
+        bravo.remote_core,
+        "remote bravo initial",
+        &bravo,
+        &bravo_submission,
+        None,
+    )?;
 
+    {
+        let driver = &mut fixture.driver;
         driver.open_activity(Activity::Chat);
         driver.click_target(&audit::targets::chat_deployment(&alpha.peer_id));
         driver.click_target(&audit::targets::chat_agent(&alpha.agent_did));
-        assert_eq!(
-            driver.app.state.chat.selected_agent_did.as_deref(),
-            Some(alpha.agent_did.as_str())
-        );
-        assert_eq!(driver.app.state.chat.selected_session_id.as_deref(), None);
+        assert_chat_context(driver, &alpha, None);
         let alpha_texts = driver.click_target(&audit::targets::chat_conversation(
             &alpha_submission.session_id,
         ));
-        assert_eq!(
-            driver.app.state.chat.selected_session_id.as_deref(),
-            Some(alpha_submission.session_id.as_str())
-        );
+        assert_chat_context(driver, &alpha, Some(alpha_submission.session_id.as_str()));
         assert!(alpha_texts
             .iter()
             .any(|text| text.contains(alpha_submission.prompt.as_str())));
@@ -959,18 +1515,11 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
 
         driver.click_target(&audit::targets::chat_deployment(&bravo.peer_id));
         driver.click_target(&audit::targets::chat_agent(&bravo.agent_did));
-        assert_eq!(
-            driver.app.state.chat.selected_agent_did.as_deref(),
-            Some(bravo.agent_did.as_str())
-        );
-        assert_eq!(driver.app.state.chat.selected_session_id.as_deref(), None);
+        assert_chat_context(driver, &bravo, None);
         let bravo_texts = driver.click_target(&audit::targets::chat_conversation(
             &bravo_submission.session_id,
         ));
-        assert_eq!(
-            driver.app.state.chat.selected_session_id.as_deref(),
-            Some(bravo_submission.session_id.as_str())
-        );
+        assert_chat_context(driver, &bravo, Some(bravo_submission.session_id.as_str()));
         assert!(bravo_texts
             .iter()
             .any(|text| text.contains(bravo_submission.prompt.as_str())));
@@ -986,18 +1535,11 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
 
         driver.open_activity(Activity::Operator);
         driver.click_target(&audit::targets::operator_deployment(&alpha.peer_id));
-        assert_eq!(
-            driver.app.state.operator.selected_agent_did.as_deref(),
-            Some(alpha.agent_did.as_str())
-        );
         driver.click_target(&audit::targets::operator_agent(&alpha.agent_did));
-        assert_eq!(
-            driver.app.state.operator.selected_agent_did.as_deref(),
-            Some(alpha.agent_did.as_str())
-        );
         driver.click_target(&audit::targets::operator_section(
             OperatorSection::Behaviors,
         ));
+        assert_operator_context(driver, &alpha, OperatorSection::Behaviors, None);
         driver.wait_for_target(
             "alpha behavior row after operator server switch",
             Duration::from_secs(10),
@@ -1005,26 +1547,52 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
         )?;
         assert!(!driver.has_target(&audit::targets::operator_entity(&bravo.docs.behavior_id)));
         driver.click_target(&audit::targets::operator_entity(&alpha.docs.behavior_id));
+        assert_operator_context(
+            driver,
+            &alpha,
+            OperatorSection::Behaviors,
+            Some(alpha.docs.behavior_id.as_str()),
+        );
         match driver.app.state.operator.draft.as_ref() {
             Some(OperatorDraft::Behavior(draft)) => {
                 assert_eq!(draft.behavior_id, alpha.docs.behavior_id);
                 assert_eq!(draft.agent_did, alpha.agent_did);
                 assert_eq!(draft.backend_id, alpha.docs.backend_id);
+                assert_eq!(draft.tool_selection_id, alpha.docs.tool_selection_id);
+                assert_eq!(draft.inference_profile_id, alpha.docs.inference_profile_id);
             }
             other => panic!("expected alpha behavior draft, got {other:?}"),
         }
 
         driver.click_target(&audit::targets::operator_section(OperatorSection::Backends));
+        assert_operator_context(driver, &alpha, OperatorSection::Backends, None);
         driver.wait_for_target(
             "alpha backend row after operator server switch",
             Duration::from_secs(10),
             &audit::targets::operator_entity(&alpha.docs.backend_id),
         )?;
         assert!(!driver.has_target(&audit::targets::operator_entity(&bravo.docs.backend_id)));
+        driver.click_target(&audit::targets::operator_entity(&alpha.docs.backend_id));
+        assert_operator_context(
+            driver,
+            &alpha,
+            OperatorSection::Backends,
+            Some(alpha.docs.backend_id.as_str()),
+        );
+        match driver.app.state.operator.draft.as_ref() {
+            Some(OperatorDraft::Backend(draft)) => {
+                assert_eq!(draft.backend_id, alpha.docs.backend_id);
+                assert_eq!(draft.provider_kind, backend.provider_kind.as_str());
+                assert_eq!(draft.endpoint, backend.endpoint);
+                assert!(draft.models.contains(backend.model_name.as_str()));
+            }
+            other => panic!("expected alpha backend draft, got {other:?}"),
+        }
 
         driver.click_target(&audit::targets::operator_section(
             OperatorSection::InferenceProfiles,
         ));
+        assert_operator_context(driver, &alpha, OperatorSection::InferenceProfiles, None);
         driver.wait_for_target(
             "alpha inference profile row after operator server switch",
             Duration::from_secs(10),
@@ -1033,20 +1601,58 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
         assert!(!driver.has_target(&audit::targets::operator_entity(
             &bravo.docs.inference_profile_id
         )));
+        driver.click_target(&audit::targets::operator_entity(
+            &alpha.docs.inference_profile_id,
+        ));
+        assert_operator_context(
+            driver,
+            &alpha,
+            OperatorSection::InferenceProfiles,
+            Some(alpha.docs.inference_profile_id.as_str()),
+        );
+        match driver.app.state.operator.draft.as_ref() {
+            Some(OperatorDraft::InferenceProfile(draft)) => {
+                assert_eq!(draft.profile_id, alpha.docs.inference_profile_id);
+                assert_eq!(draft.max_output_tokens, "1024");
+                assert_eq!(draft.max_turns, "12");
+            }
+            other => panic!("expected alpha inference profile draft, got {other:?}"),
+        }
+
+        driver.click_target(&audit::targets::operator_section(
+            OperatorSection::RequestTimeline,
+        ));
+        assert_operator_context(driver, &alpha, OperatorSection::RequestTimeline, None);
+        driver.wait_for_target(
+            "alpha request row after operator server switch",
+            Duration::from_secs(10),
+            &audit::targets::operator_entity(&alpha_submission.request_id),
+        )?;
+        assert!(!driver.has_target(&audit::targets::operator_entity(
+            &bravo_submission.request_id
+        )));
+        let alpha_timeline_texts = driver.click_target(&audit::targets::operator_entity(
+            &alpha_submission.request_id,
+        ));
+        assert_operator_context(
+            driver,
+            &alpha,
+            OperatorSection::RequestTimeline,
+            Some(alpha_submission.request_id.as_str()),
+        );
+        assert!(alpha_timeline_texts
+            .iter()
+            .any(|text| text.contains(alpha_submission.prompt.as_str())));
+        assert!(alpha_timeline_texts
+            .iter()
+            .any(|text| text.contains(alpha_submission.response.trim())));
 
         driver.click_target(&audit::targets::operator_deployment(&bravo.peer_id));
-        assert_eq!(
-            driver.app.state.operator.selected_agent_did.as_deref(),
-            Some(bravo.agent_did.as_str())
-        );
         driver.click_target(&audit::targets::operator_agent(&bravo.agent_did));
-        assert_eq!(
-            driver.app.state.operator.selected_agent_did.as_deref(),
-            Some(bravo.agent_did.as_str())
-        );
         driver.click_target(&audit::targets::operator_section(
             OperatorSection::Behaviors,
         ));
+        assert_operator_context(driver, &bravo, OperatorSection::Behaviors, None);
         driver.wait_for_target(
             "bravo behavior row after operator server switch",
             Duration::from_secs(10),
@@ -1054,26 +1660,52 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
         )?;
         assert!(!driver.has_target(&audit::targets::operator_entity(&alpha.docs.behavior_id)));
         driver.click_target(&audit::targets::operator_entity(&bravo.docs.behavior_id));
+        assert_operator_context(
+            driver,
+            &bravo,
+            OperatorSection::Behaviors,
+            Some(bravo.docs.behavior_id.as_str()),
+        );
         match driver.app.state.operator.draft.as_ref() {
             Some(OperatorDraft::Behavior(draft)) => {
                 assert_eq!(draft.behavior_id, bravo.docs.behavior_id);
                 assert_eq!(draft.agent_did, bravo.agent_did);
                 assert_eq!(draft.backend_id, bravo.docs.backend_id);
+                assert_eq!(draft.tool_selection_id, bravo.docs.tool_selection_id);
+                assert_eq!(draft.inference_profile_id, bravo.docs.inference_profile_id);
             }
             other => panic!("expected bravo behavior draft, got {other:?}"),
         }
 
         driver.click_target(&audit::targets::operator_section(OperatorSection::Backends));
+        assert_operator_context(driver, &bravo, OperatorSection::Backends, None);
         driver.wait_for_target(
             "bravo backend row after operator server switch",
             Duration::from_secs(10),
             &audit::targets::operator_entity(&bravo.docs.backend_id),
         )?;
         assert!(!driver.has_target(&audit::targets::operator_entity(&alpha.docs.backend_id)));
+        driver.click_target(&audit::targets::operator_entity(&bravo.docs.backend_id));
+        assert_operator_context(
+            driver,
+            &bravo,
+            OperatorSection::Backends,
+            Some(bravo.docs.backend_id.as_str()),
+        );
+        match driver.app.state.operator.draft.as_ref() {
+            Some(OperatorDraft::Backend(draft)) => {
+                assert_eq!(draft.backend_id, bravo.docs.backend_id);
+                assert_eq!(draft.provider_kind, backend.provider_kind.as_str());
+                assert_eq!(draft.endpoint, backend.endpoint);
+                assert!(draft.models.contains(backend.model_name.as_str()));
+            }
+            other => panic!("expected bravo backend draft, got {other:?}"),
+        }
 
         driver.click_target(&audit::targets::operator_section(
             OperatorSection::InferenceProfiles,
         ));
+        assert_operator_context(driver, &bravo, OperatorSection::InferenceProfiles, None);
         driver.wait_for_target(
             "bravo inference profile row after operator server switch",
             Duration::from_secs(10),
@@ -1082,17 +1714,69 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
         assert!(!driver.has_target(&audit::targets::operator_entity(
             &alpha.docs.inference_profile_id
         )));
+        driver.click_target(&audit::targets::operator_entity(
+            &bravo.docs.inference_profile_id,
+        ));
+        assert_operator_context(
+            driver,
+            &bravo,
+            OperatorSection::InferenceProfiles,
+            Some(bravo.docs.inference_profile_id.as_str()),
+        );
+        match driver.app.state.operator.draft.as_ref() {
+            Some(OperatorDraft::InferenceProfile(draft)) => {
+                assert_eq!(draft.profile_id, bravo.docs.inference_profile_id);
+                assert_eq!(draft.max_output_tokens, "1024");
+                assert_eq!(draft.max_turns, "12");
+            }
+            other => panic!("expected bravo inference profile draft, got {other:?}"),
+        }
+
+        driver.click_target(&audit::targets::operator_section(
+            OperatorSection::RequestTimeline,
+        ));
+        assert_operator_context(driver, &bravo, OperatorSection::RequestTimeline, None);
+        driver.wait_for_target(
+            "bravo request row after operator server switch",
+            Duration::from_secs(10),
+            &audit::targets::operator_entity(&bravo_submission.request_id),
+        )?;
+        assert!(!driver.has_target(&audit::targets::operator_entity(
+            &alpha_submission.request_id
+        )));
+        let bravo_timeline_texts = driver.click_target(&audit::targets::operator_entity(
+            &bravo_submission.request_id,
+        ));
+        assert_operator_context(
+            driver,
+            &bravo,
+            OperatorSection::RequestTimeline,
+            Some(bravo_submission.request_id.as_str()),
+        );
+        assert!(bravo_timeline_texts
+            .iter()
+            .any(|text| text.contains(bravo_submission.prompt.as_str())));
+        assert!(bravo_timeline_texts
+            .iter()
+            .any(|text| text.contains(bravo_submission.response.trim())));
 
         driver.click_target(&audit::targets::operator_deployment(&alpha.peer_id));
         driver.click_target(&audit::targets::operator_section(
             OperatorSection::Behaviors,
         ));
+        assert_operator_context(driver, &alpha, OperatorSection::Behaviors, None);
         driver.wait_for_target(
             "alpha behavior row before config edit",
             Duration::from_secs(10),
             &audit::targets::operator_entity(&alpha.docs.behavior_id),
         )?;
         driver.click_target(&audit::targets::operator_entity(&alpha.docs.behavior_id));
+        assert_operator_context(
+            driver,
+            &alpha,
+            OperatorSection::Behaviors,
+            Some(alpha.docs.behavior_id.as_str()),
+        );
         driver.replace_text_in_target(
             &audit::targets::operator_field("System Prompt"),
             alpha_tool_prompt,
@@ -1109,6 +1793,15 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
             &audit::targets::operator_field("Inference Profile ID"),
             &alpha_switch_profile_id,
         );
+        match driver.app.state.operator.draft.as_ref() {
+            Some(OperatorDraft::Behavior(draft)) => {
+                assert_eq!(draft.behavior_id, alpha.docs.behavior_id);
+                assert_eq!(draft.backend_id, alpha_switch_backend_id);
+                assert_eq!(draft.inference_profile_id, alpha_switch_profile_id);
+                assert_eq!(draft.system_prompt, alpha_tool_prompt);
+            }
+            other => panic!("expected edited alpha behavior draft, got {other:?}"),
+        }
         driver.click_target(audit::targets::OPERATOR_APPLY);
         wait_for_value(
             "alpha behavior config edit persisted on desktop",
@@ -1148,11 +1841,27 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
         driver.click_target(&audit::targets::operator_entity(
             &alpha.docs.tool_selection_id,
         ));
+        assert_operator_context(
+            driver,
+            &alpha,
+            OperatorSection::ToolSelections,
+            Some(alpha.docs.tool_selection_id.as_str()),
+        );
         driver.click_target(&audit::targets::operator_toggle("Enable File Tools"));
         driver.replace_text_in_target(
             &audit::targets::operator_field("File Tools Mode"),
             "ReadOnly",
         );
+        match driver.app.state.operator.draft.as_ref() {
+            Some(OperatorDraft::ToolSelection(draft)) => {
+                assert_eq!(draft.selection_id, alpha.docs.tool_selection_id);
+                assert_eq!(draft.agent_did, alpha.agent_did);
+                assert!(draft.enable_file_tools);
+                assert_eq!(draft.file_tools_mode, "ReadOnly");
+                assert!(!draft.enable_bash);
+            }
+            other => panic!("expected edited alpha tool selection draft, got {other:?}"),
+        }
         driver.click_target(audit::targets::OPERATOR_APPLY);
         wait_for_value(
             "alpha tool selection edit persisted on desktop",
@@ -1183,6 +1892,22 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
         )?;
         assert!(!driver.has_target(&audit::targets::operator_entity(&alpha.docs.backend_id)));
         assert!(!driver.has_target(&audit::targets::operator_entity(&bravo.docs.backend_id)));
+        driver.click_target(&audit::targets::operator_entity(&alpha_switch_backend_id));
+        assert_operator_context(
+            driver,
+            &alpha,
+            OperatorSection::Backends,
+            Some(alpha_switch_backend_id.as_str()),
+        );
+        match driver.app.state.operator.draft.as_ref() {
+            Some(OperatorDraft::Backend(draft)) => {
+                assert_eq!(draft.backend_id, alpha_switch_backend_id);
+                assert_eq!(draft.endpoint, backend.endpoint);
+                assert!(draft.models.contains(backend.model_name.as_str()));
+                assert_eq!(draft.probe_status, "healthy");
+            }
+            other => panic!("expected alpha switched backend draft, got {other:?}"),
+        }
 
         driver.click_target(&audit::targets::operator_section(
             OperatorSection::InferenceProfiles,
@@ -1199,7 +1924,22 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
             &bravo.docs.inference_profile_id
         )));
         driver.click_target(&audit::targets::operator_entity(&alpha_switch_profile_id));
+        assert_operator_context(
+            driver,
+            &alpha,
+            OperatorSection::InferenceProfiles,
+            Some(alpha_switch_profile_id.as_str()),
+        );
         driver.replace_text_in_target(&audit::targets::operator_field("Max Output Tokens"), "1536");
+        match driver.app.state.operator.draft.as_ref() {
+            Some(OperatorDraft::InferenceProfile(draft)) => {
+                assert_eq!(draft.profile_id, alpha_switch_profile_id);
+                assert_eq!(draft.max_output_tokens, "1536");
+                assert_eq!(draft.max_turns, "16");
+                assert_eq!(draft.temperature, "0");
+            }
+            other => panic!("expected edited alpha switched profile draft, got {other:?}"),
+        }
         driver.click_target(audit::targets::OPERATOR_APPLY);
         wait_for_value(
             "alpha inference profile edit persisted on desktop",
@@ -1268,7 +2008,30 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
                 });
             (behavior_ready && tools_ready && profile_ready && runtime_ready).then_some(())
         },
-    )?;
+    )
+    .with_context(|| {
+        format!(
+            "desktop state: {}\nremote state: {}",
+            describe_live_config_state(
+                fixture.runtime.as_ref(),
+                desktop_client.as_ref(),
+                "desktop",
+                &alpha.agent_did,
+                &alpha.docs,
+                &alpha_switch_backend_id,
+                &alpha_switch_profile_id,
+            ),
+            describe_live_config_state(
+                fixture.runtime.as_ref(),
+                alpha.remote_core,
+                "alpha remote",
+                &alpha.agent_did,
+                &alpha.docs,
+                &alpha_switch_backend_id,
+                &alpha_switch_profile_id,
+            )
+        )
+    })?;
     wait_for_value(
         "alpha behavior/tool config replicated to remote runtime",
         Duration::from_secs(120),
@@ -1327,6 +2090,51 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
             (behavior_ready && backend_ready && tools_ready && profile_ready && runtime_ready)
                 .then_some(())
         },
+    )
+    .with_context(|| {
+        format!(
+            "desktop state: {}\nremote state: {}",
+            describe_live_config_state(
+                fixture.runtime.as_ref(),
+                desktop_client.as_ref(),
+                "desktop",
+                &alpha.agent_did,
+                &alpha.docs,
+                &alpha_switch_backend_id,
+                &alpha_switch_profile_id,
+            ),
+            describe_live_config_state(
+                fixture.runtime.as_ref(),
+                alpha.remote_core,
+                "alpha remote",
+                &alpha.agent_did,
+                &alpha.docs,
+                &alpha_switch_backend_id,
+                &alpha_switch_profile_id,
+            )
+        )
+    })?;
+    wait_for_stable_runtime_ready(
+        fixture.runtime.as_ref(),
+        alpha.remote_core,
+        "alpha after remote config replication",
+        &alpha.agent_did,
+        Duration::from_secs(10),
+        Duration::from_secs(90),
+    )?;
+    assert_live_deployment_default_config(
+        fixture.runtime.as_ref(),
+        desktop_client.as_ref(),
+        "desktop bravo",
+        &bravo,
+        backend.model_name.as_str(),
+    )?;
+    assert_live_deployment_default_config(
+        fixture.runtime.as_ref(),
+        bravo.remote_core,
+        "remote bravo",
+        &bravo,
+        backend.model_name.as_str(),
     )?;
 
     let post_config_submission;
@@ -1356,6 +2164,61 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
                 })
             },
         )?;
+    }
+    assert_live_submission_rows(
+        fixture.runtime.as_ref(),
+        desktop_client.as_ref(),
+        "desktop alpha post-config",
+        &alpha,
+        &post_config_submission,
+        Some(alpha_switch_backend_id.as_str()),
+    )?;
+    assert_live_submission_rows(
+        fixture.runtime.as_ref(),
+        alpha.remote_core,
+        "remote alpha post-config",
+        &alpha,
+        &post_config_submission,
+        Some(alpha_switch_backend_id.as_str()),
+    )?;
+
+    {
+        let driver = &mut fixture.driver;
+        driver.open_activity(Activity::Chat);
+        driver.click_target(&audit::targets::chat_deployment(&bravo.peer_id));
+        driver.click_target(&audit::targets::chat_agent(&bravo.agent_did));
+        assert_chat_context(driver, &bravo, None);
+        let bravo_texts = driver.click_target(&audit::targets::chat_conversation(
+            &bravo_submission.session_id,
+        ));
+        assert_chat_context(driver, &bravo, Some(bravo_submission.session_id.as_str()));
+        assert!(bravo_texts
+            .iter()
+            .any(|text| text.contains(bravo_submission.prompt.as_str())));
+        assert!(
+            !bravo_texts
+                .iter()
+                .any(|text| text.contains(post_config_submission.prompt.as_str())),
+            "bravo transcript leaked alpha post-config prompt after switching deployments"
+        );
+
+        driver.click_target(&audit::targets::chat_deployment(&alpha.peer_id));
+        driver.click_target(&audit::targets::chat_agent(&alpha.agent_did));
+        assert_chat_context(driver, &alpha, None);
+        let alpha_post_config_texts = driver.click_target(&audit::targets::chat_conversation(
+            &post_config_submission.session_id,
+        ));
+        assert_chat_context(
+            driver,
+            &alpha,
+            Some(post_config_submission.session_id.as_str()),
+        );
+        assert!(alpha_post_config_texts
+            .iter()
+            .any(|text| text.contains(post_config_submission.prompt.as_str())));
+        assert!(alpha_post_config_texts
+            .iter()
+            .any(|text| text.contains(post_config_submission.response.trim())));
     }
 
     fixture.shutdown()

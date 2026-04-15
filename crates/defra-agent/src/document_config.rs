@@ -1,7 +1,9 @@
+use std::fmt;
+
 use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::de::{DeserializeOwned, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::graphql::escape_graphql_string;
 
@@ -55,8 +57,10 @@ pub struct ToolSelectionDocument {
     pub file_tool_root: Option<String>,
     pub enable_bash: Option<bool>,
     pub bash_mode: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_vec")]
     pub cli_tool_names: Option<Vec<String>>,
     pub enable_meta_tools: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_vec")]
     pub delegate_to: Option<Vec<String>>,
 }
 
@@ -557,6 +561,34 @@ pub(crate) async fn list_tool_selection_records(
     Ok(rows_with_doc_id(resp.data.as_ref(), "ToolSelection"))
 }
 
+pub(crate) async fn list_all_tool_selection_records(
+    node: &EmbeddedNode,
+) -> Result<Vec<(String, ToolSelectionDocument)>> {
+    let query = r#"{
+            ToolSelection(order: { selection_id: ASC }) {
+                _docID
+                selection_id
+                agent_did
+                display_name
+                enable_file_tools
+                file_tools_mode
+                file_tool_root
+                enable_bash
+                bash_mode
+                cli_tool_names
+                enable_meta_tools
+                delegate_to
+            }
+        }"#;
+
+    let resp = node.execute(query).await;
+    if resp.has_errors() {
+        anyhow::bail!("list all ToolSelection failed: {:?}", resp.errors);
+    }
+
+    Ok(rows_with_doc_id(resp.data.as_ref(), "ToolSelection"))
+}
+
 pub(crate) async fn list_inference_profile_records(
     node: &EmbeddedNode,
 ) -> Result<Vec<(String, InferenceProfile)>> {
@@ -873,6 +905,68 @@ fn normalize_optional_string(value: Option<&str>) -> Option<&str> {
     })
 }
 
+fn deserialize_optional_string_vec<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct OptionalStringVecVisitor;
+
+    impl<'de> Visitor<'de> for OptionalStringVecVisitor {
+        type Value = Option<Vec<String>>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a string list, null, or empty string")
+        }
+
+        fn visit_unit<E>(self) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_none<E>(self) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            if value.trim().is_empty() {
+                Ok(Some(Vec::new()))
+            } else {
+                Ok(Some(vec![value.to_string()]))
+            }
+        }
+
+        fn visit_string<E>(self, value: String) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            self.visit_str(&value)
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let mut values = Vec::new();
+            while let Some(value) = seq.next_element::<String>()? {
+                values.push(value);
+            }
+            Ok(Some(values))
+        }
+    }
+
+    deserializer.deserialize_any(OptionalStringVecVisitor)
+}
+
 fn first_row_with_doc_id<T>(data: Option<&serde_json::Value>, field: &str) -> Option<(String, T)>
 where
     T: DeserializeOwned,
@@ -890,7 +984,18 @@ where
             rows.iter()
                 .filter_map(|row| {
                     let doc_id = row.get("_docID")?.as_str()?.to_string();
-                    let parsed = serde_json::from_value(row.clone()).ok()?;
+                    let parsed = match serde_json::from_value(row.clone()) {
+                        Ok(parsed) => parsed,
+                        Err(error) => {
+                            tracing::warn!(
+                                field = field,
+                                doc_id = %doc_id,
+                                error = %error,
+                                "failed to deserialize document row"
+                            );
+                            return None;
+                        }
+                    };
                     Some((doc_id, parsed))
                 })
                 .collect()
@@ -941,5 +1046,55 @@ fn graphql_bool(value: bool) -> &'static str {
         "true"
     } else {
         "false"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_selection_document_accepts_empty_string_arrays() {
+        let document: ToolSelectionDocument = serde_json::from_value(serde_json::json!({
+            "selection_id": "did:defra-agent:test:default:tools",
+            "agent_did": "did:defra-agent:test",
+            "display_name": "Tools",
+            "enable_file_tools": true,
+            "file_tools_mode": "ReadOnly",
+            "file_tool_root": null,
+            "enable_bash": false,
+            "bash_mode": "disabled",
+            "cli_tool_names": "",
+            "enable_meta_tools": false,
+            "delegate_to": ""
+        }))
+        .expect("empty string arrays should deserialize");
+
+        assert_eq!(document.cli_tool_names, Some(Vec::new()));
+        assert_eq!(document.delegate_to, Some(Vec::new()));
+    }
+
+    #[test]
+    fn tool_selection_document_accepts_string_array_values() {
+        let document: ToolSelectionDocument = serde_json::from_value(serde_json::json!({
+            "selection_id": "did:defra-agent:test:default:tools",
+            "agent_did": "did:defra-agent:test",
+            "display_name": "Tools",
+            "enable_file_tools": true,
+            "file_tools_mode": "ReadOnly",
+            "file_tool_root": null,
+            "enable_bash": false,
+            "bash_mode": "disabled",
+            "cli_tool_names": ["rg"],
+            "enable_meta_tools": false,
+            "delegate_to": ["did:defra-agent:other"]
+        }))
+        .expect("string arrays should deserialize");
+
+        assert_eq!(document.cli_tool_names, Some(vec!["rg".to_string()]));
+        assert_eq!(
+            document.delegate_to,
+            Some(vec!["did:defra-agent:other".to_string()])
+        );
     }
 }

@@ -588,7 +588,7 @@ async fn seed_live_operator_documents(
         file_tools_mode: Some("readonly".to_string()),
         enable_bash: Some(false),
         bash_mode: Some("disabled".to_string()),
-        cli_tool_names: vec!["rg".to_string()],
+        cli_tool_names: vec![],
         enable_meta_tools: Some(false),
         delegate_to: vec![],
     })
@@ -652,10 +652,11 @@ async fn seed_live_operator_documents(
 
 fn live_multi_server_core_options() -> ClientCoreOptions {
     let mut options = ClientCoreOptions::local_only();
-    options.max_concurrent_dag_fetches = 64;
-    options.max_concurrent_push_tasks = 64;
-    options.rate_limit_burst = 50_000;
-    options.rate_limit_rate = 50_000.0;
+    // The live multi-agent harness runs several local Iroh endpoints in one
+    // process. Keep default fetch concurrency so CAR/Bitswap cannot overwhelm
+    // listeners, but allow enough local push budget for streaming responses.
+    options.rate_limit_burst = 5_000;
+    options.rate_limit_rate = 500.0;
     options.install_replicators_on_bootstrap = false;
     options
 }
@@ -1858,7 +1859,7 @@ fn wait_for_value<T>(
         if Instant::now() >= deadline {
             anyhow::bail!("timed out waiting for {label}");
         }
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
