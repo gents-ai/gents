@@ -6,10 +6,11 @@ on:
       inference_endpoint:
         description: OpenAI-compatible base URL, including /v1
         required: true
-        default: http://100.73.235.38:8000/v1
+        default: http://workstation-1:8000/v1
       model_name:
         description: Model name served by the endpoint
         required: true
+        default: MiniMax-M2.7-NVFP4
 
 env:
   CARGO_INCREMENTAL: "0"

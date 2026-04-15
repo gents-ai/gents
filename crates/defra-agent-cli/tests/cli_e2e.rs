@@ -3592,11 +3592,11 @@ async fn server_startup_defaults_to_iroh_p2p_for_desktop_pairing() -> Result<()>
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
-    let model_name = format!("mock-local-only-model-{}", Uuid::new_v4().simple());
+    let model_name = format!("mock-default-iroh-model-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockModelEndpoint::start(&model_name)?;
 
     let port = allocate_port()?;
-    let agent_name = format!("cli-local-only-{}", Uuid::new_v4().simple());
+    let agent_name = format!("cli-default-iroh-{}", Uuid::new_v4().simple());
     let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
 
@@ -5363,9 +5363,6 @@ fn desktop_bin() -> Result<PathBuf> {
         .parent()
         .ok_or_else(|| anyhow!("unable to resolve defra-agent binary directory"))?
         .join(binary_name);
-    if desktop_path.exists() {
-        return Ok(desktop_path);
-    }
 
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
