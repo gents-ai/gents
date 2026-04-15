@@ -2070,6 +2070,7 @@ mod tests {
         init_test_tracing();
 
         let backend = AgentBackendConfig::live_from_env()?;
+        let live_backend_id = "audit-live-remote-backend".to_string();
         let runtime = test_runtime()?;
         let tempdir = tempfile::tempdir()?;
         let core = runtime.block_on(ClientCore::start_with_paths_and_options(
@@ -2165,6 +2166,75 @@ mod tests {
             },
         )?;
         assert!(!response_content.trim().is_empty());
+        let (
+            request_lifecycle_state,
+            response_status,
+            runtime_process_state,
+            runtime_default_behavior_id,
+            runtime_last_result,
+            runtime_runnable_behaviors,
+            runtime_scheduled_task_count,
+            live_store_row_count,
+        ) = wait_for_value(
+            "live operator rows available",
+            Duration::from_secs(10),
+            || {
+                driver.app.client.as_ref().and_then(|client| {
+                    let snapshot = client.store().snapshot();
+                    let request = snapshot
+                        .requests
+                        .iter()
+                        .find(|row| row.request_id == request_id)?;
+                    let response = snapshot.latest_response_for_request(&request_id)?;
+                    let runtime_row = snapshot.latest_runtime(&running_agent.did)?;
+                    let backend_row = snapshot
+                        .inference_backends
+                        .iter()
+                        .find(|row| row.backend_id == live_backend_id)?;
+
+                    Some((
+                        request
+                            .lifecycle_state
+                            .clone()
+                            .unwrap_or_else(|| "unset".to_string()),
+                        response
+                            .status
+                            .clone()
+                            .unwrap_or_else(|| "unset".to_string()),
+                        runtime_row
+                            .process_state
+                            .clone()
+                            .unwrap_or_else(|| "unknown".to_string()),
+                        runtime_row
+                            .default_behavior_id
+                            .clone()
+                            .unwrap_or_else(|| "unbound".to_string()),
+                        runtime_row
+                            .last_reconcile_result
+                            .clone()
+                            .unwrap_or_else(|| "pending".to_string()),
+                        runtime_row
+                            .runnable_behavior_count
+                            .unwrap_or_default()
+                            .to_string(),
+                        snapshot
+                            .scheduled_tasks
+                            .iter()
+                            .filter(|row| {
+                                row.agent_did.as_deref() == Some(running_agent.did.as_str())
+                            })
+                            .count()
+                            .to_string(),
+                        snapshot.row_count().to_string(),
+                    ))
+                    .filter(|_| {
+                        backend_row.provider_kind.as_deref() == Some(backend.provider_kind.as_str())
+                            && backend_row.endpoint.as_deref() == Some(backend.endpoint.as_str())
+                            && backend_row.models.iter().any(|model| model == &backend.model_name)
+                    })
+                })
+            },
+        )?;
 
         let chat_texts = wait_for_value(
             "live response in transcript",
@@ -2183,19 +2253,101 @@ mod tests {
 
         driver.open_activity(Activity::Operator);
         driver.click_target(&audit::targets::operator_section(
+            crate::state::OperatorSection::Runtime,
+        ));
+        let runtime_texts = wait_for_value(
+            "operator runtime inspector",
+            Duration::from_secs(10),
+            || {
+                let texts = driver.render();
+                texts
+                    .iter()
+                    .any(|text| text.contains("Runtime Inspector"))
+                    .then_some(texts)
+            },
+        )?;
+        assert!(runtime_texts
+            .iter()
+            .any(|text| text.contains(&runtime_process_state)));
+        assert!(runtime_texts
+            .iter()
+            .any(|text| text.contains(&runtime_default_behavior_id)));
+        assert!(runtime_texts
+            .iter()
+            .any(|text| text.contains(&runtime_last_result)));
+        assert!(runtime_texts
+            .iter()
+            .any(|text| text.contains(&runtime_runnable_behaviors)));
+        assert!(runtime_texts
+            .iter()
+            .any(|text| text.contains(&runtime_scheduled_task_count)));
+
+        driver.click_target(&audit::targets::operator_section(
             crate::state::OperatorSection::RequestTimeline,
         ));
         let operator_texts =
-            wait_for_value("operator request timeline", Duration::from_secs(10), || {
-                let texts = driver.render();
+            wait_for_value("live request row in operator timeline", Duration::from_secs(10), || {
+                driver
+                    .wait_for_target(
+                        "operator request row",
+                        Duration::from_millis(250),
+                        &audit::targets::operator_entity(&request_id),
+                    )
+                    .ok()?;
+                let texts = driver.click_target(&audit::targets::operator_entity(&request_id));
                 texts
                     .iter()
                     .any(|text| text.contains("Request Detail"))
                     .then_some(texts)
             })?;
+        assert_eq!(
+            driver.app.state.operator.selected_entity_id.as_deref(),
+            Some(request_id.as_str())
+        );
         assert!(operator_texts
             .iter()
             .any(|text| text.contains(prompt_snippet)));
+        assert!(operator_texts
+            .iter()
+            .any(|text| text.contains(&request_lifecycle_state)));
+        assert!(operator_texts
+            .iter()
+            .any(|text| text.contains(&response_status)));
+        assert!(operator_texts
+            .iter()
+            .any(|text| text.contains(response_content.trim())));
+
+        driver.click_target(&audit::targets::operator_section(
+            crate::state::OperatorSection::Backends,
+        ));
+        driver.wait_for_target(
+            "live backend entity",
+            Duration::from_secs(10),
+            &audit::targets::operator_entity(&live_backend_id),
+        )?;
+        let backend_texts = driver.click_target(&audit::targets::operator_entity(&live_backend_id));
+        assert_eq!(
+            driver.app.state.operator.selected_entity_id.as_deref(),
+            Some(live_backend_id.as_str())
+        );
+        assert!(backend_texts
+            .iter()
+            .any(|text| text.contains("Provider Kind")));
+        assert!(backend_texts
+            .iter()
+            .any(|text| text.contains(backend.endpoint.as_str())));
+        match driver.app.state.operator.draft.as_ref() {
+            Some(OperatorDraft::Backend(draft)) => {
+                assert_eq!(draft.backend_id, live_backend_id);
+                assert_eq!(draft.provider_kind, backend.provider_kind.as_str());
+                assert_eq!(draft.endpoint, backend.endpoint);
+                assert_eq!(draft.models, backend.model_name);
+                assert!(draft.enabled);
+                assert!(draft.supports_tool_calls);
+                assert!(draft.supports_streaming);
+            }
+            other => panic!("expected backend draft in live smoke, got {other:?}"),
+        }
 
         driver.open_activity(Activity::Peers);
         let peers_texts = driver.wait_for_target(
@@ -2288,7 +2440,17 @@ mod tests {
         assert!(logs_texts.iter().any(|text| text.contains("approx store")));
         assert!(logs_texts
             .iter()
+            .any(|text| text.contains(&format!("/ {live_store_row_count} rows"))));
+        assert!(logs_texts
+            .iter()
+            .any(|text| text.contains("peers               0/0 connected")));
+        assert!(logs_texts.iter().any(|text| text.contains("latest warning")));
+        assert!(logs_texts
+            .iter()
             .any(|text| text.contains("live audit replication marker")));
+        assert!(logs_texts
+            .iter()
+            .any(|text| text.contains("live audit warning marker")));
         driver.click_target(audit::targets::logs_filter(LogsFilter::Category(
             crate::telemetry::DesktopLogCategory::Warnings,
         )));
@@ -2296,6 +2458,13 @@ mod tests {
         assert!(warning_texts
             .iter()
             .any(|text| text.contains("live audit warning marker")));
+        driver.click_target(audit::targets::logs_filter(LogsFilter::Category(
+            crate::telemetry::DesktopLogCategory::Replication,
+        )));
+        let replication_texts = driver.render();
+        assert!(replication_texts
+            .iter()
+            .any(|text| text.contains("live audit replication marker")));
         assert!(global_log_store().snapshot().total_events > baseline_events);
 
         runtime.block_on(running_agent.shutdown())?;
