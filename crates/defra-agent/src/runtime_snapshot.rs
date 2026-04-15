@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use tokio::sync::{mpsc, watch};
 
+use crate::admission::BackendAdmissionConfig;
 use crate::config::BehaviorConfig;
 use crate::tool_surface::ToolSurface;
 use crate::watcher::AgentRequest;
@@ -14,6 +15,7 @@ pub(crate) struct ResolvedRuntimeSnapshot {
     pub(crate) default_behavior_id: String,
     pub(crate) behaviors: HashMap<String, Arc<BehaviorConfig>>,
     pub(crate) tool_surfaces: HashMap<String, Arc<ToolSurface>>,
+    pub(crate) backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
     pub(crate) unavailable_behaviors: HashMap<String, String>,
 }
 
@@ -24,6 +26,22 @@ impl ResolvedRuntimeSnapshot {
         tool_surfaces: HashMap<String, Arc<ToolSurface>>,
         unavailable_behaviors: HashMap<String, String>,
     ) -> Self {
+        Self::from_parts_with_admission_configs(
+            default_behavior_id,
+            behaviors,
+            tool_surfaces,
+            HashMap::new(),
+            unavailable_behaviors,
+        )
+    }
+
+    pub(crate) fn from_parts_with_admission_configs(
+        default_behavior_id: String,
+        behaviors: Vec<Arc<BehaviorConfig>>,
+        tool_surfaces: HashMap<String, Arc<ToolSurface>>,
+        backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
+        unavailable_behaviors: HashMap<String, String>,
+    ) -> Self {
         Self {
             default_behavior_id,
             behaviors: behaviors
@@ -31,6 +49,7 @@ impl ResolvedRuntimeSnapshot {
                 .map(|behavior| (behavior.name.clone(), behavior))
                 .collect(),
             tool_surfaces,
+            backend_admission_configs,
             unavailable_behaviors,
         }
     }
@@ -45,6 +64,7 @@ impl ResolvedRuntimeSnapshot {
             default_behavior_id: self.default_behavior_id,
             behaviors: self.behaviors,
             tool_surfaces: self.tool_surfaces,
+            backend_admission_configs: self.backend_admission_configs,
             unavailable_behaviors: self.unavailable_behaviors,
             dispatchers,
         }
@@ -55,6 +75,7 @@ impl ResolvedRuntimeSnapshot {
             &self.default_behavior_id,
             &self.behaviors,
             &self.tool_surfaces,
+            &self.backend_admission_configs,
             &self.unavailable_behaviors,
         )
     }
@@ -66,6 +87,7 @@ pub(crate) struct ActiveRuntimeSnapshot {
     pub(crate) default_behavior_id: String,
     pub(crate) behaviors: HashMap<String, Arc<BehaviorConfig>>,
     pub(crate) tool_surfaces: HashMap<String, Arc<ToolSurface>>,
+    pub(crate) backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
     pub(crate) unavailable_behaviors: HashMap<String, String>,
     pub(crate) dispatchers: DispatcherMap,
 }
@@ -90,6 +112,7 @@ impl ActiveRuntimeSnapshot {
             &self.default_behavior_id,
             &self.behaviors,
             &self.tool_surfaces,
+            &self.backend_admission_configs,
             &self.unavailable_behaviors,
         )
     }
@@ -112,6 +135,7 @@ fn configuration_fingerprint(
     default_behavior_id: &str,
     behaviors: &HashMap<String, Arc<BehaviorConfig>>,
     tool_surfaces: &HashMap<String, Arc<ToolSurface>>,
+    backend_admission_configs: &HashMap<String, BackendAdmissionConfig>,
     unavailable_behaviors: &HashMap<String, String>,
 ) -> String {
     let mut fingerprint = String::new();
@@ -142,6 +166,19 @@ fn configuration_fingerprint(
         fingerprint.push_str(&behavior_id);
         fingerprint.push('=');
         fingerprint.push_str(&format!("{tool_surface:?}"));
+        fingerprint.push('\n');
+    }
+
+    let mut backend_ids = backend_admission_configs.keys().cloned().collect::<Vec<_>>();
+    backend_ids.sort();
+    for backend_id in backend_ids {
+        let config = backend_admission_configs
+            .get(&backend_id)
+            .expect("backend id came from backend admission config map");
+        fingerprint.push_str("backend_admission:");
+        fingerprint.push_str(&backend_id);
+        fingerprint.push('=');
+        fingerprint.push_str(&format!("{config:?}"));
         fingerprint.push('\n');
     }
 
