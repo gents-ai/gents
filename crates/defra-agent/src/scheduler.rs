@@ -1,13 +1,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
 use rig::completion::Prompt;
 use tokio_util::sync::CancellationToken;
 
-use crate::backend_registry::{self, BackendPermit, BackendTracker};
+use crate::admission::AdmissionRegistry;
 use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::hook::{DefraSessionHook, FailurePolicy};
 use crate::lifecycle::{ExecutionOrigin, RequestLifecycle};
@@ -24,7 +24,6 @@ mod tests;
 
 const TICK_INTERVAL_SECS: u64 = 60;
 const TASK_TIMEOUT_SECS: u64 = 900;
-const BACKEND_WAIT_POLL_MS: u64 = 1_000;
 const SCHEDULED_TASK_COLLECTION_MISSING_ERROR: &str =
     "Cannot query collection 'ScheduledTask': collection not found";
 
@@ -289,7 +288,7 @@ pub struct Scheduler {
     active_snapshot: Arc<ActiveRuntimeSnapshot>,
     active_snapshot_rx: tokio::sync::watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     tool_runtime: ToolRuntimeContext,
-    backend_tracker: Arc<BackendTracker>,
+    admission_registry: AdmissionRegistry,
 }
 
 impl Scheduler {
@@ -298,7 +297,7 @@ impl Scheduler {
         node: Arc<EmbeddedNode>,
         active_snapshot_rx: tokio::sync::watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
         tool_runtime: ToolRuntimeContext,
-        backend_tracker: Arc<BackendTracker>,
+        admission_registry: AdmissionRegistry,
     ) -> Self {
         let active_snapshot = active_snapshot_rx.borrow().clone();
         Self {
@@ -306,7 +305,7 @@ impl Scheduler {
             active_snapshot,
             active_snapshot_rx,
             tool_runtime,
-            backend_tracker,
+            admission_registry,
         }
     }
 

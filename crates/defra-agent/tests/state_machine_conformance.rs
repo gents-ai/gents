@@ -44,7 +44,6 @@ async fn interactive_claim_snapshot_matches_claimed_waiting() {
         RequestSnapshot {
             status: "processing".into(),
             lifecycle_state: "claimed".into(),
-            admission_state: "waiting".into(),
             behavior_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "interactive".into(),
@@ -135,27 +134,6 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
 
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     lifecycle.prepare_session_with_identity().await.unwrap();
-    lifecycle.mark_slot_acquired().await.unwrap();
-
-    assert_eq!(
-        fetch_request_snapshot(&db.node, &doc_id).await,
-        RequestSnapshot {
-            status: "processing".into(),
-            lifecycle_state: "claimed".into(),
-            admission_state: "acquired".into(),
-            behavior_id: AGENT_NAME.into(),
-            backend_id: BACKEND_ID.into(),
-            execution_origin: "interactive".into(),
-            retry_parent_request: "".into(),
-            retry_root_request: request_id.clone(),
-            superseded_by_request: "".into(),
-            retry_count: 0,
-            max_retries: defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
-            claimed_at_present: true,
-            deadline_present: true,
-        }
-    );
-
     lifecycle.begin_execution().await.unwrap();
     let response_doc_id = create_response_with_status(
         &db.node,
@@ -173,7 +151,6 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
         RequestSnapshot {
             status: "processing".into(),
             lifecycle_state: "processing".into(),
-            admission_state: "executing".into(),
             behavior_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "interactive".into(),
@@ -246,7 +223,6 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
         RequestSnapshot {
             status: "error".into(),
             lifecycle_state: "failed".into(),
-            admission_state: "released".into(),
             behavior_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "interactive".into(),
@@ -297,7 +273,6 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
         RequestSnapshot {
             status: "processing".into(),
             lifecycle_state: "claimed".into(),
-            admission_state: "waiting".into(),
             behavior_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "scheduled".into(),

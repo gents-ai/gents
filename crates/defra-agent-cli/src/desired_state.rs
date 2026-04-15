@@ -71,6 +71,8 @@ pub(crate) struct DesiredInferenceBackend {
     pub(crate) api_key: Option<String>,
     pub(crate) api_key_env_var: Option<String>,
     pub(crate) max_concurrent: i64,
+    #[serde(default = "default_max_queue_depth")]
+    pub(crate) max_queue_depth: i64,
     pub(crate) enabled: bool,
     #[serde(default = "default_true")]
     pub(crate) supports_tool_calls: bool,
@@ -803,6 +805,7 @@ pub(crate) fn manifest_from_export_bundle(
                         "api_key",
                         "api_key_env_var",
                         "max_concurrent",
+                        "max_queue_depth",
                         "enabled",
                         "supports_tool_calls",
                         "supports_streaming",
@@ -1070,6 +1073,10 @@ fn normalize_manifest(manifest: &mut DesiredStateManifest) {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_max_queue_depth() -> i64 {
+    100
 }
 
 fn desired_from_value<T>(value: &Value, allowed_fields: &[&str]) -> Result<T>

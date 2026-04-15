@@ -80,25 +80,6 @@ impl PersistedLifecycleState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PersistedAdmissionState {
-    Released,
-    Waiting,
-    Acquired,
-    Executing,
-}
-
-impl PersistedAdmissionState {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Released => "released",
-            Self::Waiting => "waiting",
-            Self::Acquired => "acquired",
-            Self::Executing => "executing",
-        }
-    }
-}
-
 pub struct RequestLifecycle {
     node: Arc<EmbeddedNode>,
     agent_name: String,

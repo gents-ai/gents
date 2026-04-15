@@ -96,7 +96,6 @@ impl Tool for DelegateToAgentTool {
                         content: "{escaped_content}",
                         status: "pending",
                         lifecycle_state: "pending",
-                        admission_state: "released",
                         backend_id: "",
                         execution_origin: "interactive",
                         created_at: "{escaped_created_at}",

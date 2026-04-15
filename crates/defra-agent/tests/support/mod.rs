@@ -48,12 +48,12 @@ pub async fn create_request(
     status: &str,
     created_at: &str,
 ) -> String {
-    let (lifecycle_state, admission_state) = match status {
-        "pending" => ("pending", "released"),
-        "processing" => ("processing", "executing"),
-        "completed" => ("completed", "released"),
-        "error" => ("failed", "released"),
-        "superseded" => ("superseded", "released"),
+    let lifecycle_state = match status {
+        "pending" => "pending",
+        "processing" => "processing",
+        "completed" => "completed",
+        "error" => "failed",
+        "superseded" => "superseded",
         other => panic!("unsupported test request status: {other}"),
     };
     let request_id = escape_graphql_string(request_id);
@@ -72,7 +72,6 @@ pub async fn create_request(
                 content: "hello",
                 status: "{status}",
                 lifecycle_state: "{lifecycle_state}",
-                admission_state: "{admission_state}",
                 backend_id: "",
                 execution_origin: "interactive",
                 created_at: "{created_at}",

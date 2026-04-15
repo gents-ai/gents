@@ -3,10 +3,16 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::Stream;
-use rig::completion::{CompletionError, GetTokenUsage};
+use rig::completion::{CompletionError, GetTokenUsage, Usage};
 use rig::streaming::{
     RawStreamingChoice, RawStreamingToolCall, StreamedAssistantContent, StreamingCompletionResponse,
 };
+
+pub(crate) trait StreamGuardLifecycle {
+    fn mark_stream_success(&mut self, _usage: Option<Usage>) {}
+
+    fn mark_stream_error(&mut self, _error: &CompletionError) {}
+}
 
 pub(crate) fn hold_stream_guard<R, G>(
     stream: StreamingCompletionResponse<R>,
@@ -14,7 +20,7 @@ pub(crate) fn hold_stream_guard<R, G>(
 ) -> StreamingCompletionResponse<R>
 where
     R: Clone + Unpin + GetTokenUsage + Send + 'static,
-    G: Send + Unpin + 'static,
+    G: StreamGuardLifecycle + Send + Unpin + 'static,
 {
     StreamingCompletionResponse::stream(Box::pin(GuardedStreamingResult {
         inner: stream,
@@ -48,7 +54,7 @@ where
 impl<R, G> Stream for GuardedStreamingResult<R, G>
 where
     R: Clone + Unpin + GetTokenUsage,
-    G: Unpin,
+    G: StreamGuardLifecycle + Unpin,
 {
     type Item = Result<RawStreamingChoice<R>, CompletionError>;
 
@@ -66,6 +72,11 @@ where
         match Pin::new(&mut this.inner).poll_next(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Some(Ok(item))) => {
+                if let StreamedAssistantContent::Final(response) = &item {
+                    if let Some(guard) = this.guard.as_mut() {
+                        guard.mark_stream_success(response.token_usage());
+                    }
+                }
                 this.pending = streamed_item_to_raw_choices(item).into();
                 match this.pending.pop_front() {
                     Some(choice) => Poll::Ready(Some(Ok(choice))),
@@ -76,10 +87,16 @@ where
                 }
             }
             Poll::Ready(Some(Err(error))) => {
+                if let Some(guard) = this.guard.as_mut() {
+                    guard.mark_stream_error(&error);
+                }
                 this.release_guard();
                 Poll::Ready(Some(Err(error)))
             }
             Poll::Ready(None) => {
+                if let Some(guard) = this.guard.as_mut() {
+                    guard.mark_stream_success(None);
+                }
                 this.release_guard();
                 if !this.message_id_emitted {
                     this.message_id_emitted = true;
@@ -158,6 +175,8 @@ mod tests {
             self.drops.fetch_add(1, Ordering::SeqCst);
         }
     }
+
+    impl super::StreamGuardLifecycle for DropProbe {}
 
     #[tokio::test]
     async fn holds_guard_until_stream_eof_and_preserves_final_response_metadata() {

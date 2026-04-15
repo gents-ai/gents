@@ -1,8 +1,23 @@
 pub(crate) mod stream_guard;
 
-use anyhow::Result;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 
+use anyhow::Result;
+use defra_node::EmbeddedNode;
+use rig::client::CompletionClient;
+use rig::completion::{
+    CompletionError, CompletionModel, CompletionRequest, CompletionResponse, Usage,
+};
+use rig::streaming::StreamingCompletionResponse;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
+use self::stream_guard::{hold_stream_guard, StreamGuardLifecycle};
 use crate::backend_registry::InferenceBackend;
+use crate::graphql::escape_graphql_string;
+use crate::watcher::AgentRequest;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BackendAdmissionConfig {
@@ -43,5 +58,1394 @@ impl BackendAdmissionConfig {
 
     pub(crate) fn is_available(&self) -> bool {
         self.enabled && self.probe_status == "healthy"
+    }
+}
+
+pub(crate) fn backend_admission_configs_from_backends<'a>(
+    backends: impl IntoIterator<Item = &'a InferenceBackend>,
+) -> Result<HashMap<String, BackendAdmissionConfig>> {
+    let mut configs = HashMap::new();
+    for backend in backends {
+        configs.insert(
+            backend.backend_id.clone(),
+            BackendAdmissionConfig::from_backend(backend)?,
+        );
+    }
+    Ok(configs)
+}
+
+#[derive(Clone)]
+pub(crate) struct AdmittedCompletionClient<C> {
+    inner: C,
+    admission: AdmissionRegistry,
+}
+
+impl<C> AdmittedCompletionClient<C> {
+    pub(crate) fn new(inner: C, admission: AdmissionRegistry) -> Self {
+        Self { inner, admission }
+    }
+}
+
+impl<C> CompletionClient for AdmittedCompletionClient<C>
+where
+    C: CompletionClient,
+    C::CompletionModel: 'static,
+    <C::CompletionModel as CompletionModel>::Response: 'static,
+    <C::CompletionModel as CompletionModel>::StreamingResponse: 'static,
+{
+    type CompletionModel = AdmittedCompletionModel<C::CompletionModel>;
+}
+
+#[derive(Clone)]
+pub(crate) struct AdmittedCompletionModel<M> {
+    inner: M,
+    admission: AdmissionRegistry,
+}
+
+impl<M> CompletionModel for AdmittedCompletionModel<M>
+where
+    M: CompletionModel + 'static,
+    M::Response: 'static,
+    M::StreamingResponse: 'static,
+{
+    type Response = M::Response;
+    type StreamingResponse = M::StreamingResponse;
+    type Client = AdmittedCompletionClient<M::Client>;
+
+    fn make(client: &Self::Client, model: impl Into<String>) -> Self {
+        Self {
+            inner: M::make(&client.inner, model),
+            admission: client.admission.clone(),
+        }
+    }
+
+    async fn completion(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+        let mut permit = self.admission.acquire_current_call().await?;
+        match self.inner.completion(request).await {
+            Ok(response) => {
+                permit.finish_success(Some(response.usage)).await;
+                Ok(response)
+            }
+            Err(error) => {
+                permit.finish_failure(&error.to_string()).await;
+                Err(error)
+            }
+        }
+    }
+
+    async fn stream(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        let mut permit = self.admission.acquire_current_call().await?;
+        match self.inner.stream(request).await {
+            Ok(stream) => Ok(hold_stream_guard(stream, permit)),
+            Err(error) => {
+                permit.finish_failure(&error.to_string()).await;
+                Err(error)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CallKind {
+    Inference,
+    Compaction,
+    Scheduled,
+}
+
+impl CallKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Inference => "inference",
+            Self::Compaction => "compaction",
+            Self::Scheduled => "scheduled",
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct AdmissionCallContext {
+    request_id: String,
+    backend_id: String,
+    behavior_id: String,
+    agent_did: String,
+    call_kind: CallKind,
+    attempt: i64,
+    call_seq: Arc<AtomicU64>,
+}
+
+impl AdmissionCallContext {
+    pub(crate) fn for_request(
+        request: &AgentRequest,
+        behavior_id: impl Into<String>,
+        backend_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            request_id: request.request_id.clone(),
+            backend_id: backend_id.into(),
+            behavior_id: behavior_id.into(),
+            agent_did: request.agent_did.clone(),
+            call_kind: CallKind::Inference,
+            attempt: 1,
+            call_seq: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    fn next_call(&self, runtime_instance_id: &str) -> PendingCallMetadata {
+        let call_seq = self.call_seq.fetch_add(1, Ordering::SeqCst) + 1;
+        PendingCallMetadata {
+            call_id: uuid::Uuid::new_v4().to_string(),
+            runtime_instance_id: runtime_instance_id.to_string(),
+            request_id: self.request_id.clone(),
+            call_seq,
+            backend_id: self.backend_id.clone(),
+            behavior_id: self.behavior_id.clone(),
+            agent_did: self.agent_did.clone(),
+            call_kind: self.call_kind,
+            attempt: self.attempt,
+        }
+    }
+}
+
+tokio::task_local! {
+    static ADMISSION_CALL_CONTEXT: AdmissionCallContext;
+}
+
+pub(crate) async fn scope_request<T>(
+    context: AdmissionCallContext,
+    future: impl Future<Output = T>,
+) -> T {
+    ADMISSION_CALL_CONTEXT.scope(context, future).await
+}
+
+pub(crate) async fn scope_call<T>(
+    call_kind: CallKind,
+    attempt: i64,
+    future: impl Future<Output = T>,
+) -> T {
+    let mut context = current_context().expect("admission call scope requires request context");
+    context.call_kind = call_kind;
+    context.attempt = attempt;
+    ADMISSION_CALL_CONTEXT.scope(context, future).await
+}
+
+fn current_context() -> Result<AdmissionCallContext, CompletionError> {
+    ADMISSION_CALL_CONTEXT
+        .try_with(Clone::clone)
+        .map_err(|_| CompletionError::ProviderError("missing inference admission context".into()))
+}
+
+#[derive(Clone)]
+pub(crate) struct AdmissionRegistry {
+    inner: Arc<AdmissionRegistryInner>,
+}
+
+struct AdmissionRegistryInner {
+    node: Arc<EmbeddedNode>,
+    runtime_instance_id: String,
+    state: Mutex<RegistryState>,
+}
+
+#[derive(Default)]
+struct RegistryState {
+    active: HashMap<String, Arc<BackendAdmissionController>>,
+    draining: HashMap<String, Vec<Arc<BackendAdmissionController>>>,
+    pending: HashMap<String, PendingControllerConfig>,
+}
+
+#[derive(Clone)]
+struct PendingControllerConfig {
+    generation: u64,
+    config: BackendAdmissionConfig,
+}
+
+impl AdmissionRegistry {
+    pub(crate) fn new(node: Arc<EmbeddedNode>) -> Self {
+        Self {
+            inner: Arc::new(AdmissionRegistryInner {
+                node,
+                runtime_instance_id: uuid::Uuid::new_v4().to_string(),
+                state: Mutex::new(RegistryState::default()),
+            }),
+        }
+    }
+
+    pub(crate) fn reconcile(
+        &self,
+        generation: u64,
+        configs: &HashMap<String, BackendAdmissionConfig>,
+    ) {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .expect("AdmissionRegistry state lock poisoned");
+        state.prune_drained();
+
+        let desired_ids = configs.keys().cloned().collect::<HashSet<_>>();
+        let active_ids = state.active.keys().cloned().collect::<Vec<_>>();
+        for backend_id in active_ids {
+            let desired = configs
+                .get(&backend_id)
+                .filter(|config| config.is_available());
+            match (state.active.remove(&backend_id), desired) {
+                (Some(active), Some(config)) if active.matches(config) => {
+                    state.active.insert(backend_id, active);
+                }
+                (Some(active), Some(config)) => {
+                    active.close();
+                    if active.is_drained() {
+                        state.active.insert(
+                            backend_id.clone(),
+                            self.inner.new_controller(
+                                generation,
+                                config.clone(),
+                                Arc::downgrade(&self.inner),
+                            ),
+                        );
+                    } else {
+                        state
+                            .draining
+                            .entry(backend_id.clone())
+                            .or_default()
+                            .push(active);
+                        state.pending.insert(
+                            backend_id,
+                            PendingControllerConfig {
+                                generation,
+                                config: config.clone(),
+                            },
+                        );
+                    }
+                }
+                (Some(active), None) => {
+                    active.close();
+                    if !active.is_drained() {
+                        state
+                            .draining
+                            .entry(backend_id.clone())
+                            .or_default()
+                            .push(active);
+                    }
+                    state.pending.remove(&backend_id);
+                }
+                (None, _) => {}
+            }
+        }
+
+        for (backend_id, config) in configs {
+            if !config.is_available() || !desired_ids.contains(backend_id) {
+                state.pending.remove(backend_id);
+                continue;
+            }
+            if state.active.contains_key(backend_id) {
+                continue;
+            }
+            if state.has_draining(backend_id) {
+                state.pending.insert(
+                    backend_id.clone(),
+                    PendingControllerConfig {
+                        generation,
+                        config: config.clone(),
+                    },
+                );
+                continue;
+            }
+            state.active.insert(
+                backend_id.clone(),
+                self.inner
+                    .new_controller(generation, config.clone(), Arc::downgrade(&self.inner)),
+            );
+        }
+
+        let pending_ids = state.pending.keys().cloned().collect::<Vec<_>>();
+        for backend_id in pending_ids {
+            state.install_pending_if_ready(&self.inner, &backend_id);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn acquire_for_test(
+        &self,
+        request_id: impl Into<String>,
+        backend_id: impl Into<String>,
+        behavior_id: impl Into<String>,
+        agent_did: impl Into<String>,
+        call_kind: CallKind,
+    ) -> Result<AdmissionPermit, CompletionError> {
+        let context = AdmissionCallContext {
+            request_id: request_id.into(),
+            backend_id: backend_id.into(),
+            behavior_id: behavior_id.into(),
+            agent_did: agent_did.into(),
+            call_kind,
+            attempt: 1,
+            call_seq: Arc::new(AtomicU64::new(0)),
+        };
+        scope_request(context, async { self.acquire_current_call().await }).await
+    }
+
+    async fn acquire_current_call(&self) -> Result<AdmissionPermit, CompletionError> {
+        let context = current_context()?;
+        let pending = context.next_call(&self.inner.runtime_instance_id);
+        if pending.backend_id.trim().is_empty() {
+            return Err(CompletionError::ProviderError(format!(
+                "behavior {} has no backend binding",
+                pending.behavior_id
+            )));
+        }
+
+        let controller = {
+            let state = self
+                .inner
+                .state
+                .lock()
+                .expect("AdmissionRegistry state lock poisoned");
+            state.active.get(&pending.backend_id).cloned()
+        };
+
+        match controller {
+            Some(controller) => controller.acquire(self.inner.node.clone(), pending).await,
+            None => {
+                let call = InferenceCallRecord::without_controller(pending);
+                if let Err(error) = persist_terminal_call(
+                    self.inner.node.clone(),
+                    call,
+                    "cancelled",
+                    Some("BackendGone"),
+                    None,
+                )
+                .await
+                {
+                    tracing::warn!(error = %error, "failed to persist backend-gone inference call");
+                }
+                Err(CompletionError::ProviderError(
+                    "BackendGone: backend admission controller is not active".into(),
+                ))
+            }
+        }
+    }
+}
+
+impl AdmissionRegistryInner {
+    fn new_controller(
+        &self,
+        generation: u64,
+        config: BackendAdmissionConfig,
+        registry: Weak<AdmissionRegistryInner>,
+    ) -> Arc<BackendAdmissionController> {
+        let max_concurrent = config.max_concurrent;
+        Arc::new(BackendAdmissionController {
+            backend_id: config.backend_id.clone(),
+            generation,
+            config,
+            // BackendAdmissionConfig validation guarantees this is >= 1.
+            semaphore: Arc::new(Semaphore::new(max_concurrent)),
+            waiters: AtomicUsize::new(0),
+            running: AtomicUsize::new(0),
+            closed: AtomicBool::new(false),
+            registry,
+        })
+    }
+
+    fn controller_drained(self: Arc<Self>, backend_id: String) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("AdmissionRegistry state lock poisoned");
+        state.install_pending_if_ready(&self, &backend_id);
+    }
+}
+
+impl RegistryState {
+    fn prune_drained(&mut self) {
+        self.draining.retain(|_, controllers| {
+            controllers.retain(|controller| !controller.is_drained());
+            !controllers.is_empty()
+        });
+    }
+
+    fn has_draining(&mut self, backend_id: &str) -> bool {
+        self.prune_drained();
+        self.draining
+            .get(backend_id)
+            .is_some_and(|controllers| !controllers.is_empty())
+    }
+
+    fn install_pending_if_ready(
+        &mut self,
+        registry: &Arc<AdmissionRegistryInner>,
+        backend_id: &str,
+    ) {
+        self.prune_drained();
+        if self.active.contains_key(backend_id) || self.has_draining(backend_id) {
+            return;
+        }
+        let Some(pending) = self.pending.remove(backend_id) else {
+            return;
+        };
+        if pending.config.is_available() {
+            self.active.insert(
+                backend_id.to_string(),
+                registry.new_controller(
+                    pending.generation,
+                    pending.config,
+                    Arc::downgrade(registry),
+                ),
+            );
+        }
+    }
+}
+
+struct BackendAdmissionController {
+    backend_id: String,
+    generation: u64,
+    config: BackendAdmissionConfig,
+    semaphore: Arc<Semaphore>,
+    waiters: AtomicUsize,
+    running: AtomicUsize,
+    closed: AtomicBool,
+    registry: Weak<AdmissionRegistryInner>,
+}
+
+impl BackendAdmissionController {
+    fn matches(&self, config: &BackendAdmissionConfig) -> bool {
+        self.config == *config && !self.is_closed()
+    }
+
+    fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
+    }
+
+    fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        self.semaphore.close();
+    }
+
+    fn is_drained(&self) -> bool {
+        self.running.load(Ordering::SeqCst) == 0
+    }
+
+    async fn acquire(
+        self: Arc<Self>,
+        node: Arc<EmbeddedNode>,
+        pending: PendingCallMetadata,
+    ) -> Result<AdmissionPermit, CompletionError> {
+        if self.is_closed() {
+            let call = self.call_record(pending, 0);
+            if let Err(error) =
+                persist_terminal_call(node, call, "cancelled", Some("BackendGone"), None).await
+            {
+                tracing::warn!(backend_id = %self.backend_id, error = %error, "failed to persist closed-controller inference call");
+            }
+            return Err(CompletionError::ProviderError(
+                "BackendGone: backend admission controller is draining".into(),
+            ));
+        }
+
+        match self.semaphore.clone().try_acquire_owned() {
+            Ok(permit) => {
+                let call = self.call_record(pending, 0);
+                return self.start_permit(node, permit, call).await;
+            }
+            Err(tokio::sync::TryAcquireError::Closed) => {
+                let call = self.call_record(pending, 0);
+                if let Err(error) =
+                    persist_terminal_call(node, call, "cancelled", Some("BackendGone"), None).await
+                {
+                    tracing::warn!(backend_id = %self.backend_id, error = %error, "failed to persist closed-controller inference call");
+                }
+                return Err(CompletionError::ProviderError(
+                    "BackendGone: backend admission controller is draining".into(),
+                ));
+            }
+            Err(tokio::sync::TryAcquireError::NoPermits) => {}
+        }
+
+        let queue_depth = match self.try_enter_queue() {
+            Some(queue_depth) => queue_depth,
+            None => {
+                let queue_depth = self.waiters.load(Ordering::SeqCst);
+                match self.semaphore.clone().try_acquire_owned() {
+                    Ok(permit) => {
+                        let call = self.call_record(pending, queue_depth);
+                        return self.start_permit(node, permit, call).await;
+                    }
+                    Err(tokio::sync::TryAcquireError::Closed) => {
+                        let call = self.call_record(pending, queue_depth);
+                        if let Err(error) = persist_terminal_call(
+                            node,
+                            call,
+                            "cancelled",
+                            Some("BackendGone"),
+                            None,
+                        )
+                        .await
+                        {
+                            tracing::warn!(backend_id = %self.backend_id, error = %error, "failed to persist backend-gone inference call");
+                        }
+                        return Err(CompletionError::ProviderError(
+                            "BackendGone: backend admission controller is draining".into(),
+                        ));
+                    }
+                    Err(tokio::sync::TryAcquireError::NoPermits) => {
+                        let call = self.call_record(pending, queue_depth);
+                        if let Err(error) =
+                            persist_terminal_call(node, call, "failed", Some("QueueFull"), None)
+                                .await
+                        {
+                            tracing::warn!(backend_id = %self.backend_id, error = %error, "failed to persist queue-full inference call");
+                        }
+                        return Err(CompletionError::ProviderError(format!(
+                            "QueueFull: backend {} admission queue is full",
+                            self.backend_id
+                        )));
+                    }
+                }
+            }
+        };
+
+        let call = self.call_record(pending, queue_depth);
+        let doc_id = persist_call_queued(node.clone(), &call)
+            .await
+            .map_err(completion_persistence_error)?;
+        let queued_guard = QueuedCallGuard {
+            node: node.clone(),
+            controller: self.clone(),
+            call: call.clone(),
+            persist_on_drop: true,
+        };
+        let permit = match self.semaphore.clone().acquire_owned().await {
+            Ok(permit) => permit,
+            Err(_) => {
+                drop(queued_guard.disarm());
+                if let Err(error) = persist_existing_call_terminal(
+                    node,
+                    &call,
+                    "cancelled",
+                    Some("BackendGone"),
+                    None,
+                )
+                .await
+                {
+                    tracing::warn!(backend_id = %self.backend_id, call_id = %call.call_id, error = %error, "failed to persist backend-gone queued inference call");
+                }
+                return Err(CompletionError::ProviderError(
+                    "BackendGone: backend admission controller is draining".into(),
+                ));
+            }
+        };
+        drop(queued_guard.disarm());
+        self.running.fetch_add(1, Ordering::SeqCst);
+        if let Err(error) = persist_existing_call_running(node.clone(), &call).await {
+            self.release_running();
+            return Err(completion_persistence_error(error));
+        }
+        Ok(AdmissionPermit::new(node, self, permit, call, doc_id))
+    }
+
+    async fn start_permit(
+        self: Arc<Self>,
+        node: Arc<EmbeddedNode>,
+        permit: OwnedSemaphorePermit,
+        call: InferenceCallRecord,
+    ) -> Result<AdmissionPermit, CompletionError> {
+        self.running.fetch_add(1, Ordering::SeqCst);
+        match persist_call_started(node.clone(), &call).await {
+            Ok(doc_id) => Ok(AdmissionPermit::new(node, self, permit, call, doc_id)),
+            Err(error) => {
+                self.release_running();
+                Err(error)
+            }
+        }
+    }
+
+    fn try_enter_queue(&self) -> Option<usize> {
+        loop {
+            let current = self.waiters.load(Ordering::SeqCst);
+            if current >= self.config.max_queue_depth {
+                return None;
+            }
+            if self
+                .waiters
+                .compare_exchange(current, current + 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                return Some(current + 1);
+            }
+        }
+    }
+
+    fn leave_queue(&self) {
+        self.waiters.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    fn release_running(&self) {
+        let previous = self.running.fetch_sub(1, Ordering::SeqCst);
+        if previous == 1 && self.is_closed() {
+            if let Some(registry) = self.registry.upgrade() {
+                let backend_id = self.backend_id.clone();
+                registry.controller_drained(backend_id);
+            }
+        }
+    }
+
+    fn call_record(
+        &self,
+        pending: PendingCallMetadata,
+        queue_depth_at_enqueue: usize,
+    ) -> InferenceCallRecord {
+        InferenceCallRecord {
+            call_id: pending.call_id,
+            runtime_instance_id: pending.runtime_instance_id,
+            request_id: pending.request_id,
+            call_seq: pending.call_seq,
+            backend_id: pending.backend_id,
+            behavior_id: pending.behavior_id,
+            agent_did: pending.agent_did,
+            call_kind: pending.call_kind,
+            attempt: pending.attempt,
+            queue_depth_at_enqueue,
+            controller_generation: self.generation,
+            backend_config_fingerprint: self.config.config_fingerprint.clone(),
+        }
+    }
+}
+
+struct QueuedCallGuard {
+    node: Arc<EmbeddedNode>,
+    controller: Arc<BackendAdmissionController>,
+    call: InferenceCallRecord,
+    persist_on_drop: bool,
+}
+
+impl QueuedCallGuard {
+    fn disarm(mut self) -> Self {
+        self.persist_on_drop = false;
+        self
+    }
+}
+
+impl Drop for QueuedCallGuard {
+    fn drop(&mut self) {
+        self.controller.leave_queue();
+        if !self.persist_on_drop {
+            return;
+        }
+        let node = self.node.clone();
+        let call = self.call.clone();
+        spawn_persistence(async move {
+            if let Err(error) =
+                persist_existing_call_terminal(node, &call, "cancelled", Some("Cancelled"), None)
+                    .await
+            {
+                tracing::warn!(call_id = %call.call_id, error = %error, "failed to persist cancelled queued inference call");
+            }
+        });
+    }
+}
+
+struct PendingCallMetadata {
+    call_id: String,
+    runtime_instance_id: String,
+    request_id: String,
+    call_seq: u64,
+    backend_id: String,
+    behavior_id: String,
+    agent_did: String,
+    call_kind: CallKind,
+    attempt: i64,
+}
+
+#[derive(Clone)]
+struct InferenceCallRecord {
+    call_id: String,
+    runtime_instance_id: String,
+    request_id: String,
+    call_seq: u64,
+    backend_id: String,
+    behavior_id: String,
+    agent_did: String,
+    call_kind: CallKind,
+    attempt: i64,
+    queue_depth_at_enqueue: usize,
+    controller_generation: u64,
+    backend_config_fingerprint: String,
+}
+
+impl InferenceCallRecord {
+    fn without_controller(pending: PendingCallMetadata) -> Self {
+        Self {
+            call_id: pending.call_id,
+            runtime_instance_id: pending.runtime_instance_id,
+            request_id: pending.request_id,
+            call_seq: pending.call_seq,
+            backend_id: pending.backend_id,
+            behavior_id: pending.behavior_id,
+            agent_did: pending.agent_did,
+            call_kind: pending.call_kind,
+            attempt: pending.attempt,
+            queue_depth_at_enqueue: 0,
+            controller_generation: 0,
+            backend_config_fingerprint: String::new(),
+        }
+    }
+}
+
+pub(crate) struct AdmissionPermit {
+    node: Arc<EmbeddedNode>,
+    controller: Arc<BackendAdmissionController>,
+    _permit: OwnedSemaphorePermit,
+    call: InferenceCallRecord,
+    _doc_id: String,
+    terminal: Option<PermitTerminal>,
+    finished: bool,
+}
+
+#[derive(Clone, Debug)]
+struct PermitTerminal {
+    call_state: &'static str,
+    failure_reason: Option<String>,
+    usage: Option<Usage>,
+}
+
+impl AdmissionPermit {
+    fn new(
+        node: Arc<EmbeddedNode>,
+        controller: Arc<BackendAdmissionController>,
+        permit: OwnedSemaphorePermit,
+        call: InferenceCallRecord,
+        doc_id: String,
+    ) -> Self {
+        Self {
+            node,
+            controller,
+            _permit: permit,
+            call,
+            _doc_id: doc_id,
+            terminal: None,
+            finished: false,
+        }
+    }
+
+    async fn finish_success(&mut self, usage: Option<Usage>) {
+        self.terminal = Some(PermitTerminal {
+            call_state: "completed",
+            failure_reason: None,
+            usage,
+        });
+        self.finish().await;
+    }
+
+    async fn finish_failure(&mut self, reason: &str) {
+        self.terminal = Some(PermitTerminal {
+            call_state: "failed",
+            failure_reason: Some(reason.to_string()),
+            usage: None,
+        });
+        self.finish().await;
+    }
+
+    async fn finish(&mut self) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+        let terminal = self.terminal.clone().unwrap_or(PermitTerminal {
+            call_state: "completed",
+            failure_reason: None,
+            usage: None,
+        });
+        if let Err(error) = persist_existing_call_terminal(
+            self.node.clone(),
+            &self.call,
+            terminal.call_state,
+            terminal.failure_reason.as_deref(),
+            terminal.usage,
+        )
+        .await
+        {
+            tracing::warn!(call_id = %self.call.call_id, error = %error, "failed to persist terminal inference call state");
+        }
+    }
+}
+
+impl StreamGuardLifecycle for AdmissionPermit {
+    fn mark_stream_success(&mut self, usage: Option<Usage>) {
+        if self.terminal.is_none() {
+            self.terminal = Some(PermitTerminal {
+                call_state: "completed",
+                failure_reason: None,
+                usage,
+            });
+        }
+    }
+
+    fn mark_stream_error(&mut self, error: &CompletionError) {
+        self.terminal = Some(PermitTerminal {
+            call_state: "failed",
+            failure_reason: Some(error.to_string()),
+            usage: None,
+        });
+    }
+}
+
+impl Drop for AdmissionPermit {
+    fn drop(&mut self) {
+        self.controller.release_running();
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+        let terminal = self.terminal.clone().unwrap_or(PermitTerminal {
+            call_state: "failed",
+            failure_reason: Some("StreamDroppedBeforeTerminalResponse".to_string()),
+            usage: None,
+        });
+        let node = self.node.clone();
+        let call_id = self.call.call_id.clone();
+        let call = self.call.clone();
+        spawn_persistence(async move {
+            if let Err(error) = persist_existing_call_terminal(
+                node,
+                &call,
+                terminal.call_state,
+                terminal.failure_reason.as_deref(),
+                terminal.usage,
+            )
+            .await
+            {
+                tracing::warn!(call_id = %call_id, error = %error, "failed to persist dropped inference call state");
+            }
+        });
+    }
+}
+
+fn spawn_persistence<F>(future: F)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.spawn(future);
+    }
+}
+
+fn completion_persistence_error(error: anyhow::Error) -> CompletionError {
+    CompletionError::ProviderError(format!("persisting InferenceCall failed: {error:#}"))
+}
+
+fn extract_inference_call_doc_id(data: Option<&serde_json::Value>) -> Result<String> {
+    data.and_then(|data| data.get("add_InferenceCall"))
+        .and_then(|value| {
+            value
+                .get("_docID")
+                .and_then(|doc_id| doc_id.as_str())
+                .or_else(|| {
+                    value
+                        .as_array()
+                        .and_then(|rows| rows.first())
+                        .and_then(|row| row.get("_docID"))
+                        .and_then(|doc_id| doc_id.as_str())
+                })
+        })
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("add_InferenceCall returned no _docID"))
+}
+
+async fn persist_call_queued(
+    node: Arc<EmbeddedNode>,
+    call: &InferenceCallRecord,
+) -> Result<String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let mutation = add_call_mutation(call, "queued", None, Some(&now), None, None, None);
+    let resp = node.execute(&mutation).await;
+    if resp.has_errors() {
+        anyhow::bail!("persisting queued InferenceCall failed: {:?}", resp.errors);
+    }
+    extract_inference_call_doc_id(resp.data.as_ref())
+}
+
+async fn persist_call_started(
+    node: Arc<EmbeddedNode>,
+    call: &InferenceCallRecord,
+) -> Result<String, CompletionError> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let mutation = add_call_mutation(call, "running", None, Some(&now), Some(&now), None, None);
+    let resp = node.execute(&mutation).await;
+    if resp.has_errors() {
+        return Err(CompletionError::ProviderError(format!(
+            "persisting running InferenceCall failed: {:?}",
+            resp.errors
+        )));
+    }
+    extract_inference_call_doc_id(resp.data.as_ref()).map_err(completion_persistence_error)
+}
+
+async fn persist_existing_call_running(
+    node: Arc<EmbeddedNode>,
+    call: &InferenceCallRecord,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let mutation = upsert_call_running_mutation(call, &now);
+    let resp = node.execute(&mutation).await;
+    if resp.has_errors() {
+        anyhow::bail!("persisting running InferenceCall failed: {:?}", resp.errors);
+    }
+    Ok(())
+}
+
+async fn persist_terminal_call(
+    node: Arc<EmbeddedNode>,
+    call: InferenceCallRecord,
+    call_state: &str,
+    failure_reason: Option<&str>,
+    usage: Option<Usage>,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let mutation = add_call_mutation(
+        &call,
+        call_state,
+        failure_reason,
+        Some(&now),
+        None,
+        Some(&now),
+        usage,
+    );
+    let resp = node.execute(&mutation).await;
+    if resp.has_errors() {
+        anyhow::bail!(
+            "persisting terminal InferenceCall failed: {:?}",
+            resp.errors
+        );
+    }
+    Ok(())
+}
+
+async fn persist_existing_call_terminal(
+    node: Arc<EmbeddedNode>,
+    call: &InferenceCallRecord,
+    call_state: &str,
+    failure_reason: Option<&str>,
+    usage: Option<Usage>,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let mutation = upsert_call_terminal_mutation(call, call_state, failure_reason, &now, usage);
+    let resp = node.execute(&mutation).await;
+    if resp.has_errors() {
+        anyhow::bail!(
+            "persisting terminal InferenceCall failed: {:?}",
+            resp.errors
+        );
+    }
+    Ok(())
+}
+
+fn add_call_mutation(
+    call: &InferenceCallRecord,
+    call_state: &str,
+    failure_reason: Option<&str>,
+    queued_at: Option<&str>,
+    started_at: Option<&str>,
+    ended_at: Option<&str>,
+    usage: Option<Usage>,
+) -> String {
+    let queued_at = optional_graphql_string("queued_at", queued_at);
+    let started_at = optional_graphql_string("started_at", started_at);
+    let ended_at = optional_graphql_string("ended_at", ended_at);
+    let failure_reason = optional_graphql_string("failure_reason", failure_reason);
+    let (prompt_tokens, completion_tokens) = usage_fields(usage);
+    format!(
+        r#"mutation {{
+            add_InferenceCall(input: {{
+                call_id: "{call_id}",
+                runtime_instance_id: "{runtime_instance_id}",
+                request_id: "{request_id}",
+                call_seq: {call_seq},
+                backend_id: "{backend_id}",
+                behavior_id: "{behavior_id}",
+                agent_did: "{agent_did}",
+                call_kind: "{call_kind}",
+                attempt: {attempt},
+                call_state: "{call_state}",
+                {failure_reason}
+                {queued_at}
+                {started_at}
+                {ended_at}
+                priority: 0,
+                queue_depth_at_enqueue: {queue_depth_at_enqueue},
+                controller_generation: {controller_generation},
+                backend_config_fingerprint: "{backend_config_fingerprint}"
+                {prompt_tokens}
+                {completion_tokens}
+            }}) {{ _docID }}
+        }}"#,
+        call_id = escape_graphql_string(&call.call_id),
+        runtime_instance_id = escape_graphql_string(&call.runtime_instance_id),
+        request_id = escape_graphql_string(&call.request_id),
+        call_seq = call.call_seq,
+        backend_id = escape_graphql_string(&call.backend_id),
+        behavior_id = escape_graphql_string(&call.behavior_id),
+        agent_did = escape_graphql_string(&call.agent_did),
+        call_kind = call.call_kind.as_str(),
+        attempt = call.attempt,
+        call_state = call_state,
+        failure_reason = failure_reason,
+        queued_at = queued_at,
+        started_at = started_at,
+        ended_at = ended_at,
+        queue_depth_at_enqueue = call.queue_depth_at_enqueue,
+        controller_generation = call.controller_generation,
+        backend_config_fingerprint = escape_graphql_string(&call.backend_config_fingerprint),
+        prompt_tokens = prompt_tokens,
+        completion_tokens = completion_tokens,
+    )
+}
+
+fn upsert_call_running_mutation(call: &InferenceCallRecord, started_at: &str) -> String {
+    format!(
+        r#"mutation {{
+            upsert_InferenceCall(
+                filter: {{ call_id: {{ _eq: "{call_id}" }} }},
+                add: {{
+                    call_id: "{call_id}",
+                    runtime_instance_id: "{runtime_instance_id}",
+                    request_id: "{request_id}",
+                    call_seq: {call_seq},
+                    backend_id: "{backend_id}",
+                    behavior_id: "{behavior_id}",
+                    agent_did: "{agent_did}",
+                    call_kind: "{call_kind}",
+                    attempt: {attempt},
+                    call_state: "running",
+                    queued_at: "{started_at}",
+                    started_at: "{started_at}",
+                    priority: 0,
+                    queue_depth_at_enqueue: {queue_depth_at_enqueue},
+                    controller_generation: {controller_generation},
+                    backend_config_fingerprint: "{backend_config_fingerprint}"
+                }},
+                update: {{
+                    call_state: "running",
+                    started_at: "{started_at}"
+                }}
+            ) {{ _docID }}
+        }}"#,
+        call_id = escape_graphql_string(&call.call_id),
+        runtime_instance_id = escape_graphql_string(&call.runtime_instance_id),
+        request_id = escape_graphql_string(&call.request_id),
+        call_seq = call.call_seq,
+        backend_id = escape_graphql_string(&call.backend_id),
+        behavior_id = escape_graphql_string(&call.behavior_id),
+        agent_did = escape_graphql_string(&call.agent_did),
+        call_kind = call.call_kind.as_str(),
+        attempt = call.attempt,
+        started_at = escape_graphql_string(started_at),
+        queue_depth_at_enqueue = call.queue_depth_at_enqueue,
+        controller_generation = call.controller_generation,
+        backend_config_fingerprint = escape_graphql_string(&call.backend_config_fingerprint),
+    )
+}
+
+fn upsert_call_terminal_mutation(
+    call: &InferenceCallRecord,
+    call_state: &str,
+    failure_reason: Option<&str>,
+    ended_at: &str,
+    usage: Option<Usage>,
+) -> String {
+    let failure_reason = optional_graphql_string("failure_reason", failure_reason);
+    let (prompt_tokens, completion_tokens) = usage_fields(usage);
+    format!(
+        r#"mutation {{
+            upsert_InferenceCall(
+                filter: {{ call_id: {{ _eq: "{call_id}" }} }},
+                add: {{
+                    call_id: "{call_id}",
+                    runtime_instance_id: "{runtime_instance_id}",
+                    request_id: "{request_id}",
+                    call_seq: {call_seq},
+                    backend_id: "{backend_id}",
+                    behavior_id: "{behavior_id}",
+                    agent_did: "{agent_did}",
+                    call_kind: "{call_kind}",
+                    attempt: {attempt},
+                    call_state: "{call_state}",
+                    {failure_reason}
+                    queued_at: "{ended_at}",
+                    ended_at: "{ended_at}",
+                    priority: 0,
+                    queue_depth_at_enqueue: {queue_depth_at_enqueue},
+                    controller_generation: {controller_generation},
+                    backend_config_fingerprint: "{backend_config_fingerprint}"
+                    {prompt_tokens}
+                    {completion_tokens}
+                }},
+                update: {{
+                    call_state: "{call_state}",
+                    {failure_reason}
+                    ended_at: "{ended_at}"
+                    {prompt_tokens}
+                    {completion_tokens}
+                }}
+            ) {{ _docID }}
+        }}"#,
+        call_id = escape_graphql_string(&call.call_id),
+        runtime_instance_id = escape_graphql_string(&call.runtime_instance_id),
+        request_id = escape_graphql_string(&call.request_id),
+        call_seq = call.call_seq,
+        backend_id = escape_graphql_string(&call.backend_id),
+        behavior_id = escape_graphql_string(&call.behavior_id),
+        agent_did = escape_graphql_string(&call.agent_did),
+        call_kind = call.call_kind.as_str(),
+        attempt = call.attempt,
+        call_state = call_state,
+        failure_reason = failure_reason,
+        ended_at = escape_graphql_string(ended_at),
+        queue_depth_at_enqueue = call.queue_depth_at_enqueue,
+        controller_generation = call.controller_generation,
+        backend_config_fingerprint = escape_graphql_string(&call.backend_config_fingerprint),
+        prompt_tokens = prompt_tokens,
+        completion_tokens = completion_tokens,
+    )
+}
+
+fn optional_graphql_string(field: &str, value: Option<&str>) -> String {
+    value
+        .map(|value| format!(r#"{field}: "{}","#, escape_graphql_string(value)))
+        .unwrap_or_default()
+}
+
+fn usage_fields(usage: Option<Usage>) -> (String, String) {
+    match usage {
+        Some(usage) => (
+            format!("prompt_tokens: {},", usage.input_tokens),
+            format!("completion_tokens: {},", usage.output_tokens),
+        ),
+        None => (String::new(), String::new()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use serde_json::Value;
+
+    use super::*;
+    use crate::schema::ensure_schemas;
+
+    async fn test_node() -> Arc<EmbeddedNode> {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        ensure_schemas(node.as_ref()).await.unwrap();
+        node
+    }
+
+    fn config(
+        backend_id: &str,
+        max_concurrent: usize,
+        max_queue_depth: usize,
+    ) -> BackendAdmissionConfig {
+        BackendAdmissionConfig {
+            backend_id: backend_id.to_string(),
+            max_concurrent,
+            max_queue_depth,
+            enabled: true,
+            probe_status: "healthy".to_string(),
+            config_fingerprint: format!("{backend_id}:{max_concurrent}:{max_queue_depth}"),
+        }
+    }
+
+    fn request(request_id: &str) -> AgentRequest {
+        AgentRequest {
+            doc_id: format!("doc-{request_id}"),
+            request_id: request_id.to_string(),
+            agent_did: "did:defra-agent:test".to_string(),
+            behavior_id: Some("default".to_string()),
+            session_id: format!("session-{request_id}"),
+            content: "hello".to_string(),
+            created_at: "2026-04-15T00:00:00Z".to_string(),
+        }
+    }
+
+    async fn call_rows(node: &EmbeddedNode) -> Vec<Value> {
+        let response = node
+            .execute(
+                r#"{
+                    InferenceCall(order: { call_seq: ASC }) {
+                        request_id
+                        call_seq
+                        backend_id
+                        behavior_id
+                        call_kind
+                        call_state
+                        failure_reason
+                        queue_depth_at_enqueue
+                    }
+                }"#,
+            )
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("InferenceCall"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn max_queue_depth_zero_allows_immediate_permit_and_rejects_saturated_backend() {
+        let node = test_node().await;
+        let registry = AdmissionRegistry::new(node.clone());
+        registry.reconcile(
+            1,
+            &HashMap::from([("backend-a".to_string(), config("backend-a", 1, 0))]),
+        );
+        let context =
+            AdmissionCallContext::for_request(&request("req-zero"), "default", "backend-a");
+
+        scope_request(context, async {
+            let mut first = registry.acquire_current_call().await.unwrap();
+            let error = match registry.acquire_current_call().await {
+                Ok(_) => panic!("saturated backend should reject without queue capacity"),
+                Err(error) => error,
+            };
+            assert!(error.to_string().contains("QueueFull"));
+            first.finish_success(None).await;
+        })
+        .await;
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let rows = call_rows(node.as_ref()).await;
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["call_state"], "completed");
+        assert_eq!(rows[1]["call_state"], "failed");
+        assert_eq!(rows[1]["failure_reason"], "QueueFull");
+    }
+
+    #[tokio::test]
+    async fn queued_calls_start_in_tokio_registration_order_after_permit_release() {
+        let node = test_node().await;
+        let registry = AdmissionRegistry::new(node.clone());
+        registry.reconcile(
+            1,
+            &HashMap::from([("backend-a".to_string(), config("backend-a", 1, 2))]),
+        );
+        let first_context =
+            AdmissionCallContext::for_request(&request("req-ordered"), "default", "backend-a");
+        let second_context = first_context.clone();
+
+        scope_request(first_context, async {
+            let mut first = registry.acquire_current_call().await.unwrap();
+            let second_registry = registry.clone();
+            let second = tokio::spawn(async move {
+                scope_request(second_context, async move {
+                    let mut permit = second_registry.acquire_current_call().await.unwrap();
+                    permit.finish_success(None).await;
+                })
+                .await;
+            });
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let rows = call_rows(node.as_ref()).await;
+            assert_eq!(rows.len(), 2);
+            assert_eq!(rows[0]["call_state"], "running");
+            assert_eq!(rows[1]["call_state"], "queued");
+
+            first.finish_success(None).await;
+            drop(first);
+            second.await.unwrap();
+        })
+        .await;
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let rows = call_rows(node.as_ref()).await;
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["call_state"], "completed");
+        assert_eq!(rows[1]["call_state"], "completed");
+        assert_eq!(rows[1]["queue_depth_at_enqueue"], 1);
+    }
+
+    #[tokio::test]
+    async fn scoped_scheduled_calls_are_persisted_with_scheduled_kind() {
+        let node = test_node().await;
+        let registry = AdmissionRegistry::new(node.clone());
+        registry.reconcile(
+            1,
+            &HashMap::from([("backend-a".to_string(), config("backend-a", 1, 1))]),
+        );
+        let context =
+            AdmissionCallContext::for_request(&request("req-scheduled"), "default", "backend-a");
+
+        scope_request(context, async {
+            scope_call(CallKind::Scheduled, 1, async {
+                let mut permit = registry.acquire_current_call().await.unwrap();
+                permit.finish_success(None).await;
+            })
+            .await;
+        })
+        .await;
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let rows = call_rows(node.as_ref()).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["call_kind"], "scheduled");
+        assert_eq!(rows[0]["call_state"], "completed");
+    }
+
+    #[tokio::test]
+    async fn compaction_calls_share_backend_capacity_with_inference_calls() {
+        let node = test_node().await;
+        let registry = AdmissionRegistry::new(node.clone());
+        registry.reconcile(
+            1,
+            &HashMap::from([("backend-a".to_string(), config("backend-a", 1, 1))]),
+        );
+        let inference_context =
+            AdmissionCallContext::for_request(&request("req-compaction"), "default", "backend-a");
+        let compaction_context = inference_context.clone();
+
+        scope_request(inference_context, async {
+            let mut inference = registry.acquire_current_call().await.unwrap();
+            let compaction_registry = registry.clone();
+            let compaction = tokio::spawn(async move {
+                scope_request(compaction_context, async move {
+                    scope_call(CallKind::Compaction, 1, async {
+                        let mut permit = compaction_registry.acquire_current_call().await.unwrap();
+                        permit.finish_success(None).await;
+                    })
+                    .await;
+                })
+                .await;
+            });
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let rows = call_rows(node.as_ref()).await;
+            assert_eq!(rows.len(), 2);
+            assert_eq!(rows[0]["call_kind"], "inference");
+            assert_eq!(rows[0]["call_state"], "running");
+            assert_eq!(rows[1]["call_kind"], "compaction");
+            assert_eq!(rows[1]["call_state"], "queued");
+
+            inference.finish_success(None).await;
+            drop(inference);
+            compaction.await.unwrap();
+        })
+        .await;
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let rows = call_rows(node.as_ref()).await;
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["call_state"], "completed");
+        assert_eq!(rows[1]["call_state"], "completed");
+        assert_eq!(rows[1]["queue_depth_at_enqueue"], 1);
     }
 }

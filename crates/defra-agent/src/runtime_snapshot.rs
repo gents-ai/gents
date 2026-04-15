@@ -20,6 +20,7 @@ pub(crate) struct ResolvedRuntimeSnapshot {
 }
 
 impl ResolvedRuntimeSnapshot {
+    #[allow(dead_code)]
     pub(crate) fn from_parts(
         default_behavior_id: String,
         behaviors: Vec<Arc<BehaviorConfig>>,
@@ -169,7 +170,10 @@ fn configuration_fingerprint(
         fingerprint.push('\n');
     }
 
-    let mut backend_ids = backend_admission_configs.keys().cloned().collect::<Vec<_>>();
+    let mut backend_ids = backend_admission_configs
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
     backend_ids.sort();
     for backend_id in backend_ids {
         let config = backend_admission_configs

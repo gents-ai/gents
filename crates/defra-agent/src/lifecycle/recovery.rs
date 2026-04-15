@@ -68,12 +68,10 @@ async fn recover_stuck_requests(node: &EmbeddedNode, agent_did: &str) -> Result<
                     filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
                     input: {{
                         status: "{next_status}",
-                        lifecycle_state: "{next_lifecycle_state}",
-                        admission_state: "{released}"
+                        lifecycle_state: "{next_lifecycle_state}"
                     }}
                 ) {{ _docID }}
             }}"#,
-            released = PersistedAdmissionState::Released.as_str(),
         );
 
         let resp = node.execute(&mutation).await;

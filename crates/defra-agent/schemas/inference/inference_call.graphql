@@ -12,9 +12,9 @@ type InferenceCall {
     call_state: String @index
     failure_reason: String
 
-    queued_at: DateTime
-    started_at: DateTime
-    ended_at: DateTime
+    queued_at: String
+    started_at: String
+    ended_at: String
 
     priority: Int
     queue_depth_at_enqueue: Int

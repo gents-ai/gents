@@ -4,6 +4,7 @@ use rig::completion::CompletionModel;
 use rig::message::ToolChoice;
 use rig::tool::ToolDyn;
 
+use crate::admission::{AdmissionRegistry, AdmittedCompletionClient};
 use crate::backend_provider::BackendProviderKind;
 use crate::config::BehaviorConfig;
 
@@ -16,6 +17,36 @@ pub(crate) fn build_agent<C>(
 where
     C: CompletionClient,
 {
+    let builder = configure_agent_builder(
+        client
+            .agent(&behavior.model_name)
+            .preamble(preamble)
+            .default_max_turns(behavior.max_turns),
+        behavior,
+        tools.len(),
+    );
+
+    if tools.is_empty() {
+        builder.build()
+    } else {
+        builder.tools(tools).build()
+    }
+}
+
+pub(crate) fn build_admitted_agent<C>(
+    client: C,
+    admission: AdmissionRegistry,
+    behavior: &BehaviorConfig,
+    preamble: &str,
+    tools: Vec<Box<dyn ToolDyn>>,
+) -> Agent<<AdmittedCompletionClient<C> as CompletionClient>::CompletionModel>
+where
+    C: CompletionClient,
+    C::CompletionModel: 'static,
+    <C::CompletionModel as CompletionModel>::Response: 'static,
+    <C::CompletionModel as CompletionModel>::StreamingResponse: 'static,
+{
+    let client = AdmittedCompletionClient::new(client, admission);
     let builder = configure_agent_builder(
         client
             .agent(&behavior.model_name)

@@ -3,8 +3,7 @@ use defra_node::EmbeddedNode;
 
 pub const INFERENCE_BACKEND_SCHEMA: &str =
     include_str!("../schemas/inference/inference_backend.graphql");
-pub const INFERENCE_CALL_SCHEMA: &str =
-    include_str!("../schemas/inference/inference_call.graphql");
+pub const INFERENCE_CALL_SCHEMA: &str = include_str!("../schemas/inference/inference_call.graphql");
 pub const INFERENCE_PROFILE_SCHEMA: &str =
     include_str!("../schemas/inference/inference_profile.graphql");
 pub const AGENT_PRINCIPAL_SCHEMA: &str = include_str!("../schemas/agent/agent_principal.graphql");

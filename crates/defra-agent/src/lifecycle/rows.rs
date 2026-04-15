@@ -33,7 +33,6 @@ pub(super) struct StatusRow {
 pub(super) struct RequestViewRow {
     pub(super) status: String,
     pub(super) lifecycle_state: Option<String>,
-    pub(super) admission_state: Option<String>,
     #[allow(dead_code)]
     pub(super) backend_id: Option<String>,
     #[allow(dead_code)]

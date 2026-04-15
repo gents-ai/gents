@@ -8,6 +8,7 @@ use std::thread::JoinHandle;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
+use crate::admission::{AdmissionRegistry, BackendAdmissionConfig, CallKind};
 use crate::compaction::CompactionStrategy;
 use crate::config::{
     BehaviorConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
@@ -18,6 +19,29 @@ use crate::ensure_runtime_schemas;
 use crate::identity::SimpleIdentity;
 use crate::tool_surface::{BehaviorToolConfig, ToolRuntimeContext};
 use crate::BackendProviderKind;
+
+fn test_admission_registry(
+    node: Arc<EmbeddedNode>,
+    backend_id: &str,
+    max_concurrent: usize,
+) -> AdmissionRegistry {
+    let registry = AdmissionRegistry::new(node);
+    registry.reconcile(
+        1,
+        &std::collections::HashMap::from([(
+            backend_id.to_string(),
+            BackendAdmissionConfig {
+                backend_id: backend_id.to_string(),
+                max_concurrent,
+                max_queue_depth: 100,
+                enabled: true,
+                probe_status: "healthy".to_string(),
+                config_fingerprint: format!("{backend_id}:{max_concurrent}:100"),
+            },
+        )]),
+    );
+    registry
+}
 
 #[test]
 fn scheduled_task_parses_from_json() {
@@ -413,6 +437,7 @@ async fn insert_backend_with_capacity(
                 name: "scheduler-backend",
                 endpoint: "{endpoint}",
                 max_concurrent: {max_concurrent},
+                max_queue_depth: 100,
                 enabled: true,
                 models: ["scheduled-model"],
                 probe_status: "healthy"
@@ -483,7 +508,7 @@ async fn scheduled_execution_succeeds_without_external_ops_service() {
         &tool_surface,
         &tool_runtime,
         &node,
-        Arc::new(BackendTracker::new()),
+        test_admission_registry(node.clone(), "backend-1", 1),
         CancellationToken::new(),
     )
     .await
@@ -653,7 +678,7 @@ async fn scheduled_execution_updates_live_task_runtime_fields() {
         &tool_surface,
         &tool_runtime,
         &node,
-        Arc::new(BackendTracker::new()),
+        test_admission_registry(node.clone(), "backend-runtime", 1),
         CancellationToken::new(),
     )
     .await
@@ -746,7 +771,7 @@ async fn scheduler_tick_shutdown_is_prompt_while_task_waits_for_backend_capacity
         node.as_ref(),
         "backend-blocked",
         mock_endpoint.endpoint(),
-        0,
+        1,
     )
     .await;
 
@@ -792,15 +817,37 @@ async fn scheduler_tick_shutdown_is_prompt_while_task_waits_for_backend_capacity
         default_behavior_id: behavior.name.clone(),
         behaviors: std::collections::HashMap::from([(behavior.name.clone(), behavior.clone())]),
         tool_surfaces: std::collections::HashMap::from([(behavior.name.clone(), tool_surface)]),
+        backend_admission_configs: std::collections::HashMap::from([(
+            "backend-blocked".to_string(),
+            BackendAdmissionConfig {
+                backend_id: "backend-blocked".to_string(),
+                max_concurrent: 1,
+                max_queue_depth: 100,
+                enabled: true,
+                probe_status: "healthy".to_string(),
+                config_fingerprint: "backend-blocked:1:100".to_string(),
+            },
+        )]),
         unavailable_behaviors: std::collections::HashMap::new(),
         dispatchers: std::collections::HashMap::new(),
     });
+    let registry = test_admission_registry(node.clone(), "backend-blocked", 1);
+    let _held_permit = registry
+        .acquire_for_test(
+            "req-held-scheduler-capacity",
+            "backend-blocked",
+            &behavior.name,
+            behavior.did(),
+            CallKind::Scheduled,
+        )
+        .await
+        .expect("test permit should acquire backend capacity");
     let (_tx, rx) = watch::channel(active_snapshot);
     let mut scheduler = Scheduler::new(
         node.clone(),
         rx,
         ToolRuntimeContext::oneshot(node.clone()),
-        Arc::new(BackendTracker::new()),
+        registry,
     );
     let cancel = CancellationToken::new();
     let cancel_for_tick = cancel.clone();

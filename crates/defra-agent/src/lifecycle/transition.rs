@@ -102,7 +102,6 @@ impl RequestLifecycle {
                 "processing",
                 "completed",
                 PersistedLifecycleState::Completed,
-                PersistedAdmissionState::Released,
             )
             .await?
         {
@@ -177,12 +176,7 @@ impl RequestLifecycle {
         )?;
 
         match self
-            .transition_request_status(
-                "processing",
-                "error",
-                PersistedLifecycleState::Failed,
-                PersistedAdmissionState::Released,
-            )
+            .transition_request_status("processing", "error", PersistedLifecycleState::Failed)
             .await?
         {
             RequestStatusTransition::Updated | RequestStatusTransition::AlreadyTarget => {
@@ -237,7 +231,6 @@ impl RequestLifecycle {
         from_status: &str,
         target_status: &str,
         target_lifecycle_state: PersistedLifecycleState,
-        target_admission_state: PersistedAdmissionState,
     ) -> Result<RequestStatusTransition> {
         let doc_id = &self.request.doc_id;
         let mutation = format!(
@@ -250,7 +243,6 @@ impl RequestLifecycle {
                     input: {{
                         status: "{target_status}",
                         lifecycle_state: "{target_lifecycle_state}",
-                        admission_state: "{target_admission_state}",
                         behavior_id: "{behavior_id}",
                         backend_id: "{backend_id}",
                         execution_origin: "{execution_origin}",
@@ -259,7 +251,6 @@ impl RequestLifecycle {
                 ) {{ _docID }}
             }}"#,
             target_lifecycle_state = target_lifecycle_state.as_str(),
-            target_admission_state = target_admission_state.as_str(),
             behavior_id = escape_graphql_string(&self.behavior_id),
             backend_id = escape_graphql_string(&self.backend_id),
             execution_origin = self.execution_origin.as_str(),
@@ -317,10 +308,8 @@ impl RequestLifecycle {
         &self,
         from_status: &str,
         from_lifecycle_state: PersistedLifecycleState,
-        from_admission_state: PersistedAdmissionState,
         target_status: &str,
         target_lifecycle_state: PersistedLifecycleState,
-        target_admission_state: PersistedAdmissionState,
     ) -> Result<()> {
         let doc_id = &self.request.doc_id;
         let mutation = format!(
@@ -329,13 +318,11 @@ impl RequestLifecycle {
                     filter: {{
                         _docID: {{ _eq: "{doc_id}" }},
                         status: {{ _eq: "{from_status}" }},
-                        lifecycle_state: {{ _eq: "{from_lifecycle_state}" }},
-                        admission_state: {{ _eq: "{from_admission_state}" }}
+                        lifecycle_state: {{ _eq: "{from_lifecycle_state}" }}
                     }},
                     input: {{
                         status: "{target_status}",
                         lifecycle_state: "{target_lifecycle_state}",
-                        admission_state: "{target_admission_state}",
                         behavior_id: "{behavior_id}",
                         backend_id: "{backend_id}",
                         execution_origin: "{execution_origin}",
@@ -344,9 +331,7 @@ impl RequestLifecycle {
                 ) {{ _docID }}
             }}"#,
             from_lifecycle_state = from_lifecycle_state.as_str(),
-            from_admission_state = from_admission_state.as_str(),
             target_lifecycle_state = target_lifecycle_state.as_str(),
-            target_admission_state = target_admission_state.as_str(),
             behavior_id = escape_graphql_string(&self.behavior_id),
             backend_id = escape_graphql_string(&self.backend_id),
             execution_origin = self.execution_origin.as_str(),
@@ -357,11 +342,9 @@ impl RequestLifecycle {
         let resp = self.node.execute(&mutation).await;
         if resp.has_errors() {
             anyhow::bail!(
-                "updating execution view {} / {} -> {} / {} for doc_id={doc_id}: {:?}",
+                "updating execution view {} -> {} for doc_id={doc_id}: {:?}",
                 from_lifecycle_state.as_str(),
-                from_admission_state.as_str(),
                 target_lifecycle_state.as_str(),
-                target_admission_state.as_str(),
                 resp.errors
             );
         }
@@ -379,29 +362,23 @@ impl RequestLifecycle {
         match request_view {
             Some(current)
                 if current.status == target_status
-                    && current.lifecycle_state.as_deref() == Some(target_lifecycle_state.as_str())
-                    && current.admission_state.as_deref() == Some(target_admission_state.as_str()) =>
+                    && current.lifecycle_state.as_deref() == Some(target_lifecycle_state.as_str()) =>
             {
                 Ok(())
             }
             Some(current) => anyhow::bail!(
-                "request {} could not transition execution view {} / {} -> {} / {}; current status={} lifecycle_state={} admission_state={}",
+                "request {} could not transition execution view {} -> {}; current status={} lifecycle_state={}",
                 self.request.request_id,
                 from_lifecycle_state.as_str(),
-                from_admission_state.as_str(),
                 target_lifecycle_state.as_str(),
-                target_admission_state.as_str(),
                 current.status,
-                current.lifecycle_state.as_deref().unwrap_or("missing"),
-                current.admission_state.as_deref().unwrap_or("missing")
+                current.lifecycle_state.as_deref().unwrap_or("missing")
             ),
             None => anyhow::bail!(
-                "request {} disappeared while transitioning execution view {} / {} -> {} / {}",
+                "request {} disappeared while transitioning execution view {} -> {}",
                 self.request.request_id,
                 from_lifecycle_state.as_str(),
-                from_admission_state.as_str(),
-                target_lifecycle_state.as_str(),
-                target_admission_state.as_str()
+                target_lifecycle_state.as_str()
             ),
         }
     }
@@ -439,7 +416,6 @@ impl RequestLifecycle {
                         input: {{
                             status: "superseded",
                             lifecycle_state: "{lifecycle_state}",
-                            admission_state: "{admission_state}",
                             superseded_by_request: "{superseded_by_request}",
                             behavior_id: "{behavior_id}",
                             backend_id: "{backend_id}",
@@ -449,7 +425,6 @@ impl RequestLifecycle {
                 }}"#,
                 doc_id = duplicate.doc_id,
                 lifecycle_state = PersistedLifecycleState::Superseded.as_str(),
-                admission_state = PersistedAdmissionState::Released.as_str(),
                 superseded_by_request = superseded_by_request,
                 behavior_id = escape_graphql_string(&self.behavior_id),
                 backend_id = escape_graphql_string(&self.backend_id),
@@ -499,7 +474,6 @@ impl RequestLifecycle {
                     input: {{
                         status: "superseded",
                         lifecycle_state: "{lifecycle_state}",
-                        admission_state: "{admission_state}",
                         superseded_by_request: "{superseded_by_request}",
                         behavior_id: "{behavior_id}",
                         backend_id: "{backend_id}",
@@ -509,7 +483,6 @@ impl RequestLifecycle {
             }}"#,
             doc_id = self.request.doc_id,
             lifecycle_state = PersistedLifecycleState::Superseded.as_str(),
-            admission_state = PersistedAdmissionState::Released.as_str(),
             superseded_by_request = superseded_by_request,
             behavior_id = escape_graphql_string(&self.behavior_id),
             backend_id = escape_graphql_string(&self.backend_id),

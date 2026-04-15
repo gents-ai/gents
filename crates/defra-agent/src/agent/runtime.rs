@@ -13,11 +13,12 @@ use tokio_util::sync::CancellationToken;
 use super::daemon::BehaviorDaemon;
 use super::reconcile::GenerationSupervisor;
 use super::{DefraAgent, ProcessLifecycleState};
+use crate::admission::{AdmissionRegistry, BackendAdmissionConfig};
 use crate::backend_provider::{
     build_completion_client, build_openrouter_client, BackendProviderKind,
 };
-use crate::backend_registry::BackendTracker;
-use crate::completion_factory::build_agent;
+use crate::backend_registry;
+use crate::completion_factory::build_admitted_agent;
 use crate::health_checker::{spawn_health_checker, ServiceHealthMap};
 use crate::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
 use crate::prompt::LayeredPromptBuilder;
@@ -32,7 +33,7 @@ use crate::watcher::{AgentRequest, DefraWatcher, Watcher};
 struct RuntimeContext {
     node: Arc<defra_node::EmbeddedNode>,
     tool_runtime: ToolRuntimeContext,
-    backend_tracker: Arc<BackendTracker>,
+    admission_registry: AdmissionRegistry,
     retry_policy: RetryPolicy,
     hook_failure_policy: crate::hook::FailurePolicy,
     startup_barrier: Arc<StartupBarrier>,
@@ -159,13 +160,18 @@ impl RuntimeContext {
         C: CompletionClient,
         C::CompletionModel: 'static,
     {
-        let agent = build_agent(&client, behavior.as_ref(), &preamble, tools);
+        let agent = build_admitted_agent(
+            client,
+            self.admission_registry.clone(),
+            behavior.as_ref(),
+            &preamble,
+            tools,
+        );
         let mut daemon = BehaviorDaemon::new(
             self.node.clone(),
             behavior,
             agent,
             prompt_builder,
-            self.backend_tracker.clone(),
             self.retry_policy.clone(),
             self.hook_failure_policy,
             self.startup_barrier.clone(),
@@ -234,11 +240,11 @@ pub(super) async fn run_agent(
             .cloned()
             .collect::<Vec<_>>(),
     ));
-    let backend_tracker = Arc::new(BackendTracker::new());
+    let admission_registry = AdmissionRegistry::new(agent.node.clone());
     let runtime = RuntimeContext {
         node: agent.node.clone(),
         tool_runtime,
-        backend_tracker: backend_tracker.clone(),
+        admission_registry: admission_registry.clone(),
         retry_policy: agent.retry_policy.clone(),
         hook_failure_policy: agent.hook_failure_policy,
         startup_barrier: startup_barrier.clone(),
@@ -247,6 +253,7 @@ pub(super) async fn run_agent(
     let runtime_for_runner = runtime.clone();
     let generation_supervisor = GenerationSupervisor::bootstrap(
         resolved_snapshot,
+        admission_registry.clone(),
         agent.retry_policy.clone(),
         move |behavior, tool_surface, request_rx, shutdown| {
             let runtime = runtime_for_runner.clone();
@@ -271,7 +278,7 @@ pub(super) async fn run_agent(
         agent.node.clone(),
         active_snapshot_rx.clone(),
         scheduler_tool_runtime,
-        backend_tracker.clone(),
+        admission_registry.clone(),
     );
 
     let scheduler_cancel = cancel.child_token();
@@ -1016,14 +1023,51 @@ async fn resolve_startup_snapshot(agent: &DefraAgent) -> Result<ResolvedRuntimeS
         None => {
             let tool_surfaces =
                 resolve_tool_surfaces(agent.node.as_ref(), &agent.behaviors).await?;
-            Ok(ResolvedRuntimeSnapshot::from_parts(
+            let backend_admission_configs =
+                resolve_backend_admission_configs(agent.node.as_ref(), &agent.behaviors).await?;
+            Ok(ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
                 agent.default_behavior_id.clone(),
                 agent.behaviors.clone(),
                 tool_surfaces,
+                backend_admission_configs,
                 agent.unavailable_behaviors.clone(),
             ))
         }
     }
+}
+
+async fn resolve_backend_admission_configs(
+    node: &defra_node::EmbeddedNode,
+    behaviors: &[Arc<crate::config::BehaviorConfig>],
+) -> Result<HashMap<String, BackendAdmissionConfig>> {
+    let mut configs = HashMap::new();
+    for behavior in behaviors {
+        let Some(backend_id) = behavior
+            .backend_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|backend_id| !backend_id.is_empty())
+        else {
+            continue;
+        };
+        if configs.contains_key(backend_id) {
+            continue;
+        }
+        let backend = backend_registry::lookup_backend(node, backend_id)
+            .await?
+            .ok_or_else(|| {
+                anyhow!(
+                    "behavior {} references missing backend {}",
+                    behavior.name,
+                    backend_id
+                )
+            })?;
+        configs.insert(
+            backend.backend_id.clone(),
+            BackendAdmissionConfig::from_backend(&backend)?,
+        );
+    }
+    Ok(configs)
 }
 
 async fn resolve_document_snapshot_with_tools(

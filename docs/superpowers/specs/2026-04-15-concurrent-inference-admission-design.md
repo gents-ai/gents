@@ -643,7 +643,8 @@ lands.
 ### New: `InferenceCall`
 
 New collection `crates/defra-agent/schemas/inference/inference_call.graphql`.
-Written exactly once per call, at terminal state.
+One row per call; the row is created at `queued`/`running`/terminal state and
+updated as the call advances.
 
 ```graphql
 type InferenceCall {
@@ -657,12 +658,12 @@ type InferenceCall {
     call_kind: String @index      # inference | compaction | scheduled
     attempt: Int
 
-    call_state: String @index       # released | rejected | cancelled
-    failure_reason: String          # AdmissionRejected | BackendError | BackendTimeout | BackendGone | Cancelled (future) | null
+    call_state: String @index       # queued | running | completed | failed | cancelled
+    failure_reason: String          # QueueFull | BackendError | BackendTimeout | BackendGone | Cancelled | null
 
-    queued_at: DateTime
-    started_at: DateTime            # null iff call never left queued
-    ended_at: DateTime
+    queued_at: String
+    started_at: String              # null iff call never left queued
+    ended_at: String
 
     priority: Int                   # reserved, unused in v1
     queue_depth_at_enqueue: Int     # waiter count observed before this call enqueues

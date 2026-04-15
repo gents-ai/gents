@@ -45,7 +45,7 @@ pub use backend_provider::{
     build_openrouter_client as build_openrouter_backend_completion_client,
     discover_models as discover_backend_models, BackendProviderAdapter, BackendProviderKind,
 };
-pub use backend_registry::{BackendTracker, InferenceBackend};
+pub use backend_registry::InferenceBackend;
 pub use config::BehaviorConfig;
 pub use defra_node;
 pub use document_config::{
