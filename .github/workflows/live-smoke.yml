@@ -17,6 +17,7 @@ env:
   RUST_BACKTRACE: "1"
   DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT: ${{ github.event.inputs.inference_endpoint }}
   DEFRA_AGENT_CLI_E2E_MODEL_NAME: ${{ github.event.inputs.model_name }}
+  DEFRA_AGENT_CLI_E2E_API_KEY: ${{ secrets.AGENT_DAEMON_API_KEY }}
   AGENT_DAEMON_API_KEY: ${{ secrets.AGENT_DAEMON_API_KEY }}
 
 jobs:
@@ -36,4 +37,4 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Run live CLI smoke test
-        run: cargo test -p defra-agent-cli --test cli_e2e cli_flow_runs_real_tool_loop_against_live_endpoint -- --ignored --nocapture --test-threads=1
+        run: cargo test -p defra-agent-cli --test cli_e2e standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools -- --ignored --nocapture --test-threads=1

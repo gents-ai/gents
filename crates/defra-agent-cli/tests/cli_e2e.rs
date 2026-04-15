@@ -4768,6 +4768,244 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires a reachable external OpenAI-compatible endpoint"]
+async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools() -> Result<()>
+{
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let files_dir = home_dir.join("demo-files");
+    fs::create_dir_all(&files_dir)?;
+    let alpha_token = format!("LIVE_DEMO_ALPHA_{}", Uuid::new_v4().simple());
+    let beta_token = format!("LIVE_DEMO_BETA_{}", Uuid::new_v4().simple());
+    fs::write(files_dir.join("alpha.txt"), format!("{alpha_token}\n"))?;
+    fs::write(files_dir.join("beta.txt"), format!("{beta_token}\n"))?;
+
+    let system_prompt = tempdir.path().join("standard_onboarding_system_prompt.txt");
+    fs::write(
+        &system_prompt,
+        "This is a live onboarding smoke test. When the user asks about files, use list_files and read_file before answering. Do not infer file contents from names. Keep final answers short and include the exact requested file tokens.",
+    )?;
+
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let agent_name = format!("cli-live-demo-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+    let live_api_key_available =
+        std::env::var("DEFRA_AGENT_CLI_E2E_API_KEY").is_ok_and(|value| !value.trim().is_empty());
+
+    let mut init_args = vec![
+        "--agent-name".to_string(),
+        agent_name.clone(),
+        "--max-concurrent".to_string(),
+        "2".to_string(),
+        "--max-queue-depth".to_string(),
+        "4".to_string(),
+    ];
+    if live_api_key_available {
+        init_args.push("--api-key-env-var".to_string());
+        init_args.push("DEFRA_AGENT_CLI_E2E_API_KEY".to_string());
+    }
+    if let Ok(model_name) = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME") {
+        init_args.push("--model-name".to_string());
+        init_args.push(model_name);
+    }
+    if let Ok(model_endpoint) = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT") {
+        init_args.push(model_endpoint);
+    }
+    let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
+    let init = run_init_json(&home_dir, &init_arg_refs)?;
+    let backend_id = init
+        .pointer("/init/backend_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing backend_id: {init}"))?
+        .to_string();
+    let backend_name = init
+        .pointer("/init/backend_name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing backend_name: {init}"))?
+        .to_string();
+    let endpoint = init
+        .pointer("/init/endpoint")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing endpoint: {init}"))?
+        .to_string();
+    let model_name = init
+        .pointer("/init/model_name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing model_name: {init}"))?
+        .to_string();
+    let behavior_id = init
+        .pointer("/init/default_behavior_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing default_behavior_id: {init}"))?
+        .to_string();
+    let selection_id = init
+        .pointer("/init/tool_selection_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing tool_selection_id: {init}"))?
+        .to_string();
+
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let mut backend_args = vec![
+        "config",
+        "backend",
+        "set",
+        "--graphql",
+        &graphql,
+        "--backend-id",
+        &backend_id,
+        "--name",
+        &backend_name,
+        "--provider-kind",
+        "OpenAiCompatible",
+        "--endpoint",
+        &endpoint,
+        "--max-concurrent",
+        "2",
+        "--max-queue-depth",
+        "4",
+    ];
+    if live_api_key_available {
+        backend_args.push("--api-key-env-var");
+        backend_args.push("DEFRA_AGENT_CLI_E2E_API_KEY");
+    }
+    run_cli_json(&home_dir, &backend_args)?;
+
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "tools",
+            "set",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--selection-id",
+            &selection_id,
+            "--display-name",
+            "Standard Onboarding Demo Tools",
+            "--enable-file-tools",
+            "--file-tools-mode",
+            "ReadOnly",
+            "--file-tool-root",
+            home_dir
+                .to_str()
+                .ok_or_else(|| anyhow!("demo home path is not UTF-8"))?,
+            "--enable-bash",
+            "--bash-mode",
+            "ReadOnly",
+        ],
+    )?;
+
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "behavior",
+            "set",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--behavior-id",
+            &behavior_id,
+            "--display-name",
+            "Standard Onboarding Demo",
+            "--system-prompt-file",
+            system_prompt
+                .to_str()
+                .ok_or_else(|| anyhow!("system prompt path is not UTF-8"))?,
+            "--backend-id",
+            &backend_id,
+            "--model-name",
+            &model_name,
+            "--tool-selection-id",
+            &selection_id,
+        ],
+    )?;
+    wait_for_runtime_quiescence(&graphql, &agent_did, 2, Duration::from_secs(6)).await?;
+
+    let session_id = Uuid::new_v4().to_string();
+    let first_prompt = "Use the filesystem tools. First list demo-files, then read demo-files/alpha.txt, then reply with only the exact token in alpha.txt.";
+    let first = run_cli_json(
+        &home_dir,
+        &[
+            "chat",
+            "--session-id",
+            &session_id,
+            "--output-format",
+            "json",
+            "--timeout-secs",
+            "240",
+            "--poll-secs",
+            "1",
+            first_prompt,
+        ],
+    )?;
+    assert_eq!(
+        first.get("session_id").and_then(Value::as_str),
+        Some(session_id.as_str())
+    );
+    let first_content = first
+        .pointer("/response/content")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("first live chat output missing response content: {first}"))?;
+    assert!(
+        first_content.contains(&alpha_token),
+        "expected first response to contain {alpha_token}, got {first_content}"
+    );
+
+    let second_prompt = "Continue this same conversation. Read demo-files/beta.txt with the filesystem tools, then reply with the alpha token from the previous turn and the exact beta token, separated by a single space.";
+    let second = run_cli_json(
+        &home_dir,
+        &[
+            "chat",
+            "--session-id",
+            &session_id,
+            "--output-format",
+            "json",
+            "--timeout-secs",
+            "240",
+            "--poll-secs",
+            "1",
+            second_prompt,
+        ],
+    )?;
+    assert_eq!(
+        second.get("session_id").and_then(Value::as_str),
+        Some(session_id.as_str())
+    );
+    let second_content = second
+        .pointer("/response/content")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("second live chat output missing response content: {second}"))?;
+    assert!(
+        second_content.contains(&alpha_token) && second_content.contains(&beta_token),
+        "expected second response to contain {alpha_token} and {beta_token}, got {second_content}"
+    );
+
+    wait_for_completed_tool_calls(&graphql, &session_id, "list_files", 1).await?;
+    let read_calls = wait_for_completed_tool_calls(&graphql, &session_id, "read_file", 2).await?;
+    let read_results = read_calls
+        .iter()
+        .filter_map(|row| row.get("result").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        read_results.contains(&alpha_token) && read_results.contains(&beta_token),
+        "expected persisted read_file tool results to contain {alpha_token} and {beta_token}: {read_results}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires a reachable external OpenAI-compatible endpoint"]
 async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
