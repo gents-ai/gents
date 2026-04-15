@@ -1,0 +1,6 @@
+{
+  "agent_did": "did:defra-agent:default",
+  "display_name": "default",
+  "default_behavior_id": "did:defra-agent:default:default",
+  "enabled": true
+}

@@ -1,0 +1,17 @@
+[
+  {
+    "backend_id": "workstation-1",
+    "name": "Workstation 1",
+    "provider_kind": "OpenAiCompatible",
+    "endpoint": "http://100.73.235.38:8000/v1",
+    "api_key": null,
+    "api_key_env_var": null,
+    "max_concurrent": 2,
+    "enabled": true,
+    "supports_tool_calls": true,
+    "supports_streaming": true,
+    "supports_structured_outputs": false,
+    "supports_json_schema": false,
+    "models": ["MiniMax-M2.7-NVFP4"]
+  }
+]

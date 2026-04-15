@@ -1,0 +1,15 @@
+[
+  {
+    "selection_id": "did:defra-agent:default:default:tools",
+    "agent_did": "did:defra-agent:default",
+    "display_name": "Standard Write Tools",
+    "enable_file_tools": true,
+    "file_tools_mode": "ReadWrite",
+    "file_tool_root": null,
+    "enable_bash": true,
+    "bash_mode": "Unrestricted",
+    "cli_tool_names": [],
+    "enable_meta_tools": true,
+    "delegate_to": []
+  }
+]
