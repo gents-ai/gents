@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
 use rig::tool::ToolDyn;
 
@@ -96,6 +96,15 @@ impl ToolCeiling {
         }
     }
 
+    pub fn readonly_at(root: impl Into<PathBuf>) -> Self {
+        Self {
+            file_tools: FileToolMode::ReadOnly,
+            bash: BashMode::ReadOnly,
+            cli_tools: Vec::new(),
+            root: Some(root.into()),
+        }
+    }
+
     pub fn readwrite(root: impl Into<PathBuf>) -> Self {
         Self {
             file_tools: FileToolMode::ReadWrite,
@@ -144,6 +153,7 @@ impl Default for ToolCeiling {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolSelection {
     pub file_tools: FileToolMode,
+    pub file_tool_root: Option<PathBuf>,
     pub bash: BashMode,
     pub cli_tool_names: Vec<String>,
     pub enable_meta_tools: bool,
@@ -154,6 +164,7 @@ impl Default for ToolSelection {
     fn default() -> Self {
         Self {
             file_tools: FileToolMode::Off,
+            file_tool_root: None,
             bash: BashMode::Off,
             cli_tool_names: Vec::new(),
             enable_meta_tools: true,
@@ -230,21 +241,30 @@ impl BehaviorToolConfig {
         ceiling: &ToolCeiling,
         custom_tools: Vec<CustomToolFactory>,
     ) -> Result<Self> {
+        let ToolSelection {
+            file_tools: requested_file_tools,
+            file_tool_root,
+            bash: requested_bash,
+            cli_tool_names,
+            enable_meta_tools,
+            delegate_to,
+        } = selection;
         let file_tools =
-            downgrade_file_tools(behavior_name, selection.file_tools, ceiling.file_tools());
-        let bash = downgrade_bash(behavior_name, selection.bash, ceiling.bash());
+            downgrade_file_tools(behavior_name, requested_file_tools, ceiling.file_tools());
+        let bash = downgrade_bash(behavior_name, requested_bash, ceiling.bash());
         let host_tools = build_host_tools(
             behavior_name,
             file_tools,
             bash,
-            &selection.cli_tool_names,
+            file_tool_root.as_deref(),
+            &cli_tool_names,
             ceiling,
         )?;
 
         Ok(Self {
             host_tools,
-            enable_meta_tools: selection.enable_meta_tools,
-            delegate_to: dedupe_strings(selection.delegate_to),
+            enable_meta_tools,
+            delegate_to: dedupe_strings(delegate_to),
             custom_tools,
         })
     }
@@ -484,11 +504,19 @@ fn build_host_tools(
     behavior_name: &str,
     file_tools: FileToolMode,
     bash: BashMode,
+    file_tool_root: Option<&Path>,
     cli_tool_names: &[String],
     ceiling: &ToolCeiling,
 ) -> Result<ToolSet> {
     let mut builder = ToolSetBuilder::default();
-    if let Some(root) = ceiling.root().map(ToOwned::to_owned) {
+    let needs_file_tool_root =
+        !matches!(file_tools, FileToolMode::Off) || !matches!(bash, BashMode::Off);
+    let effective_root = if needs_file_tool_root {
+        resolve_effective_tool_root(behavior_name, file_tool_root, ceiling.root())?
+    } else {
+        None
+    };
+    if let Some(root) = effective_root.clone() {
         builder = builder.read_root(root.clone());
     }
 
@@ -497,9 +525,8 @@ fn build_host_tools(
     }
 
     if matches!(file_tools, FileToolMode::ReadWrite) {
-        let root = ceiling
-            .root()
-            .map(ToOwned::to_owned)
+        let root = effective_root
+            .clone()
             .ok_or_else(|| anyhow!("readwrite file tools require a configured tool root"))?;
         builder = builder.write_file(root.clone()).edit_file(root);
     }
@@ -510,9 +537,8 @@ fn build_host_tools(
             builder = builder.bash_read_only();
         }
         BashMode::Unrestricted => {
-            let root = ceiling
-                .root()
-                .map(ToOwned::to_owned)
+            let root = effective_root
+                .clone()
                 .ok_or_else(|| anyhow!("unrestricted bash requires a configured tool root"))?;
             builder = builder.bash_unrestricted(root);
         }
@@ -535,6 +561,76 @@ fn build_host_tools(
     }
 
     Ok(builder.build())
+}
+
+fn resolve_effective_tool_root(
+    behavior_name: &str,
+    selection_root: Option<&Path>,
+    ceiling_root: Option<&Path>,
+) -> Result<Option<PathBuf>> {
+    let selection_root = selection_root
+        .map(resolve_configured_tool_root)
+        .transpose()?;
+    let ceiling_root = ceiling_root.map(resolve_configured_tool_root).transpose()?;
+
+    match (selection_root, ceiling_root) {
+        (Some(selection_root), Some(ceiling_root)) => {
+            if selection_root.starts_with(&ceiling_root) {
+                Ok(Some(selection_root))
+            } else {
+                bail!(
+                    "behavior {behavior_name} file tool root {} escapes operator tool root {}",
+                    selection_root.display(),
+                    ceiling_root.display()
+                );
+            }
+        }
+        (Some(selection_root), None) => Ok(Some(selection_root)),
+        (None, Some(ceiling_root)) => Ok(Some(ceiling_root)),
+        (None, None) => Ok(None),
+    }
+}
+
+fn resolve_configured_tool_root(path: &Path) -> Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .with_context(|| format!("resolving relative tool root {}", path.display()))?
+            .join(path)
+    };
+
+    resolve_path_with_canonical_prefix(&absolute)
+}
+
+fn resolve_path_with_canonical_prefix(path: &Path) -> Result<PathBuf> {
+    let mut resolved = PathBuf::new();
+    let mut missing_tail = false;
+
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
+                resolved.push(component.as_os_str());
+            }
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                resolved.pop();
+            }
+            std::path::Component::Normal(name) => {
+                let candidate = resolved.join(name);
+                if !missing_tail && candidate.exists() {
+                    resolved = std::fs::canonicalize(&candidate).with_context(|| {
+                        format!("canonicalizing tool root {}", candidate.display())
+                    })?;
+                } else {
+                    missing_tail = true;
+                    resolved.push(name);
+                }
+            }
+        }
+    }
+
+    Ok(resolved)
 }
 
 fn dedupe_strings(values: Vec<String>) -> Vec<String> {
@@ -579,4 +675,208 @@ async fn has_registered_mcp_services(node: &EmbeddedNode) -> Result<bool> {
         .unwrap_or_default();
 
     Ok(!services.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_root(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("{name}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn selection_file_tool_root_clamps_within_operator_root() {
+        let operator_root = temp_root("defra-agent-operator-root");
+        let scoped_root = operator_root.join("bench").join("results");
+        std::fs::create_dir_all(&scoped_root).unwrap();
+
+        let config = BehaviorToolConfig::from_selection(
+            "ops",
+            ToolSelection {
+                file_tools: FileToolMode::ReadWrite,
+                file_tool_root: Some(scoped_root.clone()),
+                bash: BashMode::Unrestricted,
+                cli_tool_names: Vec::new(),
+                enable_meta_tools: false,
+                delegate_to: Vec::new(),
+            },
+            &ToolCeiling::readwrite(operator_root.clone()),
+            Vec::new(),
+        )
+        .unwrap();
+
+        let canonical_scoped_root = std::fs::canonicalize(&scoped_root).unwrap();
+        let native_tools = config.host_tools().native_tools();
+        assert!(matches!(
+            native_tools[0],
+            crate::toolset::NativeTool::ListFiles { .. }
+        ));
+        assert!(matches!(
+            native_tools[1],
+            crate::toolset::NativeTool::ReadFile { .. }
+        ));
+        assert!(matches!(
+            native_tools[2],
+            crate::toolset::NativeTool::Glob { .. }
+        ));
+        assert!(matches!(
+            native_tools[3],
+            crate::toolset::NativeTool::Grep { .. }
+        ));
+        assert!(matches!(
+            native_tools[4],
+            crate::toolset::NativeTool::WriteFile { ref root } if root == &canonical_scoped_root
+        ));
+        assert!(matches!(
+            native_tools[5],
+            crate::toolset::NativeTool::EditFile { ref root } if root == &canonical_scoped_root
+        ));
+        assert!(matches!(
+            native_tools[6],
+            crate::toolset::NativeTool::BashUnrestricted { ref root, .. } if root == &canonical_scoped_root
+        ));
+    }
+
+    #[test]
+    fn selection_file_tool_root_rejects_escape_outside_operator_root() {
+        let operator_root = temp_root("defra-agent-operator-root");
+        let outside_root = temp_root("defra-agent-outside-root");
+
+        let error = BehaviorToolConfig::from_selection(
+            "ops",
+            ToolSelection {
+                file_tools: FileToolMode::ReadOnly,
+                file_tool_root: Some(outside_root),
+                bash: BashMode::Off,
+                cli_tool_names: Vec::new(),
+                enable_meta_tools: false,
+                delegate_to: Vec::new(),
+            },
+            &ToolCeiling::readwrite(operator_root),
+            Vec::new(),
+        )
+        .expect_err("selection root outside operator ceiling should fail");
+
+        assert!(
+            error.to_string().contains("escapes operator tool root"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
+        let operator_root = temp_root("defra-agent-operator-root");
+        let outside_root = temp_root("defra-agent-outside-root");
+
+        let error = BehaviorToolConfig::from_selection(
+            "ops",
+            ToolSelection {
+                file_tools: FileToolMode::ReadOnly,
+                file_tool_root: Some(outside_root),
+                bash: BashMode::ReadOnly,
+                cli_tool_names: Vec::new(),
+                enable_meta_tools: false,
+                delegate_to: Vec::new(),
+            },
+            &ToolCeiling::readonly_at(operator_root),
+            Vec::new(),
+        )
+        .expect_err("readonly selection root outside operator ceiling should fail");
+
+        assert!(
+            error.to_string().contains("escapes operator tool root"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn downgraded_off_selection_ignores_stale_file_tool_root() {
+        let stale_root =
+            std::env::temp_dir().join(format!("defra-agent-stale-root-{}", uuid::Uuid::new_v4()));
+
+        let config = BehaviorToolConfig::from_selection(
+            "ops",
+            ToolSelection {
+                file_tools: FileToolMode::ReadOnly,
+                file_tool_root: Some(stale_root),
+                bash: BashMode::ReadOnly,
+                cli_tool_names: Vec::new(),
+                enable_meta_tools: false,
+                delegate_to: Vec::new(),
+            },
+            &ToolCeiling::meta_only(),
+            Vec::new(),
+        )
+        .unwrap();
+
+        assert!(config.host_tools().native_tools().is_empty());
+        assert!(config.host_tools().build_native_tools().unwrap().is_empty());
+    }
+
+    #[test]
+    fn selection_without_root_inherits_operator_root() {
+        let operator_root = temp_root("defra-agent-operator-root");
+
+        let config = BehaviorToolConfig::from_selection(
+            "ops",
+            ToolSelection {
+                file_tools: FileToolMode::ReadWrite,
+                file_tool_root: None,
+                bash: BashMode::Unrestricted,
+                cli_tool_names: Vec::new(),
+                enable_meta_tools: false,
+                delegate_to: Vec::new(),
+            },
+            &ToolCeiling::readwrite(operator_root.clone()),
+            Vec::new(),
+        )
+        .unwrap();
+
+        let canonical_operator_root = std::fs::canonicalize(&operator_root).unwrap();
+        let native_tools = config.host_tools().native_tools();
+        assert!(matches!(
+            native_tools[4],
+            crate::toolset::NativeTool::WriteFile { ref root } if root == &canonical_operator_root
+        ));
+        assert!(matches!(
+            native_tools[5],
+            crate::toolset::NativeTool::EditFile { ref root } if root == &canonical_operator_root
+        ));
+        assert!(matches!(
+            native_tools[6],
+            crate::toolset::NativeTool::BashUnrestricted { ref root, .. } if root == &canonical_operator_root
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
+        let operator_root = temp_root("defra-agent-operator-root");
+        let outside_root = temp_root("defra-agent-outside-root");
+        let symlink_path = operator_root.join("link-out");
+        std::os::unix::fs::symlink(&outside_root, &symlink_path).unwrap();
+
+        let error = BehaviorToolConfig::from_selection(
+            "ops",
+            ToolSelection {
+                file_tools: FileToolMode::ReadWrite,
+                file_tool_root: Some(symlink_path.join("workspace")),
+                bash: BashMode::Unrestricted,
+                cli_tool_names: Vec::new(),
+                enable_meta_tools: false,
+                delegate_to: Vec::new(),
+            },
+            &ToolCeiling::readwrite(operator_root),
+            Vec::new(),
+        )
+        .expect_err("selection root through symlink should fail");
+
+        assert!(
+            error.to_string().contains("escapes operator tool root"),
+            "{error:#}"
+        );
+    }
 }

@@ -4,6 +4,7 @@ type ToolSelection {
     display_name: String
     enable_file_tools: Boolean
     file_tools_mode: String
+    file_tool_root: String
     enable_bash: Boolean
     bash_mode: String
     cli_tool_names: [String]

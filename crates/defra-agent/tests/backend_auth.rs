@@ -1,8 +1,9 @@
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -19,6 +20,43 @@ use defra_agent::{
 };
 use serde_json::Value;
 use tokio::sync::watch;
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+struct TestEnvGuard {
+    _lock: MutexGuard<'static, ()>,
+    saved: Vec<(&'static str, Option<OsString>)>,
+}
+
+impl TestEnvGuard {
+    fn new(names: &[&'static str]) -> Self {
+        let lock = ENV_LOCK.lock().expect("env lock poisoned");
+        let saved = names
+            .iter()
+            .map(|name| (*name, std::env::var_os(name)))
+            .collect();
+        Self { _lock: lock, saved }
+    }
+
+    fn set(&mut self, name: &'static str, value: &str) {
+        unsafe {
+            std::env::set_var(name, value);
+        }
+    }
+}
+
+impl Drop for TestEnvGuard {
+    fn drop(&mut self) {
+        for (name, value) in self.saved.iter().rev() {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+}
 
 struct MockModelEndpoint {
     endpoint: String,
@@ -384,15 +422,9 @@ fn behavior_config_prefers_raw_backend_api_key() {
     let mut behavior = test_behavior("behavior-raw", "backend-raw", Some("IGNORED_ENV_KEY"));
     behavior.backend_api_key = Some("raw-key".to_string());
 
-    unsafe {
-        std::env::set_var("AGENT_DAEMON_API_KEY", "legacy-key");
-        std::env::set_var("IGNORED_ENV_KEY", "env-key");
-    }
+    let mut env = TestEnvGuard::new(&["IGNORED_ENV_KEY"]);
+    env.set("IGNORED_ENV_KEY", "env-key");
     let resolved = behavior.resolve_backend_api_key().expect("resolve api key");
-    unsafe {
-        std::env::remove_var("AGENT_DAEMON_API_KEY");
-        std::env::remove_var("IGNORED_ENV_KEY");
-    }
 
     assert_eq!(resolved.as_deref(), Some("raw-key"));
 }
@@ -405,32 +437,20 @@ fn behavior_config_prefers_backend_specific_api_key_env_var() {
         Some("DEFRA_AGENT_TEST_BACKEND_KEY"),
     );
 
-    unsafe {
-        std::env::set_var("AGENT_DAEMON_API_KEY", "legacy-key");
-        std::env::set_var("DEFRA_AGENT_TEST_BACKEND_KEY", "backend-key");
-    }
+    let mut env = TestEnvGuard::new(&["DEFRA_AGENT_TEST_BACKEND_KEY"]);
+    env.set("DEFRA_AGENT_TEST_BACKEND_KEY", "backend-key");
     let resolved = behavior.resolve_backend_api_key().expect("resolve api key");
-    unsafe {
-        std::env::remove_var("AGENT_DAEMON_API_KEY");
-        std::env::remove_var("DEFRA_AGENT_TEST_BACKEND_KEY");
-    }
 
     assert_eq!(resolved.as_deref(), Some("backend-key"));
 }
 
 #[test]
-fn behavior_config_falls_back_to_legacy_global_api_key_env_var() {
+fn behavior_config_without_api_key_returns_none() {
     let behavior = test_behavior("behavior-b", "backend-b", None);
 
-    unsafe {
-        std::env::set_var("AGENT_DAEMON_API_KEY", "legacy-key");
-    }
     let resolved = behavior.resolve_backend_api_key().expect("resolve api key");
-    unsafe {
-        std::env::remove_var("AGENT_DAEMON_API_KEY");
-    }
 
-    assert_eq!(resolved.as_deref(), Some("legacy-key"));
+    assert_eq!(resolved, None);
 }
 
 #[tokio::test]
@@ -460,10 +480,8 @@ async fn run_agent_uses_backend_specific_api_key_env_var_for_startup_probe() -> 
     let response = node.execute(&mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    unsafe {
-        std::env::remove_var("AGENT_DAEMON_API_KEY");
-        std::env::set_var("DEFRA_AGENT_TEST_RUNTIME_BACKEND_KEY", "backend-key");
-    }
+    let mut env = TestEnvGuard::new(&["DEFRA_AGENT_TEST_RUNTIME_BACKEND_KEY"]);
+    env.set("DEFRA_AGENT_TEST_RUNTIME_BACKEND_KEY", "backend-key");
     let observer = Arc::new(RecordingObserver::default());
     let agent = DefraAgent::from_default_behavior_documents(
         node.clone(),
@@ -481,9 +499,6 @@ async fn run_agent_uses_backend_specific_api_key_env_var_for_startup_probe() -> 
     wait_for_runtime_process_state(node.as_ref(), identity.did(), "ready").await;
     let _ = shutdown_tx.send(true);
     run_task.await??;
-    unsafe {
-        std::env::remove_var("DEFRA_AGENT_TEST_RUNTIME_BACKEND_KEY");
-    }
 
     let observed = observer
         .states

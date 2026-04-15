@@ -272,6 +272,8 @@ pub(crate) fn tool_selection_from_document(
         } else {
             FileToolMode::Off
         },
+        file_tool_root: normalize_optional_string(selection.file_tool_root.as_deref())
+            .map(std::path::PathBuf::from),
         bash: if selection.enable_bash.unwrap_or(false) {
             BashMode::parse(selection.bash_mode.as_deref().unwrap_or("ReadOnly"))?
         } else {

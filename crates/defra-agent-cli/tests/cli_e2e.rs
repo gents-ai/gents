@@ -17,6 +17,8 @@ const DEFAULT_MODEL_ENDPOINT: &str = "http://100.73.235.38:8000/v1";
 
 struct ServeProcess {
     child: Child,
+    stdout_log: Option<tempfile::NamedTempFile>,
+    stderr_log: Option<tempfile::NamedTempFile>,
 }
 
 struct MockModelEndpoint {
@@ -56,6 +58,44 @@ impl Drop for ServeProcess {
         }
         let _ = self.child.wait();
     }
+}
+
+impl ServeProcess {
+    fn new(child: Child) -> Self {
+        Self {
+            child,
+            stdout_log: None,
+            stderr_log: None,
+        }
+    }
+
+    fn with_logs(
+        child: Child,
+        stdout_log: tempfile::NamedTempFile,
+        stderr_log: tempfile::NamedTempFile,
+    ) -> Self {
+        Self {
+            child,
+            stdout_log: Some(stdout_log),
+            stderr_log: Some(stderr_log),
+        }
+    }
+
+    fn captured_output(&self) -> Result<(String, String)> {
+        Ok((
+            read_captured_log(self.stdout_log.as_ref())?,
+            read_captured_log(self.stderr_log.as_ref())?,
+        ))
+    }
+}
+
+fn read_captured_log(log: Option<&tempfile::NamedTempFile>) -> Result<String> {
+    let Some(log) = log else {
+        return Ok(String::new());
+    };
+    let bytes = fs::read(log.path())
+        .with_context(|| format!("reading captured log {}", log.path().display()))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 impl MockModelEndpoint {
@@ -441,7 +481,7 @@ async fn tool_selection_upsert_defaults_enabled_modes_to_readonly() -> Result<()
         ],
     )?;
     let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     let output = run_cli_json(
@@ -479,6 +519,7 @@ async fn tool_selection_upsert_defaults_enabled_modes_to_readonly() -> Result<()
                 selection_id
                 enable_file_tools
                 file_tools_mode
+                file_tool_root
                 enable_bash
                 bash_mode
             }}
@@ -499,10 +540,101 @@ async fn tool_selection_upsert_defaults_enabled_modes_to_readonly() -> Result<()
         row.get("file_tools_mode").and_then(Value::as_str),
         Some("ReadOnly")
     );
+    assert_eq!(row.get("file_tool_root"), Some(&Value::Null));
     assert_eq!(row.get("enable_bash").and_then(Value::as_bool), Some(true));
     assert_eq!(
         row.get("bash_mode").and_then(Value::as_str),
         Some("ReadOnly")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_selection_upsert_persists_file_tool_root() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-config-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let agent_name = format!("cli-config-rooted-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+    let graphql = graphql_url(port);
+    let scoped_root = home_dir.join("bench").join("workspace");
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let selection_id = init
+        .pointer("/init/tool_selection_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing tool_selection_id: {init}"))?
+        .to_string();
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let output = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "tools",
+            "set",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--selection-id",
+            &selection_id,
+            "--enable-file-tools",
+            "--file-tool-root",
+            scoped_root.to_str().expect("utf-8 scoped root"),
+        ],
+    )?;
+    assert_eq!(
+        output.get("file_tool_root").and_then(Value::as_str),
+        Some(scoped_root.to_str().expect("utf-8 scoped root"))
+    );
+
+    let query = format!(
+        r#"{{
+            ToolSelection(filter: {{ selection_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                selection_id
+                file_tool_root
+            }}
+        }}"#,
+        escape_graphql_string(&selection_id),
+    );
+    let response = graphql_query(&graphql, &query).await?;
+    let row = first_graphql_row(&response, "ToolSelection")?;
+    assert_eq!(
+        row.get("file_tool_root").and_then(Value::as_str),
+        Some(scoped_root.to_str().expect("utf-8 scoped root"))
+    );
+
+    let exported = run_cli_json(&home_dir, &["config", "export"])?;
+    let selections = exported
+        .get("tool_selections")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("config export missing tool_selections: {exported}"))?;
+    let selection = selections
+        .iter()
+        .find(|value| {
+            value.get("selection_id").and_then(Value::as_str) == Some(selection_id.as_str())
+        })
+        .ok_or_else(|| anyhow!("config export missing selection {selection_id}: {exported}"))?;
+    assert_eq!(
+        selection.get("file_tool_root").and_then(Value::as_str),
+        Some(scoped_root.to_str().expect("utf-8 scoped root"))
     );
 
     Ok(())
@@ -586,7 +718,7 @@ async fn scheduled_task_set_persists_concrete_default_behavior_id() -> Result<()
         ],
     )?;
     let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     let output = run_cli_json(
@@ -676,7 +808,7 @@ async fn scheduled_task_set_recreates_deleted_task_with_same_task_id() -> Result
         ],
     )?;
     let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     run_cli_json(
@@ -925,7 +1057,7 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
                 "backend_id": "default-backend",
                 "name": "default-backend",
                 "endpoint": "http://127.0.0.1:8000/v1",
-                "api_key_env_var": "AGENT_DAEMON_API_KEY",
+                "api_key_env_var": "DEFRA_AGENT_TEST_MANIFEST_API_KEY",
                 "max_concurrent": 1,
                 "enabled": true,
                 "models": ["mock-model"]
@@ -1142,7 +1274,7 @@ async fn config_validate_accepts_tool_services_dir_and_scheduled_tasks_dir() -> 
                 "backend_id": "default-backend",
                 "name": "default-backend",
                 "endpoint": "http://127.0.0.1:8000/v1",
-                "api_key_env_var": "AGENT_DAEMON_API_KEY",
+                "api_key_env_var": "DEFRA_AGENT_TEST_MANIFEST_API_KEY",
                 "max_concurrent": 1,
                 "enabled": true,
                 "models": ["mock-model"]
@@ -1379,7 +1511,7 @@ async fn config_apply_reconciles_running_runtime_without_restart() -> Result<()>
     write_manifest_root_from_export(&root, &exported)?;
 
     let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     let behaviors_path = root.join("agent-behaviors.json");
@@ -1601,7 +1733,7 @@ async fn config_apply_updates_backend_from_fresh_init_home_over_graphql() -> Res
     write_json_file(&backends_path, &backends)?;
 
     let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     let root_str = root
@@ -1693,7 +1825,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     )?;
 
     let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     let response = reqwest::Client::new()
@@ -2152,7 +2284,7 @@ async fn config_apply_reconciles_tool_services_and_scheduled_tasks_end_to_end() 
     );
 
     let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(
         &graphql,
         &format!("did:defra-agent:{agent_name}"),
@@ -2442,7 +2574,7 @@ async fn request_submit_waits_for_response_by_default() -> Result<()> {
         ],
     )?;
     let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(
         &graphql,
         &format!("did:defra-agent:{agent_name}"),
@@ -2538,7 +2670,7 @@ async fn request_submit_supports_content_file_and_output_file() -> Result<()> {
         ],
     )?;
     let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(
         &graphql,
         &format!("did:defra-agent:{agent_name}"),
@@ -2633,7 +2765,7 @@ async fn chat_uses_runtime_state_for_interactive_turns() -> Result<()> {
         ],
     )?;
     let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     let mut child = Command::new(cli_bin())
@@ -2719,7 +2851,7 @@ async fn chat_continues_existing_session_when_session_id_is_provided() -> Result
         ],
     )?;
     let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     let first_stdout = run_cli_text(&home_dir, &["chat", &first_prompt])?;
@@ -2791,7 +2923,7 @@ async fn chat_supports_message_file_json_output_and_output_file() -> Result<()> 
         ],
     )?;
     let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     let output = run_cli_json(
@@ -2868,7 +3000,7 @@ async fn chat_buffers_final_response_and_shows_tool_progress() -> Result<()> {
         ],
     )?;
     let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     let mut child = Command::new(cli_bin())
@@ -2956,7 +3088,7 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
     );
 
     let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     assert_runtime_init_state(
@@ -2992,7 +3124,7 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
         ],
     )?;
     let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     assert_runtime_init_state(
@@ -3122,7 +3254,7 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
         &[],
         &[("DEFRA_AGENT_TEST_CLI_BACKEND_KEY", "backend-key")],
     )?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     assert_runtime_init_state(
@@ -3228,7 +3360,7 @@ async fn init_supports_provider_auth_and_capability_backend_fields() -> Result<(
     );
 
     let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     assert_runtime_init_state(
@@ -3279,7 +3411,7 @@ async fn status_reads_local_runtime_context_by_default() -> Result<()> {
         ],
     )?;
     let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     let output = run_cli_json(&home_dir, &["status"])?;
@@ -3357,7 +3489,7 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
         ],
         &[],
     )?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     assert_eq!(
@@ -3427,7 +3559,7 @@ async fn server_startup_defaults_to_local_only_when_p2p_disabled() -> Result<()>
         ],
     )?;
     let (mut serve, readiness) = spawn_server_with_ready_json(&home_dir, port, &[], &[])?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     assert_eq!(
@@ -3490,7 +3622,7 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
         .to_string();
 
     let mut warm_server = spawn_server(&home_dir, warm_port)?;
-    wait_for_port(warm_port, &mut warm_server.child)?;
+    wait_for_port(warm_port, &mut warm_server)?;
     wait_for_runtime_ready(&graphql_url(warm_port), &agent_did, Duration::from_secs(30)).await?;
     run_cli_json(
         &home_dir,
@@ -3524,7 +3656,7 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
         .context("waiting for warm server shutdown")?;
 
     let (mut serve, readiness) = spawn_server_with_ready_json(&home_dir, port, &[], &[])?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     assert_eq!(
@@ -3637,7 +3769,7 @@ async fn status_includes_p2p_runtime_info() -> Result<()> {
         ],
         &[],
     )?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     let output = run_cli_json(&home_dir, &["status"])?;
@@ -3706,7 +3838,7 @@ async fn diagnose_with_explicit_graphql_does_not_reuse_unrelated_local_p2p_state
         ],
         &[],
     )?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     let output = run_cli_json(
@@ -3795,8 +3927,8 @@ async fn p2p_connects_two_local_servers_via_operator_commands() -> Result<()> {
         ],
         &[],
     )?;
-    wait_for_port(port_a, &mut serve_a.child)?;
-    wait_for_port(port_b, &mut serve_b.child)?;
+    wait_for_port(port_a, &mut serve_a)?;
+    wait_for_port(port_b, &mut serve_b)?;
     wait_for_runtime_ready(&graphql_a, &agent_did_a, Duration::from_secs(30)).await?;
     wait_for_runtime_ready(&graphql_b, &agent_did_b, Duration::from_secs(30)).await?;
 
@@ -4002,7 +4134,7 @@ async fn config_backend_set_preset_and_discover_models_from_backend_id() -> Resu
         ],
     )?;
     let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     let backend_id = format!("{agent_name}-openrouter");
@@ -4179,7 +4311,7 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
         ],
     )?;
     let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     assert_runtime_init_state(
@@ -4201,6 +4333,43 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
         "read-only operating mode",
     )
     .await?;
+
+    Ok(())
+}
+
+#[test]
+fn init_accepts_tool_root_for_readonly_defaults() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let readonly_root = tempdir.path().join("readonly-root");
+    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&readonly_root)?;
+
+    let model_name = format!("readonly-root-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-readonly-root-{}", Uuid::new_v4().simple());
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            "--tool-root",
+            readonly_root.to_str().expect("utf-8 readonly root"),
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    assert_eq!(
+        init.pointer("/init/tool_ceiling").and_then(Value::as_str),
+        Some("Readonly")
+    );
+    assert_eq!(
+        init.pointer("/init/tool_root").and_then(Value::as_str),
+        Some(readonly_root.to_str().expect("utf-8 readonly root"))
+    );
 
     Ok(())
 }
@@ -4238,7 +4407,7 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
     );
 
     let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     assert_runtime_init_state(
@@ -4307,7 +4476,7 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
         .ok_or_else(|| anyhow!("init output missing tool_selection_id: {init}"))?
         .to_string();
     let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
     let behavior = run_cli_json(
         &home_dir,
@@ -4502,16 +4671,19 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
         .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
     let model_name = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME")
         .context("set DEFRA_AGENT_CLI_E2E_MODEL_NAME for the live CLI e2e test")?;
-    let init = run_init_json(
-        &home_dir,
-        &[
-            "--agent-name",
-            &agent_name,
-            "--model-name",
-            &model_name,
-            &model_endpoint,
-        ],
-    )?;
+    let mut init_args = vec![
+        "--agent-name".to_string(),
+        agent_name.clone(),
+        "--model-name".to_string(),
+        model_name.clone(),
+    ];
+    if std::env::var_os("DEFRA_AGENT_CLI_E2E_API_KEY").is_some() {
+        init_args.push("--api-key-env-var".to_string());
+        init_args.push("DEFRA_AGENT_CLI_E2E_API_KEY".to_string());
+    }
+    init_args.push(model_endpoint.clone());
+    let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
+    let init = run_init_json(&home_dir, &init_arg_refs)?;
     let backend_id = init
         .pointer("/init/backend_id")
         .and_then(Value::as_str)
@@ -4523,7 +4695,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
         .ok_or_else(|| anyhow!("init output missing tool_selection_id: {init}"))?
         .to_string();
     let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve.child)?;
+    wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
     run_cli_json(
         &home_dir,
@@ -4645,8 +4817,9 @@ fn spawn_server_with_ready_json(
             let mut line = String::new();
             match reader.read_line(&mut line) {
                 Ok(0) => {
-                    let _ = tx.send(Err(anyhow!(
-                        "server stdout closed before readiness JSON was emitted"
+                    let _ = tx.send(Err((
+                        anyhow!("server stdout closed before readiness JSON was emitted"),
+                        buffer,
                     )));
                     break;
                 }
@@ -4658,7 +4831,7 @@ fn spawn_server_with_ready_json(
                     }
                 }
                 Err(error) => {
-                    let _ = tx.send(Err(anyhow!("reading server stdout: {error}")));
+                    let _ = tx.send(Err((anyhow!("reading server stdout: {error}"), buffer)));
                     break;
                 }
             }
@@ -4667,14 +4840,14 @@ fn spawn_server_with_ready_json(
 
     let readiness = match rx.recv_timeout(Duration::from_secs(30)) {
         Ok(Ok(value)) => value,
-        Ok(Err(error)) => {
+        Ok(Err((error, captured_stdout))) => {
             let _ = child.kill();
             let output = child
                 .wait_with_output()
                 .context("waiting for failed defra-agent server process")?;
             return Err(anyhow!(
                 "{error}\nstdout:\n{}\nstderr:\n{}",
-                String::from_utf8_lossy(&output.stdout),
+                captured_stdout,
                 String::from_utf8_lossy(&output.stderr)
             ));
         }
@@ -4691,7 +4864,7 @@ fn spawn_server_with_ready_json(
         }
     };
 
-    Ok((ServeProcess { child }, readiness))
+    Ok((ServeProcess::new(child), readiness))
 }
 
 fn spawn_server_with_env(
@@ -4700,6 +4873,14 @@ fn spawn_server_with_env(
     extra_args: &[&str],
     envs: &[(&str, &str)],
 ) -> Result<ServeProcess> {
+    let stdout_log = tempfile::NamedTempFile::new().context("creating defra-agent stdout log")?;
+    let stderr_log = tempfile::NamedTempFile::new().context("creating defra-agent stderr log")?;
+    let stdout = stdout_log
+        .reopen()
+        .context("opening defra-agent stdout log")?;
+    let stderr = stderr_log
+        .reopen()
+        .context("opening defra-agent stderr log")?;
     let mut command = Command::new(cli_bin());
     command
         .env("HOME", home_dir)
@@ -4709,13 +4890,13 @@ fn spawn_server_with_env(
         .arg("--http-port")
         .arg(port.to_string())
         .args(extra_args)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
     for (name, value) in envs {
         command.env(name, value);
     }
     let child = command.spawn().context("spawning defra-agent server")?;
-    Ok(ServeProcess { child })
+    Ok(ServeProcess::with_logs(child, stdout_log, stderr_log))
 }
 
 fn read_runtime_state_json(home_dir: &Path) -> Result<Value> {
@@ -4935,17 +5116,31 @@ async fn doc_id_for_selection(graphql: &str, selection_id: &str) -> Result<Strin
         .ok_or_else(|| anyhow!("ToolSelection row missing _docID for {selection_id}"))
 }
 
-fn wait_for_port(port: u16, child: &mut Child) -> Result<()> {
+fn wait_for_port(port: u16, serve: &mut ServeProcess) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if TcpStream::connect(("127.0.0.1", port)).is_ok() {
             return Ok(());
         }
-        if let Some(status) = child.try_wait().context("checking serve child status")? {
-            bail!("serve exited before becoming ready: {status}");
+        if let Some(status) = serve
+            .child
+            .try_wait()
+            .context("checking serve child status")?
+        {
+            let (stdout, stderr) = serve.captured_output()?;
+            bail!(
+                "serve exited before becoming ready: {status}\nstdout:\n{}\nstderr:\n{}",
+                stdout,
+                stderr
+            );
         }
         if Instant::now() >= deadline {
-            bail!("timed out waiting for defra-agent server on port {port}");
+            let (stdout, stderr) = serve.captured_output()?;
+            bail!(
+                "timed out waiting for defra-agent server on port {port}\nstdout:\n{}\nstderr:\n{}",
+                stdout,
+                stderr
+            );
         }
         thread::sleep(Duration::from_millis(200));
     }
@@ -5114,6 +5309,7 @@ fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<()> 
                 "display_name",
                 "enable_file_tools",
                 "file_tools_mode",
+                "file_tool_root",
                 "enable_bash",
                 "bash_mode",
                 "cli_tool_names",

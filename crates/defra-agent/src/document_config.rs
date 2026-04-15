@@ -52,6 +52,7 @@ pub struct ToolSelectionDocument {
     pub display_name: Option<String>,
     pub enable_file_tools: Option<bool>,
     pub file_tools_mode: Option<String>,
+    pub file_tool_root: Option<String>,
     pub enable_bash: Option<bool>,
     pub bash_mode: Option<String>,
     pub cli_tool_names: Option<Vec<String>>,
@@ -468,6 +469,7 @@ pub(crate) async fn load_tool_selection_record(
                 display_name
                 enable_file_tools
                 file_tools_mode
+                file_tool_root
                 enable_bash
                 bash_mode
                 cli_tool_names
@@ -502,6 +504,7 @@ pub(crate) async fn load_tool_selection_by_doc_id(
                 display_name
                 enable_file_tools
                 file_tools_mode
+                file_tool_root
                 enable_bash
                 bash_mode
                 cli_tool_names
@@ -536,6 +539,7 @@ pub(crate) async fn list_tool_selection_records(
                 display_name
                 enable_file_tools
                 file_tools_mode
+                file_tool_root
                 enable_bash
                 bash_mode
                 cli_tool_names
@@ -672,6 +676,10 @@ pub async fn upsert_tool_selection(
         graphql_string_field("display_name", selection.display_name.as_deref()),
         graphql_optional_bool_field("enable_file_tools", selection.enable_file_tools),
         graphql_string_field("file_tools_mode", selection.file_tools_mode.as_deref()),
+        Some(graphql_nullable_string_field(
+            "file_tool_root",
+            selection.file_tool_root.as_deref(),
+        )),
         graphql_optional_bool_field("enable_bash", selection.enable_bash),
         graphql_string_field("bash_mode", selection.bash_mode.as_deref()),
         graphql_string_list_field("cli_tool_names", selection.cli_tool_names.as_deref()),
@@ -688,6 +696,10 @@ pub async fn upsert_tool_selection(
         graphql_string_field("display_name", selection.display_name.as_deref()),
         graphql_optional_bool_field("enable_file_tools", selection.enable_file_tools),
         graphql_string_field("file_tools_mode", selection.file_tools_mode.as_deref()),
+        Some(graphql_nullable_string_field(
+            "file_tool_root",
+            selection.file_tool_root.as_deref(),
+        )),
         graphql_optional_bool_field("enable_bash", selection.enable_bash),
         graphql_string_field("bash_mode", selection.bash_mode.as_deref()),
         graphql_string_list_field("cli_tool_names", selection.cli_tool_names.as_deref()),
@@ -901,6 +913,13 @@ fn graphql_string_field(name: &str, value: Option<&str>) -> Option<String> {
         r#"{name}: "{}""#,
         escape_graphql_string(normalize_optional_string(value).unwrap_or_default())
     ))
+}
+
+fn graphql_nullable_string_field(name: &str, value: Option<&str>) -> String {
+    match normalize_optional_string(value) {
+        Some(value) => format!(r#"{name}: "{}""#, escape_graphql_string(value)),
+        None => format!("{name}: null"),
+    }
 }
 
 fn graphql_optional_int_field(name: &str, value: Option<i64>) -> Option<String> {
