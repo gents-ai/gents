@@ -234,7 +234,15 @@ impl ClientCore {
 
     pub async fn refresh_store(&self) -> Result<u64> {
         let snapshot = load_full_snapshot(self.node.as_ref()).await?;
-        Ok(self.store.replace_snapshot(snapshot))
+        let rows = snapshot.row_count();
+        let version = self.store.replace_snapshot(snapshot);
+        tracing::info!(
+            target: "defra_agent_desktop::replication",
+            version,
+            rows,
+            "desktop replica snapshot refreshed"
+        );
+        Ok(version)
     }
 
     pub async fn shutdown(&self) -> Result<()> {
@@ -263,6 +271,12 @@ impl ClientCore {
                 self.store.set_focused_request_id(None);
                 self.refresh_store().await?;
                 self.clear_mutation_error();
+                tracing::info!(
+                    target: "defra_agent_desktop::writes",
+                    action = "chat_create",
+                    row_id = %result.session_id,
+                    "desktop write saved"
+                );
                 Ok(result)
             }
             Err(error) => Err(self.record_mutation_error("create conversation", error)),
@@ -292,6 +306,12 @@ impl ClientCore {
                     .set_focused_request_id(Some(result.request_id.clone()));
                 self.refresh_store().await?;
                 self.clear_mutation_error();
+                tracing::info!(
+                    target: "defra_agent_desktop::writes",
+                    action = "chat_submit",
+                    row_id = %result.request_id,
+                    "desktop write saved"
+                );
                 Ok(result)
             }
             Err(error) => Err(self.record_mutation_error("submit request", error)),
@@ -347,6 +367,22 @@ impl ClientCore {
             last_error: warning.clone(),
         });
         self.clear_mutation_error();
+        if let Some(warning) = warning.as_deref() {
+            tracing::warn!(
+                target: "defra_agent_desktop::peer",
+                peer_id = %record.peer_id,
+                label = %record.label,
+                error = %warning,
+                "desktop peer add warning"
+            );
+        } else {
+            tracing::info!(
+                target: "defra_agent_desktop::peer",
+                peer_id = %record.peer_id,
+                label = %record.label,
+                "desktop peer added"
+            );
+        }
 
         Ok(PeerMutationResult {
             peer_id: record.peer_id,
@@ -387,6 +423,12 @@ impl ClientCore {
             });
 
         self.clear_mutation_error();
+        tracing::info!(
+            target: "defra_agent_desktop::peer",
+            peer_id = %removed.peer_id,
+            label = %removed.label,
+            "desktop peer removed"
+        );
         Ok(PeerMutationResult {
             peer_id: removed.peer_id,
             label: removed.label,
@@ -401,6 +443,12 @@ impl ClientCore {
             Ok(()) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
+                tracing::info!(
+                    target: "defra_agent_desktop::writes",
+                    doc_type = "behavior",
+                    row_id = %row.behavior_id,
+                    "desktop write saved"
+                );
                 Ok(())
             }
             Err(error) => Err(self.record_mutation_error("save behavior", error)),
@@ -412,6 +460,12 @@ impl ClientCore {
             Ok(()) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
+                tracing::info!(
+                    target: "defra_agent_desktop::writes",
+                    doc_type = "backend",
+                    row_id = %row.backend_id,
+                    "desktop write saved"
+                );
                 Ok(())
             }
             Err(error) => Err(self.record_mutation_error("save backend", error)),
@@ -423,6 +477,12 @@ impl ClientCore {
             Ok(()) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
+                tracing::info!(
+                    target: "defra_agent_desktop::writes",
+                    doc_type = "tool_selection",
+                    row_id = %row.selection_id,
+                    "desktop write saved"
+                );
                 Ok(())
             }
             Err(error) => Err(self.record_mutation_error("save tool selection", error)),
@@ -434,6 +494,12 @@ impl ClientCore {
             Ok(()) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
+                tracing::info!(
+                    target: "defra_agent_desktop::writes",
+                    doc_type = "inference_profile",
+                    row_id = %row.profile_id,
+                    "desktop write saved"
+                );
                 Ok(())
             }
             Err(error) => Err(self.record_mutation_error("save inference profile", error)),
@@ -445,6 +511,12 @@ impl ClientCore {
             Ok(()) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
+                tracing::info!(
+                    target: "defra_agent_desktop::writes",
+                    doc_type = "scheduled_task",
+                    row_id = %row.task_id,
+                    "desktop write saved"
+                );
                 Ok(())
             }
             Err(error) => Err(self.record_mutation_error("save scheduled task", error)),
@@ -456,6 +528,13 @@ impl ClientCore {
             Ok(()) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
+                tracing::info!(
+                    target: "defra_agent_desktop::writes",
+                    doc_type = "scheduled_task",
+                    row_id = %row.task_id,
+                    action = "run_now",
+                    "desktop write saved"
+                );
                 Ok(())
             }
             Err(error) => Err(self.record_mutation_error("run scheduled task now", error)),

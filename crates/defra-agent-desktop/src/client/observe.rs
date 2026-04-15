@@ -72,10 +72,7 @@ impl ObserverHandle {
     }
 }
 
-pub fn spawn_observer(
-    node: Arc<EmbeddedNode>,
-    store: Arc<ObservedStore>,
-) -> ObserverHandle {
+pub fn spawn_observer(node: Arc<EmbeddedNode>, store: Arc<ObservedStore>) -> ObserverHandle {
     let (stop_tx, mut stop_rx) = watch::channel(false);
     let task = tokio::spawn(async move {
         let mut subscription = node.subscribe(&[EventName::Update]);

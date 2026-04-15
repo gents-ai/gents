@@ -8,7 +8,7 @@ use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
 
-const DEFAULT_LOG_CAPACITY: usize = 512;
+const DEFAULT_LOG_CAPACITY: usize = 4096;
 const EVENTS_PER_SECOND_WINDOW_SECS: i64 = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

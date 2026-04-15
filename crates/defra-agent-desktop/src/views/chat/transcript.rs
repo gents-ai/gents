@@ -250,9 +250,7 @@ fn reasoning_block(
                 &audit::targets::chat_reasoning(&response.response_key),
                 &toggle,
             );
-            if toggle.clicked()
-                && !state.chat.expanded_reasoning_cards.insert(card_id.clone())
-            {
+            if toggle.clicked() && !state.chat.expanded_reasoning_cards.insert(card_id.clone()) {
                 state.chat.expanded_reasoning_cards.remove(&card_id);
             }
 

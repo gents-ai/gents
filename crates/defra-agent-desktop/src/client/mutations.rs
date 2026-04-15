@@ -496,6 +496,19 @@ pub async fn upsert_scheduled_task(node: &EmbeddedNode, row: &ScheduledTaskRow) 
             "next_run_at",
             row.next_run_at.as_deref(),
         )),
+        Some(graphql_string_field(
+            "last_run_at",
+            row.last_run_at.as_deref(),
+        )),
+        Some(graphql_string_field(
+            "last_status",
+            row.last_status.as_deref(),
+        )),
+        Some(graphql_string_field(
+            "last_error",
+            row.last_error.as_deref(),
+        )),
+        Some(graphql_optional_int_field("run_count", row.run_count)),
     ];
     let update_fields = [
         Some(format!(
@@ -520,6 +533,19 @@ pub async fn upsert_scheduled_task(node: &EmbeddedNode, row: &ScheduledTaskRow) 
             "next_run_at",
             row.next_run_at.as_deref(),
         )),
+        Some(graphql_string_field(
+            "last_run_at",
+            row.last_run_at.as_deref(),
+        )),
+        Some(graphql_string_field(
+            "last_status",
+            row.last_status.as_deref(),
+        )),
+        Some(graphql_string_field(
+            "last_error",
+            row.last_error.as_deref(),
+        )),
+        Some(graphql_optional_int_field("run_count", row.run_count)),
     ];
 
     let mutation = format!(
