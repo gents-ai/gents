@@ -4656,18 +4656,48 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
-    let token = format!("E2E_TOKEN_{}", Uuid::new_v4().simple());
-    fs::write(home_dir.join("notes.txt"), format!("{token}\n"))?;
+    struct LiveRequestSpec {
+        behavior_id: String,
+        prompt: String,
+        tokens: Vec<String>,
+    }
+
+    let files_dir = home_dir.join("live-smoke-files");
+    fs::create_dir_all(&files_dir)?;
+    let agent_name = format!("cli-live-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+    let mut request_specs = Vec::new();
+    for request_index in 0..4 {
+        let mut paths = Vec::new();
+        let mut tokens = Vec::new();
+        for file_index in 0..3 {
+            let path = format!("live-smoke-files/request-{request_index}-file-{file_index}.txt");
+            let token = format!(
+                "LIVE_E2E_REQUEST_{request_index}_FILE_{file_index}_{}",
+                Uuid::new_v4().simple()
+            );
+            fs::write(home_dir.join(&path), format!("{token}\n"))?;
+            paths.push(path);
+            tokens.push(token);
+        }
+        let prompt = format!(
+            "This is live concurrency request {request_index}. First call list_files for live-smoke-files. Then call read_file separately for each of these files, in this exact order: {}. Reply with only the file tokens in that same order, separated by spaces. Do not guess or reuse contents from another request.",
+            paths.join(", ")
+        );
+        request_specs.push(LiveRequestSpec {
+            behavior_id: format!("{agent_did}:live-{request_index}"),
+            prompt,
+            tokens,
+        });
+    }
 
     let system_prompt = tempdir.path().join("system_prompt.txt");
     fs::write(
         &system_prompt,
-        "When the user asks you to read a local file, use the available file tools instead of guessing. If they ask for a token from a file, respond with only that token.",
+        "When the user asks about local files, use the available file tools instead of guessing. For multi-file requests, call read_file separately for every requested path before answering. Keep final answers to the requested file tokens only.",
     )?;
 
     let port = allocate_port()?;
-    let agent_name = format!("cli-live-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
     let model_endpoint = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT")
         .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
@@ -4678,6 +4708,10 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
         agent_name.clone(),
         "--model-name".to_string(),
         model_name.clone(),
+        "--max-concurrent".to_string(),
+        "4".to_string(),
+        "--max-queue-depth".to_string(),
+        "8".to_string(),
     ];
     if std::env::var_os("DEFRA_AGENT_CLI_E2E_API_KEY").is_some() {
         init_args.push("--api-key-env-var".to_string());
@@ -4699,61 +4733,138 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
-    run_cli_json(
-        &home_dir,
-        &[
-            "config",
-            "behavior",
-            "set",
-            "--graphql",
-            &graphql,
-            "--agent-did",
-            &agent_did,
-            "--display-name",
-            "Default",
-            "--system-prompt-file",
-            system_prompt
-                .to_str()
-                .context("system prompt path is not UTF-8")?,
-            "--backend-id",
-            &backend_id,
-            "--model-name",
-            &model_name,
-            "--tool-selection-id",
-            &selection_id,
-        ],
-    )?;
+
+    for (index, spec) in request_specs.iter().enumerate() {
+        let display_name = format!("Live Smoke {}", index + 1);
+        run_cli_json(
+            &home_dir,
+            &[
+                "config",
+                "behavior",
+                "set",
+                "--graphql",
+                &graphql,
+                "--agent-did",
+                &agent_did,
+                "--behavior-id",
+                &spec.behavior_id,
+                "--display-name",
+                &display_name,
+                "--system-prompt-file",
+                system_prompt
+                    .to_str()
+                    .context("system prompt path is not UTF-8")?,
+                "--backend-id",
+                &backend_id,
+                "--model-name",
+                &model_name,
+                "--tool-selection-id",
+                &selection_id,
+            ],
+        )?;
+    }
     wait_for_runtime_quiescence(&graphql, &agent_did, 2, Duration::from_secs(6)).await?;
 
-    let prompt =
-        "Use the read_file tool to read notes.txt. Reply with only the token from that file.";
-    let result = run_cli_json(
-        &home_dir,
-        &[
-            "request",
-            "submit",
-            "--graphql",
-            &graphql,
-            "--agent-did",
-            &agent_did,
-            "--content",
-            prompt,
-            "--timeout-secs",
-            "180",
-            "--poll-secs",
-            "1",
-        ],
-    )?;
-    let response = result
-        .pointer("/response/content")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            anyhow!("request submit result did not include response content: {result}")
-        })?;
-    assert!(
-        response.contains(&token),
-        "expected response to contain token {token}, got {response}"
-    );
+    let mut children = Vec::new();
+    for spec in &request_specs {
+        let child = spawn_cli(
+            &home_dir,
+            &[
+                "request",
+                "submit",
+                "--graphql",
+                &graphql,
+                "--agent-did",
+                &agent_did,
+                "--behavior-id",
+                &spec.behavior_id,
+                "--content",
+                &spec.prompt,
+                "--timeout-secs",
+                "240",
+                "--poll-secs",
+                "1",
+            ],
+        )?;
+        children.push((spec, child));
+    }
+
+    let mut outputs = Vec::new();
+    let mut wait_errors = Vec::new();
+    for (spec, child) in children {
+        match child.wait_with_output() {
+            Ok(output) => outputs.push((spec, output)),
+            Err(error) => wait_errors.push(format!("{}: {error}", spec.behavior_id)),
+        }
+    }
+    if !wait_errors.is_empty() {
+        bail!(
+            "failed waiting for live request child process(es): {}",
+            wait_errors.join("; ")
+        );
+    }
+
+    for (spec, output) in outputs {
+        if !output.status.success() {
+            let (server_stdout, server_stderr) = serve.captured_output()?;
+            bail!(
+                "live request {} failed\nstdout:\n{}\nstderr:\n{}\nserver stdout:\n{}\nserver stderr:\n{}",
+                spec.behavior_id,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+                server_stdout,
+                server_stderr
+            );
+        }
+        let result: Value = serde_json::from_slice(&output.stdout)
+            .with_context(|| format!("parsing live request JSON for {}", spec.behavior_id))?;
+        assert_eq!(
+            result.get("behavior_id").and_then(Value::as_str),
+            Some(spec.behavior_id.as_str())
+        );
+        let response = result
+            .pointer("/response/content")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                anyhow!("request submit result did not include response content: {result}")
+            })?;
+        for token in &spec.tokens {
+            assert!(
+                response.contains(token),
+                "expected response for {} to contain token {token}, got {response}",
+                spec.behavior_id
+            );
+        }
+        let session_id = result
+            .get("session_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("live request result missing session_id: {result}"))?;
+        let tool_calls =
+            wait_for_completed_tool_calls(&graphql, session_id, "read_file", spec.tokens.len())
+                .await?;
+        let tool_results = tool_calls
+            .iter()
+            .filter_map(|row| row.get("result").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for token in &spec.tokens {
+            assert!(
+                tool_results.contains(token),
+                "expected persisted read_file tool calls for {} to include token {token}: {tool_results}",
+                spec.behavior_id
+            );
+        }
+    }
+
+    wait_for_completed_inference_behaviors(
+        &graphql,
+        &backend_id,
+        &request_specs
+            .iter()
+            .map(|spec| spec.behavior_id.as_str())
+            .collect::<Vec<_>>(),
+    )
+    .await?;
 
     Ok(())
 }
@@ -5752,6 +5863,113 @@ async fn wait_for_tool_call(graphql: &str, session_id: &str, tool_name: &str) ->
 
         if Instant::now() >= deadline {
             bail!("timed out waiting for AgentToolCall {tool_name} in session {session_id}");
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+async fn wait_for_completed_tool_calls(
+    graphql: &str,
+    session_id: &str,
+    tool_name: &str,
+    minimum_count: usize,
+) -> Result<Vec<Value>> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let response = graphql_query(
+            graphql,
+            &format!(
+                r#"{{
+                    AgentToolCall(
+                        filter: {{
+                            session_id: {{ _eq: "{}" }},
+                            tool_name: {{ _eq: "{}" }}
+                        }},
+                        order: {{ started_at: ASC }}
+                    ) {{
+                        tool_name
+                        args
+                        result
+                        status
+                    }}
+                }}"#,
+                escape_graphql_string(session_id),
+                escape_graphql_string(tool_name),
+            ),
+        )
+        .await?;
+        let rows = response
+            .pointer("/data/AgentToolCall")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let completed = rows
+            .iter()
+            .filter(|row| row.get("status").and_then(Value::as_str) == Some("completed"))
+            .cloned()
+            .collect::<Vec<_>>();
+        if completed.len() >= minimum_count {
+            return Ok(completed);
+        }
+
+        if Instant::now() >= deadline {
+            bail!(
+                "timed out waiting for {minimum_count} completed {tool_name} tool call(s) in session {session_id}; last rows={}",
+                Value::Array(rows)
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+async fn wait_for_completed_inference_behaviors(
+    graphql: &str,
+    backend_id: &str,
+    expected_behavior_ids: &[&str],
+) -> Result<Vec<Value>> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let response = graphql_query(
+            graphql,
+            &format!(
+                r#"{{
+                    InferenceCall(
+                        filter: {{ backend_id: {{ _eq: "{}" }} }},
+                        order: {{ queued_at: ASC }}
+                    ) {{
+                        request_id
+                        behavior_id
+                        backend_id
+                        call_kind
+                        call_state
+                    }}
+                }}"#,
+                escape_graphql_string(backend_id),
+            ),
+        )
+        .await?;
+        let rows = response
+            .pointer("/data/InferenceCall")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let all_completed = expected_behavior_ids.iter().all(|expected| {
+            rows.iter().any(|row| {
+                row.get("behavior_id").and_then(Value::as_str) == Some(*expected)
+                    && row.get("call_kind").and_then(Value::as_str) == Some("inference")
+                    && row.get("call_state").and_then(Value::as_str) == Some("completed")
+            })
+        });
+        if all_completed {
+            return Ok(rows);
+        }
+
+        if Instant::now() >= deadline {
+            bail!(
+                "timed out waiting for completed inference calls on backend {backend_id} for behaviors {:?}; last rows={}",
+                expected_behavior_ids,
+                Value::Array(rows)
+            );
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
