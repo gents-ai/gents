@@ -4,7 +4,7 @@
 
 If you want to try it, the shortest path is:
 1. Build the CLI.
-2. Run `init <inference-endpoint>`.
+2. Run `init`.
 3. Start `server`.
 4. Open `chat` in another terminal.
 
@@ -13,8 +13,8 @@ If you want to try it, the shortest path is:
 Prerequisites:
 
 - Rust toolchain
-- one reachable OpenAI-compatible inference endpoint
-- one model name served by that endpoint
+- local Ollama for the default path, or another reachable OpenAI-compatible inference endpoint
+- default model `gemma4-26b-a4b` pulled in Ollama, or one model name served by your custom endpoint
 - if your endpoint requires auth, pass `--api-key` or `--api-key-env-var` during `init`
 
 The backend endpoint must be the OpenAI-compatible base URL, including `/v1`.
@@ -27,12 +27,10 @@ cargo build -p defra-agent-cli --release
 
 ### 2. Set demo variables
 
-Set the endpoint and model name for your inference backend.
+Set the CLI path. The default `init` target is local Ollama at `http://localhost:11434/v1` with model `gemma4-26b-a4b`.
 
 ```bash
 export AGENT=./target/release/defra-agent
-export INFERENCE_ENDPOINT=http://127.0.0.1:8000/v1
-export MODEL_NAME=your-model-name
 ```
 
 By default the CLI keeps its local node, keys, and runtime state in `~/.defra-agent`.
@@ -43,7 +41,7 @@ If you want to isolate a demo, pass `--home /some/path` to both `server` and `ch
 Run this once:
 
 ```bash
-$AGENT init "$INFERENCE_ENDPOINT" --model-name "$MODEL_NAME"
+$AGENT init
 ```
 
 This is idempotent. It provisions a standard safe home directory under `~/.defra-agent`:
@@ -57,10 +55,25 @@ This is idempotent. It provisions a standard safe home directory under `~/.defra
 
 The default tool root is the current directory where you run `init`. Pass `--tool-root /path/to/root` if you want a different read-only scope.
 
+For the default local backend, pull the default model before starting the server:
+
+```bash
+ollama pull gemma4-26b-a4b
+```
+
+To point at a different OpenAI-compatible backend during init:
+
+```bash
+export INFERENCE_ENDPOINT=http://127.0.0.1:8000/v1
+export MODEL_NAME=your-model-name
+
+$AGENT init "$INFERENCE_ENDPOINT" --model-name "$MODEL_NAME"
+```
+
 If you want write-capable local tools for a demo, opt in explicitly:
 
 ```bash
-$AGENT init "$INFERENCE_ENDPOINT" --model-name "$MODEL_NAME" --write-tools
+$AGENT init --write-tools
 ```
 
 With `--write-tools`, the same tool root also caps write/edit and unrestricted bash access.
@@ -68,7 +81,15 @@ With `--write-tools`, the same tool root also caps write/edit and unrestricted b
 If you want to wipe and recreate the configured agent home from scratch:
 
 ```bash
-$AGENT init "$INFERENCE_ENDPOINT" --model-name "$MODEL_NAME" --dangerously-overwrite
+$AGENT init --dangerously-overwrite
+```
+
+Re-running `init` does not clear persisted runtime connectivity state. Clear it explicitly when needed:
+
+```bash
+$AGENT reset
+# or combine it with init:
+$AGENT init --reset
 ```
 
 If you want to isolate a demo, pass `--home /some/path` to `init`, `server`, and `chat`.
@@ -84,11 +105,14 @@ $AGENT init "$INFERENCE_ENDPOINT" \
 The init output is JSON. The most useful fields are:
 
 - `agent_did`
+- `key_path`
 - `default_behavior_id`
 - `tool_ceiling`
 - `init.backend_id`
+- `init.endpoint`
 - `init.model_name`
 - `init.tool_selection_id`
+- `next_steps`
 
 If your inference endpoint requires auth, pass `--api-key-env-var NAME` or `--api-key VALUE` when running `init`.
 
@@ -113,7 +137,7 @@ If you start the runtime with P2P enabled, the readiness JSON also includes:
 - `p2p_peer_id`
 - `p2p_listen_addresses`
 
-The same connectivity fields are persisted to `runtime.json` under the agent home, usually `~/.defra-agent/runtime.json`.
+The same connectivity fields are persisted to `runtime.json` under the agent home, usually `~/.defra-agent/runtime.json`. Use `defra-agent reset` to remove that file.
 
 `server` stays in the foreground until you stop it with `Ctrl-C`. By default it keeps logs quiet and prints the readiness JSON plus a short status line. If you want debug output, set `RUST_LOG=info` or a more specific filter before starting it.
 
@@ -158,15 +182,9 @@ That means a fresh demo can immediately inspect the local filesystem after `init
 
 If you want write-capable tools instead, rerun `init` with `--write-tools`.
 
-The bootstrap templates live in:
+`init` writes the default backend, behavior, and tool-selection documents through the same upsert code used by `config backend set`, `config behavior set`, and `config tools set`.
 
-- `crates/defra-agent-cli/bootstrap/InferenceBackend/default.gql`
-- `crates/defra-agent-cli/bootstrap/ToolSelection/standard-readonly.gql`
-- `crates/defra-agent-cli/bootstrap/ToolSelection/standard-readwrite.gql`
-- `crates/defra-agent-cli/bootstrap/AgentBehavior/standard-readonly.gql`
-- `crates/defra-agent-cli/bootstrap/AgentBehavior/standard-readwrite.gql`
-
-They are raw GraphQL mutations, one object per file, organized by collection so the default bootstrap documents stay easy to inspect and edit.
+The remaining `init.json` file stores only filesystem-local context that is not represented in DefraDB documents: the home path, agent name, agent DID, key path, operator tool ceiling, and tool root. Runtime configuration itself lives in DefraDB documents.
 
 ## Advanced: Change Tool Selection After Init
 

@@ -652,7 +652,7 @@ fn top_level_help_shows_quickstart_workflow() -> Result<()> {
         "expected quick start section in help output, got:\n{output}"
     );
     assert!(
-        output.contains("defra-agent init http://HOST:PORT/v1 --model-name MODEL"),
+        output.contains("defra-agent init"),
         "expected init example in help output, got:\n{output}"
     );
     assert!(
@@ -677,7 +677,7 @@ fn status_without_runtime_suggests_init_and_server() -> Result<()> {
 
     let stderr = run_cli_failure_stderr(&home_dir, &["status", "--graphql", &graphql])?;
     assert!(
-        stderr.contains("defra-agent init <INFERENCE_ENDPOINT> --model-name <MODEL_NAME>"),
+        stderr.contains("defra-agent init"),
         "expected init suggestion in stderr, got:\n{stderr}"
     );
     assert!(
@@ -960,6 +960,25 @@ async fn diagnose_works_from_local_home_without_server() -> Result<()> {
 
     let output = run_cli_json(&home_dir, &["diagnose"])?;
     assert_eq!(output.get("status").and_then(Value::as_str), Some("ok"));
+    let runtime_schema = output
+        .pointer("/checks/schemas")
+        .and_then(Value::as_array)
+        .and_then(|checks| {
+            checks.iter().find(|check| {
+                check.get("collection").and_then(Value::as_str) == Some("AgentRuntime")
+            })
+        })
+        .ok_or_else(|| anyhow!("diagnose output missing AgentRuntime schema check: {output}"))?;
+    assert_eq!(
+        runtime_schema
+            .get("required_for_config")
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        runtime_schema.get("ok").and_then(Value::as_bool),
+        Some(false)
+    );
     assert_eq!(
         output.get("access_mode").and_then(Value::as_str),
         Some("local")
@@ -4010,24 +4029,43 @@ async fn init_openrouter_preset_applies_hosted_defaults() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn init_requires_model_name() -> Result<()> {
+async fn init_defaults_to_local_ollama_and_surfaces_identity() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
-    let output = Command::new(cli_bin())
-        .env("HOME", &home_dir)
-        .env("RUST_LOG", "error")
-        .arg("init")
-        .arg("http://127.0.0.1:65535/v1")
-        .output()
-        .context("running defra-agent init without model name")?;
+    let agent_name = format!("cli-defaults-{}", Uuid::new_v4().simple());
+    let init = run_init_json(&home_dir, &["--agent-name", &agent_name])?;
 
-    assert!(!output.status.success(), "init should fail");
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        init.pointer("/init/endpoint").and_then(Value::as_str),
+        Some("http://localhost:11434/v1")
+    );
+    assert_eq!(
+        init.pointer("/init/model_name").and_then(Value::as_str),
+        Some("gemma4-26b-a4b")
+    );
+    let key_path = init
+        .get("key_path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing key_path: {init}"))?;
     assert!(
-        stderr.contains("--model-name <MODEL_NAME>"),
-        "expected clap missing-argument error, got:\n{stderr}"
+        Path::new(key_path).exists(),
+        "init should create the identity key at {key_path}"
+    );
+    assert!(
+        init.pointer("/identity/permission_boundary")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.contains("permission boundary")),
+        "init should explain the identity boundary: {init}"
+    );
+    assert!(
+        init.get("next_steps")
+            .and_then(Value::as_array)
+            .is_some_and(|steps| steps
+                .iter()
+                .any(|step| { step.as_str() == Some("ollama pull gemma4-26b-a4b") })),
+        "init should print the default Ollama pull next step: {init}"
     );
 
     Ok(())
@@ -4279,6 +4317,85 @@ async fn init_dangerously_overwrite_replaces_existing_home() -> Result<()> {
     assert!(
         runtime_home.join("init.json").exists(),
         "init config should be recreated after dangerously overwrite"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn runtime_state_reset_is_explicit() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("reset-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-reset-{}", Uuid::new_v4().simple());
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    let runtime_home = home_dir.join(".defra-agent");
+    let runtime_state = runtime_home.join("runtime.json");
+    fs::write(&runtime_state, r#"{"status":"stale"}"#).context("writing stale runtime state")?;
+
+    let rerun = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    assert_eq!(
+        rerun.get("runtime_state_reset").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert!(
+        runtime_state.exists(),
+        "init without --reset should leave runtime.json in place"
+    );
+
+    let reset_init = run_init_json(
+        &home_dir,
+        &[
+            "--reset",
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    assert_eq!(
+        reset_init
+            .get("runtime_state_reset")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert!(
+        !runtime_state.exists(),
+        "init --reset should remove runtime.json"
+    );
+
+    fs::write(&runtime_state, r#"{"status":"stale-again"}"#)
+        .context("rewriting stale runtime state")?;
+    let reset = run_cli_json(&home_dir, &["reset"])?;
+    assert_eq!(reset.get("status").and_then(Value::as_str), Some("reset"));
+    assert_eq!(reset.get("cleared").and_then(Value::as_bool), Some(true));
+    assert!(
+        !runtime_state.exists(),
+        "reset command should remove runtime.json"
     );
 
     Ok(())
@@ -4644,6 +4761,244 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
             .and_then(Value::as_str)
             .is_some_and(|result| result.contains(&token)),
         "expected persisted tool result to contain token {token}: {tool_call}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires a reachable external OpenAI-compatible endpoint"]
+async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools() -> Result<()>
+{
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let files_dir = home_dir.join("demo-files");
+    fs::create_dir_all(&files_dir)?;
+    let alpha_token = format!("LIVE_DEMO_ALPHA_{}", Uuid::new_v4().simple());
+    let beta_token = format!("LIVE_DEMO_BETA_{}", Uuid::new_v4().simple());
+    fs::write(files_dir.join("alpha.txt"), format!("{alpha_token}\n"))?;
+    fs::write(files_dir.join("beta.txt"), format!("{beta_token}\n"))?;
+
+    let system_prompt = tempdir.path().join("standard_onboarding_system_prompt.txt");
+    fs::write(
+        &system_prompt,
+        "This is a live onboarding smoke test. When the user asks about files, use list_files and read_file before answering. Do not infer file contents from names. Keep final answers short and include the exact requested file tokens.",
+    )?;
+
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let agent_name = format!("cli-live-demo-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+    let live_api_key_available =
+        std::env::var("DEFRA_AGENT_CLI_E2E_API_KEY").is_ok_and(|value| !value.trim().is_empty());
+
+    let mut init_args = vec![
+        "--agent-name".to_string(),
+        agent_name.clone(),
+        "--max-concurrent".to_string(),
+        "2".to_string(),
+        "--max-queue-depth".to_string(),
+        "4".to_string(),
+    ];
+    if live_api_key_available {
+        init_args.push("--api-key-env-var".to_string());
+        init_args.push("DEFRA_AGENT_CLI_E2E_API_KEY".to_string());
+    }
+    if let Ok(model_name) = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME") {
+        init_args.push("--model-name".to_string());
+        init_args.push(model_name);
+    }
+    if let Ok(model_endpoint) = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT") {
+        init_args.push(model_endpoint);
+    }
+    let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
+    let init = run_init_json(&home_dir, &init_arg_refs)?;
+    let backend_id = init
+        .pointer("/init/backend_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing backend_id: {init}"))?
+        .to_string();
+    let backend_name = init
+        .pointer("/init/backend_name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing backend_name: {init}"))?
+        .to_string();
+    let endpoint = init
+        .pointer("/init/endpoint")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing endpoint: {init}"))?
+        .to_string();
+    let model_name = init
+        .pointer("/init/model_name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing model_name: {init}"))?
+        .to_string();
+    let behavior_id = init
+        .pointer("/init/default_behavior_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing default_behavior_id: {init}"))?
+        .to_string();
+    let selection_id = init
+        .pointer("/init/tool_selection_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing tool_selection_id: {init}"))?
+        .to_string();
+
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let mut backend_args = vec![
+        "config",
+        "backend",
+        "set",
+        "--graphql",
+        &graphql,
+        "--backend-id",
+        &backend_id,
+        "--name",
+        &backend_name,
+        "--provider-kind",
+        "OpenAiCompatible",
+        "--endpoint",
+        &endpoint,
+        "--max-concurrent",
+        "2",
+        "--max-queue-depth",
+        "4",
+    ];
+    if live_api_key_available {
+        backend_args.push("--api-key-env-var");
+        backend_args.push("DEFRA_AGENT_CLI_E2E_API_KEY");
+    }
+    run_cli_json(&home_dir, &backend_args)?;
+
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "tools",
+            "set",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--selection-id",
+            &selection_id,
+            "--display-name",
+            "Standard Onboarding Demo Tools",
+            "--enable-file-tools",
+            "--file-tools-mode",
+            "ReadOnly",
+            "--file-tool-root",
+            home_dir
+                .to_str()
+                .ok_or_else(|| anyhow!("demo home path is not UTF-8"))?,
+            "--enable-bash",
+            "--bash-mode",
+            "ReadOnly",
+        ],
+    )?;
+
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "behavior",
+            "set",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--behavior-id",
+            &behavior_id,
+            "--display-name",
+            "Standard Onboarding Demo",
+            "--system-prompt-file",
+            system_prompt
+                .to_str()
+                .ok_or_else(|| anyhow!("system prompt path is not UTF-8"))?,
+            "--backend-id",
+            &backend_id,
+            "--model-name",
+            &model_name,
+            "--tool-selection-id",
+            &selection_id,
+        ],
+    )?;
+    wait_for_runtime_quiescence(&graphql, &agent_did, 2, Duration::from_secs(6)).await?;
+
+    let session_id = Uuid::new_v4().to_string();
+    let first_prompt = "Use the filesystem tools. First list demo-files, then read demo-files/alpha.txt, then reply with only the exact token in alpha.txt.";
+    let first = run_cli_json(
+        &home_dir,
+        &[
+            "chat",
+            "--session-id",
+            &session_id,
+            "--output-format",
+            "json",
+            "--timeout-secs",
+            "240",
+            "--poll-secs",
+            "1",
+            first_prompt,
+        ],
+    )?;
+    assert_eq!(
+        first.get("session_id").and_then(Value::as_str),
+        Some(session_id.as_str())
+    );
+    let first_content = first
+        .pointer("/response/content")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("first live chat output missing response content: {first}"))?;
+    assert!(
+        first_content.contains(&alpha_token),
+        "expected first response to contain {alpha_token}, got {first_content}"
+    );
+
+    let second_prompt = "Continue this same conversation. Read demo-files/beta.txt with the filesystem tools, then reply with the alpha token from the previous turn and the exact beta token, separated by a single space.";
+    let second = run_cli_json(
+        &home_dir,
+        &[
+            "chat",
+            "--session-id",
+            &session_id,
+            "--output-format",
+            "json",
+            "--timeout-secs",
+            "240",
+            "--poll-secs",
+            "1",
+            second_prompt,
+        ],
+    )?;
+    assert_eq!(
+        second.get("session_id").and_then(Value::as_str),
+        Some(session_id.as_str())
+    );
+    let second_content = second
+        .pointer("/response/content")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("second live chat output missing response content: {second}"))?;
+    assert!(
+        second_content.contains(&alpha_token) && second_content.contains(&beta_token),
+        "expected second response to contain {alpha_token} and {beta_token}, got {second_content}"
+    );
+
+    wait_for_completed_tool_calls(&graphql, &session_id, "list_files", 1).await?;
+    let read_calls = wait_for_completed_tool_calls(&graphql, &session_id, "read_file", 2).await?;
+    let read_results = read_calls
+        .iter()
+        .filter_map(|row| row.get("result").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        read_results.contains(&alpha_token) && read_results.contains(&beta_token),
+        "expected persisted read_file tool results to contain {alpha_token} and {beta_token}: {read_results}"
     );
 
     Ok(())

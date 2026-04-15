@@ -793,37 +793,27 @@ async fn create_default_behavior(
     agent_did: &str,
     behavior_id: &str,
 ) -> Result<()> {
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_behavior_id = escape_graphql_string(behavior_id);
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let mutation = format!(
-        r#"mutation {{
-            upsert_AgentBehavior(
-                filter: {{ behavior_id: {{ _eq: "{escaped_behavior_id}" }} }},
-                add: {{
-                    behavior_id: "{escaped_behavior_id}",
-                    agent_did: "{escaped_agent_did}",
-                    display_name: "{DEFAULT_BEHAVIOR_LABEL}",
-                    enabled: true,
-                    created_at: "{created_at}"
-                }},
-                update: {{
-                    agent_did: "{escaped_agent_did}",
-                    display_name: "{DEFAULT_BEHAVIOR_LABEL}",
-                    enabled: true
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-
-    let resp = node.execute(&mutation).await;
-    if resp.has_errors() {
-        anyhow::bail!("upsert AgentBehavior failed: {:?}", resp.errors);
-    }
-    Ok(())
+    upsert_agent_behavior(
+        node,
+        &AgentBehavior {
+            behavior_id: behavior_id.to_string(),
+            agent_did: agent_did.to_string(),
+            display_name: Some(DEFAULT_BEHAVIOR_LABEL.to_string()),
+            system_prompt: None,
+            backend_id: None,
+            model_name: None,
+            tool_selection_id: None,
+            inference_profile_id: None,
+            compaction_strategy: None,
+            compaction_threshold: None,
+            enabled: true,
+            created_at: Some(chrono::Utc::now().to_rfc3339()),
+        },
+    )
+    .await
 }
 
-async fn upsert_agent_principal(
+pub async fn upsert_agent_principal(
     node: &EmbeddedNode,
     agent_did: &str,
     display_name: Option<&str>,

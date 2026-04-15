@@ -51,8 +51,8 @@ pub use defra_node;
 pub use document_config::{
     default_behavior_id_for_agent, ensure_agent_principal, list_agent_behaviors,
     load_agent_behavior, load_agent_principal, load_inference_profile, load_tool_selection,
-    upsert_agent_behavior, upsert_inference_profile, upsert_tool_selection, AgentBehavior,
-    AgentPrincipal, InferenceProfile, PrincipalBootstrap, ToolSelectionDocument,
+    upsert_agent_behavior, upsert_agent_principal, upsert_inference_profile, upsert_tool_selection,
+    AgentBehavior, AgentPrincipal, InferenceProfile, PrincipalBootstrap, ToolSelectionDocument,
 };
 pub use health_checker::{spawn_health_checker, HealthStatus, ServiceHealth, ServiceHealthMap};
 pub use hook::{DefraSessionHook, FailurePolicy, HookStats};
@@ -63,11 +63,11 @@ pub use meta_tools::build_meta_tools;
 pub use oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunResult};
 pub use prompt::{LayeredPromptBuilder, PromptBuilder};
 pub use schema::{
-    ensure_runtime_schemas, ensure_schemas, AGENT_BEHAVIOR_SCHEMA, AGENT_CONVERSATION_SCHEMA,
-    AGENT_MESSAGE_SCHEMA, AGENT_PRINCIPAL_SCHEMA, AGENT_REQUEST_SCHEMA, AGENT_RESPONSE_SCHEMA,
-    AGENT_RUNTIME_SCHEMA, AGENT_SESSION_SCHEMA, AGENT_TOOL_CALL_SCHEMA, AGENT_TOOL_RESULT_SCHEMA,
-    COMPACTION_ENTRY_SCHEMA, INFERENCE_BACKEND_SCHEMA, INFERENCE_CALL_SCHEMA,
-    INFERENCE_PROFILE_SCHEMA, SCHEDULED_TASK_SCHEMA, TOOL_SELECTION_SCHEMA,
+    ensure_config_bootstrap_schemas, ensure_runtime_schemas, ensure_schemas, AGENT_BEHAVIOR_SCHEMA,
+    AGENT_CONVERSATION_SCHEMA, AGENT_MESSAGE_SCHEMA, AGENT_PRINCIPAL_SCHEMA, AGENT_REQUEST_SCHEMA,
+    AGENT_RESPONSE_SCHEMA, AGENT_RUNTIME_SCHEMA, AGENT_SESSION_SCHEMA, AGENT_TOOL_CALL_SCHEMA,
+    AGENT_TOOL_RESULT_SCHEMA, COMPACTION_ENTRY_SCHEMA, INFERENCE_BACKEND_SCHEMA,
+    INFERENCE_CALL_SCHEMA, INFERENCE_PROFILE_SCHEMA, SCHEDULED_TASK_SCHEMA, TOOL_SELECTION_SCHEMA,
     TOOL_SERVICE_REGISTRY_SCHEMA,
 };
 pub use streaming::{DefraStreamWriter, StreamWriter};
