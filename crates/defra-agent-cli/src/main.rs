@@ -4,7 +4,7 @@ use std::io::{self, BufRead, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use axum::{
@@ -39,6 +39,8 @@ const DEFAULT_INIT_ENDPOINT: &str = "http://localhost:11434/v1";
 const DEFAULT_INIT_MODEL_NAME: &str = "gemma4-26b-a4b";
 const DEFAULT_HTTP_PORT: u16 = 9191;
 const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
+const SERVICE_NAME: &str = "defra-agent";
+const SERVICE_BINARY: &str = "defra-agent";
 const DEFAULT_P2P_MAX_CONCURRENT_DAG_FETCHES: usize = 4;
 const DEFAULT_P2P_MAX_CONCURRENT_PUSH_TASKS: usize = 8;
 const DEFAULT_P2P_RATE_LIMIT_BURST: u32 = 500;
@@ -743,6 +745,25 @@ struct StoredRuntimeState {
     p2p_listen_addresses: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct VersionResponse {
+    service: &'static str,
+    binary: &'static str,
+    package: &'static str,
+    version: &'static str,
+    repository: &'static str,
+    build: BuildMetadata,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BuildMetadata {
+    git_sha: Option<&'static str>,
+    git_ref: Option<&'static str>,
+    git_dirty: Option<bool>,
+    target: Option<&'static str>,
+    profile: Option<&'static str>,
+}
+
 #[derive(Debug, Deserialize)]
 struct NodeIdentityResponse {
     #[serde(rename = "PeerID")]
@@ -862,11 +883,13 @@ struct ConfigApplyReport {
 }
 
 #[derive(Clone)]
-struct MetricsState {
+struct RuntimeHttpState {
     graphql: String,
+    started_at: String,
+    started_instant: Instant,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct MetricsQueryData {
     #[serde(rename = "AgentRuntime", default)]
     agent_runtimes: Vec<MetricsRuntimeRow>,
@@ -874,7 +897,7 @@ struct MetricsQueryData {
     inference_backends: Vec<MetricsBackendRow>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct MetricsRuntimeRow {
     agent_did: String,
     #[serde(default)]
@@ -895,7 +918,7 @@ struct MetricsRuntimeRow {
     last_reconcile_completed_at: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct MetricsBackendRow {
     backend_id: String,
     #[serde(default)]
@@ -1478,13 +1501,21 @@ fn scheduled_task_row_matches_expected(row: &Value, expected: &Value) -> Result<
         .all(|(key, value)| actual.get(key).is_some_and(|actual| actual == value)))
 }
 
-fn metrics_router(graphql: String) -> Router {
+fn runtime_contract_router(graphql: String) -> Router {
+    let state = RuntimeHttpState {
+        graphql,
+        started_at: chrono::Utc::now().to_rfc3339(),
+        started_instant: Instant::now(),
+    };
+
     Router::new()
         .route("/metrics", get(metrics_handler))
-        .with_state(MetricsState { graphql })
+        .route("/version", get(version_handler))
+        .route("/healthz", get(healthz_handler))
+        .with_state(state)
 }
 
-async fn metrics_handler(State(state): State<MetricsState>) -> Response {
+async fn metrics_handler(State(state): State<RuntimeHttpState>) -> Response {
     match render_prometheus_metrics(&state.graphql).await {
         Ok(body) => ([(header::CONTENT_TYPE, PROMETHEUS_CONTENT_TYPE)], body).into_response(),
         Err(error) => (
@@ -1496,38 +1527,153 @@ async fn metrics_handler(State(state): State<MetricsState>) -> Response {
     }
 }
 
+async fn version_handler() -> impl IntoResponse {
+    axum::Json(version_response())
+}
+
+async fn healthz_handler(State(state): State<RuntimeHttpState>) -> Response {
+    match load_metrics_query_data(&state.graphql).await {
+        Ok(data) => {
+            let health = render_healthz_payload(&state, Some(&data), None);
+            let status = if health.get("ok") == Some(&Value::Bool(true)) {
+                StatusCode::OK
+            } else {
+                StatusCode::SERVICE_UNAVAILABLE
+            };
+            (status, axum::Json(health)).into_response()
+        }
+        Err(error) => {
+            let health = render_healthz_payload(&state, None, Some(error.to_string()));
+            (StatusCode::SERVICE_UNAVAILABLE, axum::Json(health)).into_response()
+        }
+    }
+}
+
+fn version_response() -> VersionResponse {
+    VersionResponse {
+        service: SERVICE_NAME,
+        binary: SERVICE_BINARY,
+        package: env!("CARGO_PKG_NAME"),
+        version: env!("CARGO_PKG_VERSION"),
+        repository: env!("CARGO_PKG_REPOSITORY"),
+        build: BuildMetadata {
+            git_sha: option_env!("DEFRA_AGENT_BUILD_GIT_SHA"),
+            git_ref: option_env!("DEFRA_AGENT_BUILD_GIT_REF"),
+            git_dirty: option_env!("DEFRA_AGENT_BUILD_GIT_DIRTY").and_then(|value| match value {
+                "true" => Some(true),
+                "false" => Some(false),
+                _ => None,
+            }),
+            target: option_env!("DEFRA_AGENT_BUILD_TARGET"),
+            profile: option_env!("DEFRA_AGENT_BUILD_PROFILE"),
+        },
+    }
+}
+
+fn render_healthz_payload(
+    state: &RuntimeHttpState,
+    data: Option<&MetricsQueryData>,
+    error: Option<String>,
+) -> Value {
+    let version = version_response();
+    let uptime_seconds = state.started_instant.elapsed().as_secs();
+
+    match data {
+        Some(data) => {
+            let runtime_ready = data
+                .agent_runtimes
+                .iter()
+                .any(|runtime| runtime.process_state == ProcessLifecycleState::Ready.as_str());
+            let runtime_degraded = data
+                .agent_runtimes
+                .iter()
+                .any(|runtime| runtime.unavailable_behavior_count > 0);
+            let backend_degraded = data
+                .inference_backends
+                .iter()
+                .any(|backend| backend.enabled && backend.probe_status != "healthy");
+            let ok = runtime_ready;
+            let status = if !runtime_ready {
+                "unhealthy"
+            } else if runtime_degraded || backend_degraded {
+                "degraded"
+            } else {
+                "ok"
+            };
+            let runtime_status = if runtime_ready {
+                if runtime_degraded {
+                    "degraded"
+                } else {
+                    "ok"
+                }
+            } else {
+                "unhealthy"
+            };
+            let backend_status = if backend_degraded { "degraded" } else { "ok" };
+
+            json!({
+                "status": status,
+                "ok": ok,
+                "service": SERVICE_NAME,
+                "version": version.version,
+                "started_at": state.started_at,
+                "uptime_seconds": uptime_seconds,
+                "checks": {
+                    "http": {
+                        "status": "ok",
+                    },
+                    "graphql": {
+                        "status": "ok",
+                        "endpoint": state.graphql,
+                    },
+                    "runtime": {
+                        "status": runtime_status,
+                        "ready": runtime_ready,
+                        "count": data.agent_runtimes.len(),
+                    },
+                    "backends": {
+                        "status": backend_status,
+                        "count": data.inference_backends.len(),
+                    },
+                },
+                "runtimes": data.agent_runtimes,
+                "backends": data.inference_backends,
+            })
+        }
+        None => json!({
+            "status": "unhealthy",
+            "ok": false,
+            "service": SERVICE_NAME,
+            "version": version.version,
+            "started_at": state.started_at,
+            "uptime_seconds": uptime_seconds,
+            "checks": {
+                "http": {
+                    "status": "ok",
+                },
+                "graphql": {
+                    "status": "unhealthy",
+                    "endpoint": state.graphql,
+                    "error": error.unwrap_or_else(|| "runtime GraphQL status unavailable".to_string()),
+                },
+                "runtime": {
+                    "status": "unknown",
+                    "ready": false,
+                    "count": 0,
+                },
+                "backends": {
+                    "status": "unknown",
+                    "count": 0,
+                },
+            },
+            "runtimes": [],
+            "backends": [],
+        }),
+    }
+}
+
 async fn render_prometheus_metrics(graphql: &str) -> Result<String> {
-    let response = post_graphql(
-        graphql,
-        r#"{
-            AgentRuntime {
-                agent_did
-                process_state
-                reconcile_phase
-                active_generation
-                router_generation
-                runnable_behavior_count
-                unavailable_behavior_count
-                last_reconcile_result
-                last_reconcile_completed_at
-            }
-            InferenceBackend {
-                backend_id
-                enabled
-                max_concurrent
-                max_queue_depth
-                probe_status
-                last_probe
-            }
-        }"#,
-    )
-    .await?;
-    let data = response
-        .get("data")
-        .cloned()
-        .unwrap_or_else(|| Value::Object(Default::default()));
-    let data: MetricsQueryData =
-        serde_json::from_value(data).context("decoding metrics query response")?;
+    let data = load_metrics_query_data(graphql).await?;
 
     let mut lines = Vec::new();
     push_metric_prelude(
@@ -1723,6 +1869,39 @@ async fn render_prometheus_metrics(graphql: &str) -> Result<String> {
 
     lines.push(String::new());
     Ok(lines.join("\n"))
+}
+
+async fn load_metrics_query_data(graphql: &str) -> Result<MetricsQueryData> {
+    let response = post_graphql(
+        graphql,
+        r#"{
+            AgentRuntime {
+                agent_did
+                process_state
+                reconcile_phase
+                active_generation
+                router_generation
+                runnable_behavior_count
+                unavailable_behavior_count
+                last_reconcile_result
+                last_reconcile_completed_at
+            }
+            InferenceBackend {
+                backend_id
+                enabled
+                max_concurrent
+                max_queue_depth
+                probe_status
+                last_probe
+            }
+        }"#,
+    )
+    .await?;
+    let data = response
+        .get("data")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(Default::default()));
+    serde_json::from_value(data).context("decoding runtime HTTP query response")
 }
 
 fn push_metric_prelude(lines: &mut Vec<String>, name: &str, help: &str) {
@@ -2483,7 +2662,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
     let p2p_config = resolve_server_p2p_config(&home_dir, &args)?;
     let mut node_builder = EmbeddedNode::builder().data_path(&data_dir).with_http(
         defra_node::HttpConfig::with_addr(http_addr)
-            .with_extra_routes(metrics_router(graphql_url.clone())),
+            .with_extra_routes(runtime_contract_router(graphql_url.clone())),
     );
     if let Some(config) = p2p_config {
         node_builder = node_builder.with_p2p(config);
