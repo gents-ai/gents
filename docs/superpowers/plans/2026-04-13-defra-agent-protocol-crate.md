@@ -369,7 +369,6 @@ mod tests {
             "content": "hello",
             "status": "pending",
             "lifecycle_state": "pending",
-            "admission_state": "released",
             "backend_id": "",
             "execution_origin": "interactive",
             "failure_reason": "",
@@ -532,8 +531,6 @@ pub struct AgentRequestRow {
     pub content: String,
     pub status: String,
     pub lifecycle_state: String,
-    #[serde(default)]
-    pub admission_state: Option<String>,
     #[serde(default)]
     pub backend_id: Option<String>,
     #[serde(default)]
@@ -824,7 +821,6 @@ mod tests {
             "content": "hello",
             "status": "pending",
             "lifecycle_state": "pending",
-            "admission_state": "released",
             "backend_id": "",
             "execution_origin": "interactive",
             "failure_reason": "",

@@ -9,7 +9,7 @@ use crate::watcher::AgentRequest;
 use serde_json::Value;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::thread::JoinHandle;
 
@@ -127,16 +127,27 @@ struct MockModelEndpoint {
     endpoint: String,
     port: u16,
     stop: Arc<AtomicBool>,
+    chat_requests: Arc<AtomicUsize>,
     handle: Option<JoinHandle<()>>,
 }
 
 impl MockModelEndpoint {
     fn start(model_name: &str) -> anyhow::Result<Self> {
+        Self::start_with_blocking_chat(model_name, false)
+    }
+
+    fn start_blocking_chat(model_name: &str) -> anyhow::Result<Self> {
+        Self::start_with_blocking_chat(model_name, true)
+    }
+
+    fn start_with_blocking_chat(model_name: &str, blocking_chat: bool) -> anyhow::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_for_thread = stop.clone();
+        let chat_requests = Arc::new(AtomicUsize::new(0));
+        let chat_requests_for_thread = chat_requests.clone();
         let model_name = model_name.to_string();
         let handle = thread::spawn(move || {
             while !stop_for_thread.load(Ordering::Relaxed) {
@@ -149,6 +160,17 @@ impl MockModelEndpoint {
                                 continue;
                             }
                         };
+                        if request.method == "POST" && request.path == "/v1/chat/completions" {
+                            chat_requests_for_thread.fetch_add(1, Ordering::SeqCst);
+                            if blocking_chat {
+                                while !stop_for_thread.load(Ordering::Relaxed) {
+                                    thread::sleep(Duration::from_millis(25));
+                                }
+                                let _ = stream.shutdown(Shutdown::Both);
+                                continue;
+                            }
+                        }
+
                         let (status, body) = if request.method == "GET"
                             && (request.path == "/v1/models" || request.path == "/models")
                         {
@@ -171,12 +193,17 @@ impl MockModelEndpoint {
             endpoint: format!("http://127.0.0.1:{port}/v1"),
             port,
             stop,
+            chat_requests,
             handle: Some(handle),
         })
     }
 
     fn endpoint(&self) -> &str {
         &self.endpoint
+    }
+
+    fn chat_request_count(&self) -> usize {
+        self.chat_requests.load(Ordering::SeqCst)
     }
 }
 
@@ -353,8 +380,20 @@ async fn create_agent_request(
     session_id: &str,
     content: &str,
 ) -> String {
+    create_agent_request_for_behavior(node, agent_did, None, request_id, session_id, content).await
+}
+
+async fn create_agent_request_for_behavior(
+    node: &defra_node::EmbeddedNode,
+    agent_did: &str,
+    behavior_id: Option<&str>,
+    request_id: &str,
+    session_id: &str,
+    content: &str,
+) -> String {
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_behavior_id = escape_graphql_string(behavior_id.unwrap_or_default());
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_content = escape_graphql_string(content);
     let created_at = chrono::Utc::now().to_rfc3339();
@@ -363,7 +402,7 @@ async fn create_agent_request(
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
                 agent_did: "{escaped_agent_did}",
-                behavior_id: "",
+                behavior_id: "{escaped_behavior_id}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{escaped_request_id}",
@@ -371,7 +410,6 @@ async fn create_agent_request(
                 content: "{escaped_content}",
                 status: "pending",
                 lifecycle_state: "pending",
-                admission_state: "released",
                 backend_id: "",
                 execution_origin: "interactive",
                 created_at: "{created_at}",
@@ -410,6 +448,69 @@ async fn create_agent_request(
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .expect("AgentRequest _docID")
+}
+
+async fn wait_for_chat_request_count(endpoint: &MockModelEndpoint, expected: usize) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let actual = endpoint.chat_request_count();
+        if actual >= expected {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {expected} chat request(s), observed {actual}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn wait_for_inference_call_state(
+    node: &defra_node::EmbeddedNode,
+    request_id: &str,
+    expected_state: &str,
+) {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let query = format!(
+            r#"{{
+                InferenceCall(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
+                    call_state
+                    failure_reason
+                }}
+            }}"#
+        );
+        let response = node.execute(&query).await;
+        assert!(
+            !response.has_errors(),
+            "InferenceCall query failed: {:?}",
+            response.errors
+        );
+        let row = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("InferenceCall"))
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+            .cloned();
+        let state = row
+            .as_ref()
+            .and_then(|row| row.get("call_state"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if state == expected_state {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for InferenceCall request_id={} to reach call_state={}, last row={:?}",
+            request_id,
+            expected_state,
+            row
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 async fn update_backend_probe_status(
@@ -517,6 +618,7 @@ async fn router_dispatches_first_request_after_snapshot_change_to_latest_generat
         default_behavior_id: "general".to_string(),
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
+        backend_admission_configs: HashMap::new(),
         unavailable_behaviors: HashMap::new(),
         dispatchers: HashMap::new(),
     });
@@ -525,6 +627,7 @@ async fn router_dispatches_first_request_after_snapshot_change_to_latest_generat
         default_behavior_id: "code".to_string(),
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
+        backend_admission_configs: HashMap::new(),
         unavailable_behaviors: HashMap::new(),
         dispatchers: HashMap::new(),
     });
@@ -573,6 +676,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         default_behavior_id: "general".to_string(),
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
+        backend_admission_configs: HashMap::new(),
         unavailable_behaviors: HashMap::new(),
         dispatchers: HashMap::new(),
     });
@@ -581,6 +685,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         default_behavior_id: "general".to_string(),
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
+        backend_admission_configs: HashMap::new(),
         unavailable_behaviors: HashMap::new(),
         dispatchers: HashMap::new(),
     });
@@ -1025,7 +1130,7 @@ async fn run_agent_starts_with_all_behaviors_unavailable_and_rejects_requests_at
         "hello",
     )
     .await;
-    wait_for_request_state(node.as_ref(), &request_doc_id, "error", "released").await;
+    wait_for_request_state(node.as_ref(), &request_doc_id, "error").await;
 
     let request_query = format!(
         r#"{{
@@ -1156,7 +1261,6 @@ async fn wait_for_request_state(
     node: &defra_node::EmbeddedNode,
     doc_id: &str,
     expected_status: &str,
-    expected_admission_state: &str,
 ) {
     let escaped_doc_id = escape_graphql_string(doc_id);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -1165,7 +1269,6 @@ async fn wait_for_request_state(
             r#"{{
                 AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, limit: 1) {{
                     status
-                    admission_state
                 }}
             }}"#
         );
@@ -1187,19 +1290,14 @@ async fn wait_for_request_state(
             .get("status")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let admission_state = row
-            .get("admission_state")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if status == expected_status && admission_state == expected_admission_state {
+        if status == expected_status {
             return;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for AgentRequest {} to reach status={} admission_state={}, last row={:?}",
+            "timed out waiting for AgentRequest {} to reach status={}, last row={:?}",
             doc_id,
             expected_status,
-            expected_admission_state,
             row
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1211,40 +1309,60 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("shutdown-waiting-request"));
-    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
+    let mock_endpoint = MockModelEndpoint::start_blocking_chat("default").unwrap();
     bind_default_behavior_backend_with_capacity(
         node.as_ref(),
         identity.did(),
         "backend-blocked",
         mock_endpoint.endpoint(),
-        0,
+        1,
     )
     .await;
-    let agent = crate::DefraAgent::from_default_behavior_documents(
-        node.clone(),
-        identity.clone(),
-        crate::agent::DocumentRuntimeOptions {
-            tool_ceiling: ToolCeiling::meta_only(),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
+    let agent = crate::DefraAgent::builder()
+        .node(node.clone())
+        .identity(identity.clone())
+        .default_behavior_id("general")
+        .tool_ceiling(ToolCeiling::meta_only())
+        .behavior("general")
+        .backend_id("backend-blocked")
+        .model_name("default")
+        .done()
+        .behavior("code")
+        .backend_id("backend-blocked")
+        .model_name("default")
+        .done()
+        .build()
+        .await
+        .unwrap();
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
     wait_for_runtime_process_state(node.as_ref(), identity.did(), "ready").await;
 
-    let request_doc_id = create_agent_request(
+    let first_request_doc_id = create_agent_request_for_behavior(
         node.as_ref(),
         identity.did(),
+        Some("general"),
+        "req-shutdown-running",
+        "session-shutdown-running",
+        "hello",
+    )
+    .await;
+    wait_for_request_state(node.as_ref(), &first_request_doc_id, "processing").await;
+    wait_for_chat_request_count(&mock_endpoint, 1).await;
+
+    let queued_request_doc_id = create_agent_request_for_behavior(
+        node.as_ref(),
+        identity.did(),
+        Some("code"),
         "req-shutdown-waiting",
         "session-shutdown-waiting",
         "hello",
     )
     .await;
-    wait_for_request_state(node.as_ref(), &request_doc_id, "processing", "waiting").await;
+    wait_for_request_state(node.as_ref(), &queued_request_doc_id, "processing").await;
+    wait_for_inference_call_state(node.as_ref(), "req-shutdown-waiting", "queued").await;
 
     let _ = shutdown_tx.send(true);
     tokio::time::timeout(Duration::from_secs(2), handle)
@@ -1253,5 +1371,6 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
         .expect("agent task should join")
         .expect("agent run should return ok");
 
-    wait_for_request_state(node.as_ref(), &request_doc_id, "error", "released").await;
+    wait_for_request_state(node.as_ref(), &first_request_doc_id, "error").await;
+    wait_for_request_state(node.as_ref(), &queued_request_doc_id, "error").await;
 }

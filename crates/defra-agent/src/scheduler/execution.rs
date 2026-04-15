@@ -1,8 +1,9 @@
 use super::*;
+use crate::admission::{self, AdmissionCallContext, AdmissionRegistry, CallKind};
 use crate::backend_provider::{
     build_completion_client, build_openrouter_client, BackendProviderKind,
 };
-use crate::completion_factory::build_agent;
+use crate::completion_factory::build_admitted_agent;
 use crate::config::BehaviorConfig;
 use crate::tool_surface::ToolSurface;
 
@@ -13,7 +14,7 @@ pub(super) async fn execute_task_standalone(
     tool_surface: &ToolSurface,
     tool_runtime: &ToolRuntimeContext,
     node: &Arc<EmbeddedNode>,
-    backend_tracker: Arc<BackendTracker>,
+    admission_registry: AdmissionRegistry,
     cancel: CancellationToken,
 ) -> Result<()> {
     let backend_id = behavior
@@ -51,7 +52,7 @@ pub(super) async fn execute_task_standalone(
                 tool_surface,
                 tool_runtime,
                 node,
-                backend_tracker,
+                admission_registry,
                 &mut lifecycle,
                 &full_prompt,
                 &cancel,
@@ -87,7 +88,7 @@ async fn execute_materialized_task(
     tool_surface: &ToolSurface,
     tool_runtime: &ToolRuntimeContext,
     node: &Arc<EmbeddedNode>,
-    backend_tracker: Arc<BackendTracker>,
+    admission_registry: AdmissionRegistry,
     lifecycle: &mut RequestLifecycle,
     full_prompt: &str,
     cancel: &CancellationToken,
@@ -104,8 +105,6 @@ async fn execute_materialized_task(
         behavior.did(),
         Duration::from_millis(behavior.stream_batch_ms),
     );
-    let _backend_permit =
-        acquire_backend_permit(task, behavior, node, backend_tracker, lifecycle, cancel).await?;
     lifecycle.begin_execution().await?;
 
     let doc_id = stream_writer
@@ -125,32 +124,60 @@ async fn execute_materialized_task(
                 &behavior.backend_endpoint,
                 &api_key,
             )?;
-            let agent = build_agent(&client, behavior, &preamble, tools);
-            prompt_scheduled_task(
-                task,
+            let agent = build_admitted_agent(
+                client,
+                admission_registry.clone(),
                 behavior,
-                node,
-                &prompt_builder,
-                &agent,
-                lifecycle.request().session_id.as_str(),
-                full_prompt,
-                cancel,
-            )
+                &preamble,
+                tools,
+            );
+            let admission_context = AdmissionCallContext::for_request(
+                lifecycle.request(),
+                lifecycle.behavior_id(),
+                lifecycle.backend_id(),
+            );
+            admission::scope_request(admission_context, async {
+                prompt_scheduled_task(
+                    task,
+                    behavior,
+                    node,
+                    &prompt_builder,
+                    &agent,
+                    lifecycle.request().session_id.as_str(),
+                    full_prompt,
+                    cancel,
+                )
+                .await
+            })
             .await?
         }
         BackendProviderKind::OpenRouter => {
             let client = build_openrouter_client(&behavior.backend_endpoint, &api_key)?;
-            let agent = build_agent(&client, behavior, &preamble, tools);
-            prompt_scheduled_task(
-                task,
+            let agent = build_admitted_agent(
+                client,
+                admission_registry.clone(),
                 behavior,
-                node,
-                &prompt_builder,
-                &agent,
-                lifecycle.request().session_id.as_str(),
-                full_prompt,
-                cancel,
-            )
+                &preamble,
+                tools,
+            );
+            let admission_context = AdmissionCallContext::for_request(
+                lifecycle.request(),
+                lifecycle.behavior_id(),
+                lifecycle.backend_id(),
+            );
+            admission::scope_request(admission_context, async {
+                prompt_scheduled_task(
+                    task,
+                    behavior,
+                    node,
+                    &prompt_builder,
+                    &agent,
+                    lifecycle.request().session_id.as_str(),
+                    full_prompt,
+                    cancel,
+                )
+                .await
+            })
             .await?
         }
     };
@@ -164,57 +191,6 @@ async fn execute_materialized_task(
         .finalize(&doc_id, StreamStatus::Complete)
         .await?;
     Ok(())
-}
-
-async fn acquire_backend_permit(
-    task: &ScheduledTask,
-    behavior: &BehaviorConfig,
-    node: &Arc<EmbeddedNode>,
-    backend_tracker: Arc<BackendTracker>,
-    lifecycle: &mut RequestLifecycle,
-    cancel: &CancellationToken,
-) -> Result<BackendPermit> {
-    let backend_id = lifecycle.backend_id();
-    let deadline = tokio::time::Instant::now() + behavior.deadline_duration;
-
-    loop {
-        if cancel.is_cancelled() {
-            bail!("scheduled task '{}' cancelled during shutdown", task.name);
-        }
-        if tokio::time::Instant::now() >= deadline {
-            bail!(
-                "task '{}' timed out waiting for backend {} capacity",
-                task.name,
-                backend_id
-            );
-        }
-
-        let backend = backend_registry::lookup_backend(node, backend_id)
-            .await?
-            .ok_or_else(|| {
-                anyhow!(
-                    "backend {} not found for scheduled behavior {}",
-                    backend_id,
-                    behavior.name
-                )
-            })?;
-
-        if backend.is_available() {
-            if let Some(permit) =
-                backend_tracker.try_acquire_permit(backend_id, backend.max_concurrent)
-            {
-                lifecycle.mark_slot_acquired().await?;
-                return Ok(permit);
-            }
-        }
-
-        tokio::select! {
-            _ = cancel.cancelled() => {
-                bail!("scheduled task '{}' cancelled during shutdown", task.name);
-            }
-            _ = tokio::time::sleep(Duration::from_millis(BACKEND_WAIT_POLL_MS)) => {}
-        }
-    }
 }
 
 async fn prompt_scheduled_task<M: rig::completion::CompletionModel>(
@@ -237,15 +213,19 @@ async fn prompt_scheduled_task<M: rig::completion::CompletionModel>(
     )
     .await?;
 
-    match tokio::select! {
-        _ = cancel.cancelled() => {
-            return Err(anyhow!("scheduled task '{}' cancelled during shutdown", task.name));
+    match admission::scope_call(CallKind::Scheduled, 1, async {
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                Err(anyhow!("scheduled task '{}' cancelled during shutdown", task.name))
+            }
+            response = agent
+                .prompt(full_prompt)
+                .with_history(&mut history)
+                .with_hook(hook) => response.map_err(anyhow::Error::from)
         }
-        response = agent
-            .prompt(full_prompt)
-            .with_history(&mut history)
-            .with_hook(hook) => response
-    } {
+    })
+    .await
+    {
         Ok(response) => Ok(response.to_string()),
         Err(error) if error.to_string().contains("empty") => {
             tracing::warn!(
@@ -270,19 +250,22 @@ async fn prompt_scheduled_task<M: rig::completion::CompletionModel>(
             .await?;
             let mut retry_history = prompt_builder.build(&[], &[]).await?.messages;
 
-            tokio::select! {
-                _ = cancel.cancelled() => {
-                    Err(anyhow!("scheduled task '{}' cancelled during shutdown", task.name))
+            admission::scope_call(CallKind::Scheduled, 2, async {
+                tokio::select! {
+                    _ = cancel.cancelled() => {
+                        Err(anyhow!("scheduled task '{}' cancelled during shutdown", task.name))
+                    }
+                    response = agent
+                        .prompt(full_prompt)
+                        .with_history(&mut retry_history)
+                        .with_hook(retry_hook) => response
+                        .map(|response| response.to_string())
+                        .map_err(|retry_error| {
+                            anyhow!("scheduled task inference failed on retry: {retry_error}")
+                        })
                 }
-                response = agent
-                    .prompt(full_prompt)
-                    .with_history(&mut retry_history)
-                    .with_hook(retry_hook) => response
-                    .map(|response| response.to_string())
-                    .map_err(|retry_error| {
-                        anyhow!("scheduled task inference failed on retry: {retry_error}")
-                    })
-            }
+            })
+            .await
         }
         Err(error) => Err(anyhow!("scheduled task inference failed: {error}")),
     }

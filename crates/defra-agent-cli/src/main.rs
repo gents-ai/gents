@@ -186,7 +186,7 @@ const EXPORT_AGENT_PRINCIPAL_FIELDS: &str =
 const EXPORT_AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled created_at";
 const EXPORT_TOOL_SELECTION_FIELDS: &str = "selection_id agent_did display_name enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode cli_tool_names enable_meta_tools delegate_to";
 const EXPORT_INFERENCE_BACKEND_FIELDS: &str =
-    "backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent enabled supports_tool_calls supports_streaming supports_structured_outputs supports_json_schema models last_probe probe_status";
+    "backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled supports_tool_calls supports_streaming supports_structured_outputs supports_json_schema models last_probe probe_status";
 const EXPORT_INFERENCE_PROFILE_FIELDS: &str =
     "profile_id display_name context_window max_output_tokens max_turns temperature stream_batch_ms deadline_duration_secs";
 const EXPORT_TOOL_SERVICE_REGISTRY_FIELDS: &str =
@@ -310,6 +310,8 @@ struct InitArgs {
     model_name: String,
     #[arg(long, default_value_t = 1)]
     max_concurrent: i64,
+    #[arg(long, default_value_t = default_backend_max_queue_depth())]
+    max_queue_depth: i64,
     #[arg(long)]
     supports_tool_calls: Option<bool>,
     #[arg(long)]
@@ -634,6 +636,7 @@ struct InitSummary {
     api_key_env_var: Option<String>,
     model_name: String,
     max_concurrent: i64,
+    max_queue_depth: i64,
     supports_tool_calls: bool,
     supports_streaming: bool,
     supports_structured_outputs: bool,
@@ -661,6 +664,8 @@ struct StoredInitConfig {
     model_name: String,
     #[serde(default = "default_backend_max_concurrent")]
     max_concurrent: i64,
+    #[serde(default = "default_backend_max_queue_depth")]
+    max_queue_depth: i64,
     #[serde(default = "default_backend_supports_tool_calls")]
     supports_tool_calls: bool,
     #[serde(default = "default_backend_supports_streaming")]
@@ -788,6 +793,8 @@ struct MetricsBackendRow {
     enabled: bool,
     #[serde(default)]
     max_concurrent: i64,
+    #[serde(default)]
+    max_queue_depth: i64,
     #[serde(default)]
     probe_status: String,
     last_probe: Option<String>,
@@ -1142,6 +1149,7 @@ async fn render_prometheus_metrics(graphql: &str) -> Result<String> {
                 backend_id
                 enabled
                 max_concurrent
+                max_queue_depth
                 probe_status
                 last_probe
             }
@@ -1291,6 +1299,11 @@ async fn render_prometheus_metrics(graphql: &str) -> Result<String> {
     );
     push_metric_prelude(
         &mut lines,
+        "defra_agent_backend_max_queue_depth",
+        "Configured admission queue depth for an inference backend.",
+    );
+    push_metric_prelude(
+        &mut lines,
         "defra_agent_backend_probe_status",
         "Current probe status for an inference backend.",
     );
@@ -1312,6 +1325,12 @@ async fn render_prometheus_metrics(graphql: &str) -> Result<String> {
             "defra_agent_backend_max_concurrent",
             &[("backend_id", backend.backend_id.clone())],
             backend.max_concurrent,
+        );
+        push_metric_sample(
+            &mut lines,
+            "defra_agent_backend_max_queue_depth",
+            &[("backend_id", backend.backend_id.clone())],
+            backend.max_queue_depth,
         );
         push_metric_sample(
             &mut lines,
@@ -1598,6 +1617,8 @@ struct BackendUpsertArgs {
     api_key_env_var: Option<String>,
     #[arg(long)]
     max_concurrent: i64,
+    #[arg(long, default_value_t = default_backend_max_queue_depth())]
+    max_queue_depth: i64,
     #[arg(long, default_value_t = true)]
     enabled: bool,
     #[arg(long)]
@@ -1906,6 +1927,7 @@ async fn init(args: InitArgs) -> Result<()> {
         api_key_env_var: summary.api_key_env_var.clone(),
         model_name: summary.model_name.clone(),
         max_concurrent: summary.max_concurrent,
+        max_queue_depth: summary.max_queue_depth,
         supports_tool_calls: summary.supports_tool_calls,
         supports_streaming: summary.supports_streaming,
         supports_structured_outputs: summary.supports_structured_outputs,
@@ -2378,6 +2400,7 @@ async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
                     {api_key_add},
                     {api_key_env_var_add},
                     max_concurrent: {max_concurrent},
+                    max_queue_depth: {max_queue_depth},
                     enabled: {enabled},
                     supports_tool_calls: {supports_tool_calls},
                     supports_streaming: {supports_streaming},
@@ -2393,6 +2416,7 @@ async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
                     {api_key_update},
                     {api_key_env_var_update},
                     max_concurrent: {max_concurrent},
+                    max_queue_depth: {max_queue_depth},
                     enabled: {enabled},
                     supports_tool_calls: {supports_tool_calls},
                     supports_streaming: {supports_streaming},
@@ -2413,6 +2437,7 @@ async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
         api_key_env_var_update =
             nullable_string_field("api_key_env_var", backend.api_key_env_var.as_deref()),
         max_concurrent = args.max_concurrent,
+        max_queue_depth = args.max_queue_depth,
         enabled = if args.enabled { "true" } else { "false" },
         supports_tool_calls = graphql_bool_literal(backend.supports_tool_calls),
         supports_streaming = graphql_bool_literal(backend.supports_streaming),
@@ -2431,6 +2456,7 @@ async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
         "api_key": backend.api_key.as_ref().map(|_| "<redacted>"),
         "api_key_env_var": backend.api_key_env_var,
         "max_concurrent": args.max_concurrent,
+        "max_queue_depth": args.max_queue_depth,
         "enabled": args.enabled,
         "supports_tool_calls": backend.supports_tool_calls,
         "supports_streaming": backend.supports_streaming,
@@ -2968,7 +2994,6 @@ async fn request_show(args: RequestShowArgs) -> Result<()> {
                 session_id
                 status
                 lifecycle_state
-                admission_state
                 backend_id
                 execution_origin
                 failure_reason
@@ -5143,6 +5168,7 @@ async fn initialize_runtime_home(
         backend.api_key_env_var.as_deref(),
         model_name,
         args.max_concurrent,
+        args.max_queue_depth,
         backend.supports_tool_calls,
         backend.supports_streaming,
         backend.supports_structured_outputs,
@@ -5161,6 +5187,7 @@ async fn initialize_runtime_home(
         api_key_env_var: backend.api_key_env_var,
         model_name: model_name.to_string(),
         max_concurrent: args.max_concurrent,
+        max_queue_depth: args.max_queue_depth,
         supports_tool_calls: backend.supports_tool_calls,
         supports_streaming: backend.supports_streaming,
         supports_structured_outputs: backend.supports_structured_outputs,
@@ -5311,6 +5338,10 @@ fn default_backend_max_concurrent() -> i64 {
     1
 }
 
+fn default_backend_max_queue_depth() -> i64 {
+    100
+}
+
 fn default_backend_supports_tool_calls() -> bool {
     true
 }
@@ -5352,6 +5383,7 @@ fn bootstrap_template_vars(
     api_key_env_var: Option<&str>,
     model_name: &str,
     max_concurrent: i64,
+    max_queue_depth: i64,
     supports_tool_calls: bool,
     supports_streaming: bool,
     supports_structured_outputs: bool,
@@ -5390,6 +5422,7 @@ fn bootstrap_template_vars(
     );
     vars.insert("MODEL_NAME".to_string(), graphql_string_literal(model_name));
     vars.insert("MAX_CONCURRENT".to_string(), max_concurrent.to_string());
+    vars.insert("MAX_QUEUE_DEPTH".to_string(), max_queue_depth.to_string());
     vars.insert(
         "SUPPORTS_TOOL_CALLS".to_string(),
         graphql_bool_literal(supports_tool_calls).to_string(),
@@ -5583,7 +5616,6 @@ async fn create_agent_request(
                 content: "{content}",
                 status: "pending",
                 lifecycle_state: "pending",
-                admission_state: "released",
                 backend_id: "",
                 execution_origin: "interactive",
                 failure_reason: "",

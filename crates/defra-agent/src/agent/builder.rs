@@ -7,6 +7,7 @@ use defra_node::EmbeddedNode;
 use rig::tool::ToolDyn;
 
 use super::{runtime, DefraAgent, ProcessLifecycleObserver};
+use crate::admission::BackendAdmissionConfig;
 use crate::backend_provider::BackendProviderKind;
 use crate::backend_registry::lookup_backend;
 use crate::compaction::CompactionStrategy;
@@ -392,6 +393,7 @@ impl PendingBehaviorConfig {
                 backend.probe_status
             );
         }
+        BackendAdmissionConfig::from_backend(&backend)?;
         self.build_with_resolved_backend(
             identity,
             Some(backend.backend_id),

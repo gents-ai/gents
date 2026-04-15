@@ -8,6 +8,7 @@ use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
 use tracing::Instrument;
 
+use crate::admission::AdmissionRegistry;
 use crate::config::BehaviorConfig;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
@@ -40,6 +41,7 @@ impl BehaviorSlot {
 pub(super) struct GenerationSupervisor<F> {
     current_snapshot: Arc<ActiveRuntimeSnapshot>,
     active_slots: HashMap<String, BehaviorSlot>,
+    admission_registry: AdmissionRegistry,
     retry_policy: RetryPolicy,
     runner: F,
     runtime_status: RuntimeStatusHandle,
@@ -70,11 +72,13 @@ where
 {
     pub(super) fn bootstrap(
         resolved_snapshot: ResolvedRuntimeSnapshot,
+        admission_registry: AdmissionRegistry,
         retry_policy: RetryPolicy,
         runner: F,
         runtime_status: RuntimeStatusHandle,
         shutdown: watch::Receiver<bool>,
     ) -> Result<Self> {
+        admission_registry.reconcile(1, &resolved_snapshot.backend_admission_configs);
         let active_slots = spawn_slots(
             &resolved_snapshot,
             retry_policy.clone(),
@@ -90,6 +94,7 @@ where
         Ok(Self {
             current_snapshot,
             active_slots,
+            admission_registry,
             retry_policy,
             runner,
             runtime_status,
@@ -252,6 +257,8 @@ where
             .map(|(behavior_id, slot)| (behavior_id.clone(), slot.dispatcher.clone()))
             .collect();
         let next_snapshot = Arc::new(resolved_snapshot.activate(generation, dispatchers));
+        self.admission_registry
+            .reconcile(generation, &next_snapshot.backend_admission_configs);
 
         self.current_snapshot = next_snapshot.clone();
         self.active_slots = next_slots;

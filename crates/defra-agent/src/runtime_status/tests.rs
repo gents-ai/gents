@@ -73,6 +73,7 @@ async fn runtime_status_persists_process_and_reconcile_state() {
             default_behavior_id: "general".to_string(),
             behaviors: HashMap::new(),
             tool_surfaces: HashMap::new(),
+            backend_admission_configs: HashMap::new(),
             unavailable_behaviors: HashMap::from([(
                 "code".to_string(),
                 "behavior code is disabled".to_string(),
@@ -106,6 +107,7 @@ async fn runtime_status_serializes_persisted_generation_updates() {
         default_behavior_id: "general".to_string(),
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
+        backend_admission_configs: HashMap::new(),
         unavailable_behaviors: HashMap::new(),
         dispatchers: HashMap::new(),
     };
@@ -114,6 +116,7 @@ async fn runtime_status_serializes_persisted_generation_updates() {
         default_behavior_id: "general".to_string(),
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
+        backend_admission_configs: HashMap::new(),
         unavailable_behaviors: HashMap::new(),
         dispatchers: HashMap::new(),
     };

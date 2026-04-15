@@ -25,6 +25,7 @@ AgentPrincipal / AgentBehavior
 
 Interactive execution:
   AgentRequest -> AgentResponse
+               -> InferenceCall
                -> AgentSession
                -> AgentConversation
                -> AgentMessage
@@ -50,7 +51,7 @@ These documents describe what the agent is and how it should run.
 | `AgentPrincipal` | `agent_did`, `default_behavior_id`, `enabled` | `default_behavior_id -> AgentBehavior.behavior_id` | `init`, config/bootstrap code | document boot, reconcile, scheduler/task defaulting |
 | `AgentBehavior` | `behavior_id`, `agent_did`, `backend_id`, `model_name`, `tool_selection_id`, `inference_profile_id`, `enabled` | `backend_id -> InferenceBackend.backend_id`, `tool_selection_id -> ToolSelection.selection_id`, `inference_profile_id -> InferenceProfile.profile_id` | `init`, `config behavior set`, library builder/document bootstrap | runtime resolution, request routing, scheduler |
 | `ToolSelection` | `selection_id`, `agent_did`, file/bash/meta/delegate fields | selected by `AgentBehavior.tool_selection_id` | `init`, `config tools set` | tool-surface resolution |
-| `InferenceBackend` | `backend_id`, `provider_kind`, `endpoint`, `api_key`, `api_key_env_var`, capability flags, `max_concurrent`, `enabled`, `models`, `probe_status` | selected by `AgentBehavior.backend_id` | `init`, `config backend set`, desired-state manifests, health/probe updates | startup readiness, runtime execution, scheduler execution |
+| `InferenceBackend` | `backend_id`, `provider_kind`, `endpoint`, `api_key`, `api_key_env_var`, capability flags, `max_concurrent`, `max_queue_depth`, `enabled`, `models`, `probe_status` | selected by `AgentBehavior.backend_id` | `init`, `config backend set`, desired-state manifests, health/probe updates | startup readiness, runtime execution, scheduler execution |
 | `InferenceProfile` | `profile_id`, context/output/temperature/deadline fields | selected by `AgentBehavior.inference_profile_id` | `config profile set` | runtime resolution |
 
 ### Runtime Observability
@@ -67,7 +68,8 @@ These documents record user requests, assistant output, and conversation history
 
 | Collection | Key fields | References | Written by | Read by |
 |------------|------------|------------|------------|---------|
-| `AgentRequest` | `request_id`, `agent_did`, `behavior_id`, `session_id`, `status`, `lifecycle_state`, `admission_state`, `backend_id`, `failure_reason` | belongs to an agent/session/behavior | `chat`, `request submit`, lifecycle transitions | router, CLI inspection, recovery |
+| `AgentRequest` | `request_id`, `agent_did`, `behavior_id`, `session_id`, `status`, `lifecycle_state`, `backend_id`, `failure_reason` | belongs to an agent/session/behavior | `chat`, `request submit`, lifecycle transitions | router, CLI inspection, recovery |
+| `InferenceCall` | `call_id`, `request_id`, `backend_id`, `call_kind`, `call_state`, queue/timing/token fields | belongs to a request/backend | admission controller at terminal call state | benchmarking, RL reward shaping, debugging |
 | `AgentResponse` | `request_id`, `agent_did`, `behavior_id`, `session_id`, `status`, `content`, `reasoning`, `error_message`, `progress_seq` | latest response for a request | streaming/runtime code | `chat`, `response show`, `response wait`, TUI |
 | `AgentSession` | `session_id`, `behavior_id`, `status`, `started`, `ended` | ties a sequence of requests to one behavior | session manager | `chat`, inspection, recovery |
 | `AgentConversation` | `session_id`, `agent_did`, `behavior_id`, `title`, `preview_text`, `status`, `latest_request_id` | high-level conversation summary per session | session/conversation layer | UI and inspection |

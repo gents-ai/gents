@@ -9,6 +9,7 @@ mutation {
       api_key: ${API_KEY}
       api_key_env_var: ${API_KEY_ENV_VAR}
       max_concurrent: ${MAX_CONCURRENT}
+      max_queue_depth: ${MAX_QUEUE_DEPTH}
       enabled: true
       supports_tool_calls: ${SUPPORTS_TOOL_CALLS}
       supports_streaming: ${SUPPORTS_STREAMING}
@@ -24,6 +25,7 @@ mutation {
       api_key: ${API_KEY}
       api_key_env_var: ${API_KEY_ENV_VAR}
       max_concurrent: ${MAX_CONCURRENT}
+      max_queue_depth: ${MAX_QUEUE_DEPTH}
       enabled: true
       supports_tool_calls: ${SUPPORTS_TOOL_CALLS}
       supports_streaming: ${SUPPORTS_STREAMING}

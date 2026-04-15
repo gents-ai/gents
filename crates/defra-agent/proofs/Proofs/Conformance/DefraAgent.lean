@@ -11,9 +11,9 @@ agent state machine.
 defra-agent states (from lifecycle.rs):
   Pending, Claimed, Streaming, Completed, Failed, Superseded
 
-These are implementation-local states. The persisted DefraDB view now carries a
-finer Lean-aligned refinement via `AgentRequest.lifecycle_state` plus
-`AgentRequest.admission_state`.
+These are implementation-local states. The persisted DefraDB request view now
+carries the lifecycle refinement via `AgentRequest.lifecycle_state`; call-level
+admission state lives on `InferenceCall`.
 
 Ideal model states:
   pending, claimed, processing, inputRequired, completed, failed, superseded, dead

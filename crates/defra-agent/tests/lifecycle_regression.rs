@@ -147,7 +147,6 @@ async fn claim_preserves_explicit_behavior_id() {
                 content: "hello",
                 status: "pending",
                 lifecycle_state: "pending",
-                admission_state: "released",
                 backend_id: "",
                 execution_origin: "interactive",
                 created_at: "{created_at}",

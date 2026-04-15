@@ -19,28 +19,13 @@ impl RequestLifecycle {
         self.claim_inner(true).await
     }
 
-    pub async fn mark_slot_acquired(&mut self) -> Result<()> {
-        self.ensure_state(&[LocalLifecycleState::Claimed], "mark_slot_acquired")?;
-        self.transition_execution_view(
-            "processing",
-            PersistedLifecycleState::Claimed,
-            PersistedAdmissionState::Waiting,
-            "processing",
-            PersistedLifecycleState::Claimed,
-            PersistedAdmissionState::Acquired,
-        )
-        .await
-    }
-
     pub async fn begin_execution(&mut self) -> Result<()> {
         self.ensure_state(&[LocalLifecycleState::Claimed], "begin_execution")?;
         self.transition_execution_view(
             "processing",
             PersistedLifecycleState::Claimed,
-            PersistedAdmissionState::Acquired,
             "processing",
             PersistedLifecycleState::Processing,
-            PersistedAdmissionState::Executing,
         )
         .await
     }
@@ -76,7 +61,6 @@ impl RequestLifecycle {
                     input: {{
                         status: "processing",
                         lifecycle_state: "{lifecycle_state}",
-                        admission_state: "{admission_state}",
                         behavior_id: "{escaped_behavior_id}",
                         backend_id: "{escaped_backend_id}",
                         execution_origin: "{execution_origin}",
@@ -86,7 +70,6 @@ impl RequestLifecycle {
                 ) {{ _docID }}
             }}"#,
             lifecycle_state = PersistedLifecycleState::Claimed.as_str(),
-            admission_state = PersistedAdmissionState::Waiting.as_str(),
         );
 
         let resp = self.node.execute(&mutation).await;

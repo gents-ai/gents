@@ -10,6 +10,7 @@ type InferenceBackend {
     # Credentials are not stored directly in DefraDB documents.
     api_key_env_var: String
     max_concurrent: Int
+    max_queue_depth: Int
     enabled: Boolean @index
     supports_tool_calls: Boolean
     supports_streaming: Boolean

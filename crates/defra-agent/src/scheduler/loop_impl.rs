@@ -96,7 +96,7 @@ impl Scheduler {
             let task_clone = task.clone();
             let node = self.node.clone();
             let tool_runtime = self.tool_runtime.clone();
-            let backend_tracker = self.backend_tracker.clone();
+            let admission_registry = self.admission_registry.clone();
             let task_cancel = cancel.child_token();
 
             handles.spawn(async move {
@@ -106,7 +106,7 @@ impl Scheduler {
                     tool_surface.as_ref(),
                     &tool_runtime,
                     &node,
-                    backend_tracker,
+                    admission_registry,
                     task_cancel,
                 )
                 .await;

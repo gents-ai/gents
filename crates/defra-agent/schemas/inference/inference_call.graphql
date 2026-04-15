@@ -1,0 +1,26 @@
+type InferenceCall {
+    call_id: String @index(unique: true)
+    runtime_instance_id: String @index
+    request_id: String @index
+    call_seq: Int
+    backend_id: String @index
+    behavior_id: String @index
+    agent_did: String @index
+    call_kind: String @index
+    attempt: Int
+
+    call_state: String @index
+    failure_reason: String
+
+    queued_at: String
+    started_at: String
+    ended_at: String
+
+    priority: Int
+    queue_depth_at_enqueue: Int
+    controller_generation: Int
+    backend_config_fingerprint: String
+
+    prompt_tokens: Int
+    completion_tokens: Int
+}

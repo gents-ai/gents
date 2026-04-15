@@ -5,12 +5,10 @@ import Proofs.Fleet
 
 The intended ideal model is:
 
-- interactive `AgentRequest` work enters the execution lifecycle at
-  `claimed / waiting`
-- scheduled work is materialized into the same lifecycle at
-  `claimed / waiting`
-- `BackendTracker.try_acquire` corresponds to `FleetState.CanAcquire` plus the
-  `acquire_slot` transition
+- interactive `AgentRequest` work enters the execution lifecycle at `claimed`
+- scheduled work is materialized into the same lifecycle at `claimed`
+- call-level admission in `InferenceCall` corresponds to `FleetState.CanAcquire`
+  plus the `acquire_slot` transition
 - inference start corresponds to `begin_execution`
 - terminal completion/failure corresponds to `release_on_terminal`
 
@@ -21,9 +19,9 @@ service via DefraDB.
 
 Known deviations in the current Rust implementation:
 
-1. aggregate scheduler counts remain process-local in `BackendTracker`, so the
-   fleet-level `running` view used in `slotAccountingInvariant` is not directly
-   inspectable from DefraDB state
+1. aggregate scheduler counts are persisted as `InferenceCall` rows, so the
+   fleet-level `running` view used in `slotAccountingInvariant` is inspectable
+   from DefraDB state
 2. backend health / availability facts are only as current as the backend
    documents observed at admission time; backend document freshness is an
    environmental assumption rather than a service-local proof obligation

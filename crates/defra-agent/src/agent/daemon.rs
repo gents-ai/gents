@@ -11,7 +11,6 @@ mod inference;
 mod request;
 
 use super::runtime::StartupBarrier;
-use crate::backend_registry::BackendTracker;
 use crate::compaction::{CompactionOptions, DefraCompactor};
 use crate::config::BehaviorConfig;
 use crate::hook::FailurePolicy;
@@ -25,7 +24,6 @@ pub(super) struct BehaviorDaemon<M: CompletionModel> {
     node: Arc<defra_node::EmbeddedNode>,
     behavior: Arc<BehaviorConfig>,
     agent: Agent<M>,
-    backend_tracker: Arc<BackendTracker>,
     prompt_builder: LayeredPromptBuilder,
     stream_writer: DefraStreamWriter,
     compactor: DefraCompactor<M>,
@@ -46,7 +44,6 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         behavior: Arc<BehaviorConfig>,
         agent: Agent<M>,
         prompt_builder: LayeredPromptBuilder,
-        backend_tracker: Arc<BackendTracker>,
         retry_policy: RetryPolicy,
         hook_failure_policy: FailurePolicy,
         startup_barrier: Arc<StartupBarrier>,
@@ -67,7 +64,6 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             node,
             behavior,
             agent,
-            backend_tracker,
             prompt_builder,
             stream_writer,
             compactor,

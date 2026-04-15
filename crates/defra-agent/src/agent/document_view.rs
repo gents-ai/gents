@@ -4,6 +4,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 
+use crate::admission::backend_admission_configs_from_backends;
 use crate::backend_registry::{list_backend_records, lookup_backend_by_doc_id, InferenceBackend};
 use crate::config::BehaviorConfig;
 use crate::document_config::{
@@ -425,10 +426,15 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         }
     }
 
-    Ok(ResolvedRuntimeSnapshot::from_parts(
+    let backend_admission_configs = backend_admission_configs_from_backends(
+        view.backends.values().map(|record| &record.value),
+    )?;
+
+    Ok(ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         default_behavior_id,
         behaviors,
         tool_surfaces,
+        backend_admission_configs,
         unavailable_behaviors,
     ))
 }

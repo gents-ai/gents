@@ -78,7 +78,6 @@ impl RequestLifecycle {
                 ) {{
                     status
                     lifecycle_state
-                    admission_state
                     backend_id
                     execution_origin
                 }}

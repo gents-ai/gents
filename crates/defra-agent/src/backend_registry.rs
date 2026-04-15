@@ -1,19 +1,14 @@
-//! Backend registry — DefraDB lookups and local concurrency tracking.
+//! Backend registry — DefraDB lookups for inference backend documents.
 //!
-//! The scheduler uses this to resolve a behavior's backend, check health,
-//! and enforce `max_concurrent` limits. Concurrency is tracked locally
-//! in memory (sufficient for single agent-daemon instance). Acquired
-//! capacity is represented by an owned permit so release happens on all
-//! terminal paths, including panics.
-
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+//! The runtime uses this to resolve a behavior's backend and check health.
 
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 
 use crate::backend_provider::BackendProviderKind;
 use crate::graphql::escape_graphql_string;
+
+pub const DEFAULT_MAX_QUEUE_DEPTH: i64 = 100;
 
 /// An inference backend document from DefraDB.
 #[derive(Debug, Clone)]
@@ -26,6 +21,7 @@ pub struct InferenceBackend {
     pub api_key: Option<String>,
     pub api_key_env_var: Option<String>,
     pub max_concurrent: i64,
+    pub max_queue_depth: i64,
     pub enabled: bool,
     pub supports_tool_calls: bool,
     pub supports_streaming: bool,
@@ -73,6 +69,10 @@ impl InferenceBackend {
                 .get("max_concurrent")
                 .and_then(|value| value.as_i64())
                 .ok_or_else(|| anyhow::anyhow!("max_concurrent is required"))?,
+            max_queue_depth: v
+                .get("max_queue_depth")
+                .and_then(|value| value.as_i64())
+                .unwrap_or(DEFAULT_MAX_QUEUE_DEPTH),
             enabled: v
                 .get("enabled")
                 .and_then(|value| value.as_bool())
@@ -117,90 +117,6 @@ impl InferenceBackend {
     }
 }
 
-/// Local concurrency tracker for backends.
-///
-/// Tracks how many agents are currently running against each backend.
-/// All tracking is in-process memory — sufficient for a single daemon.
-/// Uses `std::sync::Mutex` because the critical section is trivial
-/// (no await inside the lock).
-pub struct BackendTracker {
-    running: Mutex<HashMap<String, i64>>,
-}
-
-/// Owned reservation of one backend execution slot.
-///
-/// Dropping the permit releases the slot back to the tracker.
-pub struct BackendPermit {
-    tracker: Arc<BackendTracker>,
-    backend_id: String,
-}
-
-impl Drop for BackendPermit {
-    fn drop(&mut self) {
-        self.tracker.release(&self.backend_id);
-    }
-}
-
-impl Default for BackendTracker {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl BackendTracker {
-    pub fn new() -> Self {
-        Self {
-            running: Mutex::new(HashMap::new()),
-        }
-    }
-
-    /// Atomically check capacity and acquire a slot if available.
-    /// Returns `true` if a slot was acquired, `false` if at capacity.
-    ///
-    /// This is the primary API for the scheduler — it avoids the
-    /// TOCTOU race between separate `has_capacity` + `acquire` calls.
-    pub fn try_acquire(&self, backend_id: &str, max_concurrent: i64) -> bool {
-        let mut running = self.running.lock().expect("BackendTracker lock poisoned");
-        let count = running.entry(backend_id.to_string()).or_insert(0);
-        if *count < max_concurrent {
-            *count += 1;
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Acquire an owned permit for a backend if capacity is available.
-    ///
-    /// The returned permit releases its slot on drop, so scheduler code
-    /// does not need to manually balance acquire/release across error paths.
-    pub fn try_acquire_permit(
-        self: &Arc<Self>,
-        backend_id: impl Into<String>,
-        max_concurrent: i64,
-    ) -> Option<BackendPermit> {
-        let backend_id = backend_id.into();
-        self.try_acquire(&backend_id, max_concurrent)
-            .then(|| BackendPermit {
-                tracker: Arc::clone(self),
-                backend_id,
-            })
-    }
-
-    /// Decrement the running count for a backend.
-    pub fn release(&self, backend_id: &str) {
-        let mut running = self.running.lock().expect("BackendTracker lock poisoned");
-        let count = running.entry(backend_id.to_string()).or_insert(0);
-        *count = (*count - 1).max(0);
-    }
-
-    /// Current running count for a backend.
-    pub fn running_count(&self, backend_id: &str) -> i64 {
-        let running = self.running.lock().expect("BackendTracker lock poisoned");
-        running.get(backend_id).copied().unwrap_or(0)
-    }
-}
-
 /// Look up a backend by `backend_id` from DefraDB.
 pub async fn lookup_backend(
     node: &EmbeddedNode,
@@ -217,7 +133,7 @@ pub(crate) async fn lookup_backend_record(
 ) -> Result<Option<(String, InferenceBackend)>> {
     let escaped_id = escape_graphql_string(backend_id);
     let query = format!(
-        r#"query {{ InferenceBackend(filter: {{backend_id: {{_eq: "{}"}}}}) {{ _docID backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent enabled supports_tool_calls supports_streaming supports_structured_outputs supports_json_schema models probe_status }} }}"#,
+        r#"query {{ InferenceBackend(filter: {{backend_id: {{_eq: "{}"}}}}) {{ _docID backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled supports_tool_calls supports_streaming supports_structured_outputs supports_json_schema models probe_status }} }}"#,
         escaped_id
     );
 
@@ -252,7 +168,7 @@ pub(crate) async fn lookup_backend_by_doc_id(
 ) -> Result<Option<(String, InferenceBackend)>> {
     let escaped_id = escape_graphql_string(doc_id);
     let query = format!(
-        r#"query {{ InferenceBackend(filter: {{_docID: {{_eq: "{}"}}}}, limit: 1) {{ _docID backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent enabled supports_tool_calls supports_streaming supports_structured_outputs supports_json_schema models probe_status }} }}"#,
+        r#"query {{ InferenceBackend(filter: {{_docID: {{_eq: "{}"}}}}, limit: 1) {{ _docID backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled supports_tool_calls supports_streaming supports_structured_outputs supports_json_schema models probe_status }} }}"#,
         escaped_id
     );
 
@@ -294,6 +210,7 @@ pub(crate) async fn list_backend_records(
             api_key
             api_key_env_var
             max_concurrent
+            max_queue_depth
             enabled
             supports_tool_calls
             supports_streaming
@@ -337,7 +254,7 @@ pub(crate) async fn list_backend_records(
 
 /// Query all enabled backends from DefraDB.
 pub async fn list_enabled_backends(node: &EmbeddedNode) -> Result<Vec<InferenceBackend>> {
-    let query = r#"query { InferenceBackend(filter: {enabled: {_eq: true}}) { backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent enabled supports_tool_calls supports_streaming supports_structured_outputs supports_json_schema probe_status models last_probe } }"#;
+    let query = r#"query { InferenceBackend(filter: {enabled: {_eq: true}}) { backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled supports_tool_calls supports_streaming supports_structured_outputs supports_json_schema probe_status models last_probe } }"#;
 
     let resp = node.execute(query).await;
     if resp.has_errors() {

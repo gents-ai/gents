@@ -11,6 +11,7 @@ fn inference_backend_from_value_parses() {
         "api_key": "raw-key",
         "api_key_env_var": "DUAL_GPU_API_KEY",
         "max_concurrent": 4,
+        "max_queue_depth": 9,
         "enabled": true,
         "supports_tool_calls": false,
         "supports_streaming": false,
@@ -27,6 +28,7 @@ fn inference_backend_from_value_parses() {
     assert_eq!(backend.api_key.as_deref(), Some("raw-key"));
     assert_eq!(backend.api_key_env_var.as_deref(), Some("DUAL_GPU_API_KEY"));
     assert_eq!(backend.max_concurrent, 4);
+    assert_eq!(backend.max_queue_depth, 9);
     assert!(backend.enabled);
     assert!(!backend.supports_tool_calls);
     assert!(!backend.supports_streaming);
@@ -56,6 +58,7 @@ fn inference_backend_from_value_missing_fields_defaults() {
     assert_eq!(backend.provider_kind, BackendProviderKind::OpenAiCompatible);
     assert_eq!(backend.api_key, None);
     assert_eq!(backend.api_key_env_var, None);
+    assert_eq!(backend.max_queue_depth, DEFAULT_MAX_QUEUE_DEPTH);
     assert!(backend.supports_tool_calls);
     assert!(backend.supports_streaming);
     assert!(!backend.supports_structured_outputs);
@@ -74,6 +77,7 @@ fn is_available_requires_enabled_and_healthy() {
         api_key: None,
         api_key_env_var: None,
         max_concurrent: 1,
+        max_queue_depth: DEFAULT_MAX_QUEUE_DEPTH,
         enabled: true,
         supports_tool_calls: true,
         supports_streaming: true,
@@ -95,45 +99,4 @@ fn is_available_requires_enabled_and_healthy() {
         ..healthy.clone()
     };
     assert!(!unhealthy.is_available());
-}
-
-#[test]
-fn try_acquire_respects_capacity() {
-    let tracker = BackendTracker::new();
-
-    assert_eq!(tracker.running_count("b1"), 0);
-    assert!(tracker.try_acquire("b1", 2));
-    assert_eq!(tracker.running_count("b1"), 1);
-
-    assert!(tracker.try_acquire("b1", 2));
-    assert_eq!(tracker.running_count("b1"), 2);
-
-    assert!(!tracker.try_acquire("b1", 2));
-    assert_eq!(tracker.running_count("b1"), 2);
-
-    tracker.release("b1");
-    assert_eq!(tracker.running_count("b1"), 1);
-
-    assert!(tracker.try_acquire("b1", 2));
-}
-
-#[test]
-fn release_floors_at_zero() {
-    let tracker = BackendTracker::new();
-    tracker.release("nonexistent");
-    assert_eq!(tracker.running_count("nonexistent"), 0);
-}
-
-#[test]
-fn backend_permit_releases_on_drop() {
-    let tracker = Arc::new(BackendTracker::new());
-
-    {
-        let _permit = tracker
-            .try_acquire_permit("b1", 1)
-            .expect("permit should be acquired");
-        assert_eq!(tracker.running_count("b1"), 1);
-    }
-
-    assert_eq!(tracker.running_count("b1"), 0);
 }

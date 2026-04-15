@@ -3,6 +3,7 @@
 //! This crate preserves the current agent runtime pieces while
 //! `agent-daemon` remains the first consumer during the extraction phase.
 
+pub(crate) mod admission;
 pub mod agent;
 pub mod backend_provider;
 pub mod backend_registry;
@@ -44,7 +45,7 @@ pub use backend_provider::{
     build_openrouter_client as build_openrouter_backend_completion_client,
     discover_models as discover_backend_models, BackendProviderAdapter, BackendProviderKind,
 };
-pub use backend_registry::{BackendTracker, InferenceBackend};
+pub use backend_registry::InferenceBackend;
 pub use config::BehaviorConfig;
 pub use defra_node;
 pub use document_config::{
@@ -65,8 +66,9 @@ pub use schema::{
     ensure_runtime_schemas, ensure_schemas, AGENT_BEHAVIOR_SCHEMA, AGENT_CONVERSATION_SCHEMA,
     AGENT_MESSAGE_SCHEMA, AGENT_PRINCIPAL_SCHEMA, AGENT_REQUEST_SCHEMA, AGENT_RESPONSE_SCHEMA,
     AGENT_RUNTIME_SCHEMA, AGENT_SESSION_SCHEMA, AGENT_TOOL_CALL_SCHEMA, AGENT_TOOL_RESULT_SCHEMA,
-    COMPACTION_ENTRY_SCHEMA, INFERENCE_BACKEND_SCHEMA, INFERENCE_PROFILE_SCHEMA,
-    SCHEDULED_TASK_SCHEMA, TOOL_SELECTION_SCHEMA, TOOL_SERVICE_REGISTRY_SCHEMA,
+    COMPACTION_ENTRY_SCHEMA, INFERENCE_BACKEND_SCHEMA, INFERENCE_CALL_SCHEMA,
+    INFERENCE_PROFILE_SCHEMA, SCHEDULED_TASK_SCHEMA, TOOL_SELECTION_SCHEMA,
+    TOOL_SERVICE_REGISTRY_SCHEMA,
 };
 pub use streaming::{DefraStreamWriter, StreamWriter};
 pub use tool_surface::{

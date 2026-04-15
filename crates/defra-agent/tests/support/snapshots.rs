@@ -8,7 +8,6 @@ use super::{first_optional_row, first_row};
 struct RequestSnapshotRow {
     status: String,
     lifecycle_state: String,
-    admission_state: String,
     behavior_id: String,
     backend_id: String,
     execution_origin: String,
@@ -25,7 +24,6 @@ struct RequestSnapshotRow {
 pub struct RequestSnapshot {
     pub status: String,
     pub lifecycle_state: String,
-    pub admission_state: String,
     pub behavior_id: String,
     pub backend_id: String,
     pub execution_origin: String,
@@ -43,7 +41,6 @@ impl From<RequestSnapshotRow> for RequestSnapshot {
         Self {
             status: row.status,
             lifecycle_state: row.lifecycle_state,
-            admission_state: row.admission_state,
             behavior_id: row.behavior_id,
             backend_id: row.backend_id,
             execution_origin: row.execution_origin,
@@ -131,7 +128,6 @@ pub async fn fetch_request_snapshot(node: &EmbeddedNode, doc_id: &str) -> Reques
             ) {{
                 status
                 lifecycle_state
-                admission_state
                 behavior_id
                 backend_id
                 execution_origin

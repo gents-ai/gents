@@ -137,6 +137,7 @@ async fn generation_supervisor_rotates_dispatcher_on_behavior_change() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
+        crate::admission::AdmissionRegistry::new(node.clone()),
         crate::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
@@ -247,6 +248,7 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
+        crate::admission::AdmissionRegistry::new(node.clone()),
         crate::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
@@ -399,6 +401,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
+        crate::admission::AdmissionRegistry::new(node.clone()),
         crate::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,

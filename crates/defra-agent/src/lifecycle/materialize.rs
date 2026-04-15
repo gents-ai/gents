@@ -115,7 +115,6 @@ impl RequestLifecycle {
                     content: "{escaped_content}",
                     status: "processing",
                     lifecycle_state: "{lifecycle_state}",
-                    admission_state: "{admission_state}",
                     backend_id: "{escaped_backend_id}",
                     execution_origin: "{execution_origin_str}",
                     failure_reason: "",
@@ -127,7 +126,6 @@ impl RequestLifecycle {
                 }}) {{ _docID }}
             }}"#,
             lifecycle_state = PersistedLifecycleState::Claimed.as_str(),
-            admission_state = PersistedAdmissionState::Waiting.as_str(),
             max_retries = DEFAULT_REQUEST_MAX_RETRIES,
         );
 

@@ -38,10 +38,9 @@
 - **defra-agent:** All tool errors → PermanentFailure
 - **Classification:** Design choice
 
-## Deviation 7: Fleet scheduler state is not persisted
+## Deviation 7: Fleet scheduler state persistence
 - **Ideal:** FleetState exposes exact backend running counts and
-  slot-accounting invariants alongside per-request admission state
-- **defra-agent:** BackendTracker counts are process-local memory only
-- **Classification:** Observability gap — DB-only debugging cannot directly
-  inspect `slotAccountingInvariant`
+  slot-accounting invariants alongside call-level admission state
+- **defra-agent:** call-level admission is persisted through `InferenceCall`
+- **Classification:** Resolved for backend HTTP-call admission
 -/

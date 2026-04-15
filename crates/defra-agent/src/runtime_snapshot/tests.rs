@@ -11,6 +11,7 @@ fn snapshot(generation: u64, default_behavior_id: &str) -> Arc<ActiveRuntimeSnap
         default_behavior_id: default_behavior_id.to_string(),
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
+        backend_admission_configs: HashMap::new(),
         unavailable_behaviors: HashMap::new(),
         dispatchers: HashMap::new(),
     })
@@ -22,6 +23,7 @@ fn resolved_snapshot_activate_preserves_generation_and_dispatchers() {
         default_behavior_id: "general".to_string(),
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
+        backend_admission_configs: HashMap::new(),
         unavailable_behaviors: HashMap::from([("code".to_string(), "missing backend".to_string())]),
     };
     let (general_tx, _general_rx) = mpsc::channel(1);

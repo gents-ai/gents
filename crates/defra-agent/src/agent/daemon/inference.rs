@@ -6,6 +6,7 @@ use rig::streaming::StreamingPrompt;
 use tracing::Instrument;
 
 use super::{BehaviorDaemon, HandleRequestOutcome};
+use crate::admission::{self, CallKind};
 use crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS;
 use crate::error::classify_completion_error;
 use crate::hook::DefraSessionHook;
@@ -66,16 +67,20 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 .await?;
                 let persistence_hook = hook.clone();
 
-                let mut stream = tokio::select! {
-                    _ = shutdown.changed() => {
-                        return Err(anyhow!("shutdown requested before inference stream started"));
-                    }
-                    stream = self
-                        .agent
-                        .stream_prompt(&request.content)
-                        .with_history(history.to_vec())
-                        .with_hook(hook) => stream
-                };
+                let mut stream =
+                    admission::scope_call(CallKind::Inference, attempt_index as i64, async {
+                        tokio::select! {
+                            _ = shutdown.changed() => {
+                                Err(anyhow!("shutdown requested before inference stream started"))
+                            }
+                            stream = self
+                                .agent
+                                .stream_prompt(&request.content)
+                                .with_history(history.to_vec())
+                                .with_hook(hook) => Ok::<_, anyhow::Error>(stream)
+                        }
+                    })
+                    .await?;
 
                 let liveness_timeout = Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS);
 
