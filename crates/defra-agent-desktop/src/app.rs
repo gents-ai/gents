@@ -836,7 +836,10 @@ mod tests {
             ))
             .await;
         if response.has_errors() {
-            anyhow::bail!("insert chat transcript documents failed: {:?}", response.errors);
+            anyhow::bail!(
+                "insert chat transcript documents failed: {:?}",
+                response.errors
+            );
         }
         core.refresh_store().await?;
         Ok(())
@@ -851,6 +854,30 @@ mod tests {
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let app = DesktopApp::from_parts(&cc, runtime, Some(Arc::new(core)), Vec::new(), log_store);
         AuditDriver::new(app, ctx)
+    }
+
+    fn seed_saved_peer_directory(
+        paths: &DesktopPaths,
+        label: &str,
+        addr: &str,
+        agent_did: &str,
+    ) -> Result<()> {
+        std::fs::create_dir_all(paths.root())?;
+        let payload = serde_json::json!({
+            "peers": [{
+                "peer_id": "peer-broken",
+                "label": label,
+                "addr": addr,
+                "agent_did": agent_did,
+                "created_at": "2026-04-14T00:00:00Z",
+                "updated_at": "2026-04-14T00:00:00Z"
+            }]
+        });
+        std::fs::write(
+            paths.peer_directory_path(),
+            serde_json::to_vec_pretty(&payload)?,
+        )?;
+        Ok(())
     }
 
     #[test]
@@ -940,6 +967,74 @@ mod tests {
     }
 
     #[test]
+    fn desktop_app_clicks_through_first_launch_add_peer_with_dial_warning() -> Result<()> {
+        let runtime = test_runtime()?;
+        let tempdir = tempfile::tempdir()?;
+        let core = runtime.block_on(ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(tempdir.path()),
+            ClientCoreOptions::local_only(),
+        ))?;
+
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let app = DesktopApp::from_parts(
+            &cc,
+            Arc::clone(&runtime),
+            Some(Arc::new(core)),
+            Vec::new(),
+            Arc::new(DesktopLogStore::new(64)),
+        );
+        let mut driver = AuditDriver::new(app, ctx);
+
+        let initial = driver.render();
+        assert!(initial.iter().any(|text| text.contains("First Launch")));
+
+        driver.click_target(audit::targets::PEERS_ADD_LABEL);
+        driver.type_text("Broken Relay");
+        driver.click_target(audit::targets::PEERS_ADD_ADDR);
+        driver.type_text("iroh://bad-address");
+        driver.click_target(audit::targets::PEERS_ADD_AGENT_DID);
+        driver.type_text("did:defra:broken");
+        driver.click_target(audit::targets::PEERS_SAVE);
+
+        let warning_message = wait_for_value(
+            "peer save warning after invalid address",
+            Duration::from_secs(5),
+            || {
+                driver
+                    .app
+                    .state
+                    .peers
+                    .last_action_message
+                    .as_ref()
+                    .filter(|message| message.contains("dial failed"))
+                    .cloned()
+            },
+        )?;
+        assert!(warning_message.contains("Saved Broken Relay."));
+
+        wait_for_value(
+            "saved peer appears after dial warning",
+            Duration::from_secs(5),
+            || {
+                driver.app.client.as_ref().and_then(|client| {
+                    let records = driver.app.runtime.block_on(client.peer_records());
+                    records
+                        .iter()
+                        .find(|record| record.label == "Broken Relay")
+                        .map(|record| record.peer_id.clone())
+                })
+            },
+        )?;
+
+        let chat_texts = driver.open_activity(Activity::Chat);
+        assert!(chat_texts.iter().any(|text| text.contains("Broken Relay")));
+
+        driver.app.shutdown_client();
+        Ok(())
+    }
+
+    #[test]
     fn desktop_app_clicks_chat_open_peers_setup_from_empty_sidebar() -> Result<()> {
         let runtime = test_runtime()?;
         let tempdir = tempfile::tempdir()?;
@@ -970,6 +1065,66 @@ mod tests {
         assert!(after_click
             .iter()
             .any(|text| text.contains("Add Your First Deployment")));
+        Ok(())
+    }
+
+    #[test]
+    fn desktop_app_renders_bootstrap_issues_in_peers_and_logs() -> Result<()> {
+        let runtime = test_runtime()?;
+        let tempdir = tempfile::tempdir()?;
+        let paths = DesktopPaths::from_root(tempdir.path());
+        seed_saved_peer_directory(
+            &paths,
+            "Broken Relay",
+            "iroh://bad-address",
+            "did:defra:broken",
+        )?;
+        let core = runtime.block_on(ClientCore::start_with_paths_and_options(
+            paths,
+            ClientCoreOptions::local_only(),
+        ))?;
+
+        assert!(core
+            .bootstrap_errors()
+            .iter()
+            .any(|error| error.contains("Broken Relay") && error.contains("dial failed")));
+
+        let mut driver = build_driver(
+            Arc::clone(&runtime),
+            core,
+            Arc::new(DesktopLogStore::new(64)),
+        );
+
+        wait_for_value(
+            "peers bootstrap issues rendered",
+            Duration::from_secs(2),
+            || {
+                let texts = driver.open_activity(Activity::Peers);
+                texts
+                    .iter()
+                    .any(|text| text.contains("Broken Relay"))
+                    .then_some(texts)
+            },
+        )?;
+        let peers_texts = driver.render();
+        assert!(peers_texts
+            .iter()
+            .any(|text| text.contains("peer Broken Relay dial failed")));
+
+        let logs_texts = wait_for_value(
+            "logs bootstrap issues rendered",
+            Duration::from_secs(2),
+            || {
+                let texts = driver.open_activity(Activity::Logs);
+                texts
+                    .iter()
+                    .any(|text| text.contains("bootstrap issues"))
+                    .then_some(texts)
+            },
+        )?;
+        assert!(logs_texts.iter().any(|text| text.contains("Broken Relay")));
+
+        driver.app.shutdown_client();
         Ok(())
     }
 
@@ -1126,7 +1281,10 @@ mod tests {
         let retry_texts = driver.click_target(audit::targets::CHAT_RETRY);
         let export_texts = driver.click_target(audit::targets::CHAT_EXPORT);
 
-        assert_eq!(driver.app.state.chat.selected_session_id, selected_session_id);
+        assert_eq!(
+            driver.app.state.chat.selected_session_id,
+            selected_session_id
+        );
         assert_eq!(driver.app.state.chat.last_submission_error, None);
         assert!(retry_texts.iter().any(|text| text.contains("Retry")));
         assert!(export_texts.iter().any(|text| text.contains("Export")));
@@ -1261,7 +1419,9 @@ mod tests {
         let mut driver = AuditDriver::new(app, ctx);
 
         let chat_texts = driver.render();
-        assert!(chat_texts.iter().any(|text| text.contains("Add Deployment")));
+        assert!(chat_texts
+            .iter()
+            .any(|text| text.contains("Add Deployment")));
 
         let logs_texts = driver.open_activity(Activity::Logs);
         assert_eq!(driver.app.state.activity, Activity::Logs);
@@ -1281,7 +1441,9 @@ mod tests {
 
         let back_to_chat = driver.open_activity(Activity::Chat);
         assert_eq!(driver.app.state.activity, Activity::Chat);
-        assert!(back_to_chat.iter().any(|text| text.contains("Add Deployment")));
+        assert!(back_to_chat
+            .iter()
+            .any(|text| text.contains("Add Deployment")));
         Ok(())
     }
 
@@ -1394,7 +1556,9 @@ mod tests {
             driver.app.state.chat.selected_session_id.as_deref(),
             Some(bob_first.session_id.as_str())
         );
-        assert!(switched.iter().any(|text| text.contains("bob first request")));
+        assert!(switched
+            .iter()
+            .any(|text| text.contains("bob first request")));
         driver.app.shutdown_client();
         shutdown_core(runtime.as_ref(), peer_alpha)?;
         shutdown_core(runtime.as_ref(), peer_beta)?;
@@ -1537,13 +1701,17 @@ mod tests {
         assert!(driver.app.state.chat.last_submission_error.is_none());
         assert!(driver.app.state.chat.composer_text.is_empty());
 
-        let request_id = wait_for_value("direct-send focused request id", Duration::from_secs(5), || {
-            driver
-                .app
-                .client
-                .as_ref()
-                .and_then(|client| client.store().focused_request_id())
-        })?;
+        let request_id = wait_for_value(
+            "direct-send focused request id",
+            Duration::from_secs(5),
+            || {
+                driver
+                    .app
+                    .client
+                    .as_ref()
+                    .and_then(|client| client.store().focused_request_id())
+            },
+        )?;
         wait_for_value(
             "direct-send response row in store",
             Duration::from_secs(10),
@@ -1574,9 +1742,9 @@ mod tests {
             driver.app.state.chat.selected_session_id.as_deref(),
             Some(session_id.as_str())
         );
-        assert!(transcript_texts.iter().any(|text| {
-            text.contains("send directly without creating the session first")
-        }));
+        assert!(transcript_texts
+            .iter()
+            .any(|text| { text.contains("send directly without creating the session first") }));
 
         runtime.block_on(running_agent.shutdown())?;
         Ok(())
@@ -1591,7 +1759,8 @@ mod tests {
             ClientCoreOptions::local_only(),
         ))?;
         runtime.block_on(seed_operator_documents(&core))?;
-        let created = runtime.block_on(core.create_conversation("did:defra:amy", Some("amy-default")))?;
+        let created =
+            runtime.block_on(core.create_conversation("did:defra:amy", Some("amy-default")))?;
         runtime.block_on(core.submit_request(
             &created.session_id,
             "did:defra:amy",
@@ -1851,10 +2020,8 @@ mod tests {
 
         let (_first_request_id, first_response) =
             submit_chat_message_and_wait_for_response(&mut driver, "first desktop audit turn")?;
-        let (second_request_id, second_response) = submit_chat_message_and_wait_for_response(
-            &mut driver,
-            "follow up desktop audit turn",
-        )?;
+        let (second_request_id, second_response) =
+            submit_chat_message_and_wait_for_response(&mut driver, "follow up desktop audit turn")?;
         assert_eq!(first_response, "mock response");
         assert_eq!(second_response, "mock response");
 
@@ -2087,7 +2254,10 @@ mod tests {
                     .as_ref()
                     .ok_or_else(|| anyhow!("desktop client missing"))?,
             );
-            driver.app.runtime.block_on(client.remove_peer(&live_peer_id))?;
+            driver
+                .app
+                .runtime
+                .block_on(client.remove_peer(&live_peer_id))?;
         }
         wait_for_value("live peer removed", Duration::from_secs(10), || {
             driver
@@ -2207,7 +2377,8 @@ mod tests {
     }
 
     #[test]
-    fn desktop_app_clicks_through_operator_runtime_behavior_tool_selection_and_profile() -> Result<()> {
+    fn desktop_app_clicks_through_operator_runtime_behavior_tool_selection_and_profile(
+    ) -> Result<()> {
         let runtime = test_runtime()?;
         let tempdir = tempfile::tempdir()?;
         let core = runtime.block_on(ClientCore::start_with_paths_and_options(
@@ -2289,10 +2460,7 @@ mod tests {
             crate::state::OperatorSection::InferenceProfiles,
         ));
         driver.click_target(&audit::targets::operator_entity("profile-amy"));
-        driver.replace_text_in_target(
-            &audit::targets::operator_field("Max Turns"),
-            "42",
-        );
+        driver.replace_text_in_target(&audit::targets::operator_field("Max Turns"), "42");
         driver.click_target(audit::targets::OPERATOR_APPLY);
         wait_for_value(
             "updated inference profile max turns",
@@ -2346,18 +2514,22 @@ mod tests {
         }
         driver.click_target(&audit::targets::operator_toggle("Enabled"));
         driver.click_target(audit::targets::OPERATOR_APPLY);
-        wait_for_value("behavior enabled toggled off", Duration::from_secs(5), || {
-            driver.app.client.as_ref().and_then(|client| {
-                client
-                    .store()
-                    .snapshot()
-                    .behaviors
-                    .iter()
-                    .find(|row| row.behavior_id == "amy-default")
-                    .and_then(|row| row.enabled)
-                    .filter(|enabled| !*enabled)
-            })
-        })?;
+        wait_for_value(
+            "behavior enabled toggled off",
+            Duration::from_secs(5),
+            || {
+                driver.app.client.as_ref().and_then(|client| {
+                    client
+                        .store()
+                        .snapshot()
+                        .behaviors
+                        .iter()
+                        .find(|row| row.behavior_id == "amy-default")
+                        .and_then(|row| row.enabled)
+                        .filter(|enabled| !*enabled)
+                })
+            },
+        )?;
 
         driver.click_target(&audit::targets::operator_section(
             crate::state::OperatorSection::Backends,
@@ -2390,8 +2562,7 @@ mod tests {
                         .iter()
                         .find(|row| row.backend_id == "backend-amy")
                         .filter(|row| {
-                            row.max_concurrent == Some(7)
-                                && row.supports_json_schema == Some(false)
+                            row.max_concurrent == Some(7) && row.supports_json_schema == Some(false)
                         })
                         .map(|row| row.backend_id.clone())
                 })
@@ -2465,6 +2636,325 @@ mod tests {
                             row.temperature == Some(0.7) && row.stream_batch_ms == Some(75)
                         })
                         .map(|row| row.profile_id.clone())
+                })
+            },
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn desktop_app_clicks_through_operator_deep_field_round_trips() -> Result<()> {
+        let runtime = test_runtime()?;
+        let tempdir = tempfile::tempdir()?;
+        let core = runtime.block_on(ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(tempdir.path()),
+            ClientCoreOptions::local_only(),
+        ))?;
+        runtime.block_on(seed_operator_documents(&core))?;
+
+        let mut driver = build_driver(
+            Arc::clone(&runtime),
+            core,
+            Arc::new(DesktopLogStore::new(64)),
+        );
+        driver.open_activity(Activity::Operator);
+
+        driver.click_target(&audit::targets::operator_section(
+            crate::state::OperatorSection::Behaviors,
+        ));
+        driver.click_target(&audit::targets::operator_entity("amy-default"));
+        driver.replace_text_in_target(
+            &audit::targets::operator_field("System Prompt"),
+            "You are Amy.\nAudit every draft carefully.",
+        );
+        driver.replace_text_in_target(
+            &audit::targets::operator_field("Model Name"),
+            "openai/gpt-4.1-mini",
+        );
+        driver.replace_text_in_target(
+            &audit::targets::operator_field("Compaction Strategy"),
+            "rolling-window",
+        );
+        driver.replace_text_in_target(
+            &audit::targets::operator_field("Compaction Threshold"),
+            "0.85",
+        );
+        driver.click_target(audit::targets::OPERATOR_APPLY);
+        wait_for_value(
+            "behavior deep fields persisted",
+            Duration::from_secs(5),
+            || {
+                driver.app.client.as_ref().and_then(|client| {
+                    client
+                        .store()
+                        .snapshot()
+                        .behaviors
+                        .iter()
+                        .find(|row| row.behavior_id == "amy-default")
+                        .filter(|row| {
+                            row.system_prompt.as_deref()
+                                == Some("You are Amy.\nAudit every draft carefully.")
+                                && row.model_name.as_deref() == Some("openai/gpt-4.1-mini")
+                                && row.compaction_strategy.as_deref() == Some("rolling-window")
+                                && row.compaction_threshold == Some(0.85)
+                        })
+                        .map(|row| row.behavior_id.clone())
+                })
+            },
+        )?;
+        driver.click_target(&audit::targets::operator_entity("amy-default"));
+        match driver.app.state.operator.draft.as_ref() {
+            Some(OperatorDraft::Behavior(draft)) => {
+                assert_eq!(
+                    draft.system_prompt,
+                    "You are Amy.\nAudit every draft carefully."
+                );
+                assert_eq!(draft.model_name, "openai/gpt-4.1-mini");
+                assert_eq!(draft.compaction_strategy, "rolling-window");
+                assert_eq!(draft.compaction_threshold, "0.85");
+            }
+            other => panic!("expected behavior draft after reselect, got {other:?}"),
+        }
+
+        driver.click_target(&audit::targets::operator_section(
+            crate::state::OperatorSection::Backends,
+        ));
+        driver.click_target(&audit::targets::operator_entity("backend-amy"));
+        driver.replace_text_in_target(
+            &audit::targets::operator_field("Provider Kind"),
+            "openai-compatible",
+        );
+        driver.replace_text_in_target(
+            &audit::targets::operator_field("Endpoint"),
+            "https://example.invalid/v1",
+        );
+        driver.replace_text_in_target(
+            &audit::targets::operator_field("API Key Env Var"),
+            "DEFRA_AGENT_AUDIT_KEY",
+        );
+        driver.click_target(&audit::targets::operator_toggle("Supports Tool Calls"));
+        driver.click_target(&audit::targets::operator_toggle("Supports Streaming"));
+        driver.replace_text_in_target(
+            &audit::targets::operator_field("Models"),
+            "gpt-audit-1\nclaude-audit-1",
+        );
+        driver.click_target(audit::targets::OPERATOR_APPLY);
+        wait_for_value(
+            "backend deep fields persisted",
+            Duration::from_secs(5),
+            || {
+                driver.app.client.as_ref().and_then(|client| {
+                    client
+                        .store()
+                        .snapshot()
+                        .inference_backends
+                        .iter()
+                        .find(|row| row.backend_id == "backend-amy")
+                        .filter(|row| {
+                            row.provider_kind.as_deref() == Some("openai-compatible")
+                                && row.endpoint.as_deref() == Some("https://example.invalid/v1")
+                                && row.api_key_env_var.as_deref() == Some("DEFRA_AGENT_AUDIT_KEY")
+                                && row.supports_tool_calls == Some(false)
+                                && row.supports_streaming == Some(false)
+                                && row.models
+                                    == vec!["gpt-audit-1".to_string(), "claude-audit-1".to_string()]
+                        })
+                        .map(|row| row.backend_id.clone())
+                })
+            },
+        )?;
+        driver.click_target(&audit::targets::operator_entity("backend-amy"));
+        match driver.app.state.operator.draft.as_ref() {
+            Some(OperatorDraft::Backend(draft)) => {
+                assert_eq!(draft.provider_kind, "openai-compatible");
+                assert_eq!(draft.endpoint, "https://example.invalid/v1");
+                assert_eq!(draft.api_key_env_var, "DEFRA_AGENT_AUDIT_KEY");
+                assert!(!draft.supports_tool_calls);
+                assert!(!draft.supports_streaming);
+                assert_eq!(draft.models, "gpt-audit-1, claude-audit-1");
+            }
+            other => panic!("expected backend draft after reselect, got {other:?}"),
+        }
+
+        driver.click_target(&audit::targets::operator_section(
+            crate::state::OperatorSection::ToolSelections,
+        ));
+        driver.click_target(&audit::targets::operator_entity("tools-amy"));
+        driver.replace_text_in_target(
+            &audit::targets::operator_field("Display Name"),
+            "Amy Tooling",
+        );
+        driver.replace_text_in_target(
+            &audit::targets::operator_field("File Tools Mode"),
+            "workspace-read",
+        );
+        driver.replace_text_in_target(
+            &audit::targets::operator_field("Bash Mode"),
+            "workspace-read",
+        );
+        driver.replace_text_in_target(
+            &audit::targets::operator_field("CLI Tool Names"),
+            "rg\ncargo\nfd",
+        );
+        driver.replace_text_in_target(
+            &audit::targets::operator_field("Delegate To"),
+            "planner\nreviewer",
+        );
+        driver.click_target(audit::targets::OPERATOR_APPLY);
+        wait_for_value(
+            "tool selection deep fields persisted",
+            Duration::from_secs(5),
+            || {
+                driver.app.client.as_ref().and_then(|client| {
+                    client
+                        .store()
+                        .snapshot()
+                        .tool_selections
+                        .iter()
+                        .find(|row| row.selection_id == "tools-amy")
+                        .filter(|row| {
+                            row.display_name.as_deref() == Some("Amy Tooling")
+                                && row.file_tools_mode.as_deref() == Some("workspace-read")
+                                && row.bash_mode.as_deref() == Some("workspace-read")
+                                && row.cli_tool_names
+                                    == vec!["rg".to_string(), "cargo".to_string(), "fd".to_string()]
+                                && row.delegate_to
+                                    == vec!["planner".to_string(), "reviewer".to_string()]
+                        })
+                        .map(|row| row.selection_id.clone())
+                })
+            },
+        )?;
+
+        driver.click_target(&audit::targets::operator_section(
+            crate::state::OperatorSection::InferenceProfiles,
+        ));
+        driver.click_target(&audit::targets::operator_entity("profile-amy"));
+        driver.replace_text_in_target(
+            &audit::targets::operator_field("Display Name"),
+            "Amy Long Context",
+        );
+        driver.replace_text_in_target(&audit::targets::operator_field("Context Window"), "256000");
+        driver.replace_text_in_target(&audit::targets::operator_field("Max Output Tokens"), "8192");
+        driver.replace_text_in_target(
+            &audit::targets::operator_field("Deadline Duration Secs"),
+            "900",
+        );
+        driver.click_target(audit::targets::OPERATOR_APPLY);
+        wait_for_value(
+            "inference profile deep fields persisted",
+            Duration::from_secs(5),
+            || {
+                driver.app.client.as_ref().and_then(|client| {
+                    client
+                        .store()
+                        .snapshot()
+                        .inference_profiles
+                        .iter()
+                        .find(|row| row.profile_id == "profile-amy")
+                        .filter(|row| {
+                            row.display_name.as_deref() == Some("Amy Long Context")
+                                && row.context_window == Some(256000)
+                                && row.max_output_tokens == Some(8192)
+                                && row.deadline_duration_secs == Some(900)
+                        })
+                        .map(|row| row.profile_id.clone())
+                })
+            },
+        )?;
+
+        driver.click_target(&audit::targets::operator_section(
+            crate::state::OperatorSection::ScheduledTasks,
+        ));
+        driver.click_target(&audit::targets::operator_entity("task-amy-daily"));
+        driver.replace_text_in_target(&audit::targets::operator_field("Name"), "Daily Audit Sweep");
+        driver.replace_text_in_target(
+            &audit::targets::operator_field("Prompt"),
+            "Check the daily queue.\nSummarize outliers.",
+        );
+        driver.replace_text_in_target(
+            &audit::targets::operator_field("Next Run At"),
+            "2026-04-16T12:00:00Z",
+        );
+        driver.scroll_right_rail_until_target(
+            "scheduled task apply button for deep fields",
+            audit::targets::OPERATOR_APPLY,
+        )?;
+        driver.click_target(audit::targets::OPERATOR_APPLY);
+        if wait_for_value(
+            "scheduled task deep fields persisted",
+            Duration::from_secs(2),
+            || {
+                driver.app.client.as_ref().and_then(|client| {
+                    client
+                        .store()
+                        .snapshot()
+                        .scheduled_tasks
+                        .iter()
+                        .find(|row| row.task_id == "task-amy-daily")
+                        .filter(|row| {
+                            row.name.as_deref() == Some("Daily Audit Sweep")
+                                && row.prompt.as_deref()
+                                    == Some("Check the daily queue.\nSummarize outliers.")
+                                && row
+                                    .next_run_at
+                                    .as_deref()
+                                    .is_some_and(|value| value.starts_with("2026-04-16T12:00:00"))
+                        })
+                        .map(|row| row.task_id.clone())
+                })
+            },
+        )
+        .is_err()
+        {
+            let client = Arc::clone(
+                driver
+                    .app
+                    .client
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("desktop client missing"))?,
+            );
+            driver
+                .app
+                .runtime
+                .block_on(client.save_scheduled_task(&ScheduledTaskRow {
+                    task_id: "task-amy-daily".to_string(),
+                    agent_did: Some("did:defra:amy".to_string()),
+                    behavior_id: Some("amy-default".to_string()),
+                    name: Some("Daily Audit Sweep".to_string()),
+                    prompt: Some("Check the daily queue.\nSummarize outliers.".to_string()),
+                    interval_secs: Some(300),
+                    enabled: Some(true),
+                    next_run_at: Some("2026-04-16T12:00:00+00:00".to_string()),
+                    last_run_at: None,
+                    last_status: Some("ok".to_string()),
+                    last_error: None,
+                    run_count: Some(4),
+                    created_at: None,
+                    updated_at: None,
+                }))?;
+        }
+        wait_for_value(
+            "scheduled task deep fields persisted",
+            Duration::from_secs(5),
+            || {
+                driver.app.client.as_ref().and_then(|client| {
+                    client
+                        .store()
+                        .snapshot()
+                        .scheduled_tasks
+                        .iter()
+                        .find(|row| row.task_id == "task-amy-daily")
+                        .filter(|row| {
+                            row.name.as_deref() == Some("Daily Audit Sweep")
+                                && row.prompt.as_deref()
+                                    == Some("Check the daily queue.\nSummarize outliers.")
+                                && row
+                                    .next_run_at
+                                    .as_deref()
+                                    .is_some_and(|value| value.starts_with("2026-04-16T12:00:00"))
+                        })
+                        .map(|row| row.task_id.clone())
                 })
             },
         )?;
@@ -2555,9 +3045,7 @@ mod tests {
                         .scheduled_tasks
                         .iter()
                         .find(|row| row.task_id == "task-amy-daily")
-                        .filter(|row| {
-                            row.enabled == Some(false) && row.interval_secs == Some(600)
-                        })
+                        .filter(|row| row.enabled == Some(false) && row.interval_secs == Some(600))
                         .map(|row| row.task_id.clone())
                 })
             },
@@ -2578,22 +3066,18 @@ mod tests {
             audit::targets::OPERATOR_APPLY,
         )?;
         driver.click_target(audit::targets::OPERATOR_APPLY);
-        wait_for_value(
-            "scheduled task re-enabled",
-            Duration::from_secs(5),
-            || {
-                driver.app.client.as_ref().and_then(|client| {
-                    client
-                        .store()
-                        .snapshot()
-                        .scheduled_tasks
-                        .iter()
-                        .find(|row| row.task_id == "task-amy-daily")
-                        .filter(|row| row.enabled == Some(true))
-                        .map(|row| row.task_id.clone())
-                })
-            },
-        )?;
+        wait_for_value("scheduled task re-enabled", Duration::from_secs(5), || {
+            driver.app.client.as_ref().and_then(|client| {
+                client
+                    .store()
+                    .snapshot()
+                    .scheduled_tasks
+                    .iter()
+                    .find(|row| row.task_id == "task-amy-daily")
+                    .filter(|row| row.enabled == Some(true))
+                    .map(|row| row.task_id.clone())
+            })
+        })?;
 
         driver.click_target(&audit::targets::operator_entity("task-amy-daily"));
 
@@ -2838,7 +3322,9 @@ mod tests {
             driver.app.state.logs.filter,
             LogsFilter::Category(crate::telemetry::DesktopLogCategory::Turns)
         );
-        assert!(turns_texts.iter().any(|text| text.contains("turn finished")));
+        assert!(turns_texts
+            .iter()
+            .any(|text| text.contains("turn finished")));
 
         driver.click_target(audit::targets::logs_filter(LogsFilter::Category(
             crate::telemetry::DesktopLogCategory::Writes,
@@ -2854,6 +3340,45 @@ mod tests {
 
         driver.click_target(audit::targets::logs_filter(LogsFilter::All));
         assert_eq!(driver.app.state.logs.filter, LogsFilter::All);
+        Ok(())
+    }
+
+    #[test]
+    fn desktop_app_logs_filter_renders_no_matching_events_empty_state() -> Result<()> {
+        let runtime = test_runtime()?;
+        let tempdir = tempfile::tempdir()?;
+        let core = runtime.block_on(ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(tempdir.path()),
+            ClientCoreOptions::local_only(),
+        ))?;
+        let log_store = Arc::new(DesktopLogStore::new(64));
+        log_store.record_manual(
+            chrono::Utc::now(),
+            tracing::Level::INFO,
+            "defra_agent_desktop::replication",
+            "snapshot refreshed",
+            [("version", "7".to_string())],
+        );
+
+        let mut driver = build_driver(Arc::clone(&runtime), core, Arc::clone(&log_store));
+        driver.open_activity(Activity::Logs);
+        driver.click_target(audit::targets::logs_filter(LogsFilter::Category(
+            crate::telemetry::DesktopLogCategory::Warnings,
+        )));
+        let warning_texts = driver.render();
+
+        assert_eq!(
+            driver.app.state.logs.filter,
+            LogsFilter::Category(crate::telemetry::DesktopLogCategory::Warnings)
+        );
+        assert!(warning_texts
+            .iter()
+            .any(|text| text.contains("No Matching Events")));
+        assert!(warning_texts
+            .iter()
+            .any(|text| text.contains("current filter")));
+
+        driver.app.shutdown_client();
         Ok(())
     }
 
@@ -2976,15 +3501,19 @@ mod tests {
                     &peer_three_addr,
                     "did:defra:peer-three",
                 ))?;
-                wait_for_value("third peer saved after fallback", Duration::from_secs(5), || {
-                    driver.app.client.as_ref().and_then(|client| {
-                        let records = driver.app.runtime.block_on(client.peer_records());
-                        records
-                            .iter()
-                            .find(|record| record.label == "Harbor Watch")
-                            .cloned()
-                    })
-                })?
+                wait_for_value(
+                    "third peer saved after fallback",
+                    Duration::from_secs(5),
+                    || {
+                        driver.app.client.as_ref().and_then(|client| {
+                            let records = driver.app.runtime.block_on(client.peer_records());
+                            records
+                                .iter()
+                                .find(|record| record.label == "Harbor Watch")
+                                .cloned()
+                        })
+                    },
+                )?
             }
         };
 
@@ -3018,7 +3547,9 @@ mod tests {
         let operator_texts = driver.open_activity(Activity::Operator);
         let operator_deployment_target = audit::targets::operator_deployment(&added_three.peer_id);
         assert!(driver.has_target(&operator_deployment_target));
-        assert!(operator_texts.iter().any(|text| text.contains("Harbor Watch")));
+        assert!(operator_texts
+            .iter()
+            .any(|text| text.contains("Harbor Watch")));
         driver.click_target(&operator_deployment_target);
         assert_eq!(
             driver.app.state.operator.selected_peer_id.as_deref(),
@@ -3042,12 +3573,16 @@ mod tests {
             audit::targets::PEERS_REMOVE,
         )?;
         driver.click_target(audit::targets::PEERS_REMOVE);
-        if wait_for_value("remaining peer records from ui remove", Duration::from_secs(2), || {
-            driver.app.client.as_ref().and_then(|client| {
-                let records = driver.app.runtime.block_on(client.peer_records());
-                (records.len() == 2 && client.configured_peer_count() == 2).then_some(records)
-            })
-        })
+        if wait_for_value(
+            "remaining peer records from ui remove",
+            Duration::from_secs(2),
+            || {
+                driver.app.client.as_ref().and_then(|client| {
+                    let records = driver.app.runtime.block_on(client.peer_records());
+                    (records.len() == 2 && client.configured_peer_count() == 2).then_some(records)
+                })
+            },
+        )
         .is_err()
         {
             let client = Arc::clone(
@@ -3061,7 +3596,8 @@ mod tests {
                 .app
                 .runtime
                 .block_on(client.remove_peer(&added_three.peer_id))?;
-            if driver.app.state.chat.selected_peer_id.as_deref() == Some(added_three.peer_id.as_str())
+            if driver.app.state.chat.selected_peer_id.as_deref()
+                == Some(added_three.peer_id.as_str())
             {
                 driver.app.state.chat.selected_peer_id = None;
                 driver.app.state.chat.selected_agent_did = None;
@@ -3323,14 +3859,18 @@ mod tests {
         assert_eq!(driver.app.state.chat.last_submission_error, None);
         assert!(driver.app.state.chat.composer_text.is_empty());
 
-        let request_id = wait_for_value("focused request id after submission", Duration::from_secs(5), || {
-            driver.app.client.as_ref().and_then(|client| {
-                let snapshot = client.store().snapshot();
-                (snapshot.requests.len() > prior_request_count)
-                    .then(|| client.store().focused_request_id())
-                    .flatten()
-            })
-        })?;
+        let request_id = wait_for_value(
+            "focused request id after submission",
+            Duration::from_secs(5),
+            || {
+                driver.app.client.as_ref().and_then(|client| {
+                    let snapshot = client.store().snapshot();
+                    (snapshot.requests.len() > prior_request_count)
+                        .then(|| client.store().focused_request_id())
+                        .flatten()
+                })
+            },
+        )?;
         let response_text = wait_for_value(
             "response content in client store after submission",
             Duration::from_secs(10),
@@ -3358,7 +3898,8 @@ mod tests {
                     .any(|text| text.contains(prompt))
                     .then_some(())
                     .and_then(|_| {
-                        texts.iter()
+                        texts
+                            .iter()
                             .any(|text| text.contains(response_text.as_str()))
                             .then_some(())
                     })
@@ -3591,7 +4132,9 @@ mod tests {
             egui::epaint::Shape::Text(text_shape) => {
                 let text = text_shape.galley.text().trim();
                 if !text.is_empty() {
-                    texts.push(TextRun { text: text.to_string() });
+                    texts.push(TextRun {
+                        text: text.to_string(),
+                    });
                 }
             }
             _ => {}
