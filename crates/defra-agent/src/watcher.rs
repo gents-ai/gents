@@ -23,6 +23,11 @@ pub struct AgentRequest {
     pub behavior_id: Option<String>,
     pub session_id: String,
     pub content: String,
+    pub temperature: Option<f64>,
+    pub top_p: Option<f64>,
+    pub top_k: Option<i64>,
+    pub max_tokens: Option<i64>,
+    pub metadata: Option<String>,
     pub created_at: String,
 }
 

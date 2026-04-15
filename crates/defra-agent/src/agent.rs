@@ -7,7 +7,7 @@ use tokio::sync::watch;
 
 use crate::compaction::CompactionStrategy;
 use crate::config::{
-    BehaviorConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
+    BehaviorConfig, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
     DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
 };
@@ -202,6 +202,9 @@ pub(crate) fn behavior_config_from_documents(
         .and_then(|profile| profile.deadline_duration_secs)
         .and_then(|value| u64::try_from(value).ok())
         .unwrap_or(DEFAULT_DEADLINE_DURATION_SECS);
+    let profile_max_tokens = inference_profile
+        .and_then(|profile| profile.max_output_tokens)
+        .and_then(|value| u64::try_from(value).ok());
 
     Ok(BehaviorConfig {
         name: behavior.behavior_id.clone(),
@@ -239,6 +242,12 @@ pub(crate) fn behavior_config_from_documents(
         compaction_strategy,
         stream_batch_ms,
         deadline_duration: Duration::from_secs(deadline_duration_secs),
+        sampling: SamplingConfig {
+            temperature: inference_profile.and_then(|profile| profile.temperature),
+            top_p: None,
+            top_k: None,
+            max_tokens: profile_max_tokens,
+        },
     })
 }
 

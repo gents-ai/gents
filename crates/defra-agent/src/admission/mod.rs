@@ -1270,6 +1270,11 @@ mod tests {
             behavior_id: Some("default".to_string()),
             session_id: format!("session-{request_id}"),
             content: "hello".to_string(),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            max_tokens: None,
+            metadata: None,
             created_at: "2026-04-15T00:00:00Z".to_string(),
         }
     }

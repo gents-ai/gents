@@ -321,6 +321,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         compaction_strategy: crate::compaction::CompactionStrategy::StripThenSummarize,
         stream_batch_ms: crate::config::DEFAULT_STREAM_BATCH_MS,
         deadline_duration: Duration::from_secs(crate::config::DEFAULT_DEADLINE_DURATION_SECS),
+        sampling: crate::config::SamplingConfig::default(),
     });
     let updated_behavior = Arc::new(BehaviorConfig {
         name: "general".to_string(),
@@ -353,6 +354,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         compaction_strategy: crate::compaction::CompactionStrategy::StripThenSummarize,
         stream_batch_ms: crate::config::DEFAULT_STREAM_BATCH_MS,
         deadline_duration: Duration::from_secs(crate::config::DEFAULT_DEADLINE_DURATION_SECS),
+        sampling: crate::config::SamplingConfig::default(),
     });
 
     let initial_snapshot =

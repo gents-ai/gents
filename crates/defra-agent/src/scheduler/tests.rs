@@ -482,6 +482,7 @@ async fn scheduled_execution_succeeds_without_external_ops_service() {
         compaction_strategy: CompactionStrategy::StripThenSummarize,
         stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
         deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
+        sampling: crate::config::SamplingConfig::default(),
     };
 
     let tool_surface = behavior.tools.resolve(node.as_ref()).await.unwrap();
@@ -646,6 +647,7 @@ async fn scheduled_execution_updates_live_task_runtime_fields() {
         compaction_strategy: CompactionStrategy::StripThenSummarize,
         stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
         deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
+        sampling: crate::config::SamplingConfig::default(),
     };
 
     let tool_surface = behavior.tools.resolve(node.as_ref()).await.unwrap();
@@ -790,6 +792,7 @@ async fn scheduler_tick_shutdown_is_prompt_while_task_waits_for_backend_capacity
         compaction_strategy: CompactionStrategy::StripThenSummarize,
         stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
         deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
+        sampling: crate::config::SamplingConfig::default(),
     });
     let tool_surface = Arc::new(behavior.tools.resolve(node.as_ref()).await.unwrap());
     insert_due_task(

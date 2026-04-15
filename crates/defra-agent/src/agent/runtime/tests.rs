@@ -30,6 +30,11 @@ fn request(behavior_id: Option<&str>, session_id: &str) -> AgentRequest {
         behavior_id: behavior_id.map(ToOwned::to_owned),
         session_id: session_id.to_string(),
         content: "hello".to_string(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        max_tokens: None,
+        metadata: None,
         created_at: "2026-04-09T00:00:00Z".to_string(),
     }
 }
@@ -646,6 +651,11 @@ async fn router_dispatches_first_request_after_snapshot_change_to_latest_generat
             behavior_id: None,
             session_id: "session-router".to_string(),
             content: "hello".to_string(),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            max_tokens: None,
+            metadata: None,
             created_at: "2026-04-09T00:00:00Z".to_string(),
         }))
         .await

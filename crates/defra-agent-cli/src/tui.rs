@@ -291,6 +291,7 @@ impl App {
             &content,
             Some(&self.session_id),
             self.behavior_id.as_deref(),
+            crate::RequestSubmitOptions::default(),
         )
         .await?;
         self.active_request = Some(submitted);

@@ -1,5 +1,5 @@
 use defra_agent::lifecycle::ClaimOutcome;
-use defra_agent::watcher::AgentRequest;
+use defra_agent::watcher::{AgentRequest, DefraWatcher};
 use defra_agent::RequestLifecycle;
 use serde::Deserialize;
 
@@ -38,6 +38,76 @@ struct BehaviorRow {
 }
 
 #[tokio::test]
+async fn pending_request_hydrates_sampling_fields_and_metadata() {
+    let db = test_db("request-sampling-metadata").await;
+    let request_id = "req-sampling-metadata";
+    let session_id = "session-sampling-metadata";
+    let metadata = r#" { "run_id": "foo" } "#;
+    let escaped_metadata = defra_agent::graphql::escape_graphql_string(metadata);
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{request_id}",
+                agent_did: "{AGENT_DID}",
+                behavior_id: "{AGENT_NAME}",
+                session_id: "{session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{request_id}",
+                superseded_by_request: "",
+                content: "visible prompt",
+                temperature: 0.0,
+                top_p: 0.95,
+                top_k: 40,
+                max_tokens: 512,
+                metadata: "{escaped_metadata}",
+                status: "pending",
+                lifecycle_state: "pending",
+                backend_id: "",
+                execution_origin: "interactive",
+                created_at: "2026-03-23T00:00:00Z",
+                retry_count: 0,
+                max_retries: 3
+            }}) {{ _docID }}
+        }}"#,
+    );
+    let resp = db.node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "create request failed: {:?}",
+        resp.errors
+    );
+    let query = format!(
+        r#"{{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
+                _docID
+            }}
+        }}"#,
+    );
+    let resp = db.node.execute(&query).await;
+    assert!(
+        !resp.has_errors(),
+        "query request failed: {:?}",
+        resp.errors
+    );
+    let doc_id = first_row::<support::DocIdRow>(&resp, "AgentRequest").doc_id;
+
+    let watcher = DefraWatcher::new(db.node.clone(), AGENT_DID);
+    let request = watcher
+        .try_fetch_request(&doc_id)
+        .await
+        .unwrap()
+        .expect("pending request");
+
+    assert_eq!(request.temperature, Some(0.0));
+    assert_eq!(request.top_p, Some(0.95));
+    assert_eq!(request.top_k, Some(40));
+    assert_eq!(request.max_tokens, Some(512));
+    assert_eq!(request.metadata.as_deref(), Some(metadata));
+    assert_eq!(request.content, "visible prompt");
+    assert!(!request.content.contains("run_id"));
+}
+
+#[tokio::test]
 async fn claim_rejects_when_another_non_terminal_request_exists() {
     let db = test_db("lifecycle-dedup").await;
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -54,6 +124,11 @@ async fn claim_rejects_when_another_non_terminal_request_exists() {
         behavior_id: Some(AGENT_NAME.into()),
         session_id,
         content: "second".into(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        max_tokens: None,
+        metadata: None,
         created_at: later,
     };
 
@@ -105,6 +180,11 @@ async fn claim_suppresses_later_pending_duplicates() {
         behavior_id: Some(AGENT_NAME.into()),
         session_id: session_id.clone(),
         content: "first".into(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        max_tokens: None,
+        metadata: None,
         created_at: "2026-03-23T00:00:00Z".into(),
     };
 
@@ -183,6 +263,11 @@ async fn claim_preserves_explicit_behavior_id() {
         behavior_id: Some("code".into()),
         session_id: session_id.into(),
         content: "hello".into(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        max_tokens: None,
+        metadata: None,
         created_at: created_at.into(),
     };
 
@@ -440,6 +525,11 @@ async fn complete_does_not_overwrite_conversation_for_newer_request() {
         behavior_id: Some(AGENT_NAME.into()),
         session_id: session_id.into(),
         content: "hello".into(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        max_tokens: None,
+        metadata: None,
         created_at: "2026-03-23T00:00:00Z".into(),
     };
     let mut lifecycle = RequestLifecycle::new(db.node.clone(), AGENT_NAME, first_request, 300);
@@ -487,6 +577,11 @@ async fn advance_increments_progress_seq() {
         behavior_id: Some(AGENT_NAME.into()),
         session_id: "session-1".into(),
         content: "hello".into(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        max_tokens: None,
+        metadata: None,
         created_at: "2026-03-23T00:00:00Z".into(),
     };
 
