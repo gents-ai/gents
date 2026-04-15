@@ -14,6 +14,11 @@ fn agent_request_clone() {
         behavior_id: Some("general".into()),
         session_id: "sess-1".into(),
         content: "hello".into(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        max_tokens: None,
+        metadata: None,
         created_at: "2026-03-12T00:00:00Z".into(),
     };
     let cloned = req.clone();
@@ -63,6 +68,11 @@ fn request(request_id: &str, session_id: &str) -> AgentRequest {
         behavior_id: Some("general".into()),
         session_id: session_id.to_string(),
         content: "hello".into(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        max_tokens: None,
+        metadata: None,
         created_at: "2026-03-12T00:00:00Z".into(),
     }
 }

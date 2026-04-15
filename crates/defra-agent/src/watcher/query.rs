@@ -18,6 +18,11 @@ impl DefraWatcher {
                     behavior_id
                     session_id
                     content
+                    temperature
+                    top_p
+                    top_k
+                    max_tokens
+                    metadata
                     created_at
                 }}
             }}"#,
@@ -44,6 +49,11 @@ impl DefraWatcher {
                 behavior_id: normalize_optional_string(row.behavior_id),
                 session_id: row.session_id,
                 content: row.content,
+                temperature: row.temperature,
+                top_p: row.top_p,
+                top_k: row.top_k,
+                max_tokens: row.max_tokens,
+                metadata: row.metadata,
                 created_at: row.created_at,
             })),
             None => Ok(None),
@@ -66,6 +76,11 @@ impl DefraWatcher {
                     behavior_id
                     session_id
                     content
+                    temperature
+                    top_p
+                    top_k
+                    max_tokens
+                    metadata
                     created_at
                 }}
             }}"#,
@@ -92,6 +107,11 @@ impl DefraWatcher {
                 behavior_id: normalize_optional_string(row.behavior_id),
                 session_id: row.session_id,
                 content: row.content,
+                temperature: row.temperature,
+                top_p: row.top_p,
+                top_k: row.top_k,
+                max_tokens: row.max_tokens,
+                metadata: row.metadata,
                 created_at: row.created_at,
             })
             .collect())
@@ -112,6 +132,11 @@ struct AgentRequestRow {
     behavior_id: Option<String>,
     session_id: String,
     content: String,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    top_k: Option<i64>,
+    max_tokens: Option<i64>,
+    metadata: Option<String>,
     created_at: String,
 }
 
@@ -124,5 +149,10 @@ struct PendingAgentRequestRow {
     behavior_id: Option<String>,
     session_id: String,
     content: String,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    top_k: Option<i64>,
+    max_tokens: Option<i64>,
+    metadata: Option<String>,
     created_at: String,
 }

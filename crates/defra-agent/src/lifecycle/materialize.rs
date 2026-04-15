@@ -202,6 +202,11 @@ impl RequestLifecycle {
             behavior_id: Some(behavior_id.clone()),
             session_id: session_id.clone(),
             content: content.to_string(),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            max_tokens: None,
+            metadata: None,
             created_at,
         };
 

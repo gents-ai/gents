@@ -68,7 +68,7 @@ These documents record user requests, assistant output, and conversation history
 
 | Collection | Key fields | References | Written by | Read by |
 |------------|------------|------------|------------|---------|
-| `AgentRequest` | `request_id`, `agent_did`, `behavior_id`, `session_id`, `status`, `lifecycle_state`, `backend_id`, `failure_reason` | belongs to an agent/session/behavior | `chat`, `request submit`, lifecycle transitions | router, CLI inspection, recovery |
+| `AgentRequest` | `request_id`, `agent_did`, `behavior_id`, `session_id`, sampling overrides, `metadata`, `status`, `lifecycle_state`, `backend_id`, `failure_reason` | belongs to an agent/session/behavior | `chat`, `request submit`, lifecycle transitions | router, CLI inspection, recovery |
 | `InferenceCall` | `call_id`, `request_id`, `backend_id`, `call_kind`, `call_state`, queue/timing/token fields | belongs to a request/backend | admission controller at terminal call state | benchmarking, RL reward shaping, debugging |
 | `AgentResponse` | `request_id`, `agent_did`, `behavior_id`, `session_id`, `status`, `content`, `reasoning`, `error_message`, `progress_seq` | latest response for a request | streaming/runtime code | `chat`, `response show`, `response wait`, TUI |
 | `AgentSession` | `session_id`, `behavior_id`, `status`, `started`, `ended` | ties a sequence of requests to one behavior | session manager | `chat`, inspection, recovery |

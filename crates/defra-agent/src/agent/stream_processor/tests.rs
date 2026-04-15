@@ -89,6 +89,11 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
         behavior_id: Some("general".to_string()),
         session_id: session_id.clone(),
         content: "Inspect the repo".to_string(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        max_tokens: None,
+        metadata: None,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
     let mut lifecycle = RequestLifecycle::new_with_agent_did(

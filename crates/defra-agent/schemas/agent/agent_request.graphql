@@ -7,6 +7,11 @@ type AgentRequest @branchable {
     retry_root_request: String
     superseded_by_request: String
     content: String
+    temperature: Float
+    top_p: Float
+    top_k: Int
+    max_tokens: Int
+    metadata: String
     status: String @index
     lifecycle_state: String @index
     backend_id: String @index

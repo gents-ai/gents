@@ -256,6 +256,7 @@ fn test_behavior(
         compaction_strategy: CompactionStrategy::StripThenSummarize,
         stream_batch_ms: defra_agent::config::DEFAULT_STREAM_BATCH_MS,
         deadline_duration: Duration::from_secs(defra_agent::config::DEFAULT_DEADLINE_DURATION_SECS),
+        sampling: defra_agent::config::SamplingConfig::default(),
     }
 }
 

@@ -1991,6 +1991,16 @@ struct RequestSubmitArgs {
     session_id: Option<String>,
     #[arg(long)]
     behavior_id: Option<String>,
+    #[arg(long)]
+    temperature: Option<f64>,
+    #[arg(long)]
+    top_p: Option<f64>,
+    #[arg(long)]
+    top_k: Option<i64>,
+    #[arg(long)]
+    max_tokens: Option<i64>,
+    #[arg(long)]
+    metadata: Option<String>,
     #[arg(long = "output-file")]
     output_file: Option<PathBuf>,
     #[arg(long, default_value_t = false)]
@@ -3026,6 +3036,13 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
         &content,
         args.session_id.as_deref(),
         args.behavior_id.as_deref(),
+        RequestSubmitOptions {
+            temperature: args.temperature,
+            top_p: args.top_p,
+            top_k: args.top_k,
+            max_tokens: args.max_tokens,
+            metadata: args.metadata.clone(),
+        },
     )
     .await?;
     let request_summary = json!({
@@ -3033,6 +3050,11 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
         "session_id": submitted.session_id,
         "agent_did": submitted.agent_did,
         "behavior_id": submitted.behavior_id,
+        "temperature": submitted.temperature,
+        "top_p": submitted.top_p,
+        "top_k": submitted.top_k,
+        "max_tokens": submitted.max_tokens,
+        "metadata": submitted.metadata,
     });
     if args.no_wait {
         print_json(&request_summary)?;
@@ -3085,6 +3107,11 @@ async fn request_show(args: RequestShowArgs) -> Result<()> {
                 failure_reason
                 retry_count
                 max_retries
+                temperature
+                top_p
+                top_k
+                max_tokens
+                metadata
                 created_at
                 claimed_at
                 deadline
@@ -5536,6 +5563,20 @@ struct SubmittedRequest {
     session_id: String,
     agent_did: String,
     behavior_id: Option<String>,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    top_k: Option<i64>,
+    max_tokens: Option<i64>,
+    metadata: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RequestSubmitOptions {
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    top_k: Option<i64>,
+    max_tokens: Option<i64>,
+    metadata: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -5562,6 +5603,7 @@ async fn create_agent_request(
     content: &str,
     session_id: Option<&str>,
     behavior_id: Option<&str>,
+    options: RequestSubmitOptions,
 ) -> Result<SubmittedRequest> {
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = session_id
@@ -5579,6 +5621,25 @@ async fn create_agent_request(
             )
         })
         .unwrap_or_default();
+    let request_override_fields = vec![
+        optional_f64_field("temperature", options.temperature),
+        optional_f64_field("top_p", options.top_p),
+        optional_i64_field("top_k", options.top_k),
+        optional_i64_field("max_tokens", options.max_tokens),
+        options
+            .metadata
+            .as_ref()
+            .map(|metadata| format!(r#"metadata: "{}""#, escape_graphql_string(metadata))),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(",\n                ");
+    let request_override_fields = if request_override_fields.is_empty() {
+        String::new()
+    } else {
+        format!("{request_override_fields},\n                ")
+    };
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -5590,7 +5651,7 @@ async fn create_agent_request(
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
                 content: "{content}",
-                status: "pending",
+                {request_override_fields}status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "",
                 execution_origin: "interactive",
@@ -5605,6 +5666,7 @@ async fn create_agent_request(
         behavior_field = behavior_field,
         session_id = escape_graphql_string(&session_id),
         content = escape_graphql_string(content),
+        request_override_fields = request_override_fields,
     );
     post_graphql(graphql, &mutation).await?;
 
@@ -5616,6 +5678,11 @@ async fn create_agent_request(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned),
+        temperature: options.temperature,
+        top_p: options.top_p,
+        top_k: options.top_k,
+        max_tokens: options.max_tokens,
+        metadata: options.metadata,
     })
 }
 
@@ -5629,8 +5696,15 @@ async fn submit_chat_turn(
     poll_secs: u64,
 ) -> Result<(SubmittedRequest, Value)> {
     let existing_tool_calls = load_existing_tool_call_keys(graphql, session_id).await?;
-    let submitted =
-        create_agent_request(graphql, agent_did, content, Some(session_id), behavior_id).await?;
+    let submitted = create_agent_request(
+        graphql,
+        agent_did,
+        content,
+        Some(session_id),
+        behavior_id,
+        RequestSubmitOptions::default(),
+    )
+    .await?;
     let response = stream_turn_progress(
         graphql,
         &submitted,
@@ -5651,8 +5725,15 @@ async fn submit_chat_turn_json(
     timeout_secs: u64,
     poll_secs: u64,
 ) -> Result<Value> {
-    let submitted =
-        create_agent_request(graphql, agent_did, content, Some(session_id), behavior_id).await?;
+    let submitted = create_agent_request(
+        graphql,
+        agent_did,
+        content,
+        Some(session_id),
+        behavior_id,
+        RequestSubmitOptions::default(),
+    )
+    .await?;
     let response =
         wait_for_terminal_response(graphql, &submitted.request_id, timeout_secs, poll_secs)
             .await

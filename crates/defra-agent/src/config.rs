@@ -37,6 +37,39 @@ pub struct BehaviorConfig {
     pub compaction_strategy: CompactionStrategy,
     pub stream_batch_ms: u64,
     pub deadline_duration: Duration,
+    pub sampling: SamplingConfig,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SamplingConfig {
+    pub temperature: Option<f64>,
+    pub top_p: Option<f64>,
+    pub top_k: Option<i64>,
+    pub max_tokens: Option<u64>,
+}
+
+impl SamplingConfig {
+    pub fn is_empty(self) -> bool {
+        self.temperature.is_none()
+            && self.top_p.is_none()
+            && self.top_k.is_none()
+            && self.max_tokens.is_none()
+    }
+
+    pub fn additional_params(self) -> Option<serde_json::Value> {
+        let mut params = serde_json::Map::new();
+        if let Some(top_p) = self.top_p {
+            params.insert("top_p".to_string(), serde_json::json!(top_p));
+        }
+        if let Some(top_k) = self.top_k {
+            params.insert("top_k".to_string(), serde_json::json!(top_k));
+        }
+        if let Some(max_tokens) = self.max_tokens {
+            params.insert("max_tokens".to_string(), serde_json::json!(max_tokens));
+        }
+
+        (!params.is_empty()).then(|| serde_json::Value::Object(params))
+    }
 }
 
 impl std::fmt::Debug for BehaviorConfig {
@@ -62,6 +95,7 @@ impl std::fmt::Debug for BehaviorConfig {
             .field("compaction_strategy", &self.compaction_strategy)
             .field("stream_batch_ms", &self.stream_batch_ms)
             .field("deadline_duration", &self.deadline_duration)
+            .field("sampling", &self.sampling)
             .finish()
     }
 }

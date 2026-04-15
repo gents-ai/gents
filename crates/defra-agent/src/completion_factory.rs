@@ -6,7 +6,8 @@ use rig::tool::ToolDyn;
 
 use crate::admission::{AdmissionRegistry, AdmittedCompletionClient};
 use crate::backend_provider::BackendProviderKind;
-use crate::config::BehaviorConfig;
+use crate::config::{BehaviorConfig, SamplingConfig};
+use crate::watcher::AgentRequest;
 
 pub(crate) fn build_agent<C>(
     client: &C,
@@ -76,11 +77,80 @@ where
         builder = builder.tool_choice(ToolChoice::Auto);
     }
 
-    if let Some(additional_params) = provider_additional_params(behavior.backend_provider_kind) {
+    if let Some(temperature) = behavior.sampling.temperature {
+        builder = builder.temperature(temperature);
+    }
+
+    if let Some(max_tokens) = behavior.sampling.max_tokens {
+        builder = builder.max_tokens(max_tokens);
+    }
+
+    if let Some(additional_params) = merge_optional_params(
+        provider_additional_params(behavior.backend_provider_kind),
+        behavior.sampling.additional_params(),
+    ) {
         builder = builder.additional_params(additional_params);
     }
 
     builder
+}
+
+pub(crate) fn agent_with_request_sampling<M>(
+    agent: &Agent<M>,
+    behavior: &BehaviorConfig,
+    request: &AgentRequest,
+) -> Agent<M>
+where
+    M: CompletionModel,
+{
+    let sampling = sampling_for_request(behavior.sampling, request);
+    let mut agent = agent.clone();
+    agent.temperature = sampling.temperature;
+    agent.max_tokens = sampling.max_tokens;
+    if let Some(additional_params) = sampling.additional_params() {
+        agent.additional_params =
+            merge_optional_params(agent.additional_params.take(), Some(additional_params));
+    }
+    agent
+}
+
+fn sampling_for_request(defaults: SamplingConfig, request: &AgentRequest) -> SamplingConfig {
+    SamplingConfig {
+        temperature: request.temperature.or(defaults.temperature),
+        top_p: request.top_p.or(defaults.top_p),
+        top_k: request.top_k.or(defaults.top_k),
+        max_tokens: request
+            .max_tokens
+            .and_then(|value| u64::try_from(value).ok())
+            .or(defaults.max_tokens),
+    }
+}
+
+fn merge_optional_params(
+    left: Option<serde_json::Value>,
+    right: Option<serde_json::Value>,
+) -> Option<serde_json::Value> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(merge_json_values(left, right)),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    }
+}
+
+fn merge_json_values(left: serde_json::Value, right: serde_json::Value) -> serde_json::Value {
+    match (left, right) {
+        (serde_json::Value::Object(mut left), serde_json::Value::Object(right)) => {
+            for (key, right_value) in right {
+                let value = left
+                    .remove(&key)
+                    .map(|left_value| merge_json_values(left_value, right_value.clone()))
+                    .unwrap_or(right_value);
+                left.insert(key, value);
+            }
+            serde_json::Value::Object(left)
+        }
+        (_, right) => right,
+    }
 }
 
 fn provider_additional_params(kind: BackendProviderKind) -> Option<serde_json::Value> {
@@ -109,5 +179,58 @@ mod tests {
     #[test]
     fn openai_compatible_has_no_provider_specific_additional_params() {
         assert!(provider_additional_params(BackendProviderKind::OpenAiCompatible).is_none());
+    }
+
+    #[test]
+    fn sampling_additional_params_merge_with_provider_params() {
+        let sampling = SamplingConfig {
+            temperature: Some(0.1),
+            top_p: Some(0.95),
+            top_k: Some(40),
+            max_tokens: Some(1024),
+        };
+
+        let value = merge_optional_params(
+            provider_additional_params(BackendProviderKind::OpenRouter),
+            sampling.additional_params(),
+        )
+        .expect("sampling params should be present");
+
+        assert_eq!(value["provider"]["require_parameters"], true);
+        assert_eq!(value["top_p"], 0.95);
+        assert_eq!(value["top_k"], 40);
+        assert_eq!(value["max_tokens"], 1024);
+        assert!(value.get("temperature").is_none());
+    }
+
+    #[test]
+    fn request_sampling_overrides_behavior_defaults() {
+        let defaults = SamplingConfig {
+            temperature: Some(0.7),
+            top_p: Some(0.9),
+            top_k: Some(20),
+            max_tokens: Some(2048),
+        };
+        let request = AgentRequest {
+            doc_id: String::new(),
+            request_id: String::new(),
+            agent_did: String::new(),
+            behavior_id: None,
+            session_id: String::new(),
+            content: String::new(),
+            temperature: Some(0.0),
+            top_p: None,
+            top_k: Some(40),
+            max_tokens: Some(512),
+            metadata: Some(r#"{"run_id":"foo"}"#.to_string()),
+            created_at: String::new(),
+        };
+
+        let sampling = sampling_for_request(defaults, &request);
+
+        assert_eq!(sampling.temperature, Some(0.0));
+        assert_eq!(sampling.top_p, Some(0.9));
+        assert_eq!(sampling.top_k, Some(40));
+        assert_eq!(sampling.max_tokens, Some(512));
     }
 }

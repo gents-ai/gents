@@ -229,6 +229,11 @@ pub fn build_request(
         behavior_id: Some(AGENT_NAME.into()),
         session_id,
         content: "hello".into(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        max_tokens: None,
+        metadata: None,
         created_at,
     }
 }

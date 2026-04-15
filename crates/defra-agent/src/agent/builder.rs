@@ -12,7 +12,7 @@ use crate::backend_provider::BackendProviderKind;
 use crate::backend_registry::lookup_backend;
 use crate::compaction::CompactionStrategy;
 use crate::config::{
-    BehaviorConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
+    BehaviorConfig, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
     DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
 };
@@ -338,6 +338,7 @@ pub(crate) struct PendingBehaviorConfig {
     compaction_strategy: CompactionStrategy,
     stream_batch_ms: u64,
     deadline_duration: Duration,
+    sampling: SamplingConfig,
 }
 
 impl PendingBehaviorConfig {
@@ -359,6 +360,7 @@ impl PendingBehaviorConfig {
             compaction_strategy: CompactionStrategy::StripThenSummarize,
             stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
             deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
+            sampling: SamplingConfig::default(),
         }
     }
 
@@ -440,6 +442,7 @@ impl PendingBehaviorConfig {
             compaction_strategy: self.compaction_strategy,
             stream_batch_ms: self.stream_batch_ms,
             deadline_duration: self.deadline_duration,
+            sampling: self.sampling,
         })
     }
 }
