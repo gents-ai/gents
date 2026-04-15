@@ -1266,6 +1266,7 @@ fn submit_chat_message_and_wait_for_response_after_request(
         std::thread::sleep(Duration::from_millis(50));
     };
 
+    let rendered_response_text = response_text.trim();
     wait_for_value(
         "submitted prompt and response in transcript",
         Duration::from_secs(30),
@@ -1278,7 +1279,7 @@ fn submit_chat_message_and_wait_for_response_after_request(
                 .and_then(|_| {
                     texts
                         .iter()
-                        .any(|text| text.contains(response_text.as_str()))
+                        .any(|text| text.contains(rendered_response_text))
                         .then_some(())
                 })
         },
