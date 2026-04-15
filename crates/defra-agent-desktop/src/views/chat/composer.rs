@@ -157,6 +157,8 @@ fn submit(
         Ok(result) => {
             state.chat.selected_session_id = Some(result.session_id);
             state.chat.last_submission_error = None;
+            state.chat.last_action_message = None;
+            state.chat.last_export_payload = None;
             state.chat.composer_text.clear();
             state.chat.transcript_stick_to_bottom = true;
         }

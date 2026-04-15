@@ -1,7 +1,8 @@
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use defra_agent_protocol::row::{
-    AgentBehaviorRow, InferenceBackendRow, InferenceProfileRow, ScheduledTaskRow, ToolSelectionRow,
+    AgentBehaviorRow, AgentRequestRow, InferenceBackendRow, InferenceProfileRow, ScheduledTaskRow,
+    ToolSelectionRow,
 };
 use defra_node::EmbeddedNode;
 use uuid::Uuid;
@@ -673,6 +674,109 @@ pub async fn submit_request(
         max_retries = DEFAULT_REQUEST_MAX_RETRIES,
     );
     execute_mutation(node, &mutation, "submit_request").await?;
+
+    upsert_conversation(
+        node,
+        store,
+        session_id,
+        agent_did,
+        &binding.agent_name,
+        &binding.behavior_id,
+        &request_id,
+        content,
+        "active",
+    )
+    .await?;
+
+    Ok(SubmittedRequest {
+        request_id,
+        session_id: session_id.to_string(),
+        agent_did: agent_did.to_string(),
+        behavior_id: binding.behavior_id,
+    })
+}
+
+pub async fn retry_request(
+    node: &EmbeddedNode,
+    store: &ClientStore,
+    parent: &AgentRequestRow,
+) -> Result<SubmittedRequest> {
+    let parent_request_id = normalize_required("request_id", &parent.request_id)?;
+    let session_id = normalize_required(
+        "session_id",
+        parent
+            .session_id
+            .as_deref()
+            .context("retry parent request must have a session_id")?,
+    )?;
+    let agent_did = normalize_required(
+        "agent_did",
+        parent
+            .agent_did
+            .as_deref()
+            .context("retry parent request must have an agent_did")?,
+    )?;
+    let content = normalize_required(
+        "content",
+        parent
+            .content
+            .as_deref()
+            .context("retry parent request must have content")?,
+    )?;
+    let behavior_id = normalize_optional_string(parent.behavior_id.as_deref());
+    let retry_root_request = normalize_optional_string(parent.retry_root_request.as_deref())
+        .unwrap_or(parent_request_id);
+    let retry_count = parent.retry_count.unwrap_or_default() + 1;
+    let max_retries = parent
+        .max_retries
+        .unwrap_or(i64::from(DEFAULT_REQUEST_MAX_RETRIES));
+    let request_id = Uuid::new_v4().to_string();
+    let created_at = Utc::now().to_rfc3339();
+    let binding = resolve_agent_binding(store, agent_did, behavior_id, Some(session_id))?;
+
+    upsert_session(
+        node,
+        store,
+        session_id,
+        agent_did,
+        &binding.agent_name,
+        &binding.behavior_id,
+    )
+    .await?;
+
+    let escaped_request_id = escape_graphql_string(&request_id);
+    let escaped_parent_request_id = escape_graphql_string(parent_request_id);
+    let escaped_retry_root_request = escape_graphql_string(retry_root_request);
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_behavior_id = escape_graphql_string(binding.behavior_id.as_deref().unwrap_or(""));
+    let escaped_session_id = escape_graphql_string(session_id);
+    let escaped_content = escape_graphql_string(content);
+    let escaped_created_at = escape_graphql_string(&created_at);
+
+    let mutation = format!(
+        r#"mutation {{
+            add_AgentRequest(input: {{
+                request_id: "{escaped_request_id}",
+                agent_did: "{escaped_agent_did}",
+                behavior_id: "{escaped_behavior_id}",
+                session_id: "{escaped_session_id}",
+                retry_parent_request: "{escaped_parent_request_id}",
+                retry_root_request: "{escaped_retry_root_request}",
+                superseded_by_request: "",
+                content: "{escaped_content}",
+                status: "pending",
+                lifecycle_state: "pending",
+                admission_state: "released",
+                backend_id: "",
+                execution_origin: "interactive",
+                failure_reason: "",
+                created_at: "{escaped_created_at}",
+                retry_count: {retry_count},
+                max_retries: {max_retries}
+            }}) {{ _docID }}
+        }}"#
+    );
+    execute_mutation(node, &mutation, "retry_request").await?;
 
     upsert_conversation(
         node,

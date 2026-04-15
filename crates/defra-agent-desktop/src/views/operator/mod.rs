@@ -85,13 +85,14 @@ pub fn prepare_state(
         state.operator.selected_entity_id = entries.first().map(|entry| entry.id.clone());
     }
 
-    let selected_entity_id = state.operator.selected_entity_id.as_deref();
+    let selected_entity_id = state.operator.selected_entity_id.clone();
     if !draft_matches_selection(
         &state.operator.draft,
+        state.operator.draft_source_entity_id.as_deref(),
         state.operator.selected_section,
-        selected_entity_id,
+        selected_entity_id.as_deref(),
     ) {
-        state.operator.draft = selected_entity_id.and_then(|entity_id| {
+        state.operator.draft = selected_entity_id.as_deref().and_then(|entity_id| {
             draft_for_selection(
                 store,
                 state.operator.selected_section,
@@ -99,6 +100,8 @@ pub fn prepare_state(
                 entity_id,
             )
         });
+        state.operator.draft_source_entity_id =
+            state.operator.draft.as_ref().and(selected_entity_id);
         state.operator.last_apply_error = None;
     }
 }
@@ -168,6 +171,7 @@ pub fn show_sidebar(
                         state.operator.selected_entity_id = None;
                         state.operator.entity_filter.clear();
                         state.operator.draft = None;
+                        state.operator.draft_source_entity_id = None;
                     }
 
                     let response = views::tree_row(
@@ -188,6 +192,7 @@ pub fn show_sidebar(
                         state.operator.selected_entity_id = None;
                         state.operator.entity_filter.clear();
                         state.operator.draft = None;
+                        state.operator.draft_source_entity_id = None;
                     }
                 });
             });
@@ -226,6 +231,7 @@ pub fn show_sidebar(
                         state.operator.selected_entity_id = None;
                         state.operator.entity_filter.clear();
                         state.operator.draft = None;
+                        state.operator.draft_source_entity_id = None;
                         state.operator.last_apply_error = None;
                     }
                 }
@@ -255,6 +261,7 @@ pub fn show_sidebar(
                         state.operator.selected_entity_id = None;
                         state.operator.entity_filter.clear();
                         state.operator.draft = None;
+                        state.operator.draft_source_entity_id = None;
                     }
                 }
             });
@@ -350,11 +357,9 @@ pub fn show_main(ui: &mut Ui, state: &mut ShellState, store: Option<&ClientStore
                     {
                         state.operator.selected_entity_id =
                             filtered_entries.first().map(|entry| entry.id.clone());
-                        state.operator.draft = state
-                            .operator
-                            .selected_entity_id
-                            .as_deref()
-                            .and_then(|entity_id| {
+                        let selected_entity_id = state.operator.selected_entity_id.clone();
+                        state.operator.draft =
+                            selected_entity_id.as_deref().and_then(|entity_id| {
                                 draft_for_selection(
                                     store,
                                     section,
@@ -362,6 +367,8 @@ pub fn show_main(ui: &mut Ui, state: &mut ShellState, store: Option<&ClientStore
                                     entity_id,
                                 )
                             });
+                        state.operator.draft_source_entity_id =
+                            state.operator.draft.as_ref().and(selected_entity_id);
                         state.operator.last_apply_error = None;
                     }
                     if filtered_entries.is_empty() {
@@ -392,8 +399,7 @@ pub fn show_main(ui: &mut Ui, state: &mut ShellState, store: Option<&ClientStore
                                     &audit::targets::operator_entity(&entry.id),
                                     &response,
                                 );
-                                if response.clicked()
-                                {
+                                if response.clicked() {
                                     state.operator.selected_entity_id = Some(entry.id.clone());
                                     state.operator.draft = draft_for_selection(
                                         store,
@@ -401,6 +407,8 @@ pub fn show_main(ui: &mut Ui, state: &mut ShellState, store: Option<&ClientStore
                                         state.operator.selected_agent_did.as_deref(),
                                         &entry.id,
                                     );
+                                    state.operator.draft_source_entity_id =
+                                        state.operator.draft.as_ref().map(|_| entry.id.clone());
                                     state.operator.last_apply_error = None;
                                 }
                                 ui.add_space(6.0);
@@ -1032,19 +1040,17 @@ fn render_editor_footer(
             );
 
         if audit::button(ui, audit::targets::OPERATOR_DISCARD, "Discard").clicked() {
-            state.operator.draft =
-                state
-                    .operator
-                    .selected_entity_id
-                    .as_deref()
-                    .and_then(|entity_id| {
-                        draft_for_selection(
-                            store,
-                            state.operator.selected_section,
-                            state.operator.selected_agent_did.as_deref(),
-                            entity_id,
-                        )
-                    });
+            let selected_entity_id = state.operator.selected_entity_id.clone();
+            state.operator.draft = selected_entity_id.as_deref().and_then(|entity_id| {
+                draft_for_selection(
+                    store,
+                    state.operator.selected_section,
+                    state.operator.selected_agent_did.as_deref(),
+                    entity_id,
+                )
+            });
+            state.operator.draft_source_entity_id =
+                state.operator.draft.as_ref().and(selected_entity_id);
             state.operator.last_apply_error = None;
         }
 
@@ -1061,6 +1067,7 @@ fn render_editor_footer(
                 Ok(()) => {
                     state.operator.last_apply_error = None;
                     state.operator.draft = None;
+                    state.operator.draft_source_entity_id = None;
                 }
                 Err(error) => {
                     state.operator.last_apply_error = Some(error.to_string());
@@ -1083,6 +1090,7 @@ fn render_editor_footer(
                 Ok(()) => {
                     state.operator.last_apply_error = None;
                     state.operator.draft = None;
+                    state.operator.draft_source_entity_id = None;
                 }
                 Err(error) => {
                     state.operator.last_apply_error = Some(error.to_string());
@@ -1375,14 +1383,15 @@ fn section_meta(
 
 fn draft_matches_selection(
     draft: &Option<OperatorDraft>,
+    draft_source_entity_id: Option<&str>,
     section: OperatorSection,
     selected_entity_id: Option<&str>,
 ) -> bool {
-    match (draft, selected_entity_id) {
-        (Some(draft), Some(entity_id)) => {
-            draft.section() == section && draft.entity_id() == entity_id
+    match (draft, draft_source_entity_id, selected_entity_id) {
+        (Some(draft), Some(source_entity_id), Some(entity_id)) => {
+            draft.section() == section && source_entity_id == entity_id
         }
-        (None, None) => true,
+        (None, _, None) => true,
         _ => false,
     }
 }

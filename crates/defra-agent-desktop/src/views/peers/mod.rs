@@ -864,23 +864,28 @@ fn labeled_value(ui: &mut Ui, label: &str, value: &str) {
     let palette = theme::palette();
 
     ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(label)
-                .monospace()
-                .size(11.0)
-                .color(palette.text_2),
+        ui.set_width(ui.available_width());
+        let label_width = ui.available_width().min(128.0);
+        ui.add_sized(
+            egui::vec2(label_width, 16.0),
+            egui::Label::new(
+                RichText::new(label)
+                    .monospace()
+                    .size(11.0)
+                    .color(palette.text_2),
+            )
+            .wrap_mode(egui::TextWrapMode::Truncate),
         );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add(
-                egui::Label::new(
-                    RichText::new(value)
-                        .monospace()
-                        .size(11.0)
-                        .color(palette.text_0),
-                )
-                .wrap_mode(egui::TextWrapMode::Extend),
-            );
-        });
+        ui.add_sized(
+            egui::vec2(ui.available_width().max(0.0), 16.0),
+            egui::Label::new(
+                RichText::new(value)
+                    .monospace()
+                    .size(11.0)
+                    .color(palette.text_0),
+            )
+            .wrap_mode(egui::TextWrapMode::Truncate),
+        );
     });
 }
 

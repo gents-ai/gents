@@ -3,6 +3,14 @@ use eframe::egui::{self, Response, Ui, Widget, WidgetText};
 use crate::state::{Activity, LogsFilter, OperatorSection};
 use crate::telemetry::DesktopLogCategory;
 
+#[cfg(test)]
+#[derive(Debug, Clone, Copy)]
+struct TargetRecord {
+    rect: egui::Rect,
+    interact_rect: egui::Rect,
+    generation: u64,
+}
+
 pub(crate) mod targets {
     use super::*;
 
@@ -143,14 +151,68 @@ pub(crate) fn add_enabled<W: Widget>(
 
 #[cfg(test)]
 pub(crate) fn target_rect(ctx: &egui::Context, target: &str) -> Option<egui::Rect> {
-    ctx.data(|data| data.get_temp(rect_id(target)))
+    ctx.data(|data| {
+        let generation = data.get_temp::<u64>(generation_id()).unwrap_or_default();
+        data.get_temp::<TargetRecord>(rect_id(target))
+            .filter(|record| record.generation == generation)
+            .map(|record| record.rect)
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn target_interact_rect(ctx: &egui::Context, target: &str) -> Option<egui::Rect> {
+    ctx.data(|data| {
+        let generation = data.get_temp::<u64>(generation_id()).unwrap_or_default();
+        data.get_temp::<TargetRecord>(rect_id(target))
+            .filter(|record| record.generation == generation)
+            .map(|record| record.interact_rect)
+            .filter(egui::Rect::is_positive)
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn begin_frame(ctx: &egui::Context) {
+    ctx.data_mut(|data| {
+        let generation = data
+            .get_temp::<u64>(generation_id())
+            .unwrap_or_default()
+            .wrapping_add(1);
+        data.insert_temp(generation_id(), generation);
+    });
 }
 
 pub(crate) fn record(ui: &Ui, target: &str, response: &Response) {
-    ui.ctx()
-        .data_mut(|data| data.insert_temp(rect_id(target), response.rect));
+    #[cfg(test)]
+    {
+        ui.ctx().data_mut(|data| {
+            let generation = data.get_temp::<u64>(generation_id()).unwrap_or_default();
+            data.insert_temp(
+                rect_id(target),
+                TargetRecord {
+                    rect: response.rect,
+                    interact_rect: if target.starts_with("activity.") {
+                        response.rect
+                    } else {
+                        response.interact_rect
+                    },
+                    generation,
+                },
+            );
+        });
+    }
+
+    #[cfg(not(test))]
+    {
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(rect_id(target), response.rect));
+    }
 }
 
 fn rect_id(target: &str) -> egui::Id {
     egui::Id::new(("desktop-audit-target", target))
+}
+
+#[cfg(test)]
+fn generation_id() -> egui::Id {
+    egui::Id::new("desktop-audit-target-generation")
 }

@@ -209,10 +209,14 @@ pub fn show_main(
         header::show(
             ui,
             state,
-            store,
-            selected_agent_did.as_deref(),
-            selected_session_id.as_deref(),
-            turn_state,
+            header::HeaderProps {
+                store,
+                client,
+                runtime,
+                selected_agent_did: selected_agent_did.as_deref(),
+                selected_session_id: selected_session_id.as_deref(),
+                turn_state,
+            },
         );
         ui.add_space(12.0);
         if show_first_conversation_nudge {

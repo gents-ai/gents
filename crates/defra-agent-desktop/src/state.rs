@@ -60,6 +60,8 @@ pub struct ChatState {
     pub expanded_reasoning_cards: BTreeSet<String>,
     pub transcript_stick_to_bottom: bool,
     pub last_submission_error: Option<String>,
+    pub last_action_message: Option<String>,
+    pub last_export_payload: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -225,6 +227,7 @@ pub struct OperatorState {
     pub selected_agent_did: Option<String>,
     pub selected_section: OperatorSection,
     pub selected_entity_id: Option<String>,
+    pub draft_source_entity_id: Option<String>,
     pub entity_filter: String,
     pub draft: Option<OperatorDraft>,
     pub last_apply_error: Option<String>,
@@ -237,6 +240,7 @@ impl Default for OperatorState {
             selected_agent_did: None,
             selected_section: OperatorSection::Behaviors,
             selected_entity_id: None,
+            draft_source_entity_id: None,
             entity_filter: String::new(),
             draft: None,
             last_apply_error: None,

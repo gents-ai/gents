@@ -4,7 +4,8 @@ use std::sync::RwLock as StdRwLock;
 
 use anyhow::{Context, Result};
 use defra_agent_protocol::row::{
-    AgentBehaviorRow, InferenceBackendRow, InferenceProfileRow, ScheduledTaskRow, ToolSelectionRow,
+    AgentBehaviorRow, AgentRequestRow, InferenceBackendRow, InferenceProfileRow, ScheduledTaskRow,
+    ToolSelectionRow,
 };
 use defra_node::{EmbeddedNode, NodeBuilder, P2PConfig, P2POps};
 use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
@@ -315,6 +316,26 @@ impl ClientCore {
                 Ok(result)
             }
             Err(error) => Err(self.record_mutation_error("submit request", error)),
+        }
+    }
+
+    pub async fn retry_request(&self, parent: &AgentRequestRow) -> Result<SubmittedRequest> {
+        let snapshot = self.store.snapshot();
+        match mutations::retry_request(self.node.as_ref(), snapshot.as_ref(), parent).await {
+            Ok(result) => {
+                self.store
+                    .set_focused_request_id(Some(result.request_id.clone()));
+                self.refresh_store().await?;
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "defra_agent_desktop::writes",
+                    action = "chat_retry",
+                    row_id = %result.request_id,
+                    "desktop write saved"
+                );
+                Ok(result)
+            }
+            Err(error) => Err(self.record_mutation_error("retry request", error)),
         }
     }
 
