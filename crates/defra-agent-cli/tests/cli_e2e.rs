@@ -1925,7 +1925,7 @@ async fn config_export_import_round_trips_offline_and_requires_override() -> Res
     let exported = run_cli_json(&source_home, &["config", "export"])?;
     assert_eq!(
         exported.get("format").and_then(Value::as_str),
-        Some("defra-agent-config/v1")
+        Some("defra-agent-config/v2")
     );
     assert_eq!(
         exported.get("agent_did").and_then(Value::as_str),
@@ -3120,10 +3120,6 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
         "OpenAiCompatible",
         None,
         None,
-        true,
-        true,
-        false,
-        false,
         &model_name,
         &tool_selection_id,
         "ReadOnly",
@@ -3156,10 +3152,6 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
         "OpenAiCompatible",
         None,
         None,
-        true,
-        true,
-        false,
-        false,
         &model_name,
         &tool_selection_id,
         "ReadOnly",
@@ -3286,10 +3278,6 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
         "OpenAiCompatible",
         None,
         Some("DEFRA_AGENT_TEST_CLI_BACKEND_KEY"),
-        true,
-        true,
-        false,
-        false,
         &model_name,
         &tool_selection_id,
         "ReadOnly",
@@ -3314,7 +3302,7 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn init_supports_provider_auth_and_capability_backend_fields() -> Result<()> {
+async fn init_supports_provider_auth_backend_fields() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
@@ -3343,14 +3331,6 @@ async fn init_supports_provider_auth_and_capability_backend_fields() -> Result<(
             "OpenRouter",
             "--api-key",
             raw_api_key,
-            "--supports-tool-calls",
-            "true",
-            "--supports-streaming",
-            "true",
-            "--supports-structured-outputs",
-            "true",
-            "--supports-json-schema",
-            "true",
             "--model-name",
             &model_name,
             mock_endpoint.endpoint(),
@@ -3363,21 +3343,6 @@ async fn init_supports_provider_auth_and_capability_backend_fields() -> Result<(
     assert_eq!(
         init.pointer("/init/api_key").and_then(Value::as_str),
         Some("<redacted>")
-    );
-    assert_eq!(
-        init.pointer("/init/supports_tool_calls")
-            .and_then(Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        init.pointer("/init/supports_structured_outputs")
-            .and_then(Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        init.pointer("/init/supports_json_schema")
-            .and_then(Value::as_bool),
-        Some(true)
     );
 
     let mut serve = spawn_server(&home_dir, port)?;
@@ -3392,10 +3357,6 @@ async fn init_supports_provider_auth_and_capability_backend_fields() -> Result<(
         "OpenRouter",
         Some(raw_api_key),
         None,
-        true,
-        true,
-        true,
-        true,
         &model_name,
         &tool_selection_id,
         "ReadOnly",
@@ -4441,10 +4402,6 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
         "OpenAiCompatible",
         None,
         None,
-        true,
-        true,
-        false,
-        false,
         &model_name,
         &tool_selection_id,
         "ReadOnly",
@@ -4537,10 +4494,6 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
         "OpenAiCompatible",
         None,
         None,
-        true,
-        true,
-        false,
-        false,
         &model_name,
         &tool_selection_id,
         "ReadWrite",
@@ -5385,10 +5338,6 @@ async fn assert_runtime_init_state(
     expected_provider_kind: &str,
     expected_api_key: Option<&str>,
     expected_api_key_env_var: Option<&str>,
-    expected_supports_tool_calls: bool,
-    expected_supports_streaming: bool,
-    expected_supports_structured_outputs: bool,
-    expected_supports_json_schema: bool,
     model_name: &str,
     tool_selection_id: &str,
     expected_file_tools_mode: &str,
@@ -5417,10 +5366,6 @@ async fn assert_runtime_init_state(
                 api_key
                 api_key_env_var
                 enabled
-                supports_tool_calls
-                supports_streaming
-                supports_structured_outputs
-                supports_json_schema
                 probe_status
                 models
             }}
@@ -5504,24 +5449,6 @@ async fn assert_runtime_init_state(
         expected_api_key_env_var
     );
     assert_eq!(backend.get("enabled").and_then(Value::as_bool), Some(true));
-    assert_eq!(
-        backend.get("supports_tool_calls").and_then(Value::as_bool),
-        Some(expected_supports_tool_calls)
-    );
-    assert_eq!(
-        backend.get("supports_streaming").and_then(Value::as_bool),
-        Some(expected_supports_streaming)
-    );
-    assert_eq!(
-        backend
-            .get("supports_structured_outputs")
-            .and_then(Value::as_bool),
-        Some(expected_supports_structured_outputs)
-    );
-    assert_eq!(
-        backend.get("supports_json_schema").and_then(Value::as_bool),
-        Some(expected_supports_json_schema)
-    );
     assert_eq!(
         backend.get("probe_status").and_then(Value::as_str),
         Some("healthy")

@@ -410,7 +410,6 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
             )?;
             let behavior = Arc::new(behavior_config);
             let tool_surface = Arc::new(behavior.tools.resolve(node).await?);
-            behavior.ensure_runtime_compatibility(tool_surface.as_ref())?;
             Ok::<_, anyhow::Error>((behavior, tool_surface))
         }
         .await;

@@ -13,10 +13,6 @@ fn inference_backend_from_value_parses() {
         "max_concurrent": 4,
         "max_queue_depth": 9,
         "enabled": true,
-        "supports_tool_calls": false,
-        "supports_streaming": false,
-        "supports_structured_outputs": true,
-        "supports_json_schema": true,
         "models": ["openrouter/auto", "anthropic/claude-3.7-sonnet"],
         "probe_status": "healthy",
     });
@@ -30,10 +26,6 @@ fn inference_backend_from_value_parses() {
     assert_eq!(backend.max_concurrent, 4);
     assert_eq!(backend.max_queue_depth, 9);
     assert!(backend.enabled);
-    assert!(!backend.supports_tool_calls);
-    assert!(!backend.supports_streaming);
-    assert!(backend.supports_structured_outputs);
-    assert!(backend.supports_json_schema);
     assert_eq!(
         backend.models,
         vec![
@@ -59,10 +51,6 @@ fn inference_backend_from_value_missing_fields_defaults() {
     assert_eq!(backend.api_key, None);
     assert_eq!(backend.api_key_env_var, None);
     assert_eq!(backend.max_queue_depth, DEFAULT_MAX_QUEUE_DEPTH);
-    assert!(backend.supports_tool_calls);
-    assert!(backend.supports_streaming);
-    assert!(!backend.supports_structured_outputs);
-    assert!(!backend.supports_json_schema);
     assert!(backend.models.is_empty());
     assert_eq!(backend.probe_status, "unknown");
 }
@@ -79,10 +67,6 @@ fn is_available_requires_enabled_and_healthy() {
         max_concurrent: 1,
         max_queue_depth: DEFAULT_MAX_QUEUE_DEPTH,
         enabled: true,
-        supports_tool_calls: true,
-        supports_streaming: true,
-        supports_structured_outputs: false,
-        supports_json_schema: false,
         models: Vec::new(),
         probe_status: "healthy".into(),
     };

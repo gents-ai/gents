@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use crate::backend_provider::BackendProviderKind;
 use crate::compaction::CompactionStrategy;
 use crate::identity::AgentIdentity;
-use crate::tool_surface::{BehaviorToolConfig, ToolSurface};
+use crate::tool_surface::BehaviorToolConfig;
 
 pub const DEFAULT_CONTEXT_WINDOW: usize = 131_072;
 pub const DEFAULT_MAX_OUTPUT_TOKENS: usize = 32_768;
@@ -27,10 +27,6 @@ pub struct BehaviorConfig {
     pub backend_endpoint: String,
     pub backend_api_key: Option<String>,
     pub backend_api_key_env_var: Option<String>,
-    pub backend_supports_tool_calls: bool,
-    pub backend_supports_streaming: bool,
-    pub backend_supports_structured_outputs: bool,
-    pub backend_supports_json_schema: bool,
     pub model_name: String,
     pub context_window: usize,
     pub max_output_tokens: usize,
@@ -56,22 +52,6 @@ impl std::fmt::Debug for BehaviorConfig {
                 &self.backend_api_key.as_ref().map(|_| "<redacted>"),
             )
             .field("backend_api_key_env_var", &self.backend_api_key_env_var)
-            .field(
-                "backend_supports_tool_calls",
-                &self.backend_supports_tool_calls,
-            )
-            .field(
-                "backend_supports_streaming",
-                &self.backend_supports_streaming,
-            )
-            .field(
-                "backend_supports_structured_outputs",
-                &self.backend_supports_structured_outputs,
-            )
-            .field(
-                "backend_supports_json_schema",
-                &self.backend_supports_json_schema,
-            )
             .field("model_name", &self.model_name)
             .field("context_window", &self.context_window)
             .field("max_output_tokens", &self.max_output_tokens)
@@ -124,33 +104,6 @@ impl BehaviorConfig {
         Ok(self
             .resolve_backend_api_key()?
             .unwrap_or_else(|| "no-key".to_string()))
-    }
-
-    pub fn ensure_tool_calling_support_for_names(&self, tool_names: &[String]) -> Result<()> {
-        if tool_names.is_empty() || self.backend_supports_tool_calls {
-            return Ok(());
-        }
-
-        anyhow::bail!(
-            "behavior {} backend {} ({}) does not support tool calling but resolved tools are enabled: {}",
-            self.name,
-            self.backend_id.as_deref().unwrap_or("<unbound>"),
-            self.backend_provider_kind,
-            tool_names.join(", ")
-        );
-    }
-
-    pub fn ensure_runtime_compatibility(&self, tool_surface: &ToolSurface) -> Result<()> {
-        if !self.backend_supports_streaming {
-            anyhow::bail!(
-                "behavior {} backend {} ({}) does not support streaming and cannot serve interactive runtime requests",
-                self.name,
-                self.backend_id.as_deref().unwrap_or("<unbound>"),
-                self.backend_provider_kind
-            );
-        }
-
-        self.ensure_tool_calling_support_for_names(&tool_surface.tool_names())
     }
 }
 

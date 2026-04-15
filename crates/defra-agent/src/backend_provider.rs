@@ -45,79 +45,14 @@ impl std::fmt::Display for BackendProviderKind {
     }
 }
 
-pub trait BackendProviderAdapter: Send + Sync {
-    fn kind(&self) -> BackendProviderKind;
-
-    fn display_name(&self) -> &'static str;
-
-    fn verification_path(&self) -> &'static str;
-
-    fn model_discovery_path(&self) -> &'static str {
-        "/models"
-    }
-
-    fn build_completion_client(
-        &self,
-        endpoint: &str,
-        api_key: &str,
-    ) -> Result<rig::providers::openai::CompletionsClient> {
-        rig::providers::openai::CompletionsClient::builder()
-            .api_key(api_key)
-            .base_url(endpoint)
-            .build()
-            .with_context(|| {
-                format!(
-                    "building {} completion client for backend endpoint {}",
-                    self.display_name(),
-                    endpoint
-                )
-            })
-    }
-}
-
-#[derive(Debug, Default)]
-struct OpenAiCompatibleAdapter;
-
-impl BackendProviderAdapter for OpenAiCompatibleAdapter {
-    fn kind(&self) -> BackendProviderKind {
-        BackendProviderKind::OpenAiCompatible
-    }
-
-    fn display_name(&self) -> &'static str {
-        "OpenAI-compatible"
-    }
-
-    fn verification_path(&self) -> &'static str {
-        "/models"
-    }
-}
-
-#[derive(Debug, Default)]
-struct OpenRouterAdapter;
-
-impl BackendProviderAdapter for OpenRouterAdapter {
-    fn kind(&self) -> BackendProviderKind {
-        BackendProviderKind::OpenRouter
-    }
-
-    fn display_name(&self) -> &'static str {
-        "OpenRouter"
-    }
-
-    fn verification_path(&self) -> &'static str {
-        "/key"
-    }
-}
-
-static OPENAI_COMPATIBLE_ADAPTER: OpenAiCompatibleAdapter = OpenAiCompatibleAdapter;
-static OPENROUTER_ADAPTER: OpenRouterAdapter = OpenRouterAdapter;
-
-pub fn adapter_for(kind: BackendProviderKind) -> &'static dyn BackendProviderAdapter {
+fn provider_display_name(kind: BackendProviderKind) -> &'static str {
     match kind {
-        BackendProviderKind::OpenAiCompatible => &OPENAI_COMPATIBLE_ADAPTER,
-        BackendProviderKind::OpenRouter => &OPENROUTER_ADAPTER,
+        BackendProviderKind::OpenAiCompatible => "OpenAI-compatible",
+        BackendProviderKind::OpenRouter => "OpenRouter",
     }
 }
+
+const MODEL_DISCOVERY_PATH: &str = "/models";
 
 #[derive(Deserialize)]
 struct OpenAiModelsResponse {
@@ -130,50 +65,22 @@ struct OpenAiModelRecord {
     id: String,
 }
 
-pub fn build_completion_client(
-    kind: BackendProviderKind,
-    endpoint: &str,
-    api_key: &str,
-) -> Result<rig::providers::openai::CompletionsClient> {
-    adapter_for(kind).build_completion_client(endpoint, api_key)
-}
-
-pub fn build_openrouter_client(
-    endpoint: &str,
-    api_key: &str,
-) -> Result<rig::providers::openrouter::Client> {
-    rig::providers::openrouter::Client::builder()
-        .api_key(api_key)
-        .base_url(endpoint)
-        .build()
-        .with_context(|| {
-            format!("building OpenRouter completion client for backend endpoint {endpoint}")
-        })
-}
-
 pub async fn discover_models(
     client: &Client,
     kind: BackendProviderKind,
     endpoint: &str,
     api_key: Option<&str>,
 ) -> Result<Vec<String>> {
-    let adapter = adapter_for(kind);
-    let models_url = format!(
-        "{}{}",
-        endpoint.trim_end_matches('/'),
-        adapter.model_discovery_path()
-    );
+    let models_url = format!("{}{}", endpoint.trim_end_matches('/'), MODEL_DISCOVERY_PATH);
+    let provider_name = provider_display_name(kind);
     let mut request = client.get(&models_url);
     if let Some(api_key) = api_key {
         request = request.bearer_auth(api_key);
     }
-    let response = request.send().await.with_context(|| {
-        format!(
-            "querying {} models endpoint {}",
-            adapter.display_name(),
-            models_url
-        )
-    })?;
+    let response = request
+        .send()
+        .await
+        .with_context(|| format!("querying {} models endpoint {}", provider_name, models_url))?;
     let status = response.status();
     let body = response
         .text()
@@ -182,7 +89,7 @@ pub async fn discover_models(
     if !status.is_success() {
         anyhow::bail!(
             "{} model discovery failed at {}: {} {}",
-            adapter.display_name(),
+            provider_name,
             models_url,
             status,
             truncate_probe_body(&body)
@@ -192,7 +99,7 @@ pub async fn discover_models(
     let models: OpenAiModelsResponse = serde_json::from_str(&body).with_context(|| {
         format!(
             "decoding {} model discovery response from {}: {}",
-            adapter.display_name(),
+            provider_name,
             models_url,
             truncate_probe_body(&body)
         )

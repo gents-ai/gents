@@ -14,9 +14,7 @@ use super::daemon::BehaviorDaemon;
 use super::reconcile::GenerationSupervisor;
 use super::{DefraAgent, ProcessLifecycleState};
 use crate::admission::{AdmissionRegistry, BackendAdmissionConfig};
-use crate::backend_provider::{
-    build_completion_client, build_openrouter_client, BackendProviderKind,
-};
+use crate::backend_provider::BackendProviderKind;
 use crate::backend_registry;
 use crate::completion_factory::build_admitted_agent;
 use crate::health_checker::{spawn_health_checker, ServiceHealthMap};
@@ -103,7 +101,6 @@ impl RuntimeContext {
         let prompt_builder = LayeredPromptBuilder::new(behavior.as_ref(), tool_surface.as_ref());
         let preamble = prompt_builder.preamble().to_string();
         let tools = tool_surface.build_tools(&self.tool_runtime)?;
-        behavior.ensure_runtime_compatibility(tool_surface.as_ref())?;
         tracing::info!(
             behavior_id = %behavior.name,
             did = %behavior.did(),
@@ -114,11 +111,16 @@ impl RuntimeContext {
 
         match behavior.backend_provider_kind {
             BackendProviderKind::OpenAiCompatible => {
-                let client = build_completion_client(
-                    behavior.backend_provider_kind,
-                    &behavior.backend_endpoint,
-                    &api_key,
-                )?;
+                let build_context = format!(
+                    "building OpenAI-compatible completion client for behavior {} against {}",
+                    behavior.name, behavior.backend_endpoint
+                );
+                let client: rig::providers::openai::CompletionsClient =
+                    rig::providers::openai::CompletionsClient::builder()
+                        .api_key(&api_key)
+                        .base_url(&behavior.backend_endpoint)
+                        .build()
+                        .with_context(|| build_context.clone())?;
                 self.run_behavior_with_client(
                     behavior,
                     request_rx,
@@ -131,7 +133,16 @@ impl RuntimeContext {
                 .await
             }
             BackendProviderKind::OpenRouter => {
-                let client = build_openrouter_client(&behavior.backend_endpoint, &api_key)?;
+                let build_context = format!(
+                    "building OpenRouter completion client for behavior {} against {}",
+                    behavior.name, behavior.backend_endpoint
+                );
+                let client: rig::providers::openrouter::Client =
+                    rig::providers::openrouter::Client::builder()
+                        .api_key(&api_key)
+                        .base_url(&behavior.backend_endpoint)
+                        .build()
+                        .with_context(|| build_context.clone())?;
                 self.run_behavior_with_client(
                     behavior,
                     request_rx,
@@ -522,15 +533,10 @@ async fn validate_startup_snapshot(
     behavior_ids.sort();
 
     for behavior_id in behavior_ids {
-        let behavior = snapshot
-            .behaviors
-            .get(&behavior_id)
-            .expect("behavior id came from snapshot.behaviors");
         let tool_surface = snapshot
             .tool_surfaces
             .get(&behavior_id)
             .ok_or_else(|| anyhow!("missing tool surface for behavior {behavior_id}"))?;
-        behavior.ensure_runtime_compatibility(tool_surface.as_ref())?;
         tool_surface
             .build_tools(tool_runtime)
             .with_context(|| format!("building startup tool surface for behavior {behavior_id}"))?;

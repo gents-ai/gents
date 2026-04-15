@@ -39,12 +39,7 @@ pub use agent::{
     BehaviorBuilder, DefraAgent, DefraAgentBuilder, DocumentRuntimeOptions,
     ProcessLifecycleObserver, ProcessLifecycleState,
 };
-pub use backend_provider::{
-    adapter_for as backend_provider_adapter,
-    build_completion_client as build_backend_completion_client,
-    build_openrouter_client as build_openrouter_backend_completion_client,
-    discover_models as discover_backend_models, BackendProviderAdapter, BackendProviderKind,
-};
+pub use backend_provider::{discover_models as discover_backend_models, BackendProviderKind};
 pub use backend_registry::InferenceBackend;
 pub use config::BehaviorConfig;
 pub use defra_node;
