@@ -26,6 +26,13 @@ pub const TOOL_SERVICE_REGISTRY_SCHEMA: &str =
 
 pub const RUNTIME_ALL: &[&str] = &[INFERENCE_BACKEND_SCHEMA];
 
+pub const CONFIG_BOOTSTRAP: &[&str] = &[
+    AGENT_PRINCIPAL_SCHEMA,
+    AGENT_BEHAVIOR_SCHEMA,
+    TOOL_SELECTION_SCHEMA,
+    INFERENCE_BACKEND_SCHEMA,
+];
+
 pub const ALL: &[&str] = &[
     AGENT_PRINCIPAL_SCHEMA,
     AGENT_BEHAVIOR_SCHEMA,
@@ -68,6 +75,10 @@ async fn ensure_schema_set(node: &EmbeddedNode, schemas: &[&str]) -> Result<()> 
 pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
     ensure_schema_set(node, RUNTIME_ALL).await?;
     ensure_schemas(node).await
+}
+
+pub async fn ensure_config_bootstrap_schemas(node: &EmbeddedNode) -> Result<()> {
+    ensure_schema_set(node, CONFIG_BOOTSTRAP).await
 }
 
 pub async fn ensure_schemas(node: &EmbeddedNode) -> Result<()> {

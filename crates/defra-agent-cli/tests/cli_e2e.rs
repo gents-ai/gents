@@ -652,7 +652,7 @@ fn top_level_help_shows_quickstart_workflow() -> Result<()> {
         "expected quick start section in help output, got:\n{output}"
     );
     assert!(
-        output.contains("defra-agent init http://HOST:PORT/v1 --model-name MODEL"),
+        output.contains("defra-agent init"),
         "expected init example in help output, got:\n{output}"
     );
     assert!(
@@ -677,7 +677,7 @@ fn status_without_runtime_suggests_init_and_server() -> Result<()> {
 
     let stderr = run_cli_failure_stderr(&home_dir, &["status", "--graphql", &graphql])?;
     assert!(
-        stderr.contains("defra-agent init <INFERENCE_ENDPOINT> --model-name <MODEL_NAME>"),
+        stderr.contains("defra-agent init"),
         "expected init suggestion in stderr, got:\n{stderr}"
     );
     assert!(
@@ -960,6 +960,25 @@ async fn diagnose_works_from_local_home_without_server() -> Result<()> {
 
     let output = run_cli_json(&home_dir, &["diagnose"])?;
     assert_eq!(output.get("status").and_then(Value::as_str), Some("ok"));
+    let runtime_schema = output
+        .pointer("/checks/schemas")
+        .and_then(Value::as_array)
+        .and_then(|checks| {
+            checks.iter().find(|check| {
+                check.get("collection").and_then(Value::as_str) == Some("AgentRuntime")
+            })
+        })
+        .ok_or_else(|| anyhow!("diagnose output missing AgentRuntime schema check: {output}"))?;
+    assert_eq!(
+        runtime_schema
+            .get("required_for_config")
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        runtime_schema.get("ok").and_then(Value::as_bool),
+        Some(false)
+    );
     assert_eq!(
         output.get("access_mode").and_then(Value::as_str),
         Some("local")
@@ -4010,24 +4029,43 @@ async fn init_openrouter_preset_applies_hosted_defaults() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn init_requires_model_name() -> Result<()> {
+async fn init_defaults_to_local_ollama_and_surfaces_identity() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
-    let output = Command::new(cli_bin())
-        .env("HOME", &home_dir)
-        .env("RUST_LOG", "error")
-        .arg("init")
-        .arg("http://127.0.0.1:65535/v1")
-        .output()
-        .context("running defra-agent init without model name")?;
+    let agent_name = format!("cli-defaults-{}", Uuid::new_v4().simple());
+    let init = run_init_json(&home_dir, &["--agent-name", &agent_name])?;
 
-    assert!(!output.status.success(), "init should fail");
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        init.pointer("/init/endpoint").and_then(Value::as_str),
+        Some("http://localhost:11434/v1")
+    );
+    assert_eq!(
+        init.pointer("/init/model_name").and_then(Value::as_str),
+        Some("gemma4-26b-a4b")
+    );
+    let key_path = init
+        .get("key_path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing key_path: {init}"))?;
     assert!(
-        stderr.contains("--model-name <MODEL_NAME>"),
-        "expected clap missing-argument error, got:\n{stderr}"
+        Path::new(key_path).exists(),
+        "init should create the identity key at {key_path}"
+    );
+    assert!(
+        init.pointer("/identity/permission_boundary")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.contains("permission boundary")),
+        "init should explain the identity boundary: {init}"
+    );
+    assert!(
+        init.get("next_steps")
+            .and_then(Value::as_array)
+            .is_some_and(|steps| steps
+                .iter()
+                .any(|step| { step.as_str() == Some("ollama pull gemma4-26b-a4b") })),
+        "init should print the default Ollama pull next step: {init}"
     );
 
     Ok(())
@@ -4279,6 +4317,85 @@ async fn init_dangerously_overwrite_replaces_existing_home() -> Result<()> {
     assert!(
         runtime_home.join("init.json").exists(),
         "init config should be recreated after dangerously overwrite"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn runtime_state_reset_is_explicit() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("reset-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-reset-{}", Uuid::new_v4().simple());
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    let runtime_home = home_dir.join(".defra-agent");
+    let runtime_state = runtime_home.join("runtime.json");
+    fs::write(&runtime_state, r#"{"status":"stale"}"#).context("writing stale runtime state")?;
+
+    let rerun = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    assert_eq!(
+        rerun.get("runtime_state_reset").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert!(
+        runtime_state.exists(),
+        "init without --reset should leave runtime.json in place"
+    );
+
+    let reset_init = run_init_json(
+        &home_dir,
+        &[
+            "--reset",
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    assert_eq!(
+        reset_init
+            .get("runtime_state_reset")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert!(
+        !runtime_state.exists(),
+        "init --reset should remove runtime.json"
+    );
+
+    fs::write(&runtime_state, r#"{"status":"stale-again"}"#)
+        .context("rewriting stale runtime state")?;
+    let reset = run_cli_json(&home_dir, &["reset"])?;
+    assert_eq!(reset.get("status").and_then(Value::as_str), Some("reset"));
+    assert_eq!(reset.get("cleared").and_then(Value::as_bool), Some(true));
+    assert!(
+        !runtime_state.exists(),
+        "reset command should remove runtime.json"
     );
 
     Ok(())

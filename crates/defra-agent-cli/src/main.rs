@@ -18,10 +18,12 @@ use clap::{Parser, Subcommand, ValueEnum};
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{
-    cli_tool, default_behavior_id_for_agent, discover_backend_models, ensure_agent_principal,
-    ensure_runtime_schemas, AgentIdentity, BackendProviderKind, BashMode, DefraAgent,
-    DocumentRuntimeOptions, FileToolMode, McpPool, ProcessLifecycleObserver, ProcessLifecycleState,
-    SimpleIdentity, ToolCeiling,
+    cli_tool, default_behavior_id_for_agent, discover_backend_models,
+    ensure_config_bootstrap_schemas, ensure_runtime_schemas, load_agent_behavior,
+    load_agent_principal, upsert_agent_principal, AgentBehavior, AgentIdentity,
+    BackendProviderKind, BashMode, DefraAgent, DocumentRuntimeOptions, FileToolMode, McpPool,
+    ProcessLifecycleObserver, ProcessLifecycleState, SimpleIdentity, ToolCeiling,
+    ToolSelectionDocument,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -33,6 +35,8 @@ mod telemetry;
 mod tui;
 
 const DEFAULT_AGENT_NAME: &str = "default";
+const DEFAULT_INIT_ENDPOINT: &str = "http://localhost:11434/v1";
+const DEFAULT_INIT_MODEL_NAME: &str = "gemma4-26b-a4b";
 const DEFAULT_HTTP_PORT: u16 = 9191;
 const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 const DEFAULT_P2P_MAX_CONCURRENT_DAG_FETCHES: usize = 4;
@@ -53,7 +57,7 @@ const INIT_CONFIG_FILE_NAME: &str = "init.json";
 const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
 const CLI_AFTER_HELP: &str = "\
 Quick start:
-  defra-agent init http://HOST:PORT/v1 --model-name MODEL
+  defra-agent init
   defra-agent server
   defra-agent chat
 
@@ -61,6 +65,7 @@ Inspect the local runtime:
   defra-agent status
   defra-agent show runtime
   defra-agent show response REQUEST_ID
+  defra-agent reset
 
 Update runtime documents:
   defra-agent config backend set ...
@@ -70,19 +75,25 @@ const INIT_AFTER_HELP: &str = "\
 Bootstrap a local home directory with one default backend, one default behavior, and a safe read-only tool selection.
 
 Examples:
+  defra-agent init
   defra-agent init http://HOST:PORT/v1 --model-name MODEL
   defra-agent init --backend-preset openrouter --model-name MODEL
   defra-agent init --backend-preset openai --model-name MODEL
   defra-agent init $INFERENCE_ENDPOINT --model-name MODEL --write-tools
 
 Next:
+  ollama pull gemma4-26b-a4b
   defra-agent server
   defra-agent chat";
+const RESET_AFTER_HELP: &str = "\
+Examples:
+  defra-agent reset
+  defra-agent reset --home /path/to/home";
 const SERVER_AFTER_HELP: &str = "\
 `server` reads the initialized home directory, starts the embedded DefraDB runtime, and serves GraphQL locally.
 
 Common flow:
-  defra-agent init http://HOST:PORT/v1 --model-name MODEL
+  defra-agent init
   defra-agent server
   defra-agent server --p2p-transport iroh --p2p-port 4017
   defra-agent chat";
@@ -153,16 +164,29 @@ Examples:
   cat agent-config.json | defra-agent config import
   defra-agent config import agent-config.json --override";
 const CONFIG_EXPORT_FORMAT: &str = "defra-agent-config/v1";
-const BOOTSTRAP_INFERENCE_BACKEND_DEFAULT: &str =
-    include_str!("../bootstrap/InferenceBackend/default.gql");
-const BOOTSTRAP_TOOL_SELECTION_STANDARD_READONLY: &str =
-    include_str!("../bootstrap/ToolSelection/standard-readonly.gql");
-const BOOTSTRAP_TOOL_SELECTION_STANDARD_READWRITE: &str =
-    include_str!("../bootstrap/ToolSelection/standard-readwrite.gql");
-const BOOTSTRAP_AGENT_BEHAVIOR_STANDARD_READONLY: &str =
-    include_str!("../bootstrap/AgentBehavior/standard-readonly.gql");
-const BOOTSTRAP_AGENT_BEHAVIOR_STANDARD_READWRITE: &str =
-    include_str!("../bootstrap/AgentBehavior/standard-readwrite.gql");
+const STANDARD_READONLY_SYSTEM_PROMPT: &str = r#"You are a terminal-native engineering and operations agent running for the user inside a local DefraDB runtime.
+
+Your job is to help with software work, debugging, codebase inspection, incident triage, release checks, infrastructure investigation, and general computer operations tasks. Build your conclusions from real evidence: inspect files, logs, command output, and tool results before making claims.
+
+Work like a strong command-line operator:
+- be concise and factual
+- prefer direct answers over long essays
+- explain what you found, not what you assume
+- propose the next command, file, or check when it helps
+
+You are currently in a read-only operating mode for local tools. You can inspect local state, but you cannot modify files or perform write-capable shell actions. If the user asks for a change, say clearly that the current tool mode is read-only and describe the exact edit or command you would apply if write access were enabled."#;
+const STANDARD_READWRITE_SYSTEM_PROMPT: &str = r#"You are a terminal-native engineering and operations agent running for the user inside a local DefraDB runtime.
+
+Your job is to help with software work, debugging, code changes, codebase maintenance, incident triage, release checks, infrastructure investigation, and general computer operations tasks. Build your conclusions from real evidence: inspect files, logs, command output, and tool results before making claims.
+
+Work like a strong command-line operator:
+- inspect first, then act
+- keep changes focused and easy to explain
+- prefer direct answers over long essays
+- summarize exactly what changed and why
+- avoid broad or risky operations unless the user clearly wants them
+
+You have write-capable local tools. When the user asks you to make a change, you may edit files and use write-capable shell actions deliberately. Read the relevant state first, make the smallest effective change, and report the concrete outcome."#;
 const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
     ("AgentPrincipal", "agent_did"),
     ("AgentBehavior", "behavior_id"),
@@ -180,6 +204,12 @@ const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
     ("CompactionEntry", "compaction_key"),
     ("ScheduledTask", "task_id"),
     ("ToolServiceRegistry", "service_id"),
+];
+const CONFIG_SCHEMA_COLLECTIONS: &[&str] = &[
+    "AgentPrincipal",
+    "AgentBehavior",
+    "ToolSelection",
+    "InferenceBackend",
 ];
 const EXPORT_AGENT_PRINCIPAL_FIELDS: &str =
     "agent_did display_name default_behavior_id enabled created_at created_by";
@@ -219,6 +249,8 @@ struct Cli {
 enum Command {
     #[command(about = "Initialize a local agent home directory", after_help = INIT_AFTER_HELP)]
     Init(InitArgs),
+    #[command(about = "Clear persisted local runtime state", after_help = RESET_AFTER_HELP)]
+    Reset(ResetArgs),
     #[command(
         name = "server",
         about = "Run the local defra-agent runtime from an initialized home",
@@ -272,13 +304,19 @@ struct InitArgs {
         help = "Delete the existing home directory before re-initializing it"
     )]
     dangerously_overwrite: bool,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Clear persisted local runtime state after initialization"
+    )]
+    reset: bool,
     #[arg(long, default_value = DEFAULT_AGENT_NAME, help = "Local agent name. This becomes did:defra-agent:<AGENT_NAME>")]
     agent_name: String,
     #[arg(long)]
     key_path: Option<PathBuf>,
     #[arg(
         value_name = "INFERENCE_ENDPOINT",
-        help = "Inference backend base URL, usually including /v1. Falls back to INFERENCE_ENDPOINT."
+        help = "Inference backend base URL, usually including /v1. Falls back to INFERENCE_ENDPOINT, then local Ollama."
     )]
     inference_endpoint: Option<String>,
     #[arg(
@@ -306,7 +344,11 @@ struct InitArgs {
     api_key: Option<String>,
     #[arg(long, help = "Environment variable name holding the backend API key")]
     api_key_env_var: Option<String>,
-    #[arg(long, help = "Required model id to bind to the default behavior")]
+    #[arg(
+        long,
+        default_value = DEFAULT_INIT_MODEL_NAME,
+        help = "Model id to bind to the default behavior"
+    )]
     model_name: String,
     #[arg(long, default_value_t = 1)]
     max_concurrent: i64,
@@ -331,6 +373,12 @@ struct InitArgs {
         help = "Root directory for local file/bash tools. Defaults to the current working directory"
     )]
     tool_root: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+struct ResetArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    home: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -589,7 +637,7 @@ impl BackendPresetArg {
             Self::GenericOpenAiCompatible => None,
             Self::OpenAi => Some("https://api.openai.com/v1"),
             Self::OpenRouter => Some("https://openrouter.ai/api/v1"),
-            Self::Ollama => Some("http://127.0.0.1:11434/v1"),
+            Self::Ollama => Some(DEFAULT_INIT_ENDPOINT),
             Self::Vllm => Some("http://127.0.0.1:8000/v1"),
             Self::LlamaCpp => Some("http://127.0.0.1:8080/v1"),
         }
@@ -651,31 +699,13 @@ struct InitSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredInitConfig {
+    /// Filesystem-only bootstrap context. Runtime configuration lives in DefraDB
+    /// documents; these fields let later CLI commands find the local key and
+    /// operator tool ceiling without asking for flags on every run.
     home: String,
     agent_name: String,
     agent_did: String,
     key_path: Option<String>,
-    backend_id: String,
-    backend_name: String,
-    #[serde(default)]
-    provider_kind: BackendProviderKind,
-    endpoint: String,
-    api_key_env_var: Option<String>,
-    model_name: String,
-    #[serde(default = "default_backend_max_concurrent")]
-    max_concurrent: i64,
-    #[serde(default = "default_backend_max_queue_depth")]
-    max_queue_depth: i64,
-    #[serde(default = "default_backend_supports_tool_calls")]
-    supports_tool_calls: bool,
-    #[serde(default = "default_backend_supports_streaming")]
-    supports_streaming: bool,
-    #[serde(default)]
-    supports_structured_outputs: bool,
-    #[serde(default)]
-    supports_json_schema: bool,
-    default_behavior_id: String,
-    tool_selection_id: String,
     tool_ceiling: ToolCeilingArg,
     tool_root: Option<String>,
 }
@@ -833,6 +863,291 @@ impl ConfigAccess {
 struct ExistingDocumentRef {
     doc_id: String,
     deleted: bool,
+}
+
+#[derive(Debug, Clone)]
+struct InferenceBackendUpsertDocument {
+    backend_id: String,
+    name: String,
+    provider_kind: BackendProviderKind,
+    endpoint: String,
+    api_key: Option<String>,
+    api_key_env_var: Option<String>,
+    max_concurrent: i64,
+    max_queue_depth: i64,
+    enabled: bool,
+    supports_tool_calls: bool,
+    supports_streaming: bool,
+    supports_structured_outputs: bool,
+    supports_json_schema: bool,
+    models_on_add: Vec<String>,
+    models_on_update: Option<Vec<String>>,
+    probe_status: String,
+}
+
+async fn write_inference_backend_document(
+    access: &ConfigAccess,
+    backend: &InferenceBackendUpsertDocument,
+) -> Result<String> {
+    let models_add = string_list_field("models", &backend.models_on_add)
+        .ok_or_else(|| anyhow::anyhow!("backend models field could not be rendered"))?;
+    let models_update = backend
+        .models_on_update
+        .as_ref()
+        .and_then(|models| string_list_field("models", models));
+    let update_fields = vec![
+        Some(format!(
+            r#"name: "{}""#,
+            escape_graphql_string(&backend.name)
+        )),
+        Some(format!(
+            r#"provider_kind: "{}""#,
+            escape_graphql_string(backend.provider_kind.as_str())
+        )),
+        Some(format!(
+            r#"endpoint: "{}""#,
+            escape_graphql_string(&backend.endpoint)
+        )),
+        Some(nullable_string_field("api_key", backend.api_key.as_deref())),
+        Some(nullable_string_field(
+            "api_key_env_var",
+            backend.api_key_env_var.as_deref(),
+        )),
+        Some(format!("max_concurrent: {}", backend.max_concurrent)),
+        Some(format!("max_queue_depth: {}", backend.max_queue_depth)),
+        Some(format!(
+            "enabled: {}",
+            graphql_bool_literal(backend.enabled)
+        )),
+        Some(format!(
+            "supports_tool_calls: {}",
+            graphql_bool_literal(backend.supports_tool_calls)
+        )),
+        Some(format!(
+            "supports_streaming: {}",
+            graphql_bool_literal(backend.supports_streaming)
+        )),
+        Some(format!(
+            "supports_structured_outputs: {}",
+            graphql_bool_literal(backend.supports_structured_outputs)
+        )),
+        Some(format!(
+            "supports_json_schema: {}",
+            graphql_bool_literal(backend.supports_json_schema)
+        )),
+        models_update,
+        Some(format!(
+            r#"probe_status: "{}""#,
+            escape_graphql_string(&backend.probe_status)
+        )),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(",\n                    ");
+    let mutation = format!(
+        r#"mutation {{
+            upsert_InferenceBackend(
+                filter: {{ backend_id: {{ _eq: "{backend_id}" }} }},
+                add: {{
+                    backend_id: "{backend_id}",
+                    name: "{name}",
+                    provider_kind: "{provider_kind}",
+                    endpoint: "{endpoint}",
+                    {api_key},
+                    {api_key_env_var},
+                    max_concurrent: {max_concurrent},
+                    max_queue_depth: {max_queue_depth},
+                    enabled: {enabled},
+                    supports_tool_calls: {supports_tool_calls},
+                    supports_streaming: {supports_streaming},
+                    supports_structured_outputs: {supports_structured_outputs},
+                    supports_json_schema: {supports_json_schema},
+                    {models_add},
+                    probe_status: "{probe_status}"
+                }},
+                update: {{
+                    {update_fields}
+                }}
+            ) {{ _docID }}
+        }}"#,
+        backend_id = escape_graphql_string(&backend.backend_id),
+        name = escape_graphql_string(&backend.name),
+        provider_kind = escape_graphql_string(backend.provider_kind.as_str()),
+        endpoint = escape_graphql_string(&backend.endpoint),
+        api_key = nullable_string_field("api_key", backend.api_key.as_deref()),
+        api_key_env_var =
+            nullable_string_field("api_key_env_var", backend.api_key_env_var.as_deref()),
+        max_concurrent = backend.max_concurrent,
+        max_queue_depth = backend.max_queue_depth,
+        enabled = graphql_bool_literal(backend.enabled),
+        supports_tool_calls = graphql_bool_literal(backend.supports_tool_calls),
+        supports_streaming = graphql_bool_literal(backend.supports_streaming),
+        supports_structured_outputs = graphql_bool_literal(backend.supports_structured_outputs),
+        supports_json_schema = graphql_bool_literal(backend.supports_json_schema),
+        models_add = models_add,
+        probe_status = escape_graphql_string(&backend.probe_status),
+        update_fields = update_fields,
+    );
+    let response = access.execute(&mutation).await?;
+    extract_mutation_doc_id(&response, "InferenceBackend")
+}
+
+async fn write_agent_behavior_document(
+    access: &ConfigAccess,
+    behavior: &AgentBehavior,
+) -> Result<String> {
+    let created_at = behavior
+        .created_at
+        .clone()
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    let add_fields = vec![
+        Some(format!(
+            r#"behavior_id: "{}""#,
+            escape_graphql_string(&behavior.behavior_id)
+        )),
+        Some(format!(
+            r#"agent_did: "{}""#,
+            escape_graphql_string(&behavior.agent_did)
+        )),
+        optional_string_field("display_name", behavior.display_name.as_deref()),
+        optional_string_field("system_prompt", behavior.system_prompt.as_deref()),
+        optional_string_field("backend_id", behavior.backend_id.as_deref()),
+        optional_string_field("model_name", behavior.model_name.as_deref()),
+        optional_string_field("tool_selection_id", behavior.tool_selection_id.as_deref()),
+        optional_string_field(
+            "inference_profile_id",
+            behavior.inference_profile_id.as_deref(),
+        ),
+        optional_string_field(
+            "compaction_strategy",
+            behavior.compaction_strategy.as_deref(),
+        ),
+        optional_f64_field("compaction_threshold", behavior.compaction_threshold),
+        Some(format!(
+            "enabled: {}",
+            graphql_bool_literal(behavior.enabled)
+        )),
+        Some(format!(
+            r#"created_at: "{}""#,
+            escape_graphql_string(&created_at)
+        )),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(",\n                    ");
+    let update_fields = vec![
+        Some(format!(
+            r#"agent_did: "{}""#,
+            escape_graphql_string(&behavior.agent_did)
+        )),
+        optional_string_field("display_name", behavior.display_name.as_deref()),
+        optional_string_field("system_prompt", behavior.system_prompt.as_deref()),
+        optional_string_field("backend_id", behavior.backend_id.as_deref()),
+        optional_string_field("model_name", behavior.model_name.as_deref()),
+        optional_string_field("tool_selection_id", behavior.tool_selection_id.as_deref()),
+        optional_string_field(
+            "inference_profile_id",
+            behavior.inference_profile_id.as_deref(),
+        ),
+        optional_string_field(
+            "compaction_strategy",
+            behavior.compaction_strategy.as_deref(),
+        ),
+        optional_f64_field("compaction_threshold", behavior.compaction_threshold),
+        Some(format!(
+            "enabled: {}",
+            graphql_bool_literal(behavior.enabled)
+        )),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(",\n                    ");
+    let mutation = format!(
+        r#"mutation {{
+            upsert_AgentBehavior(
+                filter: {{ behavior_id: {{ _eq: "{behavior_id}" }} }},
+                add: {{
+                    {add_fields}
+                }},
+                update: {{
+                    {update_fields}
+                }}
+            ) {{ _docID }}
+        }}"#,
+        behavior_id = escape_graphql_string(&behavior.behavior_id),
+        add_fields = add_fields,
+        update_fields = update_fields,
+    );
+    let response = access.execute(&mutation).await?;
+    extract_mutation_doc_id(&response, "AgentBehavior")
+}
+
+async fn write_tool_selection_document(
+    access: &ConfigAccess,
+    selection: &ToolSelectionDocument,
+) -> Result<String> {
+    let add_fields = tool_selection_fields(selection, true);
+    let update_fields = tool_selection_fields(selection, false);
+    let mutation = format!(
+        r#"mutation {{
+            upsert_ToolSelection(
+                filter: {{ selection_id: {{ _eq: "{selection_id}" }} }},
+                add: {{
+                    {add_fields}
+                }},
+                update: {{
+                    {update_fields}
+                }}
+            ) {{ _docID }}
+        }}"#,
+        selection_id = escape_graphql_string(&selection.selection_id),
+        add_fields = add_fields,
+        update_fields = update_fields,
+    );
+    let response = access.execute(&mutation).await?;
+    extract_mutation_doc_id(&response, "ToolSelection")
+}
+
+fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) -> String {
+    let mut fields = Vec::new();
+    if include_id {
+        fields.push(format!(
+            r#"selection_id: "{}""#,
+            escape_graphql_string(&selection.selection_id)
+        ));
+    }
+    fields.push(format!(
+        r#"agent_did: "{}""#,
+        escape_graphql_string(&selection.agent_did)
+    ));
+    fields.extend(
+        [
+            optional_string_field("display_name", selection.display_name.as_deref()),
+            optional_bool_field("enable_file_tools", selection.enable_file_tools),
+            optional_string_field("file_tools_mode", selection.file_tools_mode.as_deref()),
+            Some(nullable_string_field(
+                "file_tool_root",
+                selection.file_tool_root.as_deref(),
+            )),
+            optional_bool_field("enable_bash", selection.enable_bash),
+            optional_string_field("bash_mode", selection.bash_mode.as_deref()),
+            selection
+                .cli_tool_names
+                .as_ref()
+                .and_then(|values| string_list_field("cli_tool_names", values)),
+            optional_bool_field("enable_meta_tools", selection.enable_meta_tools),
+            selection
+                .delegate_to
+                .as_ref()
+                .and_then(|values| string_list_field("delegate_to", values)),
+        ]
+        .into_iter()
+        .flatten(),
+    );
+    fields.join(",\n                    ")
 }
 
 async fn query_documents_by_unique_value(
@@ -1402,49 +1717,6 @@ fn rfc3339_timestamp_seconds(value: &str) -> Option<i64> {
         .map(|timestamp| timestamp.timestamp())
 }
 
-#[derive(Clone, Copy)]
-struct BootstrapMutationTemplate {
-    collection: &'static str,
-    option: &'static str,
-    mutation: &'static str,
-}
-
-const STANDARD_READONLY_BOOTSTRAP: &[BootstrapMutationTemplate] = &[
-    BootstrapMutationTemplate {
-        collection: "InferenceBackend",
-        option: "default",
-        mutation: BOOTSTRAP_INFERENCE_BACKEND_DEFAULT,
-    },
-    BootstrapMutationTemplate {
-        collection: "ToolSelection",
-        option: "standard-readonly",
-        mutation: BOOTSTRAP_TOOL_SELECTION_STANDARD_READONLY,
-    },
-    BootstrapMutationTemplate {
-        collection: "AgentBehavior",
-        option: "standard-readonly",
-        mutation: BOOTSTRAP_AGENT_BEHAVIOR_STANDARD_READONLY,
-    },
-];
-
-const STANDARD_READWRITE_BOOTSTRAP: &[BootstrapMutationTemplate] = &[
-    BootstrapMutationTemplate {
-        collection: "InferenceBackend",
-        option: "default",
-        mutation: BOOTSTRAP_INFERENCE_BACKEND_DEFAULT,
-    },
-    BootstrapMutationTemplate {
-        collection: "ToolSelection",
-        option: "standard-readwrite",
-        mutation: BOOTSTRAP_TOOL_SELECTION_STANDARD_READWRITE,
-    },
-    BootstrapMutationTemplate {
-        collection: "AgentBehavior",
-        option: "standard-readwrite",
-        mutation: BOOTSTRAP_AGENT_BEHAVIOR_STANDARD_READWRITE,
-    },
-];
-
 #[derive(Subcommand)]
 enum BackendCommand {
     #[command(name = "set")]
@@ -1834,6 +2106,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let result = match cli.command {
         Command::Init(args) => init(args).await,
+        Command::Reset(args) => reset(args).await,
         Command::Server(args) => serve(args).await,
         Command::Chat(args) => chat(args).await,
         Command::P2p { command } => match command {
@@ -1907,52 +2180,69 @@ async fn init(args: InitArgs) -> Result<()> {
     }
 
     let identity = Arc::new(SimpleIdentity::new(&args.agent_name, &key_path, None));
+    identity
+        .sign(b"defra-agent init identity")
+        .await
+        .context("creating or loading agent identity key")?;
     let node = EmbeddedNode::builder()
         .data_path(&data_dir)
         .build()
         .await
         .context("building embedded defra node for init")?;
-    ensure_runtime_schemas(&node).await?;
+    ensure_config_bootstrap_schemas(&node).await?;
 
-    let summary = initialize_runtime_home(&node, &home_dir, &args, identity.did()).await?;
+    let access = ConfigAccess::Local(node);
+    let summary = initialize_runtime_home(&access, &args, identity.did()).await?;
     let stored = StoredInitConfig {
         home: home_dir.to_string_lossy().to_string(),
         agent_name: args.agent_name.clone(),
         agent_did: identity.did().to_string(),
         key_path: Some(key_path.to_string_lossy().to_string()),
-        backend_id: summary.backend_id.clone(),
-        backend_name: summary.backend_name.clone(),
-        provider_kind: summary.provider_kind,
-        endpoint: summary.endpoint.clone(),
-        api_key_env_var: summary.api_key_env_var.clone(),
-        model_name: summary.model_name.clone(),
-        max_concurrent: summary.max_concurrent,
-        max_queue_depth: summary.max_queue_depth,
-        supports_tool_calls: summary.supports_tool_calls,
-        supports_streaming: summary.supports_streaming,
-        supports_structured_outputs: summary.supports_structured_outputs,
-        supports_json_schema: summary.supports_json_schema,
-        default_behavior_id: summary.default_behavior_id.clone(),
-        tool_selection_id: summary.tool_selection_id.clone(),
         tool_ceiling: summary.tool_ceiling,
         tool_root: summary.tool_root.clone(),
     };
     write_init_config(&home_dir, &stored)?;
-    clear_runtime_state(&home_dir)?;
+    let runtime_state_reset = if args.reset {
+        clear_runtime_state(&home_dir)?
+    } else {
+        false
+    };
 
     let output = json!({
         "status": "initialized",
         "home": home_dir,
         "agent_name": args.agent_name,
         "agent_did": identity.did(),
+        "key_path": key_path,
         "default_behavior_id": summary.default_behavior_id,
         "tool_selection_id": summary.tool_selection_id,
         "tool_ceiling": format_tool_ceiling(summary.tool_ceiling),
         "tool_root": summary.tool_root,
+        "runtime_state_reset": runtime_state_reset,
+        "identity": {
+            "agent_did": identity.did(),
+            "key_path": stored.key_path,
+            "permission_boundary": "This DID and key identify the permission boundary for every action the agent runtime performs."
+        },
+        "next_steps": init_next_steps(&summary),
         "init": summary,
     });
     print_json(&output)?;
 
+    Ok(())
+}
+
+async fn reset(args: ResetArgs) -> Result<()> {
+    let home_dir = resolve_home_dir(args.home.as_deref());
+    let runtime_state_path = runtime_state_path(&home_dir);
+    let cleared = clear_runtime_state(&home_dir)?;
+    let output = json!({
+        "status": "reset",
+        "home": home_dir,
+        "runtime_state_path": runtime_state_path,
+        "cleared": cleared,
+    });
+    print_json(&output)?;
     Ok(())
 }
 
@@ -2388,65 +2678,26 @@ async fn chat(args: ChatArgs) -> Result<()> {
 
 async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
     let backend = resolve_backend_upsert_config(&args)?;
-    let mutation = format!(
-        r#"mutation {{
-            upsert_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{backend_id}" }} }},
-                add: {{
-                    backend_id: "{backend_id}",
-                    name: "{name}",
-                    provider_kind: "{provider_kind}",
-                    endpoint: "{endpoint}",
-                    {api_key_add},
-                    {api_key_env_var_add},
-                    max_concurrent: {max_concurrent},
-                    max_queue_depth: {max_queue_depth},
-                    enabled: {enabled},
-                    supports_tool_calls: {supports_tool_calls},
-                    supports_streaming: {supports_streaming},
-                    supports_structured_outputs: {supports_structured_outputs},
-                    supports_json_schema: {supports_json_schema},
-                    models: ["default"],
-                    probe_status: "{probe_status}"
-                }},
-                update: {{
-                    name: "{name}",
-                    provider_kind: "{provider_kind}",
-                    endpoint: "{endpoint}",
-                    {api_key_update},
-                    {api_key_env_var_update},
-                    max_concurrent: {max_concurrent},
-                    max_queue_depth: {max_queue_depth},
-                    enabled: {enabled},
-                    supports_tool_calls: {supports_tool_calls},
-                    supports_streaming: {supports_streaming},
-                    supports_structured_outputs: {supports_structured_outputs},
-                    supports_json_schema: {supports_json_schema},
-                    probe_status: "{probe_status}"
-                }}
-            ) {{ _docID }}
-        }}"#,
-        backend_id = escape_graphql_string(&args.backend_id),
-        name = escape_graphql_string(&args.name),
-        provider_kind = backend.provider_kind,
-        endpoint = escape_graphql_string(&backend.endpoint),
-        api_key_add = nullable_string_field("api_key", backend.api_key.as_deref()),
-        api_key_update = nullable_string_field("api_key", backend.api_key.as_deref()),
-        api_key_env_var_add =
-            nullable_string_field("api_key_env_var", backend.api_key_env_var.as_deref()),
-        api_key_env_var_update =
-            nullable_string_field("api_key_env_var", backend.api_key_env_var.as_deref()),
-        max_concurrent = args.max_concurrent,
-        max_queue_depth = args.max_queue_depth,
-        enabled = if args.enabled { "true" } else { "false" },
-        supports_tool_calls = graphql_bool_literal(backend.supports_tool_calls),
-        supports_streaming = graphql_bool_literal(backend.supports_streaming),
-        supports_structured_outputs = graphql_bool_literal(backend.supports_structured_outputs),
-        supports_json_schema = graphql_bool_literal(backend.supports_json_schema),
-        probe_status = escape_graphql_string(&args.probe_status),
-    );
-    let response = post_graphql(&args.graphql, &mutation).await?;
-    let doc_id = extract_mutation_doc_id(&response, "InferenceBackend")?;
+    let access = ConfigAccess::Graphql(args.graphql.clone());
+    let doc = InferenceBackendUpsertDocument {
+        backend_id: args.backend_id.clone(),
+        name: args.name.clone(),
+        provider_kind: backend.provider_kind,
+        endpoint: backend.endpoint.clone(),
+        api_key: backend.api_key.clone(),
+        api_key_env_var: backend.api_key_env_var.clone(),
+        max_concurrent: args.max_concurrent,
+        max_queue_depth: args.max_queue_depth,
+        enabled: args.enabled,
+        supports_tool_calls: backend.supports_tool_calls,
+        supports_streaming: backend.supports_streaming,
+        supports_structured_outputs: backend.supports_structured_outputs,
+        supports_json_schema: backend.supports_json_schema,
+        models_on_add: vec!["default".to_string()],
+        models_on_update: None,
+        probe_status: args.probe_status.clone(),
+    };
+    let doc_id = write_inference_backend_document(&access, &doc).await?;
     let output = json!({
         "doc_id": doc_id,
         "backend_id": args.backend_id,
@@ -2631,73 +2882,22 @@ async fn behavior_set(args: BehaviorUpsertArgs) -> Result<()> {
         ),
         None => None,
     };
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let add_fields = vec![
-        Some(format!(
-            r#"behavior_id: "{}""#,
-            escape_graphql_string(&behavior_id)
-        )),
-        Some(format!(
-            r#"agent_did: "{}""#,
-            escape_graphql_string(&args.agent_did)
-        )),
-        optional_string_field("display_name", args.display_name.as_deref()),
-        optional_string_field("system_prompt", system_prompt.as_deref()),
-        optional_string_field("backend_id", args.backend_id.as_deref()),
-        optional_string_field("model_name", args.model_name.as_deref()),
-        optional_string_field("tool_selection_id", args.tool_selection_id.as_deref()),
-        optional_string_field("inference_profile_id", args.inference_profile_id.as_deref()),
-        optional_string_field("compaction_strategy", args.compaction_strategy.as_deref()),
-        optional_f64_field("compaction_threshold", args.compaction_threshold),
-        Some(format!(
-            "enabled: {}",
-            if args.enabled { "true" } else { "false" }
-        )),
-        Some(format!(
-            r#"created_at: "{}""#,
-            escape_graphql_string(&created_at)
-        )),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join(",\n                    ");
-    let update_fields = vec![
-        optional_string_field("display_name", args.display_name.as_deref()),
-        optional_string_field("system_prompt", system_prompt.as_deref()),
-        optional_string_field("backend_id", args.backend_id.as_deref()),
-        optional_string_field("model_name", args.model_name.as_deref()),
-        optional_string_field("tool_selection_id", args.tool_selection_id.as_deref()),
-        optional_string_field("inference_profile_id", args.inference_profile_id.as_deref()),
-        optional_string_field("compaction_strategy", args.compaction_strategy.as_deref()),
-        optional_f64_field("compaction_threshold", args.compaction_threshold),
-        Some(format!(
-            "enabled: {}",
-            if args.enabled { "true" } else { "false" }
-        )),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join(",\n                    ");
-    let mutation = format!(
-        r#"mutation {{
-            upsert_AgentBehavior(
-                filter: {{ behavior_id: {{ _eq: "{behavior_id}" }} }},
-                add: {{
-                    {add_fields}
-                }},
-                update: {{
-                    {update_fields}
-                }}
-            ) {{ _docID }}
-        }}"#,
-        behavior_id = escape_graphql_string(&behavior_id),
-        add_fields = add_fields,
-        update_fields = update_fields,
-    );
-    let response = post_graphql(&args.graphql, &mutation).await?;
-    let doc_id = extract_mutation_doc_id(&response, "AgentBehavior")?;
+    let access = ConfigAccess::Graphql(args.graphql.clone());
+    let behavior = AgentBehavior {
+        behavior_id: behavior_id.clone(),
+        agent_did: args.agent_did.clone(),
+        display_name: args.display_name.clone(),
+        system_prompt,
+        backend_id: args.backend_id.clone(),
+        model_name: args.model_name.clone(),
+        tool_selection_id: args.tool_selection_id.clone(),
+        inference_profile_id: args.inference_profile_id.clone(),
+        compaction_strategy: args.compaction_strategy.clone(),
+        compaction_threshold: args.compaction_threshold,
+        enabled: args.enabled,
+        created_at: Some(chrono::Utc::now().to_rfc3339()),
+    };
+    let doc_id = write_agent_behavior_document(&access, &behavior).await?;
     let output = json!({
         "doc_id": doc_id,
         "behavior_id": behavior_id,
@@ -2720,76 +2920,21 @@ async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<()> {
         .file_tool_root
         .as_ref()
         .map(|path| path.to_string_lossy().to_string());
-    let add_fields = vec![
-        Some(format!(
-            r#"selection_id: "{}""#,
-            escape_graphql_string(&args.selection_id)
-        )),
-        Some(format!(
-            r#"agent_did: "{}""#,
-            escape_graphql_string(&args.agent_did)
-        )),
-        Some(format!(
-            r#"display_name: "{}""#,
-            escape_graphql_string(args.display_name.as_deref().unwrap_or(""))
-        )),
-        Some(format!(
-            "enable_file_tools: {}",
-            if args.enable_file_tools {
-                "true"
-            } else {
-                "false"
-            }
-        )),
-        Some(format!(
-            r#"file_tools_mode: "{}""#,
-            escape_graphql_string(&file_tools_mode)
-        )),
-        Some(nullable_string_field(
-            "file_tool_root",
-            file_tool_root.as_deref(),
-        )),
-        Some(format!(
-            "enable_bash: {}",
-            if args.enable_bash { "true" } else { "false" }
-        )),
-        Some(format!(
-            r#"bash_mode: "{}""#,
-            escape_graphql_string(&bash_mode)
-        )),
-        string_list_field("cli_tool_names", &args.cli_tool_names),
-        Some(format!(
-            "enable_meta_tools: {}",
-            if args.enable_meta_tools {
-                "true"
-            } else {
-                "false"
-            }
-        )),
-        string_list_field("delegate_to", &args.delegate_to),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join(",\n                    ");
-
-    let mutation = format!(
-        r#"mutation {{
-            upsert_ToolSelection(
-                filter: {{ selection_id: {{ _eq: "{selection_id}" }} }},
-                add: {{
-                    {fields}
-                }},
-                update: {{
-                    {fields}
-                }}
-            ) {{ _docID }}
-        }}"#,
-        selection_id = escape_graphql_string(&args.selection_id),
-        fields = add_fields,
-    );
-    let response = post_graphql(&args.graphql, &mutation).await?;
-    let doc_id = extract_mutation_doc_id(&response, "ToolSelection")?;
+    let access = ConfigAccess::Graphql(args.graphql.clone());
+    let selection = ToolSelectionDocument {
+        selection_id: args.selection_id.clone(),
+        agent_did: args.agent_did.clone(),
+        display_name: args.display_name.clone(),
+        enable_file_tools: Some(args.enable_file_tools),
+        file_tools_mode: Some(file_tools_mode.clone()),
+        file_tool_root: file_tool_root.clone(),
+        enable_bash: Some(args.enable_bash),
+        bash_mode: Some(bash_mode.clone()),
+        cli_tool_names: Some(args.cli_tool_names.clone()),
+        enable_meta_tools: Some(args.enable_meta_tools),
+        delegate_to: Some(args.delegate_to.clone()),
+    };
+    let doc_id = write_tool_selection_document(&access, &selection).await?;
     let output = json!({
         "doc_id": doc_id,
         "selection_id": args.selection_id,
@@ -3224,6 +3369,7 @@ async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     };
     let schemas_ok = schema_checks
         .iter()
+        .filter(|check| check.get("required_for_config").and_then(Value::as_bool) == Some(true))
         .all(|check| check.get("ok").and_then(Value::as_bool) == Some(true));
     let backends_ok = backend_reports
         .iter()
@@ -4772,6 +4918,7 @@ fn graphql_input_literal(value: &Value) -> Result<String> {
 async fn diagnose_schema_presence(access: &ConfigAccess) -> Vec<Value> {
     let mut results = Vec::new();
     for (collection, field) in SCHEMA_COLLECTION_CHECKS {
+        let required_for_config = CONFIG_SCHEMA_COLLECTIONS.contains(collection);
         let query = format!(
             r#"{{ {collection}(limit: 1) {{ {field} }} }}"#,
             collection = collection,
@@ -4780,10 +4927,12 @@ async fn diagnose_schema_presence(access: &ConfigAccess) -> Vec<Value> {
         match access.execute(&query).await {
             Ok(_) => results.push(json!({
                 "collection": collection,
+                "required_for_config": required_for_config,
                 "ok": true,
             })),
             Err(error) => results.push(json!({
                 "collection": collection,
+                "required_for_config": required_for_config,
                 "ok": false,
                 "error": error.to_string(),
             })),
@@ -5120,11 +5269,13 @@ fn extract_mutation_doc_id(response: &Value, collection_name: &str) -> Result<St
 }
 
 async fn initialize_runtime_home(
-    node: &EmbeddedNode,
-    home_dir: &Path,
+    access: &ConfigAccess,
     args: &InitArgs,
     agent_did: &str,
 ) -> Result<InitSummary> {
+    let ConfigAccess::Local(node) = access else {
+        anyhow::bail!("init requires local DefraDB access");
+    };
     let explicit_backend_id = args
         .backend_id
         .as_deref()
@@ -5146,8 +5297,38 @@ async fn initialize_runtime_home(
     let backend_name = explicit_backend_name
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| backend_id.clone());
-    let bootstrap = ensure_agent_principal(node, agent_did).await?;
-    let default_behavior_id = bootstrap.default_behavior.behavior_id.clone();
+    let existing_principal = load_agent_principal(node, agent_did).await?;
+    let default_behavior_id = existing_principal
+        .as_ref()
+        .and_then(|principal| normalize_optional_string(principal.default_behavior_id.as_deref()))
+        .unwrap_or_else(|| default_behavior_id_for_agent(agent_did));
+    let existing_default_behavior = load_agent_behavior(node, &default_behavior_id).await?;
+    if let Some(behavior) = existing_default_behavior.as_ref() {
+        if behavior.agent_did != agent_did {
+            anyhow::bail!(
+                "AgentBehavior {} belongs to {} not {}",
+                default_behavior_id,
+                behavior.agent_did,
+                agent_did
+            );
+        }
+    }
+    let principal_display_name = existing_principal
+        .as_ref()
+        .and_then(|principal| normalize_optional_string(principal.display_name.as_deref()))
+        .unwrap_or_else(|| args.agent_name.clone());
+    let principal_enabled = existing_principal
+        .as_ref()
+        .map(|principal| principal.enabled)
+        .unwrap_or(true);
+    upsert_agent_principal(
+        node,
+        agent_did,
+        Some(&principal_display_name),
+        Some(&default_behavior_id),
+        principal_enabled,
+    )
+    .await?;
     let tool_selection_id = format!("{default_behavior_id}:tools");
     let tool_ceiling = if args.write_tools {
         ToolCeilingArg::Readwrite
@@ -5155,28 +5336,44 @@ async fn initialize_runtime_home(
         ToolCeilingArg::Readonly
     };
     let tool_root = Some(resolve_default_tool_root(args.tool_root.as_deref())?);
-    let templates = bootstrap_templates_for_ceiling(tool_ceiling);
-    let template_vars = bootstrap_template_vars(
-        home_dir,
-        agent_did,
-        &args.agent_name,
-        &backend_id,
-        &backend_name,
-        backend.provider_kind,
-        &backend.endpoint,
-        backend.api_key.as_deref(),
-        backend.api_key_env_var.as_deref(),
-        model_name,
-        args.max_concurrent,
-        args.max_queue_depth,
-        backend.supports_tool_calls,
-        backend.supports_streaming,
-        backend.supports_structured_outputs,
-        backend.supports_json_schema,
-        &default_behavior_id,
-        &tool_selection_id,
-    );
-    apply_bootstrap_templates(node, templates, &template_vars).await?;
+    let backend_doc = InferenceBackendUpsertDocument {
+        backend_id: backend_id.clone(),
+        name: backend_name.clone(),
+        provider_kind: backend.provider_kind,
+        endpoint: backend.endpoint.clone(),
+        api_key: backend.api_key.clone(),
+        api_key_env_var: backend.api_key_env_var.clone(),
+        max_concurrent: args.max_concurrent,
+        max_queue_depth: args.max_queue_depth,
+        enabled: true,
+        supports_tool_calls: backend.supports_tool_calls,
+        supports_streaming: backend.supports_streaming,
+        supports_structured_outputs: backend.supports_structured_outputs,
+        supports_json_schema: backend.supports_json_schema,
+        models_on_add: vec![model_name.to_string()],
+        models_on_update: Some(vec![model_name.to_string()]),
+        probe_status: "healthy".to_string(),
+    };
+    write_inference_backend_document(access, &backend_doc).await?;
+
+    let tool_selection = standard_tool_selection(agent_did, &tool_selection_id, tool_ceiling);
+    write_tool_selection_document(access, &tool_selection).await?;
+
+    let behavior = AgentBehavior {
+        behavior_id: default_behavior_id.clone(),
+        agent_did: agent_did.to_string(),
+        display_name: Some("Default".to_string()),
+        system_prompt: Some(standard_system_prompt(tool_ceiling).to_string()),
+        backend_id: Some(backend_id.clone()),
+        model_name: Some(model_name.to_string()),
+        tool_selection_id: Some(tool_selection_id.clone()),
+        inference_profile_id: None,
+        compaction_strategy: None,
+        compaction_threshold: None,
+        enabled: true,
+        created_at: Some(chrono::Utc::now().to_rfc3339()),
+    };
+    write_agent_behavior_document(access, &behavior).await?;
 
     Ok(InitSummary {
         backend_id,
@@ -5196,9 +5393,60 @@ async fn initialize_runtime_home(
         tool_selection_id,
         tool_ceiling,
         tool_root: tool_root.map(|path| path.to_string_lossy().to_string()),
-        created_principal: bootstrap.created_principal,
-        created_default_behavior: bootstrap.created_default_behavior,
+        created_principal: existing_principal.is_none(),
+        created_default_behavior: existing_default_behavior.is_none(),
     })
+}
+
+fn standard_tool_selection(
+    agent_did: &str,
+    tool_selection_id: &str,
+    tool_ceiling: ToolCeilingArg,
+) -> ToolSelectionDocument {
+    let (display_name, file_tools_mode, bash_mode) = match tool_ceiling {
+        ToolCeilingArg::Readwrite => ("Standard Write Tools", "ReadWrite", "Unrestricted"),
+        ToolCeilingArg::MetaOnly | ToolCeilingArg::Readonly => {
+            ("Standard Read-Only Tools", "ReadOnly", "ReadOnly")
+        }
+    };
+    ToolSelectionDocument {
+        selection_id: tool_selection_id.to_string(),
+        agent_did: agent_did.to_string(),
+        display_name: Some(display_name.to_string()),
+        enable_file_tools: Some(true),
+        file_tools_mode: Some(file_tools_mode.to_string()),
+        file_tool_root: None,
+        enable_bash: Some(true),
+        bash_mode: Some(bash_mode.to_string()),
+        cli_tool_names: Some(Vec::new()),
+        enable_meta_tools: Some(true),
+        delegate_to: Some(Vec::new()),
+    }
+}
+
+fn standard_system_prompt(tool_ceiling: ToolCeilingArg) -> &'static str {
+    match tool_ceiling {
+        ToolCeilingArg::Readwrite => STANDARD_READWRITE_SYSTEM_PROMPT,
+        ToolCeilingArg::MetaOnly | ToolCeilingArg::Readonly => STANDARD_READONLY_SYSTEM_PROMPT,
+    }
+}
+
+fn init_next_steps(summary: &InitSummary) -> Vec<String> {
+    let mut steps = Vec::new();
+    if is_probably_ollama_endpoint(&summary.endpoint) {
+        steps.push(format!("ollama pull {}", summary.model_name));
+    }
+    steps.push("defra-agent server".to_string());
+    steps.push("defra-agent chat".to_string());
+    steps.push(format!(
+        "defra-agent config backend set --graphql http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql --backend-id {} --name {} --endpoint <URL> --max-concurrent {}",
+        summary.backend_id, summary.backend_name, summary.max_concurrent
+    ));
+    steps
+}
+
+fn is_probably_ollama_endpoint(endpoint: &str) -> bool {
+    endpoint.contains("localhost:11434") || endpoint.contains("127.0.0.1:11434")
 }
 
 fn resolve_init_backend_config(args: &InitArgs) -> Result<ResolvedBackendConfig> {
@@ -5284,6 +5532,9 @@ fn resolve_backend_endpoint(
                     (!trimmed.is_empty()).then(|| trimmed.to_string())
                 })
         })
+        .or_else(|| {
+            (mode == BackendResolutionMode::Init).then(|| DEFAULT_INIT_ENDPOINT.to_string())
+        })
         .ok_or_else(|| match mode {
             BackendResolutionMode::Init => anyhow::anyhow!(
                 "an inference endpoint is required\nNext:\n  1. Pass it explicitly: `defra-agent init http://HOST:PORT/v1 --model-name MODEL`\n  2. Or choose a preset with a default endpoint: `defra-agent init --backend-preset openrouter --model-name MODEL`\n  3. Or set INFERENCE_ENDPOINT before running `defra-agent init`"
@@ -5334,10 +5585,6 @@ enum BackendResolutionMode {
     ConfigWrite,
 }
 
-fn default_backend_max_concurrent() -> i64 {
-    1
-}
-
 fn default_backend_max_queue_depth() -> i64 {
     100
 }
@@ -5359,136 +5606,6 @@ fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
         .ok()
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .ok_or_else(|| anyhow::anyhow!("unable to determine a default tool root for local tools"))
-}
-
-fn bootstrap_templates_for_ceiling(
-    tool_ceiling: ToolCeilingArg,
-) -> &'static [BootstrapMutationTemplate] {
-    match tool_ceiling {
-        ToolCeilingArg::Readonly => STANDARD_READONLY_BOOTSTRAP,
-        ToolCeilingArg::Readwrite => STANDARD_READWRITE_BOOTSTRAP,
-        ToolCeilingArg::MetaOnly => STANDARD_READONLY_BOOTSTRAP,
-    }
-}
-
-fn bootstrap_template_vars(
-    home_dir: &Path,
-    agent_did: &str,
-    agent_name: &str,
-    backend_id: &str,
-    backend_name: &str,
-    provider_kind: BackendProviderKind,
-    endpoint: &str,
-    api_key: Option<&str>,
-    api_key_env_var: Option<&str>,
-    model_name: &str,
-    max_concurrent: i64,
-    max_queue_depth: i64,
-    supports_tool_calls: bool,
-    supports_streaming: bool,
-    supports_structured_outputs: bool,
-    supports_json_schema: bool,
-    default_behavior_id: &str,
-    tool_selection_id: &str,
-) -> std::collections::BTreeMap<String, String> {
-    let mut vars = std::collections::BTreeMap::new();
-    vars.insert(
-        "HOME".to_string(),
-        graphql_string_literal(&home_dir.to_string_lossy()),
-    );
-    vars.insert("AGENT_DID".to_string(), graphql_string_literal(agent_did));
-    vars.insert("AGENT_NAME".to_string(), graphql_string_literal(agent_name));
-    vars.insert("BACKEND_ID".to_string(), graphql_string_literal(backend_id));
-    vars.insert(
-        "BACKEND_NAME".to_string(),
-        graphql_string_literal(backend_name),
-    );
-    vars.insert(
-        "PROVIDER_KIND".to_string(),
-        graphql_string_literal(provider_kind.as_str()),
-    );
-    vars.insert("ENDPOINT".to_string(), graphql_string_literal(endpoint));
-    vars.insert(
-        "API_KEY".to_string(),
-        api_key
-            .map(graphql_string_literal)
-            .unwrap_or_else(|| "null".to_string()),
-    );
-    vars.insert(
-        "API_KEY_ENV_VAR".to_string(),
-        api_key_env_var
-            .map(graphql_string_literal)
-            .unwrap_or_else(|| "null".to_string()),
-    );
-    vars.insert("MODEL_NAME".to_string(), graphql_string_literal(model_name));
-    vars.insert("MAX_CONCURRENT".to_string(), max_concurrent.to_string());
-    vars.insert("MAX_QUEUE_DEPTH".to_string(), max_queue_depth.to_string());
-    vars.insert(
-        "SUPPORTS_TOOL_CALLS".to_string(),
-        graphql_bool_literal(supports_tool_calls).to_string(),
-    );
-    vars.insert(
-        "SUPPORTS_STREAMING".to_string(),
-        graphql_bool_literal(supports_streaming).to_string(),
-    );
-    vars.insert(
-        "SUPPORTS_STRUCTURED_OUTPUTS".to_string(),
-        graphql_bool_literal(supports_structured_outputs).to_string(),
-    );
-    vars.insert(
-        "SUPPORTS_JSON_SCHEMA".to_string(),
-        graphql_bool_literal(supports_json_schema).to_string(),
-    );
-    vars.insert(
-        "DEFAULT_BEHAVIOR_ID".to_string(),
-        graphql_string_literal(default_behavior_id),
-    );
-    vars.insert(
-        "TOOL_SELECTION_ID".to_string(),
-        graphql_string_literal(tool_selection_id),
-    );
-    vars
-}
-
-async fn apply_bootstrap_templates(
-    node: &EmbeddedNode,
-    templates: &[BootstrapMutationTemplate],
-    vars: &std::collections::BTreeMap<String, String>,
-) -> Result<()> {
-    for template in templates {
-        let mutation =
-            substitute_bootstrap_template(template.mutation, vars).with_context(|| {
-                format!(
-                    "rendering bootstrap template {}/{}",
-                    template.collection, template.option
-                )
-            })?;
-        let response = node.execute(&mutation).await;
-        if response.has_errors() {
-            anyhow::bail!(
-                "bootstrap mutation failed for {}/{}: {:?}",
-                template.collection,
-                template.option,
-                response.errors
-            );
-        }
-    }
-
-    Ok(())
-}
-
-fn substitute_bootstrap_template(
-    template: &str,
-    vars: &std::collections::BTreeMap<String, String>,
-) -> Result<String> {
-    let mut rendered = template.to_string();
-    for (name, value) in vars {
-        rendered = rendered.replace(&format!("${{{name}}}"), value);
-    }
-    if rendered.contains("${") {
-        anyhow::bail!("unresolved bootstrap template placeholder");
-    }
-    Ok(rendered)
 }
 
 fn graphql_string_literal(value: &str) -> String {
@@ -5753,13 +5870,14 @@ fn read_runtime_state(home_dir: &Path) -> Result<Option<StoredRuntimeState>> {
     Ok(Some(state))
 }
 
-fn clear_runtime_state(home_dir: &Path) -> Result<()> {
+fn clear_runtime_state(home_dir: &Path) -> Result<bool> {
     let path = runtime_state_path(home_dir);
     if path.exists() {
         fs::remove_file(&path)
             .with_context(|| format!("removing stale runtime state {}", path.display()))?;
+        return Ok(true);
     }
-    Ok(())
+    Ok(false)
 }
 
 fn resolve_graphql_endpoint(explicit: Option<&str>, home: Option<&Path>) -> Result<String> {
@@ -6006,6 +6124,10 @@ fn optional_i64_field(name: &str, value: Option<i64>) -> Option<String> {
 
 fn optional_f64_field(name: &str, value: Option<f64>) -> Option<String> {
     value.map(|value| format!("{name}: {value}"))
+}
+
+fn optional_bool_field(name: &str, value: Option<bool>) -> Option<String> {
+    value.map(|value| format!("{name}: {}", graphql_bool_literal(value)))
 }
 
 fn optional_string_field(name: &str, value: Option<&str>) -> Option<String> {
@@ -6352,7 +6474,7 @@ fn is_probably_local_graphql_endpoint(graphql: &str) -> bool {
 
 fn graphql_diagnostic_hint(graphql: &str) -> String {
     if is_probably_local_graphql_endpoint(graphql) {
-        "Next:\n  1. If this home is not initialized, run `defra-agent init <INFERENCE_ENDPOINT> --model-name <MODEL_NAME>`\n  2. Start the runtime with `defra-agent server`\n  3. Inspect it with `defra-agent status`".to_string()
+        "Next:\n  1. If this home is not initialized, run `defra-agent init`\n  2. Start the runtime with `defra-agent server`\n  3. Inspect it with `defra-agent status`".to_string()
     } else {
         format!(
             "Next:\n  1. Verify the GraphQL endpoint {graphql}\n  2. Retry with `--graphql {graphql}` or point the command at the correct runtime"
@@ -6368,7 +6490,7 @@ fn request_diagnostic_hint(request_id: &str) -> String {
 
 fn server_start_failure_hint(home_dir: &Path) -> String {
     format!(
-        "Next:\n  1. Inspect the initialized home at {}\n  2. If this home is stale, rerun `defra-agent init <INFERENCE_ENDPOINT> --model-name <MODEL_NAME>`\n  3. If the home is already initialized, inspect backend and behavior docs once the runtime is available with `defra-agent status --home {}`",
+        "Next:\n  1. For the default local backend, run `ollama pull {DEFAULT_INIT_MODEL_NAME}` and make sure Ollama is listening on {DEFAULT_INIT_ENDPOINT}\n  2. Point the backend elsewhere with `defra-agent config backend set --graphql http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql --backend-id <ID> --name <NAME> --endpoint <URL> --max-concurrent 1`\n  3. Inspect the initialized home at {}\n  4. If persisted runtime state is stale, run `defra-agent reset --home {}`",
         init_config_path(home_dir).display(),
         home_dir.display()
     )
