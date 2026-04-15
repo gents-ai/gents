@@ -91,7 +91,16 @@ legacy name fallback anymore.
 
 | Collection | Key fields | Meaning | Written by | Read by |
 |------------|------------|---------|------------|---------|
-| `ToolServiceRegistry` | `service_id`, `hostname`, `mcp_port`, `tools`, `status`, `updated_at` | registry entries for discoverable MCP-style tool services | service registry writers | meta-tools and discovery flows |
+| `ToolServiceRegistry` | `service_id`, `hostname`, `tailscale_ip`, `lan_ip`, `mcp_port`, `mcp_path`, `status`, `version`, `updated_at` | registry entries for discoverable MCP-style tool services | desired-state apply, service registry writers | meta-tools and discovery flows |
+
+`ToolServiceRegistry` desired-state owns the identity and endpoint fields:
+`service_id`, `display_name`, `description`, `hostname`, `tailscale_ip`,
+`lan_ip`, `mcp_port`, and `mcp_path`. Desired-state apply normalizes missing or
+null address fields to empty strings, defaults missing or empty `mcp_path` to
+`/mcp`, and creates rows with `status: "online"` so they are discoverable.
+`version` and `updated_at` are runtime-owned and may be null on rows created by
+apply. Tool lists are discovered from the MCP service at runtime; the schema does
+not expose a persisted `tools` relation.
 
 ## Operational Relationships
 

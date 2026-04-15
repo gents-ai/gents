@@ -4167,6 +4167,7 @@ async fn build_config_export_bundle(
     )
     .await?;
     sort_document_rows(&mut tool_service_registry_rows, "service_id");
+    normalize_tool_service_registry_export_rows(&mut tool_service_registry_rows)?;
     let mut scheduled_task_rows = graphql_rows_or_empty_if_collection_missing(
         access,
         "ScheduledTask",
@@ -4435,6 +4436,16 @@ fn sort_document_rows(rows: &mut [Value], key: &str) {
     });
 }
 
+fn normalize_tool_service_registry_export_rows(rows: &mut [Value]) -> Result<()> {
+    for row in rows {
+        let object = row
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("ToolServiceRegistry export row must be an object"))?;
+        desired_state::normalize_tool_service_registry_storage_fields(object)?;
+    }
+    Ok(())
+}
+
 fn collect_string_field_values(rows: &[Value], field: &str) -> Vec<String> {
     let mut values = rows
         .iter()
@@ -4633,6 +4644,7 @@ fn sanitize_import_document(collection_name: &str, doc: &Value, for_update: bool
             for field in ["tools", "version", "updated_at"] {
                 object.remove(field);
             }
+            desired_state::normalize_tool_service_registry_storage_fields(&mut object)?;
             if for_update {
                 object.insert("updated_at".to_string(), Value::Null);
             }
@@ -6735,30 +6747,36 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_tool_service_registry_preserves_null_address_fields_for_diff_convergence() {
-        // apply/diff compare live rows against the desired manifest. If sanitize
-        // rewrites null address fields to empty strings on the live side but the
-        // manifest serializes None as JSON null, the diff sees a false delta and
-        // `config apply` reports "did not converge". Null-tolerance is handled at
-        // the parser layer (see registry::null_as_empty_string), so sanitize keeps
-        // these fields unchanged.
+    fn sanitize_tool_service_registry_normalizes_address_fields_for_storage() {
         let input = json!({
             "service_id": "observability-mcp",
             "hostname": null,
-            "tailscale_ip": "100.69.4.79",
+            "tailscale_ip": " 100.69.4.79 ",
             "lan_ip": null,
             "mcp_port": 9201,
-            "mcp_path": null
+            "mcp_path": "mcp"
         });
         let out = sanitize_import_document("ToolServiceRegistry", &input, false).unwrap();
         let obj = out.as_object().unwrap();
-        assert!(obj.get("hostname").unwrap().is_null());
-        assert!(obj.get("lan_ip").unwrap().is_null());
-        assert!(obj.get("mcp_path").unwrap().is_null());
+        assert_eq!(obj.get("hostname").and_then(|v| v.as_str()), Some(""));
+        assert_eq!(obj.get("lan_ip").and_then(|v| v.as_str()), Some(""));
         assert_eq!(
             obj.get("tailscale_ip").and_then(|v| v.as_str()),
             Some("100.69.4.79")
         );
+        assert_eq!(obj.get("mcp_path").and_then(|v| v.as_str()), Some("/mcp"));
+    }
+
+    #[test]
+    fn sanitize_tool_service_registry_defaults_mcp_path() {
+        let input = json!({
+            "service_id": "observability-mcp",
+            "hostname": "studio-1",
+            "mcp_port": 9201
+        });
+        let out = sanitize_import_document("ToolServiceRegistry", &input, false).unwrap();
+        let obj = out.as_object().unwrap();
+        assert_eq!(obj.get("mcp_path").and_then(|v| v.as_str()), Some("/mcp"));
     }
 
     #[test]
