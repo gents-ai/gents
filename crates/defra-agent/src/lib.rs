@@ -41,6 +41,7 @@ pub use agent::{
 };
 pub use backend_provider::{discover_models as discover_backend_models, BackendProviderKind};
 pub use backend_registry::InferenceBackend;
+pub use compaction::CompactionStrategy;
 pub use config::BehaviorConfig;
 pub use defra_node;
 pub use document_config::{
@@ -65,6 +66,7 @@ pub use schema::{
     INFERENCE_CALL_SCHEMA, INFERENCE_PROFILE_SCHEMA, SCHEDULED_TASK_SCHEMA, TOOL_SELECTION_SCHEMA,
     TOOL_SERVICE_REGISTRY_SCHEMA,
 };
+pub use session::load_history;
 pub use streaming::{DefraStreamWriter, StreamWriter};
 pub use tool_surface::{
     cli_tool, BashMode, BehaviorToolConfig, CustomToolFactory, FileToolMode, ToolCeiling,
@@ -76,3 +78,16 @@ pub use toolset::{
 };
 pub use truncation::{DefraSpillTruncator, TruncationLimits, TruncationMode, Truncator};
 pub use watcher::{AgentRequest, DefraWatcher, Watcher};
+
+#[cfg(test)]
+mod public_api_tests {
+    use super::*;
+
+    #[test]
+    fn downstream_oneshot_analysis_surface_is_available_from_crate_root() {
+        let _strategy = CompactionStrategy::StripThenSummarize;
+        let _ensure = ensure_schemas;
+        let _history = load_history;
+        let _oneshot = run_openai_oneshot_with_tools;
+    }
+}
