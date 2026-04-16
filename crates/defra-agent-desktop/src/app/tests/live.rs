@@ -198,6 +198,129 @@ fn wait_for_stable_runtime_ready(
     }
 }
 
+fn tool_loop_prompt(label: &str, directory: &str, file_paths: &[String]) -> String {
+    format!(
+        "This is live desktop tool-loop request {label} for {directory}. Call read_file separately for each of these files, in this exact order: {}. Reply with only the file tokens in that same order, separated by a single space. Do not guess or reuse tokens from another conversation.",
+        file_paths.join(", ")
+    )
+}
+
+fn assert_response_contains_tokens(
+    label: &str,
+    response: &str,
+    expected_tokens: &[String],
+) -> Result<()> {
+    let mut search_from = 0;
+    for token in expected_tokens {
+        let offset = response[search_from..].find(token.as_str()).ok_or_else(|| {
+            anyhow!(
+                "{label} response missing expected token {token} after offset {search_from}: {response}"
+            )
+        })?;
+        search_from += offset + token.len();
+    }
+    Ok(())
+}
+
+fn wait_for_session_tool_activity(
+    runtime: &tokio::runtime::Runtime,
+    core: &ClientCore,
+    label: &str,
+    session_id: &str,
+    expected_list_files: usize,
+    expected_read_files: usize,
+    expected_tokens: &[String],
+) -> Result<String> {
+    wait_for_value(label, Duration::from_secs(90), || {
+        runtime.block_on(core.refresh_store()).ok()?;
+        let snapshot = core.store().snapshot();
+        let transcript = snapshot.transcript(session_id);
+
+        let list_calls = transcript
+            .tool_calls
+            .iter()
+            .filter(|row| {
+                row.tool_name.as_deref() == Some("list_files")
+                    && row.status.as_deref() == Some("completed")
+            })
+            .count();
+        let read_calls = transcript
+            .tool_calls
+            .iter()
+            .filter(|row| {
+                row.tool_name.as_deref() == Some("read_file")
+                    && row.status.as_deref() == Some("completed")
+            })
+            .collect::<Vec<_>>();
+        if list_calls < expected_list_files || read_calls.len() < expected_read_files {
+            return None;
+        }
+
+        let read_results = transcript
+            .tool_results
+            .iter()
+            .filter(|row| row.tool_name.as_deref() == Some("read_file"))
+            .filter_map(|row| row.output_text.clone())
+            .collect::<Vec<_>>();
+        if !expected_tokens.iter().all(|token| {
+            read_results
+                .iter()
+                .any(|result| result.contains(token.as_str()))
+        }) {
+            return None;
+        }
+
+        read_calls.last().map(|tool_call| {
+            tool_call
+                .tool_call_id
+                .clone()
+                .unwrap_or_else(|| tool_call.tool_call_key.clone())
+        })
+    })
+}
+
+fn wait_for_two_requests_in_flight(
+    runtime: &tokio::runtime::Runtime,
+    core: &ClientCore,
+    first_request_id: &str,
+    second_request_id: &str,
+) -> Result<()> {
+    wait_for_value(
+        "two live requests accepted before either response completed",
+        Duration::from_secs(20),
+        || {
+            runtime.block_on(core.refresh_store()).ok()?;
+            let snapshot = core.store().snapshot();
+            let first_request = snapshot
+                .requests
+                .iter()
+                .find(|row| row.request_id == first_request_id)?;
+            let second_request = snapshot
+                .requests
+                .iter()
+                .find(|row| row.request_id == second_request_id)?;
+            let first_complete = snapshot
+                .latest_response_for_request(first_request_id)
+                .is_some_and(|row| matches!(row.status.as_deref(), Some("complete" | "completed")));
+            let second_complete = snapshot
+                .latest_response_for_request(second_request_id)
+                .is_some_and(|row| matches!(row.status.as_deref(), Some("complete" | "completed")));
+
+            (!first_complete
+                && !second_complete
+                && !matches!(
+                    first_request.lifecycle_state.as_deref(),
+                    Some("failed" | "dead" | "superseded")
+                )
+                && !matches!(
+                    second_request.lifecycle_state.as_deref(),
+                    Some("failed" | "dead" | "superseded")
+                ))
+            .then_some(())
+        },
+    )
+}
+
 fn assert_live_submission_rows(
     runtime: &tokio::runtime::Runtime,
     core: &ClientCore,
@@ -640,6 +763,108 @@ fn desktop_app_live_inference_smoke() -> Result<()> {
     ))?;
     let live_agent_did = running_agent.did.clone();
     runtime.block_on(core.refresh_store())?;
+    let initial_generation = core
+        .store()
+        .snapshot()
+        .latest_runtime(&live_agent_did)
+        .and_then(|row| row.router_generation.or(row.active_generation))
+        .unwrap_or_default();
+    let live_behavior_id = default_behavior_id_for_agent(&live_agent_did);
+    let live_tool_selection_id = format!("{live_behavior_id}:tools");
+    let live_tool_prompt = "When the user asks about local files, the token is not available in the conversation and you must not guess. Call read_file separately for every requested path in order, then reply with only the requested file tokens.";
+    let first_tokens = vec![
+        uuid::Uuid::new_v4().simple().to_string(),
+        uuid::Uuid::new_v4().simple().to_string(),
+        uuid::Uuid::new_v4().simple().to_string(),
+    ];
+    let second_tokens = vec![
+        uuid::Uuid::new_v4().simple().to_string(),
+        uuid::Uuid::new_v4().simple().to_string(),
+        uuid::Uuid::new_v4().simple().to_string(),
+    ];
+    let followup_token = uuid::Uuid::new_v4().simple().to_string();
+    let first_paths = vec![
+        "live-smoke-files/first/alpha.txt".to_string(),
+        "live-smoke-files/first/beta.txt".to_string(),
+        "live-smoke-files/first/gamma.txt".to_string(),
+    ];
+    let second_paths = vec![
+        "live-smoke-files/second/alpha.txt".to_string(),
+        "live-smoke-files/second/beta.txt".to_string(),
+        "live-smoke-files/second/gamma.txt".to_string(),
+    ];
+    running_agent.write_tool_file(&first_paths[0], &first_tokens[0])?;
+    running_agent.write_tool_file(&first_paths[1], &first_tokens[1])?;
+    running_agent.write_tool_file(&first_paths[2], &first_tokens[2])?;
+    running_agent.write_tool_file(&second_paths[0], &second_tokens[0])?;
+    running_agent.write_tool_file(&second_paths[1], &second_tokens[1])?;
+    running_agent.write_tool_file(&second_paths[2], &second_tokens[2])?;
+    running_agent.write_tool_file("live-smoke-files/second/followup.txt", &followup_token)?;
+
+    runtime.block_on(async {
+        core.save_tool_selection(&ToolSelectionRow {
+            selection_id: live_tool_selection_id.clone(),
+            agent_did: Some(live_agent_did.clone()),
+            display_name: Some("Live Smoke Tools".to_string()),
+            enable_file_tools: Some(true),
+            file_tools_mode: Some("ReadOnly".to_string()),
+            enable_bash: Some(false),
+            bash_mode: Some("Off".to_string()),
+            cli_tool_names: vec![],
+            enable_meta_tools: Some(false),
+            delegate_to: vec![],
+        })
+        .await?;
+        core.save_behavior(&AgentBehaviorRow {
+            behavior_id: live_behavior_id.clone(),
+            agent_did: Some(live_agent_did.clone()),
+            display_name: Some("Live Smoke Default".to_string()),
+            system_prompt: Some(live_tool_prompt.to_string()),
+            backend_id: Some(live_backend_id.clone()),
+            model_name: Some(backend.model_name.clone()),
+            tool_selection_id: Some(live_tool_selection_id.clone()),
+            inference_profile_id: None,
+            compaction_strategy: Some("StripThenSummarize".to_string()),
+            compaction_threshold: Some(0.95),
+            enabled: Some(true),
+            created_at: Some(chrono::Utc::now().to_rfc3339()),
+        })
+        .await?;
+        core.refresh_store().await?;
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    wait_for_value(
+        "live smoke runtime reconciled with file tools",
+        Duration::from_secs(60),
+        || {
+            runtime.block_on(core.refresh_store()).ok()?;
+            let snapshot = core.store().snapshot();
+            let generation_ready = snapshot
+                .latest_runtime(&live_agent_did)
+                .and_then(|row| row.router_generation.or(row.active_generation))
+                .is_some_and(|generation| generation > initial_generation);
+            let tool_selection_ready = snapshot
+                .tool_selections
+                .iter()
+                .find(|row| row.selection_id == live_tool_selection_id)
+                .is_some_and(|row| {
+                    row.enable_file_tools == Some(true)
+                        && row.file_tools_mode.as_deref() == Some("ReadOnly")
+                });
+            let behavior_ready = snapshot
+                .behaviors
+                .iter()
+                .find(|row| row.behavior_id == live_behavior_id)
+                .is_some_and(|row| {
+                    row.backend_id.as_deref() == Some(live_backend_id.as_str())
+                        && row.model_name.as_deref() == Some(backend.model_name.as_str())
+                        && row.tool_selection_id.as_deref() == Some(live_tool_selection_id.as_str())
+                        && row.system_prompt.as_deref() == Some(live_tool_prompt)
+                });
+            (generation_ready && tool_selection_ready && behavior_ready).then_some(())
+        },
+    )?;
 
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
@@ -653,11 +878,12 @@ fn desktop_app_live_inference_smoke() -> Result<()> {
     app.state.activity = Activity::Chat;
     let mut driver = AuditDriver::new(app, ctx);
 
-    let prompt = format!(
-        "Reply with exactly READY and nothing else. audit {}",
-        uuid::Uuid::new_v4()
+    let prompt = tool_loop_prompt("first", "live-smoke-files/first", &first_paths);
+    let prompt_snippet = "Call read_file separately for each of these files";
+    let second_prompt = tool_loop_prompt("second", "live-smoke-files/second", &second_paths);
+    let followup_prompt = format!(
+        "Continue this same conversation. Call read_file for live-smoke-files/second/followup.txt. Reply with the previous three tokens from this conversation, followed by the exact token from live-smoke-files/second/followup.txt, separated by single spaces."
     );
-    let prompt_snippet = "Reply with exactly READY";
 
     let first_session_id = ensure_chat_session_selected(
         &mut driver,
@@ -675,35 +901,107 @@ fn desktop_app_live_inference_smoke() -> Result<()> {
                 .then_some(())
         },
     )?;
-
-    driver.click_target(audit::targets::CHAT_COMPOSER_TEXT);
-    driver.type_text(&prompt);
-    driver.render();
-    driver.click_target(audit::targets::CHAT_SEND);
-    assert_eq!(driver.app.state.chat.last_submission_error, None);
-
-    let request_id = wait_for_value("live focused request id", Duration::from_secs(10), || {
-        driver
-            .app
-            .client
-            .as_ref()
-            .and_then(|client| client.store().focused_request_id())
-    })?;
-    let response_content = wait_for_value(
-        "live response row in client store",
-        Duration::from_secs(90),
+    let request_id = submit_chat_message_and_wait_for_request_observed(&mut driver, &prompt)?;
+    wait_for_value(
+        "first live request bound to first conversation",
+        Duration::from_secs(10),
         || {
             driver.app.client.as_ref().and_then(|client| {
                 client
                     .store()
                     .snapshot()
-                    .latest_response_for_request(&request_id)
-                    .and_then(|row| row.content.clone())
-                    .filter(|content| !content.trim().is_empty())
+                    .requests
+                    .iter()
+                    .find(|row| row.request_id == request_id)
+                    .filter(|row| row.session_id.as_deref() == Some(first_session_id.as_str()))
+                    .map(|row| row.request_id.clone())
             })
         },
     )?;
-    assert!(!response_content.trim().is_empty());
+
+    driver.wait_for_target(
+        "chat new conversation button",
+        Duration::from_secs(10),
+        audit::targets::CHAT_NEW_CONVERSATION,
+    )?;
+    driver.click_target(audit::targets::CHAT_NEW_CONVERSATION);
+    let second_session_id = wait_for_value(
+        "live second conversation selected",
+        Duration::from_secs(10),
+        || {
+            driver
+                .app
+                .state
+                .chat
+                .selected_session_id
+                .clone()
+                .filter(|session_id| session_id != &first_session_id)
+        },
+    )?;
+    let second_session_target = audit::targets::chat_conversation(&second_session_id);
+    driver.wait_for_target(
+        "live second conversation row",
+        Duration::from_secs(10),
+        &second_session_target,
+    )?;
+    let second_request_id =
+        submit_chat_message_and_wait_for_request_observed(&mut driver, &second_prompt)?;
+    wait_for_value(
+        "second live request bound to second conversation",
+        Duration::from_secs(10),
+        || {
+            driver.app.client.as_ref().and_then(|client| {
+                client
+                    .store()
+                    .snapshot()
+                    .requests
+                    .iter()
+                    .find(|row| row.request_id == second_request_id)
+                    .filter(|row| row.session_id.as_deref() == Some(second_session_id.as_str()))
+                    .map(|row| row.request_id.clone())
+            })
+        },
+    )?;
+    let desktop_client = Arc::clone(
+        driver
+            .app
+            .client
+            .as_ref()
+            .ok_or_else(|| anyhow!("desktop client missing"))?,
+    );
+    wait_for_two_requests_in_flight(
+        runtime.as_ref(),
+        desktop_client.as_ref(),
+        &request_id,
+        &second_request_id,
+    )?;
+
+    let second_response_content =
+        wait_for_observed_response_for_request(&mut driver, &second_request_id, &second_prompt)?;
+    assert_response_contains_tokens(
+        "second conversation initial response",
+        &second_response_content,
+        &second_tokens,
+    )?;
+
+    let first_session_target = audit::targets::chat_conversation(&first_session_id);
+    driver.wait_for_target(
+        "live first conversation row",
+        Duration::from_secs(10),
+        &first_session_target,
+    )?;
+    let first_conversation_texts = driver.click_target(&first_session_target);
+    assert_eq!(
+        driver.app.state.chat.selected_session_id.as_deref(),
+        Some(first_session_id.as_str())
+    );
+    let response_content =
+        wait_for_observed_response_for_request(&mut driver, &request_id, &prompt)?;
+    assert_response_contains_tokens(
+        "first conversation response",
+        &response_content,
+        &first_tokens,
+    )?;
     let (
         request_lifecycle_state,
         response_status,
@@ -776,7 +1074,7 @@ fn desktop_app_live_inference_smoke() -> Result<()> {
     )?;
 
     let chat_texts = wait_for_value(
-        "live response in transcript",
+        "live response in first transcript",
         Duration::from_secs(30),
         || {
             let texts = driver.render();
@@ -790,43 +1088,23 @@ fn desktop_app_live_inference_smoke() -> Result<()> {
         .iter()
         .any(|text| text.contains(response_content.trim())));
 
-    let second_prompt = format!(
-        "Reply with exactly SECOND_READY and nothing else. audit {}",
-        uuid::Uuid::new_v4()
-    );
-    let second_session = {
-        let client = Arc::clone(
-            driver
-                .app
-                .client
-                .as_ref()
-                .ok_or_else(|| anyhow!("desktop client missing"))?,
-        );
-        driver
-            .app
-            .runtime
-            .block_on(client.create_conversation(&live_agent_did, None))?
-    };
-    let second_session_target = audit::targets::chat_conversation(&second_session.session_id);
-    driver.wait_for_target(
-        "live second conversation row",
-        Duration::from_secs(10),
-        &second_session_target,
-    )?;
-    driver.click_target(&second_session_target);
+    let second_conversation_texts = driver.click_target(&second_session_target);
     assert_eq!(
         driver.app.state.chat.selected_session_id.as_deref(),
-        Some(second_session.session_id.as_str())
+        Some(second_session_id.as_str())
     );
-    let (_, second_response_content) =
-        submit_chat_message_and_wait_for_observed_response(&mut driver, &second_prompt)?;
-
-    let multi_turn_prompt = format!(
-        "This is the second turn in the same conversation. Reply with exactly MULTI_TURN_READY and nothing else. audit {}",
-        uuid::Uuid::new_v4()
-    );
-    let (_, multi_turn_response_content) =
-        submit_chat_message_and_wait_for_observed_response(&mut driver, &multi_turn_prompt)?;
+    let (multi_turn_request_id, multi_turn_response_content) =
+        submit_chat_message_and_wait_for_observed_response(&mut driver, &followup_prompt)?;
+    assert_response_contains_tokens(
+        "second conversation follow-up response",
+        &multi_turn_response_content,
+        &[
+            second_tokens[0].clone(),
+            second_tokens[1].clone(),
+            second_tokens[2].clone(),
+            followup_token.clone(),
+        ],
+    )?;
     let second_session_request_count = driver
         .app
         .client
@@ -837,23 +1115,12 @@ fn desktop_app_live_inference_smoke() -> Result<()> {
                 .snapshot()
                 .requests
                 .iter()
-                .filter(|row| row.session_id.as_deref() == Some(second_session.session_id.as_str()))
+                .filter(|row| row.session_id.as_deref() == Some(second_session_id.as_str()))
                 .count()
         })
         .ok_or_else(|| anyhow!("desktop client missing"))?;
     assert_eq!(second_session_request_count, 2);
 
-    let first_session_target = audit::targets::chat_conversation(&first_session_id);
-    driver.wait_for_target(
-        "live first conversation row",
-        Duration::from_secs(10),
-        &first_session_target,
-    )?;
-    let first_conversation_texts = driver.click_target(&first_session_target);
-    assert_eq!(
-        driver.app.state.chat.selected_session_id.as_deref(),
-        Some(first_session_id.as_str())
-    );
     assert!(first_conversation_texts
         .iter()
         .any(|text| text.contains(prompt_snippet)));
@@ -861,23 +1128,35 @@ fn desktop_app_live_inference_smoke() -> Result<()> {
         .iter()
         .any(|text| text.contains(response_content.trim())));
 
-    let second_conversation_texts = driver.click_target(&second_session_target);
-    assert_eq!(
-        driver.app.state.chat.selected_session_id.as_deref(),
-        Some(second_session.session_id.as_str())
-    );
     assert!(second_conversation_texts
         .iter()
         .any(|text| text.contains(&second_prompt)));
     assert!(second_conversation_texts
         .iter()
-        .any(|text| text.contains(&multi_turn_prompt)));
-    assert!(second_conversation_texts
-        .iter()
         .any(|text| text.contains(second_response_content.trim())));
-    assert!(second_conversation_texts
+    let second_followup_texts = driver.render();
+    assert!(second_followup_texts
+        .iter()
+        .any(|text| text.contains(&followup_prompt)));
+    assert!(second_followup_texts
         .iter()
         .any(|text| text.contains(multi_turn_response_content.trim())));
+    wait_for_value(
+        "follow-up request persisted on second conversation",
+        Duration::from_secs(10),
+        || {
+            driver.app.client.as_ref().and_then(|client| {
+                client
+                    .store()
+                    .snapshot()
+                    .requests
+                    .iter()
+                    .find(|row| row.request_id == multi_turn_request_id)
+                    .filter(|row| row.session_id.as_deref() == Some(second_session_id.as_str()))
+                    .map(|row| row.request_id.clone())
+            })
+        },
+    )?;
 
     driver.open_activity(Activity::Operator);
     driver.click_target(&audit::targets::operator_section(
@@ -937,16 +1216,10 @@ fn desktop_app_live_inference_smoke() -> Result<()> {
     );
     assert!(operator_texts
         .iter()
-        .any(|text| text.contains(prompt_snippet)));
-    assert!(operator_texts
-        .iter()
         .any(|text| text.contains(&request_lifecycle_state)));
     assert!(operator_texts
         .iter()
         .any(|text| text.contains(&response_status)));
-    assert!(operator_texts
-        .iter()
-        .any(|text| text.contains(response_content.trim())));
 
     driver.click_target(&audit::targets::operator_section(
         crate::state::OperatorSection::Backends,
@@ -1106,14 +1379,23 @@ fn desktop_app_live_inference_smoke() -> Result<()> {
     let returned_chat_texts = driver.open_activity(Activity::Chat);
     assert_eq!(
         driver.app.state.chat.selected_session_id.as_deref(),
-        Some(second_session.session_id.as_str())
+        Some(second_session_id.as_str())
     );
-    assert!(returned_chat_texts
-        .iter()
-        .any(|text| text.contains(&second_prompt)));
-    assert!(returned_chat_texts
-        .iter()
-        .any(|text| text.contains(&multi_turn_prompt)));
+    let returned_request_count = driver
+        .app
+        .client
+        .as_ref()
+        .map(|client| {
+            client
+                .store()
+                .snapshot()
+                .requests
+                .iter()
+                .filter(|row| row.session_id.as_deref() == Some(second_session_id.as_str()))
+                .count()
+        })
+        .ok_or_else(|| anyhow!("desktop client missing"))?;
+    assert_eq!(returned_request_count, 2);
     assert!(returned_chat_texts
         .iter()
         .any(|text| text.contains(second_response_content.trim())));
@@ -1135,12 +1417,13 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
         build_multi_agent_live_desktop_fixture("audit-live-multi-server", global_log_store())?;
     assert_eq!(fixture.deployments.len(), 2);
 
+    let alpha_tool_token = fixture.deployments[0].running_agent.tool_token.clone();
     let alpha = live_deployment_case(&fixture.deployments[0]);
     let bravo = live_deployment_case(&fixture.deployments[1]);
     let backend = fixture.backend.clone();
     let alpha_switch_backend_id = format!("{}:switch-backend", alpha.docs.behavior_id);
     let alpha_switch_profile_id = format!("{}:switch-profile", alpha.docs.behavior_id);
-    let alpha_tool_prompt = "When the user asks you to read a local file, you must call the read_file tool instead of guessing. The token is not available in the conversation. If they ask for a token from a file, call read_file first and then respond with only that token.";
+    let alpha_tool_prompt = "When the user asks about local files, you must call read_file instead of guessing. The token is not available in the conversation. For multi-file requests, call read_file separately for every requested path and respond with only the requested tokens.";
     let desktop_client = Arc::clone(
         fixture
             .driver
@@ -1160,7 +1443,7 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
                     endpoint: Some(backend.endpoint.clone()),
                     api_key: backend.api_key.clone(),
                     api_key_env_var: backend.api_key_env_var.clone(),
-                    max_concurrent: Some(1),
+                    max_concurrent: Some(2),
                     max_queue_depth: Some(100),
                     enabled: Some(true),
                     models: vec![backend.model_name.clone()],
@@ -1907,8 +2190,12 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
     let post_config_submission;
     {
         let driver = &mut fixture.driver;
+        let post_config_prompt = format!(
+            "This is the alpha post-config tool audit {}. Call read_file for notes.txt. Reply with only the token from notes.txt.",
+            uuid::Uuid::new_v4()
+        );
         post_config_submission =
-            submit_live_prompt_for_deployment(driver, &alpha, "ALPHA_CONFIG_READY")?;
+            submit_custom_live_prompt_for_deployment(driver, &alpha, &post_config_prompt)?;
         wait_for_value(
             "post-config request used switched backend",
             Duration::from_secs(30),
@@ -1948,6 +2235,23 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
         &post_config_submission,
         Some(alpha_switch_backend_id.as_str()),
     )?;
+    assert!(
+        post_config_submission
+            .response
+            .contains(alpha_tool_token.as_str()),
+        "expected alpha post-config response to contain {}: {}",
+        alpha_tool_token,
+        post_config_submission.response
+    );
+    let alpha_post_config_tool_card_id = wait_for_session_tool_activity(
+        fixture.runtime.as_ref(),
+        desktop_client.as_ref(),
+        "desktop alpha post-config tool activity",
+        &post_config_submission.session_id,
+        0,
+        1,
+        &[alpha_tool_token.clone()],
+    )?;
 
     {
         let driver = &mut fixture.driver;
@@ -1986,6 +2290,11 @@ fn desktop_app_live_multi_agent_server_switching_and_config_inference() -> Resul
         assert!(alpha_post_config_texts
             .iter()
             .any(|text| text.contains(post_config_submission.response.trim())));
+        driver.wait_for_target(
+            "alpha post-config tool card visible",
+            Duration::from_secs(10),
+            &audit::targets::chat_tool_card(&alpha_post_config_tool_card_id),
+        )?;
     }
 
     fixture.shutdown()

@@ -4,6 +4,7 @@ use eframe::egui::{self, RichText, Ui};
 use tokio::runtime::Runtime;
 
 use crate::audit;
+use crate::chat::controller;
 use crate::client::{ClientCore, ClientStore};
 use crate::state::ShellState;
 use crate::theme;
@@ -122,22 +123,9 @@ fn retry_latest_request(
     runtime: &Runtime,
     request: Option<&AgentRequestRow>,
 ) {
-    let Some(client) = client else {
-        state.chat.last_submission_error = Some("client core is offline".to_string());
-        return;
-    };
-    let Some(request) = request else {
-        state.chat.last_submission_error = Some("no request is available to retry".to_string());
-        return;
-    };
-
-    match runtime.block_on(client.retry_request(request)) {
-        Ok(result) => {
-            state.chat.selected_session_id = Some(result.session_id);
-            state.chat.last_submission_error = None;
+    match controller::retry_latest_request(&mut state.chat, client, runtime, request) {
+        Ok(()) => {
             state.chat.last_action_message = Some("Retried latest request.".to_string());
-            state.chat.last_export_payload = None;
-            state.chat.transcript_stick_to_bottom = true;
         }
         Err(error) => {
             state.chat.last_submission_error = Some(error.to_string());

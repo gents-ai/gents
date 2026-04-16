@@ -198,6 +198,11 @@ pub fn show_sidebar(
                             Some(accessory),
                         );
                         audit::record(ui, &audit::targets::peers_peer(&peer.record_id), &response);
+                        if state.peers.selected_peer_id.as_deref()
+                            == Some(peer.record_id.as_str())
+                        {
+                            ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
+                        }
                         if response.clicked() {
                             state.peers.selected_peer_id = Some(peer.record_id.clone());
                         }
@@ -433,27 +438,36 @@ pub fn show_rail(
         if audit::button(ui, audit::targets::PEERS_REMOVE, "Remove Saved Peer").clicked() {
             match runtime.block_on(client.remove_peer(&peer.record_id)) {
                 Ok(result) => {
-                    state.peers.selected_peer_id = peers
+                    let next_peer = peers
                         .iter()
                         .find(|candidate| candidate.record_id != result.peer_id)
-                        .map(|candidate| candidate.record_id.clone());
-                    if state.chat.selected_peer_id.as_deref() == Some(result.peer_id.as_str()) {
-                        state.chat.selected_peer_id = None;
-                        if state.chat.selected_agent_did.as_deref() == Some(peer.agent_did.as_str())
-                        {
-                            state.chat.selected_agent_did = None;
-                            state.chat.selected_session_id = None;
-                        }
+                        .cloned();
+                    state.peers.selected_peer_id =
+                        next_peer.as_ref().map(|candidate| candidate.record_id.clone());
+
+                    if state.chat.selected_peer_id.as_deref() == Some(result.peer_id.as_str())
+                        || state.chat.selected_agent_did.as_deref() == Some(peer.agent_did.as_str())
+                    {
+                        state.chat.selected_peer_id =
+                            next_peer.as_ref().map(|candidate| candidate.record_id.clone());
+                        state.chat.selected_agent_did =
+                            next_peer.as_ref().map(|candidate| candidate.agent_did.clone());
+                        state.chat.selected_session_id = None;
+                        state.chat.suppress_session_autoselect = true;
+                        state.chat.selected_behavior_override = None;
                     }
-                    if state.operator.selected_peer_id.as_deref() == Some(result.peer_id.as_str()) {
-                        state.operator.selected_peer_id = None;
-                        if state.operator.selected_agent_did.as_deref()
+
+                    if state.operator.selected_peer_id.as_deref() == Some(result.peer_id.as_str())
+                        || state.operator.selected_agent_did.as_deref()
                             == Some(peer.agent_did.as_str())
-                        {
-                            state.operator.selected_agent_did = None;
-                        }
+                    {
+                        state.operator.selected_peer_id =
+                            next_peer.as_ref().map(|candidate| candidate.record_id.clone());
+                        state.operator.selected_agent_did =
+                            next_peer.as_ref().map(|candidate| candidate.agent_did.clone());
                         state.operator.selected_entity_id = None;
                         state.operator.draft = None;
+                        state.operator.draft_source_entity_id = None;
                     }
                     state.peers.last_action_message = Some(match result.warning {
                         Some(warning) => format!("Removed {}. {}", result.label, warning),

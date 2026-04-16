@@ -1,6 +1,9 @@
 use eframe::egui::{self, RichText, Ui};
+use tokio::runtime::Runtime;
 
 use crate::audit;
+use crate::chat::controller;
+use crate::client::{ClientCore, ClientStore};
 use crate::state::{Activity, ShellState};
 use crate::theme::Palette;
 use crate::views;
@@ -11,6 +14,9 @@ pub fn show(
     ui: &mut Ui,
     palette: Palette,
     state: &mut ShellState,
+    client: Option<&ClientCore>,
+    _store: &ClientStore,
+    runtime: &Runtime,
     deployments: &[DeploymentEntry],
     conversations: &[ConversationBucket],
     selected_agent_did: Option<&str>,
@@ -98,9 +104,11 @@ pub fn show(
                             &response,
                         );
                         if response.clicked() {
-                            state.chat.selected_peer_id = Some(deployment.peer_id.clone());
-                            state.chat.selected_agent_did = Some(deployment.agent_did.clone());
-                            state.chat.selected_session_id = None;
+                            controller::select_deployment(
+                                &mut state.chat,
+                                deployment.peer_id.clone(),
+                                deployment.agent_did.clone(),
+                            );
                         }
 
                         let response = views::tree_row(
@@ -115,9 +123,11 @@ pub fn show(
                             &response,
                         );
                         if response.clicked() {
-                            state.chat.selected_peer_id = Some(deployment.peer_id.clone());
-                            state.chat.selected_agent_did = Some(deployment.agent_did.clone());
-                            state.chat.selected_session_id = None;
+                            controller::select_deployment(
+                                &mut state.chat,
+                                deployment.peer_id.clone(),
+                                deployment.agent_did.clone(),
+                            );
                         }
 
                         if let Some(warning) = deployment.warning.as_deref() {
@@ -161,7 +171,11 @@ pub fn show(
                     .min_size(egui::vec2(52.0, 20.0)),
                 );
                 if response.clicked() {
-                    state.chat.new_conversation_requested = true;
+                    if let Err(error) =
+                        controller::create_conversation(&mut state.chat, client, runtime)
+                    {
+                        state.chat.last_submission_error = Some(error.to_string());
+                    }
                 }
             });
         });
@@ -216,7 +230,10 @@ pub fn show(
                             &response,
                         );
                         if response.clicked() {
-                            state.chat.selected_session_id = Some(entry.session_id.clone());
+                            controller::select_conversation(
+                                &mut state.chat,
+                                entry.session_id.clone(),
+                            );
                         }
                     }
                     ui.add_space(6.0);

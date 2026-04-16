@@ -234,6 +234,19 @@ impl ClientStore {
         indexes_to_refs(&self.requests, self.requests_by_session_id.get(session_id))
     }
 
+    pub fn latest_request_id_for_session(&self, session_id: &str) -> Option<String> {
+        self.conversations
+            .iter()
+            .find(|row| row.session_id == session_id)
+            .and_then(|row| clean_string(row.latest_request_id.as_deref()))
+            .or_else(|| {
+                self.requests_by_session_id
+                    .get(session_id)
+                    .and_then(|indexes| indexes.last().copied())
+                    .map(|index| self.requests[index].request_id.clone())
+            })
+    }
+
     pub fn latest_runtime(&self, agent_did: &str) -> Option<&AgentRuntimeRow> {
         self.runtimes_by_agent_did
             .get(agent_did)
@@ -289,18 +302,13 @@ impl ClientStore {
     }
 
     pub fn derive_turn(&self, session_id: &str) -> Option<ClientTurnState> {
-        let latest_request_id = self
-            .conversations
-            .iter()
-            .find(|row| row.session_id == session_id)
-            .and_then(|row| clean_string(row.latest_request_id.as_deref()))
-            .or_else(|| {
-                self.requests_by_session_id
-                    .get(session_id)
-                    .and_then(|indexes| indexes.last().copied())
-                    .map(|index| self.requests[index].request_id.clone())
-            })?;
+        let latest_request_id = self.latest_request_id_for_session(session_id)?;
         let attempts = self.attempt_chain_for_request(&latest_request_id);
+        derive_turn(&attempts)
+    }
+
+    pub fn derive_turn_for_request(&self, request_id: &str) -> Option<ClientTurnState> {
+        let attempts = self.attempt_chain_for_request(request_id);
         derive_turn(&attempts)
     }
 

@@ -7,6 +7,7 @@ use egui_commonmark::CommonMarkCache;
 use tokio::runtime::Runtime;
 use tokio::sync::watch;
 
+use crate::chat::controller as chat_controller;
 use crate::client::{ClientCore, ClientStore};
 use crate::state::{Activity, ShellState};
 use crate::telemetry::{global_log_store, DesktopLogStore};
@@ -48,6 +49,14 @@ impl DesktopApp {
         let store_updates = client.as_ref().map(|client| {
             apply_bootstrap_state(&mut state, client.as_ref());
             apply_snapshot_state(&mut state, client.store().snapshot().as_ref());
+            let snapshot = client.store().snapshot();
+            let peer_statuses = client.peer_statuses();
+            chat_controller::sync_from_snapshot(
+                &mut state.chat,
+                snapshot.as_ref(),
+                &peer_statuses,
+                true,
+            );
             client.store_updates()
         });
 
@@ -296,9 +305,25 @@ impl eframe::App for DesktopApp {
 
         if let (Some(client), Some(store_updates)) = (&self.client, &mut self.store_updates) {
             apply_client_transport_state(&mut self.state, client);
+            let snapshot = client.store().snapshot();
+            let peer_statuses = client.peer_statuses();
+            chat_controller::sync_from_snapshot(
+                &mut self.state.chat,
+                snapshot.as_ref(),
+                &peer_statuses,
+                true,
+            );
             if store_updates.has_changed().unwrap_or(false) {
                 let _ = store_updates.borrow_and_update();
-                apply_snapshot_state(&mut self.state, client.store().snapshot().as_ref());
+                let snapshot = client.store().snapshot();
+                apply_snapshot_state(&mut self.state, snapshot.as_ref());
+                let peer_statuses = client.peer_statuses();
+                chat_controller::sync_from_snapshot(
+                    &mut self.state.chat,
+                    snapshot.as_ref(),
+                    &peer_statuses,
+                    true,
+                );
                 ctx.request_repaint();
             }
 

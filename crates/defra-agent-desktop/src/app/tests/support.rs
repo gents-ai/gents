@@ -459,12 +459,18 @@ fn ensure_chat_session_selected(
 
     let outcome = wait_for_value(wait_label, timeout, || {
         let texts = driver.render();
-        driver.app.state.chat.selected_session_id.clone().or_else(|| {
-            texts
-                .iter()
-                .any(|text| text.contains("Create Conversation"))
-                .then_some(MANUAL_CREATE_SENTINEL.to_string())
-        })
+        driver
+            .app
+            .state
+            .chat
+            .selected_session_id
+            .clone()
+            .or_else(|| {
+                texts
+                    .iter()
+                    .any(|text| text.contains("Create Conversation"))
+                    .then_some(MANUAL_CREATE_SENTINEL.to_string())
+            })
     })?;
 
     if outcome == MANUAL_CREATE_SENTINEL {
@@ -482,6 +488,18 @@ fn submit_live_prompt_for_deployment(
     deployment: &LiveDeploymentCase<'_>,
     exact_token: &str,
 ) -> Result<LiveSubmissionCase> {
+    let prompt = format!(
+        "Reply with exactly {exact_token} and nothing else. Multi-agent server isolation audit {}",
+        uuid::Uuid::new_v4()
+    );
+    submit_custom_live_prompt_for_deployment(driver, deployment, &prompt)
+}
+
+fn submit_custom_live_prompt_for_deployment(
+    driver: &mut AuditDriver,
+    deployment: &LiveDeploymentCase<'_>,
+    prompt: &str,
+) -> Result<LiveSubmissionCase> {
     driver.open_activity(Activity::Chat);
     let deployment_target = audit::targets::chat_deployment(&deployment.peer_id);
     driver.wait_for_target(
@@ -498,12 +516,8 @@ fn submit_live_prompt_for_deployment(
         Duration::from_secs(10),
     )?;
 
-    let prompt = format!(
-        "Reply with exactly {exact_token} and nothing else. Multi-agent server isolation audit {}",
-        uuid::Uuid::new_v4()
-    );
     let (request_id, response) =
-        submit_chat_message_and_wait_for_observed_response(driver, &prompt)?;
+        submit_chat_message_and_wait_for_observed_response(driver, prompt)?;
     let session_id = driver
         .app
         .state
@@ -536,7 +550,7 @@ fn submit_live_prompt_for_deployment(
     )?;
 
     Ok(LiveSubmissionCase {
-        prompt,
+        prompt: prompt.to_string(),
         request_id,
         response,
         session_id,
@@ -644,24 +658,26 @@ impl BootstrapRuntimeApi {
                             }
                             ("POST", "/api/v0/p2p/replicators") => {
                                 let replicator =
-                                    serde_json::from_str::<BootstrapReplicatorRequest>(&request.body)
-                                        .context("decoding /p2p/replicators payload")
-                                        .and_then(|payload| {
-                                            let target = payload
-                                                .addresses
-                                                .first()
-                                                .cloned()
-                                                .context("missing desktop replicator address")?;
-                                            handle.block_on(async {
-                                                set_replicator_with_retry(
-                                                    core_for_thread.as_ref(),
-                                                    &target,
-                                                    "bootstrap runtime replicator",
-                                                    payload.collections,
-                                                )
-                                                .await
-                                            })
-                                        });
+                                    serde_json::from_str::<BootstrapReplicatorRequest>(
+                                        &request.body,
+                                    )
+                                    .context("decoding /p2p/replicators payload")
+                                    .and_then(|payload| {
+                                        let target = payload
+                                            .addresses
+                                            .first()
+                                            .cloned()
+                                            .context("missing desktop replicator address")?;
+                                        handle.block_on(async {
+                                            set_replicator_with_retry(
+                                                core_for_thread.as_ref(),
+                                                &target,
+                                                "bootstrap runtime replicator",
+                                                payload.collections,
+                                            )
+                                            .await
+                                        })
+                                    });
                                 replicator.map(|_| {
                                     (
                                         "200 OK",
@@ -721,6 +737,7 @@ impl Drop for BootstrapRuntimeApi {
 
 fn bootstrap_live_core_options() -> ClientCoreOptions {
     let mut options = ClientCoreOptions::local_only();
+    options.max_concurrent_push_tasks = 32;
     options.rate_limit_burst = 5_000;
     options.rate_limit_rate = 500.0;
     options
@@ -797,17 +814,13 @@ fn wait_for_bootstrap_chat_ready(
     peer_id: &str,
     agent_did: &str,
 ) -> Result<()> {
-    wait_for_value(
-        "desktop bootstrap status",
-        Duration::from_secs(20),
-        || {
-            let texts = driver.render();
-            texts
-                .iter()
-                .any(|text| text.contains("replication: subscriptions armed"))
-                .then_some(())
-        },
-    )?;
+    wait_for_value("desktop bootstrap status", Duration::from_secs(20), || {
+        let texts = driver.render();
+        texts
+            .iter()
+            .any(|text| text.contains("replication: subscriptions armed"))
+            .then_some(())
+    })?;
     let deployment_target = audit::targets::chat_deployment(peer_id);
     driver.wait_for_target(
         "bootstrapped chat deployment row",
@@ -1221,6 +1234,7 @@ fn live_multi_server_core_options() -> ClientCoreOptions {
     // The live multi-agent harness runs several local Iroh endpoints in one
     // process. Keep default fetch concurrency so CAR/Bitswap cannot overwhelm
     // listeners, but allow enough local push budget for streaming responses.
+    options.max_concurrent_push_tasks = 32;
     options.rate_limit_burst = 5_000;
     options.rate_limit_rate = 500.0;
     options.install_replicators_on_bootstrap = false;
@@ -1630,11 +1644,23 @@ impl Drop for MockModelEndpoint {
 struct RunningAgent {
     did: String,
     tool_token: String,
+    tool_root: std::path::PathBuf,
     shutdown_tx: watch::Sender<bool>,
     run_task: tokio::task::JoinHandle<anyhow::Result<()>>,
 }
 
 impl RunningAgent {
+    fn write_tool_file(&self, relative_path: &str, contents: &str) -> Result<()> {
+        let path = self.tool_root.join(relative_path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating live tool directory {}", parent.display()))?;
+        }
+        std::fs::write(&path, format!("{contents}\n"))
+            .with_context(|| format!("writing live tool fixture {}", path.display()))?;
+        Ok(())
+    }
+
     async fn shutdown(self) -> Result<()> {
         let _ = self.shutdown_tx.send(true);
         self.run_task.await??;
@@ -1742,9 +1768,123 @@ fn submit_chat_message_and_wait_for_observed_response(
     driver: &mut AuditDriver,
     prompt: &str,
 ) -> Result<(String, String)> {
-    submit_chat_message_and_wait_for_observed_response_after_request(driver, prompt, |_, _| {
-        Ok(())
-    })
+    submit_chat_message_and_wait_for_observed_response_after_request(driver, prompt, |_, _| Ok(()))
+}
+
+fn submit_chat_message_and_wait_for_request_observed(
+    driver: &mut AuditDriver,
+    prompt: &str,
+) -> Result<String> {
+    let prior_request_count = driver
+        .app
+        .client
+        .as_ref()
+        .map(|client| client.store().snapshot().requests.len())
+        .ok_or_else(|| anyhow!("desktop client missing"))?;
+
+    driver.click_target(audit::targets::CHAT_COMPOSER_TEXT);
+    driver.type_text(prompt);
+    driver.click_target(audit::targets::CHAT_SEND);
+    assert_eq!(driver.app.state.chat.last_submission_error, None);
+    assert!(driver.app.state.chat.composer_text.is_empty());
+
+    wait_for_value(
+        "focused request id after request-only submission",
+        Duration::from_secs(10),
+        || {
+            driver.app.client.as_ref().and_then(|client| {
+                let snapshot = client.store().snapshot();
+                (snapshot.requests.len() > prior_request_count)
+                    .then(|| client.store().focused_request_id())
+                    .flatten()
+            })
+        },
+    )
+}
+
+fn wait_for_observed_response_for_request(
+    driver: &mut AuditDriver,
+    request_id: &str,
+    prompt: &str,
+) -> Result<String> {
+    let response_text = wait_for_value(
+        &format!("observed response content for request {request_id}"),
+        Duration::from_secs(180),
+        || {
+            let client = driver.app.client.as_ref()?;
+            let snapshot = client.store().snapshot();
+            let request = snapshot
+                .requests
+                .iter()
+                .find(|row| row.request_id == request_id);
+            let response = snapshot.latest_response_for_request(request_id);
+
+            if let Some(response) = response {
+                if matches!(response.status.as_deref(), Some("complete" | "completed")) {
+                    if let Some(content) = response.content.as_deref() {
+                        if !content.trim().is_empty() {
+                            return Some(content.to_string());
+                        }
+                    }
+                }
+
+                if matches!(
+                    response.status.as_deref(),
+                    Some("error" | "failed" | "failure")
+                ) {
+                    panic!(
+                        "response for request {request_id} reached error status while waiting for observed content: {}",
+                        describe_response_wait_state(
+                            request,
+                            Some(response),
+                            0,
+                            snapshot.responses.len()
+                        )
+                    );
+                }
+            }
+
+            if let Some(request) = request {
+                if matches!(
+                    request.lifecycle_state.as_deref(),
+                    Some("failed" | "dead" | "superseded")
+                ) {
+                    panic!(
+                        "request {request_id} reached terminal lifecycle while waiting for observed response: {}",
+                        describe_response_wait_state(
+                            Some(request),
+                            response,
+                            0,
+                            snapshot.responses.len()
+                        )
+                    );
+                }
+            }
+
+            None
+        },
+    )?;
+
+    let rendered_response_text = response_text.trim();
+    wait_for_value(
+        &format!("prompt and observed response in transcript for request {request_id}"),
+        Duration::from_secs(30),
+        || {
+            let texts = driver.render();
+            texts
+                .iter()
+                .any(|text| text.contains(prompt))
+                .then_some(())
+                .and_then(|_| {
+                    texts
+                        .iter()
+                        .any(|text| text.contains(rendered_response_text))
+                        .then_some(())
+                })
+        },
+    )?;
+
+    Ok(response_text)
 }
 
 fn submit_chat_message_and_wait_for_response_after_request(
@@ -1815,7 +1955,10 @@ fn submit_chat_message_and_wait_for_response_after_request(
                 }
             }
 
-            if matches!(response.status.as_deref(), Some("error" | "failed" | "failure")) {
+            if matches!(
+                response.status.as_deref(),
+                Some("error" | "failed" | "failure")
+            ) {
                 anyhow::bail!(
                     "response for request {request_id} reached error status while waiting for content: {}",
                     describe_response_wait_state(request, Some(response), prior_response_count, snapshot.responses.len())
@@ -1830,7 +1973,12 @@ fn submit_chat_message_and_wait_for_response_after_request(
             ) {
                 anyhow::bail!(
                     "request {request_id} reached terminal lifecycle before response content: {}",
-                    describe_response_wait_state(Some(request), response, prior_response_count, snapshot.responses.len())
+                    describe_response_wait_state(
+                        Some(request),
+                        response,
+                        prior_response_count,
+                        snapshot.responses.len()
+                    )
                 );
             }
         }
@@ -1838,7 +1986,12 @@ fn submit_chat_message_and_wait_for_response_after_request(
         if Instant::now() >= response_deadline {
             anyhow::bail!(
                 "timed out waiting for response content in client store after submission: {}",
-                describe_response_wait_state(request, response, prior_response_count, snapshot.responses.len())
+                describe_response_wait_state(
+                    request,
+                    response,
+                    prior_response_count,
+                    snapshot.responses.len()
+                )
             );
         }
 
@@ -1926,7 +2079,10 @@ fn submit_chat_message_and_wait_for_observed_response_after_request(
                     }
                 }
 
-                if matches!(response.status.as_deref(), Some("error" | "failed" | "failure")) {
+                if matches!(
+                    response.status.as_deref(),
+                    Some("error" | "failed" | "failure")
+                ) {
                     panic!(
                         "response for request {request_id} reached error status while waiting for observed content: {}",
                         describe_response_wait_state(
@@ -2090,6 +2246,17 @@ fn target_is_interactable(rect: egui::Rect) -> bool {
     visible.intersects(rect) && visible.contains(rect.center())
 }
 
+fn is_activity_sidebar_target(target: &str) -> bool {
+    target.starts_with("chat.deployment.")
+        || target.starts_with("chat.agent.")
+        || target.starts_with("chat.conversation.")
+        || target.starts_with("operator.deployment.")
+        || target.starts_with("operator.agent.")
+        || target.starts_with("operator.section.")
+        || target.starts_with("peers.peer.")
+        || target.starts_with("peers.agent.")
+}
+
 #[derive(Debug, Clone)]
 struct TextRun {
     text: String,
@@ -2117,21 +2284,50 @@ impl AuditDriver {
     }
 
     fn click_target(&mut self, target: &str) -> Vec<String> {
-        self.render();
-        let rect = audit::target_rect(&self.ctx, target)
+        let rect = self
+            .find_click_rect(target, false)
             .unwrap_or_else(|| panic!("unable to find audit target rect: {target}"));
         self.click_pos(rect.center())
     }
 
     fn click_interactable_target(&mut self, target: &str) -> Result<Vec<String>> {
-        self.render();
-        let rect = audit::target_interact_rect(&self.ctx, target)
+        let rect = self
+            .find_click_rect(target, true)
             .ok_or_else(|| anyhow!("unable to find audit target rect: {target}"))?;
         anyhow::ensure!(
             target_is_interactable(rect),
             "audit target is not interactable: {target} at {rect:?}"
         );
         Ok(self.click_pos_compact(rect.center()))
+    }
+
+    fn find_click_rect(&mut self, target: &str, require_interactable: bool) -> Option<egui::Rect> {
+        self.render();
+
+        if let Some(rect) = audit::target_interact_rect(&self.ctx, target)
+            .filter(|rect| !require_interactable || target_is_interactable(*rect))
+        {
+            return Some(rect);
+        }
+
+        if is_activity_sidebar_target(target) {
+            for delta in [
+                -220.0_f32, -220.0, -220.0, -220.0, -220.0, 220.0, 220.0, 220.0, 220.0, 220.0,
+            ] {
+                self.scroll_activity_sidebar(delta);
+                if let Some(rect) = audit::target_interact_rect(&self.ctx, target)
+                    .filter(|rect| !require_interactable || target_is_interactable(*rect))
+                {
+                    return Some(rect);
+                }
+            }
+        }
+
+        if require_interactable {
+            None
+        } else {
+            audit::target_rect(&self.ctx, target).filter(|rect| target_is_interactable(*rect))
+        }
     }
 
     fn has_target(&mut self, target: &str) -> bool {
@@ -2242,6 +2438,10 @@ impl AuditDriver {
                 modifiers: egui::Modifiers::NONE,
             },
         ])
+    }
+
+    fn scroll_activity_sidebar(&mut self, delta_y: f32) -> Vec<String> {
+        self.scroll_pos(egui::pos2(180.0, 780.0), delta_y)
     }
 
     fn scroll_right_rail(&mut self, delta_y: f32) -> Vec<String> {
@@ -2367,7 +2567,7 @@ async fn spawn_backed_agent(
         Arc::clone(&node),
         identity,
         DocumentRuntimeOptions {
-            tool_ceiling: ToolCeiling::readwrite(tool_root),
+            tool_ceiling: ToolCeiling::readwrite(tool_root.clone()),
             ..Default::default()
         },
     )
@@ -2378,6 +2578,7 @@ async fn spawn_backed_agent(
     Ok(RunningAgent {
         did,
         tool_token,
+        tool_root,
         shutdown_tx,
         run_task,
     })
@@ -2408,7 +2609,7 @@ async fn bind_default_behavior_backend(
                     endpoint: "{escaped_endpoint}",
                     {api_key_field}
                     {api_key_env_var_field}
-                    max_concurrent: 1,
+                    max_concurrent: 2,
                     max_queue_depth: 100,
                     enabled: true,
                     models: ["{escaped_model_name}"],
@@ -2420,7 +2621,7 @@ async fn bind_default_behavior_backend(
                     endpoint: "{escaped_endpoint}",
                     {api_key_field}
                     {api_key_env_var_field}
-                    max_concurrent: 1,
+                    max_concurrent: 2,
                     max_queue_depth: 100,
                     enabled: true,
                     models: ["{escaped_model_name}"],
@@ -2434,10 +2635,9 @@ async fn bind_default_behavior_backend(
         anyhow::bail!("upsert inference backend failed: {:?}", response.errors);
     }
 
-    let mut default_behavior =
-        load_agent_behavior(node, &bootstrap.default_behavior.behavior_id)
-            .await?
-            .expect("default behavior document");
+    let mut default_behavior = load_agent_behavior(node, &bootstrap.default_behavior.behavior_id)
+        .await?
+        .expect("default behavior document");
     default_behavior.backend_id = Some(backend_id.to_string());
     default_behavior.model_name = Some(backend.model_name.clone());
     upsert_agent_behavior(node, &default_behavior).await?;
@@ -2607,8 +2807,9 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequestData> {
         }
         buffer.extend_from_slice(&temp[..read]);
     }
-    let body = String::from_utf8_lossy(&buffer[header_end..buffer.len().min(header_end + content_length)])
-        .to_string();
+    let body =
+        String::from_utf8_lossy(&buffer[header_end..buffer.len().min(header_end + content_length)])
+            .to_string();
 
     Ok(HttpRequestData { method, path, body })
 }

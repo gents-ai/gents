@@ -3,12 +3,14 @@ use eframe::egui::{self, Key, RichText, TextEdit, Ui};
 use tokio::runtime::Runtime;
 
 use crate::audit;
+use crate::chat::controller;
+use crate::chat::domain::submission::SendStatus;
 use crate::client::ClientCore;
 use crate::client::ClientStore;
 use crate::state::ShellState;
 use crate::theme;
 
-use super::{send_disabled, turn_state_label};
+use super::turn_state_label;
 
 pub fn show(
     ui: &mut Ui,
@@ -18,17 +20,16 @@ pub fn show(
     runtime: &Runtime,
     selected_agent_did: Option<&str>,
     turn_state: Option<ClientTurnState>,
+    send_status: SendStatus,
 ) {
     let palette = theme::palette();
-    let client_available = client.is_some();
-    let disabled = send_disabled(
-        client_available,
-        selected_agent_did,
-        &state.chat.composer_text,
-        turn_state,
-    );
+    let disabled = send_status.is_disabled();
     let shortcut =
         !disabled && ui.input(|input| input.modifiers.command && input.key_pressed(Key::Enter));
+    let helper_text = send_status
+        .blocked_reason()
+        .map(|reason| reason.hint())
+        .unwrap_or("Cmd+Enter to send".to_string());
 
     ui.group(|ui| {
         ui.set_width(ui.available_width());
@@ -93,11 +94,11 @@ pub fn show(
                 });
                 ui.add_space(4.0);
                 ui.label(
-                    RichText::new("Cmd+Enter to send")
+                    RichText::new(helper_text)
                         .monospace()
                         .size(10.5)
                         .color(if disabled {
-                            palette.text_3
+                            palette.warning
                         } else {
                             palette.text_2
                         }),
@@ -127,50 +128,12 @@ fn submit(
     runtime: &Runtime,
     selected_agent_did: Option<&str>,
 ) {
-    let Some(client) = client else {
-        state.chat.last_submission_error = Some("client core is offline".to_string());
-        return;
-    };
     let Some(agent_did) = selected_agent_did else {
         state.chat.last_submission_error = Some("select an agent before sending".to_string());
         return;
     };
-
-    let behavior_override = state.chat.selected_behavior_override.as_deref();
-    let submission = if let Some(session_id) = state.chat.selected_session_id.clone() {
-        runtime.block_on(client.submit_request(
-            &session_id,
-            agent_did,
-            &state.chat.composer_text,
-            behavior_override,
-        ))
-    } else {
-        runtime.block_on(async {
-            let created = client
-                .create_conversation(agent_did, behavior_override)
-                .await?;
-            client
-                .submit_request(
-                    &created.session_id,
-                    agent_did,
-                    &state.chat.composer_text,
-                    behavior_override,
-                )
-                .await
-        })
-    };
-
-    match submission {
-        Ok(result) => {
-            state.chat.selected_session_id = Some(result.session_id);
-            state.chat.last_submission_error = None;
-            state.chat.last_action_message = None;
-            state.chat.last_export_payload = None;
-            state.chat.composer_text.clear();
-            state.chat.transcript_stick_to_bottom = true;
-        }
-        Err(error) => {
-            state.chat.last_submission_error = Some(error.to_string());
-        }
+    let _ = agent_did;
+    if let Err(error) = controller::submit_composer(&mut state.chat, client, runtime) {
+        state.chat.last_submission_error = Some(error.to_string());
     }
 }

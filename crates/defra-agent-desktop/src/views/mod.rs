@@ -46,7 +46,7 @@ pub fn show_sidebar(
     ui.add_space(6.0);
 
     match state.activity {
-        Activity::Chat => chat::show_sidebar(ui, state, client, store),
+        Activity::Chat => chat::show_sidebar(ui, state, client, store, runtime),
         Activity::Operator => operator::show_sidebar(ui, state, client, store),
         Activity::Peers => peers::show_sidebar(ui, state, client, store, runtime),
         Activity::Logs => logs::show_sidebar(ui, state),

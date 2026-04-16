@@ -1,5 +1,6 @@
 pub mod app;
 pub(crate) mod audit;
+pub(crate) mod chat;
 pub mod client;
 pub mod local_runtime;
 pub mod state;

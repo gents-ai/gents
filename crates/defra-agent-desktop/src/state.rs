@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use crate::chat::domain::submission::ChatWorkflowState;
 use crate::telemetry::DesktopLogCategory;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,7 +64,8 @@ pub struct ChatState {
     pub selected_peer_id: Option<String>,
     pub selected_agent_did: Option<String>,
     pub selected_session_id: Option<String>,
-    pub auto_create_attempted_agent_did: Option<String>,
+    pub suppress_session_autoselect: bool,
+    pub workflow: ChatWorkflowState,
     pub composer_text: String,
     pub selected_behavior_override: Option<String>,
     pub expanded_tool_cards: BTreeSet<String>,

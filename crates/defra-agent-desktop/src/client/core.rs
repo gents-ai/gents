@@ -27,8 +27,12 @@ use super::schema::{
 use crate::local_runtime;
 
 const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
+const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 const BOOTSTRAP_OPERATION_BACKOFF: Duration = Duration::from_millis(250);
-const PEER_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(5);
+const PEER_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(2);
+const DESKTOP_P2P_MAX_CONCURRENT_PUSH_TASKS: usize = 32;
+const DESKTOP_P2P_RATE_LIMIT_BURST: u32 = 5_000;
+const DESKTOP_P2P_RATE_LIMIT_RATE: f64 = 500.0;
 
 #[derive(Debug, Clone)]
 pub struct ClientCoreOptions {
@@ -53,9 +57,9 @@ impl Default for ClientCoreOptions {
             discovery: IrohDiscoveryConfig::default(),
             load_persisted_collections: false,
             max_concurrent_dag_fetches: 4,
-            max_concurrent_push_tasks: 8,
-            rate_limit_burst: 500,
-            rate_limit_rate: 50.0,
+            max_concurrent_push_tasks: DESKTOP_P2P_MAX_CONCURRENT_PUSH_TASKS,
+            rate_limit_burst: DESKTOP_P2P_RATE_LIMIT_BURST,
+            rate_limit_rate: DESKTOP_P2P_RATE_LIMIT_RATE,
             install_replicators_on_bootstrap: true,
         }
     }
@@ -399,19 +403,25 @@ impl ClientCore {
                 .await?
         };
 
-        let (connected, warning) = match self.p2p.connect_peer(&record.addr).await {
-            Ok(()) => match self
-                .p2p
-                .add_replicator(
-                    subscribed_collection_names()
-                        .into_iter()
-                        .map(str::to_owned)
-                        .collect(),
-                    Some(&record.addr),
-                    Vec::new(),
-                    None,
-                )
-                .await
+        let (connected, warning) = match connect_peer_with_retry_until(
+            &self.p2p,
+            &record.addr,
+            &record.label,
+            PEER_ADD_OPERATION_TIMEOUT,
+        )
+        .await
+        {
+            Ok(()) => match add_replicator_with_retry_until(
+                &self.p2p,
+                subscribed_collection_names()
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+                &record.addr,
+                &record.label,
+                PEER_ADD_OPERATION_TIMEOUT,
+            )
+            .await
             {
                 Ok(()) => (true, None),
                 Err(error) => (
@@ -729,7 +739,16 @@ async fn configure_local_runtime_pairing(p2p: &Arc<dyn P2POps>, graphql: &str) -
 }
 
 async fn connect_peer_with_retry(p2p: &Arc<dyn P2POps>, addr: &str, label: &str) -> Result<()> {
-    let deadline = Instant::now() + BOOTSTRAP_OPERATION_TIMEOUT;
+    connect_peer_with_retry_until(p2p, addr, label, BOOTSTRAP_OPERATION_TIMEOUT).await
+}
+
+async fn connect_peer_with_retry_until(
+    p2p: &Arc<dyn P2POps>,
+    addr: &str,
+    label: &str,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
     let expected_peer_id = parse_public_peer_addr(addr)
         .ok()
         .map(|(peer_id, _)| peer_id.to_string());
@@ -769,7 +788,18 @@ async fn add_replicator_with_retry(
     addr: &str,
     label: &str,
 ) -> Result<()> {
-    let deadline = Instant::now() + BOOTSTRAP_OPERATION_TIMEOUT;
+    add_replicator_with_retry_until(p2p, collections, addr, label, BOOTSTRAP_OPERATION_TIMEOUT)
+        .await
+}
+
+async fn add_replicator_with_retry_until(
+    p2p: &Arc<dyn P2POps>,
+    collections: Vec<String>,
+    addr: &str,
+    label: &str,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
     loop {
         match p2p
             .add_replicator(collections.clone(), Some(addr), Vec::new(), None)
@@ -858,7 +888,7 @@ fn spawn_peer_maintenance_task(
                     .find(|status| status.peer_id == record.peer_id)
                     .cloned();
 
-                if !needs_pairing_repair(&record, current_status.as_ref()) {
+                if !saved_peer_needs_repair(&p2p, &record, current_status.as_ref()).await {
                     continue;
                 }
 
@@ -869,16 +899,51 @@ fn spawn_peer_maintenance_task(
                     install_replicators_on_bootstrap,
                 )
                 .await;
-                replace_peer_status(&peer_statuses, updated);
+                let still_saved = peer_directory
+                    .read()
+                    .await
+                    .records()
+                    .iter()
+                    .any(|candidate| candidate.peer_id == record.peer_id);
+                if still_saved {
+                    replace_peer_status(&peer_statuses, updated);
+                }
             }
         }
     })
 }
 
-fn needs_pairing_repair(record: &PeerRecord, status: Option<&ClientPeerStatus>) -> bool {
-    status.is_none()
+async fn saved_peer_needs_repair(
+    p2p: &Arc<dyn P2POps>,
+    record: &PeerRecord,
+    status: Option<&ClientPeerStatus>,
+) -> bool {
+    if status.is_none()
         || status.is_some_and(|status| !status.dial_succeeded || status.last_error.is_some())
-        || (record.graphql.is_some() && status.is_some_and(|status| status.last_error.is_some()))
+    {
+        return true;
+    }
+
+    let Some(expected_peer_id) = parse_public_peer_addr(&record.addr)
+        .ok()
+        .map(|(peer_id, _)| peer_id.to_string())
+    else {
+        return false;
+    };
+
+    match is_connected_peer(p2p, &expected_peer_id).await {
+        Ok(connected) => !connected,
+        Err(error) => {
+            tracing::debug!(
+                target: "defra_agent_desktop::peer_maintenance",
+                peer_id = %record.peer_id,
+                label = %record.label,
+                error = %error,
+                "failed to check live P2P connectivity; forcing repair"
+            );
+            true
+        }
+    }
 }
 
 async fn repair_saved_peer(
@@ -1042,12 +1107,27 @@ mod tests {
     #[derive(Default)]
     struct RecordingP2P {
         notify_calls: AtomicUsize,
+        connected_peers: StdRwLock<Vec<String>>,
         connect_calls: StdRwLock<Vec<String>>,
     }
 
     impl RecordingP2P {
         fn notify_calls(&self) -> usize {
             self.notify_calls.load(Ordering::SeqCst)
+        }
+
+        fn set_connected_peers(&self, peers: Vec<String>) {
+            *self
+                .connected_peers
+                .write()
+                .expect("connected peers lock poisoned") = peers;
+        }
+
+        fn connected_peer_snapshot(&self) -> Vec<String> {
+            self.connected_peers
+                .read()
+                .expect("connected peers lock poisoned")
+                .clone()
         }
 
         fn connect_calls(&self) -> Vec<String> {
@@ -1069,13 +1149,17 @@ mod tests {
         }
 
         async fn connected_peers(&self) -> P2PResult<Vec<String>> {
-            Ok(self.connect_calls())
+            Ok(self.connected_peer_snapshot())
         }
 
         async fn connect_peer(&self, addr: &str) -> P2PResult<()> {
             self.connect_calls
                 .write()
                 .expect("connect calls lock poisoned")
+                .push(addr.to_string());
+            self.connected_peers
+                .write()
+                .expect("connected peers lock poisoned")
                 .push(addr.to_string());
             Ok(())
         }
@@ -1202,5 +1286,60 @@ mod tests {
         assert_eq!(recording.connect_calls(), vec![record.addr.clone()]);
         assert!(repaired.dial_succeeded);
         assert_eq!(repaired.last_error, None);
+    }
+
+    #[tokio::test]
+    async fn saved_peer_needs_repair_when_live_connection_has_dropped() {
+        let recording = Arc::new(RecordingP2P::default());
+        let p2p: Arc<dyn P2POps> = recording.clone();
+        let record = PeerRecord::new(
+            "Workshop Bay",
+            "127.0.0.1:56000/p2p/peer-alpha",
+            "did:defra:workshop-bay",
+        );
+
+        let needs_repair = saved_peer_needs_repair(
+            &p2p,
+            &record,
+            Some(&ClientPeerStatus {
+                peer_id: record.peer_id.clone(),
+                label: record.label.clone(),
+                agent_did: record.agent_did.clone(),
+                addr: record.addr.clone(),
+                dial_succeeded: true,
+                last_error: None,
+            }),
+        )
+        .await;
+
+        assert!(needs_repair);
+    }
+
+    #[tokio::test]
+    async fn saved_peer_does_not_need_repair_while_live_connection_is_healthy() {
+        let recording = Arc::new(RecordingP2P::default());
+        recording.set_connected_peers(vec!["127.0.0.1:56000/p2p/peer-alpha".to_string()]);
+        let p2p: Arc<dyn P2POps> = recording.clone();
+        let record = PeerRecord::new(
+            "Workshop Bay",
+            "127.0.0.1:56000/p2p/peer-alpha",
+            "did:defra:workshop-bay",
+        );
+
+        let needs_repair = saved_peer_needs_repair(
+            &p2p,
+            &record,
+            Some(&ClientPeerStatus {
+                peer_id: record.peer_id.clone(),
+                label: record.label.clone(),
+                agent_did: record.agent_did.clone(),
+                addr: record.addr.clone(),
+                dial_succeeded: true,
+                last_error: None,
+            }),
+        )
+        .await;
+
+        assert!(!needs_repair);
     }
 }
