@@ -2,8 +2,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use defra_node::{EmbeddedNode, QueryResponse};
-use rig::completion::message::{AssistantContent, Message, Text, UserContent};
-use rig::one_or_many::OneOrMany;
+use rig::completion::message::Message;
 use serde::{Deserialize, Serialize};
 
 use crate::graphql::{escape_graphql_string, response_has_documents};

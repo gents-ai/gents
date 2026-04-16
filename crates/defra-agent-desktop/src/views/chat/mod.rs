@@ -108,6 +108,11 @@ pub fn prepare_state(
         }
 
         let conversations = store.conversation_rows(&agent_did);
+        if !conversations.is_empty()
+            && state.chat.auto_create_attempted_agent_did.as_deref() == Some(agent_did.as_str())
+        {
+            state.chat.auto_create_attempted_agent_did = None;
+        }
         if state
             .chat
             .selected_session_id
@@ -133,6 +138,7 @@ pub fn prepare_state(
         state.status.active_agent = "no agent selected".to_string();
         state.status.runtime_state = "idle".to_string();
         state.chat.selected_session_id = None;
+        state.chat.auto_create_attempted_agent_did = None;
     }
 }
 
@@ -193,11 +199,26 @@ pub fn show_main(
     };
 
     let selected_agent_did = state.chat.selected_agent_did.clone();
-    let selected_session_id = state.chat.selected_session_id.clone();
     let selected_agent_conversations = selected_agent_did
         .as_deref()
         .map(|agent_did| store.conversation_rows(agent_did))
         .unwrap_or_default();
+    let should_auto_create_first_conversation = client.is_some()
+        && selected_agent_did.is_some()
+        && state.chat.selected_session_id.is_none()
+        && selected_agent_conversations.is_empty();
+    if should_auto_create_first_conversation
+        && state.chat.auto_create_attempted_agent_did.as_deref() != selected_agent_did.as_deref()
+    {
+        state.chat.auto_create_attempted_agent_did = selected_agent_did.clone();
+        if let Err(error) =
+            create_first_conversation(state, client, runtime, selected_agent_did.as_deref())
+        {
+            state.chat.last_submission_error = Some(error.to_string());
+        }
+    }
+
+    let selected_session_id = state.chat.selected_session_id.clone();
     let show_first_conversation_nudge = selected_agent_did.is_some()
         && selected_session_id.is_none()
         && selected_agent_conversations.is_empty();
@@ -219,6 +240,20 @@ pub fn show_main(
             },
         );
         ui.add_space(12.0);
+        egui::Panel::bottom("chat_composer_panel")
+            .resizable(false)
+            .exact_size(208.0)
+            .show_inside(ui, |ui| {
+                composer::show(
+                    ui,
+                    state,
+                    client,
+                    store,
+                    runtime,
+                    selected_agent_did.as_deref(),
+                    turn_state,
+                );
+            });
         if show_first_conversation_nudge {
             render_first_conversation_nudge(
                 ui,
@@ -237,16 +272,6 @@ pub fn show_main(
                 markdown_cache,
             );
         }
-        ui.add_space(12.0);
-        composer::show(
-            ui,
-            state,
-            client,
-            store,
-            runtime,
-            selected_agent_did.as_deref(),
-            turn_state,
-        );
     });
 }
 
@@ -372,7 +397,7 @@ fn render_first_conversation_nudge(
     ui.group(|ui| {
         ui.set_width(ui.available_width());
         ui.label(
-            RichText::new("Start First Conversation")
+            RichText::new("Create Conversation")
                 .family(theme::stencil_family())
                 .size(16.0)
                 .color(palette.text_0)
@@ -381,7 +406,7 @@ fn render_first_conversation_nudge(
         ui.add_space(6.0);
         ui.label(
             RichText::new(
-                "This agent is replicated locally but does not have a conversation yet. Create one now so the transcript and composer have a concrete session to target.",
+                "Automatic conversation creation did not complete. Create one now so the transcript and composer have a concrete session to target.",
             )
             .size(13.0)
             .color(palette.text_1)

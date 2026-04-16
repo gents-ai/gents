@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use defra_agent_protocol::client_protocol::{
@@ -58,6 +58,7 @@ pub struct ClientStore {
     tool_results_by_session_id: HashMap<String, Vec<usize>>,
     runtimes_by_agent_did: HashMap<String, usize>,
     latest_response_by_request_id: HashMap<String, usize>,
+    request_index_by_id: HashMap<String, usize>,
 }
 
 #[derive(Debug)]
@@ -173,6 +174,11 @@ impl ClientStore {
             }
         }
 
+        let mut request_index_by_id = HashMap::new();
+        for (index, row) in rows.requests.iter().enumerate() {
+            request_index_by_id.insert(row.request_id.clone(), index);
+        }
+
         Self {
             agent_principals: rows.agent_principals,
             behaviors: rows.behaviors,
@@ -197,6 +203,7 @@ impl ClientStore {
             tool_results_by_session_id,
             runtimes_by_agent_did,
             latest_response_by_request_id,
+            request_index_by_id,
         }
     }
 
@@ -282,15 +289,41 @@ impl ClientStore {
     }
 
     pub fn derive_turn(&self, session_id: &str) -> Option<ClientTurnState> {
-        let attempts: Vec<_> = self
-            .requests_by_session_id
-            .get(session_id)
-            .into_iter()
-            .flat_map(|indexes| indexes.iter())
-            .filter_map(|index| self.attempt_for_request(*index))
-            .collect();
-
+        let latest_request_id = self
+            .conversations
+            .iter()
+            .find(|row| row.session_id == session_id)
+            .and_then(|row| clean_string(row.latest_request_id.as_deref()))
+            .or_else(|| {
+                self.requests_by_session_id
+                    .get(session_id)
+                    .and_then(|indexes| indexes.last().copied())
+                    .map(|index| self.requests[index].request_id.clone())
+            })?;
+        let attempts = self.attempt_chain_for_request(&latest_request_id);
         derive_turn(&attempts)
+    }
+
+    fn attempt_chain_for_request(&self, request_id: &str) -> Vec<AttemptView> {
+        let mut attempts = Vec::new();
+        let mut cursor = Some(request_id.to_string());
+        let mut seen = HashSet::new();
+
+        while let Some(current_request_id) = cursor.take() {
+            if !seen.insert(current_request_id.clone()) {
+                break;
+            }
+            let Some(index) = self.request_index_by_id.get(&current_request_id).copied() else {
+                break;
+            };
+            let row = &self.requests[index];
+            if let Some(attempt) = self.attempt_for_request(index) {
+                attempts.push(attempt);
+            }
+            cursor = clean_string(row.retry_parent_request.as_deref());
+        }
+
+        attempts
     }
 
     fn attempt_for_request(&self, index: usize) -> Option<AttemptView> {

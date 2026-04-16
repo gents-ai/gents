@@ -1,6 +1,8 @@
-use super::history::deserialize_message;
 use super::*;
 use crate::ensure_schemas;
+use defra_agent_protocol::transcript::decode_persisted_message;
+use rig::completion::message::{AssistantContent, Text, UserContent};
+use rig::one_or_many::OneOrMany;
 
 #[test]
 fn test_load_history_deserializes_plain_text() {
@@ -10,7 +12,7 @@ fn test_load_history_deserializes_plain_text() {
         })),
     };
     let json = serde_json::to_string(&user_msg).unwrap();
-    let restored = deserialize_message("user", &json);
+    let restored = decode_persisted_message("user", &json);
     assert_eq!(user_msg, restored);
 }
 
@@ -27,7 +29,7 @@ fn test_load_history_deserializes_legacy_assistant_content() {
     ])
     .unwrap();
 
-    let restored = deserialize_message(
+    let restored = decode_persisted_message(
         "assistant",
         &serde_json::to_string(&legacy_content).unwrap(),
     );

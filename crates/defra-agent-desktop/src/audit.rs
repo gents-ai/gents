@@ -25,6 +25,8 @@ pub(crate) mod targets {
     pub(crate) const CHAT_REASONING_PREFIX: &str = "chat.reasoning";
     pub(crate) const CHAT_SEND: &str = "chat.send";
     pub(crate) const CHAT_TOOL_CARD_PREFIX: &str = "chat.tool_card";
+    pub(crate) const CHAT_TOOL_ARGS_PREFIX: &str = "chat.tool_args";
+    pub(crate) const CHAT_TOOL_OUTPUT_PREFIX: &str = "chat.tool_output";
     pub(crate) const CHAT_EXPORT: &str = "chat.export";
     pub(crate) const LOGS_FILTER_ALL: &str = "logs.filter.all";
     pub(crate) const LOGS_FILTER_REPLICATION: &str = "logs.filter.replication";
@@ -84,6 +86,14 @@ pub(crate) mod targets {
 
     pub(crate) fn chat_tool_card(card_id: &str) -> String {
         format!("{CHAT_TOOL_CARD_PREFIX}.{card_id}")
+    }
+
+    pub(crate) fn chat_tool_args(card_id: &str) -> String {
+        format!("{CHAT_TOOL_ARGS_PREFIX}.{card_id}")
+    }
+
+    pub(crate) fn chat_tool_output(card_id: &str) -> String {
+        format!("{CHAT_TOOL_OUTPUT_PREFIX}.{card_id}")
     }
 
     pub(crate) fn operator_agent(agent_did: &str) -> String {

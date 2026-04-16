@@ -7,13 +7,16 @@ use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
+use defra_agent_protocol::transcript::{
+    decode_persisted_message, extract_message_reasoning as extract_persisted_message_reasoning,
+    present_persisted_message, render_message_body_markdown as render_persisted_message_body,
+};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Terminal;
-use rig::completion::message::{AssistantContent, Message, ReasoningContent, Text, UserContent};
-use rig::one_or_many::OneOrMany;
+use rig::completion::message::Message;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -695,111 +698,30 @@ fn render_runtime(runtime: Option<&RuntimeRow>, agent_name: &str, agent_did: &st
 }
 
 fn decode_message(role: &str, content: &str) -> Message {
-    if let Ok(message) = serde_json::from_str::<Message>(content) {
-        return message;
-    }
-
-    if role == "assistant" {
-        if let Ok(content) = serde_json::from_str::<OneOrMany<AssistantContent>>(content) {
-            return Message::Assistant { id: None, content };
-        }
-    }
-
-    if role == "user" {
-        if let Ok(content) = serde_json::from_str::<OneOrMany<UserContent>>(content) {
-            return Message::User { content };
-        }
-    }
-
-    match role {
-        "assistant" => Message::Assistant {
-            id: None,
-            content: OneOrMany::one(AssistantContent::Text(Text {
-                text: content.to_string(),
-            })),
-        },
-        _ => Message::User {
-            content: OneOrMany::one(UserContent::Text(Text {
-                text: content.to_string(),
-            })),
-        },
-    }
+    decode_persisted_message(role, content)
 }
 
 fn render_transcript_message_body(message: &Message) -> String {
-    match message {
-        Message::User { content } => content
-            .iter()
-            .filter_map(|item| match item {
-                UserContent::Text(text) if !text.text.trim().is_empty() => {
-                    Some(text.text.trim().to_string())
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-        Message::Assistant { content, .. } => content
-            .iter()
-            .filter_map(|item| match item {
-                AssistantContent::Text(text) if !text.text.trim().is_empty() => {
-                    Some(text.text.trim().to_string())
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-    }
+    render_persisted_message_body(message)
 }
 
 fn extract_message_reasoning(message: &Message) -> Option<String> {
-    let Message::Assistant { content, .. } = message else {
-        return None;
-    };
-
-    let chunks = content
-        .iter()
-        .filter_map(|item| match item {
-            AssistantContent::Reasoning(reasoning) => {
-                let rendered = render_reasoning_summary(reasoning);
-                (!rendered.trim().is_empty()).then_some(rendered)
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-
-    (!chunks.is_empty()).then_some(chunks.join("\n\n"))
-}
-
-fn render_reasoning_summary(reasoning: &rig::completion::message::Reasoning) -> String {
-    let mut out = String::new();
-    for item in &reasoning.content {
-        let piece = match item {
-            ReasoningContent::Text { text, .. } | ReasoningContent::Summary(text) => text.as_str(),
-            ReasoningContent::Encrypted(_) => "[encrypted reasoning]",
-            ReasoningContent::Redacted { .. } => "[redacted reasoning]",
-            _ => "[opaque reasoning]",
-        };
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        out.push_str(piece);
-    }
-    out
+    extract_persisted_message_reasoning(message)
 }
 
 fn transcript_label(message: &Message) -> &'static str {
-    match message {
-        Message::Assistant { .. } => "Assistant",
-        Message::User { content } => {
-            let has_text = content.iter().any(
-                |item| matches!(item, UserContent::Text(text) if !text.text.trim().is_empty()),
-            );
-            if has_text {
-                "You"
-            } else {
-                "Tool"
-            }
-        }
+    match present_persisted_message(
+        match message {
+            Message::Assistant { .. } => "assistant",
+            Message::User { .. } => "user",
+        },
+        &serde_json::to_string(message).unwrap_or_default(),
+    )
+    .role
+    {
+        defra_agent_protocol::transcript::PresentedMessageRole::Assistant => "Assistant",
+        defra_agent_protocol::transcript::PresentedMessageRole::Tool => "Tool",
+        defra_agent_protocol::transcript::PresentedMessageRole::User => "You",
     }
 }
 

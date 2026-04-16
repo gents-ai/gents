@@ -256,18 +256,16 @@ fn desktop_app_renders_chat_first_conversation_nudge() -> Result<()> {
         app.state.chat.selected_agent_did.as_deref(),
         Some("did:defra:amy")
     );
-    assert!(app.state.chat.selected_session_id.is_none());
-    assert!(texts
+    assert!(app.state.chat.selected_session_id.is_some());
+    assert!(texts.iter().any(|text| text.contains("Transcript Empty")));
+    assert!(!texts
         .iter()
-        .any(|text| text.contains("Start First Conversation")));
-    assert!(texts
-        .iter()
-        .any(|text| text.contains("Create Conversation")));
+        .any(|text| text.contains("Automatic conversation creation did not complete")));
     Ok(())
 }
 
 #[test]
-fn desktop_app_clicks_through_chat_first_conversation_nudge() -> Result<()> {
+fn desktop_app_auto_creates_first_chat_conversation() -> Result<()> {
     let runtime = test_runtime()?;
     let tempdir = tempfile::tempdir()?;
     let core = runtime.block_on(ClientCore::start_with_paths_and_options(
@@ -300,16 +298,13 @@ fn desktop_app_clicks_through_chat_first_conversation_nudge() -> Result<()> {
     app.state.activity = Activity::Chat;
     let mut driver = AuditDriver::new(app, ctx);
 
-    let initial = driver.render();
-    assert!(initial
-        .iter()
-        .any(|text| text.contains("Start First Conversation")));
-
-    driver.click_target(audit::targets::CHAT_CREATE_CONVERSATION);
     let texts = driver.render();
 
     assert!(driver.app.state.chat.selected_session_id.is_some());
     assert!(texts.iter().any(|text| text.contains("Transcript Empty")));
+    assert!(!texts
+        .iter()
+        .any(|text| text.contains("Automatic conversation creation did not complete")));
     Ok(())
 }
 
@@ -344,6 +339,10 @@ fn desktop_app_clicks_through_activity_bar_navigation() -> Result<()> {
     let mut driver = AuditDriver::new(app, ctx);
 
     let chat_texts = driver.render();
+    assert!(chat_texts.iter().any(|text| text.contains("DEFRA DESKTOP")));
+    assert!(chat_texts.iter().any(|text| text.contains("CHAT")));
+    assert!(chat_texts.iter().any(|text| text.contains("conversations")));
+    assert!(chat_texts.iter().any(|text| text.contains("LOGS")));
     assert!(chat_texts
         .iter()
         .any(|text| text.contains("Add Deployment")));
@@ -351,18 +350,21 @@ fn desktop_app_clicks_through_activity_bar_navigation() -> Result<()> {
     let logs_texts = driver.open_activity(Activity::Logs);
     assert_eq!(driver.app.state.activity, Activity::Logs);
     assert!(logs_texts.iter().any(|text| text.contains("Live Logs")));
+    assert!(logs_texts.iter().any(|text| text.contains("Log Controls")));
 
     let operator_texts = driver.open_activity(Activity::Operator);
     assert_eq!(driver.app.state.activity, Activity::Operator);
     assert!(operator_texts
         .iter()
         .any(|text| text.contains("Operator Console")));
+    assert!(operator_texts.iter().any(|text| text.contains("OPERATOR")));
 
     let peers_texts = driver.open_activity(Activity::Peers);
     assert_eq!(driver.app.state.activity, Activity::Peers);
     assert!(peers_texts
         .iter()
         .any(|text| text.contains("Add Your First Deployment")));
+    assert!(peers_texts.iter().any(|text| text.contains("PEERS")));
 
     let back_to_chat = driver.open_activity(Activity::Chat);
     assert_eq!(driver.app.state.activity, Activity::Chat);
@@ -540,6 +542,11 @@ fn desktop_app_clicks_through_chat_reasoning_and_tool_card_disclosures() -> Resu
 
     assert!(initial
         .iter()
+        .any(|text| text.contains("I checked the queue and opened the trace.")));
+    assert!(initial.iter().any(|text| text.contains("Queue checked.")));
+    assert!(!initial.iter().any(|text| text.contains("\"call_id\"")));
+    assert!(initial
+        .iter()
         .any(|text| text.contains("REASONING DISCLOSURE")));
     assert!(!initial
         .iter()
@@ -553,8 +560,17 @@ fn desktop_app_clicks_through_chat_reasoning_and_tool_card_disclosures() -> Resu
         .chat
         .expanded_tool_cards
         .contains("call-shell-1"));
-    assert!(tool_texts.iter().any(|text| text.contains("ARGS")));
-    assert!(tool_texts
+    assert!(tool_texts.iter().any(|text| text.contains("Args")));
+    assert!(tool_texts.iter().any(|text| text.contains("Output")));
+    assert!(tool_texts.iter().any(|text| text.contains("completed")));
+    assert!(!tool_texts.iter().any(|text| text.contains("ARGS")));
+    assert!(!tool_texts
+        .iter()
+        .any(|text| text.contains("src/app.rs: audit target live")));
+    driver.click_target(&audit::targets::chat_tool_output("call-shell-1"));
+    let output_texts = driver.render();
+    assert!(output_texts.iter().any(|text| text.contains("TOOL OUTPUT")));
+    assert!(output_texts
         .iter()
         .any(|text| text.contains("src/app.rs: audit target live")));
 
@@ -601,18 +617,11 @@ fn desktop_app_clicks_through_chat_send_without_precreating_conversation() -> Re
     app.state.activity = Activity::Chat;
     let mut driver = AuditDriver::new(app, ctx);
 
-    wait_for_value(
-        "first-conversation nudge before direct send",
+    let _session_id = ensure_chat_session_selected(
+        &mut driver,
+        "chat session ready before direct send",
         Duration::from_secs(5),
-        || {
-            let texts = driver.render();
-            texts
-                .iter()
-                .any(|text| text.contains("Start First Conversation"))
-                .then_some(texts)
-        },
     )?;
-    assert_eq!(driver.app.state.chat.selected_session_id, None);
     assert_eq!(
         driver.app.state.chat.selected_agent_did.as_deref(),
         Some(running_agent.did.as_str())
@@ -810,28 +819,29 @@ fn desktop_app_clicks_through_live_agent_submission() -> Result<()> {
         .iter()
         .any(|row| row.agent_did == running_agent.did));
 
-    let initial = wait_for_value(
-        "chat first-conversation nudge",
-        Duration::from_secs(5),
-        || {
-            let texts = driver.render();
-            texts
-                .iter()
-                .any(|text| text.contains("Start First Conversation"))
-                .then_some(texts)
-        },
-    )?;
+    let initial = driver.render();
     assert_eq!(
         driver.app.state.chat.selected_agent_did.as_deref(),
         Some(running_agent.did.as_str())
     );
-    assert!(initial
-        .iter()
-        .any(|text| text.contains("Create Conversation")));
-
-    driver.click_target(audit::targets::CHAT_CREATE_CONVERSATION);
-    let after_create = driver.render();
+    let after_create = wait_for_value(
+        "chat auto-created first session",
+        Duration::from_secs(5),
+        || {
+            let texts = driver.render();
+            driver
+                .app
+                .state
+                .chat
+                .selected_session_id
+                .clone()
+                .map(|_| texts)
+        },
+    )?;
     assert!(driver.app.state.chat.selected_session_id.is_some());
+    assert!(!initial
+        .iter()
+        .any(|text| text.contains("Automatic conversation creation did not complete")));
     assert!(after_create
         .iter()
         .any(|text| text.contains("Transcript Empty")));
@@ -1003,21 +1013,11 @@ fn desktop_app_executes_tool_loop_and_renders_tool_output() -> Result<()> {
     app.state.activity = Activity::Chat;
     let mut driver = AuditDriver::new(app, ctx);
 
-    wait_for_value(
-        "tool loop first-conversation nudge",
+    let session_id = ensure_chat_session_selected(
+        &mut driver,
+        "tool loop selected session",
         Duration::from_secs(5),
-        || {
-            let texts = driver.render();
-            texts
-                .iter()
-                .any(|text| text.contains("Start First Conversation"))
-                .then_some(())
-        },
     )?;
-    driver.click_target(audit::targets::CHAT_CREATE_CONVERSATION);
-    let session_id = wait_for_value("tool loop selected session", Duration::from_secs(5), || {
-        driver.app.state.chat.selected_session_id.clone()
-    })?;
 
     let prompt =
         "Use the read_file tool to read notes.txt. Reply with only the token from that file.";
@@ -1068,10 +1068,14 @@ fn desktop_app_executes_tool_loop_and_renders_tool_output() -> Result<()> {
     )?;
     driver.click_interactable_target(&tool_target)?;
     let tool_texts = driver.render();
-    assert!(tool_texts.iter().any(|text| text.contains("ARGS")));
-    assert!(tool_texts.iter().any(|text| text.contains("OUTPUT")));
+    assert!(tool_texts.iter().any(|text| text.contains("Args")));
+    assert!(tool_texts.iter().any(|text| text.contains("Output")));
+    assert!(!tool_texts.iter().any(|text| text.contains("OUTPUT")));
+    let output_target = audit::targets::chat_tool_output(&tool_card_id);
+    driver.click_interactable_target(&output_target)?;
+    let output_modal = driver.render();
     assert!(tool_output.contains(&tool_token));
-    assert!(tool_texts
+    assert!(output_modal
         .iter()
         .any(|text| text.contains(&tool_token) || tool_output.contains(text.trim())));
 
@@ -1108,30 +1112,11 @@ fn desktop_app_clicks_through_live_agent_multi_turn_conversation() -> Result<()>
     app.state.activity = Activity::Chat;
     let mut driver = AuditDriver::new(app, ctx);
 
-    wait_for_value(
-        "chat first-conversation nudge for multi-turn audit",
-        Duration::from_secs(5),
-        || {
-            let texts = driver.render();
-            texts
-                .iter()
-                .any(|text| text.contains("Start First Conversation"))
-                .then_some(())
-        },
-    )?;
-    driver.click_target(audit::targets::CHAT_CREATE_CONVERSATION);
-    wait_for_value(
+    let session_id = ensure_chat_session_selected(
+        &mut driver,
         "session selected for multi-turn audit",
         Duration::from_secs(5),
-        || driver.app.state.chat.selected_session_id.clone(),
     )?;
-    let session_id = driver
-        .app
-        .state
-        .chat
-        .selected_session_id
-        .clone()
-        .ok_or_else(|| anyhow!("missing selected session after create conversation"))?;
 
     let (_first_request_id, first_response) =
         submit_chat_message_and_wait_for_response(&mut driver, "first desktop audit turn")?;
@@ -1175,5 +1160,46 @@ fn desktop_app_clicks_through_live_agent_multi_turn_conversation() -> Result<()>
     assert!(final_texts.iter().any(|text| text.contains("completed")));
 
     runtime.block_on(running_agent.shutdown())?;
+    Ok(())
+}
+
+#[test]
+fn desktop_app_places_tool_cards_in_tool_turn_without_raw_duplicate_message() -> Result<()> {
+    let runtime = test_runtime()?;
+    let tempdir = tempfile::tempdir()?;
+    let core = runtime.block_on(ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path()),
+        ClientCoreOptions::local_only(),
+    ))?;
+    runtime.block_on(insert_agent_principal(
+        &core,
+        "did:defra:amy",
+        "Amy",
+        "amy-default",
+    ))?;
+    let conversation =
+        runtime.block_on(core.create_conversation("did:defra:amy", Some("amy-default")))?;
+    runtime.block_on(insert_chat_transcript_documents(
+        &core,
+        &conversation.session_id,
+        "did:defra:amy",
+        "amy-default",
+        "response-tool-structure-1",
+    ))?;
+
+    let mut driver = build_driver(
+        Arc::clone(&runtime),
+        core,
+        Arc::new(DesktopLogStore::new(64)),
+    );
+    driver.app.state.activity = Activity::Chat;
+    let texts = driver.render();
+
+    assert!(texts.iter().any(|text| text.contains("TOOL")));
+    assert!(texts.iter().any(|text| text.contains("shell  completed")));
+    assert!(!texts
+        .iter()
+        .any(|text| text.contains("src/app.rs: audit target live")));
+    assert!(!texts.iter().any(|text| text.contains("\"call_id\"")));
     Ok(())
 }

@@ -1,224 +1,5 @@
 use super::*;
 
-#[derive(Clone)]
-struct LiveDeploymentCase<'a> {
-    label: String,
-    peer_id: String,
-    addr: String,
-    agent_did: String,
-    docs: LiveAgentDocs,
-    remote_core: &'a ClientCore,
-}
-
-struct LiveSubmissionCase {
-    prompt: String,
-    request_id: String,
-    response: String,
-    session_id: String,
-}
-
-fn assert_chat_context(
-    driver: &AuditDriver,
-    deployment: &LiveDeploymentCase<'_>,
-    session_id: Option<&str>,
-) {
-    assert_eq!(
-        driver.app.state.chat.selected_peer_id.as_deref(),
-        Some(deployment.peer_id.as_str())
-    );
-    assert_eq!(
-        driver.app.state.chat.selected_agent_did.as_deref(),
-        Some(deployment.agent_did.as_str())
-    );
-    assert_eq!(
-        driver.app.state.chat.selected_session_id.as_deref(),
-        session_id
-    );
-    assert_eq!(driver.app.state.chat.selected_behavior_override, None);
-    assert_eq!(driver.app.state.chat.last_submission_error, None);
-}
-
-fn assert_operator_context(
-    driver: &AuditDriver,
-    deployment: &LiveDeploymentCase<'_>,
-    section: OperatorSection,
-    entity_id: Option<&str>,
-) {
-    assert_eq!(
-        driver.app.state.operator.selected_peer_id.as_deref(),
-        Some(deployment.peer_id.as_str())
-    );
-    assert_eq!(
-        driver.app.state.operator.selected_agent_did.as_deref(),
-        Some(deployment.agent_did.as_str())
-    );
-    assert_eq!(driver.app.state.operator.selected_section, section);
-    assert_eq!(
-        driver.app.state.operator.selected_entity_id.as_deref(),
-        entity_id
-    );
-}
-
-fn live_deployment_case(deployment: &LiveRemoteDeployment) -> LiveDeploymentCase<'_> {
-    LiveDeploymentCase {
-        label: deployment.label.clone(),
-        peer_id: deployment.peer_id.clone(),
-        addr: deployment.addr.clone(),
-        agent_did: deployment.agent_did.clone(),
-        docs: deployment.docs.clone(),
-        remote_core: &deployment.core,
-    }
-}
-
-fn submit_live_prompt_for_deployment(
-    driver: &mut AuditDriver,
-    deployment: &LiveDeploymentCase<'_>,
-    exact_token: &str,
-) -> Result<LiveSubmissionCase> {
-    driver.open_activity(Activity::Chat);
-    let deployment_target = audit::targets::chat_deployment(&deployment.peer_id);
-    driver.wait_for_target(
-        &format!("chat deployment row for {}", deployment.label),
-        Duration::from_secs(10),
-        &deployment_target,
-    )?;
-    driver.click_target(&deployment_target);
-    assert_chat_context(driver, deployment, None);
-
-    if driver.app.state.chat.selected_session_id.is_none() {
-        let existing_session_id = driver.app.client.as_ref().and_then(|client| {
-            client
-                .store()
-                .snapshot()
-                .conversation_rows(&deployment.agent_did)
-                .first()
-                .map(|row| row.session_id.clone())
-        });
-        if let Some(session_id) = existing_session_id {
-            let conversation_target = audit::targets::chat_conversation(&session_id);
-            driver.wait_for_target(
-                &format!("existing conversation row for {}", deployment.label),
-                Duration::from_secs(10),
-                &conversation_target,
-            )?;
-            driver.click_target(&conversation_target);
-        } else {
-            driver.wait_for_target(
-                &format!("first conversation nudge for {}", deployment.label),
-                Duration::from_secs(10),
-                audit::targets::CHAT_CREATE_CONVERSATION,
-            )?;
-            driver.click_target(audit::targets::CHAT_CREATE_CONVERSATION);
-        }
-    }
-
-    let prompt = format!(
-        "Reply with exactly {exact_token} and nothing else. Multi-agent server isolation audit {}",
-        uuid::Uuid::new_v4()
-    );
-    let (request_id, response) = submit_chat_message_and_wait_for_response_after_request(
-        driver,
-        &prompt,
-        |driver, request_id| nudge_live_request_replication(driver, &deployment, request_id),
-    )?;
-    let session_id = driver
-        .app
-        .state
-        .chat
-        .selected_session_id
-        .clone()
-        .ok_or_else(|| anyhow!("missing selected session after live submission"))?;
-    assert_chat_context(driver, deployment, Some(session_id.as_str()));
-
-    wait_for_value(
-        &format!("request {request_id} bound to {}", deployment.label),
-        Duration::from_secs(10),
-        || {
-            driver.app.client.as_ref().and_then(|client| {
-                client
-                    .store()
-                    .snapshot()
-                    .requests
-                    .iter()
-                    .find(|row| row.request_id == request_id)
-                    .filter(|row| {
-                        row.agent_did.as_deref() == Some(deployment.agent_did.as_str())
-                            && row.session_id.as_deref() == Some(session_id.as_str())
-                            && row.behavior_id.as_deref()
-                                == Some(deployment.docs.behavior_id.as_str())
-                    })
-                    .map(|row| row.request_id.clone())
-            })
-        },
-    )?;
-
-    Ok(LiveSubmissionCase {
-        prompt,
-        request_id,
-        response,
-        session_id,
-    })
-}
-
-fn nudge_live_request_replication(
-    driver: &mut AuditDriver,
-    deployment: &LiveDeploymentCase<'_>,
-    request_id: &str,
-) -> Result<()> {
-    let desktop_client = Arc::clone(
-        driver
-            .app
-            .client
-            .as_ref()
-            .ok_or_else(|| anyhow!("desktop client missing for live request replication"))?,
-    );
-    let desktop_addr = desktop_client
-        .listen_addresses()
-        .first()
-        .cloned()
-        .ok_or_else(|| anyhow!("desktop client missing listen address"))?;
-
-    driver.app.block_on_runtime(async {
-        let remote_core = deployment.remote_core;
-        connect_peer_with_retry(
-            desktop_client.as_ref(),
-            &deployment.addr,
-            remote_core.local_peer_id(),
-            &format!("desktop -> {} after request {request_id}", deployment.label),
-        )
-        .await?;
-        connect_peer_with_retry(
-            remote_core,
-            &desktop_addr,
-            desktop_client.local_peer_id(),
-            &format!("{} -> desktop after request {request_id}", deployment.label),
-        )
-        .await?;
-        Ok::<(), anyhow::Error>(())
-    })?;
-
-    wait_for_value(
-        &format!(
-            "remote {} replica to receive request {request_id}",
-            deployment.label
-        ),
-        Duration::from_secs(30),
-        || {
-            driver
-                .app
-                .block_on_runtime(query_has_row_by_unique_field(
-                    deployment.remote_core,
-                    "AgentRequest",
-                    "request_id",
-                    request_id,
-                ))
-                .ok()
-                .filter(|has_row| *has_row)
-                .map(|_| ())
-        },
-    )
-}
-
 fn refreshed_runtime_generation(
     runtime: &tokio::runtime::Runtime,
     core: &ClientCore,
@@ -878,25 +659,11 @@ fn desktop_app_live_inference_smoke() -> Result<()> {
     );
     let prompt_snippet = "Reply with exactly READY";
 
-    wait_for_value(
-        "live chat first-conversation nudge",
+    let first_session_id = ensure_chat_session_selected(
+        &mut driver,
+        "live first conversation selected",
         Duration::from_secs(10),
-        || {
-            let texts = driver.render();
-            texts
-                .iter()
-                .any(|text| text.contains("Start First Conversation"))
-                .then_some(())
-        },
     )?;
-    driver.click_target(audit::targets::CHAT_CREATE_CONVERSATION);
-    let first_session_id = driver
-        .app
-        .state
-        .chat
-        .selected_session_id
-        .clone()
-        .ok_or_else(|| anyhow!("live first conversation was not selected"))?;
     wait_for_value(
         "live transcript empty state",
         Duration::from_secs(5),
@@ -1052,14 +819,14 @@ fn desktop_app_live_inference_smoke() -> Result<()> {
         Some(second_session.session_id.as_str())
     );
     let (_, second_response_content) =
-        submit_chat_message_and_wait_for_response(&mut driver, &second_prompt)?;
+        submit_chat_message_and_wait_for_observed_response(&mut driver, &second_prompt)?;
 
     let multi_turn_prompt = format!(
         "This is the second turn in the same conversation. Reply with exactly MULTI_TURN_READY and nothing else. audit {}",
         uuid::Uuid::new_v4()
     );
     let (_, multi_turn_response_content) =
-        submit_chat_message_and_wait_for_response(&mut driver, &multi_turn_prompt)?;
+        submit_chat_message_and_wait_for_observed_response(&mut driver, &multi_turn_prompt)?;
     let second_session_request_count = driver
         .app
         .client
@@ -2300,28 +2067,12 @@ fn desktop_app_live_operator_config_round_trips() -> Result<()> {
 
     {
         let driver = &mut fixture.driver;
-        driver.wait_for_target(
-            "live empty chat peers setup button",
-            Duration::from_secs(10),
-            audit::targets::CHAT_OPEN_PEERS_SETUP,
-        )?;
-        driver.click_target(audit::targets::CHAT_OPEN_PEERS_SETUP);
-        assert_eq!(driver.app.state.activity, Activity::Peers);
-        assert!(driver.app.state.peers.show_add_form);
-        driver.open_activity(Activity::Chat);
-        wait_for_value(
+        let _session_id = ensure_chat_session_selected(
+            driver,
             "live operator fixture chat ready",
             Duration::from_secs(10),
-            || {
-                let texts = driver.render();
-                texts
-                    .iter()
-                    .any(|text| text.contains("Start First Conversation"))
-                    .then_some(())
-            },
         )?;
-        driver.click_target(audit::targets::CHAT_CREATE_CONVERSATION);
-        let (request_id, response_text) = submit_chat_message_and_wait_for_response(
+        let (request_id, response_text) = submit_chat_message_and_wait_for_observed_response(
             driver,
             "Reply with exactly CONFIG_READY for the operator audit",
         )?;
@@ -2960,8 +2711,13 @@ fn desktop_app_live_chat_disclosure_artifacts() -> Result<()> {
             .chat
             .expanded_tool_cards
             .contains("call-shell-1"));
-        assert!(tool_texts.iter().any(|text| text.contains("ARGS")));
-        assert!(tool_texts
+        assert!(tool_texts.iter().any(|text| text.contains("Args")));
+        assert!(!tool_texts
+            .iter()
+            .any(|text| text.contains("src/app.rs: audit target live")));
+        driver.click_interactable_target(&audit::targets::chat_tool_output("call-shell-1"))?;
+        let output_texts = driver.render();
+        assert!(output_texts
             .iter()
             .any(|text| text.contains("src/app.rs: audit target live")));
 
@@ -2989,31 +2745,17 @@ fn desktop_app_live_chat_retry_and_export() -> Result<()> {
 
     {
         let driver = &mut fixture.driver;
-        wait_for_value(
-            "live retry/export first-conversation nudge",
+        let session_id = ensure_chat_session_selected(
+            driver,
+            "live retry/export conversation selected",
             Duration::from_secs(10),
-            || {
-                let texts = driver.render();
-                texts
-                    .iter()
-                    .any(|text| text.contains("Start First Conversation"))
-                    .then_some(())
-            },
         )?;
-        driver.click_target(audit::targets::CHAT_CREATE_CONVERSATION);
-        let session_id = driver
-            .app
-            .state
-            .chat
-            .selected_session_id
-            .clone()
-            .ok_or_else(|| anyhow!("live retry/export conversation was not selected"))?;
         let prompt = format!(
             "Reply with exactly RETRY_EXPORT_READY and nothing else. audit {}",
             uuid::Uuid::new_v4()
         );
         let (first_request_id, first_response) =
-            submit_chat_message_and_wait_for_response(driver, &prompt)?;
+            submit_chat_message_and_wait_for_observed_response(driver, &prompt)?;
 
         driver.click_interactable_target(audit::targets::CHAT_EXPORT)?;
         let export_payload = driver
@@ -3350,15 +3092,9 @@ fn desktop_app_live_logs_event_classification() -> Result<()> {
 
     {
         let driver = &mut fixture.driver;
-        wait_for_value("live logs chat ready", Duration::from_secs(10), || {
-            let texts = driver.render();
-            texts
-                .iter()
-                .any(|text| text.contains("Start First Conversation"))
-                .then_some(())
-        })?;
-        driver.click_target(audit::targets::CHAT_CREATE_CONVERSATION);
-        let (request_id, response_text) = submit_chat_message_and_wait_for_response(
+        let _session_id =
+            ensure_chat_session_selected(driver, "live logs chat ready", Duration::from_secs(10))?;
+        let (request_id, response_text) = submit_chat_message_and_wait_for_observed_response(
             driver,
             "Reply with exactly LOG_READY for the logs audit",
         )?;

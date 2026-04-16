@@ -162,6 +162,87 @@ fn store_derives_turn_from_retry_chain_tip() {
 }
 
 #[test]
+fn store_derives_turn_from_conversation_latest_request_not_random_request_id_order() {
+    let store = ClientStore::from_rows(ClientStoreRows {
+        conversations: vec![AgentConversationRow {
+            session_id: "session-1".to_string(),
+            agent_name: None,
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: None,
+            title: Some("Turn ordering".to_string()),
+            preview_text: None,
+            status: None,
+            created_at: Some("2026-04-14T00:00:00Z".to_string()),
+            updated_at: Some("2026-04-14T00:03:00Z".to_string()),
+            latest_request_id: Some("req-a-complete".to_string()),
+        }],
+        requests: vec![
+            AgentRequestRow {
+                request_id: "req-z-still-processing".to_string(),
+                agent_did: Some("did:defra:amy".to_string()),
+                behavior_id: None,
+                session_id: Some("session-1".to_string()),
+                retry_parent_request: None,
+                retry_root_request: None,
+                superseded_by_request: None,
+                content: None,
+                status: Some("processing".to_string()),
+                lifecycle_state: Some("processing".to_string()),
+                backend_id: None,
+                execution_origin: None,
+                failure_reason: None,
+                created_at: Some("2026-04-14T00:01:00Z".to_string()),
+                claimed_at: None,
+                deadline: None,
+                retry_count: None,
+                max_retries: None,
+            },
+            AgentRequestRow {
+                request_id: "req-a-complete".to_string(),
+                agent_did: Some("did:defra:amy".to_string()),
+                behavior_id: None,
+                session_id: Some("session-1".to_string()),
+                retry_parent_request: None,
+                retry_root_request: None,
+                superseded_by_request: None,
+                content: None,
+                status: Some("completed".to_string()),
+                lifecycle_state: Some("completed".to_string()),
+                backend_id: None,
+                execution_origin: None,
+                failure_reason: None,
+                created_at: Some("2026-04-14T00:02:00Z".to_string()),
+                claimed_at: None,
+                deadline: None,
+                retry_count: None,
+                max_retries: None,
+            },
+        ],
+        responses: vec![AgentResponseRow {
+            response_key: "resp-a-complete".to_string(),
+            request_id: Some("req-a-complete".to_string()),
+            agent_did: None,
+            behavior_id: None,
+            session_id: Some("session-1".to_string()),
+            content: Some("done".to_string()),
+            reasoning: None,
+            status: Some("completed".to_string()),
+            error_message: None,
+            token_count: None,
+            progress_seq: Some(1),
+            created_at: Some("2026-04-14T00:02:01Z".to_string()),
+            completed_at: Some("2026-04-14T00:02:02Z".to_string()),
+        }],
+        ..ClientStoreRows::default()
+    });
+
+    assert_eq!(
+        store.derive_turn("session-1"),
+        Some(ClientTurnState::Completed)
+    );
+}
+
+#[test]
 fn focused_request_id_defaults_to_none() {
     let (observed_store, _rx) =
         defra_agent_desktop::client::ObservedStore::new(ClientStore::default());

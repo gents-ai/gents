@@ -6,7 +6,9 @@ license.workspace = true
 description = "Shared schemas, client turn-observation protocol, and collection row mirrors for defra-agent"
 
 [dependencies]
+rig-core = "0.31"
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

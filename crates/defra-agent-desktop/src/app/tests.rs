@@ -20,6 +20,11 @@ use defra_agent_protocol::row::{
     AgentBehaviorRow, InferenceBackendRow, InferenceProfileRow, ScheduledTaskRow, ToolSelectionRow,
 };
 use eframe::App as _;
+use rig::completion::message::{
+    AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
+    UserContent,
+};
+use rig::one_or_many::OneOrMany;
 use serde_json::Value;
 use tokio::sync::watch;
 use tracing_subscriber::{prelude::*, EnvFilter};
@@ -32,6 +37,7 @@ use crate::telemetry::{global_log_layer, global_log_store, DesktopLogCategory, D
 mod coverage;
 include!("tests/support.rs");
 
+mod bootstrap;
 mod chat;
 mod first_launch;
 mod live;

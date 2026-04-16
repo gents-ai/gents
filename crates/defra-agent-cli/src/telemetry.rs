@@ -15,6 +15,20 @@ pub(crate) struct TelemetryGuard {
     tracer_provider: Option<SdkTracerProvider>,
 }
 
+fn with_default_transport_noise_filters(filter: EnvFilter) -> EnvFilter {
+    filter
+        .add_directive(
+            "iroh_quinn_proto::connection=error"
+                .parse()
+                .expect("valid tracing directive"),
+        )
+        .add_directive(
+            "noq_proto::connection=error"
+                .parse()
+                .expect("valid tracing directive"),
+        )
+}
+
 impl TelemetryGuard {
     pub(crate) fn shutdown(self) {
         let Some(provider) = self.tracer_provider else {
@@ -31,8 +45,9 @@ impl TelemetryGuard {
 }
 
 pub(crate) fn init(default_log_filter: &str) -> Result<TelemetryGuard> {
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_log_filter));
+    let env_filter = with_default_transport_noise_filters(
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_log_filter)),
+    );
 
     if !otlp_enabled_from_env() {
         tracing_subscriber::registry()

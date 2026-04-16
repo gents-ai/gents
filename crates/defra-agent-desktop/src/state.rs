@@ -13,15 +13,6 @@ pub enum Activity {
 impl Activity {
     pub const ALL: [Self; 4] = [Self::Chat, Self::Operator, Self::Peers, Self::Logs];
 
-    pub fn short_label(self) -> &'static str {
-        match self {
-            Self::Chat => "CH",
-            Self::Operator => "OP",
-            Self::Peers => "PR",
-            Self::Logs => "LG",
-        }
-    }
-
     pub fn label(self) -> &'static str {
         match self {
             Self::Chat => "Chat",
@@ -31,11 +22,29 @@ impl Activity {
         }
     }
 
-    pub fn sidebar_width(self) -> Option<f32> {
+    pub fn nav_hint(self) -> &'static str {
         match self {
-            Self::Chat => Some(288.0),
-            Self::Operator | Self::Peers => Some(268.0),
-            Self::Logs => None,
+            Self::Chat => "conversations",
+            Self::Operator => "config + runtime",
+            Self::Peers => "pairing + identity",
+            Self::Logs => "diagnostics",
+        }
+    }
+
+    pub fn nav_badge(self) -> &'static str {
+        match self {
+            Self::Chat => "CH",
+            Self::Operator => "OP",
+            Self::Peers => "PP",
+            Self::Logs => "LG",
+        }
+    }
+
+    pub fn sidebar_width(self) -> f32 {
+        match self {
+            Self::Chat => 308.0,
+            Self::Operator | Self::Peers => 292.0,
+            Self::Logs => 272.0,
         }
     }
 
@@ -54,6 +63,7 @@ pub struct ChatState {
     pub selected_peer_id: Option<String>,
     pub selected_agent_did: Option<String>,
     pub selected_session_id: Option<String>,
+    pub auto_create_attempted_agent_did: Option<String>,
     pub composer_text: String,
     pub selected_behavior_override: Option<String>,
     pub expanded_tool_cards: BTreeSet<String>,
@@ -62,6 +72,15 @@ pub struct ChatState {
     pub last_submission_error: Option<String>,
     pub last_action_message: Option<String>,
     pub last_export_payload: Option<String>,
+    pub tool_detail_modal: Option<ToolDetailModalState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolDetailModalState {
+    pub card_id: String,
+    pub title: String,
+    pub body: String,
+    pub language: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]

@@ -63,7 +63,7 @@ pub fn palette() -> Palette {
 
 pub fn metrics() -> ShellMetrics {
     ShellMetrics {
-        activity_bar_width: 52.0,
+        activity_bar_width: 108.0,
         status_bar_height: 26.0,
         toolbar_height: 42.0,
         control_height: 36.0,

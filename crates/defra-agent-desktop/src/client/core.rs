@@ -1,6 +1,7 @@
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use defra_agent_protocol::row::{
@@ -9,19 +10,25 @@ use defra_agent_protocol::row::{
 };
 use defra_node::{EmbeddedNode, NodeBuilder, P2PConfig};
 use defra_p2p_adapter::P2POperations as P2POps;
-use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
+use p2p::iroh::{parse_public_peer_addr, IrohDiscoveryConfig, IrohRelayModeConfig};
 use tokio::sync::{Mutex, RwLock};
+use tokio::task::JoinHandle;
+use tokio::time::{sleep, Instant};
 
 use super::mutations::{self, CreatedConversation, PeerMutationResult, SubmittedRequest};
 use super::observe::{spawn_observer, ObservedStore, ObserverHandle};
 use super::paths::DesktopPaths;
-use super::peer_directory::PeerDirectory;
+use super::peer_directory::{PeerDirectory, PeerRecord};
 use super::principal_identity::PrincipalIdentity;
 use super::query::load_full_snapshot;
 use super::schema::{
     ensure_runtime_schemas, subscribe_all_collections, subscribed_collection_names,
 };
 use crate::local_runtime;
+
+const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
+const BOOTSTRAP_OPERATION_BACKOFF: Duration = Duration::from_millis(250);
+const PEER_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 pub struct ClientCoreOptions {
@@ -80,10 +87,11 @@ pub struct ClientCore {
     principal: PrincipalIdentity,
     node: Arc<EmbeddedNode>,
     p2p: Arc<dyn P2POps>,
-    peer_directory: RwLock<PeerDirectory>,
+    peer_directory: Arc<RwLock<PeerDirectory>>,
     store: Arc<ObservedStore>,
     observer: Mutex<Option<ObserverHandle>>,
-    peer_statuses: StdRwLock<Vec<ClientPeerStatus>>,
+    peer_statuses: Arc<StdRwLock<Vec<ClientPeerStatus>>>,
+    peer_maintenance: Mutex<Option<JoinHandle<()>>>,
     last_mutation_error: StdRwLock<Option<String>>,
     local_peer_id: String,
     listen_addresses: Vec<String>,
@@ -107,7 +115,7 @@ impl ClientCore {
         paths.ensure_root_dirs().await?;
 
         let principal = PrincipalIdentity::load_or_create(&paths).await?;
-        let mut bootstrap_errors = Vec::new();
+        let bootstrap_errors = Vec::new();
         let node = Arc::new(
             NodeBuilder::default()
                 .data_path(paths.node_data_dir())
@@ -134,7 +142,9 @@ impl ClientCore {
         let (store, _store_updates) = ObservedStore::new(initial_snapshot);
         let observer = spawn_observer(Arc::clone(&node), Arc::clone(&store));
 
-        let peer_directory = PeerDirectory::load(paths.peer_directory_path()).await?;
+        let peer_directory = Arc::new(RwLock::new(
+            PeerDirectory::load(paths.peer_directory_path()).await?,
+        ));
         let p2p = node
             .p2p_arc()
             .context("desktop node started without P2P support")?;
@@ -149,19 +159,28 @@ impl ClientCore {
             .map_err(anyhow::Error::msg)
             .context("reading desktop P2P listen addresses")?;
 
-        let (peer_statuses, peer_errors) =
-            bootstrap_saved_peers(&p2p, peer_directory.records(), &options).await;
-        bootstrap_errors.extend(peer_errors);
+        let (peer_statuses, _peer_errors) = {
+            let records = peer_directory.read().await.records().to_vec();
+            bootstrap_saved_peers(&p2p, &records, &options).await
+        };
+        let peer_statuses = Arc::new(StdRwLock::new(peer_statuses));
+        let peer_maintenance = spawn_peer_maintenance_task(
+            Arc::clone(&p2p),
+            Arc::clone(&peer_directory),
+            Arc::clone(&peer_statuses),
+            options.install_replicators_on_bootstrap,
+        );
 
         Ok(Self {
             paths,
             principal,
             node,
             p2p,
-            peer_directory: RwLock::new(peer_directory),
+            peer_directory,
             store,
             observer: Mutex::new(Some(observer)),
-            peer_statuses: StdRwLock::new(peer_statuses),
+            peer_statuses,
+            peer_maintenance: Mutex::new(Some(peer_maintenance)),
             last_mutation_error: StdRwLock::new(None),
             local_peer_id,
             listen_addresses,
@@ -243,6 +262,15 @@ impl ClientCore {
         &self.bootstrap_errors
     }
 
+    pub fn peer_issue_count(&self) -> usize {
+        self.peer_statuses
+            .read()
+            .expect("peer status lock poisoned")
+            .iter()
+            .filter(|status| status.last_error.is_some())
+            .count()
+    }
+
     pub fn configured_peer_count(&self) -> usize {
         self.peer_statuses
             .read()
@@ -270,7 +298,7 @@ impl ClientCore {
         let snapshot = load_full_snapshot(self.node.as_ref()).await?;
         let rows = snapshot.row_count();
         let version = self.store.replace_snapshot(snapshot);
-        tracing::info!(
+        tracing::debug!(
             target: "defra_agent_desktop::replication",
             version,
             rows,
@@ -280,6 +308,10 @@ impl ClientCore {
     }
 
     pub async fn shutdown(&self) -> Result<()> {
+        if let Some(task) = self.peer_maintenance.lock().await.take() {
+            task.abort();
+            let _ = task.await;
+        }
         if let Some(observer) = self.observer.lock().await.take() {
             observer.shutdown().await;
         }
@@ -638,7 +670,7 @@ impl ClientCore {
 
 async fn bootstrap_saved_peers(
     p2p: &Arc<dyn P2POps>,
-    records: &[super::peer_directory::PeerRecord],
+    records: &[PeerRecord],
     options: &ClientCoreOptions,
 ) -> (Vec<ClientPeerStatus>, Vec<String>) {
     let mut statuses = Vec::with_capacity(records.len());
@@ -654,22 +686,21 @@ async fn bootstrap_saved_peers(
             last_error: None,
         };
 
-        match p2p.connect_peer(&record.addr).await {
+        match connect_peer_with_retry(p2p, &record.addr, &record.label).await {
             Ok(()) => {
                 status.dial_succeeded = true;
 
                 if options.install_replicators_on_bootstrap {
-                    if let Err(error) = p2p
-                        .add_replicator(
-                            subscribed_collection_names()
-                                .into_iter()
-                                .map(str::to_owned)
-                                .collect(),
-                            Some(&record.addr),
-                            Vec::new(),
-                            None,
-                        )
-                        .await
+                    if let Err(error) = add_replicator_with_retry(
+                        p2p,
+                        subscribed_collection_names()
+                            .into_iter()
+                            .map(str::to_owned)
+                            .collect(),
+                        &record.addr,
+                        &record.label,
+                    )
+                    .await
                     {
                         let message = format!(
                             "peer {} replicator bootstrap failed: {}",
@@ -708,14 +739,7 @@ async fn bootstrap_saved_peers(
 }
 
 async fn configure_local_runtime_pairing(p2p: &Arc<dyn P2POps>, graphql: &str) -> Result<()> {
-    let desktop_listen_address = p2p
-        .listen_addresses()
-        .await
-        .map_err(anyhow::Error::msg)
-        .context("reading desktop P2P listen addresses for local runtime pairing")?
-        .into_iter()
-        .find(|addr| !addr.trim().is_empty())
-        .context("desktop node has no IROH listen address for local runtime pairing")?;
+    let desktop_listen_address = wait_for_bootstrap_listen_address(p2p).await?;
     local_runtime::complete_runtime_pairing(
         graphql,
         &desktop_listen_address,
@@ -727,9 +751,307 @@ async fn configure_local_runtime_pairing(p2p: &Arc<dyn P2POps>, graphql: &str) -
     .await
 }
 
+async fn connect_peer_with_retry(p2p: &Arc<dyn P2POps>, addr: &str, label: &str) -> Result<()> {
+    let deadline = Instant::now() + BOOTSTRAP_OPERATION_TIMEOUT;
+    let expected_peer_id = parse_public_peer_addr(addr)
+        .ok()
+        .map(|(peer_id, _)| peer_id.to_string());
+
+    loop {
+        if let Some(peer_id) = expected_peer_id.as_deref() {
+            if is_connected_peer(p2p, peer_id).await? {
+                return Ok(());
+            }
+        }
+
+        match p2p.connect_peer(addr).await {
+            Ok(()) => {
+                if let Some(peer_id) = expected_peer_id.as_deref() {
+                    wait_for_connected_peer(p2p, peer_id, deadline, label).await?;
+                }
+                return Ok(());
+            }
+            Err(error) => {
+                if let Some(peer_id) = expected_peer_id.as_deref() {
+                    if is_connected_peer(p2p, peer_id).await? {
+                        return Ok(());
+                    }
+                }
+                if Instant::now() >= deadline {
+                    anyhow::bail!("timed out connecting bootstrap peer {label} at {addr}: {error}");
+                }
+                sleep(BOOTSTRAP_OPERATION_BACKOFF).await;
+            }
+        }
+    }
+}
+
+async fn add_replicator_with_retry(
+    p2p: &Arc<dyn P2POps>,
+    collections: Vec<String>,
+    addr: &str,
+    label: &str,
+) -> Result<()> {
+    let deadline = Instant::now() + BOOTSTRAP_OPERATION_TIMEOUT;
+    loop {
+        match p2p
+            .add_replicator(collections.clone(), Some(addr), Vec::new(), None)
+            .await
+        {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                if Instant::now() >= deadline {
+                    anyhow::bail!(
+                        "timed out installing bootstrap replicator for peer {label} at {addr}: {error}"
+                    );
+                }
+                sleep(BOOTSTRAP_OPERATION_BACKOFF).await;
+            }
+        }
+    }
+}
+
+async fn wait_for_bootstrap_listen_address(p2p: &Arc<dyn P2POps>) -> Result<String> {
+    let deadline = Instant::now() + BOOTSTRAP_OPERATION_TIMEOUT;
+    loop {
+        let addrs = p2p
+            .listen_addresses()
+            .await
+            .map_err(anyhow::Error::msg)
+            .context("reading desktop P2P listen addresses for local runtime pairing")?;
+        if let Some(addr) = select_local_runtime_pairing_addr(&addrs) {
+            return Ok(addr);
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("desktop node has no IROH listen address for local runtime pairing");
+        }
+        sleep(BOOTSTRAP_OPERATION_BACKOFF).await;
+    }
+}
+
+async fn is_connected_peer(p2p: &Arc<dyn P2POps>, peer_id: &str) -> Result<bool> {
+    let peers = p2p.connected_peers().await.map_err(anyhow::Error::msg)?;
+    Ok(peers.iter().any(|peer| {
+        parse_public_peer_addr(peer)
+            .map(|(parsed_peer_id, _)| parsed_peer_id.as_str() == peer_id)
+            .unwrap_or_else(|_| peer.contains(peer_id))
+    }))
+}
+
+async fn wait_for_connected_peer(
+    p2p: &Arc<dyn P2POps>,
+    peer_id: &str,
+    deadline: Instant,
+    label: &str,
+) -> Result<()> {
+    loop {
+        if is_connected_peer(p2p, peer_id).await? {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for bootstrap peer {peer_id} to connect for {label}");
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+}
+
 fn normalize_required<'a>(field: &str, value: &'a str) -> Result<&'a str> {
     let trimmed = value.trim();
     (!trimmed.is_empty())
         .then_some(trimmed)
         .with_context(|| format!("{field} must not be empty"))
+}
+
+fn spawn_peer_maintenance_task(
+    p2p: Arc<dyn P2POps>,
+    peer_directory: Arc<RwLock<PeerDirectory>>,
+    peer_statuses: Arc<StdRwLock<Vec<ClientPeerStatus>>>,
+    install_replicators_on_bootstrap: bool,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            sleep(PEER_MAINTENANCE_INTERVAL).await;
+
+            let records = peer_directory.read().await.records().to_vec();
+            for record in records {
+                let current_status = peer_statuses
+                    .read()
+                    .expect("peer status lock poisoned")
+                    .iter()
+                    .find(|status| status.peer_id == record.peer_id)
+                    .cloned();
+
+                if !needs_pairing_repair(&record, current_status.as_ref()) {
+                    continue;
+                }
+
+                let updated = repair_saved_peer(
+                    &p2p,
+                    &record,
+                    current_status,
+                    install_replicators_on_bootstrap,
+                )
+                .await;
+                replace_peer_status(&peer_statuses, updated);
+            }
+        }
+    })
+}
+
+fn needs_pairing_repair(record: &PeerRecord, status: Option<&ClientPeerStatus>) -> bool {
+    status.is_none()
+        || status.is_some_and(|status| !status.dial_succeeded || status.last_error.is_some())
+        || (record.graphql.is_some() && status.is_some_and(|status| status.last_error.is_some()))
+}
+
+async fn repair_saved_peer(
+    p2p: &Arc<dyn P2POps>,
+    record: &PeerRecord,
+    current_status: Option<ClientPeerStatus>,
+    install_replicators_on_bootstrap: bool,
+) -> ClientPeerStatus {
+    let mut status = current_status.unwrap_or_else(|| ClientPeerStatus {
+        peer_id: record.peer_id.clone(),
+        label: record.label.clone(),
+        agent_did: record.agent_did.clone(),
+        addr: record.addr.clone(),
+        dial_succeeded: false,
+        last_error: None,
+    });
+
+    let expected_peer_id = parse_public_peer_addr(&record.addr)
+        .ok()
+        .map(|(peer_id, _)| peer_id.to_string());
+    let connected_now = match expected_peer_id.as_deref() {
+        Some(peer_id) => is_connected_peer(p2p, peer_id).await.unwrap_or(false),
+        None => status.dial_succeeded,
+    };
+
+    if !connected_now {
+        match connect_peer_with_retry(p2p, &record.addr, &record.label).await {
+            Ok(()) => {
+                status.dial_succeeded = true;
+                if install_replicators_on_bootstrap {
+                    if let Err(error) = add_replicator_with_retry(
+                        p2p,
+                        subscribed_collection_names()
+                            .into_iter()
+                            .map(str::to_owned)
+                            .collect(),
+                        &record.addr,
+                        &record.label,
+                    )
+                    .await
+                    {
+                        status.last_error = Some(format!(
+                            "peer {} replicator bootstrap failed: {}",
+                            record.label, error
+                        ));
+                        return status;
+                    }
+                }
+            }
+            Err(error) => {
+                status.dial_succeeded = false;
+                status.last_error = Some(format!("peer {} dial failed: {}", record.label, error));
+                return status;
+            }
+        }
+    } else {
+        status.dial_succeeded = true;
+    }
+
+    if let Some(graphql) = record.graphql.as_deref() {
+        match configure_local_runtime_pairing(p2p, graphql).await {
+            Ok(()) => status.last_error = None,
+            Err(error) => {
+                status.last_error = Some(format!(
+                    "peer {} local runtime pairing failed: {}",
+                    record.label, error
+                ));
+            }
+        }
+    } else {
+        status.last_error = None;
+    }
+
+    status
+}
+
+fn replace_peer_status(
+    peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
+    status: ClientPeerStatus,
+) {
+    let mut statuses = peer_statuses.write().expect("peer status lock poisoned");
+    if let Some(existing) = statuses
+        .iter_mut()
+        .find(|existing| existing.peer_id == status.peer_id)
+    {
+        *existing = status;
+    } else {
+        statuses.push(status);
+        statuses.sort_by(|left, right| {
+            left.label
+                .to_lowercase()
+                .cmp(&right.label.to_lowercase())
+                .then_with(|| left.peer_id.cmp(&right.peer_id))
+        });
+    }
+}
+
+fn select_local_runtime_pairing_addr(addrs: &[String]) -> Option<String> {
+    let candidates = addrs
+        .iter()
+        .map(|addr| addr.trim())
+        .filter(|addr| !addr.is_empty())
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return None;
+    }
+
+    candidates
+        .iter()
+        .find(|addr| addr_has_loopback_hint(addr))
+        .map(|addr| (*addr).to_string())
+        .or_else(|| candidates.first().map(|addr| (*addr).to_string()))
+}
+
+fn addr_has_loopback_hint(addr: &str) -> bool {
+    parse_public_peer_addr(addr)
+        .ok()
+        .map(|(_, hints)| {
+            hints.iter().any(|hint| {
+                hint.as_str()
+                    .parse::<SocketAddr>()
+                    .map(|socket| socket.ip().is_loopback())
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn select_local_runtime_pairing_addr_prefers_loopback() {
+        let selected = select_local_runtime_pairing_addr(&[
+            "100.111.156.102:56000/p2p/peer-alpha".to_string(),
+            "127.0.0.1:56000/p2p/peer-alpha".to_string(),
+            "peer-alpha".to_string(),
+        ]);
+
+        assert_eq!(selected.as_deref(), Some("127.0.0.1:56000/p2p/peer-alpha"));
+    }
+
+    #[test]
+    fn select_local_runtime_pairing_addr_falls_back_to_first_nonempty() {
+        let selected = select_local_runtime_pairing_addr(&[
+            "endpointabc123".to_string(),
+            "peer-alpha".to_string(),
+        ]);
+
+        assert_eq!(selected.as_deref(), Some("endpointabc123"));
+    }
 }

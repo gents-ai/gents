@@ -17,6 +17,7 @@ chrono.workspace = true
 clap.workspace = true
 crossterm = "0.29"
 defra-agent = { path = "../defra-agent" }
+defra-agent-protocol.workspace = true
 defra-node.workspace = true
 defra-p2p-adapter.workspace = true
 hostname.workspace = true

@@ -3,12 +3,15 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use tokio::time::{sleep, Instant};
 
 use crate::client::{DesktopPaths, PeerDirectory};
 
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
 const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
 const LOCAL_STANDARD_SOURCE: &str = "local-standard";
+const PAIRING_RETRY_TIMEOUT: Duration = Duration::from_secs(20);
+const PAIRING_RETRY_BACKOFF: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone)]
 pub struct DesktopInitOptions {
@@ -206,27 +209,42 @@ pub(crate) async fn complete_runtime_pairing(
         .build()
         .context("building local runtime pairing HTTP client")?;
     let api_base = p2p_api_base(graphql)?;
-    http_post_json(
-        &client,
-        &format!("{api_base}/p2p/connect"),
-        &vec![desktop_listen_address.to_string()],
-    )
-    .await?;
-    http_post_json(
-        &client,
-        &format!("{api_base}/p2p/collections"),
-        &collections,
-    )
-    .await?;
-    http_post_json(
-        &client,
-        &format!("{api_base}/p2p/replicators"),
-        &P2pReplicatorRequest {
-            addresses: vec![desktop_listen_address.to_string()],
-            collections,
-        },
-    )
-    .await
+    let connect_addrs = vec![desktop_listen_address.to_string()];
+    let replicator = P2pReplicatorRequest {
+        addresses: vec![desktop_listen_address.to_string()],
+        collections: collections.clone(),
+    };
+    let deadline = Instant::now() + PAIRING_RETRY_TIMEOUT;
+
+    loop {
+        let result = async {
+            http_post_json(&client, &format!("{api_base}/p2p/connect"), &connect_addrs).await?;
+            http_post_json(
+                &client,
+                &format!("{api_base}/p2p/collections"),
+                &collections,
+            )
+            .await?;
+            http_post_json(&client, &format!("{api_base}/p2p/replicators"), &replicator).await?;
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                if Instant::now() >= deadline {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "timed out pairing desktop listen address {} with local runtime {}",
+                            desktop_listen_address, graphql
+                        )
+                    });
+                }
+                sleep(PAIRING_RETRY_BACKOFF).await;
+            }
+        }
+    }
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
@@ -288,7 +306,9 @@ async fn http_post_json<B: Serialize>(client: &reqwest::Client, url: &str, body:
 
 #[derive(Debug, Serialize)]
 struct P2pReplicatorRequest {
+    #[serde(rename = "Collections")]
     collections: Vec<String>,
+    #[serde(rename = "Addresses")]
     addresses: Vec<String>,
 }
 
@@ -332,5 +352,22 @@ mod tests {
         assert!(rendered.contains("desktop app completes P2P pairing"));
         assert!(rendered.contains("replication: subscriptions armed"));
         assert!(rendered.contains("Then submit prompts from Chat"));
+    }
+
+    #[test]
+    fn replicator_request_serializes_runtime_api_field_names() {
+        let payload = serde_json::to_value(P2pReplicatorRequest {
+            collections: vec!["AgentRequest".to_string()],
+            addresses: vec!["127.0.0.1:9999/p2p/example".to_string()],
+        })
+        .expect("serialize replicator request");
+
+        assert_eq!(
+            payload,
+            serde_json::json!({
+                "Collections": ["AgentRequest"],
+                "Addresses": ["127.0.0.1:9999/p2p/example"],
+            })
+        );
     }
 }

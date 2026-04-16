@@ -5,3 +5,4 @@
 pub mod client_protocol;
 pub mod row;
 pub mod schemas;
+pub mod transcript;

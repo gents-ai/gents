@@ -27,8 +27,11 @@ pub fn show(
         &state.chat.composer_text,
         turn_state,
     );
+    let shortcut =
+        !disabled && ui.input(|input| input.modifiers.command && input.key_pressed(Key::Enter));
 
     ui.group(|ui| {
+        ui.set_width(ui.available_width());
         ui.label(
             RichText::new("Composer")
                 .family(theme::stencil_family())
@@ -40,77 +43,81 @@ pub fn show(
 
         let text_edit = TextEdit::multiline(&mut state.chat.composer_text)
             .id_source(audit::targets::CHAT_COMPOSER_TEXT)
-            .desired_rows(5)
+            .desired_rows(4)
             .hint_text("Send an operational request to the selected agent");
         audit::add_sized(
             ui,
             audit::targets::CHAT_COMPOSER_TEXT,
-            [ui.available_width(), 110.0],
+            [ui.available_width(), 96.0],
             text_edit,
         );
         ui.add_space(8.0);
 
-        ui.horizontal_wrapped(|ui| {
-            ui.label(
-                RichText::new(format!(
-                    "[behavior: {}]",
-                    state
-                        .chat
-                        .selected_behavior_override
-                        .as_deref()
-                        .or_else(|| {
-                            selected_agent_did.and_then(|agent_did| {
-                                store
-                                    .agent_principals
-                                    .iter()
-                                    .find(|row| row.agent_did == agent_did)
-                                    .and_then(|row| row.default_behavior_id.as_deref())
-                            })
-                        })
-                        .unwrap_or("inherited")
-                ))
-                .monospace()
-                .size(11.0)
-                .color(palette.text_2),
-            );
-            ui.label(
-                RichText::new("[tools: inherited]")
-                    .monospace()
-                    .size(11.0)
-                    .color(palette.text_2),
-            );
-            ui.label(
-                RichText::new(format!("[turn: {}]", turn_state_label(turn_state)))
-                    .monospace()
-                    .size(11.0)
-                    .color(palette.text_2),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.columns(2, |columns| {
+            columns[0].vertical(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        RichText::new(format!(
+                            "[behavior: {}]",
+                            state
+                                .chat
+                                .selected_behavior_override
+                                .as_deref()
+                                .or_else(|| {
+                                    selected_agent_did.and_then(|agent_did| {
+                                        store
+                                            .agent_principals
+                                            .iter()
+                                            .find(|row| row.agent_did == agent_did)
+                                            .and_then(|row| row.default_behavior_id.as_deref())
+                                    })
+                                })
+                                .unwrap_or("inherited")
+                        ))
+                        .monospace()
+                        .size(11.0)
+                        .color(palette.text_2),
+                    );
+                    ui.label(
+                        RichText::new("[tools: inherited]")
+                            .monospace()
+                            .size(11.0)
+                            .color(palette.text_2),
+                    );
+                    ui.label(
+                        RichText::new(format!("[turn: {}]", turn_state_label(turn_state)))
+                            .monospace()
+                            .size(11.0)
+                            .color(palette.text_2),
+                    );
+                });
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("Cmd+Enter to send")
+                        .monospace()
+                        .size(10.5)
+                        .color(if disabled {
+                            palette.text_3
+                        } else {
+                            palette.text_2
+                        }),
+                );
+            });
+
+            columns[1].with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().button_padding = egui::vec2(12.0, 8.0);
                 let clicked = audit::add_enabled(
                     ui,
                     audit::targets::CHAT_SEND,
                     !disabled,
-                    egui::Button::new("Send"),
+                    egui::Button::new("Send").min_size(egui::vec2(92.0, 32.0)),
                 )
                 .clicked();
-                let shortcut = !disabled
-                    && ui.input(|input| input.modifiers.command && input.key_pressed(Key::Enter));
                 if clicked || shortcut {
                     submit(state, client, runtime, selected_agent_did);
                 }
             });
         });
-        ui.add_space(4.0);
-        ui.label(
-            RichText::new("Cmd+Enter to send")
-                .monospace()
-                .size(10.5)
-                .color(if disabled {
-                    palette.text_3
-                } else {
-                    palette.text_2
-                }),
-        );
     });
 }
 

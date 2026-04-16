@@ -1,6 +1,7 @@
 use super::retry::execute_query_timed;
 use super::rows::AgentMessageRow;
 use super::*;
+use defra_agent_protocol::transcript::decode_persisted_message;
 
 pub async fn load_history(node: &EmbeddedNode, session_id: &str) -> Result<Vec<Message>> {
     let escaped_session_id = escape_graphql_string(session_id);
@@ -35,43 +36,14 @@ pub async fn load_history(node: &EmbeddedNode, session_id: &str) -> Result<Vec<M
 
     let mut history = Vec::with_capacity(messages.len());
     for msg in messages {
-        history.push(deserialize_message(msg.role.as_str(), msg.content.as_str()));
+        history.push(decode_persisted_message(
+            msg.role.as_str(),
+            msg.content.as_str(),
+        ));
     }
 
     tracing::debug!(session_id = %session_id, count = history.len(), "loaded history");
     Ok(history)
-}
-
-pub(super) fn deserialize_message(role: &str, content: &str) -> Message {
-    if let Ok(message) = serde_json::from_str::<Message>(content) {
-        return message;
-    }
-
-    if role == "assistant" {
-        if let Ok(content) = serde_json::from_str::<OneOrMany<AssistantContent>>(content) {
-            return Message::Assistant { id: None, content };
-        }
-    }
-
-    if role == "user" {
-        if let Ok(content) = serde_json::from_str::<OneOrMany<UserContent>>(content) {
-            return Message::User { content };
-        }
-    }
-
-    match role {
-        "assistant" => Message::Assistant {
-            id: None,
-            content: OneOrMany::one(AssistantContent::Text(Text {
-                text: content.to_string(),
-            })),
-        },
-        _ => Message::User {
-            content: OneOrMany::one(UserContent::Text(Text {
-                text: content.to_string(),
-            })),
-        },
-    }
 }
 
 pub(crate) async fn save_message(

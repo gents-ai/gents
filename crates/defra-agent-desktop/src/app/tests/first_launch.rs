@@ -189,7 +189,7 @@ fn desktop_app_clicks_chat_open_peers_setup_from_empty_sidebar() -> Result<()> {
 }
 
 #[test]
-fn desktop_app_renders_bootstrap_issues_in_peers_and_logs() -> Result<()> {
+fn desktop_app_renders_broken_peer_warning_from_live_status() -> Result<()> {
     let runtime = test_runtime()?;
     let tempdir = tempfile::tempdir()?;
     let paths = DesktopPaths::from_root(tempdir.path());
@@ -204,10 +204,8 @@ fn desktop_app_renders_bootstrap_issues_in_peers_and_logs() -> Result<()> {
         ClientCoreOptions::local_only(),
     ))?;
 
-    assert!(core
-        .bootstrap_errors()
-        .iter()
-        .any(|error| error.contains("Broken Relay") && error.contains("dial failed")));
+    assert!(core.bootstrap_errors().is_empty());
+    assert_eq!(core.peer_issue_count(), 1);
 
     let mut driver = build_driver(
         Arc::clone(&runtime),
@@ -216,7 +214,7 @@ fn desktop_app_renders_bootstrap_issues_in_peers_and_logs() -> Result<()> {
     );
 
     wait_for_value(
-        "peers bootstrap issues rendered",
+        "peers warning rendered from live status",
         Duration::from_secs(2),
         || {
             let texts = driver.open_activity(Activity::Peers);
@@ -230,19 +228,6 @@ fn desktop_app_renders_bootstrap_issues_in_peers_and_logs() -> Result<()> {
     assert!(peers_texts
         .iter()
         .any(|text| text.contains("peer Broken Relay dial failed")));
-
-    let logs_texts = wait_for_value(
-        "logs bootstrap issues rendered",
-        Duration::from_secs(2),
-        || {
-            let texts = driver.open_activity(Activity::Logs);
-            texts
-                .iter()
-                .any(|text| text.contains("bootstrap issues"))
-                .then_some(texts)
-        },
-    )?;
-    assert!(logs_texts.iter().any(|text| text.contains("Broken Relay")));
 
     driver.app.shutdown_client();
     Ok(())

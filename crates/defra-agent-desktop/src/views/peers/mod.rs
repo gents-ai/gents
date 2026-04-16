@@ -429,15 +429,6 @@ pub fn show_rail(
             labeled_value(ui, "Remote Schema Match", "not exposed by node API");
         });
 
-        if !client.bootstrap_errors().is_empty() {
-            ui.add_space(10.0);
-            views::card(
-                ui,
-                "Bootstrap Issues",
-                &client.bootstrap_errors().join("\n"),
-            );
-        }
-
         ui.add_space(12.0);
         if audit::button(ui, audit::targets::PEERS_REMOVE, "Remove Saved Peer").clicked() {
             match runtime.block_on(client.remove_peer(&peer.record_id)) {

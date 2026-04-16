@@ -2,12 +2,11 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use eframe::egui::{self, Align2, Context, Panel, RichText};
+use eframe::egui::{self, Context, Panel, RichText};
 use egui_commonmark::CommonMarkCache;
 use tokio::runtime::Runtime;
 use tokio::sync::watch;
 
-use crate::audit;
 use crate::client::{ClientCore, ClientStore};
 use crate::state::{Activity, ShellState};
 use crate::telemetry::{global_log_store, DesktopLogStore};
@@ -29,7 +28,7 @@ impl DesktopApp {
         let (client, bootstrap_errors) = match runtime.block_on(ClientCore::start()) {
             Ok(core) => {
                 let client = Arc::new(core);
-                (Some(client.clone()), client.bootstrap_errors().to_vec())
+                (Some(client.clone()), Vec::new())
             }
             Err(error) => (None, vec![error.to_string()]),
         };
@@ -89,142 +88,10 @@ impl DesktopApp {
         }
     }
 
-    fn show_activity_bar(&mut self, ui: &mut egui::Ui) {
-        let palette = theme::palette();
-        let metrics = theme::metrics();
-
-        Panel::left("activity_bar")
-            .resizable(false)
-            .exact_size(metrics.activity_bar_width)
-            .show_inside(ui, |ui| {
-                let ctx = ui.ctx().clone();
-                ui.add_space(12.0);
-                ui.horizontal_centered(|ui| {
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::hover());
-                    ui.painter().rect_filled(rect, 4.0, palette.background_2);
-                    ui.painter().text(
-                        rect.center(),
-                        Align2::CENTER_CENTER,
-                        "DF",
-                        egui::FontId::new(15.0, theme::stencil_family()),
-                        palette.accent,
-                    );
-                });
-
-                ui.add_space(18.0);
-                for activity in Activity::ALL {
-                    self.activity_button(ui, activity);
-                    ui.add_space(4.0);
-                }
-
-                ui.add_space((ui.available_height() - 80.0).max(0.0));
-                self.identity_chip(ui, &ctx);
-            });
-    }
-
-    fn activity_button(&mut self, ui: &mut egui::Ui, activity: Activity) {
-        let palette = theme::palette();
-        let metrics = theme::metrics();
-        let selected = self.state.activity == activity;
-        let (rect, response) = ui.allocate_exact_size(
-            egui::vec2(metrics.control_height, metrics.control_height),
-            egui::Sense::click(),
-        );
-
-        if response.hovered() || selected {
-            ui.painter().rect_filled(
-                rect,
-                4.0,
-                if selected {
-                    palette.background_2
-                } else {
-                    palette.background_1
-                },
-            );
-        }
-
-        if selected {
-            ui.painter().line_segment(
-                [
-                    egui::pos2(rect.left() - 4.0, rect.top() + 8.0),
-                    egui::pos2(rect.left() - 4.0, rect.bottom() - 8.0),
-                ],
-                egui::Stroke::new(2.0, palette.accent),
-            );
-        }
-
-        ui.painter().text(
-            rect.center(),
-            Align2::CENTER_CENTER,
-            activity.short_label(),
-            egui::FontId::new(14.0, theme::stencil_family()),
-            if selected {
-                palette.accent
-            } else {
-                palette.text_2
-            },
-        );
-
-        let response = response.on_hover_text(activity.label());
-        audit::record(ui, audit::targets::activity(activity), &response);
-
-        if response.clicked() {
-            self.state.activity = activity;
-        }
-    }
-
-    fn identity_chip(&self, ui: &mut egui::Ui, ctx: &Context) {
-        let palette = theme::palette();
-        let metrics = theme::metrics();
-
-        ui.horizontal_centered(|ui| {
-            let (avatar_rect, _) =
-                ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::hover());
-            ui.painter()
-                .rect_filled(avatar_rect, 15.0, palette.background_2);
-            ui.painter().text(
-                avatar_rect.center(),
-                Align2::CENTER_CENTER,
-                self.state.identity.initials,
-                egui::FontId::new(11.0, egui::FontFamily::Monospace),
-                palette.text_1,
-            );
-            ui.painter().circle_filled(
-                egui::pos2(avatar_rect.right() - 2.0, avatar_rect.bottom() - 2.0),
-                4.0,
-                theme::throb_color(ctx, palette.accent),
-            );
-        });
-
-        ui.add_space(6.0);
-        ui.horizontal_centered(|ui| {
-            ui.label(
-                RichText::new(self.state.identity.label.clone())
-                    .monospace()
-                    .size(8.5)
-                    .color(palette.text_3),
-            );
-        });
-        ui.horizontal_centered(|ui| {
-            ui.label(
-                RichText::new(self.state.identity.did_short.clone())
-                    .monospace()
-                    .size(8.5)
-                    .color(palette.text_2),
-            );
-        });
-        ui.add_space(metrics.section_spacing);
-    }
-
     fn show_sidebar(&mut self, ui: &mut egui::Ui, store: Option<&ClientStore>) {
-        let Some(width) = self.state.activity.sidebar_width() else {
-            return;
-        };
-
         Panel::left("activity_sidebar")
             .resizable(false)
-            .exact_size(width)
+            .exact_size(self.state.activity.sidebar_width())
             .show_inside(ui, |ui| {
                 views::show_sidebar(
                     ui,
@@ -428,14 +295,16 @@ impl eframe::App for DesktopApp {
         self.state.status.advance_frame();
 
         if let (Some(client), Some(store_updates)) = (&self.client, &mut self.store_updates) {
+            apply_client_transport_state(&mut self.state, client);
             if store_updates.has_changed().unwrap_or(false) {
                 let _ = store_updates.borrow_and_update();
                 apply_snapshot_state(&mut self.state, client.store().snapshot().as_ref());
                 ctx.request_repaint();
             }
 
-            self.state.status.error_count =
-                self.bootstrap_errors.len() + usize::from(client.last_mutation_error().is_some());
+            self.state.status.error_count = live_error_count(client)
+                + self.bootstrap_errors.len()
+                + usize::from(client.last_mutation_error().is_some());
         }
 
         ctx.request_repaint_after(Duration::from_millis(33));
@@ -450,7 +319,6 @@ impl eframe::App for DesktopApp {
         }
         views::prepare_state(&mut self.state, self.client.as_deref(), store_ref);
         self.show_status_bar(ui);
-        self.show_activity_bar(ui);
         self.show_sidebar(ui, store_ref);
         self.show_rail(ui, store_ref);
         self.show_main(ui, store_ref);
@@ -468,21 +336,19 @@ impl Drop for DesktopApp {
 }
 
 fn apply_bootstrap_state(state: &mut ShellState, client: &ClientCore) {
-    let error_count = client.bootstrap_errors().len();
+    let error_count = live_error_count(client);
 
-    state.identity.did_short = client.principal().short_did();
-    state.status.peered_now = client.dialed_peer_count();
-    state.status.peered_target = client.configured_peer_count();
+    apply_client_transport_state(state, client);
     state.status.active_agent = "desktop client".to_string();
-    state.status.runtime_state = if error_count == 0 {
-        "client core online".to_string()
-    } else {
+    state.status.runtime_state = if !client.bootstrap_errors().is_empty() {
         "client core degraded".to_string()
+    } else if client.peer_issue_count() > 0 {
+        "peer repair active".to_string()
+    } else {
+        "client core online".to_string()
     };
     state.status.replication_state = "subscriptions armed".to_string();
     state.status.error_count = error_count;
-    state.status.did_short = client.principal().short_did();
-    state.status.build_label = format!("peer:{}", abbreviate_id(client.local_peer_id()));
 }
 
 fn apply_bootstrap_failure_state(state: &mut ShellState) {
@@ -507,6 +373,18 @@ fn apply_snapshot_state(state: &mut ShellState, store: &ClientStore) {
     } else {
         format!("{} requests observed", store.requests.len())
     };
+}
+
+fn apply_client_transport_state(state: &mut ShellState, client: &ClientCore) {
+    state.identity.did_short = client.principal().short_did();
+    state.status.peered_now = client.dialed_peer_count();
+    state.status.peered_target = client.configured_peer_count();
+    state.status.did_short = client.principal().short_did();
+    state.status.build_label = format!("peer:{}", abbreviate_id(client.local_peer_id()));
+}
+
+fn live_error_count(client: &ClientCore) -> usize {
+    client.bootstrap_errors().len() + client.peer_issue_count()
 }
 
 fn apply_first_launch_focus(state: &mut ShellState, client: &ClientCore, store: &ClientStore) {

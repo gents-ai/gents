@@ -162,6 +162,44 @@ async fn insert_chat_transcript_documents(
     behavior_id: &str,
     response_key: &str,
 ) -> Result<()> {
+    let response_content = "Queue checked.\n\n- Found the audit target.\n- Ready to continue.";
+    let response_reasoning =
+        "I verified the latest request, ran the shell tool, and summarized the result.";
+    let assistant_tool_call_message = serde_json::to_string(&Message::Assistant {
+        id: None,
+        content: OneOrMany::many(vec![
+            AssistantContent::ToolCall(ToolCall {
+                id: "call-shell-1".to_string(),
+                call_id: Some("call-shell-1".to_string()),
+                function: ToolFunction {
+                    name: "shell".to_string(),
+                    arguments: serde_json::json!({ "cmd": "rg audit" }),
+                },
+                signature: None,
+                additional_params: None,
+            }),
+            AssistantContent::Text(Text {
+                text: "I checked the queue and opened the trace.".to_string(),
+            }),
+        ])
+        .context("assistant tool-call content")?,
+    })?;
+    let tool_result_message = serde_json::to_string(&Message::User {
+        content: OneOrMany::one(UserContent::ToolResult(ToolResult {
+            id: "call-shell-1".to_string(),
+            call_id: Some("call-shell-1".to_string()),
+            content: OneOrMany::one(ToolResultContent::Text(Text {
+                text: "src/app.rs: audit target live".to_string(),
+            })),
+        })),
+    })?;
+    let assistant_final_message = serde_json::to_string(&Message::Assistant {
+        id: None,
+        content: OneOrMany::one(AssistantContent::Text(Text {
+            text: "Queue checked.\n\n- Found the audit target.\n- Ready to continue.".to_string(),
+        })),
+    })?;
+
     let response = core
         .node()
         .execute(&format!(
@@ -171,8 +209,24 @@ async fn insert_chat_transcript_documents(
                 session_id: "{session_id}"
                 sequence: 2
                 role: "assistant"
-                content: "I checked the queue and opened the trace."
+                content: "{assistant_tool_call_message}"
                 timestamp: "2026-04-14T00:00:01Z"
+            }}) {{ message_key }}
+            add_AgentMessage(input: {{
+                message_key: "msg-tool-result-1"
+                session_id: "{session_id}"
+                sequence: 3
+                role: "user"
+                content: "{tool_result_message}"
+                timestamp: "2026-04-14T00:00:03Z"
+            }}) {{ message_key }}
+            add_AgentMessage(input: {{
+                message_key: "msg-assistant-2"
+                session_id: "{session_id}"
+                sequence: 4
+                role: "assistant"
+                content: "{assistant_final_message}"
+                timestamp: "2026-04-14T00:00:04Z"
             }}) {{ message_key }}
             add_AgentToolCall(input: {{
                 tool_call_key: "tool-call-1"
@@ -201,8 +255,8 @@ async fn insert_chat_transcript_documents(
                 agent_did: "{agent_did}"
                 behavior_id: "{behavior_id}"
                 session_id: "{session_id}"
-                content: "Queue checked."
-                reasoning: "I verified the latest request, ran the shell tool, and summarized the result."
+                content: "{response_content}"
+                reasoning: "{response_reasoning}"
                 status: "completed"
                 error_message: ""
                 token_count: 42
@@ -215,6 +269,11 @@ async fn insert_chat_transcript_documents(
             agent_did = escape_graphql_string(agent_did),
             behavior_id = escape_graphql_string(behavior_id),
             response_key = escape_graphql_string(response_key),
+            assistant_tool_call_message = escape_graphql_string(&assistant_tool_call_message),
+            tool_result_message = escape_graphql_string(&tool_result_message),
+            assistant_final_message = escape_graphql_string(&assistant_final_message),
+            response_content = escape_graphql_string(response_content),
+            response_reasoning = escape_graphql_string(response_reasoning),
         ))
         .await;
     if response.has_errors() {
@@ -252,16 +311,20 @@ struct LiveDesktopFixture {
     _tempdir: tempfile::TempDir,
     driver: AuditDriver,
     running_agent: Option<RunningAgent>,
+    remote_core: Option<Arc<ClientCore>>,
     docs: LiveAgentDocs,
     backend: AgentBackendConfig,
 }
 
 impl LiveDesktopFixture {
     fn shutdown(mut self) -> Result<()> {
+        self.driver.app.shutdown_client();
         if let Some(running_agent) = self.running_agent.take() {
             self.runtime.block_on(running_agent.shutdown())?;
         }
-        self.driver.app.shutdown_client();
+        if let Some(remote_core) = self.remote_core.take() {
+            self.runtime.block_on(remote_core.shutdown())?;
+        }
         Ok(())
     }
 }
@@ -269,9 +332,8 @@ impl LiveDesktopFixture {
 struct LiveRemoteDeployment {
     label: String,
     peer_id: String,
-    addr: String,
     agent_did: String,
-    core: ClientCore,
+    core: Arc<ClientCore>,
     running_agent: RunningAgent,
     docs: LiveAgentDocs,
 }
@@ -286,13 +348,515 @@ struct MultiAgentLiveDesktopFixture {
 
 impl MultiAgentLiveDesktopFixture {
     fn shutdown(mut self) -> Result<()> {
+        self.driver.app.shutdown_client();
         for deployment in self.deployments.drain(..) {
             self.runtime.block_on(deployment.running_agent.shutdown())?;
             self.runtime.block_on(deployment.core.shutdown())?;
         }
-        self.driver.app.shutdown_client();
         Ok(())
     }
+}
+
+#[derive(Clone)]
+struct LiveDeploymentCase<'a> {
+    label: String,
+    peer_id: String,
+    agent_did: String,
+    docs: LiveAgentDocs,
+    remote_core: &'a ClientCore,
+}
+
+struct LiveSubmissionCase {
+    prompt: String,
+    request_id: String,
+    response: String,
+    session_id: String,
+}
+
+fn live_deployment_case(deployment: &LiveRemoteDeployment) -> LiveDeploymentCase<'_> {
+    LiveDeploymentCase {
+        label: deployment.label.clone(),
+        peer_id: deployment.peer_id.clone(),
+        agent_did: deployment.agent_did.clone(),
+        docs: deployment.docs.clone(),
+        remote_core: deployment.core.as_ref(),
+    }
+}
+
+fn assert_chat_context(
+    driver: &AuditDriver,
+    deployment: &LiveDeploymentCase<'_>,
+    session_id: Option<&str>,
+) {
+    assert_eq!(
+        driver.app.state.chat.selected_peer_id.as_deref(),
+        Some(deployment.peer_id.as_str())
+    );
+    assert_eq!(
+        driver.app.state.chat.selected_agent_did.as_deref(),
+        Some(deployment.agent_did.as_str())
+    );
+    assert_eq!(
+        driver.app.state.chat.selected_session_id.as_deref(),
+        session_id
+    );
+    assert_eq!(driver.app.state.chat.selected_behavior_override, None);
+    assert_eq!(driver.app.state.chat.last_submission_error, None);
+}
+
+fn assert_operator_context(
+    driver: &AuditDriver,
+    deployment: &LiveDeploymentCase<'_>,
+    section: OperatorSection,
+    entity_id: Option<&str>,
+) {
+    assert_eq!(
+        driver.app.state.operator.selected_peer_id.as_deref(),
+        Some(deployment.peer_id.as_str())
+    );
+    assert_eq!(
+        driver.app.state.operator.selected_agent_did.as_deref(),
+        Some(deployment.agent_did.as_str())
+    );
+    assert_eq!(driver.app.state.operator.selected_section, section);
+    assert_eq!(
+        driver.app.state.operator.selected_entity_id.as_deref(),
+        entity_id
+    );
+}
+
+fn ensure_chat_session_selected(
+    driver: &mut AuditDriver,
+    wait_label: &str,
+    timeout: Duration,
+) -> Result<String> {
+    const MANUAL_CREATE_SENTINEL: &str = "__manual_create__";
+
+    if let Some(session_id) = driver.app.state.chat.selected_session_id.clone() {
+        return Ok(session_id);
+    }
+
+    if let Some(existing_session_id) = driver.app.client.as_ref().and_then(|client| {
+        let agent_did = driver.app.state.chat.selected_agent_did.as_deref()?;
+        client
+            .store()
+            .snapshot()
+            .conversation_rows(agent_did)
+            .first()
+            .map(|row| row.session_id.clone())
+    }) {
+        let conversation_target = audit::targets::chat_conversation(&existing_session_id);
+        if driver
+            .wait_for_target(wait_label, timeout, &conversation_target)
+            .is_ok()
+        {
+            driver.click_target(&conversation_target);
+        }
+        return wait_for_value(wait_label, timeout, || {
+            driver.app.state.chat.selected_session_id.clone()
+        });
+    }
+
+    let outcome = wait_for_value(wait_label, timeout, || {
+        let texts = driver.render();
+        driver.app.state.chat.selected_session_id.clone().or_else(|| {
+            texts
+                .iter()
+                .any(|text| text.contains("Create Conversation"))
+                .then_some(MANUAL_CREATE_SENTINEL.to_string())
+        })
+    })?;
+
+    if outcome == MANUAL_CREATE_SENTINEL {
+        driver.click_target(audit::targets::CHAT_CREATE_CONVERSATION);
+        wait_for_value(wait_label, timeout, || {
+            driver.app.state.chat.selected_session_id.clone()
+        })
+    } else {
+        Ok(outcome)
+    }
+}
+
+fn submit_live_prompt_for_deployment(
+    driver: &mut AuditDriver,
+    deployment: &LiveDeploymentCase<'_>,
+    exact_token: &str,
+) -> Result<LiveSubmissionCase> {
+    driver.open_activity(Activity::Chat);
+    let deployment_target = audit::targets::chat_deployment(&deployment.peer_id);
+    driver.wait_for_target(
+        &format!("chat deployment row for {}", deployment.label),
+        Duration::from_secs(10),
+        &deployment_target,
+    )?;
+    driver.click_target(&deployment_target);
+    assert_chat_context(driver, deployment, None);
+
+    let _session_id = ensure_chat_session_selected(
+        driver,
+        &format!("chat session ready for {}", deployment.label),
+        Duration::from_secs(10),
+    )?;
+
+    let prompt = format!(
+        "Reply with exactly {exact_token} and nothing else. Multi-agent server isolation audit {}",
+        uuid::Uuid::new_v4()
+    );
+    let (request_id, response) =
+        submit_chat_message_and_wait_for_observed_response(driver, &prompt)?;
+    let session_id = driver
+        .app
+        .state
+        .chat
+        .selected_session_id
+        .clone()
+        .ok_or_else(|| anyhow!("missing selected session after live submission"))?;
+    assert_chat_context(driver, deployment, Some(session_id.as_str()));
+
+    wait_for_value(
+        &format!("request {request_id} bound to {}", deployment.label),
+        Duration::from_secs(10),
+        || {
+            driver.app.client.as_ref().and_then(|client| {
+                client
+                    .store()
+                    .snapshot()
+                    .requests
+                    .iter()
+                    .find(|row| row.request_id == request_id)
+                    .filter(|row| {
+                        row.agent_did.as_deref() == Some(deployment.agent_did.as_str())
+                            && row.session_id.as_deref() == Some(session_id.as_str())
+                            && row.behavior_id.as_deref()
+                                == Some(deployment.docs.behavior_id.as_str())
+                    })
+                    .map(|row| row.request_id.clone())
+            })
+        },
+    )?;
+
+    Ok(LiveSubmissionCase {
+        prompt,
+        request_id,
+        response,
+        session_id,
+    })
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct BootstrapReplicatorRequest {
+    #[serde(rename = "Addresses")]
+    addresses: Vec<String>,
+    #[serde(rename = "Collections")]
+    collections: Vec<String>,
+}
+
+struct BootstrapRuntimeApi {
+    graphql: String,
+    port: u16,
+    stop: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl BootstrapRuntimeApi {
+    fn start(
+        runtime: &Arc<Runtime>,
+        core: Arc<ClientCore>,
+        listen_address: String,
+    ) -> Result<Self> {
+        let listener = TcpListener::bind(("127.0.0.1", 0))?;
+        listener.set_nonblocking(true)?;
+        let port = listener.local_addr()?.port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_for_thread = Arc::clone(&stop);
+        let handle = runtime.handle().clone();
+        let core_for_thread = Arc::clone(&core);
+        let listen_address_for_thread = listen_address.clone();
+        let thread = thread::spawn(move || {
+            while !stop_for_thread.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let request = match read_http_request(&mut stream) {
+                            Ok(request) => request,
+                            Err(_) => {
+                                let _ = stream.shutdown(Shutdown::Both);
+                                continue;
+                            }
+                        };
+                        let response = match (request.method.as_str(), request.path.as_str()) {
+                            ("GET", "/api/v0/node/identity") => Ok((
+                                "200 OK",
+                                "application/json",
+                                serde_json::json!({
+                                    "peer_id": core_for_thread.local_peer_id(),
+                                })
+                                .to_string(),
+                            )),
+                            ("GET", "/api/v0/p2p/info") => Ok((
+                                "200 OK",
+                                "application/json",
+                                serde_json::to_string(&vec![listen_address_for_thread.clone()])
+                                    .expect("serialize bootstrap p2p info"),
+                            )),
+                            ("POST", "/api/v0/p2p/connect") => {
+                                let connect_result =
+                                    serde_json::from_str::<Vec<String>>(&request.body)
+                                        .context("decoding /p2p/connect payload")
+                                        .and_then(|addresses| {
+                                            let target = addresses
+                                                .first()
+                                                .cloned()
+                                                .context("missing desktop listen address")?;
+                                            handle.block_on(async {
+                                                core_for_thread
+                                                    .p2p()
+                                                    .connect_peer(&target)
+                                                    .await
+                                                    .map_err(anyhow::Error::msg)
+                                            })
+                                        });
+                                connect_result.map(|_| {
+                                    (
+                                        "200 OK",
+                                        "application/json",
+                                        r#"{"status":"ok"}"#.to_string(),
+                                    )
+                                })
+                            }
+                            ("POST", "/api/v0/p2p/collections") => {
+                                serde_json::from_str::<Vec<String>>(&request.body)
+                                    .context("decoding /p2p/collections payload")
+                                    .map(|_| {
+                                        (
+                                            "200 OK",
+                                            "application/json",
+                                            r#"{"status":"ok"}"#.to_string(),
+                                        )
+                                    })
+                            }
+                            ("POST", "/api/v0/p2p/replicators") => {
+                                let replicator =
+                                    serde_json::from_str::<BootstrapReplicatorRequest>(&request.body)
+                                        .context("decoding /p2p/replicators payload")
+                                        .and_then(|payload| {
+                                            let target = payload
+                                                .addresses
+                                                .first()
+                                                .cloned()
+                                                .context("missing desktop replicator address")?;
+                                            handle.block_on(async {
+                                                set_replicator_with_retry(
+                                                    core_for_thread.as_ref(),
+                                                    &target,
+                                                    "bootstrap runtime replicator",
+                                                    payload.collections,
+                                                )
+                                                .await
+                                            })
+                                        });
+                                replicator.map(|_| {
+                                    (
+                                        "200 OK",
+                                        "application/json",
+                                        r#"{"status":"ok"}"#.to_string(),
+                                    )
+                                })
+                            }
+                            _ => Ok((
+                                "404 Not Found",
+                                "application/json",
+                                r#"{"error":"not found"}"#.to_string(),
+                            )),
+                        };
+
+                        let (status, content_type, body) = match response {
+                            Ok(response) => response,
+                            Err(error) => (
+                                "500 Internal Server Error",
+                                "application/json",
+                                serde_json::json!({ "error": error.to_string() }).to_string(),
+                            ),
+                        };
+                        let _ = write_http_response(&mut stream, status, content_type, &body);
+                        let _ = stream.shutdown(Shutdown::Both);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(25));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        Ok(Self {
+            graphql: format!("http://127.0.0.1:{port}/api/v0/graphql"),
+            port,
+            stop,
+            handle: Some(thread),
+        })
+    }
+
+    fn graphql_url(&self) -> &str {
+        &self.graphql
+    }
+}
+
+impl Drop for BootstrapRuntimeApi {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        let _ = TcpStream::connect(("127.0.0.1", self.port));
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn bootstrap_live_core_options() -> ClientCoreOptions {
+    let mut options = ClientCoreOptions::local_only();
+    options.rate_limit_burst = 5_000;
+    options.rate_limit_rate = 500.0;
+    options
+}
+
+fn seed_agent_home_runtime_state_for_bootstrap(
+    agent_home: &std::path::Path,
+    agent_name: &str,
+    agent_did: &str,
+    graphql: &str,
+    peer_id: &str,
+    listen_address: &str,
+) -> Result<()> {
+    std::fs::create_dir_all(agent_home)?;
+    std::fs::write(
+        agent_home.join("init.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "agent_name": agent_name,
+            "agent_did": agent_did,
+        }))?,
+    )?;
+    std::fs::write(
+        agent_home.join("runtime.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "graphql": graphql,
+            "agent_name": agent_name,
+            "agent_did": agent_did,
+            "p2p_transport": "iroh",
+            "p2p_peer_id": peer_id,
+            "p2p_listen_addresses": [listen_address],
+        }))?,
+    )?;
+    Ok(())
+}
+
+fn wait_for_live_deployment_docs_in_store(
+    desktop_core: &ClientCore,
+    deployment_label: &str,
+    agent_did: &str,
+    docs: &LiveAgentDocs,
+) -> Result<()> {
+    wait_for_value(
+        &format!("observed live deployment docs for {deployment_label}"),
+        Duration::from_secs(120),
+        || {
+            let snapshot = desktop_core.store().snapshot();
+            let has_principal = snapshot
+                .agent_principals
+                .iter()
+                .any(|row| row.agent_did == agent_did);
+            let has_behavior = snapshot
+                .behaviors
+                .iter()
+                .any(|row| row.behavior_id == docs.behavior_id);
+            let has_backend = snapshot
+                .inference_backends
+                .iter()
+                .any(|row| row.backend_id == docs.backend_id);
+            let has_tools = snapshot
+                .tool_selections
+                .iter()
+                .any(|row| row.selection_id == docs.tool_selection_id);
+            let has_profile = snapshot
+                .inference_profiles
+                .iter()
+                .any(|row| row.profile_id == docs.inference_profile_id);
+            (has_principal && has_behavior && has_backend && has_tools && has_profile).then_some(())
+        },
+    )
+}
+
+fn wait_for_bootstrap_chat_ready(
+    driver: &mut AuditDriver,
+    peer_id: &str,
+    agent_did: &str,
+) -> Result<()> {
+    wait_for_value(
+        "desktop bootstrap status",
+        Duration::from_secs(20),
+        || {
+            let texts = driver.render();
+            texts
+                .iter()
+                .any(|text| text.contains("replication: subscriptions armed"))
+                .then_some(())
+        },
+    )?;
+    let deployment_target = audit::targets::chat_deployment(peer_id);
+    driver.wait_for_target(
+        "bootstrapped chat deployment row",
+        Duration::from_secs(20),
+        &deployment_target,
+    )?;
+    driver.click_target(&deployment_target);
+    wait_for_value(
+        "bootstrapped chat selection",
+        Duration::from_secs(10),
+        || {
+            (driver.app.state.chat.selected_peer_id.as_deref() == Some(peer_id)
+                && driver.app.state.chat.selected_agent_did.as_deref() == Some(agent_did))
+            .then_some(())
+        },
+    )
+}
+
+fn seed_bootstrap_peer_directory(
+    paths: &DesktopPaths,
+    records: &[crate::client::PeerRecord],
+) -> Result<()> {
+    std::fs::create_dir_all(paths.root())?;
+    let payload = serde_json::json!({
+        "peers": records,
+    });
+    std::fs::write(
+        paths.peer_directory_path(),
+        serde_json::to_vec_pretty(&payload)?,
+    )?;
+    Ok(())
+}
+
+fn wait_for_bootstrap_chat_rows(
+    driver: &mut AuditDriver,
+    deployments: &[LiveRemoteDeployment],
+) -> Result<()> {
+    wait_for_value(
+        "desktop multi-agent bootstrap status",
+        Duration::from_secs(20),
+        || {
+            let texts = driver.render();
+            texts
+                .iter()
+                .any(|text| text.contains("replication: subscriptions armed"))
+                .then_some(())
+        },
+    )?;
+    for deployment in deployments {
+        let deployment_target = audit::targets::chat_deployment(&deployment.peer_id);
+        driver.wait_for_target(
+            &format!("bootstrapped chat deployment row for {}", deployment.label),
+            Duration::from_secs(20),
+            &deployment_target,
+        )?;
+    }
+    Ok(())
 }
 
 fn build_live_desktop_fixture(
@@ -304,14 +868,14 @@ fn build_live_desktop_fixture(
     let backend = AgentBackendConfig::live_from_env()?;
     let runtime = test_runtime()?;
     let tempdir = tempfile::tempdir()?;
-    let core = runtime.block_on(ClientCore::start_with_paths_and_options(
-        DesktopPaths::from_root(tempdir.path().join("desktop")),
-        ClientCoreOptions::local_only(),
-    ))?;
+    let remote_core = Arc::new(runtime.block_on(ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path().join("remote")),
+        bootstrap_live_core_options(),
+    ))?);
 
     let unique_label = format!("{label}-{}", uuid::Uuid::new_v4().simple());
     let running_agent = runtime.block_on(spawn_backed_agent(
-        core.node_arc(),
+        remote_core.node_arc(),
         tempdir
             .path()
             .join("agent")
@@ -320,12 +884,59 @@ fn build_live_desktop_fixture(
         &backend,
     ))?;
     let docs = runtime.block_on(seed_live_operator_documents(
-        &core,
+        remote_core.as_ref(),
         &running_agent.did,
         &unique_label,
         &backend,
     ))?;
-    runtime.block_on(core.refresh_store())?;
+    let remote_addr = runtime.block_on(wait_for_connectable_iroh_addr(
+        remote_core.as_ref(),
+        &unique_label,
+    ))?;
+    let runtime_api =
+        BootstrapRuntimeApi::start(&runtime, Arc::clone(&remote_core), remote_addr.clone())?;
+
+    let desktop_paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
+    let agent_home = tempdir.path().join("agent-home");
+    seed_agent_home_runtime_state_for_bootstrap(
+        &agent_home,
+        &unique_label,
+        &running_agent.did,
+        runtime_api.graphql_url(),
+        remote_core.local_peer_id(),
+        &remote_addr,
+    )?;
+    let init_summary = runtime.block_on(crate::local_runtime::init_standard_local_runtime(
+        crate::local_runtime::DesktopInitOptions {
+            agent_home: agent_home.clone(),
+            desktop_paths: desktop_paths.clone(),
+            label: unique_label.clone(),
+        },
+    ))?;
+    let peer_id = init_summary.peer_record_id.clone();
+
+    let core = runtime.block_on(ClientCore::start_with_paths_and_options(
+        desktop_paths,
+        bootstrap_live_core_options(),
+    ))?;
+    if !core.bootstrap_errors().is_empty() {
+        anyhow::bail!(
+            "unexpected bootstrap errors in live desktop fixture: {:?}",
+            core.bootstrap_errors()
+        );
+    }
+    runtime.block_on(wait_for_connected_peer(
+        &core,
+        remote_core.local_peer_id(),
+        "single-agent live desktop bootstrap",
+    ))?;
+    runtime.block_on(wait_for_connected_peer(
+        remote_core.as_ref(),
+        core.local_peer_id(),
+        "single-agent live runtime bootstrap",
+    ))?;
+    drop(runtime_api);
+    wait_for_live_deployment_docs_in_store(&core, &unique_label, &running_agent.did, &docs)?;
 
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
@@ -337,42 +948,40 @@ fn build_live_desktop_fixture(
         log_store,
     );
     app.state.activity = Activity::Chat;
+    let mut driver = AuditDriver::new(app, ctx);
+    wait_for_bootstrap_chat_ready(&mut driver, &peer_id, &running_agent.did)?;
 
     Ok(LiveDesktopFixture {
         runtime,
         _tempdir: tempdir,
-        driver: AuditDriver::new(app, ctx),
+        driver,
         running_agent: Some(running_agent),
+        remote_core: Some(remote_core),
         docs,
         backend,
     })
 }
 
-fn build_multi_agent_live_desktop_fixture(
+fn build_multi_agent_desktop_fixture_with_backend(
     label: &str,
+    backend: &AgentBackendConfig,
     log_store: Arc<DesktopLogStore>,
 ) -> Result<MultiAgentLiveDesktopFixture> {
     init_test_tracing();
 
-    let backend = AgentBackendConfig::live_from_env()?;
+    let backend = backend.clone();
     let runtime = test_runtime()?;
     let tempdir = tempfile::tempdir()?;
-    let desktop_core = runtime.block_on(ClientCore::start_with_paths_and_options(
-        DesktopPaths::from_root(tempdir.path().join("desktop")),
-        live_multi_server_core_options(),
-    ))?;
+    let desktop_paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
     let mut deployments = Vec::new();
+    let mut runtime_apis = Vec::new();
+    let mut peer_records = Vec::new();
 
     for suffix in ["alpha", "bravo"] {
-        let remote_core = runtime.block_on(ClientCore::start_with_paths_and_options(
+        let remote_core = Arc::new(runtime.block_on(ClientCore::start_with_paths_and_options(
             DesktopPaths::from_root(tempdir.path().join(format!("remote-{suffix}"))),
-            live_multi_server_core_options(),
-        ))?;
-        let remote_addr = runtime.block_on(configure_live_test_replicators(
-            &desktop_core,
-            &remote_core,
-            suffix,
-        ))?;
+            bootstrap_live_core_options(),
+        ))?);
 
         let unique_label = format!("{label}-{suffix}-{}", uuid::Uuid::new_v4().simple());
         let running_agent = runtime.block_on(spawn_backed_agent(
@@ -385,30 +994,28 @@ fn build_multi_agent_live_desktop_fixture(
             &backend,
         ))?;
         let docs = runtime.block_on(seed_live_operator_documents(
-            &remote_core,
+            remote_core.as_ref(),
             &running_agent.did,
             &unique_label,
             &backend,
         ))?;
 
         let deployment_label = format!("{} Server", title_case_ascii(suffix));
-        let added = desktop_core.add_test_peer_status(
+        let remote_addr = runtime.block_on(wait_for_connectable_iroh_addr(
+            remote_core.as_ref(),
             &deployment_label,
-            remote_addr.clone(),
-            &running_agent.did,
-            true,
-        );
-        wait_for_replicated_live_deployment_docs(
-            runtime.as_ref(),
-            &desktop_core,
-            &deployment_label,
-            &running_agent.did,
-            &docs,
-        )?;
+        ))?;
+        let runtime_api =
+            BootstrapRuntimeApi::start(&runtime, Arc::clone(&remote_core), remote_addr.clone())?;
+        let mut peer_record =
+            crate::client::PeerRecord::new(&deployment_label, &remote_addr, &running_agent.did);
+        peer_record.graphql = Some(runtime_api.graphql_url().to_string());
+        let peer_id = peer_record.peer_id.clone();
+        runtime_apis.push(runtime_api);
+        peer_records.push(peer_record);
         deployments.push(LiveRemoteDeployment {
             label: deployment_label,
-            peer_id: added.peer_id,
-            addr: remote_addr,
+            peer_id,
             agent_did: running_agent.did.clone(),
             core: remote_core,
             running_agent,
@@ -416,12 +1023,39 @@ fn build_multi_agent_live_desktop_fixture(
         });
     }
 
-    wait_for_refreshed_desktop_snapshot(
-        runtime.as_ref(),
-        &desktop_core,
-        "multi-server desktop snapshot after remote setup",
-        Duration::from_secs(60),
-    )?;
+    seed_bootstrap_peer_directory(&desktop_paths, &peer_records)?;
+    let desktop_core = runtime.block_on(ClientCore::start_with_paths_and_options(
+        desktop_paths,
+        bootstrap_live_core_options(),
+    ))?;
+    if !desktop_core.bootstrap_errors().is_empty() {
+        anyhow::bail!(
+            "unexpected bootstrap errors in multi-agent live desktop fixture: {:?}",
+            desktop_core.bootstrap_errors()
+        );
+    }
+    for deployment in &deployments {
+        runtime.block_on(wait_for_connected_peer(
+            &desktop_core,
+            deployment.core.local_peer_id(),
+            &format!("desktop -> {}", deployment.label),
+        ))?;
+        runtime.block_on(wait_for_connected_peer(
+            deployment.core.as_ref(),
+            desktop_core.local_peer_id(),
+            &format!("{} -> desktop", deployment.label),
+        ))?;
+    }
+    drop(runtime_apis);
+    for deployment in &deployments {
+        wait_for_live_deployment_docs_in_store(
+            &desktop_core,
+            &deployment.label,
+            &deployment.agent_did,
+            &deployment.docs,
+        )?;
+    }
+
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = DesktopApp::from_parts(
@@ -432,100 +1066,24 @@ fn build_multi_agent_live_desktop_fixture(
         log_store,
     );
     app.state.activity = Activity::Chat;
+    let mut driver = AuditDriver::new(app, ctx);
+    wait_for_bootstrap_chat_rows(&mut driver, &deployments)?;
 
     Ok(MultiAgentLiveDesktopFixture {
         runtime,
         _tempdir: tempdir,
-        driver: AuditDriver::new(app, ctx),
+        driver,
         deployments,
         backend,
     })
 }
 
-fn wait_for_replicated_live_deployment_docs(
-    runtime: &Runtime,
-    desktop_core: &ClientCore,
-    deployment_label: &str,
-    agent_did: &str,
-    docs: &LiveAgentDocs,
-) -> Result<()> {
-    let mut last_error = None;
-    let result = wait_for_value(
-        &format!("replicated live deployment docs for {deployment_label}"),
-        Duration::from_secs(180),
-        || match runtime.block_on(live_deployment_docs_available(
-            desktop_core,
-            agent_did,
-            docs,
-        )) {
-            Ok(true) => Some(()),
-            Ok(false) => None,
-            Err(error) => {
-                last_error = Some(error.to_string());
-                None
-            }
-        },
-    );
-
-    result.with_context(|| {
-        last_error.map_or_else(
-            || format!("last {deployment_label} replication probe saw missing rows"),
-            |error| format!("last {deployment_label} replication probe failed: {error}"),
-        )
-    })?;
-    wait_for_refreshed_desktop_snapshot(
-        runtime,
-        desktop_core,
-        &format!("desktop snapshot containing {deployment_label} docs"),
-        Duration::from_secs(60),
-    )
-}
-
-fn wait_for_refreshed_desktop_snapshot(
-    runtime: &Runtime,
-    desktop_core: &ClientCore,
+fn build_multi_agent_live_desktop_fixture(
     label: &str,
-    timeout: Duration,
-) -> Result<()> {
-    let mut last_error = None;
-    wait_for_value(label, timeout, || {
-        match runtime.block_on(desktop_core.refresh_store()) {
-            Ok(_) => Some(()),
-            Err(error) => {
-                last_error = Some(error.to_string());
-                None
-            }
-        }
-    })
-    .with_context(|| {
-        last_error.map_or_else(
-            || format!("desktop snapshot did not refresh for {label}"),
-            |error| format!("last desktop snapshot refresh failed for {label}: {error}"),
-        )
-    })
-}
-
-async fn live_deployment_docs_available(
-    desktop_core: &ClientCore,
-    agent_did: &str,
-    docs: &LiveAgentDocs,
-) -> Result<bool> {
-    for (root, field, value) in [
-        ("AgentPrincipal", "agent_did", agent_did),
-        ("AgentBehavior", "behavior_id", docs.behavior_id.as_str()),
-        ("InferenceBackend", "backend_id", docs.backend_id.as_str()),
-        ("ToolSelection", "selection_id", docs.tool_selection_id.as_str()),
-        (
-            "InferenceProfile",
-            "profile_id",
-            docs.inference_profile_id.as_str(),
-        ),
-    ] {
-        if !query_has_row_by_unique_field(desktop_core, root, field, value).await? {
-            return Ok(false);
-        }
-    }
-    Ok(true)
+    log_store: Arc<DesktopLogStore>,
+) -> Result<MultiAgentLiveDesktopFixture> {
+    let backend = AgentBackendConfig::live_from_env()?;
+    build_multi_agent_desktop_fixture_with_backend(label, &backend, log_store)
 }
 
 async fn query_has_row_by_unique_field(
@@ -1172,6 +1730,15 @@ fn submit_chat_message_and_wait_for_response(
     submit_chat_message_and_wait_for_response_after_request(driver, prompt, |_, _| Ok(()))
 }
 
+fn submit_chat_message_and_wait_for_observed_response(
+    driver: &mut AuditDriver,
+    prompt: &str,
+) -> Result<(String, String)> {
+    submit_chat_message_and_wait_for_observed_response_after_request(driver, prompt, |_, _| {
+        Ok(())
+    })
+}
+
 fn submit_chat_message_and_wait_for_response_after_request(
     driver: &mut AuditDriver,
     prompt: &str,
@@ -1273,6 +1840,121 @@ fn submit_chat_message_and_wait_for_response_after_request(
     let rendered_response_text = response_text.trim();
     wait_for_value(
         "submitted prompt and response in transcript",
+        Duration::from_secs(30),
+        || {
+            let texts = driver.render();
+            texts
+                .iter()
+                .any(|text| text.contains(prompt))
+                .then_some(())
+                .and_then(|_| {
+                    texts
+                        .iter()
+                        .any(|text| text.contains(rendered_response_text))
+                        .then_some(())
+                })
+        },
+    )?;
+
+    Ok((request_id, response_text))
+}
+
+fn submit_chat_message_and_wait_for_observed_response_after_request(
+    driver: &mut AuditDriver,
+    prompt: &str,
+    mut after_request: impl FnMut(&mut AuditDriver, &str) -> Result<()>,
+) -> Result<(String, String)> {
+    let prior_request_count = driver
+        .app
+        .client
+        .as_ref()
+        .map(|client| client.store().snapshot().requests.len())
+        .ok_or_else(|| anyhow!("desktop client missing"))?;
+    let prior_response_count = driver
+        .app
+        .client
+        .as_ref()
+        .map(|client| client.store().snapshot().responses.len())
+        .ok_or_else(|| anyhow!("desktop client missing"))?;
+
+    driver.click_target(audit::targets::CHAT_COMPOSER_TEXT);
+    driver.type_text(prompt);
+    driver.click_target(audit::targets::CHAT_SEND);
+    assert_eq!(driver.app.state.chat.last_submission_error, None);
+    assert!(driver.app.state.chat.composer_text.is_empty());
+
+    let request_id = wait_for_value(
+        "focused request id after observed submission",
+        Duration::from_secs(10),
+        || {
+            driver.app.client.as_ref().and_then(|client| {
+                let snapshot = client.store().snapshot();
+                (snapshot.requests.len() > prior_request_count)
+                    .then(|| client.store().focused_request_id())
+                    .flatten()
+            })
+        },
+    )?;
+    after_request(driver, &request_id)?;
+
+    let response_text = wait_for_value(
+        "observed response content in client store after submission",
+        Duration::from_secs(180),
+        || {
+            let client = driver.app.client.as_ref()?;
+            let snapshot = client.store().snapshot();
+            let request = snapshot
+                .requests
+                .iter()
+                .find(|row| row.request_id == request_id);
+            let response = snapshot.latest_response_for_request(&request_id);
+
+            if let Some(response) = response {
+                if matches!(response.status.as_deref(), Some("complete" | "completed")) {
+                    if let Some(content) = response.content.as_deref() {
+                        if !content.trim().is_empty() {
+                            return Some(content.to_string());
+                        }
+                    }
+                }
+
+                if matches!(response.status.as_deref(), Some("error" | "failed" | "failure")) {
+                    panic!(
+                        "response for request {request_id} reached error status while waiting for observed content: {}",
+                        describe_response_wait_state(
+                            request,
+                            Some(response),
+                            prior_response_count,
+                            snapshot.responses.len()
+                        )
+                    );
+                }
+            }
+
+            if let Some(request) = request {
+                if matches!(
+                    request.lifecycle_state.as_deref(),
+                    Some("failed" | "dead" | "superseded")
+                ) {
+                    panic!(
+                        "request {request_id} reached terminal lifecycle while waiting for observed response: {}",
+                        describe_response_wait_state(
+                            Some(request),
+                            response,
+                            prior_response_count,
+                            snapshot.responses.len()
+                        )
+                    );
+                }
+            }
+
+            None
+        },
+    )?;
+
+    let rendered_response_text = response_text.trim();
+    wait_for_value(
+        "submitted prompt and observed response in transcript",
         Duration::from_secs(30),
         || {
             let texts = driver.render();
@@ -1799,18 +2481,10 @@ async fn wait_for_runtime_process_state(
 fn init_test_tracing() {
     static INIT: OnceLock<()> = OnceLock::new();
     INIT.get_or_init(|| {
+        let filter = std::env::var("DEFRA_AGENT_DESKTOP_TEST_LOG")
+            .unwrap_or_else(|_| "warn,defra_agent_desktop::app::tests=info".to_string());
         let _ = tracing_subscriber::registry()
-            .with(EnvFilter::new(
-                "warn,\
-                 defra_agent_desktop=info,\
-                 defra_agent=info,\
-                 defra_node=info,\
-                 p2p=info,\
-                 iroh=warn,\
-                 reqwest=warn,\
-                 hyper=warn,\
-                 h2=warn",
-            ))
+            .with(with_default_transport_noise_filters(EnvFilter::new(filter)))
             .with(
                 tracing_subscriber::fmt::layer()
                     .with_target(false)
@@ -1820,6 +2494,20 @@ fn init_test_tracing() {
             .with(global_log_layer())
             .try_init();
     });
+}
+
+fn with_default_transport_noise_filters(filter: EnvFilter) -> EnvFilter {
+    filter
+        .add_directive(
+            "iroh_quinn_proto::connection=error"
+                .parse()
+                .expect("valid tracing directive"),
+        )
+        .add_directive(
+            "noq_proto::connection=error"
+                .parse()
+                .expect("valid tracing directive"),
+        )
 }
 
 fn live_desktop_test_guard() -> MutexGuard<'static, ()> {

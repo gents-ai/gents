@@ -105,21 +105,23 @@ fn launch_desktop() -> anyhow::Result<()> {
 }
 
 fn init_tracing() {
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new(
-            "warn,\
-             defra_agent_desktop=trace,\
-             defra_agent=info,\
-             defra_node=info,\
-             p2p=info,\
-             iroh=info,\
-             wgpu=warn,\
-             winit=warn,\
-             eframe=warn,\
-             egui=warn,\
-             naga=warn",
-        )
-    });
+    let env_filter = with_default_transport_noise_filters(
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            EnvFilter::new(
+                "warn,\
+                 defra_agent_desktop=trace,\
+                 defra_agent=info,\
+                 defra_node=info,\
+                 p2p=info,\
+                 iroh=info,\
+                 wgpu=warn,\
+                 winit=warn,\
+                 eframe=warn,\
+                 egui=warn,\
+                 naga=warn",
+            )
+        }),
+    );
 
     let _ = tracing_subscriber::registry()
         .with(env_filter)
@@ -133,4 +135,18 @@ fn init_tracing() {
         .try_init();
 
     tracing::info!("launching defra-agent-desktop");
+}
+
+fn with_default_transport_noise_filters(filter: EnvFilter) -> EnvFilter {
+    filter
+        .add_directive(
+            "iroh_quinn_proto::connection=error"
+                .parse()
+                .expect("valid tracing directive"),
+        )
+        .add_directive(
+            "noq_proto::connection=error"
+                .parse()
+                .expect("valid tracing directive"),
+        )
 }
