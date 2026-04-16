@@ -226,6 +226,20 @@ pub fn show_main(
         .as_deref()
         .and_then(|session_id| store.derive_turn(session_id));
 
+    egui::Panel::bottom("chat_composer_panel")
+        .resizable(false)
+        .exact_size(208.0)
+        .show_inside(ui, |ui| {
+            composer::show(
+                ui,
+                state,
+                client,
+                store,
+                runtime,
+                selected_agent_did.as_deref(),
+                turn_state,
+            );
+        });
     ui.vertical(|ui| {
         header::show(
             ui,
@@ -240,20 +254,6 @@ pub fn show_main(
             },
         );
         ui.add_space(12.0);
-        egui::Panel::bottom("chat_composer_panel")
-            .resizable(false)
-            .exact_size(208.0)
-            .show_inside(ui, |ui| {
-                composer::show(
-                    ui,
-                    state,
-                    client,
-                    store,
-                    runtime,
-                    selected_agent_did.as_deref(),
-                    turn_state,
-                );
-            });
         if show_first_conversation_nudge {
             render_first_conversation_nudge(
                 ui,
