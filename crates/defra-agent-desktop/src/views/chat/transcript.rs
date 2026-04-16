@@ -433,7 +433,9 @@ fn turn_block(ui: &mut Ui, label: &str, label_color: egui::Color32, body: impl F
             .inner_margin(10)
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                body(ui);
+                ui.vertical(|ui| {
+                    body(ui);
+                });
             });
     });
 }
