@@ -20,7 +20,31 @@ pub fn show(
         ui.add_space(14.0);
         ui.horizontal(|ui| {
             ui.add_space(14.0);
-            views::sidebar_heading(ui, "Deployments", Some("+ peer"));
+            ui.label(
+                RichText::new("Deployments")
+                    .family(crate::theme::stencil_family())
+                    .size(13.0)
+                    .color(palette.text_1)
+                    .strong(),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(14.0);
+                let response = audit::add(
+                    ui,
+                    audit::targets::CHAT_OPEN_PEERS_SETUP,
+                    egui::Button::new(
+                        RichText::new("+ peer")
+                            .monospace()
+                            .size(10.5)
+                            .color(palette.accent),
+                    )
+                    .min_size(egui::vec2(52.0, 20.0)),
+                );
+                if response.clicked() {
+                    state.activity = Activity::Peers;
+                    state.peers.show_add_form = true;
+                }
+            });
         });
         ui.add_space(8.0);
 

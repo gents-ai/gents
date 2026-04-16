@@ -71,7 +71,7 @@ pub fn show(
     }
 
     transcript_surface(ui, |ui| {
-        egui::ScrollArea::vertical()
+        let scroll_output = egui::ScrollArea::vertical()
             .stick_to_bottom(state.chat.transcript_stick_to_bottom)
             .show(ui, |ui| {
                 if transcript.messages.is_empty() {
@@ -152,6 +152,13 @@ pub fn show(
                     reasoning_block(ui, state, markdown_cache, response);
                 }
             });
+
+        // Keep the stick-to-bottom flag in sync with where the user ended up
+        // so manual scrolling up stops the auto-jump, and returning to the
+        // bottom resumes it.
+        let viewport_bottom = scroll_output.state.offset.y + scroll_output.inner_rect.height();
+        let at_bottom = viewport_bottom + 2.0 >= scroll_output.content_size.y;
+        state.chat.transcript_stick_to_bottom = at_bottom;
     });
 
     show_tool_detail_modal(ui.ctx(), state, markdown_cache);

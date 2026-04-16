@@ -132,7 +132,7 @@ pub fn show_sidebar(
         ui.add_space(14.0);
         ui.horizontal(|ui| {
             ui.add_space(14.0);
-            views::sidebar_heading(ui, "Peered Deployments", Some("+ add"));
+            views::sidebar_heading(ui, "Peered Deployments", None);
         });
         ui.add_space(8.0);
         ui.horizontal(|ui| {
