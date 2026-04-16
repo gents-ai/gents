@@ -112,8 +112,15 @@ fn init_tracing() {
                  defra_agent_desktop=trace,\
                  defra_agent=info,\
                  defra_node=info,\
-                 p2p=info,\
-                 iroh=info,\
+                 p2p=warn,\
+                 iroh=warn,\
+                 iroh_net=warn,\
+                 iroh_relay=warn,\
+                 iroh_gossip=warn,\
+                 iroh_blobs=warn,\
+                 iroh_quinn=warn,\
+                 iroh_quinn_proto=warn,\
+                 netwatch=warn,\
                  wgpu=warn,\
                  winit=warn,\
                  eframe=warn,\

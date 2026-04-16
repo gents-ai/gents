@@ -114,7 +114,32 @@ pub fn show(
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.add_space(14.0);
-            views::sidebar_heading(ui, "Conversations", Some("new"));
+            ui.label(
+                RichText::new("Conversations")
+                    .family(crate::theme::stencil_family())
+                    .size(13.0)
+                    .color(palette.text_1)
+                    .strong(),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(14.0);
+                let enabled = selected_agent_did.is_some();
+                let response = audit::add_enabled(
+                    ui,
+                    audit::targets::CHAT_NEW_CONVERSATION,
+                    enabled,
+                    egui::Button::new(
+                        RichText::new("+ new")
+                            .monospace()
+                            .size(10.5)
+                            .color(if enabled { palette.accent } else { palette.text_3 }),
+                    )
+                    .min_size(egui::vec2(52.0, 20.0)),
+                );
+                if response.clicked() {
+                    state.chat.new_conversation_requested = true;
+                }
+            });
         });
         ui.add_space(8.0);
 

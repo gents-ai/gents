@@ -73,6 +73,7 @@ pub struct ChatState {
     pub last_action_message: Option<String>,
     pub last_export_payload: Option<String>,
     pub tool_detail_modal: Option<ToolDetailModalState>,
+    pub new_conversation_requested: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

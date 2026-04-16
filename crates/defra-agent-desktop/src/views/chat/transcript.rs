@@ -812,6 +812,52 @@ mod table_parser_tests {
     }
 
     #[test]
+    fn prose_with_six_fenced_code_blocks_renders_as_single_prose() {
+        let body = r#"
+## Repo Overview
+
+**defra-agent** is a Rust agent runtime.
+
+```rust
+fn main() {}
+```
+
+```toml
+name = "x"
+```
+
+```bash
+echo hi
+```
+
+```json
+{"k":1}
+```
+
+```lean
+theorem t : True := trivial
+```
+
+```txt
+plain
+```
+
+tail prose here.
+"#;
+        let segments = segment_markdown(body);
+        assert_eq!(
+            segments.len(),
+            1,
+            "no tables, so the whole body should be one prose segment"
+        );
+        assert!(matches!(segments[0], MarkdownSegment::Prose(_)));
+        let MarkdownSegment::Prose(ref prose) = segments[0] else {
+            unreachable!()
+        };
+        assert!(prose.contains("tail prose here"));
+    }
+
+    #[test]
     fn pipe_table_is_parsed_into_headers_and_rows() {
         let text = "intro\n\n| Crate | Purpose |\n| --- | --- |\n| `defra-agent` | Runtime library |\n| `defra-agent-cli` | Compiled CLI (`defra-agent`) |\n\nafter";
         let segments = segment_markdown(text);

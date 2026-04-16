@@ -218,6 +218,14 @@ pub fn show_main(
         }
     }
 
+    if std::mem::take(&mut state.chat.new_conversation_requested) {
+        if let Err(error) =
+            create_first_conversation(state, client, runtime, selected_agent_did.as_deref())
+        {
+            state.chat.last_submission_error = Some(error.to_string());
+        }
+    }
+
     let selected_session_id = state.chat.selected_session_id.clone();
     let show_first_conversation_nudge = selected_agent_did.is_some()
         && selected_session_id.is_none()
