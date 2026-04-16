@@ -20,7 +20,6 @@ egui.workspace = true
 egui_commonmark.workspace = true
 identity.workspace = true
 p2p.workspace = true
-pulldown-cmark.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

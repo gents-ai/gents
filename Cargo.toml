@@ -55,6 +55,12 @@ strip = true
 overflow-checks = true
 debug = "line-tables-only"
 
+[profile.dev-install]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
+strip = false
+
 [profile.dev.package."*"]
 opt-level = 1
 
