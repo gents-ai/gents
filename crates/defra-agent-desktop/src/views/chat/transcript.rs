@@ -446,15 +446,12 @@ fn render_markdown(
 ) {
     ui.push_id(id_salt, |ui| {
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-        egui::ScrollArea::horizontal()
-            .id_salt("body_overflow")
-            .auto_shrink([false, true])
-            .show(ui, |ui| {
-                CommonMarkViewer::new()
-                    .syntax_theme_light(MARKDOWN_THEME_LIGHT)
-                    .syntax_theme_dark(MARKDOWN_THEME_DARK)
-                    .show(ui, markdown_cache, text);
-            });
+        let bound = ui.max_rect();
+        ui.set_clip_rect(bound);
+        CommonMarkViewer::new()
+            .syntax_theme_light(MARKDOWN_THEME_LIGHT)
+            .syntax_theme_dark(MARKDOWN_THEME_DARK)
+            .show(ui, markdown_cache, text);
     });
 }
 
