@@ -2856,7 +2856,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
     });
     print_json(&output)?;
     eprintln!(
-        "defra-agent server is running with IROH P2P. Press Ctrl-C to stop. Run `defra-agent-desktop init` or `defra-agent chat` in another terminal."
+        "defra-agent server is running with IROH P2P. Press Ctrl-C to stop. For the desktop demo, run `defra-agent-desktop init`, launch `defra-agent-desktop`, wait for `replication: subscriptions armed`, then chat."
     );
 
     run_handle

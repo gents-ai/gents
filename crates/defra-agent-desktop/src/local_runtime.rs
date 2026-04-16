@@ -153,7 +153,12 @@ pub async fn init_standard_local_runtime(
         p2p_peer_id,
         p2p_listen_address,
         peer_record_id: peer.peer_id,
-        next_steps: vec!["defra-agent-desktop".to_string()],
+        next_steps: vec![
+            "Run `defra-agent-desktop` and leave the desktop app open.".to_string(),
+            "Wait for the status bar to show `replication: subscriptions armed`.".to_string(),
+            "Then submit prompts from Chat, or run `defra-agent chat` in another terminal."
+                .to_string(),
+        ],
     })
 }
 
@@ -171,8 +176,13 @@ Saved desktop deployment: {label}
 Desktop data dir: {desktop_home}
 Peer directory: {peer_directory}
 
+Note: init saves the discovered runtime. The desktop app completes P2P pairing
+and replication bootstrap on launch.
+
 Next:
-  defra-agent-desktop
+  1. Run `defra-agent-desktop` and leave it open.
+  2. Wait for the status bar to show `replication: subscriptions armed`.
+  3. Then submit prompts from Chat, or run `defra-agent chat` in another terminal.
 ",
         agent_home = summary.agent_home,
         graphql = summary.graphql,
@@ -280,4 +290,47 @@ async fn http_post_json<B: Serialize>(client: &reqwest::Client, url: &str, body:
 struct P2pReplicatorRequest {
     collections: Vec<String>,
     addresses: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_summary() -> DesktopInitSummary {
+        DesktopInitSummary {
+            status: "initialized",
+            source: LOCAL_STANDARD_SOURCE,
+            agent_home: "/tmp/agent".to_string(),
+            desktop_home: "/tmp/desktop".to_string(),
+            peer_directory: "/tmp/desktop/peers.json".to_string(),
+            label: "Local Agent".to_string(),
+            agent_name: "default".to_string(),
+            agent_did: "did:defra-agent:default".to_string(),
+            graphql: "http://127.0.0.1:9191/graphql".to_string(),
+            p2p_transport: "iroh".to_string(),
+            p2p_peer_id: "peer-runtime".to_string(),
+            p2p_listen_address: "iroh://peer-runtime".to_string(),
+            peer_record_id: "peer-runtime".to_string(),
+            next_steps: vec![
+                "Run `defra-agent-desktop` and leave the desktop app open.".to_string(),
+                "Wait for the status bar to show `replication: subscriptions armed`.".to_string(),
+                "Then submit prompts from Chat, or run `defra-agent chat` in another terminal."
+                    .to_string(),
+            ],
+        }
+    }
+
+    #[test]
+    fn init_summary_tells_demo_to_wait_for_desktop_bootstrap() {
+        let summary = sample_summary();
+        assert!(summary
+            .next_steps
+            .iter()
+            .any(|step| step.contains("replication: subscriptions armed")));
+
+        let rendered = render_human_summary(&summary);
+        assert!(rendered.contains("desktop app completes P2P pairing"));
+        assert!(rendered.contains("replication: subscriptions armed"));
+        assert!(rendered.contains("Then submit prompts from Chat"));
+    }
 }

@@ -4954,6 +4954,16 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         desktop_init.get("p2p_transport").and_then(Value::as_str),
         Some("iroh")
     );
+    let desktop_next_steps = desktop_init
+        .get("next_steps")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("desktop init output missing next_steps: {desktop_init}"))?;
+    assert!(
+        desktop_next_steps.iter().any(|step| step
+            .as_str()
+            .is_some_and(|step| step.contains("replication: subscriptions armed"))),
+        "desktop init should tell the demo to wait for desktop bootstrap before chat replication: {desktop_init}"
+    );
     let peer_directory_path = desktop_home.join("peers.json");
     let peer_directory: Value = serde_json::from_slice(
         &fs::read(&peer_directory_path)

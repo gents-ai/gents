@@ -3,10 +3,11 @@
 `defra-agent` is a DefraDB-backed agent runtime with a small consumer CLI.
 
 If you want to try it, the shortest path is:
-1. Build the CLI.
+1. Build the CLI and desktop binaries.
 2. Run `init`.
 3. Start `server`.
-4. Open `chat` in another terminal.
+4. For the desktop demo, run `defra-agent-desktop init`, launch the desktop app, and wait for `replication: subscriptions armed`.
+5. Open `chat` in another terminal or submit a prompt from the desktop Chat view.
 
 ## Demo Quickstart
 
@@ -19,22 +20,23 @@ Prerequisites:
 
 The backend endpoint must be the OpenAI-compatible base URL, including `/v1`.
 
-### 1. Build the CLI
+### 1. Build the CLI and desktop
 
 ```bash
-cargo build -p defra-agent-cli --release
+cargo build -p defra-agent-cli -p defra-agent-desktop --release
 ```
 
 ### 2. Set demo variables
 
-Set the CLI path. The default `init` target is local Ollama at `http://localhost:11434/v1` with model `gemma4-26b-a4b`.
+Set the binary paths. The default `init` target is local Ollama at `http://localhost:11434/v1` with model `gemma4-26b-a4b`.
 
 ```bash
 export AGENT=./target/release/defra-agent
+export DESKTOP=./target/release/defra-agent-desktop
 ```
 
 By default the CLI keeps its local node, keys, and runtime state in `~/.defra-agent`.
-If you want to isolate a demo, pass `--home /some/path` to both `server` and `chat`.
+If you want to isolate a demo, pass `--home /some/path` to `init`, `server`, and `chat`, and pass the same path as `--agent-home /some/path` to `$DESKTOP init`.
 
 ### 3. Initialize the default runtime
 
@@ -92,7 +94,7 @@ $AGENT reset
 $AGENT init --reset
 ```
 
-If you want to isolate a demo, pass `--home /some/path` to `init`, `server`, and `chat`.
+If you want to isolate a demo, pass `--home /some/path` to `init`, `server`, and `chat`, and pass the same path as `--agent-home /some/path` to `defra-agent-desktop init`.
 
 If you want to override the default backend id as well:
 
@@ -156,9 +158,20 @@ $AGENT server \
   --p2p-discovery disabled
 ```
 
-### 5. Start chatting
+### 5. Pair and launch the desktop
 
 Run this in terminal 2:
+
+```bash
+$DESKTOP init
+$DESKTOP
+```
+
+`defra-agent-desktop init` only discovers the local runtime and saves it in the desktop peer directory. The desktop app completes the P2P pairing and replication bootstrap when it launches. For the replicated chat demo, leave the desktop app open and wait for the status bar to show `replication: subscriptions armed` before sending prompts you expect to render in the UI.
+
+### 6. Start chatting
+
+Run this in terminal 3, after the desktop has finished bootstrapping:
 
 ```bash
 $AGENT chat
