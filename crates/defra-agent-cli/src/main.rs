@@ -25,6 +25,7 @@ use defra_agent::{
     ProcessLifecycleObserver, ProcessLifecycleState, SimpleIdentity, ToolCeiling,
     ToolSelectionDocument,
 };
+use p2p::iroh::parse_public_peer_addr;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -4694,30 +4695,32 @@ async fn fetch_live_http_p2p_status(home: Option<&Path>, graphql: &str) -> Resul
         .build()
         .context("building P2P status HTTP client")?;
     let api_base = p2p_api_base(graphql)?;
-    let identity: NodeIdentityResponse =
-        http_get_json(&client, &format!("{api_base}/node/identity")).await?;
+    let identity =
+        http_get_json::<NodeIdentityResponse>(&client, &format!("{api_base}/node/identity"))
+            .await
+            .ok();
     let transport = runtime_state
         .as_ref()
         .map(|state| state.p2p_transport.as_str())
         .filter(|transport| !transport.is_empty())
         .unwrap_or(P2pTransportArg::None.as_str());
-    let Some(peer_id) = identity.peer_id else {
-        return Ok(json!({
-            "enabled": false,
-            "p2p_transport": transport,
-            "p2p_peer_id": Value::Null,
-            "p2p_listen_addresses": [],
-            "p2p_shareable_address": Value::Null,
-            "p2p_connected_peers": [],
-            "p2p_error": Value::Null,
-        }));
-    };
     let listen_addresses: Vec<String> =
         http_get_json(&client, &format!("{api_base}/p2p/info")).await?;
     let shareable_address: P2pShareableAddressResponse =
         http_get_json(&client, &format!("{api_base}/p2p/shareable-address")).await?;
     let shareable_address = normalize_optional_string(shareable_address.address.as_deref())
         .context("runtime reported an empty shareable P2P address")?;
+    let peer_id = resolve_p2p_peer_id(
+        identity
+            .as_ref()
+            .and_then(|identity| identity.peer_id.as_deref()),
+        Some(&shareable_address),
+        &listen_addresses,
+        runtime_state
+            .as_ref()
+            .and_then(|state| state.p2p_peer_id.as_deref()),
+    )
+    .context("runtime reported a shareable P2P address but no usable peer id")?;
     let peer_rows: Vec<P2pPeerRow> =
         http_get_json(&client, &format!("{api_base}/p2p/peers")).await?;
     let connected_peers = peer_rows.into_iter().map(|row| row.id).collect::<Vec<_>>();
@@ -6405,6 +6408,29 @@ fn normalize_optional_string(value: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn peer_id_from_public_addr(value: &str) -> Option<String> {
+    let value = normalize_optional_string(Some(value))?;
+    parse_public_peer_addr(&value)
+        .ok()
+        .map(|(peer_id, _)| peer_id.to_string())
+}
+
+fn resolve_p2p_peer_id(
+    live_peer_id: Option<&str>,
+    shareable_address: Option<&str>,
+    listen_addresses: &[String],
+    stored_peer_id: Option<&str>,
+) -> Option<String> {
+    normalize_optional_string(live_peer_id)
+        .or_else(|| shareable_address.and_then(peer_id_from_public_addr))
+        .or_else(|| {
+            listen_addresses
+                .iter()
+                .find_map(|addr| peer_id_from_public_addr(addr))
+        })
+        .or_else(|| normalize_optional_string(stored_peer_id))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BackendResolutionMode {
     Init,
@@ -7784,5 +7810,31 @@ mod tests {
         assert_eq!(rows[0].id.as_deref(), Some("peer-1"));
         assert_eq!(rows[0].collection_names, vec!["AgentRuntime"]);
         assert_eq!(rows[0].collection_ids.len(), 2);
+    }
+
+    #[test]
+    fn resolve_p2p_peer_id_uses_shareable_address_when_identity_is_missing() {
+        let peer_id = resolve_p2p_peer_id(
+            None,
+            Some("127.0.0.1:56000/p2p/peer-alpha"),
+            &[],
+            Some("persisted-peer"),
+        );
+
+        assert_eq!(peer_id.as_deref(), Some("peer-alpha"));
+    }
+
+    #[test]
+    fn resolve_p2p_peer_id_falls_back_to_listen_or_stored_values() {
+        let peer_id = resolve_p2p_peer_id(
+            None,
+            None,
+            &[String::from("127.0.0.1:56000/p2p/peer-beta")],
+            Some("persisted-peer"),
+        );
+        assert_eq!(peer_id.as_deref(), Some("peer-beta"));
+
+        let peer_id = resolve_p2p_peer_id(None, None, &[], Some("persisted-peer"));
+        assert_eq!(peer_id.as_deref(), Some("persisted-peer"));
     }
 }

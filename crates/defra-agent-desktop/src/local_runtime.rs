@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use p2p::iroh::parse_public_peer_addr;
 use serde::{Deserialize, Serialize};
 use tokio::time::{sleep, Instant};
 
@@ -51,6 +52,8 @@ struct StoredRuntimeState {
     agent_did: String,
     #[serde(default)]
     p2p_transport: String,
+    #[serde(default)]
+    p2p_peer_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -114,14 +117,22 @@ pub async fn init_standard_local_runtime(
         .build()
         .context("building local runtime HTTP client")?;
     let api_base = p2p_api_base(&runtime.graphql)?;
-    let identity: NodeIdentityResponse =
-        http_get_json(&client, &format!("{api_base}/node/identity")).await?;
     let shareable_address: ShareableAddressResponse =
         http_get_json(&client, &format!("{api_base}/p2p/shareable-address")).await?;
-    let p2p_peer_id = normalize_optional_string(identity.peer_id.as_deref())
-        .context("local runtime is reachable but did not report a P2P peer id")?;
     let p2p_listen_address = normalize_optional_string(shareable_address.address.as_deref())
         .context("local runtime is reachable but did not report a shareable P2P address")?;
+    let live_identity =
+        http_get_json::<NodeIdentityResponse>(&client, &format!("{api_base}/node/identity"))
+            .await
+            .ok();
+    let p2p_peer_id = resolve_p2p_peer_id(
+        live_identity
+            .as_ref()
+            .and_then(|identity| identity.peer_id.as_deref()),
+        Some(&p2p_listen_address),
+        runtime.p2p_peer_id.as_deref(),
+    )
+    .context("local runtime is reachable but did not report a usable P2P peer id")?;
 
     let mut peer_directory =
         PeerDirectory::load(options.desktop_paths.peer_directory_path()).await?;
@@ -263,6 +274,23 @@ fn normalize_optional_string(value: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn peer_id_from_public_addr(value: &str) -> Option<String> {
+    let value = normalize_optional_string(Some(value))?;
+    parse_public_peer_addr(&value)
+        .ok()
+        .map(|(peer_id, _)| peer_id.to_string())
+}
+
+fn resolve_p2p_peer_id(
+    live_peer_id: Option<&str>,
+    shareable_address: Option<&str>,
+    stored_peer_id: Option<&str>,
+) -> Option<String> {
+    normalize_optional_string(live_peer_id)
+        .or_else(|| shareable_address.and_then(peer_id_from_public_addr))
+        .or_else(|| normalize_optional_string(stored_peer_id))
+}
+
 async fn http_get_json<T: for<'de> Deserialize<'de>>(
     client: &reqwest::Client,
     url: &str,
@@ -382,5 +410,23 @@ mod tests {
         );
         assert_eq!(normalize_optional_string(Some("   ")), None);
         assert_eq!(normalize_optional_string(None), None);
+    }
+
+    #[test]
+    fn resolve_p2p_peer_id_uses_shareable_address_when_identity_is_missing() {
+        let peer_id = resolve_p2p_peer_id(
+            None,
+            Some("127.0.0.1:56000/p2p/peer-alpha"),
+            Some("persisted-peer"),
+        );
+
+        assert_eq!(peer_id.as_deref(), Some("peer-alpha"));
+    }
+
+    #[test]
+    fn resolve_p2p_peer_id_falls_back_to_stored_value() {
+        let peer_id = resolve_p2p_peer_id(None, None, Some("persisted-peer"));
+
+        assert_eq!(peer_id.as_deref(), Some("persisted-peer"));
     }
 }
