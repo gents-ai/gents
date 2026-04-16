@@ -444,17 +444,107 @@ fn render_markdown(
     id_salt: impl std::hash::Hash,
     text: &str,
 ) {
-    let width = ui.available_width().max(240.0).floor() as usize;
     ui.push_id(id_salt, |ui| {
-        ui.set_max_width(width as f32);
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-        CommonMarkViewer::new()
-            .default_width(Some(width))
-            .max_image_width(Some(width))
-            .syntax_theme_light(MARKDOWN_THEME_LIGHT)
-            .syntax_theme_dark(MARKDOWN_THEME_DARK)
-            .show(ui, markdown_cache, text);
+        for (index, segment) in split_markdown_segments(text).into_iter().enumerate() {
+            match segment {
+                MarkdownSegment::Prose(body) => render_prose_segment(ui, markdown_cache, &body),
+                MarkdownSegment::Wide(body) => {
+                    render_wide_segment(ui, markdown_cache, index, &body)
+                }
+            }
+        }
     });
+}
+
+fn render_prose_segment(ui: &mut Ui, markdown_cache: &mut CommonMarkCache, text: &str) {
+    CommonMarkViewer::new()
+        .syntax_theme_light(MARKDOWN_THEME_LIGHT)
+        .syntax_theme_dark(MARKDOWN_THEME_DARK)
+        .show(ui, markdown_cache, text);
+}
+
+fn render_wide_segment(
+    ui: &mut Ui,
+    markdown_cache: &mut CommonMarkCache,
+    index: usize,
+    text: &str,
+) {
+    egui::ScrollArea::horizontal()
+        .id_salt(("wide_segment", index))
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            CommonMarkViewer::new()
+                .syntax_theme_light(MARKDOWN_THEME_LIGHT)
+                .syntax_theme_dark(MARKDOWN_THEME_DARK)
+                .show(ui, markdown_cache, text);
+        });
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MarkdownSegment {
+    Prose(String),
+    Wide(String),
+}
+
+fn split_markdown_segments(text: &str) -> Vec<MarkdownSegment> {
+    use pulldown_cmark::{Event, Options, Parser, Tag};
+
+    let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
+    let parser = Parser::new_ext(text, options).into_offset_iter();
+
+    let mut segments: Vec<MarkdownSegment> = Vec::new();
+    let mut cursor = 0usize;
+    let mut depth: u32 = 0;
+    let mut wide_start: Option<usize> = None;
+    let mut in_wide = false;
+
+    let push_prose = |segments: &mut Vec<MarkdownSegment>, slice: &str| {
+        if slice.trim().is_empty() {
+            return;
+        }
+        if let Some(MarkdownSegment::Prose(existing)) = segments.last_mut() {
+            existing.push_str(slice);
+        } else {
+            segments.push(MarkdownSegment::Prose(slice.to_string()));
+        }
+    };
+
+    for (event, range) in parser {
+        match event {
+            Event::Start(tag) => {
+                let is_wide_tag = matches!(tag, Tag::Table(_) | Tag::CodeBlock(_));
+                if depth == 0 && is_wide_tag {
+                    if range.start > cursor {
+                        push_prose(&mut segments, &text[cursor..range.start]);
+                    }
+                    wide_start = Some(range.start);
+                    in_wide = true;
+                }
+                depth += 1;
+            }
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 && in_wide {
+                    let start = wide_start.take().unwrap_or(range.start);
+                    segments.push(MarkdownSegment::Wide(text[start..range.end].to_string()));
+                    cursor = range.end;
+                    in_wide = false;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if cursor < text.len() {
+        push_prose(&mut segments, &text[cursor..]);
+    }
+
+    if segments.is_empty() && !text.is_empty() {
+        segments.push(MarkdownSegment::Prose(text.to_string()));
+    }
+
+    segments
 }
 
 fn compact_tool_metadata(ui: &mut Ui, tool_call: &AgentToolCallRow) {
@@ -607,5 +697,60 @@ fn tool_status_color(status: Option<&str>) -> egui::Color32 {
         "failed" | "error" => theme::palette().danger,
         "running" | "streaming" | "processing" => theme::palette().warning,
         _ => theme::palette().stroke,
+    }
+}
+
+#[cfg(test)]
+mod segmenter_tests {
+    use super::{split_markdown_segments, MarkdownSegment};
+
+    #[test]
+    fn pure_prose_collapses_to_single_prose_segment() {
+        let segments = split_markdown_segments("hello **world**");
+        assert_eq!(segments.len(), 1);
+        assert!(matches!(segments[0], MarkdownSegment::Prose(_)));
+    }
+
+    #[test]
+    fn pipe_table_is_extracted_as_wide_segment() {
+        let text = "intro line\n\n| col a | col b |\n| --- | --- |\n| foo | bar |\n\nafter";
+        let segments = split_markdown_segments(text);
+        let kinds: Vec<&str> = segments
+            .iter()
+            .map(|segment| match segment {
+                MarkdownSegment::Prose(_) => "prose",
+                MarkdownSegment::Wide(_) => "wide",
+            })
+            .collect();
+        assert_eq!(kinds, ["prose", "wide", "prose"]);
+        let MarkdownSegment::Wide(table_src) = &segments[1] else {
+            panic!("middle segment must be wide");
+        };
+        assert!(table_src.contains("| col a | col b |"));
+    }
+
+    #[test]
+    fn fenced_code_block_is_extracted_as_wide_segment() {
+        let text = "before\n\n```rust\nlet x = 1;\n```\n\nafter";
+        let segments = split_markdown_segments(text);
+        assert_eq!(segments.len(), 3);
+        assert!(matches!(segments[0], MarkdownSegment::Prose(_)));
+        let MarkdownSegment::Wide(code_src) = &segments[1] else {
+            panic!("middle segment must be wide");
+        };
+        assert!(code_src.contains("let x = 1;"));
+        assert!(matches!(segments[2], MarkdownSegment::Prose(_)));
+    }
+
+    #[test]
+    fn code_block_nested_in_list_stays_with_surrounding_prose() {
+        let text = "- outer item with code:\n\n  ```\n  nested\n  ```\n\n- second item";
+        let segments = split_markdown_segments(text);
+        assert!(
+            segments
+                .iter()
+                .all(|segment| matches!(segment, MarkdownSegment::Prose(_))),
+            "nested code inside list stays inside the enclosing prose segment"
+        );
     }
 }

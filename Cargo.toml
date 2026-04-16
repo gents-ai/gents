@@ -32,6 +32,7 @@ opentelemetry = { version = "0.31", default-features = false, features = ["trace
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"] }
 p2p = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "7d45fc01" }
+pulldown-cmark = { version = "0.13", default-features = false }
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }

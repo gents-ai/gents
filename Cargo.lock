@@ -3893,6 +3893,7 @@ dependencies = [
  "egui_commonmark",
  "identity",
  "p2p",
+ "pulldown-cmark",
  "reqwest 0.12.28",
  "rig-core",
  "serde",
