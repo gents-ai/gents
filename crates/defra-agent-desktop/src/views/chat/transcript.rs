@@ -446,11 +446,199 @@ fn render_markdown(
 ) {
     ui.push_id(id_salt, |ui| {
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-        CommonMarkViewer::new()
-            .syntax_theme_light(MARKDOWN_THEME_LIGHT)
-            .syntax_theme_dark(MARKDOWN_THEME_DARK)
-            .show(ui, markdown_cache, text);
+        for (index, segment) in segment_markdown(text).into_iter().enumerate() {
+            match segment {
+                MarkdownSegment::Prose(body) => {
+                    CommonMarkViewer::new()
+                        .syntax_theme_light(MARKDOWN_THEME_LIGHT)
+                        .syntax_theme_dark(MARKDOWN_THEME_DARK)
+                        .show(ui, markdown_cache, &body);
+                }
+                MarkdownSegment::Table(table) => {
+                    render_table(ui, index, &table);
+                    ui.add_space(4.0);
+                }
+            }
+        }
     });
+}
+
+enum MarkdownSegment {
+    Prose(String),
+    Table(ParsedTable),
+}
+
+struct ParsedTable {
+    headers: Vec<String>,
+    rows: Vec<Vec<String>>,
+}
+
+impl ParsedTable {
+    fn num_cols(&self) -> usize {
+        self.headers.len().max(
+            self.rows
+                .iter()
+                .map(|row| row.len())
+                .max()
+                .unwrap_or(0),
+        )
+    }
+}
+
+fn segment_markdown(text: &str) -> Vec<MarkdownSegment> {
+    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+
+    let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
+    let parser = Parser::new_ext(text, options).into_offset_iter();
+
+    let mut segments: Vec<MarkdownSegment> = Vec::new();
+    let mut cursor = 0usize;
+    let mut depth: u32 = 0;
+    let mut table_start: Option<usize> = None;
+    let mut in_table = false;
+    let mut current_table: Option<ParsedTable> = None;
+    let mut current_row: Vec<String> = Vec::new();
+    let mut current_cell: String = String::new();
+    let mut in_head = false;
+
+    let flush_prose = |segments: &mut Vec<MarkdownSegment>, slice: &str| {
+        if slice.trim().is_empty() {
+            return;
+        }
+        if let Some(MarkdownSegment::Prose(existing)) = segments.last_mut() {
+            existing.push_str(slice);
+        } else {
+            segments.push(MarkdownSegment::Prose(slice.to_string()));
+        }
+    };
+
+    for (event, range) in parser {
+        match event {
+            Event::Start(Tag::Table(_)) => {
+                if depth == 0 {
+                    if range.start > cursor {
+                        flush_prose(&mut segments, &text[cursor..range.start]);
+                    }
+                    table_start = Some(range.start);
+                    in_table = true;
+                    current_table = Some(ParsedTable {
+                        headers: Vec::new(),
+                        rows: Vec::new(),
+                    });
+                }
+                depth += 1;
+            }
+            Event::Start(Tag::TableHead) => {
+                in_head = true;
+                depth += 1;
+            }
+            Event::Start(Tag::TableRow) => {
+                current_row.clear();
+                depth += 1;
+            }
+            Event::Start(Tag::TableCell) => {
+                current_cell.clear();
+                depth += 1;
+            }
+            Event::Start(_) => {
+                depth += 1;
+            }
+            Event::End(TagEnd::Table) => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 && in_table {
+                    if let Some(table) = current_table.take() {
+                        segments.push(MarkdownSegment::Table(table));
+                    }
+                    cursor = range.end;
+                    in_table = false;
+                    table_start = None;
+                }
+            }
+            Event::End(TagEnd::TableHead) => {
+                depth = depth.saturating_sub(1);
+                if in_table {
+                    if let Some(table) = current_table.as_mut() {
+                        table.headers = std::mem::take(&mut current_row);
+                    }
+                }
+                in_head = false;
+            }
+            Event::End(TagEnd::TableRow) => {
+                depth = depth.saturating_sub(1);
+                if in_table && !in_head {
+                    if let Some(table) = current_table.as_mut() {
+                        table.rows.push(std::mem::take(&mut current_row));
+                    }
+                }
+            }
+            Event::End(TagEnd::TableCell) => {
+                depth = depth.saturating_sub(1);
+                if in_table {
+                    current_row.push(std::mem::take(&mut current_cell).trim().to_string());
+                }
+            }
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+            }
+            Event::Text(text) if in_table => {
+                current_cell.push_str(&text);
+            }
+            Event::Code(text) if in_table => {
+                current_cell.push_str(&text);
+            }
+            _ => {}
+        }
+    }
+
+    if cursor < text.len() {
+        flush_prose(&mut segments, &text[cursor..]);
+    }
+
+    if segments.is_empty() && !text.is_empty() {
+        segments.push(MarkdownSegment::Prose(text.to_string()));
+    }
+
+    let _ = table_start;
+    segments
+}
+
+fn render_table(ui: &mut Ui, index: usize, table: &ParsedTable) {
+    let num_cols = table.num_cols();
+    if num_cols == 0 {
+        return;
+    }
+    let palette = theme::palette();
+    let available_width = ui.available_width();
+    let col_width = (available_width / num_cols as f32).max(80.0);
+
+    egui::Grid::new(("markdown_table", index))
+        .num_columns(num_cols)
+        .min_col_width(col_width)
+        .max_col_width(col_width)
+        .striped(true)
+        .show(ui, |ui| {
+            for idx in 0..num_cols {
+                let header = table
+                    .headers
+                    .get(idx)
+                    .map(String::as_str)
+                    .unwrap_or_default();
+                ui.label(
+                    RichText::new(header)
+                        .monospace()
+                        .strong()
+                        .color(palette.text_0),
+                );
+            }
+            ui.end_row();
+            for row in &table.rows {
+                for idx in 0..num_cols {
+                    let cell = row.get(idx).map(String::as_str).unwrap_or_default();
+                    ui.label(RichText::new(cell).color(palette.text_1));
+                }
+                ui.end_row();
+            }
+        });
 }
 
 fn compact_tool_metadata(ui: &mut Ui, tool_call: &AgentToolCallRow) {
@@ -609,6 +797,42 @@ fn tool_status_color(status: Option<&str>) -> egui::Color32 {
         "failed" | "error" => theme::palette().danger,
         "running" | "streaming" | "processing" => theme::palette().warning,
         _ => theme::palette().stroke,
+    }
+}
+
+#[cfg(test)]
+mod table_parser_tests {
+    use super::{segment_markdown, MarkdownSegment};
+
+    #[test]
+    fn pure_prose_returns_single_prose_segment() {
+        let segments = segment_markdown("hello `world` and **bold**");
+        assert_eq!(segments.len(), 1);
+        assert!(matches!(segments[0], MarkdownSegment::Prose(_)));
+    }
+
+    #[test]
+    fn pipe_table_is_parsed_into_headers_and_rows() {
+        let text = "intro\n\n| Crate | Purpose |\n| --- | --- |\n| `defra-agent` | Runtime library |\n| `defra-agent-cli` | Compiled CLI (`defra-agent`) |\n\nafter";
+        let segments = segment_markdown(text);
+        let kinds: Vec<&str> = segments
+            .iter()
+            .map(|segment| match segment {
+                MarkdownSegment::Prose(_) => "prose",
+                MarkdownSegment::Table(_) => "table",
+            })
+            .collect();
+        assert_eq!(kinds, ["prose", "table", "prose"]);
+
+        let MarkdownSegment::Table(table) = &segments[1] else {
+            panic!("middle segment must be a table");
+        };
+        assert_eq!(table.headers, vec!["Crate".to_string(), "Purpose".to_string()]);
+        assert_eq!(table.rows.len(), 2);
+        assert_eq!(table.rows[0][0], "defra-agent");
+        assert_eq!(table.rows[0][1], "Runtime library");
+        assert_eq!(table.rows[1][0], "defra-agent-cli");
+        assert_eq!(table.rows[1][1], "Compiled CLI (defra-agent)");
     }
 }
 
