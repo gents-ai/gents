@@ -491,26 +491,20 @@ fn compact_tool_metadata(ui: &mut Ui, tool_call: &AgentToolCallRow) {
 
 fn transcript_surface(ui: &mut Ui, body: impl FnOnce(&mut Ui)) {
     let palette = theme::palette();
-    let available = ui.available_size();
-    let (outer_rect, _) =
-        ui.allocate_exact_size(available, egui::Sense::hover());
-    ui.painter().rect(
-        outer_rect,
-        6.0,
-        palette.background_0,
-        egui::Stroke::new(1.0, palette.stroke_subtle),
-        egui::StrokeKind::Inside,
-    );
-    let inner_rect = outer_rect.shrink(14.0);
-    ui.scope_builder(
-        egui::UiBuilder::new()
-            .max_rect(inner_rect)
-            .layout(egui::Layout::top_down(egui::Align::Min)),
-        |ui| {
-            ui.set_clip_rect(inner_rect);
+    let available_height = ui.available_height();
+    let expected_bounds = egui::Rect::from_min_size(ui.cursor().min, ui.available_size());
+    let prev_clip = ui.clip_rect();
+    ui.set_clip_rect(prev_clip.intersect(expected_bounds));
+    egui::Frame::new()
+        .fill(palette.background_0)
+        .stroke(egui::Stroke::new(1.0, palette.stroke_subtle))
+        .corner_radius(6)
+        .inner_margin(14)
+        .show(ui, |ui| {
+            ui.set_min_height((available_height - 28.0).max(0.0));
             body(ui);
-        },
-    );
+        });
+    ui.set_clip_rect(prev_clip);
 }
 
 fn centered_status_card(ui: &mut Ui, title: &str, body: &str) {
@@ -538,7 +532,9 @@ fn supporting_block(ui: &mut Ui, body: impl FnOnce(&mut Ui)) {
             .inner_margin(8)
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                body(ui);
+                ui.vertical(|ui| {
+                    body(ui);
+                });
             });
     });
 }
