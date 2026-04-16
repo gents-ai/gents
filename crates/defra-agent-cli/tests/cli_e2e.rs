@@ -3843,6 +3843,14 @@ async fn status_includes_p2p_runtime_info() -> Result<()> {
         .get("p2p_listen_addresses")
         .and_then(Value::as_array)
         .is_some_and(|rows| !rows.is_empty()));
+    assert!(output
+        .get("p2p_shareable_address")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty()));
+    assert!(output
+        .pointer("/p2p/p2p_shareable_address")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty()));
 
     Ok(())
 }
@@ -4056,6 +4064,7 @@ async fn p2p_connects_two_local_servers_via_operator_commands() -> Result<()> {
     );
     for path in [
         "/checks/p2p/info/ok",
+        "/checks/p2p/shareable_address/ok",
         "/checks/p2p/peers/ok",
         "/checks/p2p/collections/ok",
         "/checks/p2p/replicators/ok",

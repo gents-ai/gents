@@ -51,16 +51,18 @@ struct StoredRuntimeState {
     agent_did: String,
     #[serde(default)]
     p2p_transport: String,
-    #[serde(default)]
-    p2p_peer_id: Option<String>,
-    #[serde(default)]
-    p2p_listen_addresses: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct NodeIdentityResponse {
     #[serde(default)]
     peer_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ShareableAddressResponse {
+    #[serde(default)]
+    address: Option<String>,
 }
 
 pub fn default_agent_home() -> Result<PathBuf> {
@@ -114,18 +116,12 @@ pub async fn init_standard_local_runtime(
     let api_base = p2p_api_base(&runtime.graphql)?;
     let identity: NodeIdentityResponse =
         http_get_json(&client, &format!("{api_base}/node/identity")).await?;
-    let live_listen_addresses: Vec<String> =
-        http_get_json(&client, &format!("{api_base}/p2p/info")).await?;
-    let p2p_peer_id = identity
-        .peer_id
-        .or_else(|| runtime.p2p_peer_id.clone())
-        .filter(|value| !value.trim().is_empty())
+    let shareable_address: ShareableAddressResponse =
+        http_get_json(&client, &format!("{api_base}/p2p/shareable-address")).await?;
+    let p2p_peer_id = normalize_optional_string(identity.peer_id.as_deref())
         .context("local runtime is reachable but did not report a P2P peer id")?;
-    let p2p_listen_address = live_listen_addresses
-        .into_iter()
-        .chain(runtime.p2p_listen_addresses.iter().cloned())
-        .find(|value| !value.trim().is_empty())
-        .context("local runtime is reachable but did not report a P2P listen address")?;
+    let p2p_listen_address = normalize_optional_string(shareable_address.address.as_deref())
+        .context("local runtime is reachable but did not report a shareable P2P address")?;
 
     let mut peer_directory =
         PeerDirectory::load(options.desktop_paths.peer_directory_path()).await?;
@@ -260,6 +256,13 @@ fn p2p_api_base(graphql: &str) -> Result<String> {
         .with_context(|| format!("expected GraphQL endpoint ending in /graphql, got {graphql}"))
 }
 
+fn normalize_optional_string(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 async fn http_get_json<T: for<'de> Deserialize<'de>>(
     client: &reqwest::Client,
     url: &str,
@@ -369,5 +372,15 @@ mod tests {
                 "Addresses": ["127.0.0.1:9999/p2p/example"],
             })
         );
+    }
+
+    #[test]
+    fn normalize_optional_string_discards_empty_values() {
+        assert_eq!(
+            normalize_optional_string(Some(" endpoint-ticket-123 ")).as_deref(),
+            Some("endpoint-ticket-123")
+        );
+        assert_eq!(normalize_optional_string(Some("   ")), None);
+        assert_eq!(normalize_optional_string(None), None);
     }
 }

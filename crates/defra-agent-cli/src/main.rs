@@ -770,6 +770,12 @@ struct NodeIdentityResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct P2pShareableAddressResponse {
+    #[serde(default)]
+    address: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct P2pPeerRow {
     id: String,
 }
@@ -3932,6 +3938,7 @@ async fn p2p_diagnose(args: P2pAccessArgs) -> Result<()> {
     let p2p = load_live_http_p2p_status(args.home.as_deref(), &graphql).await;
     let checks = json!({
         "info": p2p_probe_get(&client, &format!("{api_base}/p2p/info")).await,
+        "shareable_address": p2p_probe_get(&client, &format!("{api_base}/p2p/shareable-address")).await,
         "peers": p2p_probe_get(&client, &format!("{api_base}/p2p/peers")).await,
         "collections": p2p_probe_get(&client, &format!("{api_base}/p2p/collections")).await,
         "replicators": p2p_probe_get(&client, &format!("{api_base}/p2p/replicators")).await,
@@ -4522,6 +4529,7 @@ fn persisted_p2p_status(runtime_state: Option<&StoredRuntimeState>) -> Value {
             "p2p_transport": runtime_state.p2p_transport,
             "p2p_peer_id": runtime_state.p2p_peer_id,
             "p2p_listen_addresses": runtime_state.p2p_listen_addresses,
+            "p2p_shareable_address": Value::Null,
             "p2p_connected_peers": [],
             "p2p_error": Value::Null,
         }),
@@ -4530,6 +4538,7 @@ fn persisted_p2p_status(runtime_state: Option<&StoredRuntimeState>) -> Value {
             "p2p_transport": P2pTransportArg::None.as_str(),
             "p2p_peer_id": Value::Null,
             "p2p_listen_addresses": [],
+            "p2p_shareable_address": Value::Null,
             "p2p_connected_peers": [],
             "p2p_error": Value::Null,
         }),
@@ -4698,12 +4707,17 @@ async fn fetch_live_http_p2p_status(home: Option<&Path>, graphql: &str) -> Resul
             "p2p_transport": transport,
             "p2p_peer_id": Value::Null,
             "p2p_listen_addresses": [],
+            "p2p_shareable_address": Value::Null,
             "p2p_connected_peers": [],
             "p2p_error": Value::Null,
         }));
     };
     let listen_addresses: Vec<String> =
         http_get_json(&client, &format!("{api_base}/p2p/info")).await?;
+    let shareable_address: P2pShareableAddressResponse =
+        http_get_json(&client, &format!("{api_base}/p2p/shareable-address")).await?;
+    let shareable_address = normalize_optional_string(shareable_address.address.as_deref())
+        .context("runtime reported an empty shareable P2P address")?;
     let peer_rows: Vec<P2pPeerRow> =
         http_get_json(&client, &format!("{api_base}/p2p/peers")).await?;
     let connected_peers = peer_rows.into_iter().map(|row| row.id).collect::<Vec<_>>();
@@ -4716,6 +4730,7 @@ async fn fetch_live_http_p2p_status(home: Option<&Path>, graphql: &str) -> Resul
         },
         "p2p_peer_id": peer_id,
         "p2p_listen_addresses": listen_addresses,
+        "p2p_shareable_address": shareable_address,
         "p2p_connected_peers": connected_peers,
         "p2p_error": Value::Null,
     }))
@@ -4826,6 +4841,7 @@ fn flatten_p2p_fields(map: &mut serde_json::Map<String, Value>, p2p: &Value) {
         "p2p_transport",
         "p2p_peer_id",
         "p2p_listen_addresses",
+        "p2p_shareable_address",
         "p2p_connected_peers",
         "p2p_error",
     ] {

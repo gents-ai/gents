@@ -120,7 +120,7 @@ dependencies = [
 [[package]]
 name = "acp"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "async-lock",
  "async-trait",
@@ -1927,7 +1927,7 @@ dependencies = [
 [[package]]
 name = "blockstore"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3205,7 +3205,7 @@ dependencies = [
 [[package]]
 name = "crdt"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "async-trait",
  "defra-core",
@@ -3350,7 +3350,7 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 [[package]]
 name = "crypto"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -3628,7 +3628,7 @@ dependencies = [
 [[package]]
 name = "datastore"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "async-lock",
  "async-trait",
@@ -3643,7 +3643,7 @@ dependencies = [
 [[package]]
 name = "db"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "acp",
  "anyhow",
@@ -3692,7 +3692,7 @@ dependencies = [
 [[package]]
 name = "db-blocks"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "async-trait",
  "blockstore",
@@ -3714,7 +3714,7 @@ dependencies = [
 [[package]]
 name = "db-index"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "async-trait",
  "datastore",
@@ -3728,7 +3728,7 @@ dependencies = [
 [[package]]
 name = "db-merge"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "acp",
  "async-lock",
@@ -3766,7 +3766,7 @@ dependencies = [
 [[package]]
 name = "db-nac"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "acp",
  "async-trait",
@@ -3781,7 +3781,7 @@ dependencies = [
 [[package]]
 name = "db-search"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "anyhow",
  "document",
@@ -3880,6 +3880,7 @@ name = "defra-agent-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "clap",
  "crypto",
@@ -3918,7 +3919,7 @@ dependencies = [
 [[package]]
 name = "defra-core"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "async-trait",
  "cid 0.10.1",
@@ -3941,7 +3942,7 @@ dependencies = [
 [[package]]
 name = "defra-http"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "acp",
  "async-stream",
@@ -3972,7 +3973,7 @@ dependencies = [
 [[package]]
 name = "defra-node"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "acp",
  "anyhow",
@@ -4004,7 +4005,7 @@ dependencies = [
 [[package]]
 name = "defra-p2p-adapter"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "acp",
  "async-trait",
@@ -4033,7 +4034,7 @@ dependencies = [
 [[package]]
 name = "defra-version"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "serde",
 ]
@@ -4317,7 +4318,7 @@ checksum = "0688c2a7f92e427f44895cd63841bff7b29f8d7a1648b9e7e07a4a365b2e1257"
 [[package]]
 name = "document"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -4869,7 +4870,7 @@ dependencies = [
 [[package]]
 name = "events"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6386,7 +6387,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "identity"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "base64 0.22.1",
  "crypto",
@@ -7306,7 +7307,7 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 [[package]]
 name = "lens"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -9633,7 +9634,7 @@ dependencies = [
 [[package]]
 name = "p2p"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "acp",
  "anyhow",
@@ -9647,6 +9648,7 @@ dependencies = [
  "crypto",
  "defra-core",
  "futures",
+ "hex",
  "identity",
  "iroh",
  "iroh-bitswap",
@@ -9663,6 +9665,7 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_cbor",
+ "sha2 0.10.9",
  "storage",
  "thiserror 2.0.18",
  "tokio",
@@ -10708,7 +10711,7 @@ dependencies = [
 [[package]]
 name = "query"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "acp",
  "async-graphql",
@@ -10743,7 +10746,7 @@ dependencies = [
 [[package]]
 name = "query-parse"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "async-trait",
  "chrono",
@@ -10760,7 +10763,7 @@ dependencies = [
 [[package]]
 name = "query-plan"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "acp",
  "async-lock",
@@ -10791,7 +10794,7 @@ dependencies = [
 [[package]]
 name = "query-types"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "async-trait",
  "chrono",
@@ -11943,7 +11946,7 @@ dependencies = [
 [[package]]
 name = "schema"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "cid 0.10.1",
  "defra-core",
@@ -12713,7 +12716,7 @@ checksum = "ea06cc588e43c632923a55450401b8f25e628131571d4e1baea1bdfdb2b5ed06"
 [[package]]
 name = "sourcehub"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "acp",
  "acp-light-client",
@@ -12857,7 +12860,7 @@ dependencies = [
 [[package]]
 name = "storage"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "async-trait",
  "bm25",
@@ -16244,7 +16247,7 @@ checksum = "2164e798d9e3d84ee2c91139ace54638059a3b23e361f5c11781c2c6459bde0f"
 [[package]]
 name = "zanzibar"
 version = "0.5.0"
-source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7d45fc01#7d45fc015fe4d0bbed8f24bc646fce99977dfe8c"
+source = "git+ssh://git@github.com/sourcenetwork/defradb.rs.git?rev=7daff5d4#7daff5d44f1db5c05f689edfd490a759ab2d537a"
 dependencies = [
  "async-lock",
  "async-trait",

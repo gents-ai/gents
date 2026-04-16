@@ -223,29 +223,6 @@ impl ClientCore {
             .clone()
     }
 
-    #[cfg(test)]
-    pub(crate) fn add_test_peer_status(
-        &self,
-        label: impl Into<String>,
-        addr: impl Into<String>,
-        agent_did: impl Into<String>,
-        dial_succeeded: bool,
-    ) -> ClientPeerStatus {
-        let status = ClientPeerStatus {
-            peer_id: uuid::Uuid::new_v4().to_string(),
-            label: label.into(),
-            agent_did: agent_did.into(),
-            addr: addr.into(),
-            dial_succeeded,
-            last_error: None,
-        };
-        self.peer_statuses
-            .write()
-            .expect("peer status lock poisoned")
-            .push(status.clone());
-        status
-    }
-
     pub async fn peer_records(&self) -> Vec<super::peer_directory::PeerRecord> {
         self.peer_directory.read().await.records().to_vec()
     }
@@ -928,6 +905,26 @@ async fn repair_saved_peer(
     };
 
     if !connected_now {
+        match p2p.notify_network_change().await {
+            Ok(()) => {
+                tracing::debug!(
+                    target: "defra_agent_desktop::peer_maintenance",
+                    peer_id = %record.peer_id,
+                    label = %record.label,
+                    "refreshed P2P network state before reconnect"
+                );
+            }
+            Err(error) => {
+                tracing::debug!(
+                    target: "defra_agent_desktop::peer_maintenance",
+                    peer_id = %record.peer_id,
+                    label = %record.label,
+                    error = %error,
+                    "failed to refresh P2P network state before reconnect"
+                );
+            }
+        }
+
         match connect_peer_with_retry(p2p, &record.addr, &record.label).await {
             Ok(()) => {
                 status.dial_succeeded = true;
@@ -1032,7 +1029,128 @@ fn addr_has_loopback_hint(addr: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use async_trait::async_trait;
+    use defra_p2p_adapter::{
+        ExplicitReplayCapabilityInput, P2PResult, P2pDocumentInfo, P2pDocumentRequest,
+        ReplicatorInfo,
+    };
+
     use super::*;
+
+    #[derive(Default)]
+    struct RecordingP2P {
+        notify_calls: AtomicUsize,
+        connect_calls: StdRwLock<Vec<String>>,
+    }
+
+    impl RecordingP2P {
+        fn notify_calls(&self) -> usize {
+            self.notify_calls.load(Ordering::SeqCst)
+        }
+
+        fn connect_calls(&self) -> Vec<String> {
+            self.connect_calls
+                .read()
+                .expect("connect calls lock poisoned")
+                .clone()
+        }
+    }
+
+    #[async_trait]
+    impl P2POps for RecordingP2P {
+        async fn local_peer_id(&self) -> P2PResult<String> {
+            Ok("local-peer".to_string())
+        }
+
+        async fn listen_addresses(&self) -> P2PResult<Vec<String>> {
+            Ok(Vec::new())
+        }
+
+        async fn connected_peers(&self) -> P2PResult<Vec<String>> {
+            Ok(self.connect_calls())
+        }
+
+        async fn connect_peer(&self, addr: &str) -> P2PResult<()> {
+            self.connect_calls
+                .write()
+                .expect("connect calls lock poisoned")
+                .push(addr.to_string());
+            Ok(())
+        }
+
+        async fn notify_network_change(&self) -> P2PResult<()> {
+            self.notify_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn get_replicators(&self) -> P2PResult<Vec<ReplicatorInfo>> {
+            Ok(Vec::new())
+        }
+
+        async fn add_replicator(
+            &self,
+            _collections: Vec<String>,
+            _addr: Option<&str>,
+            _explicit_replay_capabilities: Vec<ExplicitReplayCapabilityInput>,
+            _expected_authorizer_did: Option<&str>,
+        ) -> P2PResult<()> {
+            Ok(())
+        }
+
+        async fn remove_replicator(
+            &self,
+            _collections: Vec<String>,
+            _addr: Option<&str>,
+        ) -> P2PResult<()> {
+            Ok(())
+        }
+
+        async fn get_collections(&self) -> P2PResult<Vec<String>> {
+            Ok(Vec::new())
+        }
+
+        async fn add_collections(&self, _collections: Vec<String>) -> P2PResult<()> {
+            Ok(())
+        }
+
+        async fn remove_collections(&self, _collections: Vec<String>) -> P2PResult<()> {
+            Ok(())
+        }
+
+        async fn get_documents(&self) -> P2PResult<Vec<P2pDocumentInfo>> {
+            Ok(Vec::new())
+        }
+
+        async fn add_documents(&self, _docs: Vec<P2pDocumentRequest>) -> P2PResult<()> {
+            Ok(())
+        }
+
+        async fn remove_documents(&self, _docs: Vec<P2pDocumentRequest>) -> P2PResult<()> {
+            Ok(())
+        }
+
+        async fn republish_document(&self, _collection_name: &str, _doc_id: &str) -> P2PResult<()> {
+            Ok(())
+        }
+
+        async fn sync_documents(
+            &self,
+            _collection_name: &str,
+            _doc_ids: Vec<String>,
+        ) -> P2PResult<()> {
+            Ok(())
+        }
+
+        async fn sync_branchable_collection(&self, _collection_id: &str) -> P2PResult<()> {
+            Ok(())
+        }
+
+        async fn sync_collection_versions(&self, _version_ids: Vec<String>) -> P2PResult<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn select_local_runtime_pairing_addr_prefers_loopback() {
@@ -1053,5 +1171,36 @@ mod tests {
         ]);
 
         assert_eq!(selected.as_deref(), Some("endpointabc123"));
+    }
+
+    #[tokio::test]
+    async fn repair_saved_peer_refreshes_network_before_redial() {
+        let recording = Arc::new(RecordingP2P::default());
+        let p2p: Arc<dyn P2POps> = recording.clone();
+        let record = PeerRecord::new(
+            "Workshop Bay",
+            "127.0.0.1:56000/p2p/peer-alpha",
+            "did:defra:workshop-bay",
+        );
+
+        let repaired = repair_saved_peer(
+            &p2p,
+            &record,
+            Some(ClientPeerStatus {
+                peer_id: record.peer_id.clone(),
+                label: record.label.clone(),
+                agent_did: record.agent_did.clone(),
+                addr: record.addr.clone(),
+                dial_succeeded: false,
+                last_error: Some("peer Workshop Bay dial failed".to_string()),
+            }),
+            false,
+        )
+        .await;
+
+        assert_eq!(recording.notify_calls(), 1);
+        assert_eq!(recording.connect_calls(), vec![record.addr.clone()]);
+        assert!(repaired.dial_succeeded);
+        assert_eq!(repaired.last_error, None);
     }
 }

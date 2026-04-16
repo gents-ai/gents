@@ -492,16 +492,11 @@ struct ParsedTable {
 
 impl ParsedTable {
     fn num_cols(&self) -> usize {
-        self.headers.len().max(
-            self.rows
-                .iter()
-                .map(|row| row.len())
-                .max()
-                .unwrap_or(0),
-        )
+        self.headers
+            .len()
+            .max(self.rows.iter().map(|row| row.len()).max().unwrap_or(0))
     }
 }
-
 
 fn segment_markdown(text: &str) -> Vec<MarkdownSegment> {
     use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
@@ -1014,4 +1009,3 @@ tail prose here.
         );
     }
 }
-

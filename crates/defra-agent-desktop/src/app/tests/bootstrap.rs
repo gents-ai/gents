@@ -57,6 +57,14 @@ impl MockLocalRuntimeApi {
                                 serde_json::to_string(&vec![listen_address_for_thread.clone()])
                                     .expect("serialize mock p2p info"),
                             )),
+                            ("GET", "/api/v0/p2p/shareable-address") => Ok((
+                                "200 OK",
+                                "application/json",
+                                serde_json::json!({
+                                    "address": listen_address_for_thread.clone(),
+                                })
+                                .to_string(),
+                            )),
                             ("POST", "/api/v0/p2p/connect") => {
                                 let connect_result =
                                     serde_json::from_str::<Vec<String>>(&request.body)
