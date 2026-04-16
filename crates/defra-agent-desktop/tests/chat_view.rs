@@ -183,19 +183,22 @@ fn chat_prepare_state_leaves_selection_repair_to_controller_sync() {
         ..ClientStoreRows::default()
     });
     let mut state = ShellState::default();
-    state.chat.selected_peer_id = Some("peer-missing".to_string());
-    state.chat.selected_agent_did = Some("did:defra:missing".to_string());
-    state.chat.selected_session_id = Some("session-missing".to_string());
+    state.chat.shell.selected_peer_id = Some("peer-missing".to_string());
+    state.chat.shell.selected_agent_did = Some("did:defra:missing".to_string());
+    state.chat.shell.selected_session_id = Some("session-missing".to_string());
 
     prepare_state(&mut state, None, Some(&store));
 
-    assert_eq!(state.chat.selected_peer_id.as_deref(), Some("peer-missing"));
     assert_eq!(
-        state.chat.selected_agent_did.as_deref(),
+        state.chat.shell.selected_peer_id.as_deref(),
+        Some("peer-missing")
+    );
+    assert_eq!(
+        state.chat.shell.selected_agent_did.as_deref(),
         Some("did:defra:missing")
     );
     assert_eq!(
-        state.chat.selected_session_id.as_deref(),
+        state.chat.shell.selected_session_id.as_deref(),
         Some("session-missing")
     );
     assert_eq!(state.status.active_agent, "missing");
@@ -215,17 +218,17 @@ fn chat_prepare_state_preserves_selected_pending_session_until_observed() {
         ..ClientStoreRows::default()
     });
     let mut state = ShellState::default();
-    state.chat.selected_agent_did = Some("did:defra:amy".to_string());
-    state.chat.selected_session_id = Some("session-pending".to_string());
+    state.chat.shell.selected_agent_did = Some("did:defra:amy".to_string());
+    state.chat.shell.selected_session_id = Some("session-pending".to_string());
 
     prepare_state(&mut state, None, Some(&store));
 
     assert_eq!(
-        state.chat.selected_agent_did.as_deref(),
+        state.chat.shell.selected_agent_did.as_deref(),
         Some("did:defra:amy")
     );
     assert_eq!(
-        state.chat.selected_session_id.as_deref(),
+        state.chat.shell.selected_session_id.as_deref(),
         Some("session-pending")
     );
 }

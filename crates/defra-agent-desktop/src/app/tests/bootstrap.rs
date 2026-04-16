@@ -354,11 +354,11 @@ fn desktop_bootstrap_init_launch_and_gui_chat_round_trip_without_manual_refresh(
     )?;
     driver.click_target(&deployment_target);
     assert_eq!(
-        driver.app.state.chat.selected_peer_id.as_deref(),
+        driver.app.state.chat.shell.selected_peer_id.as_deref(),
         Some(peer_record.peer_id.as_str())
     );
     assert_eq!(
-        driver.app.state.chat.selected_agent_did.as_deref(),
+        driver.app.state.chat.shell.selected_agent_did.as_deref(),
         Some(running_agent.did.as_str())
     );
 
@@ -371,8 +371,8 @@ fn desktop_bootstrap_init_launch_and_gui_chat_round_trip_without_manual_refresh(
     driver.click_target(audit::targets::CHAT_COMPOSER_TEXT);
     driver.type_text("say hello from the saved-peer bootstrap journey");
     driver.click_target(audit::targets::CHAT_SEND);
-    assert_eq!(driver.app.state.chat.last_submission_error, None);
-    assert!(driver.app.state.chat.composer_text.is_empty());
+    assert_eq!(driver.app.state.chat.editor.last_submission_error, None);
+    assert!(driver.app.state.chat.editor.composer_text.is_empty());
 
     let request_id = wait_for_value(
         "bootstrapped focused request id",
@@ -431,7 +431,7 @@ fn desktop_bootstrap_init_launch_and_gui_chat_round_trip_without_manual_refresh(
         .iter()
         .any(|text| { text.contains("say hello from the saved-peer bootstrap journey") }));
     assert_eq!(
-        driver.app.state.chat.selected_session_id.as_deref(),
+        driver.app.state.chat.shell.selected_session_id.as_deref(),
         Some(session_id.as_str())
     );
 

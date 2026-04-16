@@ -160,16 +160,16 @@ fn desktop_app_clicks_through_peers_selection_toggle_clear_and_remove() -> Resul
     assert!(chat_texts.iter().any(|text| text.contains("Harbor Watch")));
     driver.click_target(&chat_deployment_target);
     assert_eq!(
-        driver.app.state.chat.selected_peer_id.as_deref(),
+        driver.app.state.chat.shell.selected_peer_id.as_deref(),
         Some(added_three.peer_id.as_str())
     );
     assert_eq!(
-        driver.app.state.chat.selected_agent_did.as_deref(),
+        driver.app.state.chat.shell.selected_agent_did.as_deref(),
         Some("did:defra:peer-three")
     );
     driver.click_target(&audit::targets::chat_agent("did:defra:peer-three"));
     assert_eq!(
-        driver.app.state.chat.selected_peer_id.as_deref(),
+        driver.app.state.chat.shell.selected_peer_id.as_deref(),
         Some(added_three.peer_id.as_str())
     );
 
@@ -210,7 +210,7 @@ fn desktop_app_clicks_through_peers_selection_toggle_clear_and_remove() -> Resul
     })?;
     let post_remove_chat = driver.open_activity(Activity::Chat);
     assert_ne!(
-        driver.app.state.chat.selected_peer_id.as_deref(),
+        driver.app.state.chat.shell.selected_peer_id.as_deref(),
         Some(added_three.peer_id.as_str())
     );
     assert!(!post_remove_chat
@@ -232,5 +232,156 @@ fn desktop_app_clicks_through_peers_selection_toggle_clear_and_remove() -> Resul
     shutdown_core(runtime.as_ref(), peer_one)?;
     shutdown_core(runtime.as_ref(), peer_two)?;
     shutdown_core(runtime.as_ref(), peer_three)?;
+    Ok(())
+}
+
+#[test]
+fn desktop_app_restart_client_rebinds_same_workspace() -> Result<()> {
+    let runtime = test_runtime()?;
+    let tempdir = tempfile::tempdir()?;
+    let core = runtime.block_on(ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path().join("desktop")),
+        ClientCoreOptions::local_only(),
+    ))?;
+
+    let expected_paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
+    let mut driver = build_driver(
+        Arc::clone(&runtime),
+        core,
+        Arc::new(DesktopLogStore::new(64)),
+    );
+    let original_client_generation = driver.app.client_generation;
+    assert!(
+        driver.app.restart_client("test recovery"),
+        "restart errors: {:?}, last action: {:?}",
+        driver.app.bootstrap_errors,
+        driver.app.state.peers.last_action_message
+    );
+
+    assert!(driver.app.bootstrap_errors.is_empty());
+    assert_eq!(
+        driver
+            .app
+            .client
+            .as_ref()
+            .map(|client| client.paths().clone()),
+        Some(expected_paths)
+    );
+    assert!(driver.app.client_generation > original_client_generation);
+    assert!(driver.app.client.is_some());
+    assert!(driver
+        .app
+        .state
+        .peers
+        .last_action_message
+        .as_deref()
+        .is_some_and(|message| message.contains("Restarted desktop client core")));
+    driver.app.shutdown_client();
+    Ok(())
+}
+
+#[test]
+fn desktop_app_auto_restart_policy_triggers_for_wedged_p2p() {
+    let healthy = P2PHealth::default();
+    let wedged = P2PHealth {
+        status: P2PHealthStatus::Wedged,
+        consecutive_failures: 3,
+        connected_peer_count: 0,
+        replicator_count: 0,
+        last_error: Some("channel send error".to_string()),
+        last_ok_at: None,
+        last_failure_at: None,
+    };
+
+    assert!(should_auto_restart_p2p(
+        Some(&healthy),
+        &wedged,
+        None,
+        Instant::now()
+    ));
+    assert!(!should_auto_restart_p2p(
+        Some(&wedged),
+        &wedged,
+        Some(Instant::now()),
+        Instant::now()
+    ));
+}
+
+#[test]
+fn desktop_app_peers_transport_actions_queue_repair_and_restart() -> Result<()> {
+    let runtime = test_runtime()?;
+    let tempdir = tempfile::tempdir()?;
+    let core = runtime.block_on(ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path().join("desktop")),
+        ClientCoreOptions::local_only(),
+    ))?;
+    let peer = runtime.block_on(ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path().join("peer")),
+        ClientCoreOptions::local_only(),
+    ))?;
+
+    let peer_addr = peer
+        .listen_addresses()
+        .first()
+        .cloned()
+        .ok_or_else(|| anyhow!("peer missing listen address"))?;
+    runtime.block_on(core.add_peer("Workshop Bay", &peer_addr, "did:defra:peer-one"))?;
+    let expected_paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
+
+    let mut driver = build_driver(
+        Arc::clone(&runtime),
+        core,
+        Arc::new(DesktopLogStore::new(64)),
+    );
+    driver.open_activity(Activity::Peers);
+    driver.wait_for_target(
+        "peer repair button",
+        Duration::from_secs(5),
+        audit::targets::PEERS_REPAIR_NOW,
+    )?;
+    driver.click_target(audit::targets::PEERS_REPAIR_NOW);
+    assert_eq!(
+        driver.app.state.peers.last_action_message.as_deref(),
+        Some("Queued a desktop P2P repair cycle.")
+    );
+
+    let original_client_generation = driver.app.client_generation;
+    driver.click_target(audit::targets::PEERS_RESTART_CLIENT);
+    assert_eq!(
+        driver.app.state.pending_client_restart_reason.as_deref(),
+        Some("manual desktop P2P recovery")
+    );
+    assert_eq!(
+        driver.app.state.peers.last_action_message.as_deref(),
+        Some("Restarting desktop client core to recover the P2P transport.")
+    );
+    driver.render();
+    let client = driver
+        .app
+        .client
+        .as_ref()
+        .ok_or_else(|| anyhow!("desktop client missing after restart"))?;
+    assert!(driver.app.client_generation > original_client_generation);
+    assert!(driver.app.state.pending_client_restart_reason.is_none());
+    assert_eq!(client.configured_peer_count(), 1);
+    assert!(driver.app.bootstrap_errors.is_empty());
+
+    assert_eq!(
+        driver
+            .app
+            .client
+            .as_ref()
+            .map(|client| client.paths().clone()),
+        Some(expected_paths)
+    );
+    assert!(driver
+        .app
+        .state
+        .peers
+        .last_action_message
+        .as_deref()
+        .is_some_and(|message| message.contains("Restarted desktop client core")));
+    driver.app.shutdown_client();
+    shutdown_core(runtime.as_ref(), peer)?;
     Ok(())
 }

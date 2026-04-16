@@ -1,12 +1,10 @@
 use defra_agent_protocol::client_protocol::ClientTurnState;
 use defra_agent_protocol::row::AgentRequestRow;
 use eframe::egui::{self, RichText, Ui};
-use tokio::runtime::Runtime;
 
 use crate::audit;
-use crate::chat::controller;
 use crate::client::{ClientCore, ClientStore};
-use crate::state::ShellState;
+use crate::state::{PendingChatAction, PendingShellAction, ShellState};
 use crate::theme;
 use crate::views;
 
@@ -15,7 +13,6 @@ use super::turn_state_label;
 pub(super) struct HeaderProps<'a> {
     pub store: &'a ClientStore,
     pub client: Option<&'a ClientCore>,
-    pub runtime: &'a Runtime,
     pub selected_agent_did: Option<&'a str>,
     pub selected_session_id: Option<&'a str>,
     pub turn_state: Option<ClientTurnState>,
@@ -78,7 +75,9 @@ pub(super) fn show(ui: &mut Ui, state: &mut ShellState, props: HeaderProps<'_>) 
         )
         .clicked()
         {
-            retry_latest_request(state, props.client, props.runtime, latest_request.as_ref());
+            state.queue_shell_action(PendingShellAction::Chat(
+                PendingChatAction::RetryLatestRequest,
+            ));
         }
         if audit::add_enabled(
             ui,
@@ -90,7 +89,7 @@ pub(super) fn show(ui: &mut Ui, state: &mut ShellState, props: HeaderProps<'_>) 
         {
             export_conversation(ui, state, props.store, props.selected_session_id);
         }
-        if let Some(error) = state.chat.last_submission_error.as_deref() {
+        if let Some(error) = state.chat.editor.last_submission_error.as_deref() {
             ui.add_space(12.0);
             ui.label(
                 RichText::new(error)
@@ -98,7 +97,7 @@ pub(super) fn show(ui: &mut Ui, state: &mut ShellState, props: HeaderProps<'_>) 
                     .size(10.5)
                     .color(theme::palette().warning),
             );
-        } else if let Some(message) = state.chat.last_action_message.as_deref() {
+        } else if let Some(message) = state.chat.editor.last_action_message.as_deref() {
             ui.add_space(12.0);
             ui.label(
                 RichText::new(message)
@@ -117,22 +116,6 @@ fn latest_request_for_session<'a>(
     store.requests_for_session(session_id).into_iter().last()
 }
 
-fn retry_latest_request(
-    state: &mut ShellState,
-    client: Option<&ClientCore>,
-    runtime: &Runtime,
-    request: Option<&AgentRequestRow>,
-) {
-    match controller::retry_latest_request(&mut state.chat, client, runtime, request) {
-        Ok(()) => {
-            state.chat.last_action_message = Some("Retried latest request.".to_string());
-        }
-        Err(error) => {
-            state.chat.last_submission_error = Some(error.to_string());
-        }
-    }
-}
-
 fn export_conversation(
     ui: &mut Ui,
     state: &mut ShellState,
@@ -140,7 +123,7 @@ fn export_conversation(
     selected_session_id: Option<&str>,
 ) {
     let Some(session_id) = selected_session_id else {
-        state.chat.last_submission_error =
+        state.chat.editor.last_submission_error =
             Some("select a conversation before exporting".to_string());
         return;
     };
@@ -149,13 +132,13 @@ fn export_conversation(
         Ok(payload) => {
             let byte_len = payload.len();
             ui.copy_text(payload.clone());
-            state.chat.last_export_payload = Some(payload);
-            state.chat.last_submission_error = None;
-            state.chat.last_action_message =
+            state.chat.editor.last_export_payload = Some(payload);
+            state.chat.editor.last_submission_error = None;
+            state.chat.editor.last_action_message =
                 Some(format!("Copied conversation export ({byte_len} bytes)."));
         }
         Err(error) => {
-            state.chat.last_submission_error = Some(error.to_string());
+            state.chat.editor.last_submission_error = Some(error.to_string());
         }
     }
 }

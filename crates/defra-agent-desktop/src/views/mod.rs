@@ -8,7 +8,7 @@ use egui_commonmark::CommonMarkCache;
 
 use crate::audit;
 use crate::client::{ClientCore, ClientStore};
-use crate::state::{Activity, ShellState};
+use crate::state::{Activity, PendingShellAction, ShellState};
 use crate::telemetry::DesktopLogStore;
 use crate::theme;
 
@@ -46,7 +46,7 @@ pub fn show_sidebar(
     ui.add_space(6.0);
 
     match state.activity {
-        Activity::Chat => chat::show_sidebar(ui, state, client, store, runtime),
+        Activity::Chat => chat::show_sidebar(ui, state, client, store),
         Activity::Operator => operator::show_sidebar(ui, state, client, store),
         Activity::Peers => peers::show_sidebar(ui, state, client, store, runtime),
         Activity::Logs => logs::show_sidebar(ui, state),
@@ -63,7 +63,7 @@ pub fn show_main(
     markdown_cache: &mut CommonMarkCache,
 ) {
     match state.activity {
-        Activity::Chat => chat::show_main(ui, state, client, store, runtime, markdown_cache),
+        Activity::Chat => chat::show_main(ui, state, client, store, markdown_cache),
         Activity::Operator => operator::show_main(ui, state, store),
         Activity::Peers => peers::show_main(ui, state, client, store, runtime),
         Activity::Logs => logs::show_main(ui, state, log_store),
@@ -236,7 +236,7 @@ fn render_activity_button(ui: &mut Ui, state: &mut ShellState, activity: Activit
     let response = response.on_hover_text(activity.label());
     audit::record(ui, &audit::targets::activity(activity), &response);
     if response.clicked() {
-        state.activity = activity;
+        state.queue_shell_action(PendingShellAction::Navigate(activity));
     }
 }
 

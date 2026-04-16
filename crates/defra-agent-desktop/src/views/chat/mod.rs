@@ -8,13 +8,11 @@ use defra_agent_protocol::client_protocol::ClientTurnState;
 use defra_agent_protocol::row::AgentConversationRow;
 use eframe::egui::{self, RichText, Ui};
 use egui_commonmark::CommonMarkCache;
-use tokio::runtime::Runtime;
 
 use crate::audit;
-use crate::chat::controller;
 use crate::chat::projection::project_chat;
 use crate::client::{ClientCore, ClientPeerStatus, ClientStore};
-use crate::state::ShellState;
+use crate::state::{PendingChatAction, PendingShellAction, ShellState};
 use crate::theme;
 use crate::views;
 
@@ -54,7 +52,7 @@ pub fn prepare_state(
         return;
     };
 
-    if let Some(agent_did) = state.chat.selected_agent_did.clone() {
+    if let Some(agent_did) = state.chat.shell.selected_agent_did.clone() {
         state.status.active_agent = display_name_for_agent(store, &agent_did);
         state.status.runtime_state = store
             .latest_runtime(&agent_did)
@@ -64,7 +62,6 @@ pub fn prepare_state(
     } else {
         state.status.active_agent = "no agent selected".to_string();
         state.status.runtime_state = "idle".to_string();
-        state.chat.selected_session_id = None;
     }
 }
 
@@ -73,7 +70,6 @@ pub fn show_sidebar(
     state: &mut ShellState,
     client: Option<&ClientCore>,
     store: Option<&ClientStore>,
-    runtime: &Runtime,
 ) {
     let palette = theme::palette();
 
@@ -88,8 +84,8 @@ pub fn show_sidebar(
 
     let peer_statuses = client.map(ClientCore::peer_statuses).unwrap_or_default();
     let deployments = build_deployment_entries(&peer_statuses, store);
-    let selected_agent = state.chat.selected_agent_did.clone();
-    let selected_session = state.chat.selected_session_id.clone();
+    let selected_agent = state.chat.shell.selected_agent_did.clone();
+    let selected_session = state.chat.shell.selected_session_id.clone();
     let conversations = selected_agent
         .as_deref()
         .map(|agent_did| {
@@ -103,7 +99,6 @@ pub fn show_sidebar(
         state,
         client,
         store,
-        runtime,
         &deployments,
         &conversations,
         selected_agent.as_deref(),
@@ -116,7 +111,6 @@ pub fn show_main(
     state: &mut ShellState,
     client: Option<&ClientCore>,
     store: Option<&ClientStore>,
-    runtime: &Runtime,
     markdown_cache: &mut CommonMarkCache,
 ) {
     let Some(store) = store else {
@@ -128,10 +122,9 @@ pub fn show_main(
         return;
     };
 
-    let peer_statuses = client.map(ClientCore::peer_statuses).unwrap_or_default();
-    let projection = project_chat(&state.chat, store, &peer_statuses, client.is_some());
-    let selected_agent_did = projection.selected_agent_did.clone();
-    let selected_session_id = projection.selected_session_id.clone();
+    let projection = project_chat(&state.chat, store, client.is_some());
+    let selected_agent_did = state.chat.shell.selected_agent_did.clone();
+    let selected_session_id = state.chat.shell.selected_session_id.clone();
     let turn_state = projection.turn_state;
     let send_status = projection.send_status;
     let show_first_conversation_nudge = projection.show_first_conversation_nudge;
@@ -143,9 +136,7 @@ pub fn show_main(
             composer::show(
                 ui,
                 state,
-                client,
                 store,
-                runtime,
                 selected_agent_did.as_deref(),
                 turn_state,
                 send_status,
@@ -158,7 +149,6 @@ pub fn show_main(
             header::HeaderProps {
                 store,
                 client,
-                runtime,
                 selected_agent_did: selected_agent_did.as_deref(),
                 selected_session_id: selected_session_id.as_deref(),
                 turn_state,
@@ -166,13 +156,7 @@ pub fn show_main(
         );
         ui.add_space(12.0);
         if show_first_conversation_nudge {
-            render_first_conversation_nudge(
-                ui,
-                state,
-                client,
-                runtime,
-                selected_agent_did.as_deref(),
-            );
+            render_first_conversation_nudge(ui, state, client, selected_agent_did.as_deref());
         } else {
             transcript::show(
                 ui,
@@ -300,7 +284,6 @@ fn render_first_conversation_nudge(
     ui: &mut Ui,
     state: &mut ShellState,
     client: Option<&ClientCore>,
-    runtime: &Runtime,
     selected_agent_did: Option<&str>,
 ) {
     let palette = theme::palette();
@@ -334,13 +317,9 @@ fn render_first_conversation_nudge(
             )
             .clicked()
             {
-                let _ = selected_agent_did;
-                match controller::create_conversation(&mut state.chat, client, runtime) {
-                    Ok(()) => {}
-                    Err(error) => {
-                        state.chat.last_submission_error = Some(error.to_string());
-                    }
-                }
+                state.queue_shell_action(PendingShellAction::Chat(
+                    PendingChatAction::CreateConversation,
+                ));
             }
 
             if let Some(agent_did) = selected_agent_did {
@@ -417,6 +396,9 @@ fn relative_timestamp_label(
 mod tests {
     use super::*;
 
+    use tokio::runtime::Runtime;
+
+    use crate::chat::controller;
     use crate::client::{ClientCoreOptions, DesktopPaths};
 
     #[test]
@@ -441,10 +423,10 @@ mod tests {
         assert!(!principal_resp.has_errors());
 
         let mut state = ShellState::default();
-        state.chat.selected_agent_did = Some("did:defra:amy".to_string());
+        state.chat.shell.selected_agent_did = Some("did:defra:amy".to_string());
         controller::create_conversation(&mut state.chat, Some(&core), &runtime)?;
 
-        assert!(state.chat.selected_session_id.is_some());
+        assert!(state.chat.shell.selected_session_id.is_some());
         assert_eq!(core.store().snapshot().conversations.len(), 1);
         runtime.block_on(core.shutdown())?;
         Ok(())

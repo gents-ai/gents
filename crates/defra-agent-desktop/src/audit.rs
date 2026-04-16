@@ -44,7 +44,9 @@ pub(crate) mod targets {
     pub(crate) const PEERS_ADD_LABEL: &str = "peers.add.label";
     pub(crate) const PEERS_CLEAR: &str = "peers.clear";
     pub(crate) const PEERS_MAIN_COPY_DID: &str = "peers.main.copy_did";
+    pub(crate) const PEERS_REPAIR_NOW: &str = "peers.repair_now";
     pub(crate) const PEERS_REMOVE: &str = "peers.remove";
+    pub(crate) const PEERS_RESTART_CLIENT: &str = "peers.restart_client";
     pub(crate) const PEERS_TOGGLE_ADD_FORM: &str = "peers.toggle_add_form";
     pub(crate) const PEERS_ONBOARDING_COPY_DID: &str = "peers.onboarding.copy_did";
     pub(crate) const PEERS_SAVE: &str = "peers.save";

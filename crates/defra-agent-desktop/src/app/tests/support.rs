@@ -389,19 +389,19 @@ fn assert_chat_context(
     session_id: Option<&str>,
 ) {
     assert_eq!(
-        driver.app.state.chat.selected_peer_id.as_deref(),
+        driver.app.state.chat.shell.selected_peer_id.as_deref(),
         Some(deployment.peer_id.as_str())
     );
     assert_eq!(
-        driver.app.state.chat.selected_agent_did.as_deref(),
+        driver.app.state.chat.shell.selected_agent_did.as_deref(),
         Some(deployment.agent_did.as_str())
     );
     assert_eq!(
-        driver.app.state.chat.selected_session_id.as_deref(),
+        driver.app.state.chat.shell.selected_session_id.as_deref(),
         session_id
     );
-    assert_eq!(driver.app.state.chat.selected_behavior_override, None);
-    assert_eq!(driver.app.state.chat.last_submission_error, None);
+    assert_eq!(driver.app.state.chat.editor.selected_behavior_override, None);
+    assert_eq!(driver.app.state.chat.editor.last_submission_error, None);
 }
 
 fn assert_operator_context(
@@ -425,6 +425,49 @@ fn assert_operator_context(
     );
 }
 
+fn ensure_chat_agent_selected(
+    driver: &mut AuditDriver,
+    wait_label: &str,
+    timeout: Duration,
+) -> Result<String> {
+    if let Some(agent_did) = driver.app.state.chat.shell.selected_agent_did.clone() {
+        return Ok(agent_did);
+    }
+
+    if let Some(peer_status) = driver
+        .app
+        .client
+        .as_ref()
+        .and_then(|client| client.peer_statuses().into_iter().next())
+    {
+        let deployment_target = audit::targets::chat_deployment(&peer_status.peer_id);
+        if driver
+            .wait_for_target(wait_label, timeout, &deployment_target)
+            .is_ok()
+        {
+            driver.click_target(&deployment_target);
+        }
+        return wait_for_value(wait_label, timeout, || {
+            driver.app.state.chat.shell.selected_agent_did.clone()
+        });
+    }
+
+    if let Some(agent_did) = driver.app.client.as_ref().and_then(|client| {
+        client
+            .store()
+            .snapshot()
+            .agent_principals
+            .first()
+            .map(|row| row.agent_did.clone())
+    }) {
+        driver.app.state.chat.shell.selected_agent_did = Some(agent_did.clone());
+        driver.render();
+        return Ok(agent_did);
+    }
+
+    anyhow::bail!("unable to select a chat agent for {wait_label}")
+}
+
 fn ensure_chat_session_selected(
     driver: &mut AuditDriver,
     wait_label: &str,
@@ -432,12 +475,14 @@ fn ensure_chat_session_selected(
 ) -> Result<String> {
     const MANUAL_CREATE_SENTINEL: &str = "__manual_create__";
 
-    if let Some(session_id) = driver.app.state.chat.selected_session_id.clone() {
+    let _ = ensure_chat_agent_selected(driver, wait_label, timeout)?;
+
+    if let Some(session_id) = driver.app.state.chat.shell.selected_session_id.clone() {
         return Ok(session_id);
     }
 
     if let Some(existing_session_id) = driver.app.client.as_ref().and_then(|client| {
-        let agent_did = driver.app.state.chat.selected_agent_did.as_deref()?;
+        let agent_did = driver.app.state.chat.shell.selected_agent_did.as_deref()?;
         client
             .store()
             .snapshot()
@@ -453,7 +498,7 @@ fn ensure_chat_session_selected(
             driver.click_target(&conversation_target);
         }
         return wait_for_value(wait_label, timeout, || {
-            driver.app.state.chat.selected_session_id.clone()
+            driver.app.state.chat.shell.selected_session_id.clone()
         });
     }
 
@@ -463,6 +508,7 @@ fn ensure_chat_session_selected(
             .app
             .state
             .chat
+            .shell
             .selected_session_id
             .clone()
             .or_else(|| {
@@ -476,7 +522,7 @@ fn ensure_chat_session_selected(
     if outcome == MANUAL_CREATE_SENTINEL {
         driver.click_target(audit::targets::CHAT_CREATE_CONVERSATION);
         wait_for_value(wait_label, timeout, || {
-            driver.app.state.chat.selected_session_id.clone()
+            driver.app.state.chat.shell.selected_session_id.clone()
         })
     } else {
         Ok(outcome)
@@ -522,6 +568,7 @@ fn submit_custom_live_prompt_for_deployment(
         .app
         .state
         .chat
+        .shell
         .selected_session_id
         .clone()
         .ok_or_else(|| anyhow!("missing selected session after live submission"))?;
@@ -832,8 +879,8 @@ fn wait_for_bootstrap_chat_ready(
         "bootstrapped chat selection",
         Duration::from_secs(10),
         || {
-            (driver.app.state.chat.selected_peer_id.as_deref() == Some(peer_id)
-                && driver.app.state.chat.selected_agent_did.as_deref() == Some(agent_did))
+            (driver.app.state.chat.shell.selected_peer_id.as_deref() == Some(peer_id)
+                && driver.app.state.chat.shell.selected_agent_did.as_deref() == Some(agent_did))
             .then_some(())
         },
     )
@@ -1785,8 +1832,8 @@ fn submit_chat_message_and_wait_for_request_observed(
     driver.click_target(audit::targets::CHAT_COMPOSER_TEXT);
     driver.type_text(prompt);
     driver.click_target(audit::targets::CHAT_SEND);
-    assert_eq!(driver.app.state.chat.last_submission_error, None);
-    assert!(driver.app.state.chat.composer_text.is_empty());
+    assert_eq!(driver.app.state.chat.editor.last_submission_error, None);
+    assert!(driver.app.state.chat.editor.composer_text.is_empty());
 
     wait_for_value(
         "focused request id after request-only submission",
@@ -1908,8 +1955,8 @@ fn submit_chat_message_and_wait_for_response_after_request(
     driver.click_target(audit::targets::CHAT_COMPOSER_TEXT);
     driver.type_text(prompt);
     driver.click_target(audit::targets::CHAT_SEND);
-    assert_eq!(driver.app.state.chat.last_submission_error, None);
-    assert!(driver.app.state.chat.composer_text.is_empty());
+    assert_eq!(driver.app.state.chat.editor.last_submission_error, None);
+    assert!(driver.app.state.chat.editor.composer_text.is_empty());
 
     let request_id = wait_for_value(
         "focused request id after submission",
@@ -2041,8 +2088,8 @@ fn submit_chat_message_and_wait_for_observed_response_after_request(
     driver.click_target(audit::targets::CHAT_COMPOSER_TEXT);
     driver.type_text(prompt);
     driver.click_target(audit::targets::CHAT_SEND);
-    assert_eq!(driver.app.state.chat.last_submission_error, None);
-    assert!(driver.app.state.chat.composer_text.is_empty());
+    assert_eq!(driver.app.state.chat.editor.last_submission_error, None);
+    assert!(driver.app.state.chat.editor.composer_text.is_empty());
 
     let request_id = wait_for_value(
         "focused request id after observed submission",
@@ -2377,7 +2424,8 @@ impl AuditDriver {
                 repeat: false,
                 modifiers,
             },
-        ])
+        ]);
+        self.run_events(Vec::new())
     }
 
     fn replace_text_in_target(&mut self, target: &str, text: &str) -> Vec<String> {
@@ -2406,7 +2454,8 @@ impl AuditDriver {
                 pressed: false,
                 modifiers: egui::Modifiers::NONE,
             },
-        ])
+        ]);
+        self.run_events(Vec::new())
     }
 
     fn click_pos_compact(&mut self, pos: egui::Pos2) -> Vec<String> {
@@ -2425,7 +2474,8 @@ impl AuditDriver {
                 pressed: false,
                 modifiers: egui::Modifiers::NONE,
             },
-        ])
+        ]);
+        self.run_events(Vec::new())
     }
 
     fn scroll_pos(&mut self, pos: egui::Pos2, delta_y: f32) -> Vec<String> {

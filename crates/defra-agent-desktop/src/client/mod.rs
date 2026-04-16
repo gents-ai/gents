@@ -8,7 +8,7 @@ mod query;
 mod schema;
 mod store;
 
-pub use core::{ClientCore, ClientCoreOptions, ClientPeerStatus};
+pub use core::{ClientCore, ClientCoreOptions, ClientPeerStatus, P2PHealth, P2PHealthStatus};
 pub use mutations::{CreatedConversation, PeerMutationResult, SubmittedRequest};
 pub use observe::ObservedStore;
 pub use paths::DesktopPaths;

@@ -72,7 +72,7 @@ pub fn show(
 
     transcript_surface(ui, |ui| {
         let scroll_output = egui::ScrollArea::vertical()
-            .stick_to_bottom(state.chat.transcript_stick_to_bottom)
+            .stick_to_bottom(state.chat.editor.transcript_stick_to_bottom)
             .show(ui, |ui| {
                 if transcript.messages.is_empty() {
                     for request in requests {
@@ -158,7 +158,7 @@ pub fn show(
         // bottom resumes it.
         let viewport_bottom = scroll_output.state.offset.y + scroll_output.inner_rect.height();
         let at_bottom = viewport_bottom + 2.0 >= scroll_output.content_size.y;
-        state.chat.transcript_stick_to_bottom = at_bottom;
+        state.chat.editor.transcript_stick_to_bottom = at_bottom;
     });
 
     show_tool_detail_modal(ui.ctx(), state, markdown_cache);
@@ -214,7 +214,11 @@ fn reasoning_block(
 ) {
     let palette = theme::palette();
     let card_id = format!("reasoning:{}", response.response_key);
-    let expanded = state.chat.expanded_reasoning_cards.contains(&card_id);
+    let expanded = state
+        .chat
+        .editor
+        .expanded_reasoning_cards
+        .contains(&card_id);
 
     egui::Frame::new()
         .fill(palette.background_1)
@@ -234,8 +238,14 @@ fn reasoning_block(
                 &audit::targets::chat_reasoning(&response.response_key),
                 &toggle,
             );
-            if toggle.clicked() && !state.chat.expanded_reasoning_cards.insert(card_id.clone()) {
-                state.chat.expanded_reasoning_cards.remove(&card_id);
+            if toggle.clicked()
+                && !state
+                    .chat
+                    .editor
+                    .expanded_reasoning_cards
+                    .insert(card_id.clone())
+            {
+                state.chat.editor.expanded_reasoning_cards.remove(&card_id);
             }
 
             if expanded {
@@ -297,7 +307,7 @@ fn tool_turn_block(
                 .clone()
                 .or_else(|| Some(tool_call.tool_call_key.clone()))
                 .unwrap_or_else(|| tool_call.tool_name.clone().unwrap_or_default());
-            let expanded = state.chat.expanded_tool_cards.contains(&card_id);
+            let expanded = state.chat.editor.expanded_tool_cards.contains(&card_id);
             let label = format!(
                 "{}  {}",
                 tool_call.tool_name.as_deref().unwrap_or("tool"),
@@ -339,9 +349,13 @@ fn tool_turn_block(
                             .on_hover_text("toggle tool summary");
                         audit::record(ui, &audit::targets::chat_tool_card(&card_id), &response);
                         if response.clicked()
-                            && !state.chat.expanded_tool_cards.insert(card_id.clone())
+                            && !state
+                                .chat
+                                .editor
+                                .expanded_tool_cards
+                                .insert(card_id.clone())
                         {
-                            state.chat.expanded_tool_cards.remove(&card_id);
+                            state.chat.editor.expanded_tool_cards.remove(&card_id);
                         }
 
                         ui.label(
@@ -893,7 +907,7 @@ fn open_tool_detail_modal(
     body: &str,
     language: Option<&str>,
 ) {
-    state.chat.tool_detail_modal = Some(crate::state::ToolDetailModalState {
+    state.chat.editor.tool_detail_modal = Some(crate::state::ToolDetailModalState {
         card_id: card_id.to_string(),
         title: title.to_string(),
         body: body.to_string(),
@@ -906,7 +920,7 @@ fn show_tool_detail_modal(
     state: &mut ShellState,
     markdown_cache: &mut CommonMarkCache,
 ) {
-    let Some(modal) = state.chat.tool_detail_modal.clone() else {
+    let Some(modal) = state.chat.editor.tool_detail_modal.clone() else {
         return;
     };
 
@@ -941,7 +955,7 @@ fn show_tool_detail_modal(
         });
 
     if !open {
-        state.chat.tool_detail_modal = None;
+        state.chat.editor.tool_detail_modal = None;
     }
 }
 

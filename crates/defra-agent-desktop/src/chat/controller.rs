@@ -5,20 +5,19 @@ use tokio::runtime::Runtime;
 use crate::chat::actions::{reduce, ChatAction};
 use crate::chat::domain::submission::ChatBlockedReason;
 use crate::chat::projection::{project_chat, ChatProjection};
-use crate::client::{ClientCore, ClientPeerStatus, ClientStore};
+use crate::client::{ClientCore, ClientStore};
 use crate::state::ChatState;
 
 pub fn sync_from_snapshot(
     chat: &mut ChatState,
     store: &ClientStore,
-    peer_statuses: &[ClientPeerStatus],
     client_available: bool,
 ) -> ChatProjection {
-    let projection = project_chat(chat, store, peer_statuses, client_available);
+    let projection = project_chat(chat, store, client_available);
     reduce(
         chat,
-        ChatAction::ProjectionApplied {
-            projection: projection.clone(),
+        ChatAction::SnapshotWorkflowApplied {
+            workflow: projection.workflow.clone(),
         },
     );
     projection
@@ -39,6 +38,7 @@ pub fn create_conversation(
 ) -> Result<()> {
     let client = client.context("client core is offline")?;
     let agent_did = chat
+        .shell
         .selected_agent_did
         .as_deref()
         .context("select an agent before creating a conversation")?
@@ -50,7 +50,7 @@ pub fn create_conversation(
         },
     );
 
-    let behavior_override = chat.selected_behavior_override.clone();
+    let behavior_override = chat.editor.selected_behavior_override.clone();
     match runtime.block_on(client.create_conversation(&agent_did, behavior_override.as_deref())) {
         Ok(created) => {
             reduce(
@@ -60,8 +60,7 @@ pub fn create_conversation(
                 },
             );
             let snapshot = client.store().snapshot();
-            let peer_statuses = client.peer_statuses();
-            sync_from_snapshot(chat, snapshot.as_ref(), &peer_statuses, true);
+            sync_from_snapshot(chat, snapshot.as_ref(), true);
             Ok(())
         }
         Err(error) => {
@@ -85,14 +84,15 @@ pub fn submit_composer(
 ) -> Result<()> {
     let client = client.context("client core is offline")?;
     let agent_did = chat
+        .shell
         .selected_agent_did
         .as_deref()
         .context("select an agent before sending")?
         .to_string();
 
-    let behavior_override = chat.selected_behavior_override.clone();
-    let content = chat.composer_text.clone();
-    let session_id = chat.selected_session_id.clone();
+    let behavior_override = chat.editor.selected_behavior_override.clone();
+    let content = chat.editor.composer_text.clone();
+    let session_id = chat.shell.selected_session_id.clone();
 
     let submission = if let Some(session_id) = session_id {
         reduce(
@@ -162,8 +162,7 @@ pub fn submit_composer(
                 },
             );
             let snapshot = client.store().snapshot();
-            let peer_statuses = client.peer_statuses();
-            sync_from_snapshot(chat, snapshot.as_ref(), &peer_statuses, true);
+            sync_from_snapshot(chat, snapshot.as_ref(), true);
             Ok(())
         }
         Err(error) => {
@@ -214,10 +213,9 @@ pub fn retry_latest_request(
                     request_id: submitted.request_id,
                 },
             );
-            chat.last_action_message = Some("Retried latest request.".to_string());
+            chat.editor.last_action_message = Some("Retried latest request.".to_string());
             let snapshot = client.store().snapshot();
-            let peer_statuses = client.peer_statuses();
-            sync_from_snapshot(chat, snapshot.as_ref(), &peer_statuses, true);
+            sync_from_snapshot(chat, snapshot.as_ref(), true);
             Ok(())
         }
         Err(error) => {
@@ -275,12 +273,18 @@ mod tests {
     #[test]
     fn sync_transitions_awaiting_observation_into_turn_in_progress() {
         let mut chat = ChatState {
-            selected_agent_did: Some("did:defra:amy".to_string()),
-            selected_session_id: Some("session-1".to_string()),
-            composer_text: "follow up".to_string(),
-            workflow: ChatWorkflowState::AwaitingObservation {
-                session_id: "session-1".to_string(),
-                request_id: "req-1".to_string(),
+            shell: crate::state::ChatShellState {
+                selected_agent_did: Some("did:defra:amy".to_string()),
+                selected_session_id: Some("session-1".to_string()),
+                workflow: ChatWorkflowState::AwaitingObservation {
+                    session_id: "session-1".to_string(),
+                    request_id: "req-1".to_string(),
+                },
+                ..crate::state::ChatShellState::default()
+            },
+            editor: crate::state::ChatEditorState {
+                composer_text: "follow up".to_string(),
+                ..crate::state::ChatEditorState::default()
             },
             ..ChatState::default()
         };
@@ -343,7 +347,7 @@ mod tests {
             ..ClientStoreRows::default()
         });
 
-        let projection = sync_from_snapshot(&mut chat, &store, &[], true);
+        let projection = sync_from_snapshot(&mut chat, &store, true);
 
         assert_eq!(
             projection.send_status,
@@ -352,7 +356,7 @@ mod tests {
             ))
         );
         assert!(matches!(
-            chat.workflow,
+            chat.shell.workflow,
             ChatWorkflowState::TurnInProgress { .. }
         ));
     }

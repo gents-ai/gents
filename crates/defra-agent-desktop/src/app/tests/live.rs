@@ -933,6 +933,7 @@ fn desktop_app_live_inference_smoke() -> Result<()> {
                 .app
                 .state
                 .chat
+                .shell
                 .selected_session_id
                 .clone()
                 .filter(|session_id| session_id != &first_session_id)
@@ -992,7 +993,7 @@ fn desktop_app_live_inference_smoke() -> Result<()> {
     )?;
     let first_conversation_texts = driver.click_target(&first_session_target);
     assert_eq!(
-        driver.app.state.chat.selected_session_id.as_deref(),
+        driver.app.state.chat.shell.selected_session_id.as_deref(),
         Some(first_session_id.as_str())
     );
     let response_content =
@@ -1090,7 +1091,7 @@ fn desktop_app_live_inference_smoke() -> Result<()> {
 
     let second_conversation_texts = driver.click_target(&second_session_target);
     assert_eq!(
-        driver.app.state.chat.selected_session_id.as_deref(),
+        driver.app.state.chat.shell.selected_session_id.as_deref(),
         Some(second_session_id.as_str())
     );
     let (multi_turn_request_id, multi_turn_response_content) =
@@ -1378,7 +1379,7 @@ fn desktop_app_live_inference_smoke() -> Result<()> {
 
     let returned_chat_texts = driver.open_activity(Activity::Chat);
     assert_eq!(
-        driver.app.state.chat.selected_session_id.as_deref(),
+        driver.app.state.chat.shell.selected_session_id.as_deref(),
         Some(second_session_id.as_str())
     );
     let returned_request_count = driver
@@ -2996,7 +2997,7 @@ fn desktop_app_live_chat_disclosure_artifacts() -> Result<()> {
         )?;
         driver.click_target(&audit::targets::chat_conversation(&conversation.session_id));
         assert_eq!(
-            driver.app.state.chat.selected_session_id.as_deref(),
+            driver.app.state.chat.shell.selected_session_id.as_deref(),
             Some(conversation.session_id.as_str())
         );
 
@@ -3018,6 +3019,7 @@ fn desktop_app_live_chat_disclosure_artifacts() -> Result<()> {
             .app
             .state
             .chat
+            .editor
             .expanded_tool_cards
             .contains("call-shell-1"));
         assert!(tool_texts.iter().any(|text| text.contains("Args")));
@@ -3036,6 +3038,7 @@ fn desktop_app_live_chat_disclosure_artifacts() -> Result<()> {
             .app
             .state
             .chat
+            .editor
             .expanded_reasoning_cards
             .contains(&format!("reasoning:{response_key}")));
         assert!(reasoning_texts
@@ -3071,6 +3074,7 @@ fn desktop_app_live_chat_retry_and_export() -> Result<()> {
             .app
             .state
             .chat
+            .editor
             .last_export_payload
             .as_deref()
             .ok_or_else(|| anyhow!("live chat export did not capture a payload"))?;
@@ -3124,9 +3128,9 @@ fn desktop_app_live_chat_retry_and_export() -> Result<()> {
                 .any(|text| text.contains(retry_response.trim()))
                 .then_some(())
         })?;
-        assert_eq!(driver.app.state.chat.last_submission_error, None);
+        assert_eq!(driver.app.state.chat.editor.last_submission_error, None);
         assert_eq!(
-            driver.app.state.chat.last_action_message.as_deref(),
+            driver.app.state.chat.editor.last_action_message.as_deref(),
             Some("Retried latest request.")
         );
     }
@@ -3443,11 +3447,11 @@ fn desktop_app_live_logs_event_classification() -> Result<()> {
         )?;
         driver.click_target(&live_logs_chat_deployment);
         assert_eq!(
-            driver.app.state.chat.selected_peer_id.as_deref(),
+            driver.app.state.chat.shell.selected_peer_id.as_deref(),
             Some(live_logs_peer_id.as_str())
         );
         assert_eq!(
-            driver.app.state.chat.selected_agent_did.as_deref(),
+            driver.app.state.chat.shell.selected_agent_did.as_deref(),
             Some("did:defra:live-logs-peer")
         );
 

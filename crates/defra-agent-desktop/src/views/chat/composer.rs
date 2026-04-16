@@ -1,13 +1,10 @@
 use defra_agent_protocol::client_protocol::ClientTurnState;
 use eframe::egui::{self, Key, RichText, TextEdit, Ui};
-use tokio::runtime::Runtime;
 
 use crate::audit;
-use crate::chat::controller;
 use crate::chat::domain::submission::SendStatus;
-use crate::client::ClientCore;
 use crate::client::ClientStore;
-use crate::state::ShellState;
+use crate::state::{PendingChatAction, PendingShellAction, ShellState};
 use crate::theme;
 
 use super::turn_state_label;
@@ -15,9 +12,7 @@ use super::turn_state_label;
 pub fn show(
     ui: &mut Ui,
     state: &mut ShellState,
-    client: Option<&ClientCore>,
     store: &ClientStore,
-    runtime: &Runtime,
     selected_agent_did: Option<&str>,
     turn_state: Option<ClientTurnState>,
     send_status: SendStatus,
@@ -42,7 +37,7 @@ pub fn show(
         );
         ui.add_space(6.0);
 
-        let text_edit = TextEdit::multiline(&mut state.chat.composer_text)
+        let text_edit = TextEdit::multiline(&mut state.chat.editor.composer_text)
             .id_source(audit::targets::CHAT_COMPOSER_TEXT)
             .desired_rows(4)
             .hint_text("Send an operational request to the selected agent");
@@ -62,6 +57,7 @@ pub fn show(
                             "[behavior: {}]",
                             state
                                 .chat
+                                .editor
                                 .selected_behavior_override
                                 .as_deref()
                                 .or_else(|| {
@@ -115,25 +111,19 @@ pub fn show(
                 )
                 .clicked();
                 if clicked || shortcut {
-                    submit(state, client, runtime, selected_agent_did);
+                    submit(state, selected_agent_did);
                 }
             });
         });
     });
 }
 
-fn submit(
-    state: &mut ShellState,
-    client: Option<&ClientCore>,
-    runtime: &Runtime,
-    selected_agent_did: Option<&str>,
-) {
+fn submit(state: &mut ShellState, selected_agent_did: Option<&str>) {
     let Some(agent_did) = selected_agent_did else {
-        state.chat.last_submission_error = Some("select an agent before sending".to_string());
+        state.chat.editor.last_submission_error =
+            Some("select an agent before sending".to_string());
         return;
     };
     let _ = agent_did;
-    if let Err(error) = controller::submit_composer(&mut state.chat, client, runtime) {
-        state.chat.last_submission_error = Some(error.to_string());
-    }
+    state.queue_shell_action(PendingShellAction::Chat(PendingChatAction::SubmitComposer));
 }

@@ -137,7 +137,7 @@ Examples:
   defra-agent config validate --root infra/agents/default
   defra-agent config diff --root infra/agents/default --home /path/to/home
   defra-agent config apply --root infra/agents/default --home /path/to/home
-  defra-agent config backend set --graphql URL --backend-id default-backend --name default-backend --backend-preset openrouter --max-concurrent 1
+  defra-agent config backend set --graphql URL --backend-id default-backend --name default-backend --backend-preset openrouter --max-concurrent 2
   defra-agent config backend discover-models --backend-preset openrouter
   defra-agent config behavior set --graphql URL --agent-did did:defra-agent:default --backend-id default-backend --model-name MODEL
   defra-agent config tools set --graphql URL --agent-did did:defra-agent:default --selection-id did:defra-agent:default:default:tools --enable-file-tools";
@@ -388,7 +388,7 @@ struct InitArgs {
         help = "Model id to bind to the default behavior"
     )]
     model_name: String,
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, default_value_t = 2)]
     max_concurrent: i64,
     #[arg(long, default_value_t = default_backend_max_queue_depth())]
     max_queue_depth: i64,
@@ -7388,7 +7388,7 @@ fn request_diagnostic_hint(request_id: &str) -> String {
 
 fn server_start_failure_hint(home_dir: &Path) -> String {
     format!(
-        "Next:\n  1. For the default local backend, run `ollama pull {DEFAULT_INIT_MODEL_NAME}` and make sure Ollama is listening on {DEFAULT_INIT_ENDPOINT}\n  2. Point the backend elsewhere with `defra-agent config backend set --graphql http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql --backend-id <ID> --name <NAME> --endpoint <URL> --max-concurrent 1`\n  3. Inspect the initialized home at {}\n  4. If persisted runtime state is stale, run `defra-agent reset --home {}`",
+        "Next:\n  1. For the default local backend, run `ollama pull {DEFAULT_INIT_MODEL_NAME}` and make sure Ollama is listening on {DEFAULT_INIT_ENDPOINT}\n  2. Point the backend elsewhere with `defra-agent config backend set --graphql http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql --backend-id <ID> --name <NAME> --endpoint <URL> --max-concurrent 2`\n  3. Inspect the initialized home at {}\n  4. If persisted runtime state is stale, run `defra-agent reset --home {}`",
         init_config_path(home_dir).display(),
         home_dir.display()
     )

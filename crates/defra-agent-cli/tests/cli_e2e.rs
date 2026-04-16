@@ -1078,7 +1078,7 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
                 "name": "default-backend",
                 "endpoint": "http://127.0.0.1:8000/v1",
                 "api_key_env_var": "DEFRA_AGENT_TEST_MANIFEST_API_KEY",
-                "max_concurrent": 1,
+                "max_concurrent": 2,
                 "max_queue_depth": 100,
                 "enabled": true,
                 "models": ["mock-model"]
@@ -1296,7 +1296,7 @@ async fn config_validate_accepts_tool_services_dir_and_scheduled_tasks_dir() -> 
                 "name": "default-backend",
                 "endpoint": "http://127.0.0.1:8000/v1",
                 "api_key_env_var": "DEFRA_AGENT_TEST_MANIFEST_API_KEY",
-                "max_concurrent": 1,
+                "max_concurrent": 2,
                 "max_queue_depth": 100,
                 "enabled": true,
                 "models": ["mock-model"]

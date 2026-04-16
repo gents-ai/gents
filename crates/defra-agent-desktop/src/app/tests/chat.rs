@@ -44,11 +44,11 @@ fn desktop_app_renders_chat_activity_with_live_session_data() -> Result<()> {
 
     assert_eq!(app.state.activity, Activity::Chat);
     assert_eq!(
-        app.state.chat.selected_agent_did.as_deref(),
+        app.state.chat.shell.selected_agent_did.as_deref(),
         Some("did:defra:amy")
     );
     assert_eq!(
-        app.state.chat.selected_session_id.as_deref(),
+        app.state.chat.shell.selected_session_id.as_deref(),
         Some(created.session_id.as_str())
     );
     assert!(!texts.iter().any(|text| text.contains("Operator Console")));
@@ -90,7 +90,7 @@ fn desktop_app_renders_request_only_transcript_fallback() -> Result<()> {
     let texts = driver.render();
 
     assert_eq!(
-        driver.app.state.chat.selected_session_id.as_deref(),
+        driver.app.state.chat.shell.selected_session_id.as_deref(),
         Some(created.session_id.as_str())
     );
     assert!(texts
@@ -173,12 +173,13 @@ fn desktop_app_chat_header_retry_and_export_use_transcript_state() -> Result<()>
     assert!(driver.has_target(audit::targets::CHAT_RETRY));
     assert!(driver.has_target(audit::targets::CHAT_EXPORT));
 
-    let selected_session_id = driver.app.state.chat.selected_session_id.clone();
+    let selected_session_id = driver.app.state.chat.shell.selected_session_id.clone();
     driver.click_interactable_target(audit::targets::CHAT_EXPORT)?;
     let export_payload = driver
         .app
         .state
         .chat
+        .editor
         .last_export_payload
         .as_deref()
         .ok_or_else(|| anyhow!("chat export did not capture a payload"))?;
@@ -203,10 +204,10 @@ fn desktop_app_chat_header_retry_and_export_use_transcript_state() -> Result<()>
         .ok_or_else(|| anyhow!("retry request was not created"))?;
 
     assert_eq!(
-        driver.app.state.chat.selected_session_id,
+        driver.app.state.chat.shell.selected_session_id,
         selected_session_id
     );
-    assert_eq!(driver.app.state.chat.last_submission_error, None);
+    assert_eq!(driver.app.state.chat.editor.last_submission_error, None);
     assert_eq!(retry_request.content.as_deref(), Some("hello operator"));
     assert_eq!(
         retry_request.retry_root_request.as_deref(),
@@ -253,10 +254,10 @@ fn desktop_app_renders_chat_first_conversation_nudge() -> Result<()> {
 
     assert_eq!(app.state.activity, Activity::Chat);
     assert_eq!(
-        app.state.chat.selected_agent_did.as_deref(),
+        app.state.chat.shell.selected_agent_did.as_deref(),
         Some("did:defra:amy")
     );
-    assert!(app.state.chat.selected_session_id.is_some());
+    assert!(app.state.chat.shell.selected_session_id.is_some());
     assert!(texts.iter().any(|text| text.contains("Transcript Empty")));
     assert!(!texts
         .iter()
@@ -300,7 +301,7 @@ fn desktop_app_auto_creates_first_chat_conversation() -> Result<()> {
 
     let texts = driver.render();
 
-    assert!(driver.app.state.chat.selected_session_id.is_some());
+    assert!(driver.app.state.chat.shell.selected_session_id.is_some());
     assert!(texts.iter().any(|text| text.contains("Transcript Empty")));
     assert!(!texts
         .iter()
@@ -449,14 +450,17 @@ fn desktop_app_clicks_through_chat_deployment_and_conversation_switching() -> Re
     );
     driver.app.state.onboarding.first_launch_redirect_done = true;
     driver.app.state.activity = Activity::Chat;
+    driver.render();
+    driver.click_target(&audit::targets::chat_deployment(&alpha_peer.peer_id));
+    driver.click_target(&audit::targets::chat_conversation(&amy_session.session_id));
     let initial = driver.render();
 
     assert_eq!(
-        driver.app.state.chat.selected_peer_id.as_deref(),
+        driver.app.state.chat.shell.selected_peer_id.as_deref(),
         Some(alpha_peer.peer_id.as_str())
     );
     assert_eq!(
-        driver.app.state.chat.selected_agent_did.as_deref(),
+        driver.app.state.chat.shell.selected_agent_did.as_deref(),
         Some("did:defra:amy")
     );
     assert!(initial
@@ -466,30 +470,33 @@ fn desktop_app_clicks_through_chat_deployment_and_conversation_switching() -> Re
     driver.click_target(&audit::targets::chat_deployment(&beta_peer.peer_id));
     let beta_texts = driver.render();
     assert_eq!(
-        driver.app.state.chat.selected_agent_did.as_deref(),
+        driver.app.state.chat.shell.selected_agent_did.as_deref(),
         Some("did:defra:bob")
     );
-    assert_eq!(driver.app.state.chat.selected_session_id.as_deref(), None);
+    assert_eq!(
+        driver.app.state.chat.shell.selected_session_id.as_deref(),
+        None
+    );
     assert!(!beta_texts.is_empty());
 
     driver.click_target(&audit::targets::chat_deployment(&alpha_peer.peer_id));
     driver.click_target(&audit::targets::chat_agent("did:defra:bob"));
     let beta_agent_texts = driver.render();
     assert_eq!(
-        driver.app.state.chat.selected_peer_id.as_deref(),
+        driver.app.state.chat.shell.selected_peer_id.as_deref(),
         Some(beta_peer.peer_id.as_str())
     );
     assert_eq!(
-        driver.app.state.chat.selected_agent_did.as_deref(),
+        driver.app.state.chat.shell.selected_agent_did.as_deref(),
         Some("did:defra:bob")
     );
-    assert_eq!(driver.app.state.chat.selected_session_id, None);
+    assert_eq!(driver.app.state.chat.shell.selected_session_id, None);
     assert!(!beta_agent_texts.is_empty());
 
     driver.click_target(&audit::targets::chat_conversation(&bob_first.session_id));
     let switched = driver.render();
     assert_eq!(
-        driver.app.state.chat.selected_session_id.as_deref(),
+        driver.app.state.chat.shell.selected_session_id.as_deref(),
         Some(bob_first.session_id.as_str())
     );
     assert!(switched
@@ -552,6 +559,7 @@ fn desktop_app_clicks_through_chat_reasoning_and_tool_card_disclosures() -> Resu
         .app
         .state
         .chat
+        .editor
         .expanded_tool_cards
         .contains("call-shell-1"));
     assert!(tool_texts.iter().any(|text| text.contains("Args")));
@@ -574,6 +582,7 @@ fn desktop_app_clicks_through_chat_reasoning_and_tool_card_disclosures() -> Resu
         .app
         .state
         .chat
+        .editor
         .expanded_reasoning_cards
         .contains("reasoning:response-disclosure-1"));
     assert!(reasoning_texts
@@ -617,7 +626,7 @@ fn desktop_app_clicks_through_chat_send_without_precreating_conversation() -> Re
         Duration::from_secs(5),
     )?;
     assert_eq!(
-        driver.app.state.chat.selected_agent_did.as_deref(),
+        driver.app.state.chat.shell.selected_agent_did.as_deref(),
         Some(running_agent.did.as_str())
     );
 
@@ -628,7 +637,7 @@ fn desktop_app_clicks_through_chat_send_without_precreating_conversation() -> Re
     if wait_for_value(
         "session created by first direct-send click",
         Duration::from_secs(1),
-        || driver.app.state.chat.selected_session_id.clone(),
+        || driver.app.state.chat.shell.selected_session_id.clone(),
     )
     .is_err()
     {
@@ -639,10 +648,10 @@ fn desktop_app_clicks_through_chat_send_without_precreating_conversation() -> Re
     let session_id = wait_for_value(
         "session created by direct send",
         Duration::from_secs(5),
-        || driver.app.state.chat.selected_session_id.clone(),
+        || driver.app.state.chat.shell.selected_session_id.clone(),
     )?;
-    assert!(driver.app.state.chat.last_submission_error.is_none());
-    assert!(driver.app.state.chat.composer_text.is_empty());
+    assert!(driver.app.state.chat.editor.last_submission_error.is_none());
+    assert!(driver.app.state.chat.editor.composer_text.is_empty());
 
     let request_id = wait_for_value(
         "direct-send focused request id",
@@ -682,7 +691,7 @@ fn desktop_app_clicks_through_chat_send_without_precreating_conversation() -> Re
         },
     )?;
     assert_eq!(
-        driver.app.state.chat.selected_session_id.as_deref(),
+        driver.app.state.chat.shell.selected_session_id.as_deref(),
         Some(session_id.as_str())
     );
     assert!(transcript_texts
@@ -722,8 +731,8 @@ fn desktop_app_blocks_chat_send_while_turn_is_waiting_for_claim() -> Result<()> 
         Arc::new(DesktopLogStore::new(64)),
     );
     app.state.activity = Activity::Chat;
-    app.state.chat.selected_agent_did = Some("did:defra:amy".to_string());
-    app.state.chat.selected_session_id = Some(created.session_id.clone());
+    app.state.chat.shell.selected_agent_did = Some("did:defra:amy".to_string());
+    app.state.chat.shell.selected_session_id = Some(created.session_id.clone());
     let mut driver = AuditDriver::new(app, ctx);
 
     let waiting_texts = wait_for_value(
@@ -768,8 +777,11 @@ fn desktop_app_blocks_chat_send_while_turn_is_waiting_for_claim() -> Result<()> 
         .map(|client| client.store().snapshot().requests.len())
         .ok_or_else(|| anyhow!("desktop client missing"))?;
     assert_eq!(request_count_after, initial_request_count);
-    assert_eq!(driver.app.state.chat.composer_text, "blocked follow-up");
-    assert_eq!(driver.app.state.chat.last_submission_error, None);
+    assert_eq!(
+        driver.app.state.chat.editor.composer_text,
+        "blocked follow-up"
+    );
+    assert_eq!(driver.app.state.chat.editor.last_submission_error, None);
     Ok(())
 }
 
@@ -814,25 +826,22 @@ fn desktop_app_clicks_through_live_agent_submission() -> Result<()> {
         .any(|row| row.agent_did == running_agent.did));
 
     let initial = driver.render();
+    ensure_chat_agent_selected(
+        &mut driver,
+        "chat agent selected for live submission",
+        Duration::from_secs(5),
+    )?;
     assert_eq!(
-        driver.app.state.chat.selected_agent_did.as_deref(),
+        driver.app.state.chat.shell.selected_agent_did.as_deref(),
         Some(running_agent.did.as_str())
     );
-    let after_create = wait_for_value(
-        "chat auto-created first session",
+    let _session_id = ensure_chat_session_selected(
+        &mut driver,
+        "chat session selected for live submission",
         Duration::from_secs(5),
-        || {
-            let texts = driver.render();
-            driver
-                .app
-                .state
-                .chat
-                .selected_session_id
-                .clone()
-                .map(|_| texts)
-        },
     )?;
-    assert!(driver.app.state.chat.selected_session_id.is_some());
+    let after_create = driver.render();
+    assert!(driver.app.state.chat.shell.selected_session_id.is_some());
     assert!(!initial
         .iter()
         .any(|text| text.contains("Automatic conversation creation did not complete")));
@@ -843,7 +852,7 @@ fn desktop_app_clicks_through_live_agent_submission() -> Result<()> {
     driver.click_target(audit::targets::CHAT_COMPOSER_TEXT);
     driver.type_text("say hello from the desktop audit");
     assert_eq!(
-        driver.app.state.chat.composer_text,
+        driver.app.state.chat.editor.composer_text,
         "say hello from the desktop audit"
     );
     driver.press_key(
@@ -854,8 +863,8 @@ fn desktop_app_clicks_through_live_agent_submission() -> Result<()> {
             ..Default::default()
         },
     );
-    assert_eq!(driver.app.state.chat.last_submission_error, None);
-    assert!(driver.app.state.chat.composer_text.is_empty());
+    assert_eq!(driver.app.state.chat.editor.last_submission_error, None);
+    assert!(driver.app.state.chat.editor.composer_text.is_empty());
 
     let request_id = wait_for_value("focused request id", Duration::from_secs(5), || {
         driver

@@ -1,5 +1,4 @@
 use crate::chat::domain::submission::{ChatBlockedReason, ChatWorkflowState};
-use crate::chat::projection::ChatProjection;
 use crate::state::ChatState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,47 +36,44 @@ pub enum ChatAction {
         error: String,
         blocked_reason: Option<ChatBlockedReason>,
     },
-    ProjectionApplied {
-        projection: ChatProjection,
+    SnapshotWorkflowApplied {
+        workflow: ChatWorkflowState,
     },
 }
 
 pub fn reduce(chat: &mut ChatState, action: ChatAction) {
     match action {
         ChatAction::SelectDeployment { peer_id, agent_did } => {
-            chat.selected_peer_id = Some(peer_id);
-            chat.selected_agent_did = Some(agent_did);
-            chat.selected_session_id = None;
-            chat.suppress_session_autoselect = true;
-            chat.last_submission_error = None;
-            chat.workflow = ChatWorkflowState::Ready;
+            chat.shell.selected_peer_id = Some(peer_id);
+            chat.shell.selected_agent_did = Some(agent_did);
+            chat.shell.selected_session_id = None;
+            chat.editor.last_submission_error = None;
+            chat.shell.workflow = ChatWorkflowState::Ready;
         }
         ChatAction::SelectConversation { session_id } => {
-            chat.selected_session_id = Some(session_id);
-            chat.suppress_session_autoselect = false;
-            chat.last_submission_error = None;
+            chat.shell.selected_session_id = Some(session_id);
+            chat.editor.last_submission_error = None;
         }
         ChatAction::CreateConversationStarted { agent_did } => {
-            chat.last_submission_error = None;
-            chat.last_action_message = None;
-            chat.last_export_payload = None;
-            chat.workflow = ChatWorkflowState::CreatingConversation { agent_did };
+            chat.editor.last_submission_error = None;
+            chat.editor.last_action_message = None;
+            chat.editor.last_export_payload = None;
+            chat.shell.workflow = ChatWorkflowState::CreatingConversation { agent_did };
         }
         ChatAction::ConversationCreated { session_id } => {
-            chat.selected_session_id = Some(session_id);
-            chat.suppress_session_autoselect = false;
-            chat.last_submission_error = None;
-            chat.workflow = ChatWorkflowState::Ready;
-            chat.transcript_stick_to_bottom = true;
+            chat.shell.selected_session_id = Some(session_id);
+            chat.editor.last_submission_error = None;
+            chat.shell.workflow = ChatWorkflowState::Ready;
+            chat.editor.transcript_stick_to_bottom = true;
         }
         ChatAction::SubmitRequestStarted {
             agent_did,
             session_id,
         } => {
-            chat.last_submission_error = None;
-            chat.last_action_message = None;
-            chat.last_export_payload = None;
-            chat.workflow = ChatWorkflowState::SubmittingRequest {
+            chat.editor.last_submission_error = None;
+            chat.editor.last_action_message = None;
+            chat.editor.last_export_payload = None;
+            chat.shell.workflow = ChatWorkflowState::SubmittingRequest {
                 agent_did,
                 session_id,
             };
@@ -90,14 +86,13 @@ pub fn reduce(chat: &mut ChatState, action: ChatAction) {
             session_id,
             request_id,
         } => {
-            chat.selected_session_id = Some(session_id.clone());
-            chat.suppress_session_autoselect = false;
-            chat.last_submission_error = None;
-            chat.last_action_message = None;
-            chat.last_export_payload = None;
-            chat.composer_text.clear();
-            chat.transcript_stick_to_bottom = true;
-            chat.workflow = ChatWorkflowState::AwaitingObservation {
+            chat.shell.selected_session_id = Some(session_id.clone());
+            chat.editor.last_submission_error = None;
+            chat.editor.last_action_message = None;
+            chat.editor.last_export_payload = None;
+            chat.editor.composer_text.clear();
+            chat.editor.transcript_stick_to_bottom = true;
+            chat.shell.workflow = ChatWorkflowState::AwaitingObservation {
                 session_id,
                 request_id,
             };
@@ -106,32 +101,26 @@ pub fn reduce(chat: &mut ChatState, action: ChatAction) {
             agent_did,
             session_id,
         } => {
-            chat.last_submission_error = None;
-            chat.last_action_message = None;
-            chat.last_export_payload = None;
-            chat.workflow = ChatWorkflowState::SubmittingRequest {
+            chat.editor.last_submission_error = None;
+            chat.editor.last_action_message = None;
+            chat.editor.last_export_payload = None;
+            chat.shell.workflow = ChatWorkflowState::SubmittingRequest {
                 agent_did,
                 session_id: Some(session_id),
             };
-            chat.transcript_stick_to_bottom = true;
+            chat.editor.transcript_stick_to_bottom = true;
         }
         ChatAction::MutationFailed {
             error,
             blocked_reason,
         } => {
-            chat.last_submission_error = Some(error);
-            chat.workflow = blocked_reason
+            chat.editor.last_submission_error = Some(error);
+            chat.shell.workflow = blocked_reason
                 .map(|reason| ChatWorkflowState::Blocked { reason })
                 .unwrap_or(ChatWorkflowState::Ready);
         }
-        ChatAction::ProjectionApplied { projection } => {
-            chat.selected_peer_id = projection.selected_peer_id;
-            chat.selected_agent_did = projection.selected_agent_did;
-            chat.selected_session_id = projection.selected_session_id;
-            if chat.selected_session_id.is_some() {
-                chat.suppress_session_autoselect = false;
-            }
-            chat.workflow = projection.workflow;
+        ChatAction::SnapshotWorkflowApplied { workflow } => {
+            chat.shell.workflow = workflow;
         }
     }
 }

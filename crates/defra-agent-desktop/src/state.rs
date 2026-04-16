@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::mem;
 
 use crate::chat::domain::submission::ChatWorkflowState;
 use crate::telemetry::DesktopLogCategory;
@@ -59,13 +60,32 @@ impl Activity {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PendingChatAction {
+    SelectDeployment { peer_id: String, agent_did: String },
+    SelectConversation { session_id: String },
+    CreateConversation,
+    SubmitComposer,
+    RetryLatestRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PendingShellAction {
+    Navigate(Activity),
+    OpenPeersSetup,
+    Chat(PendingChatAction),
+}
+
 #[derive(Debug, Clone, Default)]
-pub struct ChatState {
+pub struct ChatShellState {
     pub selected_peer_id: Option<String>,
     pub selected_agent_did: Option<String>,
     pub selected_session_id: Option<String>,
-    pub suppress_session_autoselect: bool,
     pub workflow: ChatWorkflowState,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ChatEditorState {
     pub composer_text: String,
     pub selected_behavior_override: Option<String>,
     pub expanded_tool_cards: BTreeSet<String>,
@@ -75,7 +95,12 @@ pub struct ChatState {
     pub last_action_message: Option<String>,
     pub last_export_payload: Option<String>,
     pub tool_detail_modal: Option<ToolDetailModalState>,
-    pub new_conversation_requested: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ChatState {
+    pub shell: ChatShellState,
+    pub editor: ChatEditorState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -278,6 +303,8 @@ pub struct IdentityState {
 pub struct StatusBarState {
     pub peered_now: usize,
     pub peered_target: usize,
+    pub p2p_state: String,
+    pub p2p_warning: bool,
     pub active_agent: String,
     pub runtime_state: String,
     pub gossip_lag_ms: u32,
@@ -328,8 +355,20 @@ pub struct ShellState {
     pub operator: OperatorState,
     pub logs: LogsState,
     pub onboarding: OnboardingState,
+    pub pending_shell_actions: Vec<PendingShellAction>,
+    pub pending_client_restart_reason: Option<String>,
     pub identity: IdentityState,
     pub status: StatusBarState,
+}
+
+impl ShellState {
+    pub fn queue_shell_action(&mut self, action: PendingShellAction) {
+        self.pending_shell_actions.push(action);
+    }
+
+    pub fn drain_pending_shell_actions(&mut self) -> Vec<PendingShellAction> {
+        mem::take(&mut self.pending_shell_actions)
+    }
 }
 
 impl Default for ShellState {
@@ -337,13 +376,18 @@ impl Default for ShellState {
         Self {
             activity: Activity::Chat,
             chat: ChatState {
-                transcript_stick_to_bottom: true,
+                editor: ChatEditorState {
+                    transcript_stick_to_bottom: true,
+                    ..ChatEditorState::default()
+                },
                 ..ChatState::default()
             },
             peers: PeersState::default(),
             operator: OperatorState::default(),
             logs: LogsState::default(),
             onboarding: OnboardingState::default(),
+            pending_shell_actions: Vec::new(),
+            pending_client_restart_reason: None,
             identity: IdentityState {
                 initials: "D1",
                 label: "FIELD PRINCIPAL".to_string(),
@@ -352,6 +396,8 @@ impl Default for ShellState {
             status: StatusBarState {
                 peered_now: 2,
                 peered_target: 3,
+                p2p_state: "healthy".to_string(),
+                p2p_warning: false,
                 active_agent: "amy-code".to_string(),
                 runtime_state: "observing".to_string(),
                 gossip_lag_ms: 84,

@@ -1,10 +1,8 @@
 use eframe::egui::{self, RichText, Ui};
-use tokio::runtime::Runtime;
 
 use crate::audit;
-use crate::chat::controller;
 use crate::client::{ClientCore, ClientStore};
-use crate::state::{Activity, ShellState};
+use crate::state::{PendingChatAction, PendingShellAction, ShellState};
 use crate::theme::Palette;
 use crate::views;
 
@@ -16,7 +14,6 @@ pub fn show(
     state: &mut ShellState,
     client: Option<&ClientCore>,
     _store: &ClientStore,
-    runtime: &Runtime,
     deployments: &[DeploymentEntry],
     conversations: &[ConversationBucket],
     selected_agent_did: Option<&str>,
@@ -47,8 +44,7 @@ pub fn show(
                     .min_size(egui::vec2(52.0, 20.0)),
                 );
                 if response.clicked() {
-                    state.activity = Activity::Peers;
-                    state.peers.show_add_form = true;
+                    state.queue_shell_action(PendingShellAction::OpenPeersSetup);
                 }
             });
         });
@@ -71,8 +67,7 @@ pub fn show(
                     )
                     .clicked()
                     {
-                        state.activity = Activity::Peers;
-                        state.peers.show_add_form = true;
+                        state.queue_shell_action(PendingShellAction::OpenPeersSetup);
                     }
                 });
             });
@@ -89,7 +84,7 @@ pub fn show(
                             ui,
                             &deployment.label,
                             &meta,
-                            state.chat.selected_peer_id.as_deref()
+                            state.chat.shell.selected_peer_id.as_deref()
                                 == Some(deployment.peer_id.as_str()),
                             if deployment.connected {
                                 palette.accent
@@ -104,11 +99,12 @@ pub fn show(
                             &response,
                         );
                         if response.clicked() {
-                            controller::select_deployment(
-                                &mut state.chat,
-                                deployment.peer_id.clone(),
-                                deployment.agent_did.clone(),
-                            );
+                            state.queue_shell_action(PendingShellAction::Chat(
+                                PendingChatAction::SelectDeployment {
+                                    peer_id: deployment.peer_id.clone(),
+                                    agent_did: deployment.agent_did.clone(),
+                                },
+                            ));
                         }
 
                         let response = views::tree_row(
@@ -123,11 +119,12 @@ pub fn show(
                             &response,
                         );
                         if response.clicked() {
-                            controller::select_deployment(
-                                &mut state.chat,
-                                deployment.peer_id.clone(),
-                                deployment.agent_did.clone(),
-                            );
+                            state.queue_shell_action(PendingShellAction::Chat(
+                                PendingChatAction::SelectDeployment {
+                                    peer_id: deployment.peer_id.clone(),
+                                    agent_did: deployment.agent_did.clone(),
+                                },
+                            ));
                         }
 
                         if let Some(warning) = deployment.warning.as_deref() {
@@ -157,7 +154,7 @@ pub fn show(
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(14.0);
-                let enabled = selected_agent_did.is_some();
+                let enabled = client.is_some() && selected_agent_did.is_some();
                 let response = audit::add_enabled(
                     ui,
                     audit::targets::CHAT_NEW_CONVERSATION,
@@ -167,15 +164,13 @@ pub fn show(
                             .monospace()
                             .size(10.5)
                             .color(if enabled { palette.accent } else { palette.text_3 }),
-                    )
-                    .min_size(egui::vec2(52.0, 20.0)),
+                )
+                .min_size(egui::vec2(52.0, 20.0)),
                 );
                 if response.clicked() {
-                    if let Err(error) =
-                        controller::create_conversation(&mut state.chat, client, runtime)
-                    {
-                        state.chat.last_submission_error = Some(error.to_string());
-                    }
+                    state.queue_shell_action(PendingShellAction::Chat(
+                        PendingChatAction::CreateConversation,
+                    ));
                 }
             });
         });
@@ -230,10 +225,11 @@ pub fn show(
                             &response,
                         );
                         if response.clicked() {
-                            controller::select_conversation(
-                                &mut state.chat,
-                                entry.session_id.clone(),
-                            );
+                            state.queue_shell_action(PendingShellAction::Chat(
+                                PendingChatAction::SelectConversation {
+                                    session_id: entry.session_id.clone(),
+                                },
+                            ));
                         }
                     }
                     ui.add_space(6.0);

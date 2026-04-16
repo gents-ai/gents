@@ -1,19 +1,19 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
 use defra_agent_protocol::row::{
     AgentBehaviorRow, AgentRequestRow, InferenceBackendRow, InferenceProfileRow, ScheduledTaskRow,
     ToolSelectionRow,
 };
-use defra_node::{EmbeddedNode, NodeBuilder, P2PConfig};
+use defra_node::{EmbeddedNode, NodeBuilder, P2PConfig, StorageBackend};
 use defra_p2p_adapter::P2POperations as P2POps;
 use p2p::iroh::{parse_public_peer_addr, IrohDiscoveryConfig, IrohRelayModeConfig};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{mpsc, watch, Mutex, RwLock};
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, Instant};
+use tokio::time::{sleep, timeout, Instant, MissedTickBehavior};
 
 use super::mutations::{self, CreatedConversation, PeerMutationResult, SubmittedRequest};
 use super::observe::{spawn_observer, ObservedStore, ObserverHandle};
@@ -29,7 +29,9 @@ use crate::local_runtime;
 const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 const BOOTSTRAP_OPERATION_BACKOFF: Duration = Duration::from_millis(250);
-const PEER_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(2);
+const P2P_SUPERVISOR_INTERVAL: Duration = Duration::from_secs(2);
+const P2P_OPERATION_TIMEOUT: Duration = Duration::from_secs(3);
+const P2P_WEDGED_FAILURE_THRESHOLD: u32 = 3;
 const DESKTOP_P2P_MAX_CONCURRENT_PUSH_TASKS: usize = 32;
 const DESKTOP_P2P_RATE_LIMIT_BURST: u32 = 5_000;
 const DESKTOP_P2P_RATE_LIMIT_RATE: f64 = 500.0;
@@ -86,8 +88,62 @@ pub struct ClientPeerStatus {
     pub last_error: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum P2PHealthStatus {
+    Healthy,
+    Degraded,
+    Wedged,
+}
+
+impl P2PHealthStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Healthy => "healthy",
+            Self::Degraded => "degraded",
+            Self::Wedged => "wedged",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct P2PHealth {
+    pub status: P2PHealthStatus,
+    pub consecutive_failures: u32,
+    pub connected_peer_count: usize,
+    pub replicator_count: usize,
+    pub last_error: Option<String>,
+    pub last_ok_at: Option<SystemTime>,
+    pub last_failure_at: Option<SystemTime>,
+}
+
+impl Default for P2PHealth {
+    fn default() -> Self {
+        Self {
+            status: P2PHealthStatus::Healthy,
+            consecutive_failures: 0,
+            connected_peer_count: 0,
+            replicator_count: 0,
+            last_error: None,
+            last_ok_at: None,
+            last_failure_at: None,
+        }
+    }
+}
+
+impl P2PHealth {
+    pub fn status_label(&self) -> &'static str {
+        self.status.label()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum P2PSupervisorCommand {
+    RepairNow,
+}
+
 pub struct ClientCore {
     paths: DesktopPaths,
+    options: ClientCoreOptions,
     principal: PrincipalIdentity,
     node: Arc<EmbeddedNode>,
     p2p: Arc<dyn P2POps>,
@@ -95,7 +151,9 @@ pub struct ClientCore {
     store: Arc<ObservedStore>,
     observer: Mutex<Option<ObserverHandle>>,
     peer_statuses: Arc<StdRwLock<Vec<ClientPeerStatus>>>,
-    peer_maintenance: Mutex<Option<JoinHandle<()>>>,
+    p2p_supervisor: Mutex<Option<JoinHandle<()>>>,
+    p2p_health: watch::Sender<P2PHealth>,
+    p2p_control: mpsc::Sender<P2PSupervisorCommand>,
     last_mutation_error: StdRwLock<Option<String>>,
     local_peer_id: String,
     listen_addresses: Vec<String>,
@@ -123,6 +181,7 @@ impl ClientCore {
         let node = Arc::new(
             NodeBuilder::default()
                 .data_path(paths.node_data_dir())
+                .with_storage_backend(StorageBackend::RocksDb)
                 .with_p2p(P2PConfig {
                     port: options.port,
                     bind_addr: options.bind_addr,
@@ -152,15 +211,11 @@ impl ClientCore {
         let p2p = node
             .p2p_arc()
             .context("desktop node started without P2P support")?;
-        let local_peer_id = p2p
-            .local_peer_id()
+        let local_peer_id = p2p_local_peer_id(&p2p)
             .await
-            .map_err(anyhow::Error::msg)
             .context("reading desktop P2P peer id")?;
-        let listen_addresses = p2p
-            .listen_addresses()
+        let listen_addresses = p2p_listen_addresses(&p2p)
             .await
-            .map_err(anyhow::Error::msg)
             .context("reading desktop P2P listen addresses")?;
 
         let (peer_statuses, _peer_errors) = {
@@ -168,15 +223,22 @@ impl ClientCore {
             bootstrap_saved_peers(&p2p, &records, &options).await
         };
         let peer_statuses = Arc::new(StdRwLock::new(peer_statuses));
-        let peer_maintenance = spawn_peer_maintenance_task(
+        let (p2p_health, _p2p_health_rx) = watch::channel(P2PHealth::default());
+        let initial_health = probe_p2p_health(&p2p, &P2PHealth::default()).await;
+        p2p_health.send_replace(initial_health);
+        let (p2p_control, p2p_control_rx) = mpsc::channel(8);
+        let p2p_supervisor = spawn_p2p_supervisor_task(
             Arc::clone(&p2p),
             Arc::clone(&peer_directory),
             Arc::clone(&peer_statuses),
+            p2p_health.clone(),
+            p2p_control_rx,
             options.install_replicators_on_bootstrap,
         );
 
         Ok(Self {
             paths,
+            options,
             principal,
             node,
             p2p,
@@ -184,7 +246,9 @@ impl ClientCore {
             store,
             observer: Mutex::new(Some(observer)),
             peer_statuses,
-            peer_maintenance: Mutex::new(Some(peer_maintenance)),
+            p2p_supervisor: Mutex::new(Some(p2p_supervisor)),
+            p2p_health,
+            p2p_control,
             last_mutation_error: StdRwLock::new(None),
             local_peer_id,
             listen_addresses,
@@ -194,6 +258,10 @@ impl ClientCore {
 
     pub fn paths(&self) -> &DesktopPaths {
         &self.paths
+    }
+
+    pub fn options(&self) -> &ClientCoreOptions {
+        &self.options
     }
 
     pub fn principal(&self) -> &PrincipalIdentity {
@@ -225,6 +293,14 @@ impl ClientCore {
             .read()
             .expect("peer status lock poisoned")
             .clone()
+    }
+
+    pub fn p2p_health(&self) -> P2PHealth {
+        self.p2p_health.borrow().clone()
+    }
+
+    pub fn p2p_health_updates(&self) -> watch::Receiver<P2PHealth> {
+        self.p2p_health.subscribe()
     }
 
     pub async fn peer_records(&self) -> Vec<super::peer_directory::PeerRecord> {
@@ -275,6 +351,13 @@ impl ClientCore {
             .clone()
     }
 
+    pub async fn request_p2p_repair(&self) -> Result<()> {
+        self.p2p_control
+            .send(P2PSupervisorCommand::RepairNow)
+            .await
+            .context("queueing desktop P2P repair request")
+    }
+
     pub async fn refresh_store(&self) -> Result<u64> {
         let snapshot = load_full_snapshot(self.node.as_ref()).await?;
         let rows = snapshot.row_count();
@@ -289,7 +372,7 @@ impl ClientCore {
     }
 
     pub async fn shutdown(&self) -> Result<()> {
-        if let Some(task) = self.peer_maintenance.lock().await.take() {
+        if let Some(task) = self.p2p_supervisor.lock().await.take() {
             task.abort();
             let _ = task.await;
         }
@@ -760,7 +843,7 @@ async fn connect_peer_with_retry_until(
             }
         }
 
-        match p2p.connect_peer(addr).await {
+        match p2p_connect_peer(p2p, addr).await {
             Ok(()) => {
                 if let Some(peer_id) = expected_peer_id.as_deref() {
                     wait_for_connected_peer(p2p, peer_id, deadline, label).await?;
@@ -801,10 +884,7 @@ async fn add_replicator_with_retry_until(
 ) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
-        match p2p
-            .add_replicator(collections.clone(), Some(addr), Vec::new(), None)
-            .await
-        {
+        match p2p_add_replicator(p2p, collections.clone(), addr).await {
             Ok(()) => return Ok(()),
             Err(error) => {
                 if Instant::now() >= deadline {
@@ -821,10 +901,8 @@ async fn add_replicator_with_retry_until(
 async fn wait_for_bootstrap_listen_address(p2p: &Arc<dyn P2POps>) -> Result<String> {
     let deadline = Instant::now() + BOOTSTRAP_OPERATION_TIMEOUT;
     loop {
-        let addrs = p2p
-            .listen_addresses()
+        let addrs = p2p_listen_addresses(p2p)
             .await
-            .map_err(anyhow::Error::msg)
             .context("reading desktop P2P listen addresses for local runtime pairing")?;
         if let Some(addr) = select_local_runtime_pairing_addr(&addrs) {
             return Ok(addr);
@@ -837,7 +915,7 @@ async fn wait_for_bootstrap_listen_address(p2p: &Arc<dyn P2POps>) -> Result<Stri
 }
 
 async fn is_connected_peer(p2p: &Arc<dyn P2POps>, peer_id: &str) -> Result<bool> {
-    let peers = p2p.connected_peers().await.map_err(anyhow::Error::msg)?;
+    let peers = p2p_connected_peers(p2p).await?;
     Ok(peers.iter().any(|peer| {
         parse_public_peer_addr(peer)
             .map(|(parsed_peer_id, _)| parsed_peer_id.as_str() == peer_id)
@@ -869,48 +947,185 @@ fn normalize_required<'a>(field: &str, value: &'a str) -> Result<&'a str> {
         .with_context(|| format!("{field} must not be empty"))
 }
 
-fn spawn_peer_maintenance_task(
+fn spawn_p2p_supervisor_task(
     p2p: Arc<dyn P2POps>,
     peer_directory: Arc<RwLock<PeerDirectory>>,
     peer_statuses: Arc<StdRwLock<Vec<ClientPeerStatus>>>,
+    p2p_health: watch::Sender<P2PHealth>,
+    mut control_rx: mpsc::Receiver<P2PSupervisorCommand>,
     install_replicators_on_bootstrap: bool,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        let mut health = p2p_health.borrow().clone();
+        let mut ticker = tokio::time::interval(P2P_SUPERVISOR_INTERVAL);
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
         loop {
-            sleep(PEER_MAINTENANCE_INTERVAL).await;
+            let manual_repair = tokio::select! {
+                _ = ticker.tick() => false,
+                command = control_rx.recv() => match command {
+                    Some(P2PSupervisorCommand::RepairNow) => true,
+                    None => break,
+                },
+            };
 
-            let records = peer_directory.read().await.records().to_vec();
-            for record in records {
-                let current_status = peer_statuses
-                    .read()
-                    .expect("peer status lock poisoned")
-                    .iter()
-                    .find(|status| status.peer_id == record.peer_id)
-                    .cloned();
-
-                if !saved_peer_needs_repair(&p2p, &record, current_status.as_ref()).await {
-                    continue;
-                }
-
-                let updated = repair_saved_peer(
-                    &p2p,
-                    &record,
-                    current_status,
-                    install_replicators_on_bootstrap,
-                )
-                .await;
-                let still_saved = peer_directory
-                    .read()
-                    .await
-                    .records()
-                    .iter()
-                    .any(|candidate| candidate.peer_id == record.peer_id);
-                if still_saved {
-                    replace_peer_status(&peer_statuses, updated);
+            if manual_repair {
+                match p2p_notify_network_change(&p2p).await {
+                    Ok(()) => {
+                        tracing::info!(
+                            target: "defra_agent_desktop::p2p_health",
+                            "manual desktop P2P repair requested"
+                        );
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            target: "defra_agent_desktop::p2p_health",
+                            error = %error,
+                            "manual desktop P2P repair could not refresh network state"
+                        );
+                    }
                 }
             }
+
+            run_saved_peer_repair_cycle(
+                &p2p,
+                &peer_directory,
+                &peer_statuses,
+                install_replicators_on_bootstrap,
+            )
+            .await;
+
+            let next_health = probe_p2p_health(&p2p, &health).await;
+            if p2p_health_materially_changed(&health, &next_health) {
+                log_p2p_health_transition(&health, &next_health);
+                p2p_health.send_replace(next_health.clone());
+            }
+            health = next_health;
         }
     })
+}
+
+async fn run_saved_peer_repair_cycle(
+    p2p: &Arc<dyn P2POps>,
+    peer_directory: &Arc<RwLock<PeerDirectory>>,
+    peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
+    install_replicators_on_bootstrap: bool,
+) {
+    let records = peer_directory.read().await.records().to_vec();
+    for record in records {
+        let current_status = peer_statuses
+            .read()
+            .expect("peer status lock poisoned")
+            .iter()
+            .find(|status| status.peer_id == record.peer_id)
+            .cloned();
+
+        if !saved_peer_needs_repair(p2p, &record, current_status.as_ref()).await {
+            continue;
+        }
+
+        let updated = repair_saved_peer(
+            p2p,
+            &record,
+            current_status,
+            install_replicators_on_bootstrap,
+        )
+        .await;
+        let still_saved = peer_directory
+            .read()
+            .await
+            .records()
+            .iter()
+            .any(|candidate| candidate.peer_id == record.peer_id);
+        if still_saved {
+            replace_peer_status(peer_statuses, updated);
+        }
+    }
+}
+
+async fn probe_p2p_health(p2p: &Arc<dyn P2POps>, previous: &P2PHealth) -> P2PHealth {
+    let now = SystemTime::now();
+    let probe = async {
+        let peer_id = p2p_local_peer_id(p2p).await?;
+        if peer_id.trim().is_empty() {
+            anyhow::bail!("P2P transport reported an empty peer id");
+        }
+
+        let listen_addresses = p2p_listen_addresses(p2p).await?;
+        if listen_addresses.is_empty() {
+            anyhow::bail!("P2P transport reported no listen addresses");
+        }
+
+        let connected_peers = p2p_connected_peers(p2p).await?;
+        let replicators = p2p_get_replicators(p2p).await?;
+
+        Ok::<(usize, usize), anyhow::Error>((connected_peers.len(), replicators.len()))
+    }
+    .await;
+
+    match probe {
+        Ok((connected_peer_count, replicator_count)) => P2PHealth {
+            status: P2PHealthStatus::Healthy,
+            consecutive_failures: 0,
+            connected_peer_count,
+            replicator_count,
+            last_error: None,
+            last_ok_at: Some(now),
+            last_failure_at: previous.last_failure_at,
+        },
+        Err(error) => {
+            let consecutive_failures = previous.consecutive_failures.saturating_add(1);
+            let status = if consecutive_failures >= P2P_WEDGED_FAILURE_THRESHOLD {
+                P2PHealthStatus::Wedged
+            } else {
+                P2PHealthStatus::Degraded
+            };
+            P2PHealth {
+                status,
+                consecutive_failures,
+                connected_peer_count: previous.connected_peer_count,
+                replicator_count: previous.replicator_count,
+                last_error: Some(error.to_string()),
+                last_ok_at: previous.last_ok_at,
+                last_failure_at: Some(now),
+            }
+        }
+    }
+}
+
+fn log_p2p_health_transition(previous: &P2PHealth, next: &P2PHealth) {
+    if next.status == P2PHealthStatus::Healthy {
+        tracing::info!(
+            target: "defra_agent_desktop::p2p_health",
+            connected_peers = next.connected_peer_count,
+            replicators = next.replicator_count,
+            "desktop P2P transport is healthy"
+        );
+        return;
+    }
+
+    let error = next
+        .last_error
+        .as_deref()
+        .unwrap_or("unknown transport error");
+    let status = next.status.label();
+    if next.status != previous.status || previous.last_error.as_deref() != Some(error) {
+        tracing::warn!(
+            target: "defra_agent_desktop::p2p_health",
+            status,
+            consecutive_failures = next.consecutive_failures,
+            error,
+            "desktop P2P transport health degraded"
+        );
+    }
+}
+
+fn p2p_health_materially_changed(previous: &P2PHealth, next: &P2PHealth) -> bool {
+    previous.status != next.status
+        || previous.consecutive_failures != next.consecutive_failures
+        || previous.connected_peer_count != next.connected_peer_count
+        || previous.replicator_count != next.replicator_count
+        || previous.last_error != next.last_error
 }
 
 async fn saved_peer_needs_repair(
@@ -970,7 +1185,7 @@ async fn repair_saved_peer(
     };
 
     if !connected_now {
-        match p2p.notify_network_change().await {
+        match p2p_notify_network_change(p2p).await {
             Ok(()) => {
                 tracing::debug!(
                     target: "defra_agent_desktop::peer_maintenance",
@@ -1061,6 +1276,80 @@ fn replace_peer_status(
     }
 }
 
+async fn p2p_local_peer_id(p2p: &Arc<dyn P2POps>) -> Result<String> {
+    match timeout(P2P_OPERATION_TIMEOUT, p2p.local_peer_id()).await {
+        Ok(result) => result
+            .map_err(anyhow::Error::msg)
+            .context("reading desktop P2P peer id"),
+        Err(_) => anyhow::bail!("timed out reading desktop P2P peer id"),
+    }
+}
+
+async fn p2p_listen_addresses(p2p: &Arc<dyn P2POps>) -> Result<Vec<String>> {
+    match timeout(P2P_OPERATION_TIMEOUT, p2p.listen_addresses()).await {
+        Ok(result) => result
+            .map_err(anyhow::Error::msg)
+            .context("reading desktop P2P listen addresses"),
+        Err(_) => anyhow::bail!("timed out reading desktop P2P listen addresses"),
+    }
+}
+
+async fn p2p_connected_peers(p2p: &Arc<dyn P2POps>) -> Result<Vec<String>> {
+    match timeout(P2P_OPERATION_TIMEOUT, p2p.connected_peers()).await {
+        Ok(result) => result
+            .map_err(anyhow::Error::msg)
+            .context("reading desktop P2P connected peers"),
+        Err(_) => anyhow::bail!("timed out reading desktop P2P connected peers"),
+    }
+}
+
+async fn p2p_connect_peer(p2p: &Arc<dyn P2POps>, addr: &str) -> Result<()> {
+    match timeout(P2P_OPERATION_TIMEOUT, p2p.connect_peer(addr)).await {
+        Ok(result) => result
+            .map_err(anyhow::Error::msg)
+            .with_context(|| format!("connecting desktop P2P peer {addr}")),
+        Err(_) => anyhow::bail!("timed out connecting desktop P2P peer {addr}"),
+    }
+}
+
+async fn p2p_notify_network_change(p2p: &Arc<dyn P2POps>) -> Result<()> {
+    match timeout(P2P_OPERATION_TIMEOUT, p2p.notify_network_change()).await {
+        Ok(result) => result
+            .map_err(anyhow::Error::msg)
+            .context("refreshing desktop P2P network state"),
+        Err(_) => anyhow::bail!("timed out refreshing desktop P2P network state"),
+    }
+}
+
+async fn p2p_get_replicators(
+    p2p: &Arc<dyn P2POps>,
+) -> Result<Vec<defra_p2p_adapter::ReplicatorInfo>> {
+    match timeout(P2P_OPERATION_TIMEOUT, p2p.get_replicators()).await {
+        Ok(result) => result
+            .map_err(anyhow::Error::msg)
+            .context("reading desktop P2P replicators"),
+        Err(_) => anyhow::bail!("timed out reading desktop P2P replicators"),
+    }
+}
+
+async fn p2p_add_replicator(
+    p2p: &Arc<dyn P2POps>,
+    collections: Vec<String>,
+    addr: &str,
+) -> Result<()> {
+    match timeout(
+        P2P_OPERATION_TIMEOUT,
+        p2p.add_replicator(collections, Some(addr), Vec::new(), None),
+    )
+    .await
+    {
+        Ok(result) => result
+            .map_err(anyhow::Error::msg)
+            .with_context(|| format!("adding desktop P2P replicator for {addr}")),
+        Err(_) => anyhow::bail!("timed out adding desktop P2P replicator for {addr}"),
+    }
+}
+
 fn select_local_runtime_pairing_addr(addrs: &[String]) -> Option<String> {
     let candidates = addrs
         .iter()
@@ -1107,13 +1396,41 @@ mod tests {
     #[derive(Default)]
     struct RecordingP2P {
         notify_calls: AtomicUsize,
+        local_peer_id_error: StdRwLock<Option<String>>,
+        listen_addresses: StdRwLock<Vec<String>>,
+        listen_addresses_error: StdRwLock<Option<String>>,
         connected_peers: StdRwLock<Vec<String>>,
+        connected_peers_error: StdRwLock<Option<String>>,
         connect_calls: StdRwLock<Vec<String>>,
+        replicators: StdRwLock<Vec<ReplicatorInfo>>,
+        replicators_error: StdRwLock<Option<String>>,
     }
 
+    #[allow(dead_code)]
     impl RecordingP2P {
         fn notify_calls(&self) -> usize {
             self.notify_calls.load(Ordering::SeqCst)
+        }
+
+        fn set_local_peer_id_error(&self, error: Option<&str>) {
+            *self
+                .local_peer_id_error
+                .write()
+                .expect("local peer id error lock poisoned") = error.map(ToOwned::to_owned);
+        }
+
+        fn set_listen_addresses(&self, addrs: Vec<String>) {
+            *self
+                .listen_addresses
+                .write()
+                .expect("listen addresses lock poisoned") = addrs;
+        }
+
+        fn set_listen_addresses_error(&self, error: Option<&str>) {
+            *self
+                .listen_addresses_error
+                .write()
+                .expect("listen addresses error lock poisoned") = error.map(ToOwned::to_owned);
         }
 
         fn set_connected_peers(&self, peers: Vec<String>) {
@@ -1121,6 +1438,13 @@ mod tests {
                 .connected_peers
                 .write()
                 .expect("connected peers lock poisoned") = peers;
+        }
+
+        fn set_connected_peers_error(&self, error: Option<&str>) {
+            *self
+                .connected_peers_error
+                .write()
+                .expect("connected peers error lock poisoned") = error.map(ToOwned::to_owned);
         }
 
         fn connected_peer_snapshot(&self) -> Vec<String> {
@@ -1136,19 +1460,58 @@ mod tests {
                 .expect("connect calls lock poisoned")
                 .clone()
         }
+
+        fn set_replicators(&self, replicators: Vec<ReplicatorInfo>) {
+            *self.replicators.write().expect("replicators lock poisoned") = replicators;
+        }
+
+        fn set_replicators_error(&self, error: Option<&str>) {
+            *self
+                .replicators_error
+                .write()
+                .expect("replicators error lock poisoned") = error.map(ToOwned::to_owned);
+        }
     }
 
     #[async_trait]
     impl P2POps for RecordingP2P {
         async fn local_peer_id(&self) -> P2PResult<String> {
+            if let Some(error) = self
+                .local_peer_id_error
+                .read()
+                .expect("local peer id error lock poisoned")
+                .clone()
+            {
+                return Err(error.into());
+            }
             Ok("local-peer".to_string())
         }
 
         async fn listen_addresses(&self) -> P2PResult<Vec<String>> {
-            Ok(Vec::new())
+            if let Some(error) = self
+                .listen_addresses_error
+                .read()
+                .expect("listen addresses error lock poisoned")
+                .clone()
+            {
+                return Err(error.into());
+            }
+            Ok(self
+                .listen_addresses
+                .read()
+                .expect("listen addresses lock poisoned")
+                .clone())
         }
 
         async fn connected_peers(&self) -> P2PResult<Vec<String>> {
+            if let Some(error) = self
+                .connected_peers_error
+                .read()
+                .expect("connected peers error lock poisoned")
+                .clone()
+            {
+                return Err(error.into());
+            }
             Ok(self.connected_peer_snapshot())
         }
 
@@ -1170,7 +1533,19 @@ mod tests {
         }
 
         async fn get_replicators(&self) -> P2PResult<Vec<ReplicatorInfo>> {
-            Ok(Vec::new())
+            if let Some(error) = self
+                .replicators_error
+                .read()
+                .expect("replicators error lock poisoned")
+                .clone()
+            {
+                return Err(error.into());
+            }
+            Ok(self
+                .replicators
+                .read()
+                .expect("replicators lock poisoned")
+                .clone())
         }
 
         async fn add_replicator(
@@ -1341,5 +1716,86 @@ mod tests {
         .await;
 
         assert!(!needs_repair);
+    }
+
+    #[tokio::test]
+    async fn probe_p2p_health_reports_healthy_transport() {
+        let recording = Arc::new(RecordingP2P::default());
+        recording.set_listen_addresses(vec!["127.0.0.1:56000/p2p/local-peer".to_string()]);
+        recording.set_connected_peers(vec!["127.0.0.1:56000/p2p/peer-alpha".to_string()]);
+        recording.set_replicators(vec![ReplicatorInfo {
+            id: Some("peer-alpha".to_string()),
+            collections: vec!["AgentRequest".to_string()],
+            address: Some("127.0.0.1:56000/p2p/peer-alpha".to_string()),
+        }]);
+        let p2p: Arc<dyn P2POps> = recording;
+
+        let health = probe_p2p_health(&p2p, &P2PHealth::default()).await;
+
+        assert_eq!(health.status, P2PHealthStatus::Healthy);
+        assert_eq!(health.connected_peer_count, 1);
+        assert_eq!(health.replicator_count, 1);
+        assert_eq!(health.consecutive_failures, 0);
+        assert_eq!(health.last_error, None);
+        assert!(health.last_ok_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn probe_p2p_health_marks_repeated_failures_wedged() {
+        let recording = Arc::new(RecordingP2P::default());
+        recording.set_listen_addresses(vec!["127.0.0.1:56000/p2p/local-peer".to_string()]);
+        recording.set_connected_peers_error(Some("channel send error"));
+        let p2p: Arc<dyn P2POps> = recording;
+
+        let mut health = P2PHealth::default();
+        for _ in 0..P2P_WEDGED_FAILURE_THRESHOLD {
+            health = probe_p2p_health(&p2p, &health).await;
+        }
+
+        assert_eq!(health.status, P2PHealthStatus::Wedged);
+        assert_eq!(health.consecutive_failures, P2P_WEDGED_FAILURE_THRESHOLD);
+        assert_eq!(
+            health.last_error.as_deref(),
+            Some("reading desktop P2P connected peers")
+        );
+        assert!(health.last_failure_at.is_some());
+    }
+
+    #[test]
+    fn p2p_health_materially_changed_ignores_probe_timestamps() {
+        let previous = P2PHealth {
+            status: P2PHealthStatus::Healthy,
+            consecutive_failures: 0,
+            connected_peer_count: 1,
+            replicator_count: 1,
+            last_error: None,
+            last_ok_at: Some(SystemTime::UNIX_EPOCH),
+            last_failure_at: None,
+        };
+        let next = P2PHealth {
+            last_ok_at: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(2)),
+            ..previous.clone()
+        };
+
+        assert!(!p2p_health_materially_changed(&previous, &next));
+    }
+
+    #[test]
+    fn p2p_health_materially_changed_detects_live_topology_change() {
+        let previous = P2PHealth {
+            status: P2PHealthStatus::Healthy,
+            consecutive_failures: 0,
+            connected_peer_count: 1,
+            replicator_count: 1,
+            last_error: None,
+            last_ok_at: Some(SystemTime::UNIX_EPOCH),
+            last_failure_at: None,
+        };
+        let next = P2PHealth {
+            connected_peer_count: 2,
+            ..previous.clone()
+        };
+
+        assert!(p2p_health_materially_changed(&previous, &next));
     }
 }

@@ -3,7 +3,7 @@ use eframe::egui::{self, RichText, Ui};
 use tracing::Level;
 
 use crate::audit;
-use crate::client::{ClientCore, ClientStore};
+use crate::client::{ClientCore, ClientStore, P2PHealthStatus};
 use crate::state::{LogsFilter, ShellState};
 use crate::telemetry::{
     DesktopLogCategory, DesktopLogEntry, DesktopLogField, DesktopLogSnapshot, DesktopLogStore,
@@ -150,6 +150,7 @@ pub fn show_rail(
     let configured_peers = client
         .map(ClientCore::configured_peer_count)
         .unwrap_or_default();
+    let p2p_health = client.map(ClientCore::p2p_health);
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         ui.add_space(14.0);
@@ -181,6 +182,13 @@ pub fn show_rail(
                 ),
                 "replication lag     n/a (not instrumented yet)".to_string(),
                 format!("peers               {connected_peers}/{configured_peers} connected"),
+                format!(
+                    "p2p transport       {}",
+                    p2p_health
+                        .as_ref()
+                        .map(|health| health.status_label().to_string())
+                        .unwrap_or_else(|| "offline".to_string())
+                ),
                 format!("events              {:.1}/s", snapshot.events_per_second),
                 format!(
                     "buffer              {}/{} live ({} dropped)",
@@ -197,6 +205,47 @@ pub fn show_rail(
                 );
             }
         });
+
+        if let Some(health) = p2p_health.as_ref() {
+            ui.add_space(10.0);
+            ui.group(|ui| {
+                ui.set_width(ui.available_width());
+                ui.label(
+                    RichText::new("p2p health")
+                        .family(theme::stencil_family())
+                        .size(13.0)
+                        .color(if health.status == P2PHealthStatus::Healthy {
+                            palette.text_1
+                        } else {
+                            palette.warning
+                        })
+                        .strong(),
+                );
+                ui.add_space(6.0);
+                for row in [
+                    format!("status              {}", health.status_label()),
+                    format!("connected peers     {}", health.connected_peer_count),
+                    format!("replicators         {}", health.replicator_count),
+                    format!("consecutive fails   {}", health.consecutive_failures),
+                ] {
+                    ui.label(
+                        RichText::new(row)
+                            .monospace()
+                            .size(11.0)
+                            .color(palette.text_1),
+                    );
+                }
+                if let Some(error) = health.last_error.as_deref() {
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new(error)
+                            .size(12.5)
+                            .color(palette.text_1)
+                            .line_height(Some(17.0)),
+                    );
+                }
+            });
+        }
 
         if let Some(entry) = latest_warning {
             ui.add_space(10.0);

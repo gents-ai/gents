@@ -1,14 +1,11 @@
 use defra_agent_protocol::client_protocol::ClientTurnState;
 
 use crate::chat::domain::submission::{ChatBlockedReason, ChatWorkflowState, SendStatus};
-use crate::client::{ClientPeerStatus, ClientStore};
+use crate::client::ClientStore;
 use crate::state::ChatState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatProjection {
-    pub selected_peer_id: Option<String>,
-    pub selected_agent_did: Option<String>,
-    pub selected_session_id: Option<String>,
     pub turn_state: Option<ClientTurnState>,
     pub send_status: SendStatus,
     pub show_first_conversation_nudge: bool,
@@ -19,123 +16,33 @@ pub struct ChatProjection {
 pub fn project_chat(
     state: &ChatState,
     store: &ClientStore,
-    peer_statuses: &[ClientPeerStatus],
     client_available: bool,
 ) -> ChatProjection {
-    let deployments = deployment_bindings(peer_statuses);
+    let selected_agent_did = state.shell.selected_agent_did.as_deref();
+    let selected_session_id = state.shell.selected_session_id.as_deref();
 
-    let mut selected_peer_id = state.selected_peer_id.clone().filter(|peer_id| {
-        deployments
-            .iter()
-            .any(|deployment| deployment.peer_id == peer_id.as_str())
+    let request_context = request_context(state, store, selected_session_id, selected_agent_did);
+    let show_first_conversation_nudge = selected_agent_did.is_some_and(|agent_did| {
+        selected_session_id.is_none() && store.conversation_rows(agent_did).is_empty()
     });
-    if selected_peer_id.is_none() {
-        selected_peer_id = deployments
-            .first()
-            .map(|deployment| deployment.peer_id.clone());
-    }
-
-    let mut selected_agent_did = state.selected_agent_did.clone().filter(|agent_did| {
-        deployments
-            .iter()
-            .any(|deployment| deployment.agent_did == agent_did.as_str())
-            || store
-                .agent_principals
-                .iter()
-                .any(|row| row.agent_did == agent_did.as_str())
-    });
-    if selected_agent_did.is_none() {
-        selected_agent_did = deployments
-            .iter()
-            .find(|deployment| Some(deployment.peer_id.as_str()) == selected_peer_id.as_deref())
-            .map(|deployment| deployment.agent_did.clone())
-            .or_else(|| {
-                deployments
-                    .first()
-                    .map(|deployment| deployment.agent_did.clone())
-            })
-            .or_else(|| {
-                store
-                    .agent_principals
-                    .first()
-                    .map(|row| row.agent_did.clone())
-            });
-    }
-
-    let (selected_peer_id, selected_session_id) =
-        if let Some(agent_did) = selected_agent_did.as_deref() {
-            let selected_peer_id = selected_peer_id
-                .filter(|peer_id| {
-                    deployments.iter().any(|deployment| {
-                        deployment.peer_id == peer_id.as_str() && deployment.agent_did == agent_did
-                    })
-                })
-                .or_else(|| {
-                    deployments
-                        .iter()
-                        .find(|deployment| deployment.agent_did == agent_did)
-                        .map(|deployment| deployment.peer_id.clone())
-                });
-            let conversations = store.conversation_rows(agent_did);
-            let selected_session_id = state.selected_session_id.clone().and_then(|session_id| {
-                if conversations
-                    .iter()
-                    .any(|conversation| conversation.session_id == session_id)
-                    || session_matches_agent(store, &session_id, agent_did)
-                    || conversations.is_empty()
-                {
-                    Some(session_id)
-                } else {
-                    None
-                }
-            });
-            let selected_session_id =
-                if selected_session_id.is_some() || state.suppress_session_autoselect {
-                    selected_session_id
-                } else {
-                    selected_session_id.or_else(|| {
-                        conversations
-                            .first()
-                            .map(|conversation| conversation.session_id.clone())
-                    })
-                };
-            (selected_peer_id, selected_session_id)
-        } else {
-            (None, None)
-        };
-
-    let request_context = request_context(
-        state,
-        store,
-        selected_session_id.as_deref(),
-        selected_agent_did.as_deref(),
-    );
-    let show_first_conversation_nudge = selected_agent_did.is_some()
-        && selected_session_id.is_none()
-        && selected_agent_did
-            .as_deref()
-            .is_some_and(|agent_did| store.conversation_rows(agent_did).is_empty());
     let session_trustworthy_for_follow_up =
-        session_trustworthy_for_follow_up(&request_context, selected_session_id.as_deref());
+        session_trustworthy_for_follow_up(&request_context, selected_session_id);
     let send_status = project_send_status(
         state,
         client_available,
-        selected_agent_did.as_deref(),
-        selected_session_id.as_deref(),
+        selected_agent_did,
+        selected_session_id,
         &request_context,
     );
     let workflow = project_workflow(
-        &state.workflow,
+        &state.shell.workflow,
         &request_context,
-        selected_session_id.as_deref(),
-        selected_agent_did.as_deref(),
+        selected_session_id,
+        selected_agent_did,
         client_available,
     );
 
     ChatProjection {
-        selected_peer_id,
-        selected_agent_did,
-        selected_session_id,
         turn_state: request_context.turn_state,
         send_status,
         show_first_conversation_nudge,
@@ -157,11 +64,11 @@ fn project_send_status(
     if selected_agent_did.is_none() {
         return SendStatus::Disabled(ChatBlockedReason::AgentNotSelected);
     }
-    if state.composer_text.trim().is_empty() {
+    if state.editor.composer_text.trim().is_empty() {
         return SendStatus::Disabled(ChatBlockedReason::ComposerEmpty);
     }
 
-    match &state.workflow {
+    match &state.shell.workflow {
         ChatWorkflowState::CreatingConversation { .. } => {
             return SendStatus::Disabled(ChatBlockedReason::CreatingConversation);
         }
@@ -310,22 +217,6 @@ fn project_workflow(
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct DeploymentBinding {
-    peer_id: String,
-    agent_did: String,
-}
-
-fn deployment_bindings(peer_statuses: &[ClientPeerStatus]) -> Vec<DeploymentBinding> {
-    peer_statuses
-        .iter()
-        .map(|status| DeploymentBinding {
-            peer_id: status.peer_id.clone(),
-            agent_did: status.agent_did.clone(),
-        })
-        .collect()
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SessionObservation {
     has_conversation: bool,
@@ -403,7 +294,7 @@ fn request_context(
     };
 
     let observation = observe_session(store, session_id);
-    let tracked_request_id = tracked_request_id_for_session(&state.workflow, session_id);
+    let tracked_request_id = tracked_request_id_for_session(&state.shell.workflow, session_id);
     let observed_request_ids = store
         .requests_for_session(session_id)
         .iter()
@@ -422,7 +313,7 @@ fn request_context(
         .or_else(|| store.derive_turn(session_id));
     let behavior_mismatch = selected_agent_did.and_then(|agent_did| {
         session_behavior_mismatch(
-            state.selected_behavior_override.as_deref(),
+            state.editor.selected_behavior_override.as_deref(),
             store,
             session_id,
             agent_did,
@@ -490,17 +381,6 @@ fn observe_session(store: &ClientStore, session_id: &str) -> SessionObservation 
     }
 }
 
-fn session_matches_agent(store: &ClientStore, session_id: &str, agent_did: &str) -> bool {
-    store
-        .conversations
-        .iter()
-        .any(|row| row.session_id == session_id && row.agent_did.as_deref() == Some(agent_did))
-        || store.requests.iter().any(|row| {
-            row.session_id.as_deref() == Some(session_id)
-                && row.agent_did.as_deref() == Some(agent_did)
-        })
-}
-
 fn session_behavior_mismatch(
     requested_behavior_id: Option<&str>,
     store: &ClientStore,
@@ -552,9 +432,15 @@ mod tests {
     #[test]
     fn projection_preserves_pending_session_until_snapshot_catches_up() {
         let state = ChatState {
-            selected_agent_did: Some("did:defra:amy".to_string()),
-            selected_session_id: Some("session-pending".to_string()),
-            composer_text: "follow up".to_string(),
+            shell: crate::state::ChatShellState {
+                selected_agent_did: Some("did:defra:amy".to_string()),
+                selected_session_id: Some("session-pending".to_string()),
+                ..crate::state::ChatShellState::default()
+            },
+            editor: crate::state::ChatEditorState {
+                composer_text: "follow up".to_string(),
+                ..crate::state::ChatEditorState::default()
+            },
             ..ChatState::default()
         };
         let store = ClientStore::from_rows(ClientStoreRows {
@@ -562,12 +448,8 @@ mod tests {
             ..ClientStoreRows::default()
         });
 
-        let projection = project_chat(&state, &store, &[], true);
+        let projection = project_chat(&state, &store, true);
 
-        assert_eq!(
-            projection.selected_session_id.as_deref(),
-            Some("session-pending")
-        );
         assert_eq!(
             projection.send_status,
             SendStatus::Disabled(ChatBlockedReason::ConversationMissingFromSnapshot)
@@ -577,11 +459,17 @@ mod tests {
     }
 
     #[test]
-    fn projection_reselects_observed_conversation_when_stale_session_cannot_be_supported() {
+    fn projection_preserves_stale_session_selection_until_explicitly_changed() {
         let state = ChatState {
-            selected_agent_did: Some("did:defra:amy".to_string()),
-            selected_session_id: Some("session-missing".to_string()),
-            composer_text: "follow up".to_string(),
+            shell: crate::state::ChatShellState {
+                selected_agent_did: Some("did:defra:amy".to_string()),
+                selected_session_id: Some("session-missing".to_string()),
+                ..crate::state::ChatShellState::default()
+            },
+            editor: crate::state::ChatEditorState {
+                composer_text: "follow up".to_string(),
+                ..crate::state::ChatEditorState::default()
+            },
             ..ChatState::default()
         };
         let store = ClientStore::from_rows(ClientStoreRows {
@@ -603,21 +491,26 @@ mod tests {
             ..ClientStoreRows::default()
         });
 
-        let projection = project_chat(&state, &store, &[], true);
+        let projection = project_chat(&state, &store, true);
 
         assert_eq!(
-            projection.selected_session_id.as_deref(),
-            Some("session-latest")
+            projection.send_status,
+            SendStatus::Disabled(ChatBlockedReason::ConversationMissingFromSnapshot)
         );
-        assert_eq!(projection.send_status, SendStatus::Ready);
     }
 
     #[test]
     fn projection_blocks_follow_up_while_turn_is_streaming() {
         let state = ChatState {
-            selected_agent_did: Some("did:defra:amy".to_string()),
-            selected_session_id: Some("session-1".to_string()),
-            composer_text: "follow up".to_string(),
+            shell: crate::state::ChatShellState {
+                selected_agent_did: Some("did:defra:amy".to_string()),
+                selected_session_id: Some("session-1".to_string()),
+                ..crate::state::ChatShellState::default()
+            },
+            editor: crate::state::ChatEditorState {
+                composer_text: "follow up".to_string(),
+                ..crate::state::ChatEditorState::default()
+            },
             ..ChatState::default()
         };
         let store = ClientStore::from_rows(ClientStoreRows {
@@ -645,7 +538,7 @@ mod tests {
             ..ClientStoreRows::default()
         });
 
-        let projection = project_chat(&state, &store, &[], true);
+        let projection = project_chat(&state, &store, true);
 
         assert_eq!(projection.turn_state, Some(ClientTurnState::Streaming));
         assert_eq!(
@@ -659,9 +552,15 @@ mod tests {
     #[test]
     fn projection_blocks_inconsistent_turn_observation_when_latest_request_is_missing() {
         let state = ChatState {
-            selected_agent_did: Some("did:defra:amy".to_string()),
-            selected_session_id: Some("session-1".to_string()),
-            composer_text: "follow up".to_string(),
+            shell: crate::state::ChatShellState {
+                selected_agent_did: Some("did:defra:amy".to_string()),
+                selected_session_id: Some("session-1".to_string()),
+                ..crate::state::ChatShellState::default()
+            },
+            editor: crate::state::ChatEditorState {
+                composer_text: "follow up".to_string(),
+                ..crate::state::ChatEditorState::default()
+            },
             ..ChatState::default()
         };
         let store = ClientStore::from_rows(ClientStoreRows {
@@ -682,7 +581,7 @@ mod tests {
             ..ClientStoreRows::default()
         });
 
-        let projection = project_chat(&state, &store, &[], true);
+        let projection = project_chat(&state, &store, true);
 
         assert_eq!(projection.turn_state, None);
         assert_eq!(
@@ -694,9 +593,15 @@ mod tests {
     #[test]
     fn projection_allows_follow_up_after_terminal_turn() {
         let state = ChatState {
-            selected_agent_did: Some("did:defra:amy".to_string()),
-            selected_session_id: Some("session-1".to_string()),
-            composer_text: "follow up".to_string(),
+            shell: crate::state::ChatShellState {
+                selected_agent_did: Some("did:defra:amy".to_string()),
+                selected_session_id: Some("session-1".to_string()),
+                ..crate::state::ChatShellState::default()
+            },
+            editor: crate::state::ChatEditorState {
+                composer_text: "follow up".to_string(),
+                ..crate::state::ChatEditorState::default()
+            },
             ..ChatState::default()
         };
         let store = ClientStore::from_rows(ClientStoreRows {
@@ -724,7 +629,7 @@ mod tests {
             ..ClientStoreRows::default()
         });
 
-        let projection = project_chat(&state, &store, &[], true);
+        let projection = project_chat(&state, &store, true);
 
         assert_eq!(projection.turn_state, Some(ClientTurnState::Completed));
         assert_eq!(projection.send_status, SendStatus::Ready);
@@ -734,12 +639,18 @@ mod tests {
     #[test]
     fn projection_uses_tracked_request_before_conversation_latest_request_catches_up() {
         let state = ChatState {
-            selected_agent_did: Some("did:defra:amy".to_string()),
-            selected_session_id: Some("session-1".to_string()),
-            composer_text: "follow up".to_string(),
-            workflow: ChatWorkflowState::AwaitingObservation {
-                session_id: "session-1".to_string(),
-                request_id: "req-new".to_string(),
+            shell: crate::state::ChatShellState {
+                selected_agent_did: Some("did:defra:amy".to_string()),
+                selected_session_id: Some("session-1".to_string()),
+                workflow: ChatWorkflowState::AwaitingObservation {
+                    session_id: "session-1".to_string(),
+                    request_id: "req-new".to_string(),
+                },
+                ..crate::state::ChatShellState::default()
+            },
+            editor: crate::state::ChatEditorState {
+                composer_text: "follow up".to_string(),
+                ..crate::state::ChatEditorState::default()
             },
             ..ChatState::default()
         };
@@ -777,7 +688,7 @@ mod tests {
             ..ClientStoreRows::default()
         });
 
-        let projection = project_chat(&state, &store, &[], true);
+        let projection = project_chat(&state, &store, true);
 
         assert_eq!(projection.turn_state, Some(ClientTurnState::Streaming));
         assert!(matches!(
@@ -789,9 +700,15 @@ mod tests {
     #[test]
     fn projection_allows_follow_up_when_conversation_row_is_missing_but_request_is_observed() {
         let state = ChatState {
-            selected_agent_did: Some("did:defra:amy".to_string()),
-            selected_session_id: Some("session-1".to_string()),
-            composer_text: "follow up".to_string(),
+            shell: crate::state::ChatShellState {
+                selected_agent_did: Some("did:defra:amy".to_string()),
+                selected_session_id: Some("session-1".to_string()),
+                ..crate::state::ChatShellState::default()
+            },
+            editor: crate::state::ChatEditorState {
+                composer_text: "follow up".to_string(),
+                ..crate::state::ChatEditorState::default()
+            },
             ..ChatState::default()
         };
         let store = ClientStore::from_rows(ClientStoreRows {
@@ -821,7 +738,7 @@ mod tests {
             ..ClientStoreRows::default()
         });
 
-        let projection = project_chat(&state, &store, &[], true);
+        let projection = project_chat(&state, &store, true);
 
         assert_eq!(projection.send_status, SendStatus::Ready);
         assert!(projection.session_trustworthy_for_follow_up);
@@ -830,10 +747,16 @@ mod tests {
     #[test]
     fn projection_detects_session_behavior_mismatch() {
         let state = ChatState {
-            selected_agent_did: Some("did:defra:amy".to_string()),
-            selected_session_id: Some("session-1".to_string()),
-            selected_behavior_override: Some("amy-alt".to_string()),
-            composer_text: "follow up".to_string(),
+            shell: crate::state::ChatShellState {
+                selected_agent_did: Some("did:defra:amy".to_string()),
+                selected_session_id: Some("session-1".to_string()),
+                ..crate::state::ChatShellState::default()
+            },
+            editor: crate::state::ChatEditorState {
+                selected_behavior_override: Some("amy-alt".to_string()),
+                composer_text: "follow up".to_string(),
+                ..crate::state::ChatEditorState::default()
+            },
             ..ChatState::default()
         };
         let store = ClientStore::from_rows(ClientStoreRows {
@@ -847,7 +770,7 @@ mod tests {
             ..ClientStoreRows::default()
         });
 
-        let projection = project_chat(&state, &store, &[], true);
+        let projection = project_chat(&state, &store, true);
 
         assert_eq!(
             projection.send_status,
