@@ -16,17 +16,25 @@ pub(crate) struct TelemetryGuard {
 }
 
 fn with_default_transport_noise_filters(filter: EnvFilter) -> EnvFilter {
-    filter
-        .add_directive(
-            "iroh_quinn_proto::connection=error"
-                .parse()
-                .expect("valid tracing directive"),
-        )
-        .add_directive(
-            "noq_proto::connection=error"
-                .parse()
-                .expect("valid tracing directive"),
-        )
+    const NOISE_DIRECTIVES: &[&str] = &[
+        "iroh_quinn_proto::connection=error",
+        "noq_proto::connection=error",
+        // Mirror the desktop defaults so tailing the agent log is sane by
+        // default. Users who need verbose P2P / relay output can still
+        // override with RUST_LOG.
+        "p2p=warn",
+        "iroh=warn",
+        "iroh_net=warn",
+        "iroh_relay=warn",
+        "iroh_gossip=warn",
+        "iroh_blobs=warn",
+        "iroh_quinn=warn",
+        "iroh_quinn_proto=warn",
+        "netwatch=warn",
+    ];
+    NOISE_DIRECTIVES.iter().fold(filter, |filter, directive| {
+        filter.add_directive(directive.parse().expect("valid tracing directive"))
+    })
 }
 
 impl TelemetryGuard {
