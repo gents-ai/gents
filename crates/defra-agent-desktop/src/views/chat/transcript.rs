@@ -484,10 +484,18 @@ enum MarkdownSegment {
     Table(ParsedTable),
 }
 
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+struct InlineStyle {
+    code: bool,
+    strong: bool,
+    emphasis: bool,
+    link: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CellRun {
     text: String,
-    code: bool,
+    style: InlineStyle,
 }
 
 type Cell = Vec<CellRun>;
@@ -519,6 +527,9 @@ fn segment_markdown(text: &str) -> Vec<MarkdownSegment> {
     let mut current_table: Option<ParsedTable> = None;
     let mut current_row: Vec<Cell> = Vec::new();
     let mut current_cell: Cell = Vec::new();
+    let mut current_style: InlineStyle = InlineStyle::default();
+    let mut strong_depth: u32 = 0;
+    let mut emphasis_depth: u32 = 0;
     let mut in_head = false;
 
     let flush_prose = |segments: &mut Vec<MarkdownSegment>, slice: &str| {
@@ -558,6 +569,29 @@ fn segment_markdown(text: &str) -> Vec<MarkdownSegment> {
             }
             Event::Start(Tag::TableCell) => {
                 current_cell.clear();
+                current_style = InlineStyle::default();
+                strong_depth = 0;
+                emphasis_depth = 0;
+                depth += 1;
+            }
+            Event::Start(Tag::Strong) => {
+                if in_table {
+                    strong_depth += 1;
+                    current_style.strong = strong_depth > 0;
+                }
+                depth += 1;
+            }
+            Event::Start(Tag::Emphasis) => {
+                if in_table {
+                    emphasis_depth += 1;
+                    current_style.emphasis = emphasis_depth > 0;
+                }
+                depth += 1;
+            }
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                if in_table && current_style.link.is_none() {
+                    current_style.link = Some(dest_url.to_string());
+                }
                 depth += 1;
             }
             Event::Start(_) => {
@@ -597,16 +631,43 @@ fn segment_markdown(text: &str) -> Vec<MarkdownSegment> {
                     let cell = std::mem::take(&mut current_cell);
                     let trimmed = trim_cell(cell);
                     current_row.push(trimmed);
+                    current_style = InlineStyle::default();
+                    strong_depth = 0;
+                    emphasis_depth = 0;
+                }
+            }
+            Event::End(TagEnd::Strong) => {
+                depth = depth.saturating_sub(1);
+                if in_table {
+                    strong_depth = strong_depth.saturating_sub(1);
+                    current_style.strong = strong_depth > 0;
+                }
+            }
+            Event::End(TagEnd::Emphasis) => {
+                depth = depth.saturating_sub(1);
+                if in_table {
+                    emphasis_depth = emphasis_depth.saturating_sub(1);
+                    current_style.emphasis = emphasis_depth > 0;
+                }
+            }
+            Event::End(TagEnd::Link) => {
+                depth = depth.saturating_sub(1);
+                if in_table {
+                    current_style.link = None;
                 }
             }
             Event::End(_) => {
                 depth = depth.saturating_sub(1);
             }
             Event::Text(chunk) if in_table => {
-                push_cell_run(&mut current_cell, chunk.to_string(), false);
+                let mut style = current_style.clone();
+                style.code = false;
+                push_cell_run(&mut current_cell, chunk.to_string(), style);
             }
             Event::Code(chunk) if in_table => {
-                push_cell_run(&mut current_cell, chunk.to_string(), true);
+                let mut style = current_style.clone();
+                style.code = true;
+                push_cell_run(&mut current_cell, chunk.to_string(), style);
             }
             _ => {}
         }
@@ -624,14 +685,14 @@ fn segment_markdown(text: &str) -> Vec<MarkdownSegment> {
     segments
 }
 
-fn push_cell_run(cell: &mut Cell, chunk: String, code: bool) {
+fn push_cell_run(cell: &mut Cell, chunk: String, style: InlineStyle) {
     if let Some(last) = cell.last_mut() {
-        if last.code == code {
+        if last.style == style {
             last.text.push_str(&chunk);
             return;
         }
     }
-    cell.push(CellRun { text: chunk, code });
+    cell.push(CellRun { text: chunk, style });
 }
 
 fn trim_cell(cell: Cell) -> Cell {
@@ -670,27 +731,37 @@ fn render_table(ui: &mut Ui, index: usize, table: &ParsedTable) {
     let available_width = ui.available_width();
     let col_width = (available_width / num_cols as f32).max(80.0);
 
-    let header_text_format = TextFormat {
-        font_id: FontId::new(body_font.size, body_font.family.clone()),
-        color: palette.text_0,
-        ..Default::default()
-    };
-    let header_code_format = TextFormat {
-        font_id: mono_font.clone(),
-        color: palette.text_0,
-        background: palette.background_2,
-        ..Default::default()
-    };
-    let cell_text_format = TextFormat {
-        font_id: FontId::new(body_font.size, body_font.family.clone()),
-        color: palette.text_1,
-        ..Default::default()
-    };
-    let cell_code_format = TextFormat {
-        font_id: mono_font,
-        color: palette.text_1,
-        background: palette.background_2,
-        ..Default::default()
+    let format_for = |style: &InlineStyle, base_color: egui::Color32| -> TextFormat {
+        let font_id = if style.code {
+            mono_font.clone()
+        } else {
+            FontId::new(body_font.size, body_font.family.clone())
+        };
+        let color = if style.link.is_some() {
+            palette.accent
+        } else if style.strong {
+            palette.text_0
+        } else {
+            base_color
+        };
+        let background = if style.code {
+            palette.background_2
+        } else {
+            egui::Color32::TRANSPARENT
+        };
+        let underline = if style.link.is_some() {
+            egui::Stroke::new(1.0, color)
+        } else {
+            egui::Stroke::NONE
+        };
+        TextFormat {
+            font_id,
+            color,
+            background,
+            italics: style.emphasis,
+            underline,
+            ..Default::default()
+        }
     };
 
     egui::Grid::new(("markdown_table", index))
@@ -702,22 +773,14 @@ fn render_table(ui: &mut Ui, index: usize, table: &ParsedTable) {
             for idx in 0..num_cols {
                 let empty: Cell = Vec::new();
                 let cell = table.headers.get(idx).unwrap_or(&empty);
-                ui.label(cell_to_layout_job(
-                    cell,
-                    &header_text_format,
-                    &header_code_format,
-                ));
+                ui.label(cell_to_layout_job(cell, palette.text_0, &format_for));
             }
             ui.end_row();
             for row in &table.rows {
                 for idx in 0..num_cols {
                     let empty: Cell = Vec::new();
                     let cell = row.get(idx).unwrap_or(&empty);
-                    ui.label(cell_to_layout_job(
-                        cell,
-                        &cell_text_format,
-                        &cell_code_format,
-                    ));
+                    ui.label(cell_to_layout_job(cell, palette.text_1, &format_for));
                 }
                 ui.end_row();
             }
@@ -725,13 +788,13 @@ fn render_table(ui: &mut Ui, index: usize, table: &ParsedTable) {
 
     fn cell_to_layout_job(
         cell: &Cell,
-        text_format: &egui::text::TextFormat,
-        code_format: &egui::text::TextFormat,
-    ) -> egui::text::LayoutJob {
+        base_color: egui::Color32,
+        format_for: &dyn Fn(&InlineStyle, egui::Color32) -> TextFormat,
+    ) -> LayoutJob {
         let mut job = LayoutJob::default();
         for run in cell {
-            let format = if run.code { code_format } else { text_format };
-            job.append(&run.text, 0.0, format.clone());
+            let format = format_for(&run.style, base_color);
+            job.append(&run.text, 0.0, format);
         }
         job
     }
@@ -1011,8 +1074,43 @@ tail prose here.
         assert_eq!(flatten(&table.rows[1][0]), "defra-agent-cli");
         assert_eq!(flatten(&table.rows[1][1]), "Compiled CLI (defra-agent)");
         assert!(
-            table.rows[0][0][0].code,
+            table.rows[0][0][0].style.code,
             "first cell's inline code run must be flagged as code"
         );
+    }
+
+    #[test]
+    fn table_cells_preserve_strong_emphasis_and_link_styling() {
+        let text = concat!(
+            "| Case | Cell |\n",
+            "| --- | --- |\n",
+            "| bold | **load-bearing** |\n",
+            "| italic | *load-bearing* |\n",
+            "| link | [load-bearing](https://example.invalid/docs) |\n",
+        );
+        let segments = segment_markdown(text);
+        let MarkdownSegment::Table(table) = segments
+            .iter()
+            .find(|s| matches!(s, MarkdownSegment::Table(_)))
+            .expect("a table segment")
+        else {
+            unreachable!();
+        };
+        let bold = &table.rows[0][1];
+        assert_eq!(bold.len(), 1);
+        assert!(bold[0].style.strong, "strong run must be flagged");
+        assert_eq!(bold[0].text, "load-bearing");
+
+        let italic = &table.rows[1][1];
+        assert_eq!(italic.len(), 1);
+        assert!(italic[0].style.emphasis, "emphasis run must be flagged");
+
+        let link = &table.rows[2][1];
+        assert_eq!(link.len(), 1);
+        assert_eq!(
+            link[0].style.link.as_deref(),
+            Some("https://example.invalid/docs")
+        );
+        assert_eq!(link[0].text, "load-bearing");
     }
 }
