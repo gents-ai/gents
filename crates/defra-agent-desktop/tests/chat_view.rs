@@ -86,10 +86,7 @@ fn conversation_grouping_meta_surfaces_behavior_binding() {
     let buckets = build_conversation_buckets(&refs, now);
 
     assert_eq!(buckets.len(), 1);
-    assert_eq!(
-        buckets[0].entries[0].meta,
-        "behavior amy-default  session sess..-1"
-    );
+    assert_eq!(buckets[0].entries[0].meta, "behavior amy-default");
 }
 
 #[test]

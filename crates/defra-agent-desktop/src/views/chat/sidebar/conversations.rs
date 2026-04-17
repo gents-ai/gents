@@ -13,7 +13,7 @@ pub(super) fn render_select_agent(ui: &mut Ui) {
         views::card(
             ui,
             "Select Agent",
-            "Choose a deployment or agent from the tree to load conversations.",
+            "Choose a deployment to load conversations.",
         );
     });
 }
@@ -24,7 +24,7 @@ pub(super) fn render_empty(ui: &mut Ui) {
         views::card(
             ui,
             "No Conversations",
-            "This agent has no conversations yet. Use the main-pane nudge to create the first conversation before sending the first request.",
+            "This agent has no conversations yet. Create the first conversation from the main panel before sending a request.",
         );
     });
 }
@@ -42,7 +42,11 @@ pub(super) fn render_buckets(
             ui.vertical(|ui| {
                 views::section_kicker(ui, bucket.label);
                 for entry in &bucket.entries {
-                    let meta = format!("{}  {}", entry.meta, entry.timestamp_label);
+                    let meta = if entry.meta.is_empty() {
+                        entry.timestamp_label.clone()
+                    } else {
+                        format!("{}  {}", entry.meta, entry.timestamp_label)
+                    };
                     let selected = selected_session_id == Some(entry.session_id.as_str());
                     let response = views::side_row(
                         ui,

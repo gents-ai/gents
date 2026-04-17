@@ -6,12 +6,11 @@ mod tool_cards;
 
 use defra_agent_protocol::client_protocol::ClientTurnState;
 use defra_agent_protocol::transcript::{present_persisted_message, PresentedMessageRole};
-use eframe::egui::{self, RichText, Ui};
+use eframe::egui::{self, Ui};
 use egui_commonmark::CommonMarkCache;
 
 use crate::client::ClientStore;
 use crate::state::ShellState;
-use crate::theme;
 
 use self::messages::{
     centered_status_card, message_block, message_label_color, transcript_surface,
@@ -21,7 +20,6 @@ use self::reasoning_cards::{
     latest_reasoning_response, reasoning_block, response_fallback_content,
 };
 use self::tool_cards::tool_turn_block;
-use super::turn_state_label;
 
 pub use markdown::markdown_theme_names;
 
@@ -30,36 +28,17 @@ pub fn show(
     state: &mut ShellState,
     store: &ClientStore,
     selected_session_id: Option<&str>,
-    turn_state: Option<ClientTurnState>,
+    _turn_state: Option<ClientTurnState>,
     markdown_cache: &mut CommonMarkCache,
 ) {
-    let palette = theme::palette();
-
-    ui.group(|ui| {
-        ui.label(
-            RichText::new(format!(
-                "TURN STATE  {}",
-                turn_state_label(turn_state).to_uppercase()
-            ))
-            .monospace()
-            .size(10.5)
-            .color(match turn_state {
-                Some(ClientTurnState::Streaming) => palette.accent,
-                Some(ClientTurnState::Failed) => palette.danger,
-                Some(ClientTurnState::Completed) => palette.text_1,
-                Some(ClientTurnState::Superseded) => palette.warning,
-                _ => palette.text_2,
-            }),
-        );
-    });
-    ui.add_space(10.0);
+    let palette = crate::theme::palette();
 
     let Some(session_id) = selected_session_id else {
         transcript_surface(ui, |ui| {
             centered_status_card(
                 ui,
                 "No Conversation Selected",
-                "Pick a conversation from the sidebar or submit a new message to create one.",
+                "Pick a conversation from the sidebar or create a new one to start.",
             );
         });
         return;
@@ -74,7 +53,7 @@ pub fn show(
             centered_status_card(
                 ui,
                 "Transcript Empty",
-                "This conversation has not produced messages yet. Submitted requests will appear here as soon as the local replica observes them.",
+                "This conversation has not produced messages yet. Submitted requests will appear here as soon as they are observed.",
             );
         });
         show_tool_detail_modal(ui.ctx(), state, markdown_cache);

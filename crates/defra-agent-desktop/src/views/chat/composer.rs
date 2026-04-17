@@ -7,7 +7,6 @@ use crate::client::ClientStore;
 use crate::state::{PendingChatAction, PendingShellAction, ShellState};
 use crate::theme;
 
-use super::turn_state_label;
 use super::view_model::{behavior_selection_entries, display_behavior_label};
 
 pub fn show(
@@ -15,7 +14,7 @@ pub fn show(
     state: &mut ShellState,
     store: &ClientStore,
     selected_agent_did: Option<&str>,
-    turn_state: Option<ClientTurnState>,
+    _turn_state: Option<ClientTurnState>,
     send_status: SendStatus,
 ) {
     let palette = theme::palette();
@@ -29,65 +28,25 @@ pub fn show(
 
     ui.group(|ui| {
         ui.set_width(ui.available_width());
-        ui.label(
-            RichText::new("Composer")
-                .family(theme::stencil_family())
-                .size(13.0)
-                .color(palette.text_1)
-                .strong(),
-        );
-        ui.add_space(6.0);
-
         render_behavior_selector(ui, state, store, selected_agent_did);
-        ui.add_space(6.0);
+        if selected_agent_did.is_some() {
+            ui.add_space(8.0);
+        }
 
         let text_edit = TextEdit::multiline(&mut state.chat.editor.composer_text)
             .id_source(audit::targets::CHAT_COMPOSER_TEXT)
-            .desired_rows(4)
-            .hint_text("Send an operational request to the selected agent");
+            .desired_rows(3)
+            .hint_text("Message the selected agent");
         audit::add_sized(
             ui,
             audit::targets::CHAT_COMPOSER_TEXT,
-            [ui.available_width(), 96.0],
+            [ui.available_width(), 84.0],
             text_edit,
         );
         ui.add_space(8.0);
 
         ui.columns(2, |columns| {
-            columns[0].vertical(|ui| {
-                ui.horizontal_wrapped(|ui| {
-                    let effective_behavior =
-                        effective_behavior_id(state, store, selected_agent_did);
-                    let behavior_locked = state.chat.shell.selected_session_id.is_some();
-                    let behavior_label = selected_agent_did
-                        .map(|agent_did| {
-                            display_behavior_label(store, agent_did, effective_behavior.as_deref())
-                        })
-                        .unwrap_or_else(|| "Inherited default".to_string());
-                    ui.label(
-                        RichText::new(format!(
-                            "[behavior: {}{}]",
-                            behavior_label,
-                            if behavior_locked { " · locked" } else { "" }
-                        ))
-                        .monospace()
-                        .size(11.0)
-                        .color(palette.text_2),
-                    );
-                    ui.label(
-                        RichText::new("[tools: inherited]")
-                            .monospace()
-                            .size(11.0)
-                            .color(palette.text_2),
-                    );
-                    ui.label(
-                        RichText::new(format!("[turn: {}]", turn_state_label(turn_state)))
-                            .monospace()
-                            .size(11.0)
-                            .color(palette.text_2),
-                    );
-                });
-                ui.add_space(4.0);
+            columns[0].vertical_centered_justified(|ui| {
                 ui.label(
                     RichText::new(helper_text)
                         .monospace()
@@ -141,7 +100,7 @@ fn render_behavior_selector(
         );
         if locked {
             ui.label(
-                RichText::new("locked to selected session")
+                RichText::new("locked to this conversation")
                     .monospace()
                     .size(10.5)
                     .color(theme::palette().text_3),

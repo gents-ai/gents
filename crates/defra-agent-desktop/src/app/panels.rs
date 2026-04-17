@@ -63,7 +63,7 @@ impl DesktopApp {
                     ui.spacing_mut().item_spacing.x = 12.0;
                     ui.label(
                         RichText::new(format!(
-                            "peered {}/{}",
+                            "peers {}/{}",
                             self.state.status.peered_now, self.state.status.peered_target
                         ))
                         .monospace()
@@ -72,7 +72,7 @@ impl DesktopApp {
                     );
                     ui.label(
                         RichText::new(format!(
-                            "{} runtime: {}",
+                            "{} / {}",
                             self.state.status.active_agent, self.state.status.runtime_state
                         ))
                         .monospace()
@@ -80,14 +80,8 @@ impl DesktopApp {
                         .color(palette.text_0),
                     );
                     ui.label(
-                        RichText::new(format!("gossip lag {}ms", self.state.status.gossip_lag_ms))
-                            .monospace()
-                            .size(10.5)
-                            .color(palette.text_2),
-                    );
-                    ui.label(
                         RichText::new(format!(
-                            "replication: {}",
+                            "replication {}",
                             self.state.status.replication_state
                         ))
                         .monospace()
@@ -114,26 +108,6 @@ impl DesktopApp {
                                 palette.text_2
                             }),
                     );
-                    ui.label(
-                        RichText::new(format!("frm:{:04}", self.state.status.frame_counter))
-                            .monospace()
-                            .size(10.5)
-                            .color(palette.text_3),
-                    );
-                    ui.label(
-                        RichText::new(self.state.status.did_short.clone())
-                            .monospace()
-                            .size(10.5)
-                            .color(palette.text_2),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            RichText::new(self.state.status.build_label.clone())
-                                .monospace()
-                                .size(10.5)
-                                .color(palette.text_3),
-                        );
-                    });
                 });
             });
     }

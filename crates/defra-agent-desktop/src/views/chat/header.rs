@@ -49,48 +49,7 @@ pub(super) fn show(ui: &mut Ui, state: &mut ShellState, props: HeaderProps<'_>) 
     ui.add_space(8.0);
 
     ui.horizontal(|ui| {
-        ui.group(|ui| {
-            ui.label(
-                RichText::new(format!(
-                    "TURN  {}",
-                    turn_state_label(props.turn_state).to_uppercase()
-                ))
-                .monospace()
-                .size(10.5)
-                .color(match props.turn_state {
-                    Some(ClientTurnState::Streaming) => theme::palette().accent,
-                    Some(ClientTurnState::Failed) => theme::palette().danger,
-                    Some(ClientTurnState::Completed) => theme::palette().text_1,
-                    Some(ClientTurnState::Superseded) => theme::palette().warning,
-                    _ => theme::palette().text_2,
-                }),
-            );
-        });
-        ui.add_space(6.0);
-        if audit::add_enabled(
-            ui,
-            audit::targets::CHAT_RETRY,
-            retry_enabled,
-            egui::Button::new("Retry"),
-        )
-        .clicked()
-        {
-            state.queue_shell_action(PendingShellAction::Chat(
-                PendingChatAction::RetryLatestRequest,
-            ));
-        }
-        if audit::add_enabled(
-            ui,
-            audit::targets::CHAT_EXPORT,
-            export_enabled,
-            egui::Button::new("Export"),
-        )
-        .clicked()
-        {
-            export_conversation(ui, state, props.store, props.selected_session_id);
-        }
         if let Some(error) = state.chat.editor.last_submission_error.as_deref() {
-            ui.add_space(12.0);
             ui.label(
                 RichText::new(error)
                     .monospace()
@@ -98,7 +57,6 @@ pub(super) fn show(ui: &mut Ui, state: &mut ShellState, props: HeaderProps<'_>) 
                     .color(theme::palette().warning),
             );
         } else if let Some(message) = state.chat.editor.last_action_message.as_deref() {
-            ui.add_space(12.0);
             ui.label(
                 RichText::new(message)
                     .monospace()
@@ -106,6 +64,30 @@ pub(super) fn show(ui: &mut Ui, state: &mut ShellState, props: HeaderProps<'_>) 
                     .color(theme::palette().text_2),
             );
         }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if audit::add_enabled(
+                ui,
+                audit::targets::CHAT_EXPORT,
+                export_enabled,
+                egui::Button::new("Export"),
+            )
+            .clicked()
+            {
+                export_conversation(ui, state, props.store, props.selected_session_id);
+            }
+            if audit::add_enabled(
+                ui,
+                audit::targets::CHAT_RETRY,
+                retry_enabled,
+                egui::Button::new("Retry"),
+            )
+            .clicked()
+            {
+                state.queue_shell_action(PendingShellAction::Chat(
+                    PendingChatAction::RetryLatestRequest,
+                ));
+            }
+        });
     });
 }
 
@@ -207,18 +189,5 @@ fn breadcrumb(
         })
         .unwrap_or("new conversation");
 
-    format!(
-        "{} / {} / {}",
-        state_label(selected_agent_did),
-        agent,
-        conversation
-    )
-}
-
-fn state_label(selected_agent_did: Option<&str>) -> &'static str {
-    if selected_agent_did.is_some() {
-        "deployment"
-    } else {
-        "replica"
-    }
+    format!("{agent} / {conversation}")
 }

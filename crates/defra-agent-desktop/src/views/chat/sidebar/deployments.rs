@@ -36,19 +36,28 @@ pub(super) fn render_list(
     palette: Palette,
     state: &mut ShellState,
     deployments: &[DeploymentEntry],
-    selected_agent_did: Option<&str>,
+    _selected_agent_did: Option<&str>,
 ) {
     for deployment in deployments {
         ui.horizontal(|ui| {
             ui.add_space(14.0);
             ui.vertical(|ui| {
-                let meta = format!("1 agent  {}", deployment.addr);
+                let selected = state.chat.shell.selected_peer_id.as_deref()
+                    == Some(deployment.peer_id.as_str());
+                let meta = format!(
+                    "{}  {}",
+                    deployment.agent_label,
+                    if deployment.connected {
+                        "online"
+                    } else {
+                        "saved"
+                    }
+                );
                 let response = views::side_row(
                     ui,
                     &deployment.label,
                     &meta,
-                    state.chat.shell.selected_peer_id.as_deref()
-                        == Some(deployment.peer_id.as_str()),
+                    selected,
                     if deployment.connected {
                         palette.accent
                     } else {
@@ -61,16 +70,6 @@ pub(super) fn render_list(
                     &audit::targets::chat_deployment(&deployment.peer_id),
                     &response,
                 );
-                if response.clicked() {
-                    queue_select_deployment(state, deployment);
-                }
-
-                let response = views::tree_row(
-                    ui,
-                    &deployment.agent_label,
-                    if deployment.connected { "live" } else { "lag" },
-                    selected_agent_did == Some(deployment.agent_did.as_str()),
-                );
                 audit::record(
                     ui,
                     &audit::targets::chat_agent(&deployment.agent_did),
@@ -80,12 +79,20 @@ pub(super) fn render_list(
                     queue_select_deployment(state, deployment);
                 }
 
-                if let Some(warning) = deployment.warning.as_deref() {
+                if selected {
+                    if let Some(warning) = deployment.warning.as_deref() {
+                        ui.label(
+                            RichText::new(warning)
+                                .monospace()
+                                .size(10.0)
+                                .color(theme::palette().warning),
+                        );
+                    }
                     ui.label(
-                        RichText::new(warning)
+                        RichText::new(deployment.addr.as_str())
                             .monospace()
                             .size(10.0)
-                            .color(theme::palette().warning),
+                            .color(theme::palette().text_3),
                     );
                 }
             });

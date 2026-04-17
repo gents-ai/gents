@@ -31,7 +31,7 @@ pub(super) fn show_sidebar(
         ui.add_space(14.0);
         ui.horizontal(|ui| {
             ui.add_space(14.0);
-            views::sidebar_heading(ui, "Deployments", Some("focus"));
+            views::sidebar_heading(ui, "Deployments", None);
         });
         ui.add_space(6.0);
 
@@ -40,12 +40,12 @@ pub(super) fn show_sidebar(
                 ui.add_space(14.0);
                 ui.vertical(|ui| {
                     let meta = format!(
-                        "{}  runtime {}",
+                        "{}  {}",
                         deployment.agent_label,
                         if deployment.connected {
                             "online"
                         } else {
-                            "lagging"
+                            "saved"
                         }
                     );
                     let response = views::side_row(
@@ -65,22 +65,6 @@ pub(super) fn show_sidebar(
                         ui,
                         &audit::targets::operator_deployment(&deployment.peer_id),
                         &response,
-                    );
-                    if response.clicked() {
-                        state.queue_shell_action(PendingShellAction::Operator(
-                            PendingOperatorAction::SelectDeployment {
-                                peer_id: deployment.peer_id.clone(),
-                                agent_did: deployment.agent_did.clone(),
-                            },
-                        ));
-                    }
-
-                    let response = views::tree_row(
-                        ui,
-                        &deployment.agent_label,
-                        if deployment.connected { "live" } else { "lag" },
-                        state.operator.selected_agent_did.as_deref()
-                            == Some(deployment.agent_did.as_str()),
                     );
                     audit::record(
                         ui,
@@ -105,7 +89,7 @@ pub(super) fn show_sidebar(
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.add_space(14.0);
-            views::sidebar_heading(ui, "Manage", None);
+            views::sidebar_heading(ui, "Config", None);
         });
         ui.add_space(8.0);
         ui.horizontal(|ui| {
@@ -138,19 +122,25 @@ pub(super) fn show_sidebar(
         ui.add_space(10.0);
         ui.horizontal(|ui| {
             ui.add_space(14.0);
-            views::sidebar_heading(ui, "Inspect", None);
+            views::sidebar_heading(ui, "History", None);
         });
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.add_space(14.0);
             ui.vertical(|ui| {
                 for section in OperatorSection::INSPECT {
+                    let (title, meta) =
+                        section_meta(store, section, state.operator.selected_agent_did.as_deref());
                     let response = views::side_row(
                         ui,
-                        section.label(),
-                        "T10",
+                        title,
+                        &meta,
                         state.operator.selected_section == section,
-                        palette.text_3,
+                        if state.operator.selected_section == section {
+                            palette.accent
+                        } else {
+                            palette.text_3
+                        },
                         None,
                     );
                     audit::record(ui, &audit::targets::operator_section(section), &response);

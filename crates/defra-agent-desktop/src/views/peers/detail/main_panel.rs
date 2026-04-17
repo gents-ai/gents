@@ -7,7 +7,7 @@ use crate::views;
 
 use super::super::actions::render_transport_actions;
 use super::super::shared::PeerEntry;
-use super::summary::{render_acp_limitations, render_peer_summary, render_replication_watch};
+use super::summary::render_peer_summary;
 
 pub(super) fn show_main(
     ui: &mut Ui,
@@ -57,9 +57,5 @@ pub(super) fn show_main(
         render_transport_actions(ui, state, client, runtime);
         ui.add_space(10.0);
         render_peer_summary(ui, peer);
-        ui.add_space(10.0);
-        render_replication_watch(ui, peer);
-        ui.add_space(10.0);
-        render_acp_limitations(ui, client, peer);
     });
 }

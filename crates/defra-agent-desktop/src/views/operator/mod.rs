@@ -50,16 +50,7 @@ pub fn show_main(ui: &mut Ui, state: &mut ShellState, store: Option<&ClientStore
     let breadcrumb = entity_list::breadcrumb(state, section);
 
     ui.vertical(|ui| {
-        views::toolbar(
-            ui,
-            "Operator Console",
-            &breadcrumb,
-            if state.operator.draft.is_some() {
-                "editor: active"
-            } else {
-                "editor: idle"
-            },
-        );
+        views::toolbar(ui, "Operator Console", &breadcrumb, section.label());
         ui.add_space(12.0);
 
         match section {
