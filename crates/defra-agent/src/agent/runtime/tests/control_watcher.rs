@@ -1,4 +1,5 @@
 use super::*;
+use super::support::*;
 
 async fn update_agent_principal_enabled(
     node: &defra_node::EmbeddedNode,

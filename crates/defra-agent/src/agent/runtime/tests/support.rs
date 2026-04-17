@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::thread::JoinHandle;
 
-// Re-export items used directly by sibling test files (reached via `use super::*` in mod.rs).
 pub(super) use crate::document_config::ToolSelectionDocument;
 pub(super) use crate::ensure_runtime_schemas;
 pub(super) use crate::graphql::escape_graphql_string;
