@@ -36,7 +36,7 @@ Applies specifically to these sibling paths until their owning task runs:
 ## Prerequisites
 
 - Parent branch: `main` at commit `db094e0` or later.
-- Worktree: created via `superpowers:using-git-worktrees` at `../defra-agent-agent-a1-admission` (branch `refactor/admission-split`).
+- Worktree: `../defra-agent-agent-readability` on branch `refactor/agent-readability` — this worktree is shared across all phases of the agent readability refactor (A1-A9, B1-B11). Do NOT create a per-phase worktree or per-phase branch.
 - Lean-spec boundary applies: this phase touches `admission/`, so `tests/state_machine_conformance.rs`, `tests/lifecycle_regression.rs`, and `cargo test -p defra-agent` must all stay green unchanged.
 
 ---
@@ -2218,20 +2218,22 @@ grep -rn "^#\[cfg(test)\]\nmod tests \{" crates/defra-agent/src/admission/ --inc
 ```
 Expected: no matches (stream_guard.rs has its tests inline but that file is out of scope).
 
-- [ ] **Step 12.5: Push and open PR**
+- [ ] **Step 12.5: Push and open draft PR**
 
 Push the branch:
 ```bash
-git push -u origin refactor/admission-split
+git push -u origin refactor/agent-readability
 ```
 
-Open the PR using the gh CLI with a body that includes:
-- What changed (split `admission/mod.rs` into 6 sibling submodules + tests.rs)
-- Line-count before/after (1456 → ~25 shell + 7 files under threshold)
+Open a **draft** PR using the gh CLI. This is the single PR that will accumulate commits for every subsequent phase (A2-A9, B1-B11). Body should include:
+- Scope: agent readability refactor across `defra-agent` and `defra-agent-cli`, phased per `docs/issues/2026-04-17-agent-readability-refactor-plan.md`
+- Phase A1 landed: split `admission/mod.rs` (1456 → ~25 shell + 7 sibling files under threshold)
 - Green test runs (agent library, state-machine conformance, lifecycle regression)
-- Reference to the spec: `docs/issues/2026-04-17-agent-readability-refactor-plan.md#phase-a1`
+- Note that subsequent phases will be pushed to this same branch as additional commits
 
-Do NOT open the PR automatically; surface the command for the reviewer to run manually or ask before pushing if working with an exec-plan skill that requires confirmation.
+Use `--draft` on `gh pr create`. Do not mark ready-for-review; Jack decides when.
+
+For subsequent phases (A2 onward), skip Task 12's PR step — just push the new commits to `refactor/agent-readability` and let the PR update in place.
 
 ---
 
