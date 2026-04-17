@@ -25,6 +25,8 @@ fn desktop_app_clicks_through_chat_reasoning_and_tool_card_disclosures() -> Resu
     ))?;
 
     let mut driver = build_chat_driver(Arc::clone(&runtime), core);
+    driver.app.state.chat.shell.selected_agent_did = Some("did:defra:amy".to_string());
+    driver.app.state.chat.shell.selected_session_id = Some(conversation.session_id.clone());
     let initial = driver.render();
 
     assert!(initial

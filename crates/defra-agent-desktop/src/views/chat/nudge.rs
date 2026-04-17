@@ -25,7 +25,7 @@ pub(super) fn render_first_conversation_nudge(
         ui.add_space(6.0);
         ui.label(
             RichText::new(
-                "Create a conversation explicitly when this agent has no observed sessions yet. This avoids hiding snapshot lag behind automatic local state repair.",
+                "This agent has no observed conversations yet. Create one explicitly, then send the first request.",
             )
             .size(13.0)
             .color(palette.text_1)
@@ -45,15 +45,6 @@ pub(super) fn render_first_conversation_nudge(
                 state.queue_shell_action(PendingShellAction::Chat(
                     PendingChatAction::CreateConversation,
                 ));
-            }
-
-            if let Some(agent_did) = selected_agent_did {
-                ui.label(
-                    RichText::new(format!("target {agent_did}"))
-                        .monospace()
-                        .size(11.0)
-                        .color(palette.text_2),
-                );
             }
         });
     });

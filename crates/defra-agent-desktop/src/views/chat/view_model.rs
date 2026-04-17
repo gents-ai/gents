@@ -86,15 +86,12 @@ pub fn build_conversation_buckets(
                 .filter(|title| !title.trim().is_empty())
                 .unwrap_or("New Conversation")
                 .to_string(),
-            meta: format!(
-                "behavior {}  session {}",
-                conversation
-                    .behavior_id
-                    .as_deref()
-                    .filter(|value| !value.trim().is_empty())
-                    .unwrap_or("default"),
-                abbreviate_id(&conversation.session_id),
-            ),
+            meta: conversation
+                .behavior_id
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .map(|behavior_id| format!("behavior {behavior_id}"))
+                .unwrap_or_else(|| "default behavior".to_string()),
             timestamp_label: timestamp
                 .map(|timestamp| relative_timestamp_label(local_now, timestamp))
                 .unwrap_or_else(|| "unknown".to_string()),
@@ -191,14 +188,6 @@ pub(super) fn display_name_for_agent(store: &ClientStore, agent_did: &str) -> St
                 .unwrap_or(agent_did)
                 .to_string()
         })
-}
-
-fn abbreviate_id(value: &str) -> String {
-    if value.len() <= 8 {
-        return value.to_string();
-    }
-
-    format!("{}..{}", &value[..4], &value[value.len() - 2..])
 }
 
 fn abbreviate_address(value: &str) -> String {

@@ -135,8 +135,6 @@ pub(super) fn show_rail(
 }
 
 fn render_editor_footer(ui: &mut Ui, state: &mut ShellState, client: Option<&ClientCore>) {
-    let palette = theme::palette();
-
     ui.add_space(12.0);
     ui.horizontal(|ui| {
         let can_run_now = client.is_some()
@@ -180,14 +178,5 @@ fn render_editor_footer(ui: &mut Ui, state: &mut ShellState, client: Option<&Cli
                 PendingOperatorAction::RunNowSelectedTask,
             ));
         }
-
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(
-                RichText::new("1:1 document editor")
-                    .monospace()
-                    .size(10.5)
-                    .color(palette.text_3),
-            );
-        });
     });
 }

@@ -1,5 +1,3 @@
-use std::fmt::Write as _;
-
 use eframe::egui::{self, RichText, Ui};
 use p2p::iroh::parse_public_peer_addr;
 
@@ -85,14 +83,6 @@ fn parse_remote_node_id(addr: &str) -> Option<String> {
         .map(|(peer_id, _)| peer_id.to_string())
 }
 
-pub(super) fn public_key_fingerprint(bytes: &[u8]) -> String {
-    let mut output = String::new();
-    for byte in bytes.iter().take(6) {
-        let _ = write!(&mut output, "{byte:02x}");
-    }
-    output
-}
-
 pub(super) fn labeled_value(ui: &mut Ui, label: &str, value: &str) {
     let palette = theme::palette();
 
@@ -122,42 +112,9 @@ pub(super) fn labeled_value(ui: &mut Ui, label: &str, value: &str) {
     });
 }
 
-pub(super) fn monospace_row(ui: &mut Ui, left: &str, middle: &str, right: &str) {
-    let palette = theme::palette();
-
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(format!("{left:<24}"))
-                .monospace()
-                .size(11.0)
-                .color(palette.text_0),
-        );
-        ui.label(
-            RichText::new(format!("{middle:<10}"))
-                .monospace()
-                .size(11.0)
-                .color(palette.text_2),
-        );
-        ui.label(
-            RichText::new(right)
-                .monospace()
-                .size(11.0)
-                .color(palette.text_1),
-        );
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn public_key_fingerprint_uses_hex_prefix() {
-        assert_eq!(
-            public_key_fingerprint(&[0xde, 0xad, 0xbe, 0xef, 0x11, 0x22]),
-            "deadbeef1122"
-        );
-    }
 
     #[test]
     fn parse_remote_node_id_returns_none_for_invalid_addr() {

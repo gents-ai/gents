@@ -34,7 +34,7 @@ pub fn show_main(ui: &mut Ui, state: &mut ShellState, log_store: &DesktopLogStor
         ui.add_space(10.0);
         ui.label(
             RichText::new(format!(
-                "{} events buffered · {} total captured · newest first",
+                "{} shown · {} captured",
                 snapshot.entries.len(),
                 snapshot.total_events
             ))
@@ -48,7 +48,7 @@ pub fn show_main(ui: &mut Ui, state: &mut ShellState, log_store: &DesktopLogStor
             views::card(
                 ui,
                 "No Matching Events",
-                "The log capture layer is live, but nothing in the current filter has been observed yet.",
+                "Nothing in the current filter has been observed yet.",
             );
             return;
         }

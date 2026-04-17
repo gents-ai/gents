@@ -13,7 +13,7 @@ use crate::client::{ClientCore, ClientStore};
 use crate::state::{Activity, ShellState};
 use crate::telemetry::DesktopLogStore;
 
-pub(crate) use primitives::{card, section_kicker, side_row, sidebar_heading, toolbar, tree_row};
+pub(crate) use primitives::{card, section_kicker, side_row, sidebar_heading, toolbar};
 
 pub fn prepare_state(
     state: &mut ShellState,

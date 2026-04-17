@@ -8,7 +8,7 @@ use crate::theme;
 use crate::views;
 
 use super::forms::{copy_did, render_add_peer_form};
-use super::shared::{build_peer_entries, labeled_value, public_key_fingerprint};
+use super::shared::{build_peer_entries, labeled_value};
 
 pub(super) fn prepare_state(
     state: &mut ShellState,
@@ -119,15 +119,15 @@ pub(super) fn show_sidebar(
         ui.add_space(14.0);
         ui.horizontal(|ui| {
             ui.add_space(14.0);
-            views::sidebar_heading(ui, "Peered Deployments", None);
+            views::sidebar_heading(ui, "Deployments", None);
         });
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.add_space(14.0);
             let toggle_label = if state.peers.show_add_form {
-                "Hide add form"
+                "Hide form"
             } else {
-                "Add deployment"
+                "Add Deployment"
             };
             if audit::button(ui, audit::targets::PEERS_TOGGLE_ADD_FORM, toggle_label).clicked() {
                 state.peers.show_add_form = !state.peers.show_add_form;
@@ -184,21 +184,10 @@ pub(super) fn show_sidebar(
                             Some(accessory),
                         );
                         audit::record(ui, &audit::targets::peers_peer(&peer.record_id), &response);
-                        if state.peers.selected_peer_id.as_deref() == Some(peer.record_id.as_str()) {
+                        if state.peers.selected_peer_id.as_deref() == Some(peer.record_id.as_str())
+                        {
                             ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
                         }
-                        if response.clicked() {
-                            state.peers.selected_peer_id = Some(peer.record_id.clone());
-                        }
-
-                        let tree_tag = if peer.connected { "live" } else { "saved" };
-                        let response = views::tree_row(
-                            ui,
-                            &peer.agent_label,
-                            tree_tag,
-                            state.peers.selected_peer_id.as_deref()
-                                == Some(peer.record_id.as_str()),
-                        );
                         audit::record(ui, &audit::targets::peers_agent(&peer.record_id), &response);
                         if response.clicked() {
                             state.peers.selected_peer_id = Some(peer.record_id.clone());
@@ -208,30 +197,12 @@ pub(super) fn show_sidebar(
                 ui.add_space(10.0);
             }
         }
-
-        ui.add_space(8.0);
-        ui.separator();
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.add_space(14.0);
-            views::sidebar_heading(ui, "Pending Access", None);
-        });
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.add_space(14.0);
-            views::card(
-                ui,
-                "ACP Queue Unavailable",
-                "Incoming access requests are not queryable from the current embedded node API, so this MVP can show peer transport state but not a pending Grant/Deny queue yet.",
-            );
-        });
     });
 }
 
 fn render_identity_card(ui: &mut Ui, client: &ClientCore) {
     let palette = theme::palette();
     let did = client.principal().did();
-    let fingerprint = public_key_fingerprint(client.principal().public_key_bytes());
 
     ui.group(|ui| {
         ui.set_width(ui.available_width());
@@ -244,17 +215,6 @@ fn render_identity_card(ui: &mut Ui, client: &ClientCore) {
         );
         ui.add_space(6.0);
         labeled_value(ui, "DID", did);
-        labeled_value(ui, "Peer ID", client.local_peer_id());
-        labeled_value(ui, "Key FP", &fingerprint);
-        labeled_value(
-            ui,
-            "Listen",
-            client
-                .listen_addresses()
-                .first()
-                .map(String::as_str)
-                .unwrap_or("not published"),
-        );
         ui.add_space(6.0);
         ui.label(
             RichText::new(
