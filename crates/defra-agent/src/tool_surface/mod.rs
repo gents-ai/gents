@@ -5,18 +5,16 @@ mod behavior_config;
 mod build;
 
 pub use modes::{BashMode, FileToolMode, ToolCeiling};
+pub use runtime_context::ToolRuntimeContext;
 pub use selection::{CustomToolFactory, ToolSelection};
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
 use rig::tool::ToolDyn;
 
-use crate::health_checker::ServiceHealthMap;
-use crate::mcp_pool::McpPool;
 use crate::meta_tools::{build_meta_tools, META_TOOL_NAMES};
 use crate::toolset::{
     build_delegate_tool, CliToolConfig, ToolSet, ToolSetBuilder, DELEGATE_TOOL_NAME,
@@ -207,55 +205,6 @@ impl std::fmt::Debug for ToolSurface {
                     .collect::<Vec<_>>(),
             )
             .finish()
-    }
-}
-
-#[derive(Clone)]
-pub struct ToolRuntimeContext {
-    node: Arc<EmbeddedNode>,
-    mcp_pool: McpPool,
-    health_map: ServiceHealthMap,
-    local_hostname: String,
-    local_subnet: Option<String>,
-}
-
-impl ToolRuntimeContext {
-    pub fn new(
-        node: Arc<EmbeddedNode>,
-        mcp_pool: McpPool,
-        health_map: ServiceHealthMap,
-        local_hostname: impl Into<String>,
-        local_subnet: Option<String>,
-    ) -> Self {
-        Self {
-            node,
-            mcp_pool,
-            health_map,
-            local_hostname: local_hostname.into(),
-            local_subnet,
-        }
-    }
-
-    pub fn oneshot(node: Arc<EmbeddedNode>) -> Self {
-        Self {
-            node,
-            mcp_pool: McpPool::default(),
-            health_map: ServiceHealthMap::default(),
-            local_hostname: "localhost".to_string(),
-            local_subnet: None,
-        }
-    }
-
-    pub fn node(&self) -> &Arc<EmbeddedNode> {
-        &self.node
-    }
-
-    pub fn local_hostname(&self) -> &str {
-        &self.local_hostname
-    }
-
-    pub fn local_subnet(&self) -> Option<&str> {
-        self.local_subnet.as_deref()
     }
 }
 
