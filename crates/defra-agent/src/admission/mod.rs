@@ -1,4 +1,10 @@
 pub(crate) mod stream_guard;
+mod config;
+mod client;
+mod controller;
+mod permit;
+mod registry;
+mod persistence;
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
