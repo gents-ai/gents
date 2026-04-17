@@ -1,3 +1,10 @@
+mod principal;
+mod behavior;
+mod inference_profile;
+mod tool_selection;
+mod serde_helpers;
+mod graphql_fields;
+
 use std::fmt;
 
 use anyhow::{anyhow, Result};
