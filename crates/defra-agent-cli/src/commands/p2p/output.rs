@@ -10,7 +10,7 @@ use crate::shared::{
     StoredRuntimeState,
 };
 
-use super::{p2p_api_base, p2p_http_client};
+use super::p2p_api_base;
 use crate::{http_get_json, normalize_optional_string, read_runtime_state, resolve_home_dir};
 
 pub(super) fn p2p_collection_rows(
@@ -103,7 +103,7 @@ pub(crate) fn flatten_p2p_fields(map: &mut serde_json::Map<String, Value>, p2p: 
     }
 }
 
-pub(super) async fn load_live_http_p2p_status(home: Option<&Path>, graphql: &str) -> Value {
+pub(crate) async fn load_live_http_p2p_status(home: Option<&Path>, graphql: &str) -> Value {
     let home_dir = resolve_home_dir(home);
     let runtime_state = read_runtime_state(&home_dir)
         .ok()
@@ -174,7 +174,7 @@ pub(super) async fn fetch_live_http_p2p_status(home: Option<&Path>, graphql: &st
     }))
 }
 
-fn persisted_p2p_status(runtime_state: Option<&StoredRuntimeState>) -> Value {
+pub(crate) fn persisted_p2p_status(runtime_state: Option<&StoredRuntimeState>) -> Value {
     match runtime_state {
         Some(runtime_state) => json!({
             "enabled": runtime_state.p2p_transport != P2pTransportArg::None.as_str(),

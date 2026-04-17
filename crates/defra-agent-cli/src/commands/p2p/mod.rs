@@ -12,7 +12,7 @@ use crate::cli::args::{
     P2pCollectionsCommand, P2pCommand, P2pDocumentsCommand, P2pReplicatorsCommand,
 };
 
-pub(crate) use output::flatten_p2p_fields;
+pub(crate) use output::{flatten_p2p_fields, load_live_http_p2p_status, persisted_p2p_status};
 
 pub(crate) async fn dispatch(command: P2pCommand) -> Result<()> {
     match command {
