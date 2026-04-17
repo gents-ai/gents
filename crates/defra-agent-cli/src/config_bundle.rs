@@ -5,15 +5,15 @@ use anyhow::Result;
 use defra_agent::graphql::escape_graphql_string;
 use serde_json::Value;
 
+use crate::config_writes::ConfigAccess;
 use crate::desired_state;
 use crate::shared::ConfigExportBundle;
 use crate::{
     graphql_rows, graphql_rows_or_empty_if_collection_missing, graphql_string_list_literal,
-    EXPORT_AGENT_BEHAVIOR_FIELDS, EXPORT_AGENT_PRINCIPAL_FIELDS, EXPORT_INFERENCE_BACKEND_FIELDS,
-    EXPORT_INFERENCE_PROFILE_FIELDS, EXPORT_SCHEDULED_TASK_FIELDS, EXPORT_TOOL_SELECTION_FIELDS,
-    EXPORT_TOOL_SERVICE_REGISTRY_FIELDS, CONFIG_EXPORT_FORMAT,
+    CONFIG_EXPORT_FORMAT, EXPORT_AGENT_BEHAVIOR_FIELDS, EXPORT_AGENT_PRINCIPAL_FIELDS,
+    EXPORT_INFERENCE_BACKEND_FIELDS, EXPORT_INFERENCE_PROFILE_FIELDS, EXPORT_SCHEDULED_TASK_FIELDS,
+    EXPORT_TOOL_SELECTION_FIELDS, EXPORT_TOOL_SERVICE_REGISTRY_FIELDS,
 };
-use crate::config_writes::ConfigAccess;
 
 pub(crate) async fn build_config_export_bundle(
     access: &ConfigAccess,
@@ -430,7 +430,11 @@ pub(crate) fn collect_string_field_values(rows: &[Value], field: &str) -> Vec<St
     values
 }
 
-pub(crate) fn sanitize_import_document(collection_name: &str, doc: &Value, for_update: bool) -> Result<Value> {
+pub(crate) fn sanitize_import_document(
+    collection_name: &str,
+    doc: &Value,
+    for_update: bool,
+) -> Result<Value> {
     let mut object = match collection_name {
         "InferenceBackend" | "ScheduledTask" | "ToolServiceRegistry" => {
             doc.as_object().cloned().ok_or_else(|| {

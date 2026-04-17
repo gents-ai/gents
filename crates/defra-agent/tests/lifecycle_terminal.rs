@@ -6,8 +6,7 @@ use serde::Deserialize;
 mod support;
 
 use support::{
-    create_request, create_response, first_row, test_db, upsert_conversation, AGENT_DID,
-    AGENT_NAME,
+    create_request, create_response, first_row, test_db, upsert_conversation, AGENT_DID, AGENT_NAME,
 };
 
 #[derive(Debug, Clone, Deserialize)]

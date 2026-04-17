@@ -85,8 +85,7 @@ async fn max_queue_depth_zero_allows_immediate_permit_and_rejects_saturated_back
         1,
         &HashMap::from([("backend-a".to_string(), config("backend-a", 1, 0))]),
     );
-    let context =
-        AdmissionCallContext::for_request(&request("req-zero"), "default", "backend-a");
+    let context = AdmissionCallContext::for_request(&request("req-zero"), "default", "backend-a");
 
     scope_request(context, async {
         let mut first = registry.acquire_current_call().await.unwrap();

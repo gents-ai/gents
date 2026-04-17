@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::shared::{StoredInitConfig, StoredRuntimeState};
-use crate::{DEFAULT_AGENT_NAME, DEFAULT_HTTP_PORT, INIT_CONFIG_FILE_NAME, RUNTIME_STATE_FILE_NAME};
+use crate::{
+    DEFAULT_AGENT_NAME, DEFAULT_HTTP_PORT, INIT_CONFIG_FILE_NAME, RUNTIME_STATE_FILE_NAME,
+};
 
 pub(crate) fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
     explicit
@@ -90,7 +92,10 @@ pub(crate) fn clear_runtime_state(home_dir: &Path) -> Result<bool> {
     Ok(false)
 }
 
-pub(crate) fn resolve_graphql_endpoint(explicit: Option<&str>, home: Option<&Path>) -> Result<String> {
+pub(crate) fn resolve_graphql_endpoint(
+    explicit: Option<&str>,
+    home: Option<&Path>,
+) -> Result<String> {
     if let Some(graphql) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
         return Ok(graphql.to_string());
     }

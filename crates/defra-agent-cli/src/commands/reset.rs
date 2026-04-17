@@ -2,9 +2,7 @@ use anyhow::Result;
 use serde_json::json;
 
 use crate::cli::*;
-use crate::{
-    clear_runtime_state, print_json, resolve_home_dir, runtime_state_path,
-};
+use crate::{clear_runtime_state, print_json, resolve_home_dir, runtime_state_path};
 
 pub(crate) async fn reset(args: ResetArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());

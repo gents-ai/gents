@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::graphql::escape_graphql_string;
 
-use super::serde_helpers::{default_display_name_for_did, first_row_with_doc_id, normalize_optional_string};
+use super::serde_helpers::{
+    default_display_name_for_did, first_row_with_doc_id, normalize_optional_string,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentPrincipal {

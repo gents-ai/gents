@@ -5,9 +5,7 @@ use serde::Deserialize;
 
 mod support;
 
-use support::{
-    create_request, first_row, test_db, AGENT_DID, AGENT_NAME,
-};
+use support::{create_request, first_row, test_db, AGENT_DID, AGENT_NAME};
 
 #[derive(Debug, Clone, Deserialize)]
 struct StatusRow {

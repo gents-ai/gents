@@ -125,7 +125,11 @@ pub(crate) fn diff_manifests(
     }
 }
 
-pub(super) fn diff_single<T>(id: &str, desired: Option<&T>, live: Option<&T>) -> DesiredStateCollectionDiff
+pub(super) fn diff_single<T>(
+    id: &str,
+    desired: Option<&T>,
+    live: Option<&T>,
+) -> DesiredStateCollectionDiff
 where
     T: PartialEq,
 {

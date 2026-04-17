@@ -8,9 +8,13 @@ use crate::config_bundle::{sanitize_import_document, select_apply_collection_doc
 use crate::config_writes::{write_scheduled_task_document, ConfigAccess};
 use crate::desired_state;
 use crate::shared::{ConfigApplyCounts, ConfigExportBundle};
-use crate::{extract_mutation_doc_id, graphql_input_literal, CONFIG_EXPORT_FORMAT, CONFIG_EXPORT_FORMAT_V1};
+use crate::{
+    extract_mutation_doc_id, graphql_input_literal, CONFIG_EXPORT_FORMAT, CONFIG_EXPORT_FORMAT_V1,
+};
 
-pub(crate) fn read_config_import_bundle(path: Option<&std::path::Path>) -> Result<ConfigExportBundle> {
+pub(crate) fn read_config_import_bundle(
+    path: Option<&std::path::Path>,
+) -> Result<ConfigExportBundle> {
     let contents = match path {
         Some(path) => std::fs::read_to_string(path)
             .with_context(|| format!("reading config import from {}", path.display()))?,
@@ -143,7 +147,9 @@ pub(crate) async fn apply_import_collection(
     Ok(docs.len())
 }
 
-pub(crate) fn diff_has_pending_apply(counts: &desired_state::DesiredStateDiffCollectionsCounts) -> bool {
+pub(crate) fn diff_has_pending_apply(
+    counts: &desired_state::DesiredStateDiffCollectionsCounts,
+) -> bool {
     [
         &counts.agent_principal,
         &counts.agent_behaviors,

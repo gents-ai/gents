@@ -1,15 +1,17 @@
-mod load;
 mod apply;
+mod load;
 mod snapshot;
 
-pub(crate) use load::load_document_runtime_view;
 pub(crate) use apply::apply_control_update;
+pub(crate) use load::load_document_runtime_view;
 pub(crate) use snapshot::resolve_document_runtime_snapshot_from_view;
 
 use std::collections::HashMap;
 
 use crate::backend_registry::InferenceBackend;
-use crate::document_config::{AgentBehavior, AgentPrincipal, InferenceProfile, ToolSelectionDocument};
+use crate::document_config::{
+    AgentBehavior, AgentPrincipal, InferenceProfile, ToolSelectionDocument,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct DocumentRecord<T> {

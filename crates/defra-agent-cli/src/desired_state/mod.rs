@@ -2,9 +2,9 @@ pub(crate) mod convert;
 pub(crate) mod diff;
 pub(crate) mod load;
 pub(crate) mod normalize;
-pub(crate) mod validate;
 #[cfg(test)]
 mod tests;
+pub(crate) mod validate;
 
 pub(crate) use convert::{
     export_bundle_from_manifest, manifest_from_export_bundle,

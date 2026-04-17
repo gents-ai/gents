@@ -9,8 +9,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-use super::{read_http_request, request_has_tool_result_message, write_http_response};
 use super::chat::{completion_text_sse, tool_call_sse};
+use super::{read_http_request, request_has_tool_result_message, write_http_response};
 
 pub struct MockOpenAIEndpoint {
     pub endpoint: String,

@@ -2,9 +2,9 @@ use std::fs;
 
 use serde_json::json;
 
-use super::*;
 use super::convert::tool_service_registry_from_live_value;
 use super::diff::diff_collection;
+use super::*;
 
 #[test]
 fn desired_tool_service_registry_normalizes_address_storage_fields() {

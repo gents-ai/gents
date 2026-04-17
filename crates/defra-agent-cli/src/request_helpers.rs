@@ -6,9 +6,7 @@ use anyhow::{Context, Result};
 use defra_agent::graphql::escape_graphql_string;
 use serde_json::Value;
 
-use crate::{
-    optional_f64_field, optional_i64_field, post_graphql, require_non_empty,
-};
+use crate::{optional_f64_field, optional_i64_field, post_graphql, require_non_empty};
 
 #[derive(Debug, Clone)]
 pub(crate) struct SubmittedRequest {
@@ -215,7 +213,10 @@ pub(crate) fn resolve_request_id(positional: Option<&str>, flag: Option<&str>) -
     }
 }
 
-pub(crate) fn resolve_request_content(content: Option<&str>, content_file: Option<&Path>) -> Result<String> {
+pub(crate) fn resolve_request_content(
+    content: Option<&str>,
+    content_file: Option<&Path>,
+) -> Result<String> {
     match (content, content_file) {
         (Some(_), Some(path)) => anyhow::bail!(
             "provide either --content or --content-file, not both ({})",

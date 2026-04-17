@@ -1,5 +1,5 @@
-use super::*;
 use super::support::*;
+use super::*;
 
 #[tokio::test]
 async fn router_dispatches_first_request_after_snapshot_change_to_latest_generation() {

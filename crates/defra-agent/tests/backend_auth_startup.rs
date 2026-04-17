@@ -203,7 +203,9 @@ async fn run_agent_uses_backend_specific_api_key_env_var_for_startup_probe() -> 
             Self { saved }
         }
         fn set(&mut self, name: &'static str, value: &str) {
-            unsafe { std::env::set_var(name, value); }
+            unsafe {
+                std::env::set_var(name, value);
+            }
         }
     }
     impl Drop for TestEnvGuard {

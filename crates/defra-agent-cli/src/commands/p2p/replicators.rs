@@ -3,7 +3,9 @@ use serde_json::{json, Value};
 
 use crate::cli::args::{P2pAccessArgs, P2pReplicatorAddArgs, P2pReplicatorRemoveArgs};
 use crate::shared::{P2pReplicatorDeleteRequest, P2pReplicatorRequest, P2pReplicatorRow};
-use crate::{http_delete_json, http_post_json, print_json, resolve_graphql_endpoint, resolve_home_dir};
+use crate::{
+    http_delete_json, http_post_json, print_json, resolve_graphql_endpoint, resolve_home_dir,
+};
 
 use super::collections::expand_p2p_collection_args;
 use super::output::{

@@ -1,35 +1,34 @@
-mod principal;
 mod behavior;
-mod inference_profile;
-mod tool_selection;
-mod serde_helpers;
 mod graphql_fields;
+mod inference_profile;
+mod principal;
+mod serde_helpers;
+mod tool_selection;
 
 pub use principal::{load_agent_principal, upsert_agent_principal, AgentPrincipal};
 pub(crate) use principal::{load_agent_principal_by_doc_id, load_agent_principal_record};
 
-pub use behavior::{
-    list_agent_behaviors, load_agent_behavior, upsert_agent_behavior, AgentBehavior,
-};
+use behavior::create_default_behavior;
 #[allow(unused_imports)]
 pub(crate) use behavior::{
     list_agent_behavior_records, load_agent_behavior_by_doc_id, load_agent_behavior_record,
 };
-use behavior::create_default_behavior;
+pub use behavior::{
+    list_agent_behaviors, load_agent_behavior, upsert_agent_behavior, AgentBehavior,
+};
 
-pub use inference_profile::{load_inference_profile, upsert_inference_profile, InferenceProfile};
 #[allow(unused_imports)]
 pub(crate) use inference_profile::{
-    list_inference_profile_records, load_inference_profile_by_doc_id,
-    load_inference_profile_record,
+    list_inference_profile_records, load_inference_profile_by_doc_id, load_inference_profile_record,
 };
+pub use inference_profile::{load_inference_profile, upsert_inference_profile, InferenceProfile};
 
-pub use tool_selection::{load_tool_selection, upsert_tool_selection, ToolSelectionDocument};
 #[allow(unused_imports)]
 pub(crate) use tool_selection::{
-    list_all_tool_selection_records, list_tool_selection_records,
-    load_tool_selection_by_doc_id, load_tool_selection_record,
+    list_all_tool_selection_records, list_tool_selection_records, load_tool_selection_by_doc_id,
+    load_tool_selection_record,
 };
+pub use tool_selection::{load_tool_selection, upsert_tool_selection, ToolSelectionDocument};
 
 use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
@@ -53,9 +52,10 @@ pub async fn ensure_agent_principal(
     let existing_principal = load_agent_principal(node, agent_did).await?;
     let (default_behavior_id, created_principal) = match existing_principal.as_ref() {
         Some(principal) => {
-            let behavior_id = serde_helpers::normalize_optional_string(principal.default_behavior_id.as_deref())
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| default_behavior_id_for_agent(agent_did));
+            let behavior_id =
+                serde_helpers::normalize_optional_string(principal.default_behavior_id.as_deref())
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| default_behavior_id_for_agent(agent_did));
             (behavior_id, false)
         }
         None => (default_behavior_id_for_agent(agent_did), true),
@@ -80,7 +80,9 @@ pub async fn ensure_agent_principal(
             if existing_principal
                 .as_ref()
                 .and_then(|principal| {
-                    serde_helpers::normalize_optional_string(principal.default_behavior_id.as_deref())
+                    serde_helpers::normalize_optional_string(
+                        principal.default_behavior_id.as_deref(),
+                    )
                 })
                 .is_some()
             {
@@ -101,7 +103,9 @@ pub async fn ensure_agent_principal(
 
     match existing_principal {
         Some(principal) => {
-            if serde_helpers::normalize_optional_string(principal.default_behavior_id.as_deref()).is_none() {
+            if serde_helpers::normalize_optional_string(principal.default_behavior_id.as_deref())
+                .is_none()
+            {
                 let fallback_display_name = serde_helpers::default_display_name_for_did(agent_did);
                 upsert_agent_principal(
                     node,

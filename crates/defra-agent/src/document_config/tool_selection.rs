@@ -2,9 +2,9 @@ use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::escape_graphql_string;
 use super::graphql_fields;
 use super::serde_helpers;
+use crate::graphql::escape_graphql_string;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolSelectionDocument {
@@ -16,10 +16,16 @@ pub struct ToolSelectionDocument {
     pub file_tool_root: Option<String>,
     pub enable_bash: Option<bool>,
     pub bash_mode: Option<String>,
-    #[serde(default, deserialize_with = "super::serde_helpers::deserialize_optional_string_vec")]
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
+    )]
     pub cli_tool_names: Option<Vec<String>>,
     pub enable_meta_tools: Option<bool>,
-    #[serde(default, deserialize_with = "super::serde_helpers::deserialize_optional_string_vec")]
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
+    )]
     pub delegate_to: Option<Vec<String>>,
 }
 
@@ -64,7 +70,10 @@ pub(crate) async fn load_tool_selection_record(
         anyhow::bail!("query ToolSelection failed: {:?}", resp.errors);
     }
 
-    Ok(serde_helpers::first_row_with_doc_id(resp.data.as_ref(), "ToolSelection"))
+    Ok(serde_helpers::first_row_with_doc_id(
+        resp.data.as_ref(),
+        "ToolSelection",
+    ))
 }
 
 pub(crate) async fn load_tool_selection_by_doc_id(
@@ -99,7 +108,10 @@ pub(crate) async fn load_tool_selection_by_doc_id(
         anyhow::bail!("query ToolSelection by _docID failed: {:?}", resp.errors);
     }
 
-    Ok(serde_helpers::first_row_with_doc_id(resp.data.as_ref(), "ToolSelection"))
+    Ok(serde_helpers::first_row_with_doc_id(
+        resp.data.as_ref(),
+        "ToolSelection",
+    ))
 }
 
 pub(crate) async fn list_tool_selection_records(
@@ -134,7 +146,10 @@ pub(crate) async fn list_tool_selection_records(
         anyhow::bail!("list ToolSelection failed: {:?}", resp.errors);
     }
 
-    Ok(serde_helpers::rows_with_doc_id(resp.data.as_ref(), "ToolSelection"))
+    Ok(serde_helpers::rows_with_doc_id(
+        resp.data.as_ref(),
+        "ToolSelection",
+    ))
 }
 
 pub(crate) async fn list_all_tool_selection_records(
@@ -162,7 +177,10 @@ pub(crate) async fn list_all_tool_selection_records(
         anyhow::bail!("list all ToolSelection failed: {:?}", resp.errors);
     }
 
-    Ok(serde_helpers::rows_with_doc_id(resp.data.as_ref(), "ToolSelection"))
+    Ok(serde_helpers::rows_with_doc_id(
+        resp.data.as_ref(),
+        "ToolSelection",
+    ))
 }
 
 pub async fn upsert_tool_selection(
@@ -176,16 +194,28 @@ pub async fn upsert_tool_selection(
         Some(format!(r#"selection_id: "{escaped_selection_id}""#)),
         Some(format!(r#"agent_did: "{escaped_agent_did}""#)),
         graphql_fields::graphql_string_field("display_name", selection.display_name.as_deref()),
-        graphql_fields::graphql_optional_bool_field("enable_file_tools", selection.enable_file_tools),
-        graphql_fields::graphql_string_field("file_tools_mode", selection.file_tools_mode.as_deref()),
+        graphql_fields::graphql_optional_bool_field(
+            "enable_file_tools",
+            selection.enable_file_tools,
+        ),
+        graphql_fields::graphql_string_field(
+            "file_tools_mode",
+            selection.file_tools_mode.as_deref(),
+        ),
         Some(graphql_fields::graphql_nullable_string_field(
             "file_tool_root",
             selection.file_tool_root.as_deref(),
         )),
         graphql_fields::graphql_optional_bool_field("enable_bash", selection.enable_bash),
         graphql_fields::graphql_string_field("bash_mode", selection.bash_mode.as_deref()),
-        graphql_fields::graphql_string_list_field("cli_tool_names", selection.cli_tool_names.as_deref()),
-        graphql_fields::graphql_optional_bool_field("enable_meta_tools", selection.enable_meta_tools),
+        graphql_fields::graphql_string_list_field(
+            "cli_tool_names",
+            selection.cli_tool_names.as_deref(),
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "enable_meta_tools",
+            selection.enable_meta_tools,
+        ),
         graphql_fields::graphql_string_list_field("delegate_to", selection.delegate_to.as_deref()),
     ]
     .into_iter()
@@ -196,16 +226,28 @@ pub async fn upsert_tool_selection(
     let update_fields = vec![
         Some(format!(r#"agent_did: "{escaped_agent_did}""#)),
         graphql_fields::graphql_string_field("display_name", selection.display_name.as_deref()),
-        graphql_fields::graphql_optional_bool_field("enable_file_tools", selection.enable_file_tools),
-        graphql_fields::graphql_string_field("file_tools_mode", selection.file_tools_mode.as_deref()),
+        graphql_fields::graphql_optional_bool_field(
+            "enable_file_tools",
+            selection.enable_file_tools,
+        ),
+        graphql_fields::graphql_string_field(
+            "file_tools_mode",
+            selection.file_tools_mode.as_deref(),
+        ),
         Some(graphql_fields::graphql_nullable_string_field(
             "file_tool_root",
             selection.file_tool_root.as_deref(),
         )),
         graphql_fields::graphql_optional_bool_field("enable_bash", selection.enable_bash),
         graphql_fields::graphql_string_field("bash_mode", selection.bash_mode.as_deref()),
-        graphql_fields::graphql_string_list_field("cli_tool_names", selection.cli_tool_names.as_deref()),
-        graphql_fields::graphql_optional_bool_field("enable_meta_tools", selection.enable_meta_tools),
+        graphql_fields::graphql_string_list_field(
+            "cli_tool_names",
+            selection.cli_tool_names.as_deref(),
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "enable_meta_tools",
+            selection.enable_meta_tools,
+        ),
         graphql_fields::graphql_string_list_field("delegate_to", selection.delegate_to.as_deref()),
     ]
     .into_iter()

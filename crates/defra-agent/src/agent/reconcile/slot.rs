@@ -215,7 +215,10 @@ async fn run_slot_loop<F, Fut>(
     }
 }
 
-async fn wait_for_restart(delay: std::time::Duration, shutdown: &mut watch::Receiver<bool>) -> bool {
+async fn wait_for_restart(
+    delay: std::time::Duration,
+    shutdown: &mut watch::Receiver<bool>,
+) -> bool {
     tokio::select! {
         _ = tokio::time::sleep(delay) => true,
         _ = shutdown.changed() => false,

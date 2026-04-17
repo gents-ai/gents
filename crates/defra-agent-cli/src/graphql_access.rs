@@ -226,7 +226,10 @@ pub(crate) fn graphql_diagnostic_hint(graphql: &str) -> String {
     }
 }
 
-pub(crate) fn first_graphql_row<'a>(response: &'a Value, collection_name: &str) -> Result<&'a Value> {
+pub(crate) fn first_graphql_row<'a>(
+    response: &'a Value,
+    collection_name: &str,
+) -> Result<&'a Value> {
     response
         .get("data")
         .and_then(|data| data.get(collection_name))

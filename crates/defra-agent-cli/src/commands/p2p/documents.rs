@@ -3,7 +3,10 @@ use serde_json::json;
 
 use crate::cli::args::{P2pAccessArgs, P2pDocumentsMutateArgs, P2pDocumentsSyncArgs};
 use crate::shared::P2pSyncDocumentsRequest;
-use crate::{expand_nonempty_values, http_delete_json, http_post_json, print_json, resolve_graphql_endpoint, resolve_home_dir};
+use crate::{
+    expand_nonempty_values, http_delete_json, http_post_json, print_json, resolve_graphql_endpoint,
+    resolve_home_dir,
+};
 
 use super::{p2p_api_base, p2p_http_client};
 
