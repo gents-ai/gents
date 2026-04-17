@@ -13,7 +13,6 @@ use defra_agent::{
     cli_tool, discover_backend_models, ensure_runtime_schemas, BackendProviderKind, BashMode,
     FileToolMode,
 };
-use p2p::iroh::parse_public_peer_addr;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -30,8 +29,6 @@ use cli::*;
 use shared::*;
 
 use config_writes::{write_scheduled_task_document, ConfigAccess};
-use http::version::{NodeIdentityResponse, P2pShareableAddressResponse};
-
 const DEFAULT_AGENT_NAME: &str = "default";
 const DEFAULT_INIT_ENDPOINT: &str = "http://localhost:11434/v1";
 const DEFAULT_INIT_MODEL_NAME: &str = "gemma4-26b-a4b";
@@ -193,34 +190,6 @@ const CONFIG_SCHEMA_COLLECTIONS: &[&str] = &[
     "ToolSelection",
     "InferenceBackend",
 ];
-const P2P_AGENT_COLLECTIONS: &[&str] = &[
-    "AgentPrincipal",
-    "AgentBehavior",
-    "AgentRuntime",
-    "ToolSelection",
-    "InferenceBackend",
-    "InferenceProfile",
-];
-const P2P_DESKTOP_CONFIG_COLLECTIONS: &[&str] = &[
-    "AgentPrincipal",
-    "AgentBehavior",
-    "ToolSelection",
-    "InferenceBackend",
-    "InferenceProfile",
-    "ToolServiceRegistry",
-    "ScheduledTask",
-];
-const P2P_CHAT_REQUEST_COLLECTIONS: &[&str] = &[
-    "AgentConversation",
-    "AgentRequest",
-    "AgentResponse",
-    "AgentToolResult",
-    "AgentSession",
-    "AgentMessage",
-    "AgentToolCall",
-    "CompactionEntry",
-];
-const P2P_TOOL_SERVICE_COLLECTIONS: &[&str] = &["ToolServiceRegistry"];
 pub(crate) const EXPORT_AGENT_PRINCIPAL_FIELDS: &str =
     "agent_did display_name default_behavior_id enabled created_at created_by";
 pub(crate) const EXPORT_AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled created_at";
@@ -500,377 +469,6 @@ async fn status(args: StatusArgs) -> Result<()> {
     Ok(())
 }
 
-async fn p2p_status(args: P2pAccessArgs) -> Result<()> {
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let p2p = fetch_live_http_p2p_status(args.home.as_deref(), &graphql).await?;
-    let home_dir = resolve_home_dir(args.home.as_deref());
-    let mut output = json!({
-        "home": home_dir,
-        "graphql": graphql,
-        "p2p": p2p,
-    });
-    if let Some(map) = output.as_object_mut() {
-        let p2p_value = map.get("p2p").cloned().unwrap_or(Value::Null);
-        flatten_p2p_fields(map, &p2p_value);
-    }
-    print_json(&output)?;
-    Ok(())
-}
-
-async fn p2p_peers(args: P2pAccessArgs) -> Result<()> {
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let p2p = fetch_live_http_p2p_status(args.home.as_deref(), &graphql).await?;
-    let peers = p2p
-        .get("p2p_connected_peers")
-        .cloned()
-        .unwrap_or_else(|| json!([]));
-    let count = peers.as_array().map(|rows| rows.len()).unwrap_or(0);
-    let home_dir = resolve_home_dir(args.home.as_deref());
-    let mut output = json!({
-        "home": home_dir,
-        "graphql": graphql,
-        "p2p": p2p,
-        "peers": peers,
-        "count": count,
-    });
-    if let Some(map) = output.as_object_mut() {
-        let p2p_value = map.get("p2p").cloned().unwrap_or(Value::Null);
-        flatten_p2p_fields(map, &p2p_value);
-    }
-    print_json(&output)?;
-    Ok(())
-}
-
-async fn p2p_connect(args: P2pConnectArgs) -> Result<()> {
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .context("building P2P connect HTTP client")?;
-    let api_base = p2p_api_base(&graphql)?;
-    http_post_json(
-        &client,
-        &format!("{api_base}/p2p/connect"),
-        &vec![args.peer.clone()],
-    )
-    .await?;
-    let p2p = fetch_live_http_p2p_status(args.home.as_deref(), &graphql).await?;
-    let home_dir = resolve_home_dir(args.home.as_deref());
-    let mut output = json!({
-        "status": "connect_requested",
-        "home": home_dir,
-        "graphql": graphql,
-        "peer": args.peer,
-        "p2p": p2p,
-    });
-    if let Some(map) = output.as_object_mut() {
-        let p2p_value = map.get("p2p").cloned().unwrap_or(Value::Null);
-        flatten_p2p_fields(map, &p2p_value);
-    }
-    print_json(&output)?;
-    Ok(())
-}
-
-async fn p2p_collections_list(args: P2pAccessArgs) -> Result<()> {
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
-    let collection_ids: Vec<String> =
-        http_get_json(&client, &format!("{api_base}/p2p/collections")).await?;
-    let collection_names_by_id = load_collection_name_by_id(&client, &api_base).await;
-    let collections = p2p_collection_rows(&collection_ids, &collection_names_by_id);
-    let collection_names = p2p_collection_names(&collection_ids, &collection_names_by_id);
-    let count = collections.len();
-    let home_dir = resolve_home_dir(args.home.as_deref());
-    print_json(&json!({
-        "status": "ok",
-        "home": home_dir,
-        "graphql": graphql,
-        "collections": collections,
-        "collection_ids": collection_ids,
-        "collection_names": collection_names,
-        "count": count,
-    }))?;
-    Ok(())
-}
-
-async fn p2p_collections_add(args: P2pCollectionsMutateArgs) -> Result<()> {
-    let collections = expand_p2p_collection_args(&args.collections, &args.profiles)?;
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
-    http_post_json(
-        &client,
-        &format!("{api_base}/p2p/collections"),
-        &collections,
-    )
-    .await?;
-    let p2p = fetch_live_http_p2p_status(args.home.as_deref(), &graphql).await?;
-    let home_dir = resolve_home_dir(args.home.as_deref());
-    let mut output = json!({
-        "status": "collections_added",
-        "home": home_dir,
-        "graphql": graphql,
-        "collections": collections,
-        "p2p": p2p,
-    });
-    if let Some(map) = output.as_object_mut() {
-        let p2p_value = map.get("p2p").cloned().unwrap_or(Value::Null);
-        flatten_p2p_fields(map, &p2p_value);
-    }
-    print_json(&output)?;
-    Ok(())
-}
-
-async fn p2p_collections_remove(args: P2pCollectionsMutateArgs) -> Result<()> {
-    let collections = expand_p2p_collection_args(&args.collections, &args.profiles)?;
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
-    http_delete_json(
-        &client,
-        &format!("{api_base}/p2p/collections"),
-        &collections,
-    )
-    .await?;
-    let home_dir = resolve_home_dir(args.home.as_deref());
-    print_json(&json!({
-        "status": "collections_removed",
-        "home": home_dir,
-        "graphql": graphql,
-        "collections": collections,
-    }))?;
-    Ok(())
-}
-
-async fn p2p_collections_sync_branchable(args: P2pSyncBranchableArgs) -> Result<()> {
-    let collection_id = args.collection_id.trim().to_string();
-    if collection_id.is_empty() {
-        anyhow::bail!("provide --collection-id");
-    }
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
-    let request = P2pSyncBranchableRequest {
-        collection_id: collection_id.clone(),
-    };
-    http_post_json(
-        &client,
-        &format!("{api_base}/p2p/collections/sync-branchable"),
-        &request,
-    )
-    .await?;
-    let home_dir = resolve_home_dir(args.home.as_deref());
-    print_json(&json!({
-        "status": "collection_sync_requested",
-        "home": home_dir,
-        "graphql": graphql,
-        "collection_id": collection_id,
-    }))?;
-    Ok(())
-}
-
-async fn p2p_collections_sync_versions(args: P2pSyncVersionsArgs) -> Result<()> {
-    let version_ids = expand_nonempty_values(&args.version_ids, "--version-id")?;
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
-    let request = P2pSyncVersionsRequest {
-        version_ids: version_ids.clone(),
-    };
-    http_post_json(
-        &client,
-        &format!("{api_base}/p2p/collections/sync-versions"),
-        &request,
-    )
-    .await?;
-    let home_dir = resolve_home_dir(args.home.as_deref());
-    print_json(&json!({
-        "status": "collection_versions_sync_requested",
-        "home": home_dir,
-        "graphql": graphql,
-        "version_ids": version_ids,
-    }))?;
-    Ok(())
-}
-
-async fn p2p_replicators_list(args: P2pAccessArgs) -> Result<()> {
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
-    let raw_replicators: Vec<P2pReplicatorRow> =
-        http_get_json(&client, &format!("{api_base}/p2p/replicators")).await?;
-    let collection_names_by_id = load_collection_name_by_id(&client, &api_base).await;
-    let replicators = p2p_replicator_rows(raw_replicators, &collection_names_by_id);
-    let count = replicators.len();
-    let home_dir = resolve_home_dir(args.home.as_deref());
-    print_json(&json!({
-        "status": "ok",
-        "home": home_dir,
-        "graphql": graphql,
-        "replicators": replicators,
-        "count": count,
-    }))?;
-    Ok(())
-}
-
-async fn p2p_replicators_add(args: P2pReplicatorAddArgs) -> Result<()> {
-    let collections = expand_p2p_collection_args(&args.collections, &args.profiles)?;
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
-    let request = P2pReplicatorRequest {
-        collections: collections.clone(),
-        addresses: vec![args.peer.clone()],
-    };
-    http_post_json(&client, &format!("{api_base}/p2p/replicators"), &request).await?;
-    let p2p = fetch_live_http_p2p_status(args.home.as_deref(), &graphql).await?;
-    let home_dir = resolve_home_dir(args.home.as_deref());
-    let mut output = json!({
-        "status": "replicator_added",
-        "home": home_dir,
-        "graphql": graphql,
-        "peer": args.peer,
-        "collections": collections,
-        "p2p": p2p,
-    });
-    if let Some(map) = output.as_object_mut() {
-        let p2p_value = map.get("p2p").cloned().unwrap_or(Value::Null);
-        flatten_p2p_fields(map, &p2p_value);
-    }
-    print_json(&output)?;
-    Ok(())
-}
-
-async fn p2p_replicators_remove(args: P2pReplicatorRemoveArgs) -> Result<()> {
-    let collections = expand_p2p_collection_args(&args.collections, &args.profiles)?;
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
-    let request = P2pReplicatorDeleteRequest {
-        id: args.peer.clone(),
-        collections: collections.clone(),
-    };
-    http_delete_json(&client, &format!("{api_base}/p2p/replicators"), &request).await?;
-    let home_dir = resolve_home_dir(args.home.as_deref());
-    print_json(&json!({
-        "status": "replicator_removed",
-        "home": home_dir,
-        "graphql": graphql,
-        "peer": args.peer,
-        "collections": collections,
-    }))?;
-    Ok(())
-}
-
-async fn p2p_documents_list(args: P2pAccessArgs) -> Result<()> {
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
-    let doc_ids: Vec<String> = http_get_json(&client, &format!("{api_base}/p2p/documents")).await?;
-    let count = doc_ids.len();
-    let home_dir = resolve_home_dir(args.home.as_deref());
-    print_json(&json!({
-        "status": "ok",
-        "home": home_dir,
-        "graphql": graphql,
-        "doc_ids": doc_ids,
-        "count": count,
-    }))?;
-    Ok(())
-}
-
-async fn p2p_documents_add(args: P2pDocumentsMutateArgs) -> Result<()> {
-    let doc_ids = expand_nonempty_values(&args.doc_ids, "--doc-id")?;
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
-    http_post_json(&client, &format!("{api_base}/p2p/documents"), &doc_ids).await?;
-    let home_dir = resolve_home_dir(args.home.as_deref());
-    print_json(&json!({
-        "status": "documents_added",
-        "home": home_dir,
-        "graphql": graphql,
-        "doc_ids": doc_ids,
-    }))?;
-    Ok(())
-}
-
-async fn p2p_documents_remove(args: P2pDocumentsMutateArgs) -> Result<()> {
-    let doc_ids = expand_nonempty_values(&args.doc_ids, "--doc-id")?;
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
-    http_delete_json(&client, &format!("{api_base}/p2p/documents"), &doc_ids).await?;
-    let home_dir = resolve_home_dir(args.home.as_deref());
-    print_json(&json!({
-        "status": "documents_removed",
-        "home": home_dir,
-        "graphql": graphql,
-        "doc_ids": doc_ids,
-    }))?;
-    Ok(())
-}
-
-async fn p2p_documents_sync(args: P2pDocumentsSyncArgs) -> Result<()> {
-    let collection = args.collection.trim().to_string();
-    if collection.is_empty() {
-        anyhow::bail!("provide --collection");
-    }
-    let doc_ids = expand_nonempty_values(&args.doc_ids, "--doc-id")?;
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
-    let request = P2pSyncDocumentsRequest {
-        collection_name: collection.clone(),
-        doc_ids: doc_ids.clone(),
-    };
-    http_post_json(&client, &format!("{api_base}/p2p/documents/sync"), &request).await?;
-    let home_dir = resolve_home_dir(args.home.as_deref());
-    print_json(&json!({
-        "status": "documents_sync_requested",
-        "home": home_dir,
-        "graphql": graphql,
-        "collection": collection,
-        "doc_ids": doc_ids,
-    }))?;
-    Ok(())
-}
-
-async fn p2p_diagnose(args: P2pAccessArgs) -> Result<()> {
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
-    let p2p = load_live_http_p2p_status(args.home.as_deref(), &graphql).await;
-    let checks = json!({
-        "info": p2p_probe_get(&client, &format!("{api_base}/p2p/info")).await,
-        "shareable_address": p2p_probe_get(&client, &format!("{api_base}/p2p/shareable-address")).await,
-        "peers": p2p_probe_get(&client, &format!("{api_base}/p2p/peers")).await,
-        "collections": p2p_probe_get(&client, &format!("{api_base}/p2p/collections")).await,
-        "replicators": p2p_probe_get(&client, &format!("{api_base}/p2p/replicators")).await,
-        "documents": p2p_probe_get(&client, &format!("{api_base}/p2p/documents")).await,
-    });
-    let ok = checks.as_object().is_some_and(|map| {
-        map.values()
-            .all(|value| value.get("ok") == Some(&Value::Bool(true)))
-    });
-    let home_dir = resolve_home_dir(args.home.as_deref());
-    let mut output = json!({
-        "status": if ok { "ok" } else { "degraded" },
-        "home": home_dir,
-        "graphql": graphql,
-        "p2p": p2p,
-        "checks": {
-            "p2p": checks
-        }
-    });
-    if let Some(map) = output.as_object_mut() {
-        let p2p_value = map.get("p2p").cloned().unwrap_or(Value::Null);
-        flatten_p2p_fields(map, &p2p_value);
-    }
-    print_json(&output)?;
-    Ok(())
-}
 
 async fn show_runtime(args: RuntimeShowArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
@@ -958,8 +556,8 @@ async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             .is_some_and(|endpoint| endpoint == state.graphql)
     });
     let p2p_status = match graphql.as_deref().filter(|_| graphql_reachable) {
-        Some(endpoint) => load_live_http_p2p_status(args.home.as_deref(), endpoint).await,
-        None => persisted_p2p_status(matching_runtime_state),
+        Some(endpoint) => commands::p2p::load_live_http_p2p_status(args.home.as_deref(), endpoint).await,
+        None => commands::p2p::persisted_p2p_status(matching_runtime_state),
     };
     let p2p_transport = p2p_status
         .get("p2p_transport")
@@ -1050,7 +648,7 @@ async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     });
     if let Some(map) = output.as_object_mut() {
         let p2p_value = map.get("p2p").cloned().unwrap_or(Value::Null);
-        flatten_p2p_fields(map, &p2p_value);
+        commands::p2p::flatten_p2p_fields(map, &p2p_value);
     }
     print_json(&output)?;
     Ok(())
@@ -1093,7 +691,7 @@ async fn load_runtime_status_output(
         .unwrap_or(Value::Null);
     let home_dir = resolve_home_dir(home);
     let runtime_state = read_runtime_state(&home_dir)?;
-    let p2p_status = load_live_http_p2p_status(home, graphql).await;
+    let p2p_status = commands::p2p::load_live_http_p2p_status(home, graphql).await;
     let mut output = json!({
         "home": home_dir,
         "graphql": graphql,
@@ -1123,7 +721,7 @@ async fn load_runtime_status_output(
             );
         }
         let p2p_value = map.get("p2p").cloned().unwrap_or(Value::Null);
-        flatten_p2p_fields(map, &p2p_value);
+        commands::p2p::flatten_p2p_fields(map, &p2p_value);
     }
     Ok(output)
 }
@@ -1239,65 +837,6 @@ fn bool_field(row: &Value, field: &str, default: bool) -> bool {
     row.get(field).and_then(Value::as_bool).unwrap_or(default)
 }
 
-fn persisted_p2p_status(runtime_state: Option<&StoredRuntimeState>) -> Value {
-    match runtime_state {
-        Some(runtime_state) => json!({
-            "enabled": runtime_state.p2p_transport != P2pTransportArg::None.as_str(),
-            "p2p_transport": runtime_state.p2p_transport,
-            "p2p_peer_id": runtime_state.p2p_peer_id,
-            "p2p_listen_addresses": runtime_state.p2p_listen_addresses,
-            "p2p_shareable_address": Value::Null,
-            "p2p_connected_peers": [],
-            "p2p_error": Value::Null,
-        }),
-        None => json!({
-            "enabled": false,
-            "p2p_transport": P2pTransportArg::None.as_str(),
-            "p2p_peer_id": Value::Null,
-            "p2p_listen_addresses": [],
-            "p2p_shareable_address": Value::Null,
-            "p2p_connected_peers": [],
-            "p2p_error": Value::Null,
-        }),
-    }
-}
-
-fn expand_p2p_collection_args(
-    explicit_collections: &[String],
-    profiles: &[P2pCollectionProfileArg],
-) -> Result<Vec<String>> {
-    let mut collections = explicit_collections
-        .iter()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<BTreeSet<_>>();
-
-    for profile in profiles {
-        for collection in p2p_collection_profile_names(*profile) {
-            collections.insert(collection.to_string());
-        }
-    }
-
-    if collections.is_empty() {
-        anyhow::bail!("provide at least one --collection or --profile");
-    }
-
-    Ok(collections.into_iter().collect())
-}
-
-fn p2p_collection_profile_names(profile: P2pCollectionProfileArg) -> Vec<&'static str> {
-    match profile {
-        P2pCollectionProfileArg::Runtime => SCHEMA_COLLECTION_CHECKS
-            .iter()
-            .map(|(collection, _)| *collection)
-            .collect(),
-        P2pCollectionProfileArg::Agent => P2P_AGENT_COLLECTIONS.to_vec(),
-        P2pCollectionProfileArg::DesktopConfig => P2P_DESKTOP_CONFIG_COLLECTIONS.to_vec(),
-        P2pCollectionProfileArg::ChatRequests => P2P_CHAT_REQUEST_COLLECTIONS.to_vec(),
-        P2pCollectionProfileArg::ToolServices => P2P_TOOL_SERVICE_COLLECTIONS.to_vec(),
-    }
-}
 
 pub(crate) fn expand_nonempty_values(values: &[String], flag_name: &str) -> Result<Vec<String>> {
     let values = values
@@ -1314,176 +853,7 @@ pub(crate) fn expand_nonempty_values(values: &[String], flag_name: &str) -> Resu
     Ok(values.into_iter().collect())
 }
 
-async fn load_collection_name_by_id(
-    client: &reqwest::Client,
-    api_base: &str,
-) -> BTreeMap<String, String> {
-    let Ok(collections) =
-        http_get_json::<Vec<Value>>(client, &format!("{api_base}/collections/versions")).await
-    else {
-        return BTreeMap::new();
-    };
 
-    collections
-        .into_iter()
-        .filter_map(|row| {
-            let id = collection_version_string_field(&row, &["CollectionID", "collection_id"])?;
-            let name = collection_version_string_field(&row, &["Name", "name"])?;
-            Some((id, name))
-        })
-        .collect()
-}
-
-fn collection_version_string_field(row: &Value, names: &[&str]) -> Option<String> {
-    names.iter().find_map(|name| {
-        row.get(*name)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-    })
-}
-
-fn p2p_collection_rows(
-    collection_ids: &[String],
-    collection_names_by_id: &BTreeMap<String, String>,
-) -> Vec<P2pCollectionSubscriptionRow> {
-    collection_ids
-        .iter()
-        .map(|id| P2pCollectionSubscriptionRow {
-            id: id.clone(),
-            name: collection_names_by_id.get(id).cloned(),
-        })
-        .collect()
-}
-
-fn p2p_collection_names(
-    collection_ids: &[String],
-    collection_names_by_id: &BTreeMap<String, String>,
-) -> Vec<String> {
-    collection_ids
-        .iter()
-        .filter_map(|id| collection_names_by_id.get(id).cloned())
-        .collect()
-}
-
-fn p2p_replicator_rows(
-    rows: Vec<P2pReplicatorRow>,
-    collection_names_by_id: &BTreeMap<String, String>,
-) -> Vec<P2pReplicatorOutputRow> {
-    rows.into_iter()
-        .map(|row| {
-            let collection_names =
-                p2p_collection_names(&row.collection_ids, collection_names_by_id);
-            P2pReplicatorOutputRow {
-                id: row.id,
-                addresses: row.addresses,
-                collection_ids: row.collection_ids,
-                collection_names,
-            }
-        })
-        .collect()
-}
-
-async fn load_live_http_p2p_status(home: Option<&Path>, graphql: &str) -> Value {
-    let home_dir = resolve_home_dir(home);
-    let runtime_state = read_runtime_state(&home_dir)
-        .ok()
-        .flatten()
-        .filter(|state| state.graphql == graphql);
-    match fetch_live_http_p2p_status(home, graphql).await {
-        Ok(status) => status,
-        Err(error) => {
-            let mut status = persisted_p2p_status(runtime_state.as_ref());
-            if let Some(map) = status.as_object_mut() {
-                map.insert("p2p_error".to_string(), Value::String(error.to_string()));
-            }
-            status
-        }
-    }
-}
-
-async fn fetch_live_http_p2p_status(home: Option<&Path>, graphql: &str) -> Result<Value> {
-    let home_dir = resolve_home_dir(home);
-    let runtime_state = read_runtime_state(&home_dir)?.filter(|state| state.graphql == graphql);
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .context("building P2P status HTTP client")?;
-    let api_base = p2p_api_base(graphql)?;
-    let identity =
-        http_get_json::<NodeIdentityResponse>(&client, &format!("{api_base}/node/identity"))
-            .await
-            .ok();
-    let transport = runtime_state
-        .as_ref()
-        .map(|state| state.p2p_transport.as_str())
-        .filter(|transport| !transport.is_empty())
-        .unwrap_or(P2pTransportArg::None.as_str());
-    let listen_addresses: Vec<String> =
-        http_get_json(&client, &format!("{api_base}/p2p/info")).await?;
-    let shareable_address: P2pShareableAddressResponse =
-        http_get_json(&client, &format!("{api_base}/p2p/shareable-address")).await?;
-    let shareable_address = normalize_optional_string(shareable_address.address.as_deref())
-        .context("runtime reported an empty shareable P2P address")?;
-    let peer_id = resolve_p2p_peer_id(
-        identity
-            .as_ref()
-            .and_then(|identity| identity.peer_id.as_deref()),
-        Some(&shareable_address),
-        &listen_addresses,
-        runtime_state
-            .as_ref()
-            .and_then(|state| state.p2p_peer_id.as_deref()),
-    )
-    .context("runtime reported a shareable P2P address but no usable peer id")?;
-    let peer_rows: Vec<P2pPeerRow> =
-        http_get_json(&client, &format!("{api_base}/p2p/peers")).await?;
-    let connected_peers = peer_rows.into_iter().map(|row| row.id).collect::<Vec<_>>();
-    Ok(json!({
-        "enabled": true,
-        "p2p_transport": if transport == P2pTransportArg::None.as_str() {
-            P2pTransportArg::Iroh.as_str()
-        } else {
-            transport
-        },
-        "p2p_peer_id": peer_id,
-        "p2p_listen_addresses": listen_addresses,
-        "p2p_shareable_address": shareable_address,
-        "p2p_connected_peers": connected_peers,
-        "p2p_error": Value::Null,
-    }))
-}
-
-fn p2p_http_client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .context("building P2P HTTP client")
-}
-
-async fn p2p_probe_get(client: &reqwest::Client, url: &str) -> Value {
-    match http_get_json::<Value>(client, url).await {
-        Ok(value) => json!({
-            "ok": true,
-            "value": value,
-        }),
-        Err(error) => json!({
-            "ok": false,
-            "error": error.to_string(),
-        }),
-    }
-}
-
-fn p2p_api_base(graphql: &str) -> Result<String> {
-    graphql
-        .trim()
-        .strip_suffix("/graphql")
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| {
-            anyhow::anyhow!("expected GraphQL endpoint ending in /graphql, got {graphql}")
-        })
-}
 
 pub(crate) async fn http_get_json<T: DeserializeOwned>(client: &reqwest::Client, url: &str) -> Result<T> {
     let response = client
@@ -1551,25 +921,6 @@ pub(crate) async fn http_delete_json<B: Serialize>(
     Ok(())
 }
 
-fn flatten_p2p_fields(map: &mut serde_json::Map<String, Value>, p2p: &Value) {
-    map.insert(
-        "p2p_enabled".to_string(),
-        p2p.get("enabled").cloned().unwrap_or(Value::Bool(false)),
-    );
-    for field in [
-        "p2p_transport",
-        "p2p_peer_id",
-        "p2p_listen_addresses",
-        "p2p_shareable_address",
-        "p2p_connected_peers",
-        "p2p_error",
-    ] {
-        map.insert(
-            field.to_string(),
-            p2p.get(field).cloned().unwrap_or(Value::Null),
-        );
-    }
-}
 
 pub(crate) async fn resolve_config_access(
     home: Option<&Path>,
@@ -2929,28 +2280,6 @@ pub(crate) fn normalize_optional_string(value: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn peer_id_from_public_addr(value: &str) -> Option<String> {
-    let value = normalize_optional_string(Some(value))?;
-    parse_public_peer_addr(&value)
-        .ok()
-        .map(|(peer_id, _)| peer_id.to_string())
-}
-
-fn resolve_p2p_peer_id(
-    live_peer_id: Option<&str>,
-    shareable_address: Option<&str>,
-    listen_addresses: &[String],
-    stored_peer_id: Option<&str>,
-) -> Option<String> {
-    normalize_optional_string(live_peer_id)
-        .or_else(|| shareable_address.and_then(peer_id_from_public_addr))
-        .or_else(|| {
-            listen_addresses
-                .iter()
-                .find_map(|addr| peer_id_from_public_addr(addr))
-        })
-        .or_else(|| normalize_optional_string(stored_peer_id))
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BackendResolutionMode {
@@ -4255,97 +3584,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn p2p_collection_profiles_expand_and_dedupe_collection_names() {
-        let collections = expand_p2p_collection_args(
-            &[
-                " AgentRequest ".to_string(),
-                "AgentRequest".to_string(),
-                "".to_string(),
-            ],
-            &[
-                P2pCollectionProfileArg::ChatRequests,
-                P2pCollectionProfileArg::ToolServices,
-            ],
-        )
-        .unwrap();
-
-        assert!(collections.iter().any(|name| name == "AgentRequest"));
-        assert!(collections.iter().any(|name| name == "AgentResponse"));
-        assert!(collections.iter().any(|name| name == "ToolServiceRegistry"));
-        assert_eq!(
-            collections
-                .iter()
-                .filter(|name| name.as_str() == "AgentRequest")
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn p2p_collection_args_require_collection_or_profile() {
-        let error = expand_p2p_collection_args(&[], &[]).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("provide at least one --collection or --profile"));
-    }
-
-    #[test]
-    fn p2p_collection_rows_include_human_readable_names_when_known() {
-        let mut names_by_id = BTreeMap::new();
-        names_by_id.insert("bafk-agent-request".to_string(), "AgentRequest".to_string());
-        let rows = p2p_collection_rows(
-            &["bafk-agent-request".to_string(), "bafk-unknown".to_string()],
-            &names_by_id,
-        );
-
-        assert_eq!(rows[0].id, "bafk-agent-request");
-        assert_eq!(rows[0].name.as_deref(), Some("AgentRequest"));
-        assert_eq!(rows[1].id, "bafk-unknown");
-        assert!(rows[1].name.is_none());
-    }
-
-    #[test]
-    fn p2p_replicator_rows_resolve_collection_names() {
-        let mut names_by_id = BTreeMap::new();
-        names_by_id.insert("bafk-agent-runtime".to_string(), "AgentRuntime".to_string());
-        let rows = p2p_replicator_rows(
-            vec![P2pReplicatorRow {
-                id: Some("peer-1".to_string()),
-                addresses: vec!["iroh://peer-1".to_string()],
-                collection_ids: vec!["bafk-agent-runtime".to_string(), "bafk-missing".to_string()],
-            }],
-            &names_by_id,
-        );
-
-        assert_eq!(rows[0].id.as_deref(), Some("peer-1"));
-        assert_eq!(rows[0].collection_names, vec!["AgentRuntime"]);
-        assert_eq!(rows[0].collection_ids.len(), 2);
-    }
-
-    #[test]
-    fn resolve_p2p_peer_id_uses_shareable_address_when_identity_is_missing() {
-        let peer_id = resolve_p2p_peer_id(
-            None,
-            Some("127.0.0.1:56000/p2p/peer-alpha"),
-            &[],
-            Some("persisted-peer"),
-        );
-
-        assert_eq!(peer_id.as_deref(), Some("peer-alpha"));
-    }
-
-    #[test]
-    fn resolve_p2p_peer_id_falls_back_to_listen_or_stored_values() {
-        let peer_id = resolve_p2p_peer_id(
-            None,
-            None,
-            &[String::from("127.0.0.1:56000/p2p/peer-beta")],
-            Some("persisted-peer"),
-        );
-        assert_eq!(peer_id.as_deref(), Some("peer-beta"));
-
-        let peer_id = resolve_p2p_peer_id(None, None, &[], Some("persisted-peer"));
-        assert_eq!(peer_id.as_deref(), Some("persisted-peer"));
-    }
 }
