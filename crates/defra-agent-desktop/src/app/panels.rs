@@ -23,23 +23,60 @@ impl DesktopApp {
     }
 
     pub(super) fn show_rail(&mut self, ui: &mut egui::Ui, store: Option<&ClientStore>) {
-        let Some(width) = self.state.activity.rail_width() else {
+        let Some(width) = self
+            .should_show_rail()
+            .then(|| self.state.activity.rail_width())
+            .flatten()
+        else {
             return;
         };
+        let palette = theme::palette();
+        let content_rect = ui.max_rect();
+        let drawer_height = (content_rect.height() - 24.0).max(240.0);
+        let drawer_x = (content_rect.right() - width - 16.0).max(content_rect.left() + 12.0);
+        let drawer_pos = egui::pos2(drawer_x, content_rect.top() + 12.0);
 
-        Panel::right("activity_rail")
-            .resizable(false)
-            .exact_size(width)
-            .show_inside(ui, |ui| {
-                views::show_rail(
-                    ui,
-                    &mut self.state,
-                    self.client.as_deref(),
-                    store,
-                    self.log_store.as_ref(),
-                    self.runtime.as_ref(),
-                );
+        egui::Area::new(egui::Id::new("activity_rail_overlay"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(drawer_pos)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::new()
+                    .fill(palette.background_1)
+                    .stroke(egui::Stroke::new(1.0, palette.stroke_subtle))
+                    .corner_radius(8)
+                    .inner_margin(12)
+                    .show(ui, |ui| {
+                        ui.set_width(width);
+                        ui.set_min_size(egui::vec2(width, drawer_height));
+                        views::show_rail(
+                            ui,
+                            &mut self.state,
+                            self.client.as_deref(),
+                            store,
+                            self.log_store.as_ref(),
+                            self.runtime.as_ref(),
+                        );
+                    });
             });
+    }
+
+    fn should_show_rail(&self) -> bool {
+        match self.state.activity {
+            crate::state::Activity::Chat => false,
+            crate::state::Activity::Peers => false,
+            crate::state::Activity::Logs => true,
+            crate::state::Activity::Operator => {
+                use crate::state::OperatorSection;
+
+                matches!(
+                    self.state.operator.selected_section,
+                    OperatorSection::Runtime
+                        | OperatorSection::RequestTimeline
+                        | OperatorSection::RecentFailures
+                ) || self.state.operator.selected_entity_id.is_some()
+                    || self.state.operator.draft.is_some()
+            }
+        }
     }
 
     pub(super) fn show_status_bar(&self, ui: &mut egui::Ui) {

@@ -1,7 +1,7 @@
 use eframe::egui::Ui;
 
 use crate::audit;
-use crate::state::{PendingChatAction, PendingShellAction, ShellState};
+use crate::state::{Activity, PendingChatAction, PendingShellAction, ShellState};
 use crate::theme::Palette;
 use crate::views;
 
@@ -13,7 +13,7 @@ pub(super) fn render_select_agent(ui: &mut Ui) {
         views::card(
             ui,
             "Select Agent",
-            "Choose a deployment to load conversations.",
+            "Choose a deployment above to load conversations.",
         );
     });
 }
@@ -24,7 +24,7 @@ pub(super) fn render_empty(ui: &mut Ui) {
         views::card(
             ui,
             "No Conversations",
-            "This agent has no conversations yet. Create the first conversation from the main panel before sending a request.",
+            "This behavior has no conversations yet. Create the first conversation from the main panel before sending a request.",
         );
     });
 }
@@ -66,6 +66,9 @@ pub(super) fn render_buckets(
                         &response,
                     );
                     if response.clicked() {
+                        if state.activity != Activity::Chat {
+                            state.queue_shell_action(PendingShellAction::Navigate(Activity::Chat));
+                        }
                         state.queue_shell_action(PendingShellAction::Chat(
                             PendingChatAction::SelectConversation {
                                 session_id: entry.session_id.clone(),

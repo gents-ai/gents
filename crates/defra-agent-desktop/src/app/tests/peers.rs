@@ -48,9 +48,7 @@ fn desktop_app_clicks_through_peers_selection_toggle_clear_and_remove() -> Resul
     );
     driver.open_activity(Activity::Peers);
     let initial = driver.render();
-    assert!(initial
-        .iter()
-        .any(|text| text.contains("Desktop Principal")));
+    assert!(initial.iter().any(|text| text.contains("Desktop Access")));
     assert!(initial.iter().any(|text| text.contains("Night Shift")));
 
     driver.render();

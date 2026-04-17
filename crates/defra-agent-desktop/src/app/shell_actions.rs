@@ -21,6 +21,18 @@ impl DesktopApp {
                 self.state.activity = Activity::Peers;
                 self.state.peers.show_add_form = true;
             }
+            PendingShellAction::SelectScopedDeployment { peer_id, agent_did } => {
+                chat_controller::select_deployment(
+                    &mut self.state.chat,
+                    peer_id.clone(),
+                    agent_did.clone(),
+                );
+                operator_controller::select_deployment(
+                    &mut self.state.operator,
+                    peer_id.clone(),
+                    agent_did,
+                );
+            }
             PendingShellAction::Chat(action) => self.process_pending_chat_action(action),
             PendingShellAction::Operator(action) => self.process_pending_operator_action(action),
         }

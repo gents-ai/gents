@@ -20,6 +20,7 @@ pub fn prepare_state(
     client: Option<&ClientCore>,
     store: Option<&ClientStore>,
 ) {
+    shell::prepare_state(state, client, store);
     match state.activity {
         Activity::Chat => chat::prepare_state(state, client, store),
         Activity::Operator => operator::prepare_state(state, client, store),
@@ -35,14 +36,9 @@ pub fn show_sidebar(
     store: Option<&ClientStore>,
     runtime: &tokio::runtime::Runtime,
 ) {
-    shell::show_sidebar_chrome(ui, state);
-
-    match state.activity {
-        Activity::Chat => chat::show_sidebar(ui, state, client, store),
-        Activity::Operator => operator::show_sidebar(ui, state, client, store),
-        Activity::Peers => peers::show_sidebar(ui, state, client, store, runtime),
-        Activity::Logs => logs::show_sidebar(ui, state),
-    }
+    shell::show_sidebar_chrome(ui, state, client, store);
+    let _ = runtime;
+    chat::show_sidebar(ui, state, client, store);
 }
 
 pub fn show_main(

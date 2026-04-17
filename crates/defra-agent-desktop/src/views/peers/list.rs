@@ -1,4 +1,4 @@
-use eframe::egui::{self, RichText, Ui};
+use eframe::egui::{self, Ui};
 use tokio::runtime::Runtime;
 
 use crate::audit;
@@ -7,8 +7,8 @@ use crate::state::ShellState;
 use crate::theme;
 use crate::views;
 
-use super::forms::{copy_did, render_add_peer_form};
-use super::shared::{build_peer_entries, labeled_value};
+use super::forms::render_add_peer_form;
+use super::shared::build_peer_entries;
 
 pub(super) fn prepare_state(
     state: &mut ShellState,
@@ -22,7 +22,6 @@ pub(super) fn prepare_state(
 
     let peers = build_peer_entries(client, store);
     if peers.is_empty() {
-        state.peers.selected_peer_id = None;
         state.peers.show_add_form = true;
         return;
     }
@@ -54,91 +53,68 @@ pub(super) fn show_sidebar(
     };
 
     let peers = build_peer_entries(client, store);
-    let palette = theme::palette();
-
-    if peers.is_empty() {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            let short_did = client.principal().short_did();
-            ui.add_space(14.0);
-            ui.horizontal(|ui| {
-                ui.add_space(14.0);
-                views::sidebar_heading(ui, "Add Deployment", Some("first launch"));
-            });
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                ui.add_space(14.0);
-                ui.vertical(|ui| {
-                    views::card(
-                        ui,
-                        "First Launch",
-                        "Your desktop principal is ready. Use the center panel to copy the DID, request ACP access on a remote agent, and add the first deployment ticket or address.",
-                    );
-                    ui.add_space(10.0);
-                    ui.group(|ui| {
-                        ui.set_width(ui.available_width());
-                        ui.label(
-                            RichText::new("setup status")
-                                .family(theme::stencil_family())
-                                .size(12.5)
-                                .color(palette.text_1)
-                                .strong(),
-                        );
-                        ui.add_space(6.0);
-                        labeled_value(ui, "Principal DID", &short_did);
-                        labeled_value(ui, "Peers Saved", "0");
-                        labeled_value(
-                            ui,
-                            "Next Step",
-                            "grant DID on remote peer, then add deployment",
-                        );
-                    });
-                });
-            });
-        });
-        return;
-    }
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         ui.add_space(14.0);
         ui.horizontal(|ui| {
             ui.add_space(14.0);
-            views::sidebar_heading(ui, "My Identity", Some("local"));
+            views::sidebar_heading(
+                ui,
+                "Desktop Access",
+                Some(if peers.is_empty() { "empty" } else { "saved" }),
+            );
         });
         ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.add_space(14.0);
-            ui.vertical(|ui| {
-                render_identity_card(ui, client);
-                ui.add_space(8.0);
-                if audit::button(ui, audit::targets::PEERS_MAIN_COPY_DID, "Copy DID").clicked() {
-                    copy_did(ui, state, client);
-                }
+
+        if peers.is_empty() {
+            ui.horizontal(|ui| {
+                ui.add_space(14.0);
+                views::card(
+                    ui,
+                    "No Saved Deployments",
+                    "Use Add Deployment below to save the first remote node for this desktop.",
+                );
             });
-        });
+        } else {
+            render_peer_directory(ui, state, &peers);
+        }
 
         ui.add_space(14.0);
         ui.horizontal(|ui| {
             ui.add_space(14.0);
-            views::sidebar_heading(ui, "Deployments", None);
+            views::sidebar_heading(ui, "Add Deployment", None);
         });
         ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.add_space(14.0);
-            let toggle_label = if state.peers.show_add_form {
-                "Hide form"
-            } else {
-                "Add Deployment"
-            };
-            if audit::button(ui, audit::targets::PEERS_TOGGLE_ADD_FORM, toggle_label).clicked() {
-                state.peers.show_add_form = !state.peers.show_add_form;
-            }
-        });
+
+        if !peers.is_empty() {
+            ui.horizontal(|ui| {
+                ui.add_space(14.0);
+                let toggle_label = if state.peers.show_add_form {
+                    "Hide form"
+                } else {
+                    "Show form"
+                };
+                if audit::button(ui, audit::targets::PEERS_TOGGLE_ADD_FORM, toggle_label).clicked()
+                {
+                    state.peers.show_add_form = !state.peers.show_add_form;
+                }
+            });
+            ui.add_space(8.0);
+        }
 
         if state.peers.show_add_form {
-            ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.add_space(14.0);
                 render_add_peer_form(ui, state, client, runtime);
+            });
+        } else if !peers.is_empty() {
+            ui.horizontal(|ui| {
+                ui.add_space(14.0);
+                views::card(
+                    ui,
+                    "Add Another Deployment",
+                    "Use the shell add button or open this form when you want to save another node.",
+                );
             });
         }
 
@@ -149,79 +125,40 @@ pub(super) fn show_sidebar(
                 views::card(ui, "Last Peer Action", message);
             });
         }
-
-        ui.add_space(8.0);
-        if peers.is_empty() {
-            ui.horizontal(|ui| {
-                ui.add_space(14.0);
-                views::card(
-                    ui,
-                    "No Peers Saved",
-                    "Add a deployment ticket or address to start dialing and replication setup.",
-                );
-            });
-        } else {
-            for peer in &peers {
-                ui.horizontal(|ui| {
-                    ui.add_space(14.0);
-                    ui.vertical(|ui| {
-                        let status_label = if peer.connected { "online" } else { "saved" };
-                        let status_color = if peer.connected {
-                            palette.accent
-                        } else {
-                            palette.warning
-                        };
-                        let accessory = if peer.connected { "up" } else { "hold" };
-                        let meta = format!("{}  {}", peer.agent_label, status_label);
-
-                        let response = views::side_row(
-                            ui,
-                            &peer.label,
-                            &meta,
-                            state.peers.selected_peer_id.as_deref()
-                                == Some(peer.record_id.as_str()),
-                            status_color,
-                            Some(accessory),
-                        );
-                        audit::record(ui, &audit::targets::peers_peer(&peer.record_id), &response);
-                        if state.peers.selected_peer_id.as_deref() == Some(peer.record_id.as_str())
-                        {
-                            ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
-                        }
-                        audit::record(ui, &audit::targets::peers_agent(&peer.record_id), &response);
-                        if response.clicked() {
-                            state.peers.selected_peer_id = Some(peer.record_id.clone());
-                        }
-                    });
-                });
-                ui.add_space(10.0);
-            }
-        }
     });
 }
 
-fn render_identity_card(ui: &mut Ui, client: &ClientCore) {
+fn render_peer_directory(
+    ui: &mut Ui,
+    state: &mut ShellState,
+    peers: &[super::shared::PeerEntry],
+) {
     let palette = theme::palette();
-    let did = client.principal().did();
 
-    ui.group(|ui| {
-        ui.set_width(ui.available_width());
-        ui.label(
-            RichText::new("Desktop Principal")
-                .family(theme::stencil_family())
-                .size(12.5)
-                .color(palette.text_1)
-                .strong(),
-        );
-        ui.add_space(6.0);
-        labeled_value(ui, "DID", did);
-        ui.add_space(6.0);
-        ui.label(
-            RichText::new(
-                "Copy the DID from here when a remote operator needs to grant this desktop access.",
-            )
-            .size(12.5)
-            .color(palette.text_2),
-        );
+    ui.horizontal(|ui| {
+        ui.add_space(14.0);
+        ui.vertical(|ui| {
+            for peer in peers {
+                let selected = state.peers.selected_peer_id.as_deref() == Some(peer.record_id.as_str());
+                let response = views::side_row(
+                    ui,
+                    &peer.label,
+                    &peer.agent_label,
+                    selected,
+                    if peer.connected {
+                        palette.accent
+                    } else {
+                        palette.warning
+                    },
+                    Some(if peer.connected { "online" } else { "saved" }),
+                );
+                audit::record(ui, &audit::targets::peers_peer(&peer.record_id), &response);
+                audit::record(ui, &audit::targets::peers_agent(&peer.record_id), &response);
+                if response.clicked() {
+                    state.peers.selected_peer_id = Some(peer.record_id.clone());
+                }
+                ui.add_space(6.0);
+            }
+        });
     });
 }

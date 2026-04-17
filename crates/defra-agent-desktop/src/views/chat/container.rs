@@ -8,7 +8,7 @@ use crate::views;
 
 use super::nudge::render_first_conversation_nudge;
 use super::view_model::{
-    build_conversation_buckets, build_deployment_entries, display_name_for_agent,
+    build_conversation_buckets, display_name_for_agent, effective_behavior_id,
 };
 use super::{composer, header, sidebar, transcript};
 
@@ -51,14 +51,17 @@ pub fn show_sidebar(
         return;
     };
 
-    let peer_statuses = client.map(ClientCore::peer_statuses).unwrap_or_default();
-    let deployments = build_deployment_entries(&peer_statuses, store);
     let selected_agent = state.chat.shell.selected_agent_did.clone();
     let selected_session = state.chat.shell.selected_session_id.clone();
+    let selected_behavior = effective_behavior_id(state, store, selected_agent.as_deref());
     let conversations = selected_agent
         .as_deref()
         .map(|agent_did| {
-            build_conversation_buckets(&store.conversation_rows(agent_did), chrono::Utc::now())
+            let rows = selected_behavior
+                .as_deref()
+                .map(|behavior_id| store.conversations_for_behavior(agent_did, behavior_id))
+                .unwrap_or_else(|| store.conversation_rows(agent_did));
+            build_conversation_buckets(&rows, chrono::Utc::now())
         })
         .unwrap_or_default();
 
@@ -68,7 +71,6 @@ pub fn show_sidebar(
         state,
         client,
         store,
-        &deployments,
         &conversations,
         selected_agent.as_deref(),
         selected_session.as_deref(),

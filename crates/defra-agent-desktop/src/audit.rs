@@ -19,7 +19,6 @@ pub(crate) mod targets {
     pub(crate) const ACTIVITY_PEERS: &str = "activity.peers";
     pub(crate) const ACTIVITY_LOGS: &str = "activity.logs";
     pub(crate) const CHAT_COMPOSER_TEXT: &str = "chat.composer.text";
-    pub(crate) const CHAT_BEHAVIOR_SELECT: &str = "chat.behavior.select";
     pub(crate) const CHAT_CREATE_CONVERSATION: &str = "chat.create_conversation";
     pub(crate) const CHAT_NEW_CONVERSATION: &str = "chat.new_conversation";
     pub(crate) const CHAT_OPEN_PEERS_SETUP: &str = "chat.open_peers_setup";
