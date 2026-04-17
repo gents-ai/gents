@@ -1,5 +1,6 @@
 pub mod fs;
 pub mod graphql;
+pub mod mocks;
 pub mod ports;
 pub mod process;
 pub mod waits;
@@ -9,14 +10,16 @@ pub use fs::{
     read_json_file, read_runtime_state_json, write_json_file, write_manifest_root_from_export,
 };
 pub use graphql::{doc_id_for_selection, escape_graphql_string, first_graphql_row, graphql_query};
+pub use mocks::{
+    completion_text_sse, request_contains_role_text, request_has_tool_result_message,
+    request_system_message, request_tool_names, request_tool_result_text, tool_call_sse,
+    HttpRequestData, MockChatEndpoint, MockModelEndpoint, MockOpenAIEndpoint,
+};
 pub use ports::{allocate_port, graphql_url};
 pub use process::{
-    cli_bin, completion_text_sse, desktop_bin, request_contains_role_text,
-    request_has_tool_result_message, request_system_message, request_tool_names,
-    request_tool_result_text, run_cli_failure_stderr, run_cli_failure_stdout_json, run_cli_json,
+    cli_bin, desktop_bin, run_cli_failure_stderr, run_cli_failure_stdout_json, run_cli_json,
     run_cli_text, run_desktop_init_json, run_init_json, spawn_cli, spawn_server,
-    spawn_server_with_env, spawn_server_with_ready_json, tool_call_sse, wait_for_port,
-    HttpRequestData, MockChatEndpoint, MockModelEndpoint, MockOpenAIEndpoint, ServeProcess,
+    spawn_server_with_env, spawn_server_with_ready_json, wait_for_port, ServeProcess,
 };
 pub use waits::{
     insert_terminal_response, wait_for_completed_inference_behaviors,
