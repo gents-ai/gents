@@ -1,4 +1,5 @@
 use super::*;
+use super::support::*;
 
 #[tokio::test]
 async fn resolve_behavior_uses_default_when_session_is_unbound() {
