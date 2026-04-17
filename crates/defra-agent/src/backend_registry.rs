@@ -10,7 +10,6 @@ use crate::graphql::escape_graphql_string;
 
 pub const DEFAULT_MAX_QUEUE_DEPTH: i64 = 100;
 
-/// An inference backend document from DefraDB.
 #[derive(Debug, Clone)]
 pub struct InferenceBackend {
     pub backend_id: String,
@@ -28,7 +27,6 @@ pub struct InferenceBackend {
 }
 
 impl InferenceBackend {
-    /// Parse from a DefraDB JSON value.
     pub fn from_value(v: &serde_json::Value) -> Result<Self> {
         Ok(Self {
             backend_id: v
@@ -97,7 +95,6 @@ impl InferenceBackend {
     }
 }
 
-/// Look up a backend by `backend_id` from DefraDB.
 pub async fn lookup_backend(
     node: &EmbeddedNode,
     backend_id: &str,
@@ -228,7 +225,6 @@ pub(crate) async fn list_backend_records(
     Ok(backends)
 }
 
-/// Query all enabled backends from DefraDB.
 pub async fn list_enabled_backends(node: &EmbeddedNode) -> Result<Vec<InferenceBackend>> {
     let query = r#"query { InferenceBackend(filter: {enabled: {_eq: true}}) { backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled probe_status models last_probe } }"#;
 

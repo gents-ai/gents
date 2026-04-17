@@ -1,3 +1,7 @@
+// Soft-cap justified: six filesystem tool structs (list, read, write, edit,
+// glob, grep) that share private helpers defined in the same file. Splitting
+// each tool into its own file would scatter the shared defaults and make
+// cross-tool consistency harder to verify.
 use std::collections::BTreeSet;
 
 use anyhow::{anyhow, Context as _, Result};

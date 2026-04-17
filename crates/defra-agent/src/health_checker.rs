@@ -24,7 +24,6 @@ const HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 const STALENESS_THRESHOLD_SECS: i64 = 120;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Health status of a single service.
 #[derive(Debug, Clone)]
 pub struct ServiceHealth {
     pub status: HealthStatus,
@@ -32,7 +31,6 @@ pub struct ServiceHealth {
     pub last_error: Option<String>,
 }
 
-/// Possible health states for a service.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HealthStatus {
     Healthy,
@@ -50,7 +48,6 @@ impl std::fmt::Display for HealthStatus {
     }
 }
 
-/// Shared health state for all discovered services.
 #[derive(Clone)]
 pub struct ServiceHealthMap {
     inner: Arc<RwLock<HashMap<String, ServiceHealth>>>,
@@ -104,7 +101,6 @@ struct RegistryServiceEntry {
     updated_at: Option<String>,
 }
 
-/// Spawn the background health checker task.
 pub fn spawn_health_checker(
     node: Arc<EmbeddedNode>,
     mcp_pool: McpPool,

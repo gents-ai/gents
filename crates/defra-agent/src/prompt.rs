@@ -181,8 +181,6 @@ impl PromptBuilder for LayeredPromptBuilder {
     }
 }
 
-/// Assemble the frozen preamble from system prompt, behavior context, and
-/// tool discovery guidance.
 fn build_preamble(
     system_prompt: &str,
     behavior_name: &str,
@@ -220,7 +218,6 @@ fn estimate_tokens(text: &str) -> usize {
     text.len() / 4
 }
 
-/// Estimate tokens for a message sequence via JSON serialization.
 fn estimate_message_tokens(messages: &[Message]) -> usize {
     let serialized = serde_json::to_string(messages).unwrap_or_default();
     estimate_tokens(&serialized)

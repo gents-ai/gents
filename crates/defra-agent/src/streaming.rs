@@ -1,3 +1,7 @@
+// Soft-cap justified: StreamWriter trait + its only production impl
+// (DefraStreamWriter) are tightly coupled through shared DB mutation patterns.
+// Splitting the impl from the trait would fragment what is functionally a
+// single coherent unit.
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};

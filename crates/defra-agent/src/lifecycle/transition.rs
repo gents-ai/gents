@@ -1,3 +1,8 @@
+// Soft-cap justified: single impl block on RequestLifecycle; all methods are
+// atomic DB mutations that must stay together to preserve the Lean-spec
+// transition invariants (S1, S3, S6). Splitting by transition direction
+// (complete/fail/supersede) would require re-exporting private helpers across
+// submodules with no readability gain.
 use super::rows::{DedupRow, RequestStatusTransition};
 use super::*;
 

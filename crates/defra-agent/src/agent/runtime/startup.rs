@@ -1,3 +1,7 @@
+// Soft-cap justified: agent startup sequence with strong ordering constraints
+// between health checking, snapshot resolution, slot bootstrap, and recovery.
+// Each phase depends on the previous; splitting into submodules would require
+// threading many intermediate values across module boundaries for no gain.
 use std::collections::HashMap;
 use std::sync::Arc;
 
