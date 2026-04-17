@@ -7,190 +7,25 @@ mod registry;
 mod persistence;
 
 pub(crate) use config::{backend_admission_configs_from_backends, BackendAdmissionConfig};
+pub(crate) use client::{
+    scope_call, scope_request, AdmissionCallContext, AdmittedCompletionClient, CallKind,
+};
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+#[cfg(test)]
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::Result;
 use defra_node::EmbeddedNode;
-use rig::client::CompletionClient;
-use rig::completion::{
-    CompletionError, CompletionModel, CompletionRequest, CompletionResponse, Usage,
-};
-use rig::streaming::StreamingCompletionResponse;
+use rig::completion::{CompletionError, Usage};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use self::stream_guard::{hold_stream_guard, StreamGuardLifecycle};
+use self::client::current_context;
+use self::stream_guard::StreamGuardLifecycle;
 use crate::graphql::escape_graphql_string;
-use crate::watcher::AgentRequest;
-
-#[derive(Clone)]
-pub(crate) struct AdmittedCompletionClient<C> {
-    inner: C,
-    admission: AdmissionRegistry,
-}
-
-impl<C> AdmittedCompletionClient<C> {
-    pub(crate) fn new(inner: C, admission: AdmissionRegistry) -> Self {
-        Self { inner, admission }
-    }
-}
-
-impl<C> CompletionClient for AdmittedCompletionClient<C>
-where
-    C: CompletionClient,
-    C::CompletionModel: 'static,
-    <C::CompletionModel as CompletionModel>::Response: 'static,
-    <C::CompletionModel as CompletionModel>::StreamingResponse: 'static,
-{
-    type CompletionModel = AdmittedCompletionModel<C::CompletionModel>;
-}
-
-#[derive(Clone)]
-pub(crate) struct AdmittedCompletionModel<M> {
-    inner: M,
-    admission: AdmissionRegistry,
-}
-
-impl<M> CompletionModel for AdmittedCompletionModel<M>
-where
-    M: CompletionModel + 'static,
-    M::Response: 'static,
-    M::StreamingResponse: 'static,
-{
-    type Response = M::Response;
-    type StreamingResponse = M::StreamingResponse;
-    type Client = AdmittedCompletionClient<M::Client>;
-
-    fn make(client: &Self::Client, model: impl Into<String>) -> Self {
-        Self {
-            inner: M::make(&client.inner, model),
-            admission: client.admission.clone(),
-        }
-    }
-
-    async fn completion(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        let mut permit = self.admission.acquire_current_call().await?;
-        match self.inner.completion(request).await {
-            Ok(response) => {
-                permit.finish_success(Some(response.usage)).await;
-                Ok(response)
-            }
-            Err(error) => {
-                permit.finish_failure(&error.to_string()).await;
-                Err(error)
-            }
-        }
-    }
-
-    async fn stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        let mut permit = self.admission.acquire_current_call().await?;
-        match self.inner.stream(request).await {
-            Ok(stream) => Ok(hold_stream_guard(stream, permit)),
-            Err(error) => {
-                permit.finish_failure(&error.to_string()).await;
-                Err(error)
-            }
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CallKind {
-    Inference,
-    Compaction,
-    Scheduled,
-}
-
-impl CallKind {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Inference => "inference",
-            Self::Compaction => "compaction",
-            Self::Scheduled => "scheduled",
-        }
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct AdmissionCallContext {
-    request_id: String,
-    backend_id: String,
-    behavior_id: String,
-    agent_did: String,
-    call_kind: CallKind,
-    attempt: i64,
-    call_seq: Arc<AtomicU64>,
-}
-
-impl AdmissionCallContext {
-    pub(crate) fn for_request(
-        request: &AgentRequest,
-        behavior_id: impl Into<String>,
-        backend_id: impl Into<String>,
-    ) -> Self {
-        Self {
-            request_id: request.request_id.clone(),
-            backend_id: backend_id.into(),
-            behavior_id: behavior_id.into(),
-            agent_did: request.agent_did.clone(),
-            call_kind: CallKind::Inference,
-            attempt: 1,
-            call_seq: Arc::new(AtomicU64::new(0)),
-        }
-    }
-
-    fn next_call(&self, runtime_instance_id: &str) -> PendingCallMetadata {
-        let call_seq = self.call_seq.fetch_add(1, Ordering::SeqCst) + 1;
-        PendingCallMetadata {
-            call_id: uuid::Uuid::new_v4().to_string(),
-            runtime_instance_id: runtime_instance_id.to_string(),
-            request_id: self.request_id.clone(),
-            call_seq,
-            backend_id: self.backend_id.clone(),
-            behavior_id: self.behavior_id.clone(),
-            agent_did: self.agent_did.clone(),
-            call_kind: self.call_kind,
-            attempt: self.attempt,
-        }
-    }
-}
-
-tokio::task_local! {
-    static ADMISSION_CALL_CONTEXT: AdmissionCallContext;
-}
-
-pub(crate) async fn scope_request<T>(
-    context: AdmissionCallContext,
-    future: impl Future<Output = T>,
-) -> T {
-    ADMISSION_CALL_CONTEXT.scope(context, future).await
-}
-
-pub(crate) async fn scope_call<T>(
-    call_kind: CallKind,
-    attempt: i64,
-    future: impl Future<Output = T>,
-) -> T {
-    let mut context = current_context().expect("admission call scope requires request context");
-    context.call_kind = call_kind;
-    context.attempt = attempt;
-    ADMISSION_CALL_CONTEXT.scope(context, future).await
-}
-
-fn current_context() -> Result<AdmissionCallContext, CompletionError> {
-    ADMISSION_CALL_CONTEXT
-        .try_with(Clone::clone)
-        .map_err(|_| CompletionError::ProviderError("missing inference admission context".into()))
-}
 
 #[derive(Clone)]
 pub(crate) struct AdmissionRegistry {
@@ -1192,6 +1027,7 @@ mod tests {
 
     use super::*;
     use crate::schema::ensure_schemas;
+    use crate::watcher::AgentRequest;
 
     async fn test_node() -> Arc<EmbeddedNode> {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
