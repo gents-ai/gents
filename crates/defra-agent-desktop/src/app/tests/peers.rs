@@ -297,13 +297,15 @@ fn desktop_app_auto_restart_policy_triggers_for_wedged_p2p() {
         Some(&healthy),
         &wedged,
         None,
-        Instant::now()
+        Instant::now(),
+        Duration::from_secs(20)
     ));
     assert!(!should_auto_restart_p2p(
         Some(&wedged),
         &wedged,
         Some(Instant::now()),
-        Instant::now()
+        Instant::now(),
+        Duration::from_secs(20)
     ));
 }
 

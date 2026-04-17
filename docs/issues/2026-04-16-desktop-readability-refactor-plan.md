@@ -88,19 +88,35 @@ Status: completed
 ### Phase 6: `src/app.rs`
 
 - Split into:
-  - `src/app/mod.rs`
-  - `src/app/client_binding.rs`
-  - `src/app/p2p_restart.rs`
-  - `src/app/shell_actions.rs`
+  - `src/app.rs` as the thin root
   - `src/app/bootstrap.rs`
+  - `src/app/client_binding.rs`
+  - `src/app/panels.rs`
+  - `src/app/shell_actions.rs`
+
+Status: completed
 
 ### Phase 7: Test Harness
 
 - Split into:
+  - support fragments included directly from `src/app/tests.rs` to preserve existing test visibility:
+    - `src/app/tests/support/seed.rs`
+    - `src/app/tests/support/fixture.rs`
+    - `src/app/tests/support/chat_flow.rs`
+    - `src/app/tests/support/bootstrap_runtime.rs`
+    - `src/app/tests/support/network.rs`
+    - `src/app/tests/support/mock_backend.rs`
   - `src/app/tests/support/driver.rs`
   - `src/app/tests/support/wait.rs`
-  - `src/app/tests/support/fixture.rs`
-  - `src/app/tests/support/live_backend.rs`
+  - live test suite split into:
+    - `src/app/tests/live/mod.rs`
+    - `src/app/tests/live/common.rs`
   - `src/app/tests/live/chat.rs`
-  - `src/app/tests/live/operator.rs`
-  - `src/app/tests/live/peers.rs`
+    - `src/app/tests/live/chat_followup.rs`
+    - `src/app/tests/live/replication.rs`
+    - `src/app/tests/live/operator_switching.rs`
+    - `src/app/tests/live/operator_roundtrip.rs`
+    - `src/app/tests/live/operator_scheduled.rs`
+    - `src/app/tests/live/logs.rs`
+
+Status: completed
