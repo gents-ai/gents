@@ -8,8 +8,9 @@ use rig::completion::{
 };
 use rig::streaming::StreamingCompletionResponse;
 
+use super::controller::PendingCallMetadata;
 use super::stream_guard::hold_stream_guard;
-use super::{AdmissionRegistry, PendingCallMetadata};
+use super::AdmissionRegistry;
 use crate::watcher::AgentRequest;
 
 #[derive(Clone)]
