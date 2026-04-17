@@ -174,28 +174,32 @@ pub(crate) fn title_case_ascii(value: &str) -> String {
     }
 }
 
-pub(crate) fn seed_saved_peer_directory(
+pub(crate) fn write_peer_directory_records(
     paths: &DesktopPaths,
-    label: &str,
-    addr: &str,
-    agent_did: &str,
+    records: &[crate::client::PeerRecord],
 ) -> Result<()> {
     std::fs::create_dir_all(paths.root())?;
     let payload = serde_json::json!({
-        "peers": [{
-            "peer_id": "peer-broken",
-            "label": label,
-            "addr": addr,
-            "agent_did": agent_did,
-            "created_at": "2026-04-14T00:00:00Z",
-            "updated_at": "2026-04-14T00:00:00Z"
-        }]
+        "peers": records,
     });
     std::fs::write(
         paths.peer_directory_path(),
         serde_json::to_vec_pretty(&payload)?,
     )?;
     Ok(())
+}
+
+pub(crate) fn seed_saved_peer_directory(
+    paths: &DesktopPaths,
+    label: &str,
+    addr: &str,
+    agent_did: &str,
+) -> Result<()> {
+    let mut record = crate::client::PeerRecord::new(label, addr, agent_did);
+    record.peer_id = "peer-broken".to_string();
+    record.created_at = "2026-04-14T00:00:00Z".to_string();
+    record.updated_at = "2026-04-14T00:00:00Z".to_string();
+    write_peer_directory_records(paths, &[record])
 }
 
 pub(crate) struct HttpRequestData {

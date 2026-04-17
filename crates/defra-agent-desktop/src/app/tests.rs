@@ -34,8 +34,14 @@ use crate::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use crate::state::{Activity, LogsFilter, OperatorDraft, OperatorSection};
 use crate::telemetry::{global_log_layer, global_log_store, DesktopLogCategory, DesktopLogStore};
 
-include!("tests/support/seed.rs");
-include!("tests/support/fixture.rs");
+#[path = "tests/support/live_fixture/mod.rs"]
+mod support_live_fixture;
+use support_live_fixture::*;
+
+#[path = "tests/support/seed/mod.rs"]
+mod support_seed;
+use support_seed::*;
+
 include!("tests/support/chat_flow.rs");
 include!("tests/support/operator_flow.rs");
 include!("tests/support/bootstrap_runtime.rs");
