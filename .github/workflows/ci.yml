@@ -39,7 +39,7 @@ jobs:
         run: cargo test -p defra-agent --lib --tests
 
       - name: Run mocked CLI end-to-end flow
-        run: cargo test -p defra-agent-cli --test cli_e2e -- --nocapture --test-threads=1
+        run: cargo test -p defra-agent-cli -- --nocapture --test-threads=1
 
   lean-proofs:
     runs-on: ubuntu-latest
