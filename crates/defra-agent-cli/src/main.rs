@@ -169,7 +169,7 @@ Examples:
 pub(crate) const CONFIG_EXPORT_FORMAT_V1: &str = "defra-agent-config/v1";
 pub(crate) const CONFIG_EXPORT_FORMAT: &str = "defra-agent-config/v2";
 
-const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
+pub(crate) const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
     ("AgentPrincipal", "agent_did"),
     ("AgentBehavior", "behavior_id"),
     ("AgentRuntime", "agent_did"),
@@ -244,34 +244,7 @@ async fn main() -> Result<()> {
         Command::Reset(args) => commands::reset::reset(args).await,
         Command::Server(args) => commands::serve::serve(args).await,
         Command::Chat(args) => chat(args).await,
-        Command::P2p { command } => match command {
-            P2pCommand::Status(args) => p2p_status(args).await,
-            P2pCommand::Peers(args) => p2p_peers(args).await,
-            P2pCommand::Connect(args) => p2p_connect(args).await,
-            P2pCommand::Collections { command } => match command {
-                P2pCollectionsCommand::List(args) => p2p_collections_list(args).await,
-                P2pCollectionsCommand::Add(args) => p2p_collections_add(args).await,
-                P2pCollectionsCommand::Remove(args) => p2p_collections_remove(args).await,
-                P2pCollectionsCommand::SyncBranchable(args) => {
-                    p2p_collections_sync_branchable(args).await
-                }
-                P2pCollectionsCommand::SyncVersions(args) => {
-                    p2p_collections_sync_versions(args).await
-                }
-            },
-            P2pCommand::Replicators { command } => match command {
-                P2pReplicatorsCommand::List(args) => p2p_replicators_list(args).await,
-                P2pReplicatorsCommand::Add(args) => p2p_replicators_add(args).await,
-                P2pReplicatorsCommand::Remove(args) => p2p_replicators_remove(args).await,
-            },
-            P2pCommand::Documents { command } => match command {
-                P2pDocumentsCommand::List(args) => p2p_documents_list(args).await,
-                P2pDocumentsCommand::Add(args) => p2p_documents_add(args).await,
-                P2pDocumentsCommand::Remove(args) => p2p_documents_remove(args).await,
-                P2pDocumentsCommand::Sync(args) => p2p_documents_sync(args).await,
-            },
-            P2pCommand::Diagnose(args) => p2p_diagnose(args).await,
-        },
+        Command::P2p { command } => commands::p2p::dispatch(command).await,
         Command::Show { command } => match command {
             ShowCommand::Request(args) => request_show(args).await,
             ShowCommand::Response(args) => response_show(args).await,
@@ -1326,7 +1299,7 @@ fn p2p_collection_profile_names(profile: P2pCollectionProfileArg) -> Vec<&'stati
     }
 }
 
-fn expand_nonempty_values(values: &[String], flag_name: &str) -> Result<Vec<String>> {
+pub(crate) fn expand_nonempty_values(values: &[String], flag_name: &str) -> Result<Vec<String>> {
     let values = values
         .iter()
         .map(|value| value.trim())
@@ -1512,7 +1485,7 @@ fn p2p_api_base(graphql: &str) -> Result<String> {
         })
 }
 
-async fn http_get_json<T: DeserializeOwned>(client: &reqwest::Client, url: &str) -> Result<T> {
+pub(crate) async fn http_get_json<T: DeserializeOwned>(client: &reqwest::Client, url: &str) -> Result<T> {
     let response = client
         .get(url)
         .send()
@@ -1532,7 +1505,7 @@ async fn http_get_json<T: DeserializeOwned>(client: &reqwest::Client, url: &str)
     serde_json::from_slice(&body).with_context(|| format!("decoding JSON response from {url}"))
 }
 
-async fn http_post_json<B: Serialize>(client: &reqwest::Client, url: &str, body: &B) -> Result<()> {
+pub(crate) async fn http_post_json<B: Serialize>(client: &reqwest::Client, url: &str, body: &B) -> Result<()> {
     let response = client
         .post(url)
         .json(body)
@@ -1553,7 +1526,7 @@ async fn http_post_json<B: Serialize>(client: &reqwest::Client, url: &str, body:
     Ok(())
 }
 
-async fn http_delete_json<B: Serialize>(
+pub(crate) async fn http_delete_json<B: Serialize>(
     client: &reqwest::Client,
     url: &str,
     body: &B,
@@ -3237,7 +3210,7 @@ async fn submit_chat_turn_json(
     Ok(chat_turn_output(&submitted, response))
 }
 
-fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
+pub(crate) fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
     explicit
         .map(Path::to_path_buf)
         .unwrap_or_else(default_home_dir)
@@ -3294,7 +3267,7 @@ fn write_runtime_state(home_dir: &Path, state: &StoredRuntimeState) -> Result<()
     Ok(())
 }
 
-fn read_runtime_state(home_dir: &Path) -> Result<Option<StoredRuntimeState>> {
+pub(crate) fn read_runtime_state(home_dir: &Path) -> Result<Option<StoredRuntimeState>> {
     let path = runtime_state_path(home_dir);
     if !path.exists() {
         return Ok(None);
