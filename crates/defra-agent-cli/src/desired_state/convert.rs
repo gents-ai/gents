@@ -1,0 +1,244 @@
+use anyhow::{anyhow, Result};
+use serde::Deserialize;
+use serde_json::{Map, Value};
+
+use super::{
+    DesiredStateManifest, DesiredToolServiceRegistry, TOOL_SERVICE_ADDRESS_FIELDS,
+};
+use super::normalize::normalize_manifest;
+use super::validate::{
+    normalize_tool_service_mcp_path, normalize_tool_service_string, optional_i64_from_value,
+    optional_string_from_value,
+};
+
+pub(crate) fn tool_service_registry_from_live_value(value: &Value) -> Result<DesiredToolServiceRegistry> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow!("expected ToolServiceRegistry live row to be an object"))?;
+    let service_id = object
+        .get("service_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("ToolServiceRegistry live row is missing service_id"))?
+        .to_string();
+
+    Ok(DesiredToolServiceRegistry {
+        service_id,
+        display_name: optional_string_from_value("display_name", object.get("display_name"))?,
+        description: optional_string_from_value("description", object.get("description"))?,
+        hostname: optional_string_from_value("hostname", object.get("hostname"))?,
+        tailscale_ip: optional_string_from_value("tailscale_ip", object.get("tailscale_ip"))?,
+        lan_ip: optional_string_from_value("lan_ip", object.get("lan_ip"))?,
+        mcp_port: optional_i64_from_value("mcp_port", object.get("mcp_port"))?,
+        mcp_path: optional_string_from_value("mcp_path", object.get("mcp_path"))?,
+    })
+}
+
+pub(crate) fn normalize_tool_service_registry_storage_fields(
+    object: &mut Map<String, Value>,
+) -> Result<()> {
+    for field in TOOL_SERVICE_ADDRESS_FIELDS {
+        let normalized =
+            normalize_tool_service_string(optional_string_from_value(field, object.get(*field))?);
+        object.insert((*field).to_string(), Value::String(normalized));
+    }
+
+    let mcp_path = normalize_tool_service_mcp_path(optional_string_from_value(
+        "mcp_path",
+        object.get("mcp_path"),
+    )?);
+    object.insert("mcp_path".to_string(), Value::String(mcp_path));
+
+    Ok(())
+}
+
+pub(crate) fn manifest_from_export_bundle(
+    bundle: &super::super::ConfigExportBundle,
+) -> Result<DesiredStateManifest> {
+    let principal = bundle
+        .agent_principal
+        .as_ref()
+        .ok_or_else(|| anyhow!("config export bundle is missing agent_principal"))?;
+
+    let mut manifest = DesiredStateManifest {
+        agent_principal: desired_from_value(
+            principal,
+            &[
+                "agent_did",
+                "display_name",
+                "default_behavior_id",
+                "enabled",
+            ],
+        )?,
+        agent_behaviors: bundle
+            .agent_behaviors
+            .iter()
+            .map(|value| {
+                desired_from_value(
+                    value,
+                    &[
+                        "behavior_id",
+                        "agent_did",
+                        "display_name",
+                        "system_prompt",
+                        "backend_id",
+                        "model_name",
+                        "tool_selection_id",
+                        "inference_profile_id",
+                        "compaction_strategy",
+                        "compaction_threshold",
+                        "enabled",
+                    ],
+                )
+            })
+            .collect::<Result<Vec<_>>>()?,
+        tool_selections: bundle
+            .tool_selections
+            .iter()
+            .map(|value| {
+                desired_from_value(
+                    value,
+                    &[
+                        "selection_id",
+                        "agent_did",
+                        "display_name",
+                        "enable_file_tools",
+                        "file_tools_mode",
+                        "file_tool_root",
+                        "enable_bash",
+                        "bash_mode",
+                        "cli_tool_names",
+                        "enable_meta_tools",
+                        "delegate_to",
+                    ],
+                )
+            })
+            .collect::<Result<Vec<_>>>()?,
+        inference_backends: bundle
+            .inference_backends
+            .iter()
+            .map(|value| {
+                desired_from_value(
+                    value,
+                    &[
+                        "backend_id",
+                        "name",
+                        "provider_kind",
+                        "endpoint",
+                        "api_key",
+                        "api_key_env_var",
+                        "max_concurrent",
+                        "max_queue_depth",
+                        "enabled",
+                        "models",
+                    ],
+                )
+            })
+            .collect::<Result<Vec<_>>>()?,
+        inference_profiles: bundle
+            .inference_profiles
+            .iter()
+            .map(|value| {
+                desired_from_value(
+                    value,
+                    &[
+                        "profile_id",
+                        "display_name",
+                        "context_window",
+                        "max_output_tokens",
+                        "max_turns",
+                        "temperature",
+                        "stream_batch_ms",
+                        "deadline_duration_secs",
+                    ],
+                )
+            })
+            .collect::<Result<Vec<_>>>()?,
+        tool_service_registries: bundle
+            .tool_service_registries
+            .iter()
+            .map(tool_service_registry_from_live_value)
+            .collect::<Result<Vec<_>>>()?,
+        scheduled_tasks: bundle
+            .scheduled_tasks
+            .iter()
+            .map(|value| {
+                desired_from_value(
+                    value,
+                    &[
+                        "task_id",
+                        "agent_did",
+                        "behavior_id",
+                        "name",
+                        "prompt",
+                        "interval_secs",
+                        "enabled",
+                    ],
+                )
+            })
+            .collect::<Result<Vec<_>>>()?,
+    };
+    normalize_manifest(&mut manifest);
+    Ok(manifest)
+}
+
+pub(crate) fn export_bundle_from_manifest(
+    manifest: &DesiredStateManifest,
+    access_mode: &str,
+) -> Result<super::super::ConfigExportBundle> {
+    Ok(super::super::ConfigExportBundle {
+        format: super::super::CONFIG_EXPORT_FORMAT.to_string(),
+        agent_did: manifest.agent_principal.agent_did.clone(),
+        exported_at: chrono::Utc::now().to_rfc3339(),
+        access_mode: access_mode.to_string(),
+        agent_principal: Some(serde_json::to_value(&manifest.agent_principal)?),
+        agent_behaviors: manifest
+            .agent_behaviors
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<serde_json::Result<Vec<_>>>()?,
+        tool_selections: manifest
+            .tool_selections
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<serde_json::Result<Vec<_>>>()?,
+        inference_backends: manifest
+            .inference_backends
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<serde_json::Result<Vec<_>>>()?,
+        inference_profiles: manifest
+            .inference_profiles
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<serde_json::Result<Vec<_>>>()?,
+        tool_service_registries: manifest
+            .tool_service_registries
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<serde_json::Result<Vec<_>>>()?,
+        scheduled_tasks: manifest
+            .scheduled_tasks
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<serde_json::Result<Vec<_>>>()?,
+    })
+}
+
+pub(crate) fn desired_from_value<T>(value: &Value, allowed_fields: &[&str]) -> Result<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow!("expected object while projecting desired-state document"))?;
+    let projected = allowed_fields
+        .iter()
+        .filter_map(|field| {
+            object
+                .get(*field)
+                .filter(|value| !value.is_null())
+                .map(|value| ((*field).to_string(), value.clone()))
+        })
+        .collect::<Map<String, Value>>();
+    Ok(serde_json::from_value(Value::Object(projected))?)
+}
