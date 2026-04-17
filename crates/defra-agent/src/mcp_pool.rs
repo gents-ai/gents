@@ -17,10 +17,6 @@ use rmcp::{
 };
 use tokio::sync::RwLock;
 
-// ---------------------------------------------------------------------------
-// Connection wrapper
-// ---------------------------------------------------------------------------
-
 /// Wrapper that stores list_tools / call_tool closures over a concrete
 /// `RunningService` so that the pool doesn't need to name the transport
 /// generic parameter (which includes rmcp's internal reqwest 0.13 Client).
@@ -35,7 +31,6 @@ struct McpConnection {
     call_tool_fn: Box<CallToolFn>,
 }
 
-/// Create an `McpConnection` from a concrete `RunningService`.
 fn wrap_connection<S>(
     endpoint: String,
     client: rmcp::service::RunningService<RoleClient, S>,
@@ -70,10 +65,6 @@ where
     }
 }
 
-// ---------------------------------------------------------------------------
-// McpPool
-// ---------------------------------------------------------------------------
-
 /// Connection pool for MCP data-service clients.
 ///
 /// Connections are created lazily on the first `list_tools` or `call_tool`
@@ -86,7 +77,6 @@ pub struct McpPool {
 }
 
 impl McpPool {
-    /// Create an empty pool.
     pub fn new() -> Self {
         Self {
             inner: Arc::new(RwLock::new(HashMap::new())),
@@ -151,7 +141,6 @@ impl McpPool {
         }
     }
 
-    /// Evict a cached connection for `service_id`.
     pub async fn remove(&self, service_id: &str) {
         let mut guard = self.inner.write().await;
         guard.remove(service_id);
@@ -286,7 +275,6 @@ pub fn resolve_mcp_url(
     format!("http://{host}:{mcp_port}{path}")
 }
 
-/// Check if an IPv4 address falls within a CIDR block (for example `192.168.1.0/24`).
 fn ip_in_cidr(ip: &str, cidr: &str) -> bool {
     let Some((network, prefix)) = cidr.split_once('/') else {
         return false;
@@ -324,76 +312,4 @@ fn normalize_mcp_path(path: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn resolve_mcp_url_same_host_uses_localhost() {
-        let url = resolve_mcp_url(
-            "studio-1",
-            "100.69.4.79",
-            "192.168.1.104",
-            9200,
-            "/mcp",
-            "studio-1",
-            Some("192.168.1.0/24"),
-        );
-        assert_eq!(url, "http://127.0.0.1:9200/mcp");
-    }
-
-    #[test]
-    fn resolve_mcp_url_same_subnet_uses_lan_ip() {
-        let url = resolve_mcp_url(
-            "studio-2",
-            "100.76.203.120",
-            "192.168.1.152",
-            9200,
-            "/mcp",
-            "studio-1",
-            Some("192.168.1.0/24"),
-        );
-        assert_eq!(url, "http://192.168.1.152:9200/mcp");
-    }
-
-    #[test]
-    fn resolve_mcp_url_cross_site_uses_tailscale_when_subnet_differs() {
-        let url = resolve_mcp_url(
-            "mini-1",
-            "100.86.62.91",
-            "192.168.1.101",
-            9200,
-            "/mcp",
-            "studio-1",
-            Some("10.0.0.0/24"),
-        );
-        assert_eq!(url, "http://100.86.62.91:9200/mcp");
-    }
-
-    #[test]
-    fn resolve_mcp_url_no_lan_ip_uses_tailscale() {
-        let url = resolve_mcp_url(
-            "vps-1",
-            "5.78.68.132",
-            "",
-            9200,
-            "/mcp",
-            "studio-1",
-            Some("192.168.1.0/24"),
-        );
-        assert_eq!(url, "http://5.78.68.132:9200/mcp");
-    }
-
-    #[test]
-    fn resolve_mcp_url_no_subnet_uses_tailscale() {
-        let url = resolve_mcp_url(
-            "studio-2",
-            "100.76.203.120",
-            "192.168.1.152",
-            9200,
-            "/mcp",
-            "studio-1",
-            None,
-        );
-        assert_eq!(url, "http://100.76.203.120:9200/mcp");
-    }
-}
+mod tests;
