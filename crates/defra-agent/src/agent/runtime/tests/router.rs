@@ -1,0 +1,146 @@
+use super::*;
+
+#[tokio::test]
+async fn router_dispatches_first_request_after_snapshot_change_to_latest_generation() {
+    let agent_did = "did:defra-agent:router-latest-snapshot";
+    let initial_snapshot = Arc::new(crate::runtime_snapshot::ActiveRuntimeSnapshot {
+        generation: 1,
+        default_behavior_id: "general".to_string(),
+        behaviors: HashMap::new(),
+        tool_surfaces: HashMap::new(),
+        backend_admission_configs: HashMap::new(),
+        unavailable_behaviors: HashMap::new(),
+        dispatchers: HashMap::new(),
+    });
+    let updated_snapshot = Arc::new(crate::runtime_snapshot::ActiveRuntimeSnapshot {
+        generation: 2,
+        default_behavior_id: "code".to_string(),
+        behaviors: HashMap::new(),
+        tool_surfaces: HashMap::new(),
+        backend_admission_configs: HashMap::new(),
+        unavailable_behaviors: HashMap::new(),
+        dispatchers: HashMap::new(),
+    });
+    let (active_tx, mut active_rx) = watch::channel(initial_snapshot);
+    let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
+    let (watcher_tx, watcher_rx) = mpsc::channel(1);
+    let mut watcher = ScriptedWatcher { rx: watcher_rx };
+    let mut active_snapshot = active_rx.borrow().clone();
+
+    active_tx.send(updated_snapshot).unwrap();
+    watcher_tx
+        .send(Ok(AgentRequest {
+            doc_id: "doc-router".to_string(),
+            request_id: "req-router".to_string(),
+            agent_did: agent_did.to_string(),
+            behavior_id: None,
+            session_id: "session-router".to_string(),
+            content: "hello".to_string(),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            max_tokens: None,
+            metadata: None,
+            created_at: "2026-04-09T00:00:00Z".to_string(),
+        }))
+        .await
+        .unwrap();
+    let request = wait_for_next_request_with_latest_snapshot(
+        agent_did,
+        &mut watcher,
+        &mut active_snapshot,
+        &mut active_rx,
+        &mut shutdown_rx,
+    )
+    .await
+    .expect("router wait should succeed")
+    .expect("request should be returned");
+
+    assert_eq!(request.request_id, "req-router");
+    assert_eq!(active_snapshot.generation, 2);
+    assert_eq!(active_snapshot.default_behavior_id, "code");
+}
+
+#[tokio::test(start_paused = true)]
+async fn router_publishes_observed_generation_without_waiting_for_request() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let agent_did = "did:defra-agent:router-observed-generation";
+    let initial_snapshot = Arc::new(crate::runtime_snapshot::ActiveRuntimeSnapshot {
+        generation: 1,
+        default_behavior_id: "general".to_string(),
+        behaviors: HashMap::new(),
+        tool_surfaces: HashMap::new(),
+        backend_admission_configs: HashMap::new(),
+        unavailable_behaviors: HashMap::new(),
+        dispatchers: HashMap::new(),
+    });
+    let updated_snapshot = Arc::new(crate::runtime_snapshot::ActiveRuntimeSnapshot {
+        generation: 2,
+        default_behavior_id: "general".to_string(),
+        behaviors: HashMap::new(),
+        tool_surfaces: HashMap::new(),
+        backend_admission_configs: HashMap::new(),
+        unavailable_behaviors: HashMap::new(),
+        dispatchers: HashMap::new(),
+    });
+    let (active_tx, active_rx) = watch::channel(initial_snapshot.clone());
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent_did.to_string());
+    runtime_status
+        .publish_startup_snapshot(initial_snapshot.as_ref())
+        .await;
+
+    let observer_task = tokio::spawn(run_router_generation_observer(
+        active_rx,
+        runtime_status.clone(),
+        shutdown_rx,
+    ));
+
+    tokio::task::yield_now().await;
+    active_tx.send(updated_snapshot).unwrap();
+    tokio::task::yield_now().await;
+
+    let row = fetch_runtime_status(node.as_ref(), agent_did).await;
+    assert_eq!(row.active_generation, 1);
+    assert_eq!(row.last_reconcile_result, "startup");
+
+    let query = format!(
+        r#"{{
+            AgentRuntime(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}, limit: 1) {{
+                router_generation
+            }}
+        }}"#,
+        agent_did = escape_graphql_string(agent_did),
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    loop {
+        let response = node.execute(&query).await;
+        assert!(
+            !response.has_errors(),
+            "AgentRuntime router query failed: {:?}",
+            response.errors
+        );
+        let router_generation = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRuntime"))
+            .and_then(|rows| rows.as_array())
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("router_generation"))
+            .and_then(Value::as_i64)
+            .unwrap_or_default();
+        if router_generation == 2 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "router generation did not advance to 2; last value={router_generation}"
+        );
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(10)).await;
+    }
+
+    let _ = shutdown_tx.send(true);
+    observer_task.await.unwrap().unwrap();
+}
