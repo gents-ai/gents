@@ -33,7 +33,6 @@ use tokio::sync::watch;
 
 mod desired_state;
 mod telemetry;
-mod tui;
 
 const DEFAULT_AGENT_NAME: &str = "default";
 const DEFAULT_INIT_ENDPOINT: &str = "http://localhost:11434/v1";
@@ -302,8 +301,6 @@ enum Command {
         #[command(subcommand)]
         command: P2pCommand,
     },
-    #[command(about = "Experimental terminal UI", hide = true)]
-    Tui(TuiArgs),
     #[command(about = "Show stored runtime, request, or response state", after_help = SHOW_AFTER_HELP)]
     Show {
         #[command(subcommand)]
@@ -479,26 +476,6 @@ struct ChatArgs {
     poll_secs: u64,
     #[arg(value_name = "MESSAGE")]
     message: Vec<String>,
-}
-
-#[derive(clap::Args, Clone)]
-struct TuiArgs {
-    #[arg(long)]
-    home: Option<PathBuf>,
-    #[arg(long)]
-    graphql: Option<String>,
-    #[arg(long)]
-    agent_did: Option<String>,
-    #[arg(long)]
-    agent_name: Option<String>,
-    #[arg(long)]
-    session_id: Option<String>,
-    #[arg(long)]
-    behavior_id: Option<String>,
-    #[arg(long, default_value_t = 300)]
-    timeout_secs: u64,
-    #[arg(long, default_value_t = 500)]
-    poll_ms: u64,
 }
 
 #[derive(Subcommand)]
@@ -2519,7 +2496,6 @@ async fn main() -> Result<()> {
             },
             P2pCommand::Diagnose(args) => p2p_diagnose(args).await,
         },
-        Command::Tui(args) => tui::run(args).await,
         Command::Show { command } => match command {
             ShowCommand::Request(args) => request_show(args).await,
             ShowCommand::Response(args) => response_show(args).await,

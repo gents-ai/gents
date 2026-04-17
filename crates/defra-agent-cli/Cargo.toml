@@ -15,7 +15,6 @@ anyhow.workspace = true
 axum = "0.8"
 chrono.workspace = true
 clap.workspace = true
-crossterm = "0.29"
 defra-agent = { path = "../defra-agent" }
 defra-agent-protocol.workspace = true
 defra-node.workspace = true
@@ -25,7 +24,6 @@ opentelemetry.workspace = true
 opentelemetry-otlp.workspace = true
 opentelemetry_sdk.workspace = true
 p2p.workspace = true
-ratatui = "0.29"
 reqwest.workspace = true
 rig-core = "0.31"
 serde.workspace = true
