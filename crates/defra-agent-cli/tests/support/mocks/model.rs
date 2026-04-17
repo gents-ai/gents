@@ -21,7 +21,10 @@ impl MockModelEndpoint {
         Self::start_with_required_bearer(model_name, None)
     }
 
-    pub fn start_with_required_bearer(model_name: &str, required_bearer: Option<&str>) -> Result<Self> {
+    pub fn start_with_required_bearer(
+        model_name: &str,
+        required_bearer: Option<&str>,
+    ) -> Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0)).context("binding mock model port")?;
         listener
             .set_nonblocking(true)

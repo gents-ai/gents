@@ -3,13 +3,13 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use super::{
-    DesiredAgentBehavior, DesiredAgentPrincipal, DesiredInferenceBackend, DesiredInferenceProfile,
-    DesiredScheduledTask, DesiredStateManifest, DesiredStateCounts, DesiredStateValidationReport,
-    DesiredToolSelection, DesiredToolServiceRegistry,
-};
 use super::normalize::normalize_manifest;
 use super::validate::validate_manifest;
+use super::{
+    DesiredAgentBehavior, DesiredAgentPrincipal, DesiredInferenceBackend, DesiredInferenceProfile,
+    DesiredScheduledTask, DesiredStateCounts, DesiredStateManifest, DesiredStateValidationReport,
+    DesiredToolSelection, DesiredToolServiceRegistry,
+};
 
 const AGENT_PRINCIPAL_FILE: &str = "agent-principal.json";
 const AGENT_BEHAVIORS_FILE: &str = "agent-behaviors.json";
@@ -157,7 +157,11 @@ pub(crate) fn load_manifest_root(
     )
 }
 
-pub(super) fn load_required_json<T>(root: &Path, file_name: &str, errors: &mut Vec<String>) -> Option<T>
+pub(super) fn load_required_json<T>(
+    root: &Path,
+    file_name: &str,
+    errors: &mut Vec<String>,
+) -> Option<T>
 where
     T: for<'de> Deserialize<'de>,
 {
@@ -177,7 +181,11 @@ where
     }
 }
 
-pub(super) fn load_optional_json<T>(root: &Path, file_name: &str, errors: &mut Vec<String>) -> Option<T>
+pub(super) fn load_optional_json<T>(
+    root: &Path,
+    file_name: &str,
+    errors: &mut Vec<String>,
+) -> Option<T>
 where
     T: for<'de> Deserialize<'de>,
 {

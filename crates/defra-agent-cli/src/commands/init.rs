@@ -13,8 +13,8 @@ use serde_json::json;
 
 use crate::cli::*;
 use crate::config_writes::{
-    write_agent_behavior_document, write_inference_backend_document,
-    write_tool_selection_document, ConfigAccess, InferenceBackendUpsertDocument,
+    write_agent_behavior_document, write_inference_backend_document, write_tool_selection_document,
+    ConfigAccess, InferenceBackendUpsertDocument,
 };
 use crate::shared::*;
 use crate::{

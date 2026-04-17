@@ -14,9 +14,12 @@ pub(crate) async fn dispatch(command: ShowCommand) -> Result<()> {
 async fn show_runtime(args: RuntimeShowArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
-    let output =
-        crate::commands::status::load_runtime_status_output(args.home.as_deref(), &graphql, &agent_did)
-            .await?;
+    let output = crate::commands::status::load_runtime_status_output(
+        args.home.as_deref(),
+        &graphql,
+        &agent_did,
+    )
+    .await?;
     print_json(&output)?;
     Ok(())
 }

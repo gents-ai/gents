@@ -209,7 +209,6 @@ pub(crate) const EXPORT_TOOL_SERVICE_REGISTRY_FIELDS: &str =
 pub(crate) const EXPORT_SCHEDULED_TASK_FIELDS: &str =
     "task_id agent_did behavior_id name prompt interval_secs enabled";
 
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let telemetry = telemetry::init(DEFAULT_LOG_FILTER)?;
@@ -246,7 +245,10 @@ pub(crate) fn expand_nonempty_values(values: &[String], flag_name: &str) -> Resu
     Ok(values.into_iter().collect())
 }
 
-pub(crate) async fn http_get_json<T: DeserializeOwned>(client: &reqwest::Client, url: &str) -> Result<T> {
+pub(crate) async fn http_get_json<T: DeserializeOwned>(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<T> {
     let response = client
         .get(url)
         .send()
@@ -266,7 +268,11 @@ pub(crate) async fn http_get_json<T: DeserializeOwned>(client: &reqwest::Client,
     serde_json::from_slice(&body).with_context(|| format!("decoding JSON response from {url}"))
 }
 
-pub(crate) async fn http_post_json<B: Serialize>(client: &reqwest::Client, url: &str, body: &B) -> Result<()> {
+pub(crate) async fn http_post_json<B: Serialize>(
+    client: &reqwest::Client,
+    url: &str,
+    body: &B,
+) -> Result<()> {
     let response = client
         .post(url)
         .json(body)
@@ -570,5 +576,4 @@ mod tests {
             "updated_at should be stripped on create"
         );
     }
-
 }

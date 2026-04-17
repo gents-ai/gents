@@ -2,9 +2,9 @@ use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::escape_graphql_string;
 use super::graphql_fields;
 use super::serde_helpers;
+use crate::graphql::escape_graphql_string;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InferenceProfile {
@@ -119,7 +119,10 @@ pub(crate) async fn list_inference_profile_records(
         anyhow::bail!("list InferenceProfile failed: {:?}", resp.errors);
     }
 
-    Ok(serde_helpers::rows_with_doc_id(resp.data.as_ref(), "InferenceProfile"))
+    Ok(serde_helpers::rows_with_doc_id(
+        resp.data.as_ref(),
+        "InferenceProfile",
+    ))
 }
 
 pub async fn upsert_inference_profile(
@@ -136,7 +139,10 @@ pub async fn upsert_inference_profile(
         graphql_fields::graphql_optional_int_field("max_turns", profile.max_turns),
         graphql_fields::graphql_optional_float_field("temperature", profile.temperature),
         graphql_fields::graphql_optional_int_field("stream_batch_ms", profile.stream_batch_ms),
-        graphql_fields::graphql_optional_int_field("deadline_duration_secs", profile.deadline_duration_secs),
+        graphql_fields::graphql_optional_int_field(
+            "deadline_duration_secs",
+            profile.deadline_duration_secs,
+        ),
     ]
     .into_iter()
     .flatten()
@@ -150,7 +156,10 @@ pub async fn upsert_inference_profile(
         graphql_fields::graphql_optional_int_field("max_turns", profile.max_turns),
         graphql_fields::graphql_optional_float_field("temperature", profile.temperature),
         graphql_fields::graphql_optional_int_field("stream_batch_ms", profile.stream_batch_ms),
-        graphql_fields::graphql_optional_int_field("deadline_duration_secs", profile.deadline_duration_secs),
+        graphql_fields::graphql_optional_int_field(
+            "deadline_duration_secs",
+            profile.deadline_duration_secs,
+        ),
     ]
     .into_iter()
     .flatten()

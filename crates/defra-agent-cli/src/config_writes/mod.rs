@@ -5,7 +5,9 @@ mod scheduled_task;
 mod tool_selection;
 
 pub(crate) use agent_behavior::write_agent_behavior_document;
-pub(crate) use inference_backend::{write_inference_backend_document, InferenceBackendUpsertDocument};
+pub(crate) use inference_backend::{
+    write_inference_backend_document, InferenceBackendUpsertDocument,
+};
 pub(crate) use scheduled_task::write_scheduled_task_document;
 pub(crate) use tool_selection::write_tool_selection_document;
 

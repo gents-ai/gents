@@ -12,7 +12,9 @@ use crate::tool_surface::ToolSelection;
 
 use super::DocumentRuntimeView;
 
-use crate::agent::{behavior_config_from_documents, tool_selection_from_document, DocumentResolveContext};
+use crate::agent::{
+    behavior_config_from_documents, tool_selection_from_document, DocumentResolveContext,
+};
 
 pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     node: &EmbeddedNode,

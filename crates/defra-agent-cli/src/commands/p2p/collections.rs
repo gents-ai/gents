@@ -3,9 +3,15 @@ use std::collections::BTreeSet;
 use anyhow::Result;
 use serde_json::{json, Value};
 
-use crate::cli::args::{P2pAccessArgs, P2pCollectionProfileArg, P2pCollectionsMutateArgs, P2pSyncBranchableArgs, P2pSyncVersionsArgs};
+use crate::cli::args::{
+    P2pAccessArgs, P2pCollectionProfileArg, P2pCollectionsMutateArgs, P2pSyncBranchableArgs,
+    P2pSyncVersionsArgs,
+};
 use crate::shared::{P2pSyncBranchableRequest, P2pSyncVersionsRequest};
-use crate::{expand_nonempty_values, http_delete_json, http_post_json, print_json, resolve_graphql_endpoint, resolve_home_dir, SCHEMA_COLLECTION_CHECKS};
+use crate::{
+    expand_nonempty_values, http_delete_json, http_post_json, print_json, resolve_graphql_endpoint,
+    resolve_home_dir, SCHEMA_COLLECTION_CHECKS,
+};
 
 use super::output::{
     fetch_live_http_p2p_status, flatten_p2p_fields, load_collection_name_by_id,
@@ -208,8 +214,8 @@ pub(super) async fn p2p_collections_sync_versions(args: P2pSyncVersionsArgs) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use crate::shared::{P2pCollectionSubscriptionRow, P2pReplicatorRow};
+    use std::collections::BTreeMap;
 
     #[test]
     fn p2p_collection_profiles_expand_and_dedupe_collection_names() {

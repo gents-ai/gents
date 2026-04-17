@@ -3,12 +3,12 @@ use defra_node::EmbeddedNode;
 
 use crate::toolset::ToolSet;
 
-use super::modes::ToolCeiling;
-use super::selection::{CustomToolFactory, ToolSelection};
 use super::build::{
     build_host_tools, dedupe_strings, downgrade_bash, downgrade_file_tools,
     has_registered_mcp_services,
 };
+use super::modes::ToolCeiling;
+use super::selection::{CustomToolFactory, ToolSelection};
 use super::ToolSurface;
 
 #[derive(Clone)]

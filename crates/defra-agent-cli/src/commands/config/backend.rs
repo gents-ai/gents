@@ -6,12 +6,13 @@ use defra_agent::{discover_backend_models, BackendProviderKind};
 use serde_json::{json, Value};
 
 use crate::cli::*;
-use crate::config_writes::{write_inference_backend_document, ConfigAccess, InferenceBackendUpsertDocument};
+use crate::config_writes::{
+    write_inference_backend_document, ConfigAccess, InferenceBackendUpsertDocument,
+};
 use crate::print_json;
 use crate::shared::*;
 use crate::{
-    normalize_optional_string, post_graphql, BackendResolutionMode,
-    EXPORT_INFERENCE_BACKEND_FIELDS,
+    normalize_optional_string, post_graphql, BackendResolutionMode, EXPORT_INFERENCE_BACKEND_FIELDS,
 };
 
 pub(super) async fn backend_set(args: BackendUpsertArgs) -> Result<()> {

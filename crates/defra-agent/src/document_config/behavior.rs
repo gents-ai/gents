@@ -169,7 +169,10 @@ pub async fn upsert_agent_behavior(node: &EmbeddedNode, behavior: &AgentBehavior
         graphql_fields::graphql_string_field("system_prompt", behavior.system_prompt.as_deref()),
         graphql_fields::graphql_string_field("backend_id", behavior.backend_id.as_deref()),
         graphql_fields::graphql_string_field("model_name", behavior.model_name.as_deref()),
-        graphql_fields::graphql_string_field("tool_selection_id", behavior.tool_selection_id.as_deref()),
+        graphql_fields::graphql_string_field(
+            "tool_selection_id",
+            behavior.tool_selection_id.as_deref(),
+        ),
         graphql_fields::graphql_string_field(
             "inference_profile_id",
             behavior.inference_profile_id.as_deref(),
@@ -178,8 +181,14 @@ pub async fn upsert_agent_behavior(node: &EmbeddedNode, behavior: &AgentBehavior
             "compaction_strategy",
             behavior.compaction_strategy.as_deref(),
         ),
-        graphql_fields::graphql_optional_float_field("compaction_threshold", behavior.compaction_threshold),
-        Some(format!("enabled: {}", graphql_fields::graphql_bool(behavior.enabled))),
+        graphql_fields::graphql_optional_float_field(
+            "compaction_threshold",
+            behavior.compaction_threshold,
+        ),
+        Some(format!(
+            "enabled: {}",
+            graphql_fields::graphql_bool(behavior.enabled)
+        )),
         Some(format!(
             r#"created_at: "{}""#,
             escape_graphql_string(created_at.as_str())
@@ -196,7 +205,10 @@ pub async fn upsert_agent_behavior(node: &EmbeddedNode, behavior: &AgentBehavior
         graphql_fields::graphql_string_field("system_prompt", behavior.system_prompt.as_deref()),
         graphql_fields::graphql_string_field("backend_id", behavior.backend_id.as_deref()),
         graphql_fields::graphql_string_field("model_name", behavior.model_name.as_deref()),
-        graphql_fields::graphql_string_field("tool_selection_id", behavior.tool_selection_id.as_deref()),
+        graphql_fields::graphql_string_field(
+            "tool_selection_id",
+            behavior.tool_selection_id.as_deref(),
+        ),
         graphql_fields::graphql_string_field(
             "inference_profile_id",
             behavior.inference_profile_id.as_deref(),
@@ -205,8 +217,14 @@ pub async fn upsert_agent_behavior(node: &EmbeddedNode, behavior: &AgentBehavior
             "compaction_strategy",
             behavior.compaction_strategy.as_deref(),
         ),
-        graphql_fields::graphql_optional_float_field("compaction_threshold", behavior.compaction_threshold),
-        Some(format!("enabled: {}", graphql_fields::graphql_bool(behavior.enabled))),
+        graphql_fields::graphql_optional_float_field(
+            "compaction_threshold",
+            behavior.compaction_threshold,
+        ),
+        Some(format!(
+            "enabled: {}",
+            graphql_fields::graphql_bool(behavior.enabled)
+        )),
     ]
     .into_iter()
     .flatten()

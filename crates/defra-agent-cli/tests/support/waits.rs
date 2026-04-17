@@ -6,7 +6,11 @@ use serde_json::Value;
 use super::graphql::{escape_graphql_string, first_graphql_row, graphql_query};
 use super::process::run_cli_json;
 
-pub async fn wait_for_runtime_ready(graphql: &str, agent_did: &str, timeout: Duration) -> Result<()> {
+pub async fn wait_for_runtime_ready(
+    graphql: &str,
+    agent_did: &str,
+    timeout: Duration,
+) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
         let response = graphql_query(

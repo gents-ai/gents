@@ -2,16 +2,16 @@ use anyhow::{anyhow, Result};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-use super::{
-    DesiredStateManifest, DesiredToolServiceRegistry, TOOL_SERVICE_ADDRESS_FIELDS,
-};
 use super::normalize::normalize_manifest;
 use super::validate::{
     normalize_tool_service_mcp_path, normalize_tool_service_string, optional_i64_from_value,
     optional_string_from_value,
 };
+use super::{DesiredStateManifest, DesiredToolServiceRegistry, TOOL_SERVICE_ADDRESS_FIELDS};
 
-pub(crate) fn tool_service_registry_from_live_value(value: &Value) -> Result<DesiredToolServiceRegistry> {
+pub(crate) fn tool_service_registry_from_live_value(
+    value: &Value,
+) -> Result<DesiredToolServiceRegistry> {
     let object = value
         .as_object()
         .ok_or_else(|| anyhow!("expected ToolServiceRegistry live row to be an object"))?;

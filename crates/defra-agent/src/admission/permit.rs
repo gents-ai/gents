@@ -5,8 +5,8 @@ use rig::completion::{CompletionError, Usage};
 use tokio::sync::OwnedSemaphorePermit;
 
 use super::controller::{BackendAdmissionController, InferenceCallRecord};
-use super::stream_guard::StreamGuardLifecycle;
 use super::persistence::{persist_existing_call_terminal, spawn_persistence};
+use super::stream_guard::StreamGuardLifecycle;
 
 pub(crate) struct AdmissionPermit {
     node: Arc<EmbeddedNode>,

@@ -3,9 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use rig::client::CompletionClient;
-use rig::completion::{
-    CompletionError, CompletionModel, CompletionRequest, CompletionResponse,
-};
+use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
 use rig::streaming::StreamingCompletionResponse;
 
 use super::controller::PendingCallMetadata;

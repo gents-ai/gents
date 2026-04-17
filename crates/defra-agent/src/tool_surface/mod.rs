@@ -1,8 +1,8 @@
-mod modes;
-mod selection;
-mod runtime_context;
 mod behavior_config;
 mod build;
+mod modes;
+mod runtime_context;
+mod selection;
 
 pub use behavior_config::BehaviorToolConfig;
 pub use modes::{BashMode, FileToolMode, ToolCeiling};

@@ -30,7 +30,10 @@ pub(super) async fn diagnose_schema_presence(access: &ConfigAccess) -> Vec<Value
     results
 }
 
-pub(super) async fn load_runtime_row(access: &ConfigAccess, agent_did: &str) -> Result<Option<Value>> {
+pub(super) async fn load_runtime_row(
+    access: &ConfigAccess,
+    agent_did: &str,
+) -> Result<Option<Value>> {
     use defra_agent::graphql::escape_graphql_string;
     let query = format!(
         r#"{{

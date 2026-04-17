@@ -2,11 +2,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use defra_agent::{cli_tool, graphql::escape_graphql_string, BackendProviderKind, BashMode, FileToolMode};
+use defra_agent::{
+    cli_tool, graphql::escape_graphql_string, BackendProviderKind, BashMode, FileToolMode,
+};
 
 use crate::cli::args::{BackendPresetArg, ToolCeilingArg};
 use crate::shared::ResolvedBackendConfig;
-use crate::{first_graphql_row, normalize_optional_string, post_graphql, require_non_empty, DEFAULT_INIT_ENDPOINT};
+use crate::{
+    first_graphql_row, normalize_optional_string, post_graphql, require_non_empty,
+    DEFAULT_INIT_ENDPOINT,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BackendResolutionMode {
@@ -101,7 +106,10 @@ fn resolve_backend_api_key_env_var(
     })
 }
 
-pub(crate) fn resolve_task_prompt(prompt: Option<&str>, prompt_file: Option<&Path>) -> Result<String> {
+pub(crate) fn resolve_task_prompt(
+    prompt: Option<&str>,
+    prompt_file: Option<&Path>,
+) -> Result<String> {
     match (prompt, prompt_file) {
         (Some(_), Some(path)) => anyhow::bail!(
             "provide either --prompt or --prompt-file, not both ({})",

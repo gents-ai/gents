@@ -42,7 +42,8 @@ pub(super) fn p2p_replicator_rows(
 ) -> Vec<P2pReplicatorOutputRow> {
     rows.into_iter()
         .map(|row| {
-            let collection_names = p2p_collection_names(&row.collection_ids, collection_names_by_id);
+            let collection_names =
+                p2p_collection_names(&row.collection_ids, collection_names_by_id);
             P2pReplicatorOutputRow {
                 id: row.id,
                 addresses: row.addresses,
@@ -121,7 +122,10 @@ pub(crate) async fn load_live_http_p2p_status(home: Option<&Path>, graphql: &str
     }
 }
 
-pub(super) async fn fetch_live_http_p2p_status(home: Option<&Path>, graphql: &str) -> Result<Value> {
+pub(super) async fn fetch_live_http_p2p_status(
+    home: Option<&Path>,
+    graphql: &str,
+) -> Result<Value> {
     use crate::http::version::{NodeIdentityResponse, P2pShareableAddressResponse};
     let home_dir = resolve_home_dir(home);
     let runtime_state = read_runtime_state(&home_dir)?.filter(|state| state.graphql == graphql);
