@@ -1,3 +1,4 @@
+// Soft-cap justified: 5 server startup scenarios share setup (port allocation, runtime state, degraded-mode wiring); splitting would duplicate ~40 lines per file.
 mod support;
 use support::*;
 
