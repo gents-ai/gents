@@ -1,3 +1,4 @@
+// Soft-cap justified: shared test harness for runtime integration tests. Splitting further would fragment fixture reuse (mock HTTP server, bind helpers, wait utilities must stay co-located with the tests that pair them).
 use super::super::*;
 use crate::identity::SimpleIdentity;
 use std::io::{Read, Write};

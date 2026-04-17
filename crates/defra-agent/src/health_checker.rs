@@ -315,6 +315,7 @@ fn parse_updated_at(value: Option<&str>) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
+// Inline test module preserved: single-test smoke check, deliberately not extracted to keep it co-located with the narrow code it tests.
 #[cfg(test)]
 mod registry_parsing_tests {
     use super::RegistryServiceEntry;

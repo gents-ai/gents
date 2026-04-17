@@ -79,6 +79,7 @@ pub use toolset::{
 pub use truncation::{DefraSpillTruncator, TruncationLimits, TruncationMode, Truncator};
 pub use watcher::{AgentRequest, DefraWatcher, Watcher};
 
+// Inline test module preserved: single-test smoke check, deliberately not extracted to keep it co-located with the narrow code it tests.
 #[cfg(test)]
 mod public_api_tests {
     use super::*;
