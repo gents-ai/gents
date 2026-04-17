@@ -7,11 +7,12 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::client::CallKind;
 use super::config::BackendAdmissionConfig;
-use super::registry::AdmissionRegistryInner;
-use super::{
+use super::permit::AdmissionPermit;
+use super::persistence::{
     persist_call_started, persist_existing_call_running, persist_existing_call_terminal,
-    persist_terminal_call, spawn_persistence, AdmissionPermit,
+    persist_terminal_call, spawn_persistence,
 };
+use super::registry::AdmissionRegistryInner;
 
 pub(super) struct BackendAdmissionController {
     pub(super) backend_id: String,
@@ -141,9 +142,9 @@ impl BackendAdmissionController {
         };
 
         let call = self.call_record(pending, queue_depth);
-        let doc_id = super::persist_call_queued(node.clone(), &call)
+        let doc_id = super::persistence::persist_call_queued(node.clone(), &call)
             .await
-            .map_err(super::completion_persistence_error)?;
+            .map_err(super::persistence::completion_persistence_error)?;
         let queued_guard = QueuedCallGuard {
             node: node.clone(),
             controller: self.clone(),
@@ -174,7 +175,7 @@ impl BackendAdmissionController {
         self.running.fetch_add(1, Ordering::SeqCst);
         if let Err(error) = persist_existing_call_running(node.clone(), &call).await {
             self.release_running();
-            return Err(super::completion_persistence_error(error));
+            return Err(super::persistence::completion_persistence_error(error));
         }
         Ok(AdmissionPermit::new(node, self, permit, call, doc_id))
     }

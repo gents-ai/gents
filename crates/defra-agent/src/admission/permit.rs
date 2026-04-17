@@ -6,7 +6,7 @@ use tokio::sync::OwnedSemaphorePermit;
 
 use super::controller::{BackendAdmissionController, InferenceCallRecord};
 use super::stream_guard::StreamGuardLifecycle;
-use super::{persist_existing_call_terminal, spawn_persistence};
+use super::persistence::{persist_existing_call_terminal, spawn_persistence};
 
 pub(crate) struct AdmissionPermit {
     node: Arc<EmbeddedNode>,

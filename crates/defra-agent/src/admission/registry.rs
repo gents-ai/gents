@@ -10,7 +10,7 @@ use super::client::{scope_request, AdmissionCallContext, CallKind};
 use super::config::BackendAdmissionConfig;
 use super::controller::{BackendAdmissionController, InferenceCallRecord};
 use super::permit::AdmissionPermit;
-use super::persist_terminal_call;
+use super::persistence::persist_terminal_call;
 
 #[derive(Clone)]
 pub(crate) struct AdmissionRegistry {
