@@ -1,18 +1,15 @@
 use defra_agent_protocol::client_protocol::ClientTurnState;
-use eframe::egui::{self, ComboBox, Key, RichText, TextEdit, Ui};
+use eframe::egui::{self, Key, RichText, TextEdit, Ui};
 
 use crate::audit;
 use crate::chat::domain::submission::SendStatus;
-use crate::client::ClientStore;
 use crate::state::{PendingChatAction, PendingShellAction, ShellState};
 use crate::theme;
-
-use super::view_model::{behavior_selection_entries, display_behavior_label};
 
 pub fn show(
     ui: &mut Ui,
     state: &mut ShellState,
-    store: &ClientStore,
+    _store: &crate::client::ClientStore,
     selected_agent_did: Option<&str>,
     _turn_state: Option<ClientTurnState>,
     send_status: SendStatus,
@@ -28,11 +25,6 @@ pub fn show(
 
     ui.group(|ui| {
         ui.set_width(ui.available_width());
-        render_behavior_selector(ui, state, store, selected_agent_did);
-        if selected_agent_did.is_some() {
-            ui.add_space(8.0);
-        }
-
         let text_edit = TextEdit::multiline(&mut state.chat.editor.composer_text)
             .id_source(audit::targets::CHAT_COMPOSER_TEXT)
             .desired_rows(3)
@@ -74,96 +66,6 @@ pub fn show(
             });
         });
     });
-}
-
-fn render_behavior_selector(
-    ui: &mut Ui,
-    state: &mut ShellState,
-    store: &ClientStore,
-    selected_agent_did: Option<&str>,
-) {
-    let Some(agent_did) = selected_agent_did else {
-        return;
-    };
-
-    let selected_session_id = state.chat.shell.selected_session_id.as_deref();
-    let locked = selected_session_id.is_some();
-    let selected_behavior_id = effective_behavior_id(state, store, selected_agent_did);
-    let selected_text = display_behavior_label(store, agent_did, selected_behavior_id.as_deref());
-
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new("Behavior")
-                .monospace()
-                .size(10.5)
-                .color(theme::palette().text_2),
-        );
-        if locked {
-            ui.label(
-                RichText::new("locked to this conversation")
-                    .monospace()
-                    .size(10.5)
-                    .color(theme::palette().text_3),
-            );
-        }
-    });
-
-    if locked {
-        audit::add_enabled(
-            ui,
-            audit::targets::CHAT_BEHAVIOR_SELECT,
-            false,
-            egui::Button::new(selected_text).min_size(egui::vec2(ui.available_width(), 28.0)),
-        );
-        return;
-    }
-
-    let response = ComboBox::from_id_salt(audit::targets::CHAT_BEHAVIOR_SELECT)
-        .selected_text(selected_text)
-        .width(ui.available_width())
-        .show_ui(ui, |ui| {
-            for entry in behavior_selection_entries(store, agent_did) {
-                let selected = entry.behavior_id.as_deref()
-                    == state.chat.editor.selected_behavior_override.as_deref();
-                let target = entry
-                    .behavior_id
-                    .as_deref()
-                    .map(audit::targets::chat_behavior_option)
-                    .unwrap_or_else(|| "chat.behavior.option.default".to_string());
-                let option = ui.selectable_label(selected, &entry.label);
-                audit::record(ui, &target, &option);
-                if option.clicked() {
-                    state.queue_shell_action(PendingShellAction::Chat(
-                        PendingChatAction::SelectBehavior {
-                            behavior_id: entry.behavior_id.clone(),
-                        },
-                    ));
-                    ui.close();
-                }
-            }
-        });
-    audit::record(ui, audit::targets::CHAT_BEHAVIOR_SELECT, &response.response);
-}
-
-fn effective_behavior_id(
-    state: &ShellState,
-    store: &ClientStore,
-    selected_agent_did: Option<&str>,
-) -> Option<String> {
-    state
-        .chat
-        .shell
-        .selected_session_id
-        .as_deref()
-        .and_then(|session_id| store.session_behavior_id(session_id, selected_agent_did))
-        .or_else(|| state.chat.editor.selected_behavior_override.clone())
-        .or_else(|| {
-            selected_agent_did.and_then(|agent_did| {
-                store
-                    .default_behavior_id_for_agent(agent_did)
-                    .map(ToOwned::to_owned)
-            })
-        })
 }
 
 fn submit(state: &mut ShellState, selected_agent_did: Option<&str>) {

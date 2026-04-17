@@ -1,8 +1,8 @@
-use eframe::egui::{self, Ui};
+use eframe::egui::{self, RichText, Ui};
 
 use crate::audit;
 use crate::client::{ClientCore, ClientStore};
-use crate::operator::{build_deployment_entries, section_meta};
+use crate::operator::section_meta;
 use crate::state::{OperatorSection, PendingOperatorAction, PendingShellAction, ShellState};
 use crate::theme;
 use crate::views;
@@ -10,11 +10,9 @@ use crate::views;
 pub(super) fn show_sidebar(
     ui: &mut Ui,
     state: &mut ShellState,
-    client: Option<&ClientCore>,
+    _client: Option<&ClientCore>,
     store: Option<&ClientStore>,
 ) {
-    let palette = theme::palette();
-
     let Some(store) = store else {
         views::card(
             ui,
@@ -24,133 +22,85 @@ pub(super) fn show_sidebar(
         return;
     };
 
-    let peer_statuses = client.map(ClientCore::peer_statuses).unwrap_or_default();
-    let deployments = build_deployment_entries(&peer_statuses, store);
-
     egui::ScrollArea::vertical().show(ui, |ui| {
         ui.add_space(14.0);
-        ui.horizontal(|ui| {
-            ui.add_space(14.0);
-            views::sidebar_heading(ui, "Deployments", None);
-        });
-        ui.add_space(6.0);
 
-        for deployment in &deployments {
-            ui.horizontal(|ui| {
-                ui.add_space(14.0);
-                ui.vertical(|ui| {
-                    let meta = format!(
-                        "{}  {}",
-                        deployment.agent_label,
-                        if deployment.connected {
-                            "online"
-                        } else {
-                            "saved"
-                        }
-                    );
-                    let response = views::side_row(
-                        ui,
-                        &deployment.label,
-                        &meta,
-                        state.operator.selected_peer_id.as_deref()
-                            == Some(deployment.peer_id.as_str()),
-                        if deployment.connected {
-                            palette.accent
-                        } else {
-                            palette.warning
-                        },
-                        Some(if deployment.connected { "up" } else { "warn" }),
-                    );
-                    audit::record(
-                        ui,
-                        &audit::targets::operator_deployment(&deployment.peer_id),
-                        &response,
-                    );
-                    audit::record(
-                        ui,
-                        &audit::targets::operator_agent(&deployment.agent_did),
-                        &response,
-                    );
-                    if response.clicked() {
-                        state.queue_shell_action(PendingShellAction::Operator(
-                            PendingOperatorAction::SelectDeployment {
-                                peer_id: deployment.peer_id.clone(),
-                                agent_did: deployment.agent_did.clone(),
-                            },
-                        ));
-                    }
-                });
-            });
-            ui.add_space(10.0);
+        if state.operator.selected_agent_did.is_none() {
+            views::card(
+                ui,
+                "Select Deployment",
+                "Choose a deployment above, then open Configure to manage its behaviors and runtime state.",
+            );
+            return;
         }
 
-        ui.add_space(8.0);
-        ui.separator();
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.add_space(14.0);
-            views::sidebar_heading(ui, "Config", None);
-        });
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.add_space(14.0);
-            ui.vertical(|ui| {
-                for section in OperatorSection::MANAGE {
-                    let (title, meta) =
-                        section_meta(store, section, state.operator.selected_agent_did.as_deref());
-                    let response = views::side_row(
-                        ui,
-                        title,
-                        &meta,
-                        state.operator.selected_section == section,
-                        if state.operator.selected_section == section {
-                            palette.accent
-                        } else {
-                            palette.text_3
-                        },
-                        None,
-                    );
-                    audit::record(ui, &audit::targets::operator_section(section), &response);
-                    if response.clicked() {
-                        state.queue_shell_action(PendingShellAction::Operator(
-                            PendingOperatorAction::SelectSection { section },
-                        ));
-                    }
-                }
-            });
-        });
+        render_section_group(ui, state, store, "Configure", &OperatorSection::MANAGE);
         ui.add_space(10.0);
-        ui.horizontal(|ui| {
-            ui.add_space(14.0);
-            views::sidebar_heading(ui, "History", None);
-        });
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.add_space(14.0);
-            ui.vertical(|ui| {
-                for section in OperatorSection::INSPECT {
-                    let (title, meta) =
-                        section_meta(store, section, state.operator.selected_agent_did.as_deref());
-                    let response = views::side_row(
-                        ui,
-                        title,
-                        &meta,
-                        state.operator.selected_section == section,
-                        if state.operator.selected_section == section {
-                            palette.accent
-                        } else {
-                            palette.text_3
-                        },
-                        None,
-                    );
-                    audit::record(ui, &audit::targets::operator_section(section), &response);
-                    if response.clicked() {
-                        state.queue_shell_action(PendingShellAction::Operator(
-                            PendingOperatorAction::SelectSection { section },
-                        ));
-                    }
+        render_section_group(ui, state, store, "History", &OperatorSection::INSPECT);
+    });
+}
+
+fn render_section_group(
+    ui: &mut Ui,
+    state: &mut ShellState,
+    store: &ClientStore,
+    title: &str,
+    sections: &[OperatorSection],
+) {
+    let palette = theme::palette();
+    let selected_section = state.operator.selected_section;
+    let open = sections.contains(&selected_section);
+
+    ui.horizontal(|ui| {
+        ui.add_space(14.0);
+        ui.group(|ui| {
+            ui.set_width(ui.available_width());
+            let header = egui::Button::new(
+                RichText::new(format!("{} {}", if open { "v" } else { ">" }, title))
+                    .family(theme::stencil_family())
+                    .size(13.0)
+                    .color(palette.text_1)
+                    .strong(),
+            )
+            .min_size(egui::vec2(ui.available_width(), 28.0))
+            .fill(palette.background_0)
+            .stroke(egui::Stroke::new(1.0, palette.stroke_subtle));
+            if ui.add(header).clicked() && !open {
+                state.queue_shell_action(PendingShellAction::Operator(
+                    PendingOperatorAction::SelectSection {
+                        section: sections[0],
+                    },
+                ));
+            }
+
+            if !open {
+                return;
+            }
+
+            ui.add_space(8.0);
+            for section in sections {
+                let (title, meta) =
+                    section_meta(store, *section, state.operator.selected_agent_did.as_deref());
+                let response = views::side_row(
+                    ui,
+                    title,
+                    &meta,
+                    selected_section == *section,
+                    if selected_section == *section {
+                        palette.accent
+                    } else {
+                        palette.text_3
+                    },
+                    None,
+                );
+                audit::record(ui, &audit::targets::operator_section(*section), &response);
+                if response.clicked() {
+                    state.queue_shell_action(PendingShellAction::Operator(
+                        PendingOperatorAction::SelectSection { section: *section },
+                    ));
                 }
-            });
+                ui.add_space(6.0);
+            }
         });
     });
 }

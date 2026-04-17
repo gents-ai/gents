@@ -24,9 +24,7 @@ fn desktop_app_redirects_blank_first_launch_to_peers_onboarding() -> Result<()> 
     assert_eq!(app.state.activity, Activity::Peers);
     assert!(app.state.onboarding.first_launch_redirect_done);
     assert!(texts.iter().any(|text| text.contains("First Launch")));
-    assert!(texts
-        .iter()
-        .any(|text| text.contains("Add Your First Deployment")));
+    assert!(texts.iter().any(|text| text.contains("Add Deployment")));
     Ok(())
 }
 
@@ -182,9 +180,7 @@ fn desktop_app_clicks_chat_open_peers_setup_from_empty_sidebar() -> Result<()> {
     let after_click = driver.click_target(audit::targets::CHAT_OPEN_PEERS_SETUP);
     assert_eq!(driver.app.state.activity, Activity::Peers);
     assert!(driver.app.state.peers.show_add_form);
-    assert!(after_click
-        .iter()
-        .any(|text| text.contains("Add Your First Deployment")));
+    assert!(after_click.iter().any(|text| text.contains("First Launch")));
     Ok(())
 }
 

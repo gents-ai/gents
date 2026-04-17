@@ -1,14 +1,14 @@
+mod behavior;
 mod conversations;
-mod deployments;
 
 use eframe::egui::{self, RichText, Ui};
 
 use crate::audit;
 use crate::client::{ClientCore, ClientStore};
-use crate::state::{PendingChatAction, PendingShellAction, ShellState};
+use crate::state::{Activity, PendingChatAction, PendingShellAction, ShellState};
 use crate::theme::Palette;
 
-use super::{ConversationBucket, DeploymentEntry};
+use super::ConversationBucket;
 
 pub fn show(
     ui: &mut Ui,
@@ -16,21 +16,21 @@ pub fn show(
     state: &mut ShellState,
     client: Option<&ClientCore>,
     store: &ClientStore,
-    deployments: &[DeploymentEntry],
     conversations: &[ConversationBucket],
     selected_agent_did: Option<&str>,
     selected_session_id: Option<&str>,
 ) {
-    let _ = store;
     egui::ScrollArea::vertical().show(ui, |ui| {
-        show_deployments_header(ui, palette, state);
+        show_behaviors_header(ui, palette);
         ui.add_space(8.0);
-
-        if deployments.is_empty() {
-            deployments::render_empty(ui, state);
-        } else {
-            deployments::render_list(ui, palette, state, deployments, selected_agent_did);
-        }
+        behavior::show(
+            ui,
+            palette,
+            state,
+            store,
+            selected_agent_did,
+            selected_session_id,
+        );
 
         ui.separator();
         ui.add_space(8.0);
@@ -51,34 +51,17 @@ pub fn show(
     });
 }
 
-fn show_deployments_header(ui: &mut Ui, palette: Palette, state: &mut ShellState) {
+fn show_behaviors_header(ui: &mut Ui, palette: Palette) {
     ui.add_space(14.0);
     ui.horizontal(|ui| {
         ui.add_space(14.0);
         ui.label(
-            RichText::new("Deployments")
+            RichText::new("Behaviors")
                 .family(crate::theme::stencil_family())
                 .size(13.0)
                 .color(palette.text_1)
                 .strong(),
         );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add_space(14.0);
-            let response = audit::add(
-                ui,
-                audit::targets::CHAT_OPEN_PEERS_SETUP,
-                egui::Button::new(
-                    RichText::new("+ peer")
-                        .monospace()
-                        .size(10.5)
-                        .color(palette.accent),
-                )
-                .min_size(egui::vec2(52.0, 20.0)),
-            );
-            if response.clicked() {
-                state.queue_shell_action(PendingShellAction::OpenPeersSetup);
-            }
-        });
     });
 }
 
@@ -115,6 +98,9 @@ fn show_conversations_header(
                 .min_size(egui::vec2(52.0, 20.0)),
             );
             if response.clicked() {
+                if state.activity != Activity::Chat {
+                    state.queue_shell_action(PendingShellAction::Navigate(Activity::Chat));
+                }
                 state.queue_shell_action(PendingShellAction::Chat(
                     PendingChatAction::StartNewConversationDraft,
                 ));

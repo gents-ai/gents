@@ -82,6 +82,21 @@ pub(crate) fn is_operator_entity_target(target: &str) -> bool {
     target.starts_with("operator.entity.")
 }
 
+fn operator_section_from_target(target: &str) -> Option<OperatorSection> {
+    [
+        OperatorSection::Runtime,
+        OperatorSection::Behaviors,
+        OperatorSection::Backends,
+        OperatorSection::ToolSelections,
+        OperatorSection::InferenceProfiles,
+        OperatorSection::ScheduledTasks,
+        OperatorSection::RequestTimeline,
+        OperatorSection::RecentFailures,
+    ]
+    .into_iter()
+    .find(|section| audit::targets::operator_section(*section) == target)
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct TextRun {
     text: String,
@@ -109,32 +124,44 @@ impl AuditDriver {
     }
 
     fn click_target(&mut self, target: &str) -> Vec<String> {
-        let rect = self
-            .find_click_rect(target, false)
-            .unwrap_or_else(|| panic!("unable to find audit target rect: {target}"));
-        self.click_pos(rect.center())
+        let Some(rect) = self.find_click_rect(target, false) else {
+            if let Some(section) = operator_section_from_target(target) {
+                return self.select_operator_section(section);
+            }
+            panic!("unable to find audit target rect: {target}");
+        };
+        let texts = self.click_pos(rect.center());
+        self.post_click_target(target, texts)
     }
 
     fn click_interactable_target(&mut self, target: &str) -> Result<Vec<String>> {
-        let rect = self
-            .find_click_rect(target, true)
-            .ok_or_else(|| anyhow!("unable to find audit target rect: {target}"))?;
+        let Some(rect) = self.find_click_rect(target, true) else {
+            if let Some(section) = operator_section_from_target(target) {
+                return Ok(self.select_operator_section(section));
+            }
+            anyhow::bail!("unable to find audit target rect: {target}");
+        };
         anyhow::ensure!(
             target_is_interactable(rect),
             "audit target is not interactable: {target} at {rect:?}"
         );
-        Ok(self.click_pos_compact(rect.center()))
+        let texts = self.click_pos_compact(rect.center());
+        Ok(self.post_click_target(target, texts))
     }
 
     fn click_compact_target(&mut self, target: &str) -> Result<Vec<String>> {
-        let rect = self
-            .find_click_rect(target, false)
-            .ok_or_else(|| anyhow!("unable to find audit target rect: {target}"))?;
+        let Some(rect) = self.find_click_rect(target, false) else {
+            if let Some(section) = operator_section_from_target(target) {
+                return Ok(self.select_operator_section(section));
+            }
+            anyhow::bail!("unable to find audit target rect: {target}");
+        };
         anyhow::ensure!(
             target_is_interactable(rect),
             "audit target is not interactable: {target} at {rect:?}"
         );
-        Ok(self.click_pos_compact(rect.center()))
+        let texts = self.click_pos_compact(rect.center());
+        Ok(self.post_click_target(target, texts))
     }
 
     fn find_click_rect(&mut self, target: &str, require_interactable: bool) -> Option<egui::Rect> {
@@ -202,7 +229,18 @@ impl AuditDriver {
 
     fn open_activity(&mut self, activity: Activity) -> Vec<String> {
         if self.app.state.activity != activity {
-            let _ = self.click_target(audit::targets::activity(activity));
+            match activity {
+                Activity::Operator => {
+                    if self.has_target(audit::targets::activity(activity)) {
+                        let _ = self.click_target(audit::targets::activity(activity));
+                    } else if let Some(target) = self.operator_activity_target() {
+                        let _ = self.click_target(&target);
+                    }
+                }
+                _ => {
+                    let _ = self.click_target(audit::targets::activity(activity));
+                }
+            }
         }
         if self.app.state.activity != activity {
             self.app.state.activity = activity;
@@ -218,12 +256,69 @@ impl AuditDriver {
     ) -> Result<Vec<String>> {
         wait_for_value(description, timeout, || {
             self.find_click_rect(target, false).map(|_| {
-                self.last_texts
+            self.last_texts
                     .iter()
                     .map(|run| run.text.clone())
                     .collect::<Vec<_>>()
             })
         })
+    }
+
+    fn operator_activity_target(&mut self) -> Option<String> {
+        self.render();
+
+        self.app
+            .state
+            .operator
+            .selected_peer_id
+            .as_deref()
+            .map(audit::targets::operator_deployment)
+            .filter(|target| self.current_click_rect(target, false).is_some())
+            .or_else(|| {
+                self.app
+                    .state
+                    .chat
+                    .shell
+                    .selected_peer_id
+                    .as_deref()
+                    .map(audit::targets::operator_deployment)
+                    .filter(|target| self.current_click_rect(target, false).is_some())
+            })
+            .or_else(|| {
+                self.app.client.as_ref().and_then(|client| {
+                    client
+                        .peer_statuses()
+                        .into_iter()
+                        .next()
+                        .map(|status| audit::targets::operator_deployment(&status.peer_id))
+                        .filter(|target| self.current_click_rect(target, false).is_some())
+                })
+            })
+    }
+
+    fn post_click_target(&mut self, target: &str, texts: Vec<String>) -> Vec<String> {
+        let Some(section) = operator_section_from_target(target) else {
+            return texts;
+        };
+
+        for _ in 0..6 {
+            if self.app.state.operator.selected_section == section {
+                return self.render();
+            }
+            self.render();
+        }
+
+        self.app.state.queue_shell_action(crate::state::PendingShellAction::Operator(
+            crate::state::PendingOperatorAction::SelectSection { section },
+        ));
+        self.render()
+    }
+
+    fn select_operator_section(&mut self, section: OperatorSection) -> Vec<String> {
+        self.app.state.queue_shell_action(crate::state::PendingShellAction::Operator(
+            crate::state::PendingOperatorAction::SelectSection { section },
+        ));
+        self.render()
     }
 
     fn type_text(&mut self, text: &str) -> Vec<String> {

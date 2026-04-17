@@ -52,19 +52,29 @@ pub fn show_main(ui: &mut Ui, state: &mut ShellState, store: Option<&ClientStore
     ui.vertical(|ui| {
         views::toolbar(ui, "Operator Console", &breadcrumb, section.label());
         ui.add_space(12.0);
-
-        match section {
-            OperatorSection::Runtime => runtime::show_runtime_summary(ui, store, state),
-            OperatorSection::Behaviors
-            | OperatorSection::Backends
-            | OperatorSection::ToolSelections
-            | OperatorSection::InferenceProfiles
-            | OperatorSection::ScheduledTasks
-            | OperatorSection::RequestTimeline
-            | OperatorSection::RecentFailures => {
-                entity_list::show_document_section(ui, state, store, section, entries);
-            }
-        }
+        ui.horizontal_top(|ui| {
+            let nav_width = 260.0_f32.min(ui.available_width() * 0.34);
+            ui.allocate_ui_with_layout(
+                egui::vec2(nav_width, ui.available_height()),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    sidebar::show_sidebar(ui, state, None, Some(store));
+                },
+            );
+            ui.add_space(12.0);
+            ui.vertical(|ui| match section {
+                OperatorSection::Runtime => runtime::show_runtime_summary(ui, store, state),
+                OperatorSection::Behaviors
+                | OperatorSection::Backends
+                | OperatorSection::ToolSelections
+                | OperatorSection::InferenceProfiles
+                | OperatorSection::ScheduledTasks
+                | OperatorSection::RequestTimeline
+                | OperatorSection::RecentFailures => {
+                    entity_list::show_document_section(ui, state, store, section, entries);
+                }
+            });
+        });
     });
 }
 

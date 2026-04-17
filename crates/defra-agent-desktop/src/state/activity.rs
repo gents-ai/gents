@@ -37,11 +37,8 @@ impl Activity {
     }
 
     pub fn sidebar_width(self) -> f32 {
-        match self {
-            Self::Chat => 308.0,
-            Self::Operator | Self::Peers => 292.0,
-            Self::Logs => 272.0,
-        }
+        let _ = self;
+        308.0
     }
 
     pub fn rail_width(self) -> Option<f32> {
@@ -80,6 +77,7 @@ pub enum PendingOperatorAction {
 pub enum PendingShellAction {
     Navigate(Activity),
     OpenPeersSetup,
+    SelectScopedDeployment { peer_id: String, agent_did: String },
     Chat(PendingChatAction),
     Operator(PendingOperatorAction),
 }
