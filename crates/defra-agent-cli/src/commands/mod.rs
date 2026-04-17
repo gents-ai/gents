@@ -9,3 +9,4 @@ pub(crate) mod reset;
 pub(crate) mod response;
 pub(crate) mod serve;
 pub(crate) mod show;
+pub(crate) mod status;
