@@ -1,10 +1,5 @@
 mod render;
-mod rows;
 
-use anyhow::Result;
-use defra_agent_protocol::row::{
-    AgentBehaviorRow, InferenceBackendRow, InferenceProfileRow, ScheduledTaskRow, ToolSelectionRow,
-};
 use eframe::egui::{self, RichText, TextEdit, Ui};
 
 use crate::audit;
@@ -31,26 +26,6 @@ pub(super) fn render_inference_profile_editor(ui: &mut Ui, draft: &mut Inference
 
 pub(super) fn render_scheduled_task_editor(ui: &mut Ui, draft: &mut ScheduledTaskDraft) {
     render::render_scheduled_task_editor(ui, draft);
-}
-
-pub(crate) fn behavior_row(draft: &BehaviorDraft) -> Result<AgentBehaviorRow> {
-    rows::behavior_row(draft)
-}
-
-pub(crate) fn backend_row(draft: &BackendDraft) -> Result<InferenceBackendRow> {
-    rows::backend_row(draft)
-}
-
-pub(crate) fn tool_selection_row(draft: &ToolSelectionDraft) -> Result<ToolSelectionRow> {
-    rows::tool_selection_row(draft)
-}
-
-pub(crate) fn inference_profile_row(draft: &InferenceProfileDraft) -> Result<InferenceProfileRow> {
-    rows::inference_profile_row(draft)
-}
-
-pub(crate) fn scheduled_task_row(draft: &ScheduledTaskDraft) -> Result<ScheduledTaskRow> {
-    rows::scheduled_task_row(draft)
 }
 
 pub(super) fn editor_heading(ui: &mut Ui, title: &str) {

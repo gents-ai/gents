@@ -1,9 +1,9 @@
 use crate::client::{ClientPeerStatus, ClientStore};
-use crate::state::{OperatorDraft, OperatorDraftOrigin, OperatorState};
-use crate::views::chat::{build_deployment_entries, DeploymentEntry};
-use crate::views::operator::drafts::{
-    draft_for_selection, draft_matches_selection, entity_summaries,
+use crate::operator::{
+    build_deployment_entries, draft_for_selection, draft_matches_selection, entity_summaries,
+    DeploymentEntry,
 };
+use crate::state::{OperatorDraft, OperatorDraftOrigin, OperatorState};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OperatorProjection {
@@ -21,8 +21,7 @@ pub fn project_operator(
 ) -> OperatorProjection {
     let deployments = build_deployment_entries(peer_statuses, store);
     let selected_peer_id = resolve_peer_id(state, &deployments);
-    let selected_agent_did =
-        resolve_agent_did(state, store, &deployments, selected_peer_id.as_deref());
+    let selected_agent_did = resolve_agent_did(state, store, &deployments);
 
     if preserves_new_document_draft(state) {
         return OperatorProjection {
@@ -39,8 +38,7 @@ pub fn project_operator(
         .selected_entity_id
         .as_deref()
         .filter(|entity_id| entries.iter().any(|entry| entry.id == *entity_id))
-        .map(ToOwned::to_owned)
-        .or_else(|| entries.first().map(|entry| entry.id.clone()));
+        .map(ToOwned::to_owned);
 
     if draft_matches_selection(
         &state.draft,
@@ -93,14 +91,12 @@ fn resolve_peer_id(state: &OperatorState, deployments: &[DeploymentEntry]) -> Op
         .as_deref()
         .filter(|peer_id| deployments.iter().any(|entry| entry.peer_id == *peer_id))
         .map(ToOwned::to_owned)
-        .or_else(|| deployments.first().map(|entry| entry.peer_id.clone()))
 }
 
 fn resolve_agent_did(
     state: &OperatorState,
     store: &ClientStore,
     deployments: &[DeploymentEntry],
-    selected_peer_id: Option<&str>,
 ) -> Option<String> {
     state
         .selected_agent_did
@@ -115,19 +111,6 @@ fn resolve_agent_did(
                     .any(|row| row.agent_did == *agent_did)
         })
         .map(ToOwned::to_owned)
-        .or_else(|| {
-            deployments
-                .iter()
-                .find(|entry| Some(entry.peer_id.as_str()) == selected_peer_id)
-                .map(|entry| entry.agent_did.clone())
-        })
-        .or_else(|| deployments.first().map(|entry| entry.agent_did.clone()))
-        .or_else(|| {
-            store
-                .agent_principals
-                .first()
-                .map(|row| row.agent_did.clone())
-        })
 }
 
 #[cfg(test)]
@@ -166,5 +149,62 @@ mod tests {
             Some(OperatorDraftOrigin::NewDocument)
         );
         assert!(matches!(projection.draft, Some(OperatorDraft::Backend(_))));
+    }
+
+    #[test]
+    fn projection_clears_invalid_existing_entity_selection() {
+        let store = ClientStore::default();
+        let state = OperatorState {
+            selected_section: OperatorSection::Backends,
+            selected_entity_id: Some("missing-backend".to_string()),
+            draft: Some(OperatorDraft::Backend(BackendDraft {
+                backend_id: "missing-backend".to_string(),
+                name: "stale".to_string(),
+                provider_kind: String::new(),
+                endpoint: String::new(),
+                api_key: String::new(),
+                api_key_env_var: String::new(),
+                max_concurrent: String::new(),
+                max_queue_depth: String::new(),
+                enabled: true,
+                models: String::new(),
+                probe_status: String::new(),
+            })),
+            ..OperatorState::default()
+        };
+
+        let projection = project_operator(&state, &[], &store);
+        assert_eq!(projection.selected_entity_id, None);
+        assert_eq!(projection.draft, None);
+        assert_eq!(projection.draft_origin, None);
+    }
+
+    #[test]
+    fn projection_keeps_valid_agent_without_inventing_peer_or_entity() {
+        let store = ClientStore::from_rows(crate::client::ClientStoreRows {
+            agent_principals: vec![defra_agent_protocol::row::AgentPrincipalRow {
+                agent_did: "did:defra:amy".to_string(),
+                display_name: Some("Amy".to_string()),
+                default_behavior_id: Some("amy-default".to_string()),
+                enabled: Some(true),
+                created_at: None,
+                created_by: None,
+            }],
+            ..crate::client::ClientStoreRows::default()
+        });
+        let state = OperatorState {
+            selected_agent_did: Some("did:defra:amy".to_string()),
+            selected_peer_id: Some("peer-missing".to_string()),
+            selected_entity_id: Some("behavior-missing".to_string()),
+            ..OperatorState::default()
+        };
+
+        let projection = project_operator(&state, &[], &store);
+        assert_eq!(projection.selected_peer_id, None);
+        assert_eq!(
+            projection.selected_agent_did.as_deref(),
+            Some("did:defra:amy")
+        );
+        assert_eq!(projection.selected_entity_id, None);
     }
 }

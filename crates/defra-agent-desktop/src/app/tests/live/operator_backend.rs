@@ -296,6 +296,14 @@ fn desktop_app_live_operator_creates_backend_and_uses_it_for_inference() -> Resu
                 OperatorSection::Behaviors,
             ));
         }
+        driver.wait_for_target(
+            "live behavior entity target for backend rebinding",
+            Duration::from_secs(20),
+            &audit::targets::operator_entity(deployment.docs.behavior_id.as_str()),
+        )?;
+        driver.click_target(&audit::targets::operator_entity(
+            deployment.docs.behavior_id.as_str(),
+        ));
         wait_for_value(
             "live behavior selected for backend rebinding",
             Duration::from_secs(20),

@@ -4,11 +4,11 @@ use tokio::runtime::Runtime;
 use crate::client::{ClientCore, ClientPeerStatus, ClientStore};
 use crate::operator::actions::{reduce, OperatorAction};
 use crate::operator::projection::{project_operator, OperatorProjection};
-use crate::state::{OperatorDraft, OperatorSection, OperatorState};
-use crate::views::operator::drafts::new_draft_for_section;
-use crate::views::operator::editors::{
-    backend_row, behavior_row, inference_profile_row, scheduled_task_row, tool_selection_row,
+use crate::operator::{
+    backend_row, behavior_row, inference_profile_row, new_draft_for_section, scheduled_task_row,
+    tool_selection_row,
 };
+use crate::state::{OperatorDraft, OperatorSection, OperatorState};
 
 pub fn sync_from_snapshot(
     operator: &mut OperatorState,

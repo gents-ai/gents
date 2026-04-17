@@ -13,17 +13,10 @@ mod sidebar;
 use eframe::egui::Ui;
 use tokio::runtime::Runtime;
 
-use self::drafts::entity_summaries;
 use crate::client::{ClientCore, ClientStore};
+use crate::operator::{entity_summaries, EntitySummary};
 use crate::state::{OperatorSection, ShellState};
 use crate::views;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct EntitySummary {
-    pub(crate) id: String,
-    pub(crate) title: String,
-    pub(crate) meta: String,
-}
 
 pub fn prepare_state(
     state: &mut ShellState,

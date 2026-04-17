@@ -2,12 +2,10 @@ use eframe::egui::{self, Ui};
 
 use crate::audit;
 use crate::client::{ClientCore, ClientStore};
+use crate::operator::{build_deployment_entries, section_meta};
 use crate::state::{OperatorSection, PendingOperatorAction, PendingShellAction, ShellState};
 use crate::theme;
 use crate::views;
-use crate::views::chat::build_deployment_entries;
-
-use super::drafts::section_meta;
 
 pub(super) fn show_sidebar(
     ui: &mut Ui,
