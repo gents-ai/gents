@@ -6,7 +6,7 @@ use anyhow::Result;
 use serde_json::{json, Value};
 
 use crate::cli::args::{DiagnoseArgs, P2pTransportArg};
-use crate::shared::{ConfigExportBundle, StoredInitConfig};
+use crate::shared::ConfigExportBundle;
 use crate::{
     build_config_export_bundle, graphql_endpoint_available, print_json, read_init_config,
     read_runtime_state, resolve_agent_did, resolve_config_access, resolve_home_dir,
