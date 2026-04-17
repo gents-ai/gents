@@ -81,6 +81,9 @@ Status: completed
   - `src/views/chat/transcript/tool_cards.rs`
   - `src/views/chat/transcript/reasoning_cards.rs`
   - `src/views/chat/transcript/modal.rs`
+  - `src/views/chat/transcript/markdown.rs`
+
+Status: completed
 
 ### Phase 6: `src/app.rs`
 
