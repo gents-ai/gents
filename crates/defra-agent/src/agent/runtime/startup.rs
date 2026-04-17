@@ -170,7 +170,7 @@ pub(in crate::agent) async fn run_agent(
     let router_shutdown = shutdown.clone();
     background_tasks.spawn(async move {
         BackgroundTaskResult::Router(
-            super::run_router(
+            super::router::run_router(
                 router_node,
                 router_agent_did,
                 router_active_snapshot_rx,
@@ -185,7 +185,7 @@ pub(in crate::agent) async fn run_agent(
     let router_observer_shutdown = shutdown.clone();
     background_tasks.spawn(async move {
         BackgroundTaskResult::RouterObserver(
-            super::run_router_generation_observer(
+            super::router::run_router_generation_observer(
                 router_observer_active_snapshot_rx,
                 router_observer_runtime_status,
                 router_observer_shutdown,
