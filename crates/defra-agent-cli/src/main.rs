@@ -170,8 +170,8 @@ Examples:
   defra-agent config import agent-config.json
   cat agent-config.json | defra-agent config import
   defra-agent config import agent-config.json --override";
-const CONFIG_EXPORT_FORMAT_V1: &str = "defra-agent-config/v1";
-const CONFIG_EXPORT_FORMAT: &str = "defra-agent-config/v2";
+pub(crate) const CONFIG_EXPORT_FORMAT_V1: &str = "defra-agent-config/v1";
+pub(crate) const CONFIG_EXPORT_FORMAT: &str = "defra-agent-config/v2";
 
 const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
     ("AgentPrincipal", "agent_did"),
@@ -225,17 +225,17 @@ const P2P_CHAT_REQUEST_COLLECTIONS: &[&str] = &[
     "CompactionEntry",
 ];
 const P2P_TOOL_SERVICE_COLLECTIONS: &[&str] = &["ToolServiceRegistry"];
-const EXPORT_AGENT_PRINCIPAL_FIELDS: &str =
+pub(crate) const EXPORT_AGENT_PRINCIPAL_FIELDS: &str =
     "agent_did display_name default_behavior_id enabled created_at created_by";
-const EXPORT_AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled created_at";
-const EXPORT_TOOL_SELECTION_FIELDS: &str = "selection_id agent_did display_name enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode cli_tool_names enable_meta_tools delegate_to";
-const EXPORT_INFERENCE_BACKEND_FIELDS: &str =
+pub(crate) const EXPORT_AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled created_at";
+pub(crate) const EXPORT_TOOL_SELECTION_FIELDS: &str = "selection_id agent_did display_name enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode cli_tool_names enable_meta_tools delegate_to";
+pub(crate) const EXPORT_INFERENCE_BACKEND_FIELDS: &str =
     "backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models last_probe probe_status";
-const EXPORT_INFERENCE_PROFILE_FIELDS: &str =
+pub(crate) const EXPORT_INFERENCE_PROFILE_FIELDS: &str =
     "profile_id display_name context_window max_output_tokens max_turns temperature stream_batch_ms deadline_duration_secs";
-const EXPORT_TOOL_SERVICE_REGISTRY_FIELDS: &str =
+pub(crate) const EXPORT_TOOL_SERVICE_REGISTRY_FIELDS: &str =
     "service_id display_name description hostname tailscale_ip lan_ip mcp_port mcp_path";
-const EXPORT_SCHEDULED_TASK_FIELDS: &str =
+pub(crate) const EXPORT_SCHEDULED_TASK_FIELDS: &str =
     "task_id agent_did behavior_id name prompt interval_secs enabled";
 
 
@@ -283,29 +283,7 @@ async fn main() -> Result<()> {
         },
         Command::Status(args) => status(args).await,
         Command::Diagnose(args) => diagnose(args).await,
-        Command::Config { command } => match command {
-            ConfigCommand::Validate(args) => config_validate(args).await,
-            ConfigCommand::Diff(args) => config_diff(args).await,
-            ConfigCommand::Apply(args) => config_apply(args).await,
-            ConfigCommand::Backend { command } => match command {
-                BackendCommand::Set(args) => backend_set(args).await,
-                BackendCommand::DiscoverModels(args) => backend_discover_models(args).await,
-            },
-            ConfigCommand::Behavior { command } => match command {
-                BehaviorCommand::Set(args) => behavior_set(args).await,
-            },
-            ConfigCommand::Tools { command } => match command {
-                ToolSelectionCommand::Set(args) => tool_selection_set(args).await,
-            },
-            ConfigCommand::Profile { command } => match command {
-                InferenceProfileCommand::Set(args) => inference_profile_set(args).await,
-            },
-            ConfigCommand::Task { command } => match command {
-                ScheduledTaskCommand::Set(args) => scheduled_task_set(args).await,
-            },
-            ConfigCommand::Export(args) => config_export(args).await,
-            ConfigCommand::Import(args) => config_import(args).await,
-        },
+        Command::Config { command } => commands::config::dispatch(command).await,
         Command::Request { command } => match command {
             RequestCommand::Submit(args) => request_submit(args).await,
             RequestCommand::Show(args) => request_show(args).await,
@@ -2204,7 +2182,7 @@ fn flatten_p2p_fields(map: &mut serde_json::Map<String, Value>, p2p: &Value) {
     }
 }
 
-async fn resolve_config_access(
+pub(crate) async fn resolve_config_access(
     home: Option<&Path>,
     explicit_graphql: Option<&str>,
     ensure_local_schemas: bool,
@@ -2284,7 +2262,7 @@ async fn load_runtime_row(access: &ConfigAccess, agent_did: &str) -> Result<Opti
         .next())
 }
 
-async fn graphql_rows(
+pub(crate) async fn graphql_rows(
     access: &ConfigAccess,
     collection_name: &str,
     query: &str,
@@ -2298,7 +2276,7 @@ async fn graphql_rows(
         .unwrap_or_default())
 }
 
-async fn graphql_rows_or_empty_if_collection_missing(
+pub(crate) async fn graphql_rows_or_empty_if_collection_missing(
     access: &ConfigAccess,
     collection_name: &str,
     query: &str,
@@ -2310,13 +2288,13 @@ async fn graphql_rows_or_empty_if_collection_missing(
     }
 }
 
-fn is_collection_missing_error(collection_name: &str, error: &anyhow::Error) -> bool {
+pub(crate) fn is_collection_missing_error(collection_name: &str, error: &anyhow::Error) -> bool {
     let message = error.to_string();
     message.contains(collection_name)
         && (message.contains("collection not found") || message.contains("Cannot query field"))
 }
 
-async fn build_config_export_bundle(
+pub(crate) async fn build_config_export_bundle(
     access: &ConfigAccess,
     agent_did: &str,
 ) -> Result<ConfigExportBundle> {
@@ -2473,7 +2451,7 @@ async fn build_config_export_bundle(
     })
 }
 
-async fn build_desired_state_live_bundle(
+pub(crate) async fn build_desired_state_live_bundle(
     access: &ConfigAccess,
     desired_manifest: &desired_state::DesiredStateManifest,
 ) -> Result<ConfigExportBundle> {
@@ -2674,7 +2652,7 @@ async fn build_desired_state_live_bundle(
     })
 }
 
-fn live_manifest_from_bundle(
+pub(crate) fn live_manifest_from_bundle(
     desired_manifest: &desired_state::DesiredStateManifest,
     live_bundle: &ConfigExportBundle,
 ) -> Result<(
@@ -2700,7 +2678,7 @@ fn live_manifest_from_bundle(
     }
 }
 
-fn sort_document_rows(rows: &mut [Value], key: &str) {
+pub(crate) fn sort_document_rows(rows: &mut [Value], key: &str) {
     rows.sort_by(|left, right| {
         let left_key = left.get(key).and_then(Value::as_str).unwrap_or_default();
         let right_key = right.get(key).and_then(Value::as_str).unwrap_or_default();
@@ -2708,7 +2686,7 @@ fn sort_document_rows(rows: &mut [Value], key: &str) {
     });
 }
 
-fn normalize_tool_service_registry_export_rows(rows: &mut [Value]) -> Result<()> {
+pub(crate) fn normalize_tool_service_registry_export_rows(rows: &mut [Value]) -> Result<()> {
     for row in rows {
         let object = row
             .as_object_mut()
@@ -2718,7 +2696,7 @@ fn normalize_tool_service_registry_export_rows(rows: &mut [Value]) -> Result<()>
     Ok(())
 }
 
-fn collect_string_field_values(rows: &[Value], field: &str) -> Vec<String> {
+pub(crate) fn collect_string_field_values(rows: &[Value], field: &str) -> Vec<String> {
     let mut values = rows
         .iter()
         .filter_map(|row| row.get(field).and_then(Value::as_str))
@@ -2731,7 +2709,7 @@ fn collect_string_field_values(rows: &[Value], field: &str) -> Vec<String> {
     values
 }
 
-fn graphql_string_list_literal(values: &[String]) -> String {
+pub(crate) fn graphql_string_list_literal(values: &[String]) -> String {
     format!(
         "[{}]",
         values
@@ -2742,7 +2720,7 @@ fn graphql_string_list_literal(values: &[String]) -> String {
     )
 }
 
-fn read_config_import_bundle(path: Option<&Path>) -> Result<ConfigExportBundle> {
+pub(crate) fn read_config_import_bundle(path: Option<&Path>) -> Result<ConfigExportBundle> {
     let contents = match path {
         Some(path) => fs::read_to_string(path)
             .with_context(|| format!("reading config import from {}", path.display()))?,
@@ -2760,7 +2738,7 @@ fn read_config_import_bundle(path: Option<&Path>) -> Result<ConfigExportBundle> 
     Ok(bundle)
 }
 
-fn validate_config_import_bundle(bundle: &ConfigExportBundle) -> Result<()> {
+pub(crate) fn validate_config_import_bundle(bundle: &ConfigExportBundle) -> Result<()> {
     if !matches!(
         bundle.format.as_str(),
         CONFIG_EXPORT_FORMAT | CONFIG_EXPORT_FORMAT_V1
@@ -2777,7 +2755,7 @@ fn validate_config_import_bundle(bundle: &ConfigExportBundle) -> Result<()> {
     Ok(())
 }
 
-fn migrate_config_import_bundle(bundle: &mut ConfigExportBundle) {
+pub(crate) fn migrate_config_import_bundle(bundle: &mut ConfigExportBundle) {
     for backend in &mut bundle.inference_backends {
         if let Some(object) = backend.as_object_mut() {
             desired_state::strip_deprecated_inference_backend_fields(object);
@@ -2788,7 +2766,7 @@ fn migrate_config_import_bundle(bundle: &mut ConfigExportBundle) {
     }
 }
 
-async fn apply_import_collection(
+pub(crate) async fn apply_import_collection(
     access: &ConfigAccess,
     collection_name: &str,
     unique_field: &str,
@@ -2875,7 +2853,7 @@ async fn apply_import_collection(
     Ok(docs.len())
 }
 
-fn sanitize_import_document(collection_name: &str, doc: &Value, for_update: bool) -> Result<Value> {
+pub(crate) fn sanitize_import_document(collection_name: &str, doc: &Value, for_update: bool) -> Result<Value> {
     let mut object = match collection_name {
         "InferenceBackend" | "ScheduledTask" | "ToolServiceRegistry" => {
             doc.as_object().cloned().ok_or_else(|| {
@@ -2933,7 +2911,7 @@ fn sanitize_import_document(collection_name: &str, doc: &Value, for_update: bool
     Ok(Value::Object(object))
 }
 
-fn diff_has_pending_apply(counts: &desired_state::DesiredStateDiffCollectionsCounts) -> bool {
+pub(crate) fn diff_has_pending_apply(counts: &desired_state::DesiredStateDiffCollectionsCounts) -> bool {
     [
         &counts.agent_principal,
         &counts.agent_behaviors,
@@ -2947,7 +2925,7 @@ fn diff_has_pending_apply(counts: &desired_state::DesiredStateDiffCollectionsCou
     .any(|count| count.create > 0 || count.update > 0)
 }
 
-fn config_apply_counts_changed(counts: &ConfigApplyCounts) -> bool {
+pub(crate) fn config_apply_counts_changed(counts: &ConfigApplyCounts) -> bool {
     counts.agent_principal > 0
         || counts.agent_behaviors > 0
         || counts.tool_selections > 0
@@ -2957,7 +2935,7 @@ fn config_apply_counts_changed(counts: &ConfigApplyCounts) -> bool {
         || counts.scheduled_tasks > 0
 }
 
-fn select_apply_collection_docs(
+pub(crate) fn select_apply_collection_docs(
     docs: &[Value],
     unique_field: &str,
     collection_name: &str,
@@ -3003,7 +2981,7 @@ fn select_apply_collection_docs(
     Ok(selected)
 }
 
-fn select_apply_principal_docs(
+pub(crate) fn select_apply_principal_docs(
     doc: Option<&Value>,
     diff: &desired_state::DesiredStateCollectionDiff,
 ) -> Result<Vec<Value>> {
@@ -3015,7 +2993,7 @@ fn select_apply_principal_docs(
     Ok(vec![doc.clone()])
 }
 
-async fn apply_desired_state_changes(
+pub(crate) async fn apply_desired_state_changes(
     access: &ConfigAccess,
     desired_bundle: &ConfigExportBundle,
     planned: &desired_state::DesiredStateDiffReport,
@@ -3566,7 +3544,7 @@ fn resolve_backend_api_key_env_var(
     })
 }
 
-fn normalize_optional_string(value: Option<&str>) -> Option<String> {
+pub(crate) fn normalize_optional_string(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
         .filter(|candidate| !candidate.is_empty())
@@ -3597,7 +3575,7 @@ fn resolve_p2p_peer_id(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BackendResolutionMode {
+pub(crate) enum BackendResolutionMode {
     Init,
     ConfigWrite,
 }
@@ -3933,7 +3911,7 @@ fn clear_runtime_state(home_dir: &Path) -> Result<bool> {
     Ok(false)
 }
 
-fn resolve_graphql_endpoint(explicit: Option<&str>, home: Option<&Path>) -> Result<String> {
+pub(crate) fn resolve_graphql_endpoint(explicit: Option<&str>, home: Option<&Path>) -> Result<String> {
     if let Some(graphql) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
         return Ok(graphql.to_string());
     }
@@ -3948,7 +3926,7 @@ fn resolve_graphql_endpoint(explicit: Option<&str>, home: Option<&Path>) -> Resu
     ))
 }
 
-fn resolve_agent_did(home: Option<&Path>, explicit: Option<&str>) -> Result<String> {
+pub(crate) fn resolve_agent_did(home: Option<&Path>, explicit: Option<&str>) -> Result<String> {
     if let Some(agent_did) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
         return Ok(agent_did.to_string());
     }
@@ -3993,7 +3971,7 @@ fn display_host(host: IpAddr) -> String {
     }
 }
 
-fn require_non_empty<'a>(field: &str, value: &'a str) -> Result<&'a str> {
+pub(crate) fn require_non_empty<'a>(field: &str, value: &'a str) -> Result<&'a str> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         anyhow::bail!("--{field} must not be empty");
@@ -4016,7 +3994,7 @@ pub(crate) fn graphql_bool_literal(value: bool) -> &'static str {
     }
 }
 
-fn normalize_optional_rfc3339(value: Option<&str>) -> Result<Option<String>> {
+pub(crate) fn normalize_optional_rfc3339(value: Option<&str>) -> Result<Option<String>> {
     match value.map(str::trim).filter(|value| !value.is_empty()) {
         Some(raw) => {
             let parsed = chrono::DateTime::parse_from_rfc3339(raw)
@@ -4031,7 +4009,7 @@ fn normalize_optional_rfc3339(value: Option<&str>) -> Result<Option<String>> {
     }
 }
 
-fn resolve_task_prompt(prompt: Option<&str>, prompt_file: Option<&Path>) -> Result<String> {
+pub(crate) fn resolve_task_prompt(prompt: Option<&str>, prompt_file: Option<&Path>) -> Result<String> {
     match (prompt, prompt_file) {
         (Some(_), Some(path)) => anyhow::bail!(
             "provide either --prompt or --prompt-file, not both ({})",
@@ -4084,7 +4062,7 @@ fn resolve_request_content(content: Option<&str>, content_file: Option<&Path>) -
     }
 }
 
-async fn resolve_scheduled_task_behavior_id(
+pub(crate) async fn resolve_scheduled_task_behavior_id(
     graphql: &str,
     agent_did: &str,
     explicit_behavior_id: Option<&str>,
@@ -4171,7 +4149,7 @@ fn first_graphql_row<'a>(response: &'a Value, collection_name: &str) -> Result<&
         .ok_or_else(|| anyhow::anyhow!("graphql returned no rows for {collection_name}"))
 }
 
-fn optional_i64_field(name: &str, value: Option<i64>) -> Option<String> {
+pub(crate) fn optional_i64_field(name: &str, value: Option<i64>) -> Option<String> {
     value.map(|value| format!("{name}: {value}"))
 }
 
@@ -4218,7 +4196,7 @@ fn parse_cli_tool_arg(value: &str) -> Result<defra_agent::CliToolConfig> {
     ))
 }
 
-fn normalize_file_tools_mode(enabled: bool, explicit: Option<&str>) -> Result<String> {
+pub(crate) fn normalize_file_tools_mode(enabled: bool, explicit: Option<&str>) -> Result<String> {
     let value = if enabled {
         explicit
             .map(str::trim)
@@ -4231,7 +4209,7 @@ fn normalize_file_tools_mode(enabled: bool, explicit: Option<&str>) -> Result<St
     Ok(value.to_string())
 }
 
-fn normalize_bash_mode(enabled: bool, explicit: Option<&str>) -> Result<String> {
+pub(crate) fn normalize_bash_mode(enabled: bool, explicit: Option<&str>) -> Result<String> {
     let value = if enabled {
         explicit
             .map(str::trim)
@@ -4252,7 +4230,7 @@ fn format_tool_ceiling(value: ToolCeilingArg) -> &'static str {
     }
 }
 
-fn print_json(value: &Value) -> Result<()> {
+pub(crate) fn print_json(value: &Value) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
 }
