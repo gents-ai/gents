@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use super::*;
+use crate::agent::DocumentResolveContext;
 use crate::document_config::ToolSelectionDocument;
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;

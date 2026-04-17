@@ -8,7 +8,6 @@ pub(crate) use snapshot::resolve_document_runtime_snapshot_from_view;
 
 use std::collections::HashMap;
 
-use crate::agent::DocumentResolveContext;
 use crate::backend_registry::InferenceBackend;
 use crate::document_config::{AgentBehavior, AgentPrincipal, InferenceProfile, ToolSelectionDocument};
 
