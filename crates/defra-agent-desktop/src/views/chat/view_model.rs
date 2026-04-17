@@ -28,6 +28,12 @@ pub struct ConversationBucket {
     pub entries: Vec<ConversationEntry>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct BehaviorEntry {
+    pub behavior_id: Option<String>,
+    pub label: String,
+}
+
 pub fn build_deployment_entries(
     peer_statuses: &[ClientPeerStatus],
     store: &ClientStore,
@@ -80,7 +86,15 @@ pub fn build_conversation_buckets(
                 .filter(|title| !title.trim().is_empty())
                 .unwrap_or("New Conversation")
                 .to_string(),
-            meta: format!("session {}", abbreviate_id(&conversation.session_id)),
+            meta: format!(
+                "behavior {}  session {}",
+                conversation
+                    .behavior_id
+                    .as_deref()
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or("default"),
+                abbreviate_id(&conversation.session_id),
+            ),
             timestamp_label: timestamp
                 .map(|timestamp| relative_timestamp_label(local_now, timestamp))
                 .unwrap_or_else(|| "unknown".to_string()),
@@ -115,6 +129,52 @@ pub fn build_conversation_buckets(
     buckets
 }
 
+pub(super) fn behavior_selection_entries(
+    store: &ClientStore,
+    agent_did: &str,
+) -> Vec<BehaviorEntry> {
+    let default_behavior_id = store.default_behavior_id_for_agent(agent_did);
+    let mut rows = store.behavior_rows(agent_did);
+    rows.sort_by(|left, right| left.behavior_id.cmp(&right.behavior_id));
+
+    let mut entries = vec![BehaviorEntry {
+        behavior_id: None,
+        label: default_behavior_id
+            .map(|behavior_id| format!("Default ({behavior_id})"))
+            .unwrap_or_else(|| "Inherited default".to_string()),
+    }];
+
+    for row in rows {
+        if Some(row.behavior_id.as_str()) == default_behavior_id {
+            continue;
+        }
+
+        entries.push(BehaviorEntry {
+            behavior_id: Some(row.behavior_id.clone()),
+            label: behavior_label(row.display_name.as_deref(), Some(row.behavior_id.as_str())),
+        });
+    }
+
+    entries
+}
+
+pub(super) fn display_behavior_label(
+    store: &ClientStore,
+    agent_did: &str,
+    behavior_id: Option<&str>,
+) -> String {
+    match behavior_id {
+        Some(behavior_id) => store
+            .behavior_row(agent_did, behavior_id)
+            .map(|row| behavior_label(row.display_name.as_deref(), Some(behavior_id)))
+            .unwrap_or_else(|| behavior_id.to_string()),
+        None => store
+            .default_behavior_id_for_agent(agent_did)
+            .map(|behavior_id| format!("Default ({behavior_id})"))
+            .unwrap_or_else(|| "Inherited default".to_string()),
+    }
+}
+
 pub(super) fn display_name_for_agent(store: &ClientStore, agent_did: &str) -> String {
     store
         .agent_principals
@@ -147,6 +207,24 @@ fn abbreviate_address(value: &str) -> String {
     }
 
     format!("{}..{}", &value[..10], &value[value.len() - 4..])
+}
+
+fn behavior_label(display_name: Option<&str>, behavior_id: Option<&str>) -> String {
+    match (
+        display_name
+            .map(str::trim)
+            .filter(|display_name| !display_name.is_empty()),
+        behavior_id
+            .map(str::trim)
+            .filter(|behavior_id| !behavior_id.is_empty()),
+    ) {
+        (Some(display_name), Some(behavior_id)) if display_name != behavior_id => {
+            format!("{display_name} ({behavior_id})")
+        }
+        (Some(display_name), _) => display_name.to_string(),
+        (_, Some(behavior_id)) => behavior_id.to_string(),
+        _ => "Inherited default".to_string(),
+    }
 }
 
 fn parse_timestamp(value: &str) -> Option<chrono::DateTime<Local>> {

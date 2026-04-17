@@ -7,7 +7,7 @@ use defra_agent_desktop::client::DesktopPaths;
 use defra_agent_desktop::local_runtime::{
     default_agent_home, init_standard_local_runtime, render_human_summary, DesktopInitOptions,
 };
-use defra_agent_desktop::telemetry::global_log_layer;
+use defra_agent_desktop::telemetry::{global_log_layer, with_default_transport_noise_filters};
 use eframe::egui;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
@@ -105,30 +105,19 @@ fn launch_desktop() -> anyhow::Result<()> {
 }
 
 fn init_tracing() {
-    let env_filter = with_default_transport_noise_filters(
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new(
-                "warn,\
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        with_default_transport_noise_filters(EnvFilter::new(
+            "warn,\
                  defra_agent_desktop=trace,\
                  defra_agent=info,\
                  defra_node=info,\
-                 p2p=warn,\
-                 iroh=warn,\
-                 iroh_net=warn,\
-                 iroh_relay=warn,\
-                 iroh_gossip=warn,\
-                 iroh_blobs=warn,\
-                 iroh_quinn=warn,\
-                 iroh_quinn_proto=warn,\
-                 netwatch=warn,\
                  wgpu=warn,\
                  winit=warn,\
                  eframe=warn,\
                  egui=warn,\
                  naga=warn",
-            )
-        }),
-    );
+        ))
+    });
 
     let _ = tracing_subscriber::registry()
         .with(env_filter)
@@ -142,18 +131,4 @@ fn init_tracing() {
         .try_init();
 
     tracing::info!("launching defra-agent-desktop");
-}
-
-fn with_default_transport_noise_filters(filter: EnvFilter) -> EnvFilter {
-    filter
-        .add_directive(
-            "iroh_quinn_proto::connection=error"
-                .parse()
-                .expect("valid tracing directive"),
-        )
-        .add_directive(
-            "noq_proto::connection=error"
-                .parse()
-                .expect("valid tracing directive"),
-        )
 }

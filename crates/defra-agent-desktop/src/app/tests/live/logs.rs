@@ -163,7 +163,7 @@ fn desktop_app_live_logs_event_classification() -> Result<()> {
         driver.app.state.operator.selected_peer_id = None;
         driver.app.state.operator.selected_entity_id = None;
         driver.app.state.operator.draft = None;
-        driver.app.state.operator.draft_source_entity_id = None;
+        driver.app.state.operator.draft_origin = None;
         driver.click_target(&audit::targets::operator_section(
             crate::state::OperatorSection::Behaviors,
         ));

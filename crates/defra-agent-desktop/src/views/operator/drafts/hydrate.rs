@@ -4,8 +4,6 @@ use crate::state::{
     ScheduledTaskDraft, ToolSelectionDraft,
 };
 
-use super::{backend_ids_for_agent, inference_profile_ids_for_agent};
-
 pub(super) fn draft_for_selection(
     store: &ClientStore,
     section: OperatorSection,
@@ -38,36 +36,31 @@ pub(super) fn draft_for_selection(
                     created_at: row.created_at.clone().unwrap_or_default(),
                 })
             }),
-        OperatorSection::Backends => {
-            let backend_ids = backend_ids_for_agent(store, selected_agent_did);
-            store
-                .inference_backends
-                .iter()
-                .find(|row| {
-                    row.backend_id == entity_id && backend_ids.contains(&row.backend_id.as_str())
+        OperatorSection::Backends => store
+            .inference_backends
+            .iter()
+            .find(|row| row.backend_id == entity_id)
+            .map(|row| {
+                OperatorDraft::Backend(BackendDraft {
+                    backend_id: row.backend_id.clone(),
+                    name: row.name.clone().unwrap_or_default(),
+                    provider_kind: row.provider_kind.clone().unwrap_or_default(),
+                    endpoint: row.endpoint.clone().unwrap_or_default(),
+                    api_key: row.api_key.clone().unwrap_or_default(),
+                    api_key_env_var: row.api_key_env_var.clone().unwrap_or_default(),
+                    max_concurrent: row
+                        .max_concurrent
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                    max_queue_depth: row
+                        .max_queue_depth
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                    enabled: row.enabled.unwrap_or(true),
+                    models: row.models.join(", "),
+                    probe_status: row.probe_status.clone().unwrap_or_default(),
                 })
-                .map(|row| {
-                    OperatorDraft::Backend(BackendDraft {
-                        backend_id: row.backend_id.clone(),
-                        name: row.name.clone().unwrap_or_default(),
-                        provider_kind: row.provider_kind.clone().unwrap_or_default(),
-                        endpoint: row.endpoint.clone().unwrap_or_default(),
-                        api_key: row.api_key.clone().unwrap_or_default(),
-                        api_key_env_var: row.api_key_env_var.clone().unwrap_or_default(),
-                        max_concurrent: row
-                            .max_concurrent
-                            .map(|value| value.to_string())
-                            .unwrap_or_default(),
-                        max_queue_depth: row
-                            .max_queue_depth
-                            .map(|value| value.to_string())
-                            .unwrap_or_default(),
-                        enabled: row.enabled.unwrap_or(true),
-                        models: row.models.join(", "),
-                        probe_status: row.probe_status.clone().unwrap_or_default(),
-                    })
-                })
-        }
+            }),
         OperatorSection::ToolSelections => store
             .tool_selections
             .iter()
@@ -88,45 +81,40 @@ pub(super) fn draft_for_selection(
                     delegate_to: row.delegate_to.join(", "),
                 })
             }),
-        OperatorSection::InferenceProfiles => {
-            let profile_ids = inference_profile_ids_for_agent(store, selected_agent_did);
-            store
-                .inference_profiles
-                .iter()
-                .find(|row| {
-                    row.profile_id == entity_id && profile_ids.contains(&row.profile_id.as_str())
+        OperatorSection::InferenceProfiles => store
+            .inference_profiles
+            .iter()
+            .find(|row| row.profile_id == entity_id)
+            .map(|row| {
+                OperatorDraft::InferenceProfile(InferenceProfileDraft {
+                    profile_id: row.profile_id.clone(),
+                    display_name: row.display_name.clone().unwrap_or_default(),
+                    context_window: row
+                        .context_window
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                    max_output_tokens: row
+                        .max_output_tokens
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                    max_turns: row
+                        .max_turns
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                    temperature: row
+                        .temperature
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                    stream_batch_ms: row
+                        .stream_batch_ms
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                    deadline_duration_secs: row
+                        .deadline_duration_secs
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
                 })
-                .map(|row| {
-                    OperatorDraft::InferenceProfile(InferenceProfileDraft {
-                        profile_id: row.profile_id.clone(),
-                        display_name: row.display_name.clone().unwrap_or_default(),
-                        context_window: row
-                            .context_window
-                            .map(|value| value.to_string())
-                            .unwrap_or_default(),
-                        max_output_tokens: row
-                            .max_output_tokens
-                            .map(|value| value.to_string())
-                            .unwrap_or_default(),
-                        max_turns: row
-                            .max_turns
-                            .map(|value| value.to_string())
-                            .unwrap_or_default(),
-                        temperature: row
-                            .temperature
-                            .map(|value| value.to_string())
-                            .unwrap_or_default(),
-                        stream_batch_ms: row
-                            .stream_batch_ms
-                            .map(|value| value.to_string())
-                            .unwrap_or_default(),
-                        deadline_duration_secs: row
-                            .deadline_duration_secs
-                            .map(|value| value.to_string())
-                            .unwrap_or_default(),
-                    })
-                })
-        }
+            }),
         OperatorSection::ScheduledTasks => store
             .scheduled_tasks
             .iter()
@@ -155,6 +143,82 @@ pub(super) fn draft_for_selection(
                     updated_at: row.updated_at.clone().unwrap_or_default(),
                 })
             }),
+        _ => None,
+    }
+}
+
+pub(super) fn new_draft_for_section(
+    section: OperatorSection,
+    selected_agent_did: Option<&str>,
+) -> Option<OperatorDraft> {
+    match section {
+        OperatorSection::Behaviors => Some(OperatorDraft::Behavior(BehaviorDraft {
+            behavior_id: String::new(),
+            agent_did: selected_agent_did.unwrap_or_default().to_string(),
+            display_name: String::new(),
+            system_prompt: String::new(),
+            backend_id: String::new(),
+            model_name: String::new(),
+            tool_selection_id: String::new(),
+            inference_profile_id: String::new(),
+            compaction_strategy: "StripThenSummarize".to_string(),
+            compaction_threshold: String::new(),
+            enabled: true,
+            created_at: String::new(),
+        })),
+        OperatorSection::Backends => Some(OperatorDraft::Backend(BackendDraft {
+            backend_id: String::new(),
+            name: String::new(),
+            provider_kind: String::new(),
+            endpoint: String::new(),
+            api_key: String::new(),
+            api_key_env_var: String::new(),
+            max_concurrent: String::new(),
+            max_queue_depth: String::new(),
+            enabled: true,
+            models: String::new(),
+            probe_status: String::new(),
+        })),
+        OperatorSection::ToolSelections => Some(OperatorDraft::ToolSelection(ToolSelectionDraft {
+            selection_id: String::new(),
+            agent_did: selected_agent_did.unwrap_or_default().to_string(),
+            display_name: String::new(),
+            enable_file_tools: false,
+            file_tools_mode: String::new(),
+            enable_bash: false,
+            bash_mode: String::new(),
+            cli_tool_names: String::new(),
+            enable_meta_tools: false,
+            delegate_to: String::new(),
+        })),
+        OperatorSection::InferenceProfiles => {
+            Some(OperatorDraft::InferenceProfile(InferenceProfileDraft {
+                profile_id: String::new(),
+                display_name: String::new(),
+                context_window: String::new(),
+                max_output_tokens: String::new(),
+                max_turns: String::new(),
+                temperature: String::new(),
+                stream_batch_ms: String::new(),
+                deadline_duration_secs: String::new(),
+            }))
+        }
+        OperatorSection::ScheduledTasks => Some(OperatorDraft::ScheduledTask(ScheduledTaskDraft {
+            task_id: String::new(),
+            agent_did: selected_agent_did.unwrap_or_default().to_string(),
+            behavior_id: String::new(),
+            name: String::new(),
+            prompt: String::new(),
+            interval_secs: String::new(),
+            enabled: true,
+            next_run_at: String::new(),
+            last_run_at: String::new(),
+            last_status: String::new(),
+            last_error: String::new(),
+            run_count: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        })),
         _ => None,
     }
 }

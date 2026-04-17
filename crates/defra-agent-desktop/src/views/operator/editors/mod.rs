@@ -33,23 +33,23 @@ pub(super) fn render_scheduled_task_editor(ui: &mut Ui, draft: &mut ScheduledTas
     render::render_scheduled_task_editor(ui, draft);
 }
 
-pub(super) fn behavior_row(draft: &BehaviorDraft) -> Result<AgentBehaviorRow> {
+pub(crate) fn behavior_row(draft: &BehaviorDraft) -> Result<AgentBehaviorRow> {
     rows::behavior_row(draft)
 }
 
-pub(super) fn backend_row(draft: &BackendDraft) -> Result<InferenceBackendRow> {
+pub(crate) fn backend_row(draft: &BackendDraft) -> Result<InferenceBackendRow> {
     rows::backend_row(draft)
 }
 
-pub(super) fn tool_selection_row(draft: &ToolSelectionDraft) -> Result<ToolSelectionRow> {
+pub(crate) fn tool_selection_row(draft: &ToolSelectionDraft) -> Result<ToolSelectionRow> {
     rows::tool_selection_row(draft)
 }
 
-pub(super) fn inference_profile_row(draft: &InferenceProfileDraft) -> Result<InferenceProfileRow> {
+pub(crate) fn inference_profile_row(draft: &InferenceProfileDraft) -> Result<InferenceProfileRow> {
     rows::inference_profile_row(draft)
 }
 
-pub(super) fn scheduled_task_row(draft: &ScheduledTaskDraft) -> Result<ScheduledTaskRow> {
+pub(crate) fn scheduled_task_row(draft: &ScheduledTaskDraft) -> Result<ScheduledTaskRow> {
     rows::scheduled_task_row(draft)
 }
 

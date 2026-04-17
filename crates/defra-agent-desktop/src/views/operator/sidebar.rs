@@ -2,7 +2,7 @@ use eframe::egui::{self, Ui};
 
 use crate::audit;
 use crate::client::{ClientCore, ClientStore};
-use crate::state::{OperatorSection, ShellState};
+use crate::state::{OperatorSection, PendingOperatorAction, PendingShellAction, ShellState};
 use crate::theme;
 use crate::views;
 use crate::views::chat::build_deployment_entries;
@@ -69,9 +69,12 @@ pub(super) fn show_sidebar(
                         &response,
                     );
                     if response.clicked() {
-                        state.operator.selected_peer_id = Some(deployment.peer_id.clone());
-                        state.operator.selected_agent_did = Some(deployment.agent_did.clone());
-                        reset_selection(state);
+                        state.queue_shell_action(PendingShellAction::Operator(
+                            PendingOperatorAction::SelectDeployment {
+                                peer_id: deployment.peer_id.clone(),
+                                agent_did: deployment.agent_did.clone(),
+                            },
+                        ));
                     }
 
                     let response = views::tree_row(
@@ -87,9 +90,12 @@ pub(super) fn show_sidebar(
                         &response,
                     );
                     if response.clicked() {
-                        state.operator.selected_peer_id = Some(deployment.peer_id.clone());
-                        state.operator.selected_agent_did = Some(deployment.agent_did.clone());
-                        reset_selection(state);
+                        state.queue_shell_action(PendingShellAction::Operator(
+                            PendingOperatorAction::SelectDeployment {
+                                peer_id: deployment.peer_id.clone(),
+                                agent_did: deployment.agent_did.clone(),
+                            },
+                        ));
                     }
                 });
             });
@@ -124,9 +130,9 @@ pub(super) fn show_sidebar(
                     );
                     audit::record(ui, &audit::targets::operator_section(section), &response);
                     if response.clicked() {
-                        state.operator.selected_section = section;
-                        reset_selection(state);
-                        state.operator.last_apply_error = None;
+                        state.queue_shell_action(PendingShellAction::Operator(
+                            PendingOperatorAction::SelectSection { section },
+                        ));
                     }
                 }
             });
@@ -151,21 +157,12 @@ pub(super) fn show_sidebar(
                     );
                     audit::record(ui, &audit::targets::operator_section(section), &response);
                     if response.clicked() {
-                        state.operator.selected_section = section;
-                        state.operator.selected_entity_id = None;
-                        state.operator.entity_filter.clear();
-                        state.operator.draft = None;
-                        state.operator.draft_source_entity_id = None;
+                        state.queue_shell_action(PendingShellAction::Operator(
+                            PendingOperatorAction::SelectSection { section },
+                        ));
                     }
                 }
             });
         });
     });
-}
-
-fn reset_selection(state: &mut ShellState) {
-    state.operator.selected_entity_id = None;
-    state.operator.entity_filter.clear();
-    state.operator.draft = None;
-    state.operator.draft_source_entity_id = None;
 }

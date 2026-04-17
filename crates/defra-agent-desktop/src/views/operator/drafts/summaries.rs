@@ -5,7 +5,6 @@ use super::super::recent_failures::recent_failure_summaries;
 use super::super::request_timeline::request_timeline_summaries;
 use super::super::shared::{bool_word, scheduled_task_is_due, scheduled_task_next_run_label};
 use super::super::EntitySummary;
-use super::{backend_ids_for_agent, inference_profile_ids_for_agent};
 
 pub(super) fn entity_summaries(
     store: &ClientStore,
@@ -28,7 +27,7 @@ pub(super) fn entity_summaries(
                         .clone()
                         .unwrap_or_else(|| row.behavior_id.clone()),
                     meta: format!(
-                        "{}  model {}  backend {}",
+                        "{}  model {}  backend {}  tasks {}  convos {}",
                         if row.enabled == Some(false) {
                             "disabled"
                         } else {
@@ -36,17 +35,24 @@ pub(super) fn entity_summaries(
                         },
                         row.model_name.as_deref().unwrap_or("unbound"),
                         row.backend_id.as_deref().unwrap_or("unbound"),
+                        store
+                            .scheduled_tasks_for_behavior(
+                                selected_agent_did.unwrap_or_default(),
+                                &row.behavior_id,
+                            )
+                            .len(),
+                        store
+                            .conversations_for_behavior(
+                                selected_agent_did.unwrap_or_default(),
+                                &row.behavior_id,
+                            )
+                            .len(),
                     ),
                 })
                 .collect()
         }
         OperatorSection::Backends => {
-            let backend_ids = backend_ids_for_agent(store, selected_agent_did);
-            let mut rows = store
-                .inference_backends
-                .iter()
-                .filter(|row| backend_ids.contains(&row.backend_id.as_str()))
-                .collect::<Vec<_>>();
+            let mut rows = store.inference_backends.iter().collect::<Vec<_>>();
             rows.sort_by(|left, right| left.backend_id.cmp(&right.backend_id));
             rows.into_iter()
                 .map(|row| EntitySummary {
@@ -85,12 +91,7 @@ pub(super) fn entity_summaries(
                 .collect()
         }
         OperatorSection::InferenceProfiles => {
-            let profile_ids = inference_profile_ids_for_agent(store, selected_agent_did);
-            let mut rows = store
-                .inference_profiles
-                .iter()
-                .filter(|row| profile_ids.contains(&row.profile_id.as_str()))
-                .collect::<Vec<_>>();
+            let mut rows = store.inference_profiles.iter().collect::<Vec<_>>();
             rows.sort_by(|left, right| left.profile_id.cmp(&right.profile_id));
             rows.into_iter()
                 .map(|row| EntitySummary {

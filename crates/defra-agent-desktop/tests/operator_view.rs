@@ -234,7 +234,10 @@ fn operator_prepare_state_reselects_entity_and_refreshes_draft() {
         state.operator.selected_entity_id.as_deref(),
         Some("amy-default")
     );
-    assert_eq!(state.operator.last_apply_error, None);
+    assert_eq!(
+        state.operator.last_apply_error.as_deref(),
+        Some("stale validation")
+    );
     match state.operator.draft.as_ref() {
         Some(OperatorDraft::Behavior(draft)) => {
             assert_eq!(draft.behavior_id, "amy-default");

@@ -1,18 +1,18 @@
-use anyhow::{anyhow, Context, Result};
 use eframe::egui::{self, RichText, Ui};
 use tokio::runtime::Runtime;
 
 use crate::audit;
 use crate::client::{ClientCore, ClientStore};
-use crate::state::{OperatorDraft, OperatorSection, ShellState};
+use crate::state::{
+    OperatorDraft, OperatorSection, PendingOperatorAction, PendingShellAction, ShellState,
+};
 use crate::theme;
 use crate::views;
 
-use super::drafts::draft_for_selection;
+use super::behavior_context::render_behavior_context;
 use super::editors::{
-    backend_row, behavior_row, inference_profile_row, render_backend_editor,
-    render_behavior_editor, render_inference_profile_editor, render_scheduled_task_editor,
-    render_tool_selection_editor, scheduled_task_row, tool_selection_row,
+    render_backend_editor, render_behavior_editor, render_inference_profile_editor,
+    render_scheduled_task_editor, render_tool_selection_editor,
 };
 use super::recent_failures::render_recent_failure_detail;
 use super::request_timeline::render_request_timeline_detail;
@@ -23,7 +23,7 @@ pub(super) fn show_rail(
     state: &mut ShellState,
     client: Option<&ClientCore>,
     store: Option<&ClientStore>,
-    runtime: &Runtime,
+    _runtime: &Runtime,
 ) {
     let palette = theme::palette();
 
@@ -51,8 +51,12 @@ pub(super) fn show_rail(
             OperatorSection::Runtime => render_runtime_inspector(ui, store, state),
             OperatorSection::Behaviors => {
                 if let Some(OperatorDraft::Behavior(draft)) = state.operator.draft.as_mut() {
+                    let behavior_id = draft.behavior_id.clone();
                     render_behavior_editor(ui, draft);
-                    render_editor_footer(ui, state, store, client, runtime);
+                    render_editor_footer(ui, state, client);
+                    if let Some(agent_did) = state.operator.selected_agent_did.as_deref() {
+                        render_behavior_context(ui, store, agent_did, behavior_id.as_str());
+                    }
                 } else {
                     views::card(
                         ui,
@@ -64,7 +68,7 @@ pub(super) fn show_rail(
             OperatorSection::Backends => {
                 if let Some(OperatorDraft::Backend(draft)) = state.operator.draft.as_mut() {
                     render_backend_editor(ui, draft);
-                    render_editor_footer(ui, state, store, client, runtime);
+                    render_editor_footer(ui, state, client);
                 } else {
                     views::card(
                         ui,
@@ -76,7 +80,7 @@ pub(super) fn show_rail(
             OperatorSection::ToolSelections => {
                 if let Some(OperatorDraft::ToolSelection(draft)) = state.operator.draft.as_mut() {
                     render_tool_selection_editor(ui, draft);
-                    render_editor_footer(ui, state, store, client, runtime);
+                    render_editor_footer(ui, state, client);
                 } else {
                     views::card(
                         ui,
@@ -89,7 +93,7 @@ pub(super) fn show_rail(
                 if let Some(OperatorDraft::InferenceProfile(draft)) = state.operator.draft.as_mut()
                 {
                     render_inference_profile_editor(ui, draft);
-                    render_editor_footer(ui, state, store, client, runtime);
+                    render_editor_footer(ui, state, client);
                 } else {
                     views::card(
                         ui,
@@ -101,7 +105,7 @@ pub(super) fn show_rail(
             OperatorSection::ScheduledTasks => {
                 if let Some(OperatorDraft::ScheduledTask(draft)) = state.operator.draft.as_mut() {
                     render_scheduled_task_editor(ui, draft);
-                    render_editor_footer(ui, state, store, client, runtime);
+                    render_editor_footer(ui, state, client);
                 } else {
                     views::card(
                         ui,
@@ -130,13 +134,7 @@ pub(super) fn show_rail(
     });
 }
 
-fn render_editor_footer(
-    ui: &mut Ui,
-    state: &mut ShellState,
-    store: &ClientStore,
-    client: Option<&ClientCore>,
-    runtime: &Runtime,
-) {
+fn render_editor_footer(ui: &mut Ui, state: &mut ShellState, client: Option<&ClientCore>) {
     let palette = theme::palette();
 
     ui.add_space(12.0);
@@ -148,18 +146,9 @@ fn render_editor_footer(
             );
 
         if audit::button(ui, audit::targets::OPERATOR_DISCARD, "Discard").clicked() {
-            let selected_entity_id = state.operator.selected_entity_id.clone();
-            state.operator.draft = selected_entity_id.as_deref().and_then(|entity_id| {
-                draft_for_selection(
-                    store,
-                    state.operator.selected_section,
-                    state.operator.selected_agent_did.as_deref(),
-                    entity_id,
-                )
-            });
-            state.operator.draft_source_entity_id =
-                state.operator.draft.as_ref().and(selected_entity_id);
-            state.operator.last_apply_error = None;
+            state.queue_shell_action(PendingShellAction::Operator(
+                PendingOperatorAction::DiscardDraft,
+            ));
         }
 
         let can_apply = client.is_some() && state.operator.draft.is_some();
@@ -171,16 +160,9 @@ fn render_editor_footer(
         )
         .clicked()
         {
-            match apply_draft(state, client, runtime) {
-                Ok(()) => {
-                    state.operator.last_apply_error = None;
-                    state.operator.draft = None;
-                    state.operator.draft_source_entity_id = None;
-                }
-                Err(error) => {
-                    state.operator.last_apply_error = Some(error.to_string());
-                }
-            }
+            state.queue_shell_action(PendingShellAction::Operator(
+                PendingOperatorAction::ApplyDraft,
+            ));
         }
 
         if matches!(
@@ -194,16 +176,9 @@ fn render_editor_footer(
         )
         .clicked()
         {
-            match run_now_draft(state, client, runtime) {
-                Ok(()) => {
-                    state.operator.last_apply_error = None;
-                    state.operator.draft = None;
-                    state.operator.draft_source_entity_id = None;
-                }
-                Err(error) => {
-                    state.operator.last_apply_error = Some(error.to_string());
-                }
-            }
+            state.queue_shell_action(PendingShellAction::Operator(
+                PendingOperatorAction::RunNowSelectedTask,
+            ));
         }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -215,47 +190,4 @@ fn render_editor_footer(
             );
         });
     });
-}
-
-fn apply_draft(state: &ShellState, client: Option<&ClientCore>, runtime: &Runtime) -> Result<()> {
-    let client = client.context("client core is offline")?;
-    let draft = state
-        .operator
-        .draft
-        .as_ref()
-        .context("no operator draft is selected")?;
-
-    match draft {
-        OperatorDraft::Behavior(draft) => {
-            runtime.block_on(client.save_behavior(&behavior_row(draft)?))
-        }
-        OperatorDraft::Backend(draft) => {
-            runtime.block_on(client.save_backend(&backend_row(draft)?))
-        }
-        OperatorDraft::ToolSelection(draft) => {
-            runtime.block_on(client.save_tool_selection(&tool_selection_row(draft)?))
-        }
-        OperatorDraft::InferenceProfile(draft) => {
-            runtime.block_on(client.save_inference_profile(&inference_profile_row(draft)?))
-        }
-        OperatorDraft::ScheduledTask(draft) => {
-            runtime.block_on(client.save_scheduled_task(&scheduled_task_row(draft)?))
-        }
-    }
-}
-
-fn run_now_draft(state: &ShellState, client: Option<&ClientCore>, runtime: &Runtime) -> Result<()> {
-    let client = client.context("client core is offline")?;
-    let draft = state
-        .operator
-        .draft
-        .as_ref()
-        .context("no operator draft is selected")?;
-
-    match draft {
-        OperatorDraft::ScheduledTask(draft) => {
-            runtime.block_on(client.run_scheduled_task_now(&scheduled_task_row(draft)?))
-        }
-        _ => Err(anyhow!("run now is only available for scheduled tasks")),
-    }
 }

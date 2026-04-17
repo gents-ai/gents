@@ -1,5 +1,6 @@
-mod drafts;
-mod editors;
+mod behavior_context;
+pub(crate) mod drafts;
+pub(crate) mod editors;
 mod entity_list;
 mod prepare;
 mod rail;
@@ -18,10 +19,10 @@ use crate::state::{OperatorSection, ShellState};
 use crate::views;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct EntitySummary {
-    id: String,
-    title: String,
-    meta: String,
+pub(crate) struct EntitySummary {
+    pub(crate) id: String,
+    pub(crate) title: String,
+    pub(crate) meta: String,
 }
 
 pub fn prepare_state(

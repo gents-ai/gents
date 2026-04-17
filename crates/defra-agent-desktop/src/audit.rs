@@ -19,6 +19,7 @@ pub(crate) mod targets {
     pub(crate) const ACTIVITY_PEERS: &str = "activity.peers";
     pub(crate) const ACTIVITY_LOGS: &str = "activity.logs";
     pub(crate) const CHAT_COMPOSER_TEXT: &str = "chat.composer.text";
+    pub(crate) const CHAT_BEHAVIOR_SELECT: &str = "chat.behavior.select";
     pub(crate) const CHAT_CREATE_CONVERSATION: &str = "chat.create_conversation";
     pub(crate) const CHAT_NEW_CONVERSATION: &str = "chat.new_conversation";
     pub(crate) const CHAT_OPEN_PEERS_SETUP: &str = "chat.open_peers_setup";
@@ -38,6 +39,7 @@ pub(crate) mod targets {
     pub(crate) const OPERATOR_APPLY: &str = "operator.apply";
     pub(crate) const OPERATOR_DISCARD: &str = "operator.discard";
     pub(crate) const OPERATOR_ENTITY_FILTER: &str = "operator.entity_filter";
+    pub(crate) const OPERATOR_NEW: &str = "operator.new";
     pub(crate) const OPERATOR_RUN_NOW: &str = "operator.run_now";
     pub(crate) const PEERS_ADD_ADDR: &str = "peers.add.addr";
     pub(crate) const PEERS_ADD_AGENT_DID: &str = "peers.add.agent_did";
@@ -73,6 +75,10 @@ pub(crate) mod targets {
 
     pub(crate) fn chat_conversation(session_id: &str) -> String {
         format!("chat.conversation.{session_id}")
+    }
+
+    pub(crate) fn chat_behavior_option(behavior_id: &str) -> String {
+        format!("chat.behavior.option.{behavior_id}")
     }
 
     pub(crate) fn chat_deployment(peer_id: &str) -> String {
@@ -137,14 +143,16 @@ pub(crate) fn button(
     target: impl AsRef<str>,
     text: impl Into<WidgetText>,
 ) -> Response {
-    let response = ui.button(text);
-    record(ui, target.as_ref(), &response);
+    let target = target.as_ref();
+    let response = ui.push_id(target, |ui| ui.button(text)).inner;
+    record(ui, target, &response);
     response
 }
 
 pub(crate) fn add<W: Widget>(ui: &mut Ui, target: impl AsRef<str>, widget: W) -> Response {
-    let response = ui.add(widget);
-    record(ui, target.as_ref(), &response);
+    let target = target.as_ref();
+    let response = ui.push_id(target, |ui| ui.add(widget)).inner;
+    record(ui, target, &response);
     response
 }
 
@@ -154,8 +162,11 @@ pub(crate) fn add_sized<W: Widget>(
     max_size: impl Into<egui::Vec2>,
     widget: W,
 ) -> Response {
-    let response = ui.add_sized(max_size, widget);
-    record(ui, target.as_ref(), &response);
+    let target = target.as_ref();
+    let response = ui
+        .push_id(target, |ui| ui.add_sized(max_size, widget))
+        .inner;
+    record(ui, target, &response);
     response
 }
 
@@ -165,8 +176,11 @@ pub(crate) fn add_enabled<W: Widget>(
     enabled: bool,
     widget: W,
 ) -> Response {
-    let response = ui.add_enabled(enabled, widget);
-    record(ui, target.as_ref(), &response);
+    let target = target.as_ref();
+    let response = ui
+        .push_id(target, |ui| ui.add_enabled(enabled, widget))
+        .inner;
+    record(ui, target, &response);
     response
 }
 

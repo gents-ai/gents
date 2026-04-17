@@ -34,6 +34,17 @@ impl OperatorSection {
             Self::RecentFailures => "Recent Failures",
         }
     }
+
+    pub fn supports_new_documents(self) -> bool {
+        matches!(
+            self,
+            Self::Behaviors
+                | Self::Backends
+                | Self::ToolSelections
+                | Self::InferenceProfiles
+                | Self::ScheduledTasks
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -142,13 +153,19 @@ impl OperatorDraft {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OperatorDraftOrigin {
+    ExistingEntity(String),
+    NewDocument,
+}
+
 #[derive(Debug, Clone)]
 pub struct OperatorState {
     pub selected_peer_id: Option<String>,
     pub selected_agent_did: Option<String>,
     pub selected_section: OperatorSection,
     pub selected_entity_id: Option<String>,
-    pub draft_source_entity_id: Option<String>,
+    pub draft_origin: Option<OperatorDraftOrigin>,
     pub entity_filter: String,
     pub draft: Option<OperatorDraft>,
     pub last_apply_error: Option<String>,
@@ -161,7 +178,7 @@ impl Default for OperatorState {
             selected_agent_did: None,
             selected_section: OperatorSection::Behaviors,
             selected_entity_id: None,
-            draft_source_entity_id: None,
+            draft_origin: None,
             entity_filter: String::new(),
             draft: None,
             last_apply_error: None,

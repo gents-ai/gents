@@ -2,7 +2,6 @@ use crate::client::ClientStore;
 use crate::state::OperatorSection;
 
 use super::super::recent_failures::recent_failure_summaries;
-use super::{backend_ids_for_agent, inference_profile_ids_for_agent};
 
 pub(super) fn section_meta(
     store: &ClientStore,
@@ -30,10 +29,7 @@ pub(super) fn section_meta(
         ),
         OperatorSection::Backends => (
             "Backends",
-            format!(
-                "{} inference backends",
-                backend_ids_for_agent(store, selected_agent_did).len()
-            ),
+            format!("{} inference backends", store.inference_backends.len()),
         ),
         OperatorSection::ToolSelections => (
             "Tool selections",
@@ -48,10 +44,7 @@ pub(super) fn section_meta(
         ),
         OperatorSection::InferenceProfiles => (
             "Inference profiles",
-            format!(
-                "{} profiles",
-                inference_profile_ids_for_agent(store, selected_agent_did).len()
-            ),
+            format!("{} profiles", store.inference_profiles.len()),
         ),
         OperatorSection::ScheduledTasks => (
             "Scheduled Tasks",

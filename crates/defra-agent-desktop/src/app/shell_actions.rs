@@ -1,5 +1,6 @@
 use crate::chat::controller as chat_controller;
-use crate::state::{Activity, PendingChatAction, PendingShellAction};
+use crate::operator::controller as operator_controller;
+use crate::state::{Activity, PendingChatAction, PendingOperatorAction, PendingShellAction};
 
 use super::DesktopApp;
 
@@ -21,6 +22,7 @@ impl DesktopApp {
                 self.state.peers.show_add_form = true;
             }
             PendingShellAction::Chat(action) => self.process_pending_chat_action(action),
+            PendingShellAction::Operator(action) => self.process_pending_operator_action(action),
         }
     }
 
@@ -31,6 +33,12 @@ impl DesktopApp {
             }
             PendingChatAction::SelectConversation { session_id } => {
                 chat_controller::select_conversation(&mut self.state.chat, session_id);
+            }
+            PendingChatAction::StartNewConversationDraft => {
+                chat_controller::start_new_conversation_draft(&mut self.state.chat);
+            }
+            PendingChatAction::SelectBehavior { behavior_id } => {
+                chat_controller::select_behavior_override(&mut self.state.chat, behavior_id);
             }
             PendingChatAction::CreateConversation => {
                 if let Err(error) = chat_controller::create_conversation(
@@ -74,6 +82,58 @@ impl DesktopApp {
                     Err(error) => {
                         self.state.chat.editor.last_submission_error = Some(error.to_string());
                     }
+                }
+            }
+        }
+    }
+
+    fn process_pending_operator_action(&mut self, action: PendingOperatorAction) {
+        match action {
+            PendingOperatorAction::SelectDeployment { peer_id, agent_did } => {
+                operator_controller::select_deployment(
+                    &mut self.state.operator,
+                    peer_id,
+                    agent_did,
+                );
+            }
+            PendingOperatorAction::SelectSection { section } => {
+                operator_controller::select_section(&mut self.state.operator, section);
+            }
+            PendingOperatorAction::SelectEntity { entity_id } => {
+                operator_controller::select_entity(&mut self.state.operator, entity_id);
+            }
+            PendingOperatorAction::StartNewDocument => {
+                operator_controller::start_new_document(&mut self.state.operator);
+            }
+            PendingOperatorAction::DiscardDraft => {
+                if let Some(client) = self.client.as_deref() {
+                    let snapshot = client.store().snapshot();
+                    operator_controller::discard_draft(
+                        &mut self.state.operator,
+                        &client.peer_statuses(),
+                        snapshot.as_ref(),
+                    );
+                } else {
+                    self.state.operator.last_apply_error =
+                        Some("client core is offline".to_string());
+                }
+            }
+            PendingOperatorAction::ApplyDraft => {
+                if let Err(error) = operator_controller::apply_draft(
+                    &mut self.state.operator,
+                    self.client.as_deref(),
+                    self.runtime.as_ref(),
+                ) {
+                    self.state.operator.last_apply_error = Some(error.to_string());
+                }
+            }
+            PendingOperatorAction::RunNowSelectedTask => {
+                if let Err(error) = operator_controller::run_selected_task_now(
+                    &mut self.state.operator,
+                    self.client.as_deref(),
+                    self.runtime.as_ref(),
+                ) {
+                    self.state.operator.last_apply_error = Some(error.to_string());
                 }
             }
         }
