@@ -7,9 +7,10 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::client::CallKind;
 use super::config::BackendAdmissionConfig;
+use super::registry::AdmissionRegistryInner;
 use super::{
     persist_call_started, persist_existing_call_running, persist_existing_call_terminal,
-    persist_terminal_call, spawn_persistence, AdmissionPermit, AdmissionRegistryInner,
+    persist_terminal_call, spawn_persistence, AdmissionPermit,
 };
 
 pub(super) struct BackendAdmissionController {
