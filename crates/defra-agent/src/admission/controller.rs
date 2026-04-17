@@ -281,7 +281,7 @@ impl Drop for QueuedCallGuard {
     }
 }
 
-pub(crate) struct PendingCallMetadata {
+pub(super) struct PendingCallMetadata {
     pub(super) call_id: String,
     pub(super) runtime_instance_id: String,
     pub(super) request_id: String,
@@ -294,7 +294,7 @@ pub(crate) struct PendingCallMetadata {
 }
 
 #[derive(Clone)]
-pub(crate) struct InferenceCallRecord {
+pub(super) struct InferenceCallRecord {
     pub(super) call_id: String,
     pub(super) runtime_instance_id: String,
     pub(super) request_id: String,
