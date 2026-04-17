@@ -92,7 +92,7 @@ async fn hydrate_referenced_tool_selections(
                 .value
                 .tool_selection_id
                 .as_deref()
-                .and_then(super::non_empty)
+                .and_then(super::snapshot::non_empty)
         })
         .filter(|selection_id| !view.tool_selections.contains_key(*selection_id))
         .map(ToOwned::to_owned)

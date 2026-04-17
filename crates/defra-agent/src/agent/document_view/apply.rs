@@ -7,7 +7,8 @@ use crate::document_config::{
     load_inference_profile_by_doc_id, load_tool_selection_by_doc_id,
 };
 
-use super::{behavior_references_ready, ControlUpdateOutcome, DocumentRecord, DocumentRuntimeView};
+use super::snapshot::behavior_references_ready;
+use super::{ControlUpdateOutcome, DocumentRecord, DocumentRuntimeView};
 
 pub(crate) async fn apply_control_update(
     node: &EmbeddedNode,
