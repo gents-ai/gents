@@ -1,1 +1,173 @@
-// Temporary placeholder; contents move from agent/runtime/mod.rs in subsequent tasks.
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use rig::client::CompletionClient;
+use rig::tool::ToolDyn;
+use tokio::sync::{mpsc, watch, Mutex, Notify};
+
+use crate::admission::AdmissionRegistry;
+use crate::agent::daemon::BehaviorDaemon;
+use crate::backend_provider::BackendProviderKind;
+use crate::completion_factory::build_admitted_agent;
+use crate::prompt::LayeredPromptBuilder;
+use crate::retry::RetryPolicy;
+use crate::tool_surface::{ToolRuntimeContext, ToolSurface};
+use crate::watcher::AgentRequest;
+
+#[derive(Clone)]
+pub(super) struct RuntimeContext {
+    pub(super) node: Arc<defra_node::EmbeddedNode>,
+    pub(super) tool_runtime: ToolRuntimeContext,
+    pub(super) admission_registry: AdmissionRegistry,
+    pub(super) retry_policy: RetryPolicy,
+    pub(super) hook_failure_policy: crate::hook::FailurePolicy,
+    pub(super) startup_barrier: Arc<StartupBarrier>,
+}
+
+pub(super) struct BehaviorResolution {
+    pub(super) behavior_id: String,
+    pub(super) rejection_reason: Option<String>,
+}
+
+pub struct StartupBarrier {
+    pending_behaviors: Mutex<HashSet<String>>,
+    notify: Notify,
+}
+
+impl StartupBarrier {
+    pub(super) fn new(behaviors: &[Arc<crate::config::BehaviorConfig>]) -> Self {
+        Self {
+            pending_behaviors: Mutex::new(
+                behaviors
+                    .iter()
+                    .map(|behavior| behavior.name.clone())
+                    .collect::<HashSet<_>>(),
+            ),
+            notify: Notify::new(),
+        }
+    }
+
+    pub async fn mark_behavior_ready(&self, behavior_id: &str) {
+        let mut pending = self.pending_behaviors.lock().await;
+        let removed = pending.remove(behavior_id);
+        let is_empty = pending.is_empty();
+        drop(pending);
+
+        if removed && is_empty {
+            self.notify.notify_waiters();
+        }
+    }
+
+    pub(super) async fn wait_ready(&self) {
+        loop {
+            if self.pending_behaviors.lock().await.is_empty() {
+                return;
+            }
+            self.notify.notified().await;
+        }
+    }
+}
+
+impl RuntimeContext {
+    pub(super) async fn run_behavior(
+        &self,
+        behavior: Arc<crate::config::BehaviorConfig>,
+        tool_surface: Arc<ToolSurface>,
+        request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+        shutdown: watch::Receiver<bool>,
+    ) -> Result<()> {
+        let tool_names = tool_surface.tool_names();
+        let api_key = behavior.completion_client_api_key()?;
+        let prompt_builder = LayeredPromptBuilder::new(behavior.as_ref(), tool_surface.as_ref());
+        let preamble = prompt_builder.preamble().to_string();
+        let tools = tool_surface.build_tools(&self.tool_runtime)?;
+        tracing::info!(
+            behavior_id = %behavior.name,
+            did = %behavior.did(),
+            model = %behavior.model_name,
+            tools = ?tool_names,
+            "building behavior runtime"
+        );
+
+        match behavior.backend_provider_kind {
+            BackendProviderKind::OpenAiCompatible => {
+                let build_context = format!(
+                    "building OpenAI-compatible completion client for behavior {} against {}",
+                    behavior.name, behavior.backend_endpoint
+                );
+                let client: rig::providers::openai::CompletionsClient =
+                    rig::providers::openai::CompletionsClient::builder()
+                        .api_key(&api_key)
+                        .base_url(&behavior.backend_endpoint)
+                        .build()
+                        .with_context(|| build_context.clone())?;
+                self.run_behavior_with_client(
+                    behavior,
+                    request_rx,
+                    shutdown,
+                    prompt_builder,
+                    preamble,
+                    tools,
+                    client,
+                )
+                .await
+            }
+            BackendProviderKind::OpenRouter => {
+                let build_context = format!(
+                    "building OpenRouter completion client for behavior {} against {}",
+                    behavior.name, behavior.backend_endpoint
+                );
+                let client: rig::providers::openrouter::Client =
+                    rig::providers::openrouter::Client::builder()
+                        .api_key(&api_key)
+                        .base_url(&behavior.backend_endpoint)
+                        .build()
+                        .with_context(|| build_context.clone())?;
+                self.run_behavior_with_client(
+                    behavior,
+                    request_rx,
+                    shutdown,
+                    prompt_builder,
+                    preamble,
+                    tools,
+                    client,
+                )
+                .await
+            }
+        }
+    }
+
+    pub(super) async fn run_behavior_with_client<C>(
+        &self,
+        behavior: Arc<crate::config::BehaviorConfig>,
+        request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+        shutdown: watch::Receiver<bool>,
+        prompt_builder: LayeredPromptBuilder,
+        preamble: String,
+        tools: Vec<Box<dyn ToolDyn>>,
+        client: C,
+    ) -> Result<()>
+    where
+        C: CompletionClient,
+        C::CompletionModel: 'static,
+    {
+        let agent = build_admitted_agent(
+            client,
+            self.admission_registry.clone(),
+            behavior.as_ref(),
+            &preamble,
+            tools,
+        );
+        let mut daemon = BehaviorDaemon::new(
+            self.node.clone(),
+            behavior,
+            agent,
+            prompt_builder,
+            self.retry_policy.clone(),
+            self.hook_failure_policy,
+            self.startup_barrier.clone(),
+        );
+        daemon.run(request_rx, shutdown).await
+    }
+}
