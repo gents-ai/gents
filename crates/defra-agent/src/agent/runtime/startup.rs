@@ -220,7 +220,7 @@ pub(in crate::agent) async fn run_agent(
         let control_shutdown = shutdown.clone();
         background_tasks.spawn(async move {
             BackgroundTaskResult::Control(
-                super::run_control_watcher(
+                super::control_watcher::run_control_watcher(
                     control_node,
                     control_agent_did,
                     control_context,
