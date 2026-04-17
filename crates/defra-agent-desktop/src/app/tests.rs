@@ -40,10 +40,16 @@ include!("tests/support/chat_flow.rs");
 include!("tests/support/operator_flow.rs");
 include!("tests/support/bootstrap_runtime.rs");
 include!("tests/support/network.rs");
-include!("tests/support/mock_backend.rs");
-include!("tests/support/response_wait.rs");
 include!("tests/support/wait.rs");
 include!("tests/support/driver.rs");
+
+#[path = "tests/support/mock_backend/mod.rs"]
+mod support_mock_backend;
+use support_mock_backend::*;
+
+#[path = "tests/support/response_wait/mod.rs"]
+mod support_response_wait;
+use support_response_wait::*;
 
 mod bootstrap;
 mod chat;

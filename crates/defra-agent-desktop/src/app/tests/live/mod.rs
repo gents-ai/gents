@@ -1,7 +1,7 @@
 use super::*;
 
-include!("common.rs");
-
+mod common;
+pub(crate) use common::*;
 mod operator_config;
 pub(crate) use operator_config::*;
 
