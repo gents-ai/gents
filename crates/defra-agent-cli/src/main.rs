@@ -24,10 +24,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use tokio::sync::watch;
 
+mod config_writes;
 mod desired_state;
 mod http;
 mod telemetry;
 
+use config_writes::{
+    write_agent_behavior_document, write_inference_backend_document,
+    write_scheduled_task_document, write_tool_selection_document, ConfigAccess,
+    InferenceBackendUpsertDocument,
+};
 use http::runtime_contract_router;
 use http::version::{NodeIdentityResponse, P2pShareableAddressResponse};
 
@@ -827,576 +833,6 @@ struct ConfigApplyReport {
     applied: ConfigApplyCounts,
     remaining: desired_state::DesiredStateDiffCollectionsCounts,
 }
-
-enum ConfigAccess {
-    Graphql(String),
-    Local(EmbeddedNode),
-}
-
-impl ConfigAccess {
-    fn mode(&self) -> &'static str {
-        match self {
-            Self::Graphql(_) => "graphql",
-            Self::Local(_) => "local",
-        }
-    }
-
-    async fn execute(&self, query: &str) -> Result<Value> {
-        match self {
-            Self::Graphql(graphql) => post_graphql(graphql, query).await,
-            Self::Local(node) => {
-                let response = node.execute(query).await;
-                if response.has_errors() {
-                    anyhow::bail!("graphql returned errors: {:?}", response.errors);
-                }
-                Ok(json!({
-                    "data": response.data.unwrap_or(Value::Null),
-                }))
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct ExistingDocumentRef {
-    doc_id: String,
-    deleted: bool,
-}
-
-#[derive(Debug, Clone)]
-struct InferenceBackendUpsertDocument {
-    backend_id: String,
-    name: String,
-    provider_kind: BackendProviderKind,
-    endpoint: String,
-    api_key: Option<String>,
-    api_key_env_var: Option<String>,
-    max_concurrent: i64,
-    max_queue_depth: i64,
-    enabled: bool,
-    models_on_add: Vec<String>,
-    models_on_update: Option<Vec<String>>,
-    probe_status: String,
-}
-
-async fn write_inference_backend_document(
-    access: &ConfigAccess,
-    backend: &InferenceBackendUpsertDocument,
-) -> Result<String> {
-    let models_add = string_list_field("models", &backend.models_on_add)
-        .ok_or_else(|| anyhow::anyhow!("backend models field could not be rendered"))?;
-    let models_update = backend
-        .models_on_update
-        .as_ref()
-        .and_then(|models| string_list_field("models", models));
-    let update_fields = vec![
-        Some(format!(
-            r#"name: "{}""#,
-            escape_graphql_string(&backend.name)
-        )),
-        Some(format!(
-            r#"provider_kind: "{}""#,
-            escape_graphql_string(backend.provider_kind.as_str())
-        )),
-        Some(format!(
-            r#"endpoint: "{}""#,
-            escape_graphql_string(&backend.endpoint)
-        )),
-        Some(nullable_string_field("api_key", backend.api_key.as_deref())),
-        Some(nullable_string_field(
-            "api_key_env_var",
-            backend.api_key_env_var.as_deref(),
-        )),
-        Some(format!("max_concurrent: {}", backend.max_concurrent)),
-        Some(format!("max_queue_depth: {}", backend.max_queue_depth)),
-        Some(format!(
-            "enabled: {}",
-            graphql_bool_literal(backend.enabled)
-        )),
-        models_update,
-        Some(format!(
-            r#"probe_status: "{}""#,
-            escape_graphql_string(&backend.probe_status)
-        )),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join(",\n                    ");
-    let mutation = format!(
-        r#"mutation {{
-            upsert_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{backend_id}" }} }},
-                add: {{
-                    backend_id: "{backend_id}",
-                    name: "{name}",
-                    provider_kind: "{provider_kind}",
-                    endpoint: "{endpoint}",
-                    {api_key},
-                    {api_key_env_var},
-                    max_concurrent: {max_concurrent},
-                    max_queue_depth: {max_queue_depth},
-                    enabled: {enabled},
-                    {models_add},
-                    probe_status: "{probe_status}"
-                }},
-                update: {{
-                    {update_fields}
-                }}
-            ) {{ _docID }}
-        }}"#,
-        backend_id = escape_graphql_string(&backend.backend_id),
-        name = escape_graphql_string(&backend.name),
-        provider_kind = escape_graphql_string(backend.provider_kind.as_str()),
-        endpoint = escape_graphql_string(&backend.endpoint),
-        api_key = nullable_string_field("api_key", backend.api_key.as_deref()),
-        api_key_env_var =
-            nullable_string_field("api_key_env_var", backend.api_key_env_var.as_deref()),
-        max_concurrent = backend.max_concurrent,
-        max_queue_depth = backend.max_queue_depth,
-        enabled = graphql_bool_literal(backend.enabled),
-        models_add = models_add,
-        probe_status = escape_graphql_string(&backend.probe_status),
-        update_fields = update_fields,
-    );
-    let response = access.execute(&mutation).await?;
-    extract_mutation_doc_id(&response, "InferenceBackend")
-}
-
-async fn write_agent_behavior_document(
-    access: &ConfigAccess,
-    behavior: &AgentBehavior,
-) -> Result<String> {
-    let created_at = behavior
-        .created_at
-        .clone()
-        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-    let add_fields = vec![
-        Some(format!(
-            r#"behavior_id: "{}""#,
-            escape_graphql_string(&behavior.behavior_id)
-        )),
-        Some(format!(
-            r#"agent_did: "{}""#,
-            escape_graphql_string(&behavior.agent_did)
-        )),
-        optional_string_field("display_name", behavior.display_name.as_deref()),
-        optional_string_field("system_prompt", behavior.system_prompt.as_deref()),
-        optional_string_field("backend_id", behavior.backend_id.as_deref()),
-        optional_string_field("model_name", behavior.model_name.as_deref()),
-        optional_string_field("tool_selection_id", behavior.tool_selection_id.as_deref()),
-        optional_string_field(
-            "inference_profile_id",
-            behavior.inference_profile_id.as_deref(),
-        ),
-        optional_string_field(
-            "compaction_strategy",
-            behavior.compaction_strategy.as_deref(),
-        ),
-        optional_f64_field("compaction_threshold", behavior.compaction_threshold),
-        Some(format!(
-            "enabled: {}",
-            graphql_bool_literal(behavior.enabled)
-        )),
-        Some(format!(
-            r#"created_at: "{}""#,
-            escape_graphql_string(&created_at)
-        )),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join(",\n                    ");
-    let update_fields = vec![
-        Some(format!(
-            r#"agent_did: "{}""#,
-            escape_graphql_string(&behavior.agent_did)
-        )),
-        optional_string_field("display_name", behavior.display_name.as_deref()),
-        optional_string_field("system_prompt", behavior.system_prompt.as_deref()),
-        optional_string_field("backend_id", behavior.backend_id.as_deref()),
-        optional_string_field("model_name", behavior.model_name.as_deref()),
-        optional_string_field("tool_selection_id", behavior.tool_selection_id.as_deref()),
-        optional_string_field(
-            "inference_profile_id",
-            behavior.inference_profile_id.as_deref(),
-        ),
-        optional_string_field(
-            "compaction_strategy",
-            behavior.compaction_strategy.as_deref(),
-        ),
-        optional_f64_field("compaction_threshold", behavior.compaction_threshold),
-        Some(format!(
-            "enabled: {}",
-            graphql_bool_literal(behavior.enabled)
-        )),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join(",\n                    ");
-    let mutation = format!(
-        r#"mutation {{
-            upsert_AgentBehavior(
-                filter: {{ behavior_id: {{ _eq: "{behavior_id}" }} }},
-                add: {{
-                    {add_fields}
-                }},
-                update: {{
-                    {update_fields}
-                }}
-            ) {{ _docID }}
-        }}"#,
-        behavior_id = escape_graphql_string(&behavior.behavior_id),
-        add_fields = add_fields,
-        update_fields = update_fields,
-    );
-    let response = access.execute(&mutation).await?;
-    extract_mutation_doc_id(&response, "AgentBehavior")
-}
-
-async fn write_tool_selection_document(
-    access: &ConfigAccess,
-    selection: &ToolSelectionDocument,
-) -> Result<String> {
-    let add_fields = tool_selection_fields(selection, true);
-    let update_fields = tool_selection_fields(selection, false);
-    let mutation = format!(
-        r#"mutation {{
-            upsert_ToolSelection(
-                filter: {{ selection_id: {{ _eq: "{selection_id}" }} }},
-                add: {{
-                    {add_fields}
-                }},
-                update: {{
-                    {update_fields}
-                }}
-            ) {{ _docID }}
-        }}"#,
-        selection_id = escape_graphql_string(&selection.selection_id),
-        add_fields = add_fields,
-        update_fields = update_fields,
-    );
-    let response = access.execute(&mutation).await?;
-    extract_mutation_doc_id(&response, "ToolSelection")
-}
-
-fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) -> String {
-    let mut fields = Vec::new();
-    if include_id {
-        fields.push(format!(
-            r#"selection_id: "{}""#,
-            escape_graphql_string(&selection.selection_id)
-        ));
-    }
-    fields.push(format!(
-        r#"agent_did: "{}""#,
-        escape_graphql_string(&selection.agent_did)
-    ));
-    fields.extend(
-        [
-            optional_string_field("display_name", selection.display_name.as_deref()),
-            optional_bool_field("enable_file_tools", selection.enable_file_tools),
-            optional_string_field("file_tools_mode", selection.file_tools_mode.as_deref()),
-            Some(nullable_string_field(
-                "file_tool_root",
-                selection.file_tool_root.as_deref(),
-            )),
-            optional_bool_field("enable_bash", selection.enable_bash),
-            optional_string_field("bash_mode", selection.bash_mode.as_deref()),
-            selection
-                .cli_tool_names
-                .as_ref()
-                .and_then(|values| string_list_field("cli_tool_names", values)),
-            optional_bool_field("enable_meta_tools", selection.enable_meta_tools),
-            selection
-                .delegate_to
-                .as_ref()
-                .and_then(|values| string_list_field("delegate_to", values)),
-        ]
-        .into_iter()
-        .flatten(),
-    );
-    fields.join(",\n                    ")
-}
-
-async fn query_documents_by_unique_value(
-    access: &ConfigAccess,
-    collection_name: &str,
-    unique_field: &str,
-    unique_value: &str,
-    show_deleted: bool,
-) -> Result<Vec<ExistingDocumentRef>> {
-    let show_deleted_arg = if show_deleted {
-        "showDeleted: true, "
-    } else {
-        ""
-    };
-    let query = format!(
-        r#"{{
-            {collection_name}(
-                {show_deleted_arg}filter: {{ {unique_field}: {{ _eq: "{unique_value}" }} }},
-                limit: 16
-            ) {{
-                _docID
-                _deleted
-            }}
-        }}"#,
-        collection_name = collection_name,
-        show_deleted_arg = show_deleted_arg,
-        unique_field = unique_field,
-        unique_value = escape_graphql_string(unique_value),
-    );
-    let response = access.execute(&query).await?;
-    let rows = response
-        .get("data")
-        .and_then(|data| data.get(collection_name))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-
-    rows.into_iter()
-        .map(|row| {
-            Ok(ExistingDocumentRef {
-                doc_id: row
-                    .get("_docID")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "{collection_name} lookup row missing _docID for {unique_field}={unique_value}: {row}"
-                        )
-                    })?
-                    .to_string(),
-                deleted: row.get("_deleted").and_then(Value::as_bool).unwrap_or(false),
-            })
-        })
-        .collect()
-}
-
-fn select_existing_document(
-    collection_name: &str,
-    unique_field: &str,
-    unique_value: &str,
-    rows: &[ExistingDocumentRef],
-) -> Result<Option<ExistingDocumentRef>> {
-    let live_rows = rows.iter().filter(|row| !row.deleted).collect::<Vec<_>>();
-    if live_rows.len() > 1 {
-        anyhow::bail!(
-            "multiple live {collection_name} documents share {unique_field}={unique_value}"
-        );
-    }
-    if let Some(row) = live_rows.first() {
-        return Ok(Some((*row).clone()));
-    }
-
-    let deleted_rows = rows.iter().filter(|row| row.deleted).collect::<Vec<_>>();
-    if deleted_rows.len() > 1 {
-        anyhow::bail!(
-            "multiple deleted {collection_name} tombstones share {unique_field}={unique_value}"
-        );
-    }
-
-    Ok(deleted_rows.first().map(|row| (*row).clone()))
-}
-
-async fn write_scheduled_task_document(
-    access: &ConfigAccess,
-    task_id: &str,
-    add_doc: &Value,
-    update_doc: &Value,
-) -> Result<String> {
-    let existing = select_existing_document(
-        "ScheduledTask",
-        "task_id",
-        task_id,
-        &query_documents_by_unique_value(access, "ScheduledTask", "task_id", task_id, true).await?,
-    )?;
-
-    let Some(existing) = existing.as_ref() else {
-        return create_scheduled_task_document(access, task_id, add_doc).await;
-    };
-    if existing.deleted {
-        return create_scheduled_task_document(access, task_id, add_doc).await;
-    }
-
-    let input_literal = graphql_input_literal(update_doc)?;
-    let mutation = format!(
-        r#"mutation {{
-            update_ScheduledTask(docID: "{doc_id}", input: {input_literal}) {{ _docID }}
-        }}"#,
-        doc_id = escape_graphql_string(&existing.doc_id),
-        input_literal = input_literal,
-    );
-
-    let response = access.execute(&mutation).await?;
-    match extract_mutation_doc_id(&response, "ScheduledTask") {
-        Ok(doc_id) => Ok(doc_id),
-        Err(extract_error) => {
-            let current = select_matching_scheduled_task_row(access, task_id, update_doc).await?;
-            if let Some(row) = current {
-                let current_doc_id = row
-                    .get("_docID")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let deleted = row
-                    .get("_deleted")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                if !deleted
-                    && current_doc_id == existing.doc_id
-                    && scheduled_task_row_matches_expected(&row, update_doc)?
-                {
-                    return Ok(current_doc_id);
-                }
-                return Err(anyhow::anyhow!(
-                    "{}\nScheduledTask post-update row did not converge for task_id {}: {}",
-                    extract_error,
-                    task_id,
-                    row
-                ));
-            }
-            Err(anyhow::anyhow!(
-                "{}\nScheduledTask task_id {} has no row after update attempt",
-                extract_error,
-                task_id
-            ))
-        }
-    }
-}
-
-async fn create_scheduled_task_document(
-    access: &ConfigAccess,
-    task_id: &str,
-    add_doc: &Value,
-) -> Result<String> {
-    let input_literal = graphql_input_literal(add_doc)?;
-    let mutation = format!(
-        r#"mutation {{
-            create_ScheduledTask(input: {input_literal}) {{ _docID }}
-        }}"#,
-        input_literal = input_literal,
-    );
-    let response = access.execute(&mutation).await?;
-    match extract_mutation_doc_id(&response, "ScheduledTask") {
-        Ok(doc_id) => Ok(doc_id),
-        Err(extract_error) => {
-            let current = select_matching_scheduled_task_row(access, task_id, add_doc).await?;
-            if let Some(row) = current {
-                let deleted = row
-                    .get("_deleted")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                if !deleted && scheduled_task_row_matches_expected(&row, add_doc)? {
-                    return row
-                        .get("_docID")
-                        .and_then(Value::as_str)
-                        .map(ToOwned::to_owned)
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "ScheduledTask live row missing _docID after recreate: {}",
-                                row
-                            )
-                        });
-                }
-                return Err(anyhow::anyhow!(
-                    "{}\nScheduledTask post-create row did not converge for task_id {}: {}",
-                    extract_error,
-                    task_id,
-                    row
-                ));
-            }
-            Err(anyhow::anyhow!(
-                "{}\nScheduledTask task_id {} has no live row after create attempt",
-                extract_error,
-                task_id
-            ))
-        }
-    }
-}
-
-async fn select_matching_scheduled_task_row(
-    access: &ConfigAccess,
-    task_id: &str,
-    expected: &Value,
-) -> Result<Option<Value>> {
-    let rows = query_scheduled_task_rows(access, task_id, true).await?;
-    let live_rows = rows
-        .into_iter()
-        .filter(|row| row.get("_deleted").and_then(Value::as_bool) != Some(true))
-        .collect::<Vec<_>>();
-    if live_rows.len() > 1 {
-        anyhow::bail!(
-            "multiple live ScheduledTask rows share task_id {} during post-write verification",
-            task_id
-        );
-    }
-    if let Some(row) = live_rows.into_iter().next() {
-        if scheduled_task_row_matches_expected(&row, expected)? {
-            return Ok(Some(row));
-        }
-    }
-    Ok(None)
-}
-
-async fn query_scheduled_task_rows(
-    access: &ConfigAccess,
-    task_id: &str,
-    show_deleted: bool,
-) -> Result<Vec<Value>> {
-    let show_deleted_arg = if show_deleted {
-        "showDeleted: true, "
-    } else {
-        ""
-    };
-    let query = format!(
-        r#"{{
-            ScheduledTask(
-                {show_deleted_arg}filter: {{ task_id: {{ _eq: "{task_id}" }} }},
-                limit: 4
-            ) {{
-                _docID
-                _deleted
-                task_id
-                agent_did
-                behavior_id
-                name
-                prompt
-                interval_secs
-                enabled
-                next_run_at
-                last_run_at
-                last_status
-                last_error
-                run_count
-                created_at
-                updated_at
-            }}
-        }}"#,
-        show_deleted_arg = show_deleted_arg,
-        task_id = escape_graphql_string(task_id),
-    );
-    let response = access.execute(&query).await?;
-    Ok(response
-        .get("data")
-        .and_then(|data| data.get("ScheduledTask"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default())
-}
-
-fn scheduled_task_row_matches_expected(row: &Value, expected: &Value) -> Result<bool> {
-    let expected = expected
-        .as_object()
-        .ok_or_else(|| anyhow::anyhow!("ScheduledTask expected document must be an object"))?;
-    let actual = row
-        .as_object()
-        .ok_or_else(|| anyhow::anyhow!("ScheduledTask row must be an object"))?;
-    Ok(expected
-        .iter()
-        .all(|(key, value)| actual.get(key).is_some_and(|actual| actual == value)))
-}
-
 
 #[derive(Subcommand)]
 enum BackendCommand {
@@ -5216,7 +4652,7 @@ async fn apply_desired_state_changes(
     })
 }
 
-fn graphql_input_literal(value: &Value) -> Result<String> {
+pub(crate) fn graphql_input_literal(value: &Value) -> Result<String> {
     match value {
         Value::Null => Ok("null".to_string()),
         Value::Bool(value) => Ok(value.to_string()),
@@ -5509,7 +4945,7 @@ async fn diagnose_backend(backend: &Value, required_models: Vec<String>) -> Valu
     })
 }
 
-async fn post_graphql(graphql: &str, query: &str) -> Result<serde_json::Value> {
+pub(crate) async fn post_graphql(graphql: &str, query: &str) -> Result<serde_json::Value> {
     let client = reqwest::Client::new();
     let response = client
         .post(graphql)
@@ -5537,7 +4973,7 @@ async fn post_graphql(graphql: &str, query: &str) -> Result<serde_json::Value> {
     Ok(value)
 }
 
-fn extract_mutation_doc_id(response: &Value, collection_name: &str) -> Result<String> {
+pub(crate) fn extract_mutation_doc_id(response: &Value, collection_name: &str) -> Result<String> {
     let data = response
         .get("data")
         .ok_or_else(|| anyhow::anyhow!("graphql response missing data: {response}"))?;
@@ -6290,14 +5726,14 @@ fn require_non_empty<'a>(field: &str, value: &'a str) -> Result<&'a str> {
     Ok(trimmed)
 }
 
-fn nullable_string_field(name: &str, value: Option<&str>) -> String {
+pub(crate) fn nullable_string_field(name: &str, value: Option<&str>) -> String {
     match value.map(str::trim).filter(|value| !value.is_empty()) {
         Some(value) => format!(r#"{name}: "{}""#, escape_graphql_string(value)),
         None => format!("{name}: null"),
     }
 }
 
-fn graphql_bool_literal(value: bool) -> &'static str {
+pub(crate) fn graphql_bool_literal(value: bool) -> &'static str {
     if value {
         "true"
     } else {
@@ -6464,22 +5900,22 @@ fn optional_i64_field(name: &str, value: Option<i64>) -> Option<String> {
     value.map(|value| format!("{name}: {value}"))
 }
 
-fn optional_f64_field(name: &str, value: Option<f64>) -> Option<String> {
+pub(crate) fn optional_f64_field(name: &str, value: Option<f64>) -> Option<String> {
     value.map(|value| format!("{name}: {value}"))
 }
 
-fn optional_bool_field(name: &str, value: Option<bool>) -> Option<String> {
+pub(crate) fn optional_bool_field(name: &str, value: Option<bool>) -> Option<String> {
     value.map(|value| format!("{name}: {}", graphql_bool_literal(value)))
 }
 
-fn optional_string_field(name: &str, value: Option<&str>) -> Option<String> {
+pub(crate) fn optional_string_field(name: &str, value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| format!(r#"{name}: "{}""#, escape_graphql_string(value)))
 }
 
-fn string_list_field(name: &str, values: &[String]) -> Option<String> {
+pub(crate) fn string_list_field(name: &str, values: &[String]) -> Option<String> {
     Some(format!(
         "{name}: [{}]",
         values
