@@ -8,7 +8,10 @@ use defra_agent::{ensure_runtime_schemas, watcher::AgentRequest};
 use serde::Deserialize;
 use tempfile::TempDir;
 
+pub mod fixtures;
+pub mod http_mock;
 pub mod snapshots;
+pub mod waits;
 
 pub const AGENT_DID: &str = "did:defra-agent:test";
 pub const AGENT_NAME: &str = "test";
