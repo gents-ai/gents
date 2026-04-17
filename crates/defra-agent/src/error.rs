@@ -5,7 +5,6 @@
 
 use thiserror::Error;
 
-/// Top-level daemon error.
 #[derive(Debug, Error)]
 pub enum DaemonError {
     #[error(transparent)]
@@ -49,7 +48,6 @@ pub enum ConfigError {
     Parse(#[from] toml::de::Error),
 }
 
-/// Watcher / P2P event bus errors.
 #[derive(Debug, Error)]
 pub enum WatcherError {
     #[error("event bus closed")]
@@ -103,7 +101,6 @@ impl InferenceError {
     }
 }
 
-/// Streaming response errors.
 #[derive(Debug, Error)]
 pub enum StreamError {
     #[error("stream write failed for doc {doc_id}: {reason}")]
@@ -116,7 +113,6 @@ pub enum StreamError {
     FinalizeFailed { reason: String },
 }
 
-/// Hook / persistence errors.
 #[derive(Debug, Error)]
 pub enum HookError {
     #[error("persistence failed: {reason}")]
@@ -126,7 +122,6 @@ pub enum HookError {
     SessionNotInitialized,
 }
 
-/// Classify a rig `CompletionError` into our inference error types.
 pub fn classify_completion_error(error: &rig::agent::StreamingError) -> InferenceError {
     let msg = error.to_string();
 
@@ -186,67 +181,4 @@ pub fn classify_completion_error(error: &rig::agent::StreamingError) -> Inferenc
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn inference_error_retryability() {
-        assert!(InferenceError::ModelUnreachable {
-            endpoint: "http://localhost:8000/v1".into()
-        }
-        .is_retryable());
-
-        assert!(InferenceError::TransientFailure {
-            reason: "connection reset".into()
-        }
-        .is_retryable());
-
-        assert!(!InferenceError::PermanentFailure {
-            reason: "invalid_api_key".into()
-        }
-        .is_retryable());
-
-        assert!(InferenceError::RateLimited {
-            retry_after_secs: 30
-        }
-        .is_retryable());
-
-        assert!(!InferenceError::ContextLengthExceeded {
-            reason: "too long".into()
-        }
-        .is_retryable());
-
-        assert!(!InferenceError::RetriesExhausted {
-            max_retries: 3,
-            last_error: "gone".into()
-        }
-        .is_retryable());
-    }
-
-    #[test]
-    fn daemon_error_from_variants() {
-        let config_err: DaemonError = ConfigError::Missing {
-            key: "backend_endpoint".into(),
-        }
-        .into();
-        assert!(matches!(config_err, DaemonError::Config(_)));
-
-        let watcher_err: DaemonError = WatcherError::EventBusClosed.into();
-        assert!(matches!(watcher_err, DaemonError::Watcher(_)));
-    }
-
-    #[test]
-    fn error_display_messages() {
-        let err = InferenceError::RetriesExhausted {
-            max_retries: 3,
-            last_error: "timeout".into(),
-        };
-        assert!(err.to_string().contains("3 attempts"));
-
-        let err = WatcherError::ClaimFailed {
-            doc_id: "doc-1".into(),
-            reason: "already processing".into(),
-        };
-        assert!(err.to_string().contains("doc-1"));
-    }
-}
+mod tests;
