@@ -64,10 +64,14 @@ Status: completed
 ### Phase 4: `src/views/peers/mod.rs`
 
 - Split into:
+  - `src/views/peers/mod.rs`
   - `src/views/peers/list.rs`
   - `src/views/peers/detail.rs`
   - `src/views/peers/forms.rs`
   - `src/views/peers/actions.rs`
+  - `src/views/peers/shared.rs`
+
+Status: completed
 
 ### Phase 5: `src/views/chat/transcript.rs`
 
