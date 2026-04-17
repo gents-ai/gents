@@ -25,19 +25,3 @@ pub(super) async fn config_diff(args: ConfigDiffArgs) -> Result<()> {
     print_json(&serde_json::to_value(&report)?)?;
     Ok(())
 }
-
-pub(crate) fn diff_has_pending_apply(
-    counts: &desired_state::DesiredStateDiffCollectionsCounts,
-) -> bool {
-    [
-        &counts.agent_principal,
-        &counts.agent_behaviors,
-        &counts.tool_selections,
-        &counts.inference_backends,
-        &counts.inference_profiles,
-        &counts.tool_service_registries,
-        &counts.scheduled_tasks,
-    ]
-    .iter()
-    .any(|count| count.create > 0 || count.update > 0)
-}

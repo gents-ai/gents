@@ -2,7 +2,6 @@ use anyhow::Result;
 
 use crate::cli::*;
 use crate::print_json;
-use crate::shared::*;
 use crate::{build_config_export_bundle, resolve_agent_did, resolve_config_access};
 
 pub(super) async fn config_export(args: ConfigExportArgs) -> Result<()> {
