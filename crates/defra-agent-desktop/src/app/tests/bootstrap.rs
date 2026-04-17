@@ -2,218 +2,6 @@ use super::*;
 
 use crate::client::PeerDirectory;
 
-#[derive(Debug, serde::Deserialize)]
-struct MockReplicatorRequest {
-    #[serde(rename = "Addresses")]
-    addresses: Vec<String>,
-    #[serde(rename = "Collections")]
-    collections: Vec<String>,
-}
-
-struct MockLocalRuntimeApi {
-    graphql: String,
-    port: u16,
-    stop: Arc<AtomicBool>,
-    handle: Option<JoinHandle<()>>,
-}
-
-impl MockLocalRuntimeApi {
-    fn start(
-        runtime: &Arc<Runtime>,
-        core: Arc<ClientCore>,
-        listen_address: String,
-    ) -> Result<Self> {
-        let listener = TcpListener::bind(("127.0.0.1", 0))?;
-        listener.set_nonblocking(true)?;
-        let port = listener.local_addr()?.port();
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_for_thread = Arc::clone(&stop);
-        let handle = runtime.handle().clone();
-        let core_for_thread = Arc::clone(&core);
-        let listen_address_for_thread = listen_address.clone();
-        let thread = thread::spawn(move || {
-            while !stop_for_thread.load(Ordering::Relaxed) {
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        let request = match read_http_request(&mut stream) {
-                            Ok(request) => request,
-                            Err(_) => {
-                                let _ = stream.shutdown(Shutdown::Both);
-                                continue;
-                            }
-                        };
-                        let response = match (request.method.as_str(), request.path.as_str()) {
-                            ("GET", "/api/v0/node/identity") => Ok((
-                                "200 OK",
-                                "application/json",
-                                serde_json::json!({
-                                    "peer_id": core_for_thread.local_peer_id(),
-                                })
-                                .to_string(),
-                            )),
-                            ("GET", "/api/v0/p2p/info") => Ok((
-                                "200 OK",
-                                "application/json",
-                                serde_json::to_string(&vec![listen_address_for_thread.clone()])
-                                    .expect("serialize mock p2p info"),
-                            )),
-                            ("GET", "/api/v0/p2p/shareable-address") => Ok((
-                                "200 OK",
-                                "application/json",
-                                serde_json::json!({
-                                    "address": listen_address_for_thread.clone(),
-                                })
-                                .to_string(),
-                            )),
-                            ("POST", "/api/v0/p2p/connect") => {
-                                let connect_result =
-                                    serde_json::from_str::<Vec<String>>(&request.body)
-                                        .context("decoding /p2p/connect payload")
-                                        .and_then(|addresses| {
-                                            let target = addresses
-                                                .first()
-                                                .cloned()
-                                                .context("missing desktop listen address")?;
-                                            handle.block_on(async {
-                                                core_for_thread
-                                                    .p2p()
-                                                    .connect_peer(&target)
-                                                    .await
-                                                    .map_err(anyhow::Error::msg)
-                                            })
-                                        });
-                                connect_result.map(|_| {
-                                    (
-                                        "200 OK",
-                                        "application/json",
-                                        r#"{"status":"ok"}"#.to_string(),
-                                    )
-                                })
-                            }
-                            ("POST", "/api/v0/p2p/collections") => {
-                                serde_json::from_str::<Vec<String>>(&request.body)
-                                    .context("decoding /p2p/collections payload")
-                                    .map(|_| {
-                                        (
-                                            "200 OK",
-                                            "application/json",
-                                            r#"{"status":"ok"}"#.to_string(),
-                                        )
-                                    })
-                            }
-                            ("POST", "/api/v0/p2p/replicators") => {
-                                let replicator =
-                                    serde_json::from_str::<MockReplicatorRequest>(&request.body)
-                                        .context("decoding /p2p/replicators payload")
-                                        .and_then(|payload| {
-                                            let target =
-                                                payload.addresses.first().cloned().context(
-                                                    "missing desktop replicator address",
-                                                )?;
-                                            handle.block_on(async {
-                                                set_replicator_with_retry(
-                                                    core_for_thread.as_ref(),
-                                                    &target,
-                                                    "mock runtime bootstrap replicator",
-                                                    payload.collections,
-                                                )
-                                                .await
-                                            })
-                                        });
-                                replicator.map(|_| {
-                                    (
-                                        "200 OK",
-                                        "application/json",
-                                        r#"{"status":"ok"}"#.to_string(),
-                                    )
-                                })
-                            }
-                            _ => Ok((
-                                "404 Not Found",
-                                "application/json",
-                                r#"{"error":"not found"}"#.to_string(),
-                            )),
-                        };
-
-                        let (status, content_type, body) = match response {
-                            Ok(response) => response,
-                            Err(error) => (
-                                "500 Internal Server Error",
-                                "application/json",
-                                serde_json::json!({ "error": error.to_string() }).to_string(),
-                            ),
-                        };
-                        let _ = write_http_response(&mut stream, status, content_type, &body);
-                        let _ = stream.shutdown(Shutdown::Both);
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(25));
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-
-        Ok(Self {
-            graphql: format!("http://127.0.0.1:{port}/api/v0/graphql"),
-            port,
-            stop,
-            handle: Some(thread),
-        })
-    }
-
-    fn graphql_url(&self) -> &str {
-        &self.graphql
-    }
-}
-
-impl Drop for MockLocalRuntimeApi {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        let _ = TcpStream::connect(("127.0.0.1", self.port));
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
-    }
-}
-
-fn bootstrap_core_options() -> ClientCoreOptions {
-    let mut options = ClientCoreOptions::local_only();
-    options.rate_limit_burst = 5_000;
-    options.rate_limit_rate = 500.0;
-    options
-}
-
-fn seed_agent_home_runtime_state(
-    agent_home: &std::path::Path,
-    agent_name: &str,
-    agent_did: &str,
-    graphql: &str,
-    peer_id: &str,
-    listen_address: &str,
-) -> Result<()> {
-    std::fs::create_dir_all(agent_home)?;
-    std::fs::write(
-        agent_home.join("init.json"),
-        serde_json::to_vec_pretty(&serde_json::json!({
-            "agent_name": agent_name,
-            "agent_did": agent_did,
-        }))?,
-    )?;
-    std::fs::write(
-        agent_home.join("runtime.json"),
-        serde_json::to_vec_pretty(&serde_json::json!({
-            "graphql": graphql,
-            "agent_name": agent_name,
-            "agent_did": agent_did,
-            "p2p_transport": "iroh",
-            "p2p_peer_id": peer_id,
-            "p2p_listen_addresses": [listen_address],
-        }))?,
-    )?;
-    Ok(())
-}
-
 #[test]
 fn desktop_bootstrap_init_launch_and_gui_chat_round_trip_without_manual_refresh() -> Result<()> {
     init_test_tracing();
@@ -225,7 +13,7 @@ fn desktop_bootstrap_init_launch_and_gui_chat_round_trip_without_manual_refresh(
 
     let remote_core = Arc::new(runtime.block_on(ClientCore::start_with_paths_and_options(
         DesktopPaths::from_root(tempdir.path().join("remote")),
-        bootstrap_core_options(),
+        bootstrap_live_core_options(),
     ))?);
     let agent_name = "bootstrap-demo";
     let running_agent = runtime.block_on(spawn_backed_agent(
@@ -245,11 +33,11 @@ fn desktop_bootstrap_init_launch_and_gui_chat_round_trip_without_manual_refresh(
         "mock runtime",
     ))?;
     let runtime_api =
-        MockLocalRuntimeApi::start(&runtime, Arc::clone(&remote_core), remote_addr.clone())?;
+        BootstrapRuntimeApi::start(&runtime, Arc::clone(&remote_core), remote_addr.clone())?;
 
     let desktop_paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
     let agent_home = tempdir.path().join("agent-home");
-    seed_agent_home_runtime_state(
+    seed_agent_home_runtime_state_for_bootstrap(
         &agent_home,
         agent_name,
         &running_agent.did,
@@ -280,7 +68,7 @@ fn desktop_bootstrap_init_launch_and_gui_chat_round_trip_without_manual_refresh(
 
     let desktop_core = runtime.block_on(ClientCore::start_with_paths_and_options(
         desktop_paths,
-        bootstrap_core_options(),
+        bootstrap_live_core_options(),
     ))?;
     assert!(
         desktop_core.bootstrap_errors().is_empty(),
@@ -504,111 +292,51 @@ fn desktop_bootstrap_multi_agent_gui_switching_round_trip_without_manual_refresh
 
     {
         let driver = &mut fixture.driver;
-        driver.open_activity(Activity::Chat);
-        driver.click_target(&audit::targets::chat_deployment(&alpha.peer_id));
-        assert_chat_context(driver, &alpha, None);
-        let alpha_texts = driver.click_target(&audit::targets::chat_conversation(
-            &alpha_submission.session_id,
-        ));
-        assert_chat_context(driver, &alpha, Some(alpha_submission.session_id.as_str()));
-        assert!(alpha_texts
-            .iter()
-            .any(|text| text.contains(alpha_submission.prompt.as_str())));
-        assert!(alpha_texts
-            .iter()
-            .any(|text| text.contains(alpha_submission.response.trim())));
-        assert!(
-            !alpha_texts
-                .iter()
-                .any(|text| text.contains(bravo_submission.prompt.as_str())),
-            "alpha transcript leaked bravo prompt after bootstrap switching"
-        );
-
-        driver.click_target(&audit::targets::chat_deployment(&bravo.peer_id));
-        assert_chat_context(driver, &bravo, None);
-        let bravo_texts = driver.click_target(&audit::targets::chat_conversation(
-            &bravo_submission.session_id,
-        ));
-        assert_chat_context(driver, &bravo, Some(bravo_submission.session_id.as_str()));
-        assert!(bravo_texts
-            .iter()
-            .any(|text| text.contains(bravo_submission.prompt.as_str())));
-        assert!(bravo_texts
-            .iter()
-            .any(|text| text.contains(bravo_submission.response.trim())));
-        assert!(
-            !bravo_texts
-                .iter()
-                .any(|text| text.contains(alpha_submission.prompt.as_str())),
-            "bravo transcript leaked alpha prompt after bootstrap switching"
-        );
-
-        driver.open_activity(Activity::Operator);
-        driver.click_target(&audit::targets::operator_deployment(&alpha.peer_id));
-        driver.click_target(&audit::targets::operator_agent(&alpha.agent_did));
-        driver.click_target(&audit::targets::operator_section(
-            OperatorSection::Behaviors,
-        ));
-        assert_operator_context(driver, &alpha, OperatorSection::Behaviors, None);
-        driver.wait_for_target(
-            "alpha behavior row after bootstrap operator switch",
-            Duration::from_secs(10),
-            &audit::targets::operator_entity(&alpha.docs.behavior_id),
+        open_chat_conversation_and_assert_isolation(
+            driver,
+            &alpha,
+            &alpha_submission,
+            bravo_submission.prompt.as_str(),
+            "alpha transcript leaked bravo prompt after bootstrap switching",
         )?;
-        assert!(!driver.has_target(&audit::targets::operator_entity(&bravo.docs.behavior_id)));
-        driver.click_target(&audit::targets::operator_entity(&alpha.docs.behavior_id));
-        assert_operator_context(
+        open_chat_conversation_and_assert_isolation(
+            driver,
+            &bravo,
+            &bravo_submission,
+            alpha_submission.prompt.as_str(),
+            "bravo transcript leaked alpha prompt after bootstrap switching",
+        )?;
+
+        open_operator_entity_and_assert_visibility(
             driver,
             &alpha,
             OperatorSection::Behaviors,
-            Some(alpha.docs.behavior_id.as_str()),
-        );
-
-        driver.click_target(&audit::targets::operator_section(
-            OperatorSection::RequestTimeline,
-        ));
-        assert_operator_context(driver, &alpha, OperatorSection::RequestTimeline, None);
-        driver.wait_for_target(
+            &alpha.docs.behavior_id,
+            &[bravo.docs.behavior_id.as_str()],
+            "alpha behavior row after bootstrap operator switch",
+        )?;
+        open_operator_request_timeline_and_assert_visibility(
+            driver,
+            &alpha,
+            &alpha_submission.request_id,
+            &[bravo_submission.request_id.as_str()],
             "alpha request row after bootstrap operator switch",
-            Duration::from_secs(10),
-            &audit::targets::operator_entity(&alpha_submission.request_id),
         )?;
-        assert!(!driver.has_target(&audit::targets::operator_entity(
-            &bravo_submission.request_id,
-        )));
-
-        driver.click_target(&audit::targets::operator_deployment(&bravo.peer_id));
-        driver.click_target(&audit::targets::operator_agent(&bravo.agent_did));
-        driver.click_target(&audit::targets::operator_section(
-            OperatorSection::Behaviors,
-        ));
-        assert_operator_context(driver, &bravo, OperatorSection::Behaviors, None);
-        driver.wait_for_target(
-            "bravo behavior row after bootstrap operator switch",
-            Duration::from_secs(10),
-            &audit::targets::operator_entity(&bravo.docs.behavior_id),
-        )?;
-        assert!(!driver.has_target(&audit::targets::operator_entity(&alpha.docs.behavior_id)));
-        driver.click_target(&audit::targets::operator_entity(&bravo.docs.behavior_id));
-        assert_operator_context(
+        open_operator_entity_and_assert_visibility(
             driver,
             &bravo,
             OperatorSection::Behaviors,
-            Some(bravo.docs.behavior_id.as_str()),
-        );
-
-        driver.click_target(&audit::targets::operator_section(
-            OperatorSection::RequestTimeline,
-        ));
-        assert_operator_context(driver, &bravo, OperatorSection::RequestTimeline, None);
-        driver.wait_for_target(
-            "bravo request row after bootstrap operator switch",
-            Duration::from_secs(10),
-            &audit::targets::operator_entity(&bravo_submission.request_id),
+            &bravo.docs.behavior_id,
+            &[alpha.docs.behavior_id.as_str()],
+            "bravo behavior row after bootstrap operator switch",
         )?;
-        assert!(!driver.has_target(&audit::targets::operator_entity(
-            &alpha_submission.request_id,
-        )));
+        open_operator_request_timeline_and_assert_visibility(
+            driver,
+            &bravo,
+            &bravo_submission.request_id,
+            &[alpha_submission.request_id.as_str()],
+            "bravo request row after bootstrap operator switch",
+        )?;
     }
 
     fixture.shutdown()

@@ -1,0 +1,129 @@
+use anyhow::{Context, Result};
+use chrono::Utc;
+use defra_agent_protocol::row::AgentBehaviorRow;
+use defra_node::EmbeddedNode;
+
+use super::super::graphql::{
+    escape_graphql_string, execute_mutation, graphql_optional_bool_field,
+    graphql_optional_float_field, graphql_string_field, join_fields, normalize_required,
+};
+
+pub async fn upsert_agent_behavior(node: &EmbeddedNode, row: &AgentBehaviorRow) -> Result<()> {
+    let behavior_id = normalize_required("behavior_id", &row.behavior_id)?;
+    let agent_did = normalize_required(
+        "agent_did",
+        row.agent_did
+            .as_deref()
+            .context("agent_did is required for AgentBehavior")?,
+    )?;
+    let created_at = row
+        .created_at
+        .as_deref()
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| Utc::now().to_rfc3339());
+
+    let add_fields = [
+        Some(format!(
+            r#"behavior_id: "{}""#,
+            escape_graphql_string(behavior_id)
+        )),
+        Some(format!(
+            r#"agent_did: "{}""#,
+            escape_graphql_string(agent_did)
+        )),
+        Some(graphql_string_field(
+            "display_name",
+            row.display_name.as_deref(),
+        )),
+        Some(graphql_string_field(
+            "system_prompt",
+            row.system_prompt.as_deref(),
+        )),
+        Some(graphql_string_field(
+            "backend_id",
+            row.backend_id.as_deref(),
+        )),
+        Some(graphql_string_field(
+            "model_name",
+            row.model_name.as_deref(),
+        )),
+        Some(graphql_string_field(
+            "tool_selection_id",
+            row.tool_selection_id.as_deref(),
+        )),
+        Some(graphql_string_field(
+            "inference_profile_id",
+            row.inference_profile_id.as_deref(),
+        )),
+        Some(graphql_string_field(
+            "compaction_strategy",
+            row.compaction_strategy.as_deref(),
+        )),
+        Some(graphql_optional_float_field(
+            "compaction_threshold",
+            row.compaction_threshold,
+        )),
+        Some(graphql_optional_bool_field("enabled", row.enabled)),
+        Some(format!(
+            r#"created_at: "{}""#,
+            escape_graphql_string(&created_at)
+        )),
+    ];
+    let update_fields = [
+        Some(format!(
+            r#"agent_did: "{}""#,
+            escape_graphql_string(agent_did)
+        )),
+        Some(graphql_string_field(
+            "display_name",
+            row.display_name.as_deref(),
+        )),
+        Some(graphql_string_field(
+            "system_prompt",
+            row.system_prompt.as_deref(),
+        )),
+        Some(graphql_string_field(
+            "backend_id",
+            row.backend_id.as_deref(),
+        )),
+        Some(graphql_string_field(
+            "model_name",
+            row.model_name.as_deref(),
+        )),
+        Some(graphql_string_field(
+            "tool_selection_id",
+            row.tool_selection_id.as_deref(),
+        )),
+        Some(graphql_string_field(
+            "inference_profile_id",
+            row.inference_profile_id.as_deref(),
+        )),
+        Some(graphql_string_field(
+            "compaction_strategy",
+            row.compaction_strategy.as_deref(),
+        )),
+        Some(graphql_optional_float_field(
+            "compaction_threshold",
+            row.compaction_threshold,
+        )),
+        Some(graphql_optional_bool_field("enabled", row.enabled)),
+    ];
+
+    let mutation = format!(
+        r#"mutation {{
+            upsert_AgentBehavior(
+                filter: {{ behavior_id: {{ _eq: "{behavior_id}" }} }},
+                add: {{
+                    {add_fields}
+                }},
+                update: {{
+                    {update_fields}
+                }}
+            ) {{ _docID }}
+        }}"#,
+        behavior_id = escape_graphql_string(behavior_id),
+        add_fields = join_fields(&add_fields),
+        update_fields = join_fields(&update_fields),
+    );
+    execute_mutation(node, &mutation, "upsert_agent_behavior").await
+}

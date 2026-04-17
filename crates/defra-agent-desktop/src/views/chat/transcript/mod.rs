@@ -1,0 +1,176 @@
+mod markdown;
+mod messages;
+mod modal;
+mod reasoning_cards;
+mod tool_cards;
+
+use defra_agent_protocol::client_protocol::ClientTurnState;
+use defra_agent_protocol::transcript::{present_persisted_message, PresentedMessageRole};
+use eframe::egui::{self, RichText, Ui};
+use egui_commonmark::CommonMarkCache;
+
+use crate::client::ClientStore;
+use crate::state::ShellState;
+use crate::theme;
+
+use self::messages::{
+    centered_status_card, message_block, message_label_color, transcript_surface,
+};
+use self::modal::show_tool_detail_modal;
+use self::reasoning_cards::{
+    latest_reasoning_response, reasoning_block, response_fallback_content,
+};
+use self::tool_cards::tool_turn_block;
+use super::turn_state_label;
+
+pub use markdown::markdown_theme_names;
+
+pub fn show(
+    ui: &mut Ui,
+    state: &mut ShellState,
+    store: &ClientStore,
+    selected_session_id: Option<&str>,
+    turn_state: Option<ClientTurnState>,
+    markdown_cache: &mut CommonMarkCache,
+) {
+    let palette = theme::palette();
+
+    ui.group(|ui| {
+        ui.label(
+            RichText::new(format!(
+                "TURN STATE  {}",
+                turn_state_label(turn_state).to_uppercase()
+            ))
+            .monospace()
+            .size(10.5)
+            .color(match turn_state {
+                Some(ClientTurnState::Streaming) => palette.accent,
+                Some(ClientTurnState::Failed) => palette.danger,
+                Some(ClientTurnState::Completed) => palette.text_1,
+                Some(ClientTurnState::Superseded) => palette.warning,
+                _ => palette.text_2,
+            }),
+        );
+    });
+    ui.add_space(10.0);
+
+    let Some(session_id) = selected_session_id else {
+        transcript_surface(ui, |ui| {
+            centered_status_card(
+                ui,
+                "No Conversation Selected",
+                "Pick a conversation from the sidebar or submit a new message to create one.",
+            );
+        });
+        return;
+    };
+
+    let transcript = store.transcript(session_id);
+    let requests = store.requests_for_session(session_id);
+    let latest_reasoning = latest_reasoning_response(store, session_id);
+
+    if transcript.messages.is_empty() && requests.is_empty() {
+        transcript_surface(ui, |ui| {
+            centered_status_card(
+                ui,
+                "Transcript Empty",
+                "This conversation has not produced messages yet. Submitted requests will appear here as soon as the local replica observes them.",
+            );
+        });
+        show_tool_detail_modal(ui.ctx(), state, markdown_cache);
+        return;
+    }
+
+    transcript_surface(ui, |ui| {
+        let scroll_output = egui::ScrollArea::vertical()
+            .stick_to_bottom(state.chat.editor.transcript_stick_to_bottom)
+            .show(ui, |ui| {
+                if transcript.messages.is_empty() {
+                    for request in requests {
+                        if let Some(content) = request.content.as_deref() {
+                            message_block(
+                                ui,
+                                markdown_cache,
+                                format!("request:{}:content", request.request_id),
+                                "USER",
+                                palette.text_1,
+                                content,
+                            );
+                            ui.add_space(10.0);
+                        }
+                        if let Some(response) =
+                            store.latest_response_for_request(&request.request_id)
+                        {
+                            if let Some(content) = response_fallback_content(response) {
+                                message_block(
+                                    ui,
+                                    markdown_cache,
+                                    format!("response:{}:fallback", response.response_key.as_str()),
+                                    "ASSISTANT",
+                                    palette.accent,
+                                    content,
+                                );
+                                ui.add_space(10.0);
+                            }
+                        }
+                    }
+                } else {
+                    for message in &transcript.messages {
+                        let presentation = present_persisted_message(
+                            message.role.as_deref().unwrap_or("user"),
+                            message.content.as_deref().unwrap_or_default(),
+                        );
+                        let related_tool_calls: Vec<_> = transcript
+                            .tool_calls
+                            .iter()
+                            .copied()
+                            .filter(|tool_call| tool_call.message_sequence == message.sequence)
+                            .collect();
+                        let suppress_tool_message = presentation.role == PresentedMessageRole::Tool
+                            && (!transcript.tool_calls.is_empty()
+                                || !transcript.tool_results.is_empty());
+
+                        if presentation.has_visible_body() && !suppress_tool_message {
+                            message_block(
+                                ui,
+                                markdown_cache,
+                                format!(
+                                    "message:{}:{}",
+                                    message.sequence.unwrap_or_default(),
+                                    presentation.role.label()
+                                ),
+                                presentation.role.label(),
+                                message_label_color(presentation.role),
+                                &presentation.body_markdown,
+                            );
+                            ui.add_space(6.0);
+                        }
+
+                        if !related_tool_calls.is_empty() {
+                            tool_turn_block(
+                                ui,
+                                state,
+                                &related_tool_calls,
+                                &transcript.tool_results,
+                            );
+                            ui.add_space(8.0);
+                        }
+                    }
+                }
+
+                if let Some(response) = latest_reasoning {
+                    ui.add_space(6.0);
+                    reasoning_block(ui, state, markdown_cache, response);
+                }
+            });
+
+        // Keep the stick-to-bottom flag in sync with where the user ended up
+        // so manual scrolling up stops the auto-jump, and returning to the
+        // bottom resumes it.
+        let viewport_bottom = scroll_output.state.offset.y + scroll_output.inner_rect.height();
+        let at_bottom = viewport_bottom + 2.0 >= scroll_output.content_size.y;
+        state.chat.editor.transcript_stick_to_bottom = at_bottom;
+    });
+
+    show_tool_detail_modal(ui.ctx(), state, markdown_cache);
+}

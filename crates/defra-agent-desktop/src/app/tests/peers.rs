@@ -297,13 +297,15 @@ fn desktop_app_auto_restart_policy_triggers_for_wedged_p2p() {
         Some(&healthy),
         &wedged,
         None,
-        Instant::now()
+        Instant::now(),
+        Duration::from_secs(20)
     ));
     assert!(!should_auto_restart_p2p(
         Some(&wedged),
         &wedged,
         Some(Instant::now()),
-        Instant::now()
+        Instant::now(),
+        Duration::from_secs(20)
     ));
 }
 
@@ -347,15 +349,19 @@ fn desktop_app_peers_transport_actions_queue_repair_and_restart() -> Result<()> 
 
     let original_client_generation = driver.app.client_generation;
     driver.click_target(audit::targets::PEERS_RESTART_CLIENT);
-    assert_eq!(
-        driver.app.state.pending_client_restart_reason.as_deref(),
-        Some("manual desktop P2P recovery")
-    );
-    assert_eq!(
-        driver.app.state.peers.last_action_message.as_deref(),
-        Some("Restarting desktop client core to recover the P2P transport.")
-    );
-    driver.render();
+    assert!(driver
+        .app
+        .state
+        .peers
+        .last_action_message
+        .as_deref()
+        .is_some_and(|message| {
+            message == "Restarting desktop client core to recover the P2P transport."
+                || message.contains("Restarted desktop client core")
+        }));
+    wait_for_value("desktop client restarted", Duration::from_secs(5), || {
+        (driver.app.client_generation > original_client_generation).then_some(())
+    })?;
     let client = driver
         .app
         .client

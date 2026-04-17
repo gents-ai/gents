@@ -31,11 +31,31 @@ use tracing_subscriber::{prelude::*, EnvFilter};
 
 use crate::audit;
 use crate::client::{ClientCore, ClientCoreOptions, DesktopPaths};
-use crate::state::{LogsFilter, OperatorDraft, OperatorSection};
+use crate::state::{Activity, LogsFilter, OperatorDraft, OperatorSection};
 use crate::telemetry::{global_log_layer, global_log_store, DesktopLogCategory, DesktopLogStore};
 
-mod coverage;
-include!("tests/support.rs");
+#[path = "tests/support/live_fixture/mod.rs"]
+mod support_live_fixture;
+use support_live_fixture::*;
+
+#[path = "tests/support/seed/mod.rs"]
+mod support_seed;
+use support_seed::*;
+
+include!("tests/support/chat_flow.rs");
+include!("tests/support/operator_flow.rs");
+include!("tests/support/bootstrap_runtime.rs");
+include!("tests/support/network.rs");
+include!("tests/support/wait.rs");
+include!("tests/support/driver.rs");
+
+#[path = "tests/support/mock_backend/mod.rs"]
+mod support_mock_backend;
+use support_mock_backend::*;
+
+#[path = "tests/support/response_wait/mod.rs"]
+mod support_response_wait;
+use support_response_wait::*;
 
 mod bootstrap;
 mod chat;
