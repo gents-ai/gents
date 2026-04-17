@@ -1,0 +1,355 @@
+mod support;
+use support::*;
+
+use std::fs;
+use std::time::Duration;
+
+use anyhow::{anyhow, Context, Result};
+use serde_json::Value;
+use uuid::Uuid;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("default");
+    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&root)?;
+
+    let agent_did = format!("did:defra-agent:{}", Uuid::new_v4().simple());
+    let default_behavior_id = format!("{agent_did}:default");
+    let tool_selection_id = format!("{default_behavior_id}:tools");
+
+    write_json_file(
+        &root.join("agent-principal.json"),
+        &serde_json::json!({
+            "agent_did": agent_did.clone(),
+            "display_name": "Default Agent",
+            "default_behavior_id": default_behavior_id.clone(),
+            "enabled": true
+        }),
+    )?;
+    write_json_file(
+        &root.join("agent-behaviors.json"),
+        &serde_json::json!([
+            {
+                "behavior_id": default_behavior_id.clone(),
+                "agent_did": agent_did.clone(),
+                "display_name": "Default",
+                "system_prompt": "Keep responses short.",
+                "backend_id": "default-backend",
+                "model_name": "mock-model",
+                "tool_selection_id": tool_selection_id.clone(),
+                "inference_profile_id": null,
+                "compaction_strategy": null,
+                "compaction_threshold": null,
+                "enabled": true
+            }
+        ]),
+    )?;
+    write_json_file(
+        &root.join("tool-selections.json"),
+        &serde_json::json!([
+            {
+                "selection_id": tool_selection_id.clone(),
+                "agent_did": agent_did.clone(),
+                "display_name": "Standard",
+                "enable_file_tools": true,
+                "file_tools_mode": "ReadOnly",
+                "enable_bash": true,
+                "bash_mode": "ReadOnly",
+                "cli_tool_names": [],
+                "enable_meta_tools": true,
+                "delegate_to": []
+            }
+        ]),
+    )?;
+    write_json_file(
+        &root.join("inference-backends.json"),
+        &serde_json::json!([
+            {
+                "backend_id": "default-backend",
+                "name": "default-backend",
+                "endpoint": "http://127.0.0.1:8000/v1",
+                "api_key_env_var": "DEFRA_AGENT_TEST_MANIFEST_API_KEY",
+                "max_concurrent": 2,
+                "max_queue_depth": 100,
+                "enabled": true,
+                "models": ["mock-model"]
+            }
+        ]),
+    )?;
+
+    let output = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "validate",
+            "--root",
+            root.to_str().expect("utf-8 manifest root"),
+        ],
+    )?;
+
+    assert_eq!(
+        output.get("status").and_then(Value::as_str),
+        Some("validated")
+    );
+    assert_eq!(output.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        output.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+    assert_eq!(
+        output
+            .pointer("/counts/agent_principal")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        output
+            .pointer("/counts/agent_behaviors")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        output
+            .pointer("/counts/tool_selections")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        output
+            .pointer("/counts/inference_backends")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        output
+            .pointer("/counts/inference_profiles")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        output.get("errors").and_then(Value::as_array).map(Vec::len),
+        Some(0)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_validate_reports_reference_errors_and_fails_nonzero() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("broken");
+    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&root)?;
+
+    let agent_did = format!("did:defra-agent:{}", Uuid::new_v4().simple());
+
+    write_json_file(
+        &root.join("agent-principal.json"),
+        &serde_json::json!({
+            "agent_did": agent_did.clone(),
+            "display_name": "Broken Agent",
+            "default_behavior_id": format!("{agent_did}:default"),
+            "enabled": true
+        }),
+    )?;
+    write_json_file(
+        &root.join("agent-behaviors.json"),
+        &serde_json::json!([
+            {
+                "behavior_id": "other-behavior",
+                "agent_did": agent_did.clone(),
+                "display_name": "Other",
+                "system_prompt": "Broken config.",
+                "backend_id": "missing-backend",
+                "model_name": "mock-model",
+                "tool_selection_id": "missing-tools",
+                "inference_profile_id": "missing-profile",
+                "compaction_strategy": null,
+                "compaction_threshold": null,
+                "enabled": true
+            }
+        ]),
+    )?;
+    write_json_file(&root.join("tool-selections.json"), &serde_json::json!([]))?;
+    write_json_file(
+        &root.join("inference-backends.json"),
+        &serde_json::json!([]),
+    )?;
+
+    let output = run_cli_failure_stdout_json(
+        &home_dir,
+        &[
+            "config",
+            "validate",
+            "--root",
+            root.to_str().expect("utf-8 manifest root"),
+        ],
+    )?;
+
+    assert_eq!(
+        output.get("status").and_then(Value::as_str),
+        Some("invalid")
+    );
+    assert_eq!(output.get("ok").and_then(Value::as_bool), Some(false));
+    let errors = output
+        .get("errors")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("validate output missing errors array: {output}"))?;
+    let messages = errors
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        messages.contains("default_behavior_id"),
+        "expected default behavior validation error, got:\n{messages}"
+    );
+    assert!(
+        messages.contains("missing backend_id missing-backend"),
+        "expected missing backend validation error, got:\n{messages}"
+    );
+    assert!(
+        messages.contains("missing tool_selection_id missing-tools"),
+        "expected missing tool selection validation error, got:\n{messages}"
+    );
+    assert!(
+        messages.contains("missing inference_profile_id missing-profile"),
+        "expected missing profile validation error, got:\n{messages}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_validate_accepts_tool_services_dir_and_scheduled_tasks_dir() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("fleet");
+    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&root)?;
+    fs::create_dir_all(root.join("tool-services"))?;
+    fs::create_dir_all(root.join("scheduled-tasks"))?;
+
+    let agent_did = format!("did:defra-agent:{}", Uuid::new_v4().simple());
+    let default_behavior_id = format!("{agent_did}:default");
+    let tool_selection_id = format!("{default_behavior_id}:tools");
+
+    write_json_file(
+        &root.join("agent-principal.json"),
+        &serde_json::json!({
+            "agent_did": agent_did.clone(),
+            "display_name": "Fleet Agent",
+            "default_behavior_id": default_behavior_id.clone(),
+            "enabled": true
+        }),
+    )?;
+    write_json_file(
+        &root.join("agent-behaviors.json"),
+        &serde_json::json!([
+            {
+                "behavior_id": default_behavior_id.clone(),
+                "agent_did": agent_did.clone(),
+                "display_name": "Default",
+                "system_prompt": "Stay focused.",
+                "backend_id": "default-backend",
+                "model_name": "mock-model",
+                "tool_selection_id": tool_selection_id.clone(),
+                "inference_profile_id": null,
+                "compaction_strategy": null,
+                "compaction_threshold": null,
+                "enabled": true
+            }
+        ]),
+    )?;
+    write_json_file(
+        &root.join("tool-selections.json"),
+        &serde_json::json!([
+            {
+                "selection_id": tool_selection_id.clone(),
+                "agent_did": agent_did.clone(),
+                "display_name": "Standard",
+                "enable_file_tools": true,
+                "file_tools_mode": "ReadOnly",
+                "enable_bash": true,
+                "bash_mode": "ReadOnly",
+                "cli_tool_names": [],
+                "enable_meta_tools": true,
+                "delegate_to": []
+            }
+        ]),
+    )?;
+    write_json_file(
+        &root.join("inference-backends.json"),
+        &serde_json::json!([
+            {
+                "backend_id": "default-backend",
+                "name": "default-backend",
+                "endpoint": "http://127.0.0.1:8000/v1",
+                "api_key_env_var": "DEFRA_AGENT_TEST_MANIFEST_API_KEY",
+                "max_concurrent": 2,
+                "max_queue_depth": 100,
+                "enabled": true,
+                "models": ["mock-model"]
+            }
+        ]),
+    )?;
+    write_json_file(
+        &root.join("tool-services").join("ops-mcp.json"),
+        &serde_json::json!({
+            "service_id": "ops-mcp",
+            "display_name": "Ops MCP",
+            "description": "Operational tooling",
+            "hostname": "ops.internal",
+            "tailscale_ip": "100.64.0.10",
+            "lan_ip": "192.168.1.10",
+            "mcp_port": 8080,
+            "mcp_path": "/mcp"
+        }),
+    )?;
+    write_json_file(
+        &root.join("scheduled-tasks").join("nightly-audit.json"),
+        &serde_json::json!({
+            "task_id": "nightly-audit",
+            "agent_did": agent_did.clone(),
+            "behavior_id": default_behavior_id.clone(),
+            "name": "Nightly Audit",
+            "prompt": "Audit the fleet state and summarize drift.",
+            "interval_secs": 3600,
+            "enabled": false
+        }),
+    )?;
+
+    let output = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "validate",
+            "--root",
+            root.to_str().expect("utf-8 manifest root"),
+        ],
+    )?;
+
+    assert_eq!(
+        output.get("status").and_then(Value::as_str),
+        Some("validated")
+    );
+    assert_eq!(output.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        output
+            .pointer("/counts/tool_service_registries")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        output
+            .pointer("/counts/scheduled_tasks")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    Ok(())
+}
