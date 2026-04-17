@@ -1,13 +1,12 @@
 use super::*;
 
 fn wait_for_bootstrap_replication_ready(driver: &mut AuditDriver, label: &str) -> Result<()> {
-    wait_for_value(label, Duration::from_secs(20), || {
-        let texts = driver.render();
-        texts
-            .iter()
-            .any(|text| text.contains("replication: subscriptions armed"))
-            .then_some(())
-    })
+    wait_for_replication_state(
+        driver,
+        label,
+        Duration::from_secs(20),
+        "subscriptions armed",
+    )
 }
 
 pub(super) fn wait_for_live_deployment_docs_in_store(

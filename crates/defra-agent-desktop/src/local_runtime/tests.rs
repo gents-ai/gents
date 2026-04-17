@@ -19,7 +19,7 @@ fn sample_summary() -> DesktopInitSummary {
         peer_record_id: "peer-runtime".to_string(),
         next_steps: vec![
             "Run `defra-agent-desktop` and leave the desktop app open.".to_string(),
-            "Wait for the status bar to show `replication: subscriptions armed`.".to_string(),
+            "Wait for the status bar to show `replication subscriptions armed`.".to_string(),
             "Then submit prompts from Chat, or run `defra-agent chat` in another terminal."
                 .to_string(),
         ],
@@ -32,11 +32,11 @@ fn init_summary_tells_demo_to_wait_for_desktop_bootstrap() {
     assert!(summary
         .next_steps
         .iter()
-        .any(|step| step.contains("replication: subscriptions armed")));
+        .any(|step| step.contains("replication subscriptions armed")));
 
     let rendered = render_human_summary(&summary);
     assert!(rendered.contains("desktop app completes P2P pairing"));
-    assert!(rendered.contains("replication: subscriptions armed"));
+    assert!(rendered.contains("replication subscriptions armed"));
     assert!(rendered.contains("Then submit prompts from Chat"));
 }
 

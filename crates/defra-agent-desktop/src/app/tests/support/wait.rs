@@ -50,6 +50,18 @@ pub(crate) fn assert_logs_filter_has_results(texts: &[String]) {
     );
 }
 
+pub(crate) fn wait_for_replication_state(
+    driver: &mut AuditDriver,
+    label: &str,
+    timeout: Duration,
+    expected: &str,
+) -> Result<()> {
+    wait_for_value(label, timeout, || {
+        driver.render();
+        (driver.app.state.status.replication_state == expected).then_some(())
+    })
+}
+
 pub(crate) fn wait_for_value<T>(
     label: &str,
     timeout: Duration,

@@ -126,13 +126,12 @@ fn desktop_bootstrap_init_launch_and_gui_chat_round_trip_without_manual_refresh(
     app.state.activity = Activity::Chat;
     let mut driver = AuditDriver::new(app, ctx);
 
-    wait_for_value("desktop bootstrap status", Duration::from_secs(10), || {
-        let texts = driver.render();
-        texts
-            .iter()
-            .any(|text| text.contains("replication: subscriptions armed"))
-            .then_some(texts)
-    })?;
+    wait_for_replication_state(
+        &mut driver,
+        "desktop bootstrap status",
+        Duration::from_secs(10),
+        "subscriptions armed",
+    )?;
 
     let deployment_target = audit::targets::chat_deployment(&peer_record.peer_id);
     driver.wait_for_target(
