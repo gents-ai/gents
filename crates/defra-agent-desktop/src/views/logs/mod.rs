@@ -33,14 +33,10 @@ pub fn show_main(ui: &mut Ui, state: &mut ShellState, log_store: &DesktopLogStor
         });
         ui.add_space(10.0);
         ui.label(
-            RichText::new(format!(
-                "{} shown · {} captured",
-                snapshot.entries.len(),
-                snapshot.total_events
-            ))
-            .monospace()
-            .size(11.0)
-            .color(palette.text_2),
+            RichText::new(summary_text(entries.len(), snapshot.total_events))
+                .monospace()
+                .size(11.0)
+                .color(palette.text_2),
         );
         ui.add_space(10.0);
 
@@ -75,4 +71,8 @@ pub fn show_rail(
     log_store: &DesktopLogStore,
 ) {
     rail::show_rail(ui, client, store, log_store);
+}
+
+fn summary_text(filtered_count: usize, total_events: u64) -> String {
+    format!("{filtered_count} shown · {total_events} captured")
 }
