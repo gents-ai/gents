@@ -1,0 +1,115 @@
+mod support;
+use support::*;
+
+use std::fs;
+use std::time::Duration;
+
+use anyhow::{anyhow, Context, Result};
+use serde_json::Value;
+use uuid::Uuid;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_apply_reconciles_running_runtime_without_restart() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("default");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-apply-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let agent_name = format!("cli-apply-{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:defra-agent:{agent_name}");
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    let exported = run_cli_json(&home_dir, &["config", "export"])?;
+    write_manifest_root_from_export(&root, &exported)?;
+
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let behaviors_path = root.join("agent-behaviors.json");
+    let mut behaviors = read_json_file(&behaviors_path)?;
+    let updated_prompt = "Keep responses terse. Mention that desired state was applied.";
+    behaviors[0]["system_prompt"] = Value::String(updated_prompt.to_string());
+    write_json_file(&behaviors_path, &behaviors)?;
+
+    let root_str = root
+        .to_str()
+        .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
+    let applied = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
+    assert_eq!(
+        applied.get("status").and_then(Value::as_str),
+        Some("applied")
+    );
+    assert_eq!(applied.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(applied.get("changed").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        applied
+            .pointer("/applied/agent_behaviors")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        applied
+            .pointer("/remaining/agent_behaviors/update")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+
+    let generation_after_apply =
+        wait_for_runtime_quiescence(&graphql, &agent_did, 2, Duration::from_secs(6)).await?;
+    let response = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{
+                AgentBehavior(
+                    filter: {{ agent_did: {{ _eq: "{}" }} }},
+                    limit: 1
+                ) {{
+                    system_prompt
+                }}
+            }}"#,
+            escape_graphql_string(&agent_did),
+        ),
+    )
+    .await?;
+    let behavior_row = first_graphql_row(&response, "AgentBehavior")?;
+    assert_eq!(
+        behavior_row.get("system_prompt").and_then(Value::as_str),
+        Some(updated_prompt)
+    );
+
+    let noop = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
+    assert_eq!(noop.get("status").and_then(Value::as_str), Some("noop"));
+    assert_eq!(noop.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(noop.get("changed").and_then(Value::as_bool), Some(false));
+    assert_eq!(
+        noop.pointer("/applied/agent_behaviors")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+
+    let generation_after_noop = wait_for_runtime_quiescence(
+        &graphql,
+        &agent_did,
+        generation_after_apply,
+        Duration::from_secs(3),
+    )
+    .await?;
+    assert_eq!(generation_after_noop, generation_after_apply);
+
+    Ok(())
+}
