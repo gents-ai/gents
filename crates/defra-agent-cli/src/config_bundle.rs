@@ -1,3 +1,4 @@
+// Soft-cap justified: two bundle-building functions share a GraphQL query pattern; splitting would duplicate query logic.
 use std::collections::BTreeSet;
 
 use anyhow::Result;

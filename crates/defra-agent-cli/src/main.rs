@@ -1,3 +1,4 @@
+// Soft-cap justified: thin entry point plus ~170 lines of constants and ~175 lines of co-located bootstrap tests. Further splitting would fragment binary-crate setup.
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
