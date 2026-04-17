@@ -24,12 +24,16 @@ fn desktop_app_operator_creates_backend_and_rebinds_behavior() -> Result<()> {
         &audit::targets::operator_agent("did:defra:amy"),
     )?;
     driver.click_target(&audit::targets::operator_agent("did:defra:amy"));
-    wait_for_value("operator selected local agent", Duration::from_secs(10), || {
-        let texts = driver.render();
-        (driver.app.state.operator.selected_agent_did.as_deref() == Some("did:defra:amy")
-            && texts.iter().any(|text| text.contains("Operator Console")))
-        .then_some(())
-    })?;
+    wait_for_value(
+        "operator selected local agent",
+        Duration::from_secs(10),
+        || {
+            let texts = driver.render();
+            (driver.app.state.operator.selected_agent_did.as_deref() == Some("did:defra:amy")
+                && texts.iter().any(|text| text.contains("Operator Console")))
+            .then_some(())
+        },
+    )?;
 
     driver.click_target(&audit::targets::operator_section(OperatorSection::Backends));
     driver.wait_for_target(
@@ -138,16 +142,20 @@ fn desktop_app_operator_creates_backend_and_rebinds_behavior() -> Result<()> {
         &audit::targets::operator_entity("amy-default"),
     )?;
     driver.click_target(&audit::targets::operator_entity("amy-default"));
-    wait_for_value("amy behavior selected after explicit click", Duration::from_secs(10), || {
-        let texts = driver.render();
-        (driver.app.state.operator.selected_section == OperatorSection::Behaviors
-            && driver.app.state.operator.selected_entity_id.as_deref() == Some("amy-default")
-            && matches!(
-                driver.app.state.operator.draft.as_ref(),
-                Some(OperatorDraft::Behavior(_))
-            ))
-        .then_some(texts)
-    })?;
+    wait_for_value(
+        "amy behavior selected after explicit click",
+        Duration::from_secs(10),
+        || {
+            let texts = driver.render();
+            (driver.app.state.operator.selected_section == OperatorSection::Behaviors
+                && driver.app.state.operator.selected_entity_id.as_deref() == Some("amy-default")
+                && matches!(
+                    driver.app.state.operator.draft.as_ref(),
+                    Some(OperatorDraft::Behavior(_))
+                ))
+            .then_some(texts)
+        },
+    )?;
     assert_behavior_draft_bindings(
         &driver,
         "amy-default",

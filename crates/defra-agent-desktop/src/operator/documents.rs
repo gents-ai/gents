@@ -6,8 +6,7 @@ use crate::state::{
 
 use super::{
     abbreviate_identifier, bool_word, compact_timestamp, normalize_optional_owned,
-    scheduled_task_is_due, scheduled_task_next_run_label, summarize_request_content,
-    truncate_line,
+    scheduled_task_is_due, scheduled_task_next_run_label, summarize_request_content, truncate_line,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
