@@ -195,4 +195,3 @@ fn desktop_app_live_chat_retry_and_export() -> Result<()> {
 
     fixture.shutdown()
 }
-

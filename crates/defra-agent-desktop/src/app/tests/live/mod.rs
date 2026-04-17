@@ -2,6 +2,9 @@ use super::*;
 
 include!("common.rs");
 
+mod operator_config;
+pub(crate) use operator_config::*;
+
 mod chat;
 mod chat_followup;
 mod logs;

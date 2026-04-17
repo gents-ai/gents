@@ -284,4 +284,3 @@ fn wait_for_remote_config_docs(
         has_rows.then_some(())
     })
 }
-

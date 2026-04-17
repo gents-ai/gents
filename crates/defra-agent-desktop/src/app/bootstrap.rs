@@ -129,7 +129,8 @@ pub(crate) fn should_auto_restart_p2p(
         return false;
     }
 
-    if last_attempt.is_some_and(|attempted_at| now.saturating_duration_since(attempted_at) < cooldown)
+    if last_attempt
+        .is_some_and(|attempted_at| now.saturating_duration_since(attempted_at) < cooldown)
     {
         return false;
     }
@@ -144,7 +145,11 @@ pub(crate) fn should_auto_restart_p2p(
     }
 }
 
-pub(super) fn apply_first_launch_focus(state: &mut ShellState, client: &ClientCore, store: &ClientStore) {
+pub(super) fn apply_first_launch_focus(
+    state: &mut ShellState,
+    client: &ClientCore,
+    store: &ClientStore,
+) {
     if !state.onboarding.first_launch_redirect_done
         && state.activity == Activity::Chat
         && should_focus_first_launch(client, store)

@@ -34,13 +34,14 @@ use crate::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use crate::state::{Activity, LogsFilter, OperatorDraft, OperatorSection};
 use crate::telemetry::{global_log_layer, global_log_store, DesktopLogCategory, DesktopLogStore};
 
-mod coverage;
 include!("tests/support/seed.rs");
 include!("tests/support/fixture.rs");
 include!("tests/support/chat_flow.rs");
+include!("tests/support/operator_flow.rs");
 include!("tests/support/bootstrap_runtime.rs");
 include!("tests/support/network.rs");
 include!("tests/support/mock_backend.rs");
+include!("tests/support/response_wait.rs");
 include!("tests/support/wait.rs");
 include!("tests/support/driver.rs");
 

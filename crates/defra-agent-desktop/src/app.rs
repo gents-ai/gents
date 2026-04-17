@@ -6,13 +6,13 @@ mod shell_actions;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::client::{ClientCore, P2PHealth, P2PHealthStatus};
+use crate::state::ShellState;
+use crate::telemetry::{global_log_store, DesktopLogStore};
 use eframe::egui::{self, Context};
 use egui_commonmark::CommonMarkCache;
 use tokio::runtime::Runtime;
 use tokio::sync::watch;
-use crate::client::{ClientCore, P2PHealth, P2PHealthStatus};
-use crate::state::ShellState;
-use crate::telemetry::{global_log_store, DesktopLogStore};
 
 use self::bootstrap::{
     apply_bootstrap_failure_state, apply_bootstrap_state, apply_client_transport_state,

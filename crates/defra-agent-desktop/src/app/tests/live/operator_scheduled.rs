@@ -241,4 +241,3 @@ fn desktop_app_live_operator_scheduled_task_and_failures() -> Result<()> {
 
     fixture.shutdown()
 }
-
