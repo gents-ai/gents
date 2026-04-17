@@ -117,7 +117,7 @@ pub(super) fn remove_selected_peer(
                     .map(|candidate| candidate.agent_did.clone());
                 state.operator.selected_entity_id = None;
                 state.operator.draft = None;
-                state.operator.draft_source_entity_id = None;
+                state.operator.draft_origin = None;
             }
             state.peers.last_action_message = Some(match result.warning {
                 Some(warning) => format!("Removed {}. {}", result.label, warning),

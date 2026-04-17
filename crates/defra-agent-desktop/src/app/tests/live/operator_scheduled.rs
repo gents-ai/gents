@@ -220,7 +220,7 @@ fn desktop_app_live_operator_scheduled_task_and_failures() -> Result<()> {
         driver.app.state.operator.selected_agent_did = failed_task_agent_did;
         driver.app.state.operator.selected_entity_id = None;
         driver.app.state.operator.draft = None;
-        driver.app.state.operator.draft_source_entity_id = None;
+        driver.app.state.operator.draft_origin = None;
         driver.click_target(&audit::targets::operator_section(
             crate::state::OperatorSection::RecentFailures,
         ));

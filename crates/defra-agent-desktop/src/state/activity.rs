@@ -58,9 +58,22 @@ impl Activity {
 pub enum PendingChatAction {
     SelectDeployment { peer_id: String, agent_did: String },
     SelectConversation { session_id: String },
+    StartNewConversationDraft,
+    SelectBehavior { behavior_id: Option<String> },
     CreateConversation,
     SubmitComposer,
     RetryLatestRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PendingOperatorAction {
+    SelectDeployment { peer_id: String, agent_did: String },
+    SelectSection { section: super::OperatorSection },
+    SelectEntity { entity_id: String },
+    StartNewDocument,
+    DiscardDraft,
+    ApplyDraft,
+    RunNowSelectedTask,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,4 +81,5 @@ pub enum PendingShellAction {
     Navigate(Activity),
     OpenPeersSetup,
     Chat(PendingChatAction),
+    Operator(PendingOperatorAction),
 }

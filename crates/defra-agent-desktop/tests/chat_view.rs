@@ -67,6 +67,32 @@ fn conversation_grouping_splits_today_yesterday_and_earlier() {
 }
 
 #[test]
+fn conversation_grouping_meta_surfaces_behavior_binding() {
+    let now = Utc::now();
+    let rows = vec![AgentConversationRow {
+        session_id: "session-1".to_string(),
+        agent_name: None,
+        agent_did: Some("did:defra:amy".to_string()),
+        behavior_id: Some("amy-default".to_string()),
+        title: Some("Today".to_string()),
+        preview_text: None,
+        status: None,
+        created_at: Some(now.to_rfc3339()),
+        updated_at: Some(now.to_rfc3339()),
+        latest_request_id: None,
+    }];
+    let refs: Vec<_> = rows.iter().collect();
+
+    let buckets = build_conversation_buckets(&refs, now);
+
+    assert_eq!(buckets.len(), 1);
+    assert_eq!(
+        buckets[0].entries[0].meta,
+        "behavior amy-default  session sess..-1"
+    );
+}
+
+#[test]
 fn send_disabled_for_non_terminal_turn_and_empty_inputs() {
     assert!(send_disabled(true, Some("did:defra:amy"), "", None));
     assert!(send_disabled(

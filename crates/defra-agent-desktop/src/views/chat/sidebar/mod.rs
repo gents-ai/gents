@@ -116,7 +116,7 @@ fn show_conversations_header(
             );
             if response.clicked() {
                 state.queue_shell_action(PendingShellAction::Chat(
-                    PendingChatAction::CreateConversation,
+                    PendingChatAction::StartNewConversationDraft,
                 ));
             }
         });

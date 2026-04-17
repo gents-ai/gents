@@ -100,7 +100,7 @@ pub fn show_main(
 
     egui::Panel::bottom("chat_composer_panel")
         .resizable(false)
-        .exact_size(208.0)
+        .exact_size(248.0)
         .show_inside(ui, |ui| {
             composer::show(
                 ui,

@@ -61,4 +61,5 @@ mod bootstrap;
 mod chat;
 mod first_launch;
 mod live;
+mod operator;
 mod peers;

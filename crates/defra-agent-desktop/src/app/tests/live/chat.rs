@@ -184,29 +184,10 @@ fn desktop_app_live_inference_smoke() -> Result<()> {
         audit::targets::CHAT_NEW_CONVERSATION,
     )?;
     driver.click_target(audit::targets::CHAT_NEW_CONVERSATION);
-    let second_session_id = wait_for_value(
-        "live second conversation selected",
-        Duration::from_secs(10),
-        || {
-            driver
-                .app
-                .state
-                .chat
-                .shell
-                .selected_session_id
-                .clone()
-                .filter(|session_id| session_id != &first_session_id)
-        },
-    )?;
-    let second_session_target = audit::targets::chat_conversation(&second_session_id);
-    driver.wait_for_target(
-        "live second conversation row",
-        Duration::from_secs(10),
-        &second_session_target,
-    )?;
+    assert_eq!(driver.app.state.chat.shell.selected_session_id, None);
     let second_request_id =
         submit_chat_message_and_wait_for_request_observed(&mut driver, &second_prompt)?;
-    wait_for_value(
+    let second_session_id = wait_for_value(
         "second live request bound to second conversation",
         Duration::from_secs(10),
         || {
@@ -217,10 +198,16 @@ fn desktop_app_live_inference_smoke() -> Result<()> {
                     .requests
                     .iter()
                     .find(|row| row.request_id == second_request_id)
-                    .filter(|row| row.session_id.as_deref() == Some(second_session_id.as_str()))
-                    .map(|row| row.request_id.clone())
+                    .and_then(|row| row.session_id.clone())
+                    .filter(|session_id| session_id != &first_session_id)
             })
         },
+    )?;
+    let second_session_target = audit::targets::chat_conversation(&second_session_id);
+    driver.wait_for_target(
+        "live second conversation row",
+        Duration::from_secs(10),
+        &second_session_target,
     )?;
     let desktop_client = Arc::clone(
         driver

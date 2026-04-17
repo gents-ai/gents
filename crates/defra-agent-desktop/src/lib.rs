@@ -3,6 +3,7 @@ pub(crate) mod audit;
 pub(crate) mod chat;
 pub mod client;
 pub mod local_runtime;
+pub(crate) mod operator;
 pub mod state;
 pub mod telemetry;
 pub mod theme;

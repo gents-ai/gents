@@ -4,6 +4,7 @@ use crate::chat::controller as chat_controller;
 use crate::client::{
     ClientCore, ClientCoreOptions, ClientStore, DesktopPaths, P2PHealth, P2PHealthStatus,
 };
+use crate::operator::controller as operator_controller;
 use crate::state::{Activity, ShellState};
 use crate::views;
 
@@ -108,6 +109,7 @@ pub(super) fn sync_shell_state_from_client(state: &mut ShellState, client: &Clie
     apply_snapshot_state(state, store);
 
     chat_controller::sync_from_snapshot(&mut state.chat, store, true);
+    operator_controller::sync_from_snapshot(&mut state.operator, &client.peer_statuses(), store);
     apply_first_launch_focus(state, client, store);
     views::prepare_state(state, Some(client), Some(store));
 }

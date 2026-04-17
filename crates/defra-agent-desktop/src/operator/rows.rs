@@ -7,12 +7,12 @@ use crate::state::{
     BackendDraft, BehaviorDraft, InferenceProfileDraft, ScheduledTaskDraft, ToolSelectionDraft,
 };
 
-use super::super::shared::{
+use super::{
     normalize_optional_owned, normalize_required, parse_optional_f64, parse_optional_i64,
     parse_optional_rfc3339, parse_required_positive_i64, split_csv,
 };
 
-pub(super) fn behavior_row(draft: &BehaviorDraft) -> Result<AgentBehaviorRow> {
+pub fn behavior_row(draft: &BehaviorDraft) -> Result<AgentBehaviorRow> {
     Ok(AgentBehaviorRow {
         behavior_id: normalize_required("behavior_id", &draft.behavior_id)?.to_string(),
         agent_did: Some(normalize_required("agent_did", &draft.agent_did)?.to_string()),
@@ -32,7 +32,7 @@ pub(super) fn behavior_row(draft: &BehaviorDraft) -> Result<AgentBehaviorRow> {
     })
 }
 
-pub(super) fn backend_row(draft: &BackendDraft) -> Result<InferenceBackendRow> {
+pub fn backend_row(draft: &BackendDraft) -> Result<InferenceBackendRow> {
     Ok(InferenceBackendRow {
         backend_id: normalize_required("backend_id", &draft.backend_id)?.to_string(),
         name: normalize_optional_owned(&draft.name),
@@ -49,7 +49,7 @@ pub(super) fn backend_row(draft: &BackendDraft) -> Result<InferenceBackendRow> {
     })
 }
 
-pub(super) fn tool_selection_row(draft: &ToolSelectionDraft) -> Result<ToolSelectionRow> {
+pub fn tool_selection_row(draft: &ToolSelectionDraft) -> Result<ToolSelectionRow> {
     Ok(ToolSelectionRow {
         selection_id: normalize_required("selection_id", &draft.selection_id)?.to_string(),
         agent_did: Some(normalize_required("agent_did", &draft.agent_did)?.to_string()),
@@ -64,7 +64,7 @@ pub(super) fn tool_selection_row(draft: &ToolSelectionDraft) -> Result<ToolSelec
     })
 }
 
-pub(super) fn inference_profile_row(draft: &InferenceProfileDraft) -> Result<InferenceProfileRow> {
+pub fn inference_profile_row(draft: &InferenceProfileDraft) -> Result<InferenceProfileRow> {
     Ok(InferenceProfileRow {
         profile_id: normalize_required("profile_id", &draft.profile_id)?.to_string(),
         display_name: normalize_optional_owned(&draft.display_name),
@@ -80,7 +80,7 @@ pub(super) fn inference_profile_row(draft: &InferenceProfileDraft) -> Result<Inf
     })
 }
 
-pub(super) fn scheduled_task_row(draft: &ScheduledTaskDraft) -> Result<ScheduledTaskRow> {
+pub fn scheduled_task_row(draft: &ScheduledTaskDraft) -> Result<ScheduledTaskRow> {
     Ok(ScheduledTaskRow {
         task_id: normalize_required("task_id", &draft.task_id)?.to_string(),
         agent_did: Some(normalize_required("agent_did", &draft.agent_did)?.to_string()),

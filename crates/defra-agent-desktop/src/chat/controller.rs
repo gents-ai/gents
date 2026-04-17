@@ -31,6 +31,14 @@ pub fn select_conversation(chat: &mut ChatState, session_id: String) {
     reduce(chat, ChatAction::SelectConversation { session_id });
 }
 
+pub fn start_new_conversation_draft(chat: &mut ChatState) {
+    reduce(chat, ChatAction::StartNewConversationDraft);
+}
+
+pub fn select_behavior_override(chat: &mut ChatState, behavior_id: Option<String>) {
+    reduce(chat, ChatAction::SelectBehaviorOverride { behavior_id });
+}
+
 pub fn create_conversation(
     chat: &mut ChatState,
     client: Option<&ClientCore>,

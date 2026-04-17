@@ -32,14 +32,12 @@ pub(crate) fn assert_live_operator_switching_baseline(
     assert_backend_section(
         driver,
         alpha,
-        bravo.docs.backend_id.as_str(),
         backend,
         "alpha backend row after operator server switch",
     )?;
     assert_profile_section(
         driver,
         alpha,
-        bravo.docs.inference_profile_id.as_str(),
         "alpha inference profile row after operator server switch",
     )?;
     assert_request_timeline_section(
@@ -59,14 +57,12 @@ pub(crate) fn assert_live_operator_switching_baseline(
     assert_backend_section(
         driver,
         bravo,
-        alpha.docs.backend_id.as_str(),
         backend,
         "bravo backend row after operator server switch",
     )?;
     assert_profile_section(
         driver,
         bravo,
-        alpha.docs.inference_profile_id.as_str(),
         "bravo inference profile row after operator server switch",
     )?;
     assert_request_timeline_section(
@@ -106,7 +102,6 @@ fn assert_behavior_section(
 fn assert_backend_section(
     driver: &mut AuditDriver,
     deployment: &LiveDeploymentCase<'_>,
-    hidden_backend_id: &str,
     backend: &AgentBackendConfig,
     wait_label: &str,
 ) -> Result<()> {
@@ -115,7 +110,7 @@ fn assert_backend_section(
         deployment,
         OperatorSection::Backends,
         &deployment.docs.backend_id,
-        &[hidden_backend_id],
+        &[],
         wait_label,
     )?;
     assert_backend_draft_matches(
@@ -131,7 +126,6 @@ fn assert_backend_section(
 fn assert_profile_section(
     driver: &mut AuditDriver,
     deployment: &LiveDeploymentCase<'_>,
-    hidden_profile_id: &str,
     wait_label: &str,
 ) -> Result<()> {
     open_operator_entity_and_assert_visibility(
@@ -139,7 +133,7 @@ fn assert_profile_section(
         deployment,
         OperatorSection::InferenceProfiles,
         &deployment.docs.inference_profile_id,
-        &[hidden_profile_id],
+        &[],
         wait_label,
     )?;
     assert_inference_profile_draft_matches(

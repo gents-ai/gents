@@ -2,9 +2,14 @@ pub(crate) fn init_test_tracing() {
     static INIT: OnceLock<()> = OnceLock::new();
     INIT.get_or_init(|| {
         let filter = std::env::var("DEFRA_AGENT_DESKTOP_TEST_LOG")
-            .unwrap_or_else(|_| "warn,defra_agent_desktop::app::tests=info".to_string());
+            .map(EnvFilter::new)
+            .unwrap_or_else(|_| {
+                crate::telemetry::with_default_transport_noise_filters(EnvFilter::new(
+                    "warn,defra_agent_desktop::app::tests=info",
+                ))
+            });
         let _ = tracing_subscriber::registry()
-            .with(with_default_transport_noise_filters(EnvFilter::new(filter)))
+            .with(filter)
             .with(
                 tracing_subscriber::fmt::layer()
                     .with_target(false)
@@ -14,20 +19,6 @@ pub(crate) fn init_test_tracing() {
             .with(global_log_layer())
             .try_init();
     });
-}
-
-pub(crate) fn with_default_transport_noise_filters(filter: EnvFilter) -> EnvFilter {
-    filter
-        .add_directive(
-            "iroh_quinn_proto::connection=error"
-                .parse()
-                .expect("valid tracing directive"),
-        )
-        .add_directive(
-            "noq_proto::connection=error"
-                .parse()
-                .expect("valid tracing directive"),
-        )
 }
 
 pub(crate) fn live_desktop_test_guard() -> MutexGuard<'static, ()> {

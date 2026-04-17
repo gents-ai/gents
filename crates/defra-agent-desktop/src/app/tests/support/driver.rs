@@ -78,6 +78,10 @@ pub(crate) fn is_activity_sidebar_target(target: &str) -> bool {
         || target.starts_with("peers.agent.")
 }
 
+pub(crate) fn is_operator_entity_target(target: &str) -> bool {
+    target.starts_with("operator.entity.")
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct TextRun {
     text: String,
@@ -122,12 +126,25 @@ impl AuditDriver {
         Ok(self.click_pos_compact(rect.center()))
     }
 
+    fn click_compact_target(&mut self, target: &str) -> Result<Vec<String>> {
+        let rect = self
+            .find_click_rect(target, false)
+            .ok_or_else(|| anyhow!("unable to find audit target rect: {target}"))?;
+        anyhow::ensure!(
+            target_is_interactable(rect),
+            "audit target is not interactable: {target} at {rect:?}"
+        );
+        Ok(self.click_pos_compact(rect.center()))
+    }
+
     fn find_click_rect(&mut self, target: &str, require_interactable: bool) -> Option<egui::Rect> {
+        if let Some(rect) = self.current_click_rect(target, require_interactable) {
+            return Some(rect);
+        }
+
         self.render();
 
-        if let Some(rect) = audit::target_interact_rect(&self.ctx, target)
-            .filter(|rect| !require_interactable || target_is_interactable(*rect))
-        {
+        if let Some(rect) = self.current_click_rect(target, require_interactable) {
             return Some(rect);
         }
 
@@ -142,6 +159,33 @@ impl AuditDriver {
                     return Some(rect);
                 }
             }
+        }
+
+        if is_operator_entity_target(target) {
+            for delta in [
+                -260.0_f32, -260.0, -260.0, -260.0, -260.0, 260.0, 260.0, 260.0, 260.0, 260.0,
+            ] {
+                self.scroll_operator_entity_list(delta);
+                if let Some(rect) = audit::target_interact_rect(&self.ctx, target)
+                    .filter(|rect| !require_interactable || target_is_interactable(*rect))
+                {
+                    return Some(rect);
+                }
+            }
+        }
+
+        if require_interactable {
+            None
+        } else {
+            audit::target_rect(&self.ctx, target).filter(|rect| target_is_interactable(*rect))
+        }
+    }
+
+    fn current_click_rect(&self, target: &str, require_interactable: bool) -> Option<egui::Rect> {
+        if let Some(rect) = audit::target_interact_rect(&self.ctx, target)
+            .filter(|rect| !require_interactable || target_is_interactable(*rect))
+        {
+            return Some(rect);
         }
 
         if require_interactable {
@@ -173,8 +217,12 @@ impl AuditDriver {
         target: &str,
     ) -> Result<Vec<String>> {
         wait_for_value(description, timeout, || {
-            let texts = self.render();
-            audit::target_rect(&self.ctx, target).map(|_| texts)
+            self.find_click_rect(target, false).map(|_| {
+                self.last_texts
+                    .iter()
+                    .map(|run| run.text.clone())
+                    .collect::<Vec<_>>()
+            })
         })
     }
 
@@ -266,6 +314,10 @@ impl AuditDriver {
 
     fn scroll_activity_sidebar(&mut self, delta_y: f32) -> Vec<String> {
         self.scroll_pos(egui::pos2(180.0, 780.0), delta_y)
+    }
+
+    fn scroll_operator_entity_list(&mut self, delta_y: f32) -> Vec<String> {
+        self.scroll_pos(egui::pos2(760.0, 520.0), delta_y)
     }
 
     fn scroll_right_rail(&mut self, delta_y: f32) -> Vec<String> {

@@ -1,5 +1,6 @@
-mod drafts;
-mod editors;
+mod behavior_context;
+pub(crate) mod drafts;
+pub(crate) mod editors;
 mod entity_list;
 mod prepare;
 mod rail;
@@ -12,17 +13,10 @@ mod sidebar;
 use eframe::egui::Ui;
 use tokio::runtime::Runtime;
 
-use self::drafts::entity_summaries;
 use crate::client::{ClientCore, ClientStore};
+use crate::operator::{entity_summaries, EntitySummary};
 use crate::state::{OperatorSection, ShellState};
 use crate::views;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct EntitySummary {
-    id: String,
-    title: String,
-    meta: String,
-}
 
 pub fn prepare_state(
     state: &mut ShellState,

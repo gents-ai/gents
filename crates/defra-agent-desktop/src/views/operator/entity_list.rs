@@ -2,11 +2,11 @@ use eframe::egui::{self, RichText, TextEdit, Ui};
 
 use crate::audit;
 use crate::client::ClientStore;
-use crate::state::{OperatorSection, ShellState};
+use crate::state::{OperatorSection, PendingOperatorAction, PendingShellAction, ShellState};
 use crate::theme;
 use crate::views;
 
-use super::drafts::{draft_for_selection, filter_entity_summaries};
+use super::drafts::filter_entity_summaries;
 use super::EntitySummary;
 
 pub(super) fn breadcrumb(state: &ShellState, section: OperatorSection) -> String {
@@ -29,11 +29,11 @@ pub(super) fn breadcrumb(state: &ShellState, section: OperatorSection) -> String
 pub(super) fn show_document_section(
     ui: &mut Ui,
     state: &mut ShellState,
-    store: &ClientStore,
+    _store: &ClientStore,
     section: OperatorSection,
     entries: Vec<EntitySummary>,
 ) {
-    show_filter_bar(ui, state);
+    show_filter_bar(ui, state, section);
     ui.add_space(10.0);
 
     if entries.is_empty() {
@@ -46,7 +46,6 @@ pub(super) fn show_document_section(
     }
 
     let filtered_entries = filter_entity_summaries(entries, state.operator.entity_filter.as_str());
-    sync_filtered_selection(state, store, section, &filtered_entries);
 
     if filtered_entries.is_empty() {
         views::card(
@@ -57,11 +56,12 @@ pub(super) fn show_document_section(
         return;
     }
 
-    render_entity_list(ui, state, store, section, &filtered_entries);
+    render_entity_list(ui, state, &filtered_entries);
 }
 
-fn show_filter_bar(ui: &mut Ui, state: &mut ShellState) {
+fn show_filter_bar(ui: &mut Ui, state: &mut ShellState, section: OperatorSection) {
     let palette = theme::palette();
+    let has_new_button = section.supports_new_documents();
     ui.horizontal(|ui| {
         ui.label(
             RichText::new("FILTER")
@@ -72,49 +72,35 @@ fn show_filter_bar(ui: &mut Ui, state: &mut ShellState) {
         audit::add_sized(
             ui,
             audit::targets::OPERATOR_ENTITY_FILTER,
-            [ui.available_width(), 28.0],
+            [ui.available_width().max(120.0), 28.0],
             TextEdit::singleline(&mut state.operator.entity_filter)
                 .id_source(audit::targets::OPERATOR_ENTITY_FILTER)
                 .hint_text("name, id, backend, model"),
         );
     });
-}
-
-fn sync_filtered_selection(
-    state: &mut ShellState,
-    store: &ClientStore,
-    section: OperatorSection,
-    filtered_entries: &[EntitySummary],
-) {
-    if state
-        .operator
-        .selected_entity_id
-        .as_deref()
-        .is_some_and(|entity_id| !filtered_entries.iter().any(|entry| entry.id == entity_id))
-    {
-        state.operator.selected_entity_id = filtered_entries.first().map(|entry| entry.id.clone());
-        let selected_entity_id = state.operator.selected_entity_id.clone();
-        state.operator.draft = selected_entity_id.as_deref().and_then(|entity_id| {
-            draft_for_selection(
-                store,
-                section,
-                state.operator.selected_agent_did.as_deref(),
-                entity_id,
-            )
-        });
-        state.operator.draft_source_entity_id =
-            state.operator.draft.as_ref().and(selected_entity_id);
-        state.operator.last_apply_error = None;
+    if has_new_button {
+        ui.add_space(6.0);
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), 28.0),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                let response = audit::add_sized(
+                    ui,
+                    audit::targets::OPERATOR_NEW,
+                    egui::vec2(96.0, 28.0),
+                    egui::Button::new("New"),
+                );
+                if response.clicked() {
+                    state.queue_shell_action(PendingShellAction::Operator(
+                        PendingOperatorAction::StartNewDocument,
+                    ));
+                }
+            },
+        );
     }
 }
 
-fn render_entity_list(
-    ui: &mut Ui,
-    state: &mut ShellState,
-    store: &ClientStore,
-    section: OperatorSection,
-    filtered_entries: &[EntitySummary],
-) {
+fn render_entity_list(ui: &mut Ui, state: &mut ShellState, filtered_entries: &[EntitySummary]) {
     let palette = theme::palette();
     egui::ScrollArea::vertical().show(ui, |ui| {
         for entry in filtered_entries {
@@ -133,16 +119,11 @@ fn render_entity_list(
             );
             audit::record(ui, &audit::targets::operator_entity(&entry.id), &response);
             if response.clicked() {
-                state.operator.selected_entity_id = Some(entry.id.clone());
-                state.operator.draft = draft_for_selection(
-                    store,
-                    section,
-                    state.operator.selected_agent_did.as_deref(),
-                    &entry.id,
-                );
-                state.operator.draft_source_entity_id =
-                    state.operator.draft.as_ref().map(|_| entry.id.clone());
-                state.operator.last_apply_error = None;
+                state.queue_shell_action(PendingShellAction::Operator(
+                    PendingOperatorAction::SelectEntity {
+                        entity_id: entry.id.clone(),
+                    },
+                ));
             }
             ui.add_space(6.0);
         }

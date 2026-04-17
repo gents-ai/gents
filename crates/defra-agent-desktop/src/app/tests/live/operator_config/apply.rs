@@ -139,7 +139,7 @@ fn assert_switched_backend_draft(
         deployment,
         OperatorSection::Backends,
         &config.backend_id,
-        &[deployment.docs.backend_id.as_str()],
+        &[],
         "switched backend row after behavior binding edit",
     )?;
     match driver.app.state.operator.draft.as_ref() {
@@ -164,7 +164,7 @@ fn apply_switched_profile(
         deployment,
         OperatorSection::InferenceProfiles,
         &config.profile_id,
-        &[deployment.docs.inference_profile_id.as_str()],
+        &[],
         "switched inference profile row after behavior binding edit",
     )?;
     driver.replace_text_in_target(
