@@ -149,7 +149,7 @@ pub async fn init_standard_local_runtime(
         peer_record_id: peer.peer_id,
         next_steps: vec![
             "Run `defra-agent-desktop` and leave the desktop app open.".to_string(),
-            "Wait for the status bar to show `replication: subscriptions armed`.".to_string(),
+            "Wait for the status bar to show `replication subscriptions armed`.".to_string(),
             "Then submit prompts from Chat, or run `defra-agent chat` in another terminal."
                 .to_string(),
         ],
@@ -175,7 +175,7 @@ and replication bootstrap on launch.
 
 Next:
   1. Run `defra-agent-desktop` and leave it open.
-  2. Wait for the status bar to show `replication: subscriptions armed`.
+  2. Wait for the status bar to show `replication subscriptions armed`.
   3. Then submit prompts from Chat, or run `defra-agent chat` in another terminal.
 ",
         agent_home = summary.agent_home,
