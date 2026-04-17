@@ -1,9 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, BufRead, Read, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -11,18 +10,13 @@ use clap::Parser;
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{
-    cli_tool, default_behavior_id_for_agent, discover_backend_models,
-    ensure_config_bootstrap_schemas, ensure_runtime_schemas, load_agent_behavior,
-    load_agent_principal, upsert_agent_principal, AgentBehavior, AgentIdentity,
-    BackendProviderKind, BashMode, DefraAgent, DocumentRuntimeOptions, FileToolMode, McpPool,
-    ProcessLifecycleObserver, ProcessLifecycleState, SimpleIdentity, ToolCeiling,
-    ToolSelectionDocument,
+    cli_tool, default_behavior_id_for_agent, discover_backend_models, ensure_runtime_schemas,
+    AgentBehavior, BackendProviderKind, BashMode, FileToolMode, ToolSelectionDocument,
 };
 use p2p::iroh::parse_public_peer_addr;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Map, Value};
-use tokio::sync::watch;
 
 mod cli;
 mod commands;
@@ -40,7 +34,6 @@ use config_writes::{
     write_scheduled_task_document, write_tool_selection_document, ConfigAccess,
     InferenceBackendUpsertDocument,
 };
-use http::runtime_contract_router;
 use http::version::{NodeIdentityResponse, P2pShareableAddressResponse};
 
 const DEFAULT_AGENT_NAME: &str = "default";
@@ -179,29 +172,7 @@ Examples:
   defra-agent config import agent-config.json --override";
 const CONFIG_EXPORT_FORMAT_V1: &str = "defra-agent-config/v1";
 const CONFIG_EXPORT_FORMAT: &str = "defra-agent-config/v2";
-const STANDARD_READONLY_SYSTEM_PROMPT: &str = r#"You are a terminal-native engineering and operations agent running for the user inside a local DefraDB runtime.
 
-Your job is to help with software work, debugging, codebase inspection, incident triage, release checks, infrastructure investigation, and general computer operations tasks. Build your conclusions from real evidence: inspect files, logs, command output, and tool results before making claims.
-
-Work like a strong command-line operator:
-- be concise and factual
-- prefer direct answers over long essays
-- explain what you found, not what you assume
-- propose the next command, file, or check when it helps
-
-You are currently in a read-only operating mode for local tools. You can inspect local state, but you cannot modify files or perform write-capable shell actions. If the user asks for a change, say clearly that the current tool mode is read-only and describe the exact edit or command you would apply if write access were enabled."#;
-const STANDARD_READWRITE_SYSTEM_PROMPT: &str = r#"You are a terminal-native engineering and operations agent running for the user inside a local DefraDB runtime.
-
-Your job is to help with software work, debugging, code changes, codebase maintenance, incident triage, release checks, infrastructure investigation, and general computer operations tasks. Build your conclusions from real evidence: inspect files, logs, command output, and tool results before making claims.
-
-Work like a strong command-line operator:
-- inspect first, then act
-- keep changes focused and easy to explain
-- prefer direct answers over long essays
-- summarize exactly what changed and why
-- avoid broad or risky operations unless the user clearly wants them
-
-You have write-capable local tools. When the user asks you to make a change, you may edit files and use write-capable shell actions deliberately. Read the relevant state first, make the smallest effective change, and report the concrete outcome."#;
 const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
     ("AgentPrincipal", "agent_did"),
     ("AgentBehavior", "behavior_id"),
@@ -267,24 +238,15 @@ const EXPORT_TOOL_SERVICE_REGISTRY_FIELDS: &str =
 const EXPORT_SCHEDULED_TASK_FIELDS: &str =
     "task_id agent_did behavior_id name prompt interval_secs enabled";
 
-struct CliReadyObserver {
-    tx: watch::Sender<ProcessLifecycleState>,
-}
-
-impl ProcessLifecycleObserver for CliReadyObserver {
-    fn on_process_state_change(&self, state: ProcessLifecycleState) {
-        let _ = self.tx.send(state);
-    }
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let telemetry = telemetry::init(DEFAULT_LOG_FILTER)?;
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Init(args) => init(args).await,
-        Command::Reset(args) => reset(args).await,
-        Command::Server(args) => serve(args).await,
+        Command::Init(args) => commands::init::init(args).await,
+        Command::Reset(args) => commands::reset::reset(args).await,
+        Command::Server(args) => commands::serve::serve(args).await,
         Command::Chat(args) => chat(args).await,
         Command::P2p { command } => match command {
             P2pCommand::Status(args) => p2p_status(args).await,
@@ -357,413 +319,6 @@ async fn main() -> Result<()> {
     result
 }
 
-async fn init(args: InitArgs) -> Result<()> {
-    let home_dir = resolve_home_dir(args.home.as_deref());
-    if args.dangerously_overwrite {
-        dangerously_overwrite_home(&home_dir)?;
-    }
-    let data_dir = args
-        .data_dir
-        .clone()
-        .unwrap_or_else(|| default_data_dir(&home_dir));
-    fs::create_dir_all(&data_dir)
-        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-
-    let key_path = args
-        .key_path
-        .clone()
-        .unwrap_or_else(|| default_key_path(&home_dir, &args.agent_name));
-    if let Some(parent) = key_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating key directory {}", parent.display()))?;
-    }
-
-    let identity = Arc::new(SimpleIdentity::new(&args.agent_name, &key_path, None));
-    identity
-        .sign(b"defra-agent init identity")
-        .await
-        .context("creating or loading agent identity key")?;
-    let node = EmbeddedNode::builder()
-        .data_path(&data_dir)
-        .build()
-        .await
-        .context("building embedded defra node for init")?;
-    ensure_config_bootstrap_schemas(&node).await?;
-
-    let access = ConfigAccess::Local(node);
-    let summary = initialize_runtime_home(&access, &args, identity.did()).await?;
-    let stored = StoredInitConfig {
-        home: home_dir.to_string_lossy().to_string(),
-        agent_name: args.agent_name.clone(),
-        agent_did: identity.did().to_string(),
-        key_path: Some(key_path.to_string_lossy().to_string()),
-        tool_ceiling: summary.tool_ceiling,
-        tool_root: summary.tool_root.clone(),
-    };
-    write_init_config(&home_dir, &stored)?;
-    let runtime_state_reset = if args.reset {
-        clear_runtime_state(&home_dir)?
-    } else {
-        false
-    };
-
-    let output = json!({
-        "status": "initialized",
-        "home": home_dir,
-        "agent_name": args.agent_name,
-        "agent_did": identity.did(),
-        "key_path": key_path,
-        "default_behavior_id": summary.default_behavior_id,
-        "tool_selection_id": summary.tool_selection_id,
-        "tool_ceiling": format_tool_ceiling(summary.tool_ceiling),
-        "tool_root": summary.tool_root,
-        "runtime_state_reset": runtime_state_reset,
-        "identity": {
-            "agent_did": identity.did(),
-            "key_path": stored.key_path,
-            "permission_boundary": "This DID and key identify the permission boundary for every action the agent runtime performs."
-        },
-        "next_steps": init_next_steps(&summary),
-        "init": summary,
-    });
-    print_json(&output)?;
-
-    Ok(())
-}
-
-async fn reset(args: ResetArgs) -> Result<()> {
-    let home_dir = resolve_home_dir(args.home.as_deref());
-    let runtime_state_path = runtime_state_path(&home_dir);
-    let cleared = clear_runtime_state(&home_dir)?;
-    let output = json!({
-        "status": "reset",
-        "home": home_dir,
-        "runtime_state_path": runtime_state_path,
-        "cleared": cleared,
-    });
-    print_json(&output)?;
-    Ok(())
-}
-
-async fn serve(args: ServeArgs) -> Result<()> {
-    let home_dir = resolve_home_dir(args.home.as_deref());
-    let data_dir = args
-        .data_dir
-        .clone()
-        .unwrap_or_else(|| default_data_dir(&home_dir));
-    fs::create_dir_all(&data_dir)
-        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let http_addr = SocketAddr::new(args.http_addr, args.http_port);
-    let graphql_url = format!(
-        "http://{}:{}/api/v0/graphql",
-        display_host(args.http_addr),
-        args.http_port
-    );
-    let p2p_config = resolve_server_p2p_config(&home_dir, &args)?;
-    let mut node_builder = EmbeddedNode::builder().data_path(&data_dir).with_http(
-        defra_node::HttpConfig::with_addr(http_addr)
-            .with_extra_routes(runtime_contract_router(graphql_url.clone())),
-    );
-    if let Some(config) = p2p_config {
-        node_builder = node_builder.with_p2p(config);
-    }
-    let node = Arc::new(
-        node_builder
-            .build()
-            .await
-            .context("building embedded defra node")?,
-    );
-    ensure_runtime_schemas(node.as_ref()).await?;
-    let init_config = read_init_config(&home_dir)?;
-    if let (Some(explicit), Some(config)) = (args.agent_name.as_deref(), init_config.as_ref()) {
-        if explicit != config.agent_name {
-            anyhow::bail!(
-                "--agent-name {} does not match initialized home agent {}",
-                explicit,
-                config.agent_name
-            );
-        }
-    }
-
-    let local_hostname = hostname::get()
-        .map(|host| host.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "unknown".to_string());
-    let agent_name = args
-        .agent_name
-        .clone()
-        .or_else(|| init_config.as_ref().map(|config| config.agent_name.clone()))
-        .unwrap_or_else(|| DEFAULT_AGENT_NAME.to_string());
-    let key_path = args
-        .key_path
-        .clone()
-        .or_else(|| {
-            init_config
-                .as_ref()
-                .and_then(|config| config.key_path.as_ref().map(PathBuf::from))
-        })
-        .unwrap_or_else(|| default_key_path(&home_dir, &agent_name));
-    if let Some(parent) = key_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating key directory {}", parent.display()))?;
-    }
-    let effective_tool_ceiling = args
-        .tool_ceiling
-        .or_else(|| init_config.as_ref().map(|config| config.tool_ceiling))
-        .unwrap_or(ToolCeilingArg::MetaOnly);
-    let configured_tool_root = args.tool_root.clone().or_else(|| {
-        init_config
-            .as_ref()
-            .and_then(|config| config.tool_root.as_ref().map(PathBuf::from))
-    });
-    let effective_tool_root = match effective_tool_ceiling {
-        ToolCeilingArg::MetaOnly => configured_tool_root,
-        ToolCeilingArg::Readonly => Some(match configured_tool_root {
-            Some(root) => root,
-            None => resolve_default_tool_root(None)?,
-        }),
-        ToolCeilingArg::Readwrite => Some(configured_tool_root.ok_or_else(|| {
-            anyhow::anyhow!("--tool-root is required when --tool-ceiling readwrite")
-        })?),
-    };
-    let mut tool_ceiling = match effective_tool_ceiling {
-        ToolCeilingArg::MetaOnly => ToolCeiling::meta_only(),
-        ToolCeilingArg::Readonly => ToolCeiling::readonly_at(
-            effective_tool_root
-                .as_ref()
-                .expect("readonly root resolved"),
-        ),
-        ToolCeilingArg::Readwrite => ToolCeiling::readwrite(
-            effective_tool_root
-                .as_ref()
-                .expect("readwrite root resolved"),
-        ),
-    };
-    for cli_tool_arg in &args.cli_tools {
-        tool_ceiling = tool_ceiling.with_cli_tool(parse_cli_tool_arg(cli_tool_arg)?);
-    }
-    let identity = Arc::new(SimpleIdentity::new(&agent_name, &key_path, None));
-    let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
-
-    let agent = DefraAgent::from_default_behavior_documents(
-        node.clone(),
-        identity.clone(),
-        DocumentRuntimeOptions {
-            mcp_pool: McpPool::new(),
-            local_hostname: Some(local_hostname),
-            tool_ceiling,
-            process_state_observer: Some(Arc::new(CliReadyObserver { tx: ready_tx })),
-            ..Default::default()
-        },
-    )
-    .await
-    .with_context(|| {
-        format!(
-            "starting defra-agent server from {}\n{}",
-            home_dir.display(),
-            server_start_failure_hint(&home_dir)
-        )
-    })?;
-    let runnable_behaviors = agent
-        .behaviors()
-        .iter()
-        .map(|behavior| {
-            json!({
-                "behavior_id": behavior.name,
-                "backend_id": behavior.backend_id,
-                "model_name": behavior.model_name,
-            })
-        })
-        .collect::<Vec<_>>();
-    let default_behavior_id = agent.default_behavior_id().to_string();
-    let unavailable_behaviors = agent.unavailable_behaviors().clone();
-    let behavior_readiness = if unavailable_behaviors.is_empty() {
-        "ready"
-    } else {
-        "degraded"
-    };
-
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            let _ = shutdown_tx.send(true);
-        }
-    });
-
-    let mut run_handle = tokio::spawn(agent.run(shutdown_rx));
-    loop {
-        if *ready_rx.borrow() == ProcessLifecycleState::Ready {
-            break;
-        }
-
-        tokio::select! {
-            changed = ready_rx.changed() => {
-                if changed.is_err() {
-                    break;
-                }
-            }
-            joined = &mut run_handle => {
-                let result = joined.context("joining defra-agent runtime task")?;
-                return result;
-            }
-        }
-    }
-
-    let p2p_status = load_local_server_p2p_status(node.as_ref(), P2pTransportArg::Iroh).await?;
-    write_runtime_state(
-        &home_dir,
-        &StoredRuntimeState {
-            home: home_dir.to_string_lossy().to_string(),
-            graphql: graphql_url.clone(),
-            agent_name: agent_name.clone(),
-            agent_did: identity.did().to_string(),
-            default_behavior_id: default_behavior_id.clone(),
-            p2p_transport: p2p_status
-                .get("p2p_transport")
-                .and_then(Value::as_str)
-                .unwrap_or(P2pTransportArg::None.as_str())
-                .to_string(),
-            p2p_peer_id: p2p_status
-                .get("p2p_peer_id")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
-            p2p_listen_addresses: p2p_status
-                .get("p2p_listen_addresses")
-                .and_then(Value::as_array)
-                .map(|rows| {
-                    rows.iter()
-                        .filter_map(Value::as_str)
-                        .map(ToOwned::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default(),
-        },
-    )?;
-
-    let output = json!({
-        "status": "serving",
-        "behavior_readiness": behavior_readiness,
-        "home": home_dir,
-        "agent_name": agent_name,
-        "agent_did": identity.did(),
-        "default_behavior_id": default_behavior_id,
-        "tool_ceiling": format_tool_ceiling(effective_tool_ceiling),
-        "tool_root": effective_tool_root,
-        "runnable_behaviors": runnable_behaviors,
-        "unavailable_behaviors": unavailable_behaviors,
-        "graphql": graphql_url,
-        "p2p_transport": p2p_status.get("p2p_transport").cloned().unwrap_or(Value::String(default_p2p_transport())),
-        "p2p_peer_id": p2p_status.get("p2p_peer_id").cloned().unwrap_or(Value::Null),
-        "p2p_listen_addresses": p2p_status.get("p2p_listen_addresses").cloned().unwrap_or_else(|| json!([])),
-    });
-    print_json(&output)?;
-    eprintln!(
-        "defra-agent server is running with IROH P2P. Press Ctrl-C to stop. For the desktop demo, run `defra-agent-desktop init`, launch `defra-agent-desktop`, wait for `replication: subscriptions armed`, then chat."
-    );
-
-    run_handle
-        .await
-        .context("joining defra-agent runtime task")?
-}
-
-fn default_p2p_transport() -> String {
-    P2pTransportArg::Iroh.as_str().to_string()
-}
-
-fn default_p2p_secret_key_path(home_dir: &Path) -> PathBuf {
-    home_dir.join("p2p-secret-key")
-}
-
-fn resolve_server_p2p_config(
-    home_dir: &Path,
-    args: &ServeArgs,
-) -> Result<Option<defra_node::P2PConfig>> {
-    let secret_key_path = args
-        .p2p_secret_key_path
-        .clone()
-        .unwrap_or_else(|| default_p2p_secret_key_path(home_dir));
-    if let Some(parent) = secret_key_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating P2P key directory {}", parent.display()))?;
-    }
-    Ok(Some(defra_node::P2PConfig {
-        port: args.p2p_port.unwrap_or(0),
-        bind_addr: Some(
-            args.p2p_bind_addr
-                .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)),
-        ),
-        relay_mode: match args.p2p_relay_mode {
-            P2pRelayModeArg::Default => p2p::iroh::IrohRelayModeConfig::Default,
-            P2pRelayModeArg::Disabled => p2p::iroh::IrohRelayModeConfig::Disabled,
-        },
-        discovery: match args.p2p_discovery {
-            P2pDiscoveryArg::N0 => p2p::iroh::IrohDiscoveryConfig::N0,
-            P2pDiscoveryArg::Disabled => p2p::iroh::IrohDiscoveryConfig::Disabled,
-        },
-        secret_key_path: Some(secret_key_path),
-        load_persisted_collections: true,
-        max_concurrent_dag_fetches: DEFAULT_P2P_MAX_CONCURRENT_DAG_FETCHES,
-        max_concurrent_push_tasks: DEFAULT_P2P_MAX_CONCURRENT_PUSH_TASKS,
-        rate_limit_burst: DEFAULT_P2P_RATE_LIMIT_BURST,
-        rate_limit_rate: DEFAULT_P2P_RATE_LIMIT_RATE,
-    }))
-}
-
-async fn load_local_server_p2p_status(
-    node: &EmbeddedNode,
-    transport: P2pTransportArg,
-) -> Result<Value> {
-    match transport {
-        P2pTransportArg::None => Ok(json!({
-            "enabled": false,
-            "p2p_transport": transport.as_str(),
-            "p2p_peer_id": Value::Null,
-            "p2p_listen_addresses": [],
-            "p2p_connected_peers": [],
-        })),
-        P2pTransportArg::Iroh => {
-            let p2p = node.p2p().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "P2P transport was requested but is not available on the embedded node"
-                )
-            })?;
-            let peer_id = p2p
-                .local_peer_id()
-                .await
-                .context("loading local P2P peer id from the embedded node")?;
-            let listen_addresses = wait_for_p2p_listen_addresses(p2p).await?;
-            let connected_peers = p2p
-                .connected_peers()
-                .await
-                .context("loading connected P2P peers from the embedded node")?;
-            Ok(json!({
-                "enabled": true,
-                "p2p_transport": transport.as_str(),
-                "p2p_peer_id": peer_id,
-                "p2p_listen_addresses": listen_addresses,
-                "p2p_connected_peers": connected_peers,
-            }))
-        }
-    }
-}
-
-async fn wait_for_p2p_listen_addresses(
-    p2p: &dyn defra_p2p_adapter::P2POperations,
-) -> Result<Vec<String>> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let listen_addresses = p2p
-            .listen_addresses()
-            .await
-            .context("loading local P2P listen addresses from the embedded node")?;
-        if !listen_addresses.is_empty() {
-            return Ok(listen_addresses);
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Ok(listen_addresses);
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
 
 async fn chat(args: ChatArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
@@ -3917,190 +3472,6 @@ pub(crate) fn extract_mutation_doc_id(response: &Value, collection_name: &str) -
     anyhow::bail!("graphql mutation returned no _docID for {collection_name}: {response}");
 }
 
-async fn initialize_runtime_home(
-    access: &ConfigAccess,
-    args: &InitArgs,
-    agent_did: &str,
-) -> Result<InitSummary> {
-    let ConfigAccess::Local(node) = access else {
-        anyhow::bail!("init requires local DefraDB access");
-    };
-    let explicit_backend_id = args
-        .backend_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let explicit_backend_name = args
-        .backend_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let model_name = args.model_name.trim();
-    if model_name.is_empty() {
-        anyhow::bail!("--model-name must not be empty");
-    }
-    let backend = resolve_init_backend_config(args)?;
-    let backend_id = explicit_backend_id
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| format!("{}-backend", args.agent_name));
-    let backend_name = explicit_backend_name
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| backend_id.clone());
-    let existing_principal = load_agent_principal(node, agent_did).await?;
-    let default_behavior_id = existing_principal
-        .as_ref()
-        .and_then(|principal| normalize_optional_string(principal.default_behavior_id.as_deref()))
-        .unwrap_or_else(|| default_behavior_id_for_agent(agent_did));
-    let existing_default_behavior = load_agent_behavior(node, &default_behavior_id).await?;
-    if let Some(behavior) = existing_default_behavior.as_ref() {
-        if behavior.agent_did != agent_did {
-            anyhow::bail!(
-                "AgentBehavior {} belongs to {} not {}",
-                default_behavior_id,
-                behavior.agent_did,
-                agent_did
-            );
-        }
-    }
-    let principal_display_name = existing_principal
-        .as_ref()
-        .and_then(|principal| normalize_optional_string(principal.display_name.as_deref()))
-        .unwrap_or_else(|| args.agent_name.clone());
-    let principal_enabled = existing_principal
-        .as_ref()
-        .map(|principal| principal.enabled)
-        .unwrap_or(true);
-    upsert_agent_principal(
-        node,
-        agent_did,
-        Some(&principal_display_name),
-        Some(&default_behavior_id),
-        principal_enabled,
-    )
-    .await?;
-    let tool_selection_id = format!("{default_behavior_id}:tools");
-    let tool_ceiling = if args.write_tools {
-        ToolCeilingArg::Readwrite
-    } else {
-        ToolCeilingArg::Readonly
-    };
-    let tool_root = Some(resolve_default_tool_root(args.tool_root.as_deref())?);
-    let backend_doc = InferenceBackendUpsertDocument {
-        backend_id: backend_id.clone(),
-        name: backend_name.clone(),
-        provider_kind: backend.provider_kind,
-        endpoint: backend.endpoint.clone(),
-        api_key: backend.api_key.clone(),
-        api_key_env_var: backend.api_key_env_var.clone(),
-        max_concurrent: args.max_concurrent,
-        max_queue_depth: args.max_queue_depth,
-        enabled: true,
-        models_on_add: vec![model_name.to_string()],
-        models_on_update: Some(vec![model_name.to_string()]),
-        probe_status: "healthy".to_string(),
-    };
-    write_inference_backend_document(access, &backend_doc).await?;
-
-    let tool_selection = standard_tool_selection(agent_did, &tool_selection_id, tool_ceiling);
-    write_tool_selection_document(access, &tool_selection).await?;
-
-    let behavior = AgentBehavior {
-        behavior_id: default_behavior_id.clone(),
-        agent_did: agent_did.to_string(),
-        display_name: Some("Default".to_string()),
-        system_prompt: Some(standard_system_prompt(tool_ceiling).to_string()),
-        backend_id: Some(backend_id.clone()),
-        model_name: Some(model_name.to_string()),
-        tool_selection_id: Some(tool_selection_id.clone()),
-        inference_profile_id: None,
-        compaction_strategy: None,
-        compaction_threshold: None,
-        enabled: true,
-        created_at: Some(chrono::Utc::now().to_rfc3339()),
-    };
-    write_agent_behavior_document(access, &behavior).await?;
-
-    Ok(InitSummary {
-        backend_id,
-        backend_name,
-        provider_kind: backend.provider_kind,
-        endpoint: backend.endpoint,
-        api_key: backend.api_key.map(|_| "<redacted>".to_string()),
-        api_key_env_var: backend.api_key_env_var,
-        model_name: model_name.to_string(),
-        max_concurrent: args.max_concurrent,
-        max_queue_depth: args.max_queue_depth,
-        default_behavior_id,
-        tool_selection_id,
-        tool_ceiling,
-        tool_root: tool_root.map(|path| path.to_string_lossy().to_string()),
-        created_principal: existing_principal.is_none(),
-        created_default_behavior: existing_default_behavior.is_none(),
-    })
-}
-
-fn standard_tool_selection(
-    agent_did: &str,
-    tool_selection_id: &str,
-    tool_ceiling: ToolCeilingArg,
-) -> ToolSelectionDocument {
-    let (display_name, file_tools_mode, bash_mode) = match tool_ceiling {
-        ToolCeilingArg::Readwrite => ("Standard Write Tools", "ReadWrite", "Unrestricted"),
-        ToolCeilingArg::MetaOnly | ToolCeilingArg::Readonly => {
-            ("Standard Read-Only Tools", "ReadOnly", "ReadOnly")
-        }
-    };
-    ToolSelectionDocument {
-        selection_id: tool_selection_id.to_string(),
-        agent_did: agent_did.to_string(),
-        display_name: Some(display_name.to_string()),
-        enable_file_tools: Some(true),
-        file_tools_mode: Some(file_tools_mode.to_string()),
-        file_tool_root: None,
-        enable_bash: Some(true),
-        bash_mode: Some(bash_mode.to_string()),
-        cli_tool_names: Some(Vec::new()),
-        enable_meta_tools: Some(true),
-        delegate_to: Some(Vec::new()),
-    }
-}
-
-fn standard_system_prompt(tool_ceiling: ToolCeilingArg) -> &'static str {
-    match tool_ceiling {
-        ToolCeilingArg::Readwrite => STANDARD_READWRITE_SYSTEM_PROMPT,
-        ToolCeilingArg::MetaOnly | ToolCeilingArg::Readonly => STANDARD_READONLY_SYSTEM_PROMPT,
-    }
-}
-
-fn init_next_steps(summary: &InitSummary) -> Vec<String> {
-    let mut steps = Vec::new();
-    if is_probably_ollama_endpoint(&summary.endpoint) {
-        steps.push(format!("ollama pull {}", summary.model_name));
-    }
-    steps.push("defra-agent server".to_string());
-    steps.push("defra-agent chat".to_string());
-    steps.push(format!(
-        "defra-agent config backend set --graphql http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql --backend-id {} --name {} --endpoint <URL> --max-concurrent {}",
-        summary.backend_id, summary.backend_name, summary.max_concurrent
-    ));
-    steps
-}
-
-fn is_probably_ollama_endpoint(endpoint: &str) -> bool {
-    endpoint.contains("localhost:11434") || endpoint.contains("127.0.0.1:11434")
-}
-
-fn resolve_init_backend_config(args: &InitArgs) -> Result<ResolvedBackendConfig> {
-    resolve_backend_config_with_preset(
-        args.backend_preset,
-        args.inference_endpoint.as_deref(),
-        args.provider_kind.as_deref(),
-        args.api_key.as_deref(),
-        args.api_key_env_var.as_deref(),
-        BackendResolutionMode::Init,
-    )
-}
-
 fn resolve_backend_upsert_config(args: &BackendUpsertArgs) -> Result<ResolvedBackendConfig> {
     resolve_backend_config_with_preset(
         args.backend_preset,
@@ -4235,16 +3606,6 @@ pub(crate) fn default_backend_max_queue_depth() -> i64 {
     100
 }
 
-fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
-    if let Some(path) = explicit {
-        return Ok(path.to_path_buf());
-    }
-
-    std::env::current_dir()
-        .ok()
-        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-        .ok_or_else(|| anyhow::anyhow!("unable to determine a default tool root for local tools"))
-}
 
 fn graphql_string_literal(value: &str) -> String {
     format!(r#""{}""#, escape_graphql_string(value))
