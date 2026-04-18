@@ -19,23 +19,23 @@ pub(crate) fn assert_chat_context(
     assert_eq!(driver.app.state.chat.editor.last_submission_error, None);
 }
 
-pub(crate) fn assert_operator_context(
+pub(crate) fn assert_manage_context(
     driver: &AuditDriver,
     deployment: &LiveDeploymentCase<'_>,
-    section: OperatorSection,
+    section: ManageSection,
     entity_id: Option<&str>,
 ) {
     assert_eq!(
-        driver.app.state.operator.selected_peer_id.as_deref(),
+        driver.app.state.manage.selected_peer_id.as_deref(),
         Some(deployment.peer_id.as_str())
     );
     assert_eq!(
-        driver.app.state.operator.selected_agent_did.as_deref(),
+        driver.app.state.manage.selected_agent_did.as_deref(),
         Some(deployment.agent_did.as_str())
     );
-    assert_eq!(driver.app.state.operator.selected_section, section);
+    assert_eq!(driver.app.state.manage.selected_section, section);
     assert_eq!(
-        driver.app.state.operator.selected_entity_id.as_deref(),
+        driver.app.state.manage.selected_entity_id.as_deref(),
         entity_id
     );
 }

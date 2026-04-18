@@ -105,7 +105,7 @@ impl DesktopApp {
             );
             tracing::warn!(reason, "desktop client restart skipped");
             self.bootstrap_errors.push(message.clone());
-            self.state.peers.last_action_message = Some(message);
+            self.state.setup.last_action_message = Some(message);
             return false;
         };
 
@@ -115,7 +115,7 @@ impl DesktopApp {
         match self.start_client_with_retry(&plan) {
             Ok(core) => {
                 self.attach_client(Some(Arc::new(core)), Vec::new());
-                self.state.peers.last_action_message =
+                self.state.setup.last_action_message =
                     Some(format!("Restarted desktop client core after {reason}."));
                 true
             }
@@ -123,7 +123,7 @@ impl DesktopApp {
                 let message = format!("desktop client restart failed after {reason}: {error:#}");
                 tracing::error!(reason, error = %error, "desktop client restart failed");
                 self.attach_client(None, vec![message.clone()]);
-                self.state.peers.last_action_message =
+                self.state.setup.last_action_message =
                     Some(format!("Restart failed after {reason}: {error:#}"));
                 false
             }

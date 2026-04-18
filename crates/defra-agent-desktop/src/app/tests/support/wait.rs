@@ -43,13 +43,6 @@ pub(crate) fn graphql_optional_string_field(name: &str, value: Option<&str>) -> 
         .unwrap_or_default()
 }
 
-pub(crate) fn assert_logs_filter_has_results(texts: &[String]) {
-    assert!(
-        !texts.iter().any(|text| text.contains("No Matching Events")),
-        "logs filter unexpectedly rendered empty state"
-    );
-}
-
 pub(crate) fn wait_for_replication_state(
     driver: &mut AuditDriver,
     label: &str,

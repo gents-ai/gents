@@ -29,10 +29,11 @@ pub(super) fn message_block(
 
 fn turn_block(ui: &mut Ui, label: &str, label_color: egui::Color32, body: impl FnOnce(&mut Ui)) {
     let palette = theme::palette();
+    let label_width = (ui.available_width() * 0.09).clamp(54.0, 72.0);
 
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
-            ui.set_width(66.0);
+            ui.set_width(label_width);
             ui.with_layout(egui::Layout::top_down_justified(egui::Align::Max), |ui| {
                 ui.label(
                     RichText::new(label)
@@ -89,9 +90,10 @@ pub(super) fn centered_status_card(ui: &mut Ui, title: &str, body: &str) {
 
 pub(super) fn supporting_block(ui: &mut Ui, body: impl FnOnce(&mut Ui)) {
     let palette = theme::palette();
+    let label_width = (ui.available_width() * 0.09).clamp(54.0, 72.0);
 
     ui.horizontal(|ui| {
-        ui.add_space(66.0);
+        ui.add_space(label_width);
         egui::Frame::new()
             .fill(palette.background_0)
             .stroke(egui::Stroke::new(1.0, palette.stroke_subtle))

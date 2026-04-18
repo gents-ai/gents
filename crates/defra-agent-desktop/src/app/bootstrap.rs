@@ -4,7 +4,7 @@ use crate::chat::controller as chat_controller;
 use crate::client::{
     ClientCore, ClientCoreOptions, ClientStore, DesktopPaths, P2PHealth, P2PHealthStatus,
 };
-use crate::operator::controller as operator_controller;
+use crate::manage::controller as manage_controller;
 use crate::state::{Activity, ShellState};
 use crate::views;
 
@@ -43,7 +43,7 @@ pub(super) fn apply_bootstrap_state(state: &mut ShellState, client: &ClientCore)
     state.status.runtime_state = if !client.bootstrap_errors().is_empty() {
         "client core degraded".to_string()
     } else if client.peer_issue_count() > 0 {
-        "peer repair active".to_string()
+        "deployment repair active".to_string()
     } else {
         "client core online".to_string()
     };
@@ -82,13 +82,13 @@ pub(super) fn apply_client_transport_state(state: &mut ShellState, client: &Clie
     state.status.peered_now = client.dialed_peer_count();
     state.status.peered_target = client.configured_peer_count();
     state.status.did_short = client.principal().short_did();
-    state.status.build_label = format!("peer:{}", abbreviate_id(client.local_peer_id()));
+    state.status.build_label = format!("node:{}", abbreviate_id(client.local_peer_id()));
 }
 
 pub(super) fn apply_p2p_health_state(state: &mut ShellState, health: &P2PHealth) {
     state.status.p2p_state = if health.status == P2PHealthStatus::Healthy {
         format!(
-            "{} · {} peers / {} reps",
+            "{} · {} links / {} reps",
             health.status.label(),
             health.connected_peer_count,
             health.replicator_count
@@ -109,7 +109,7 @@ pub(super) fn sync_shell_state_from_client(state: &mut ShellState, client: &Clie
     apply_snapshot_state(state, store);
 
     chat_controller::sync_from_snapshot(&mut state.chat, store, true);
-    operator_controller::sync_from_snapshot(&mut state.operator, &client.peer_statuses(), store);
+    manage_controller::sync_from_snapshot(&mut state.manage, &client.peer_statuses(), store);
     apply_first_launch_focus(state, client, store);
     views::prepare_state(state, Some(client), Some(store));
 }
@@ -156,8 +156,9 @@ pub(super) fn apply_first_launch_focus(
         && state.activity == Activity::Chat
         && should_focus_first_launch(client, store)
     {
-        state.activity = Activity::Peers;
-        state.peers.show_add_form = true;
+        state.activity = Activity::Chat;
+        state.setup.workspace_open = true;
+        state.setup.show_add_form = true;
         state.onboarding.first_launch_redirect_done = true;
     }
 }

@@ -1,6 +1,6 @@
 use crate::chat::controller as chat_controller;
-use crate::operator::controller as operator_controller;
-use crate::state::{Activity, PendingChatAction, PendingOperatorAction, PendingShellAction};
+use crate::manage::controller as manage_controller;
+use crate::state::{Activity, PendingChatAction, PendingManageAction, PendingShellAction};
 
 use super::DesktopApp;
 
@@ -17,9 +17,10 @@ impl DesktopApp {
             PendingShellAction::Navigate(activity) => {
                 self.state.activity = activity;
             }
-            PendingShellAction::OpenPeersSetup => {
-                self.state.activity = Activity::Peers;
-                self.state.peers.show_add_form = true;
+            PendingShellAction::OpenDeploymentSetup => {
+                self.state.activity = Activity::Chat;
+                self.state.setup.workspace_open = true;
+                self.state.setup.show_add_form = true;
             }
             PendingShellAction::SelectScopedDeployment { peer_id, agent_did } => {
                 chat_controller::select_deployment(
@@ -27,14 +28,14 @@ impl DesktopApp {
                     peer_id.clone(),
                     agent_did.clone(),
                 );
-                operator_controller::select_deployment(
-                    &mut self.state.operator,
+                manage_controller::select_deployment(
+                    &mut self.state.manage,
                     peer_id.clone(),
                     agent_did,
                 );
             }
             PendingShellAction::Chat(action) => self.process_pending_chat_action(action),
-            PendingShellAction::Operator(action) => self.process_pending_operator_action(action),
+            PendingShellAction::Manage(action) => self.process_pending_manage_action(action),
         }
     }
 
@@ -99,53 +100,53 @@ impl DesktopApp {
         }
     }
 
-    fn process_pending_operator_action(&mut self, action: PendingOperatorAction) {
+    fn process_pending_manage_action(&mut self, action: PendingManageAction) {
         match action {
-            PendingOperatorAction::SelectDeployment { peer_id, agent_did } => {
-                operator_controller::select_deployment(
-                    &mut self.state.operator,
+            PendingManageAction::SelectDeployment { peer_id, agent_did } => {
+                manage_controller::select_deployment(
+                    &mut self.state.manage,
                     peer_id,
                     agent_did,
                 );
             }
-            PendingOperatorAction::SelectSection { section } => {
-                operator_controller::select_section(&mut self.state.operator, section);
+            PendingManageAction::SelectSection { section } => {
+                manage_controller::select_section(&mut self.state.manage, section);
             }
-            PendingOperatorAction::SelectEntity { entity_id } => {
-                operator_controller::select_entity(&mut self.state.operator, entity_id);
+            PendingManageAction::SelectEntity { entity_id } => {
+                manage_controller::select_entity(&mut self.state.manage, entity_id);
             }
-            PendingOperatorAction::StartNewDocument => {
-                operator_controller::start_new_document(&mut self.state.operator);
+            PendingManageAction::StartNewDocument => {
+                manage_controller::start_new_document(&mut self.state.manage);
             }
-            PendingOperatorAction::DiscardDraft => {
+            PendingManageAction::DiscardDraft => {
                 if let Some(client) = self.client.as_deref() {
                     let snapshot = client.store().snapshot();
-                    operator_controller::discard_draft(
-                        &mut self.state.operator,
+                    manage_controller::discard_draft(
+                        &mut self.state.manage,
                         &client.peer_statuses(),
                         snapshot.as_ref(),
                     );
                 } else {
-                    self.state.operator.last_apply_error =
+                    self.state.manage.last_apply_error =
                         Some("client core is offline".to_string());
                 }
             }
-            PendingOperatorAction::ApplyDraft => {
-                if let Err(error) = operator_controller::apply_draft(
-                    &mut self.state.operator,
+            PendingManageAction::ApplyDraft => {
+                if let Err(error) = manage_controller::apply_draft(
+                    &mut self.state.manage,
                     self.client.as_deref(),
                     self.runtime.as_ref(),
                 ) {
-                    self.state.operator.last_apply_error = Some(error.to_string());
+                    self.state.manage.last_apply_error = Some(error.to_string());
                 }
             }
-            PendingOperatorAction::RunNowSelectedTask => {
-                if let Err(error) = operator_controller::run_selected_task_now(
-                    &mut self.state.operator,
+            PendingManageAction::RunNowSelectedTask => {
+                if let Err(error) = manage_controller::run_selected_task_now(
+                    &mut self.state.manage,
                     self.client.as_deref(),
                     self.runtime.as_ref(),
                 ) {
-                    self.state.operator.last_apply_error = Some(error.to_string());
+                    self.state.manage.last_apply_error = Some(error.to_string());
                 }
             }
         }

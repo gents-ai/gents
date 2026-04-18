@@ -1,5 +1,6 @@
 use eframe::egui::Ui;
 use egui_commonmark::CommonMarkCache;
+use tokio::runtime::Runtime;
 
 use crate::chat::projection::project_chat;
 use crate::client::{ClientCore, ClientStore};
@@ -82,6 +83,7 @@ pub fn show_main(
     state: &mut ShellState,
     client: Option<&ClientCore>,
     store: Option<&ClientStore>,
+    runtime: &Runtime,
     markdown_cache: &mut CommonMarkCache,
 ) {
     let Some(store) = store else {
@@ -93,6 +95,15 @@ pub fn show_main(
         return;
     };
 
+    let deployment_entries = super::view_model::build_deployment_entries(
+        &client.map(ClientCore::peer_statuses).unwrap_or_default(),
+        store,
+    );
+    if deployment_entries.is_empty() || state.setup.workspace_open {
+        crate::views::setup::show_embedded_main(ui, state, client, Some(store), runtime);
+        return;
+    }
+
     let projection = project_chat(&state.chat, store, client.is_some());
     let selected_agent_did = state.chat.shell.selected_agent_did.clone();
     let selected_session_id = state.chat.shell.selected_session_id.clone();
@@ -102,7 +113,9 @@ pub fn show_main(
 
     egui::Panel::bottom("chat_composer_panel")
         .resizable(false)
-        .exact_size(248.0)
+        .default_size(108.0)
+        .min_size(92.0)
+        .max_size(136.0)
         .show_inside(ui, |ui| {
             composer::show(
                 ui,

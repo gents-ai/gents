@@ -1,7 +1,6 @@
 pub mod chat;
-pub mod logs;
-pub mod operator;
-pub mod peers;
+pub mod manage;
+pub mod setup;
 
 mod primitives;
 mod shell;
@@ -21,11 +20,10 @@ pub fn prepare_state(
     store: Option<&ClientStore>,
 ) {
     shell::prepare_state(state, client, store);
+    setup::prepare_state(state, client, store);
     match state.activity {
         Activity::Chat => chat::prepare_state(state, client, store),
-        Activity::Operator => operator::prepare_state(state, client, store),
-        Activity::Peers => peers::prepare_state(state, client, store),
-        Activity::Logs => {}
+        Activity::Manage => manage::prepare_state(state, client, store),
     }
 }
 
@@ -34,11 +32,13 @@ pub fn show_sidebar(
     state: &mut ShellState,
     client: Option<&ClientCore>,
     store: Option<&ClientStore>,
-    runtime: &tokio::runtime::Runtime,
+    _runtime: &tokio::runtime::Runtime,
 ) {
     shell::show_sidebar_chrome(ui, state, client, store);
-    let _ = runtime;
-    chat::show_sidebar(ui, state, client, store);
+    match state.activity {
+        Activity::Chat => chat::show_sidebar(ui, state, client, store),
+        Activity::Manage => manage::show_sidebar(ui, state, client, store),
+    }
 }
 
 pub fn show_main(
@@ -46,15 +46,13 @@ pub fn show_main(
     state: &mut ShellState,
     client: Option<&ClientCore>,
     store: Option<&ClientStore>,
-    log_store: &DesktopLogStore,
+    _log_store: &DesktopLogStore,
     runtime: &tokio::runtime::Runtime,
     markdown_cache: &mut CommonMarkCache,
 ) {
     match state.activity {
-        Activity::Chat => chat::show_main(ui, state, client, store, markdown_cache),
-        Activity::Operator => operator::show_main(ui, state, store),
-        Activity::Peers => peers::show_main(ui, state, client, store, runtime),
-        Activity::Logs => logs::show_main(ui, state, log_store),
+        Activity::Chat => chat::show_main(ui, state, client, store, runtime, markdown_cache),
+        Activity::Manage => manage::show_main(ui, state, client, store),
     }
 }
 
@@ -63,13 +61,11 @@ pub fn show_rail(
     state: &mut ShellState,
     client: Option<&ClientCore>,
     store: Option<&ClientStore>,
-    log_store: &DesktopLogStore,
+    _log_store: &DesktopLogStore,
     runtime: &tokio::runtime::Runtime,
 ) {
     match state.activity {
         Activity::Chat => {}
-        Activity::Operator => operator::show_rail(ui, state, client, store, runtime),
-        Activity::Peers => peers::show_rail(ui, state, client, store, runtime),
-        Activity::Logs => logs::show_rail(ui, client, store, log_store),
+        Activity::Manage => manage::show_rail(ui, state, client, store, runtime),
     }
 }

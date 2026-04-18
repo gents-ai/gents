@@ -30,19 +30,18 @@ pub(super) fn show(
         views::card(
             ui,
             "No Behaviors",
-            "This deployment has no named behaviors yet. Configure one from Operator before starting a conversation.",
+            "This deployment has no named behaviors yet. Manage the deployment before starting a conversation.",
         );
         return;
     }
 
     let selected_behavior_id = effective_behavior_id(state, store, selected_agent_did);
     for entry in entries {
-        let selected =
-            selected_behavior_id.as_deref() == entry.represented_behavior_id.as_deref();
+        let selected = selected_behavior_id.as_deref() == entry.represented_behavior_id.as_deref();
         let response = views::side_row(
             ui,
             &entry.label,
-            entry.meta,
+            &entry.meta,
             selected,
             if selected {
                 palette.accent

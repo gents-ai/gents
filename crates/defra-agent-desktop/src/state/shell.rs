@@ -2,7 +2,7 @@ use std::mem;
 
 use super::status::IdentityState;
 use super::{
-    Activity, ChatEditorState, ChatState, LogsState, OnboardingState, OperatorState, PeersState,
+    Activity, ChatEditorState, ChatState, LogsState, OnboardingState, ManageState, SetupState,
     PendingShellAction, StatusBarState,
 };
 
@@ -10,8 +10,8 @@ use super::{
 pub struct ShellState {
     pub activity: Activity,
     pub chat: ChatState,
-    pub peers: PeersState,
-    pub operator: OperatorState,
+    pub setup: SetupState,
+    pub manage: ManageState,
     pub logs: LogsState,
     pub onboarding: OnboardingState,
     pub pending_shell_actions: Vec<PendingShellAction>,
@@ -41,8 +41,8 @@ impl Default for ShellState {
                 },
                 ..ChatState::default()
             },
-            peers: PeersState::default(),
-            operator: OperatorState::default(),
+            setup: SetupState::default(),
+            manage: ManageState::default(),
             logs: LogsState::default(),
             onboarding: OnboardingState::default(),
             pending_shell_actions: Vec::new(),

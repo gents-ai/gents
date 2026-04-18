@@ -9,44 +9,44 @@ pub(crate) fn build_driver(
     AuditDriver::new(app, ctx)
 }
 
-pub(crate) fn assert_operator_filter_round_trip(
+pub(crate) fn assert_manage_filter_round_trip(
     driver: &mut AuditDriver,
-    section: OperatorSection,
+    section: ManageSection,
     query: &str,
     target_id: &str,
     missing_query: &str,
 ) -> Result<()> {
-    driver.click_target(&audit::targets::operator_section(section));
+    driver.click_target(&audit::targets::manage_section(section));
     driver.wait_for_target(
-        "operator filter input",
+        "manage filter input",
         Duration::from_secs(10),
-        audit::targets::OPERATOR_ENTITY_FILTER,
+        audit::targets::MANAGE_ENTITY_FILTER,
     )?;
-    driver.replace_text_in_target(audit::targets::OPERATOR_ENTITY_FILTER, query);
+    driver.replace_text_in_target(audit::targets::MANAGE_ENTITY_FILTER, query);
     let filtered_texts = driver.render();
-    assert_eq!(driver.app.state.operator.entity_filter, query);
+    assert_eq!(driver.app.state.manage.entity_filter, query);
     assert!(
         !filtered_texts
             .iter()
             .any(|text| text.contains("No Matches")),
-        "operator filter unexpectedly hid {target_id} in {section:?}"
+        "manage filter unexpectedly hid {target_id} in {section:?}"
     );
-    assert!(driver.has_target(&audit::targets::operator_entity(target_id)));
+    assert!(driver.has_target(&audit::targets::manage_entity(target_id)));
 
-    driver.replace_text_in_target(audit::targets::OPERATOR_ENTITY_FILTER, missing_query);
+    driver.replace_text_in_target(audit::targets::MANAGE_ENTITY_FILTER, missing_query);
     let no_match_texts = driver.render();
     assert!(
         no_match_texts
             .iter()
             .any(|text| text.contains("No Matches")),
-        "operator filter did not render No Matches for {missing_query}"
+        "manage filter did not render No Matches for {missing_query}"
     );
 
-    driver.replace_text_in_target(audit::targets::OPERATOR_ENTITY_FILTER, "");
+    driver.replace_text_in_target(audit::targets::MANAGE_ENTITY_FILTER, "");
     driver.wait_for_target(
-        "operator filtered row after clearing filter",
+        "manage filtered row after clearing filter",
         Duration::from_secs(10),
-        &audit::targets::operator_entity(target_id),
+        &audit::targets::manage_entity(target_id),
     )?;
     Ok(())
 }
@@ -71,30 +71,38 @@ pub(crate) fn is_activity_sidebar_target(target: &str) -> bool {
     target.starts_with("chat.deployment.")
         || target.starts_with("chat.agent.")
         || target.starts_with("chat.conversation.")
-        || target.starts_with("operator.deployment.")
-        || target.starts_with("operator.agent.")
-        || target.starts_with("operator.section.")
-        || target.starts_with("peers.peer.")
-        || target.starts_with("peers.agent.")
+        || target.starts_with("manage.deployment.")
+        || target.starts_with("manage.agent.")
+        || target.starts_with("manage.section.")
+        || target.starts_with("setup.deployment.")
+        || target.starts_with("setup.agent.")
 }
 
-pub(crate) fn is_operator_entity_target(target: &str) -> bool {
-    target.starts_with("operator.entity.")
+pub(crate) fn is_manage_entity_target(target: &str) -> bool {
+    target.starts_with("manage.entity.")
 }
 
-fn operator_section_from_target(target: &str) -> Option<OperatorSection> {
+pub(crate) fn is_manage_editor_target(target: &str) -> bool {
+    target.starts_with("manage.field.")
+        || target.starts_with("manage.toggle.")
+        || target == audit::targets::MANAGE_APPLY
+        || target == audit::targets::MANAGE_DISCARD
+        || target == audit::targets::MANAGE_RUN_NOW
+}
+
+fn manage_section_from_target(target: &str) -> Option<ManageSection> {
     [
-        OperatorSection::Runtime,
-        OperatorSection::Behaviors,
-        OperatorSection::Backends,
-        OperatorSection::ToolSelections,
-        OperatorSection::InferenceProfiles,
-        OperatorSection::ScheduledTasks,
-        OperatorSection::RequestTimeline,
-        OperatorSection::RecentFailures,
+        ManageSection::Runtime,
+        ManageSection::Behaviors,
+        ManageSection::Backends,
+        ManageSection::ToolSelections,
+        ManageSection::InferenceProfiles,
+        ManageSection::ScheduledTasks,
+        ManageSection::RequestTimeline,
+        ManageSection::RecentFailures,
     ]
     .into_iter()
-    .find(|section| audit::targets::operator_section(*section) == target)
+    .find(|section| audit::targets::manage_section(*section) == target)
 }
 
 #[derive(Debug, Clone)]
@@ -125,8 +133,8 @@ impl AuditDriver {
 
     fn click_target(&mut self, target: &str) -> Vec<String> {
         let Some(rect) = self.find_click_rect(target, false) else {
-            if let Some(section) = operator_section_from_target(target) {
-                return self.select_operator_section(section);
+            if let Some(section) = manage_section_from_target(target) {
+                return self.select_manage_section(section);
             }
             panic!("unable to find audit target rect: {target}");
         };
@@ -136,8 +144,8 @@ impl AuditDriver {
 
     fn click_interactable_target(&mut self, target: &str) -> Result<Vec<String>> {
         let Some(rect) = self.find_click_rect(target, true) else {
-            if let Some(section) = operator_section_from_target(target) {
-                return Ok(self.select_operator_section(section));
+            if let Some(section) = manage_section_from_target(target) {
+                return Ok(self.select_manage_section(section));
             }
             anyhow::bail!("unable to find audit target rect: {target}");
         };
@@ -151,8 +159,8 @@ impl AuditDriver {
 
     fn click_compact_target(&mut self, target: &str) -> Result<Vec<String>> {
         let Some(rect) = self.find_click_rect(target, false) else {
-            if let Some(section) = operator_section_from_target(target) {
-                return Ok(self.select_operator_section(section));
+            if let Some(section) = manage_section_from_target(target) {
+                return Ok(self.select_manage_section(section));
             }
             anyhow::bail!("unable to find audit target rect: {target}");
         };
@@ -188,11 +196,24 @@ impl AuditDriver {
             }
         }
 
-        if is_operator_entity_target(target) {
+        if is_manage_entity_target(target) {
             for delta in [
                 -260.0_f32, -260.0, -260.0, -260.0, -260.0, 260.0, 260.0, 260.0, 260.0, 260.0,
             ] {
-                self.scroll_operator_entity_list(delta);
+                self.scroll_manage_entity_list(delta);
+                if let Some(rect) = audit::target_interact_rect(&self.ctx, target)
+                    .filter(|rect| !require_interactable || target_is_interactable(*rect))
+                {
+                    return Some(rect);
+                }
+            }
+        }
+
+        if is_manage_editor_target(target) {
+            for delta in [
+                -220.0_f32, -220.0, -220.0, -220.0, 220.0, 220.0, 220.0, 220.0,
+            ] {
+                self.scroll_manage_editor(delta);
                 if let Some(rect) = audit::target_interact_rect(&self.ctx, target)
                     .filter(|rect| !require_interactable || target_is_interactable(*rect))
                 {
@@ -230,16 +251,14 @@ impl AuditDriver {
     fn open_activity(&mut self, activity: Activity) -> Vec<String> {
         if self.app.state.activity != activity {
             match activity {
-                Activity::Operator => {
+                Activity::Manage => {
                     if self.has_target(audit::targets::activity(activity)) {
                         let _ = self.click_target(audit::targets::activity(activity));
-                    } else if let Some(target) = self.operator_activity_target() {
+                    } else if let Some(target) = self.manage_activity_target() {
                         let _ = self.click_target(&target);
                     }
                 }
-                _ => {
-                    let _ = self.click_target(audit::targets::activity(activity));
-                }
+                Activity::Chat => {}
             }
         }
         if self.app.state.activity != activity {
@@ -264,15 +283,15 @@ impl AuditDriver {
         })
     }
 
-    fn operator_activity_target(&mut self) -> Option<String> {
+    fn manage_activity_target(&mut self) -> Option<String> {
         self.render();
 
         self.app
             .state
-            .operator
+            .manage
             .selected_peer_id
             .as_deref()
-            .map(audit::targets::operator_deployment)
+            .map(audit::targets::manage_deployment)
             .filter(|target| self.current_click_rect(target, false).is_some())
             .or_else(|| {
                 self.app
@@ -281,7 +300,7 @@ impl AuditDriver {
                     .shell
                     .selected_peer_id
                     .as_deref()
-                    .map(audit::targets::operator_deployment)
+                    .map(audit::targets::manage_deployment)
                     .filter(|target| self.current_click_rect(target, false).is_some())
             })
             .or_else(|| {
@@ -290,33 +309,33 @@ impl AuditDriver {
                         .peer_statuses()
                         .into_iter()
                         .next()
-                        .map(|status| audit::targets::operator_deployment(&status.peer_id))
+                        .map(|status| audit::targets::manage_deployment(&status.peer_id))
                         .filter(|target| self.current_click_rect(target, false).is_some())
                 })
             })
     }
 
     fn post_click_target(&mut self, target: &str, texts: Vec<String>) -> Vec<String> {
-        let Some(section) = operator_section_from_target(target) else {
+        let Some(section) = manage_section_from_target(target) else {
             return texts;
         };
 
         for _ in 0..6 {
-            if self.app.state.operator.selected_section == section {
+            if self.app.state.manage.selected_section == section {
                 return self.render();
             }
             self.render();
         }
 
-        self.app.state.queue_shell_action(crate::state::PendingShellAction::Operator(
-            crate::state::PendingOperatorAction::SelectSection { section },
+        self.app.state.queue_shell_action(crate::state::PendingShellAction::Manage(
+            crate::state::PendingManageAction::SelectSection { section },
         ));
         self.render()
     }
 
-    fn select_operator_section(&mut self, section: OperatorSection) -> Vec<String> {
-        self.app.state.queue_shell_action(crate::state::PendingShellAction::Operator(
-            crate::state::PendingOperatorAction::SelectSection { section },
+    fn select_manage_section(&mut self, section: ManageSection) -> Vec<String> {
+        self.app.state.queue_shell_action(crate::state::PendingShellAction::Manage(
+            crate::state::PendingManageAction::SelectSection { section },
         ));
         self.render()
     }
@@ -411,8 +430,12 @@ impl AuditDriver {
         self.scroll_pos(egui::pos2(180.0, 780.0), delta_y)
     }
 
-    fn scroll_operator_entity_list(&mut self, delta_y: f32) -> Vec<String> {
+    fn scroll_manage_entity_list(&mut self, delta_y: f32) -> Vec<String> {
         self.scroll_pos(egui::pos2(760.0, 520.0), delta_y)
+    }
+
+    fn scroll_manage_editor(&mut self, delta_y: f32) -> Vec<String> {
+        self.scroll_pos(egui::pos2(1120.0, 520.0), delta_y)
     }
 
     fn scroll_right_rail(&mut self, delta_y: f32) -> Vec<String> {

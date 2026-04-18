@@ -1,6 +1,7 @@
 use defra_agent_protocol::client_protocol::ClientTurnState;
 use eframe::egui::{self, Key, RichText, TextEdit, Ui};
 
+use super::turn_state_label;
 use crate::audit;
 use crate::chat::domain::submission::SendStatus;
 use crate::state::{PendingChatAction, PendingShellAction, ShellState};
@@ -11,7 +12,7 @@ pub fn show(
     state: &mut ShellState,
     _store: &crate::client::ClientStore,
     selected_agent_did: Option<&str>,
-    _turn_state: Option<ClientTurnState>,
+    turn_state: Option<ClientTurnState>,
     send_status: SendStatus,
 ) {
     let palette = theme::palette();
@@ -27,18 +28,21 @@ pub fn show(
         ui.set_width(ui.available_width());
         let text_edit = TextEdit::multiline(&mut state.chat.editor.composer_text)
             .id_source(audit::targets::CHAT_COMPOSER_TEXT)
-            .desired_rows(3)
+            .desired_rows(2)
+            .desired_width(ui.available_width())
             .hint_text("Message the selected agent");
-        audit::add_sized(
-            ui,
-            audit::targets::CHAT_COMPOSER_TEXT,
-            [ui.available_width(), 84.0],
-            text_edit,
-        );
+        audit::add(ui, audit::targets::CHAT_COMPOSER_TEXT, text_edit);
         ui.add_space(8.0);
 
-        ui.columns(2, |columns| {
-            columns[0].vertical_centered_justified(|ui| {
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                let (turn_label, turn_color) = turn_status(turn_state, &palette);
+                ui.label(
+                    RichText::new(turn_label)
+                        .monospace()
+                        .size(10.5)
+                        .color(turn_color),
+                );
                 ui.label(
                     RichText::new(helper_text)
                         .monospace()
@@ -50,8 +54,7 @@ pub fn show(
                         }),
                 );
             });
-
-            columns[1].with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().button_padding = egui::vec2(12.0, 8.0);
                 let clicked = audit::add_enabled(
                     ui,
@@ -66,6 +69,20 @@ pub fn show(
             });
         });
     });
+}
+
+fn turn_status(
+    turn_state: Option<ClientTurnState>,
+    palette: &theme::Palette,
+) -> (String, egui::Color32) {
+    match turn_state {
+        Some(ClientTurnState::WaitingForClaim) => ("turn waiting...".to_string(), palette.warning),
+        Some(ClientTurnState::Streaming) => ("turn streaming...".to_string(), palette.accent),
+        Some(ClientTurnState::Failed) => ("turn failed".to_string(), palette.warning),
+        Some(ClientTurnState::Superseded) => ("turn superseded".to_string(), palette.text_2),
+        Some(ClientTurnState::Completed) => ("turn completed".to_string(), palette.text_2),
+        None => (format!("turn {}", turn_state_label(None)), palette.text_3),
+    }
 }
 
 fn submit(state: &mut ShellState, selected_agent_did: Option<&str>) {

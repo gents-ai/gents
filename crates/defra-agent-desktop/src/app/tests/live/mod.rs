@@ -2,16 +2,15 @@ use super::*;
 
 mod common;
 pub(crate) use common::*;
-mod operator_config;
-pub(crate) use operator_config::*;
+mod manage_config;
+pub(crate) use manage_config::*;
 
 mod chat;
 mod chat_followup;
-mod logs;
-mod operator_backend;
-mod operator_behavior;
-mod operator_profile;
-mod operator_scheduled;
-mod operator_switching;
-mod operator_tool_selection;
+mod manage_backend;
+mod manage_behavior;
+mod manage_profile;
+mod manage_scheduled;
+mod manage_switching;
+mod manage_tool_selection;
 mod replication;

@@ -6,9 +6,9 @@ use crate::audit;
 use crate::client::{ClientCore, ClientStore};
 use crate::state::{PendingChatAction, PendingShellAction, ShellState};
 use crate::theme;
-use crate::views;
+use crate::views::toolbar;
 
-use super::turn_state_label;
+use super::view_model::simple_behavior_label;
 
 pub(super) struct HeaderProps<'a> {
     pub store: &'a ClientStore,
@@ -24,6 +24,7 @@ pub(super) fn show(ui: &mut Ui, state: &mut ShellState, props: HeaderProps<'_>) 
         props.selected_agent_did,
         props.selected_session_id,
     );
+    let title = conversation_title(props.store, props.selected_session_id);
     let latest_request = props
         .selected_session_id
         .and_then(|session_id| latest_request_for_session(props.store, session_id))
@@ -40,11 +41,14 @@ pub(super) fn show(ui: &mut Ui, state: &mut ShellState, props: HeaderProps<'_>) 
     let export_enabled = props
         .selected_session_id
         .is_some_and(|session_id| conversation_has_export_rows(props.store, session_id));
-    views::toolbar(
-        ui,
-        "Conversation",
-        &breadcrumb,
-        turn_state_label(props.turn_state),
+    toolbar(ui, "Conversation", &breadcrumb, "");
+    ui.add_space(4.0);
+
+    ui.label(
+        RichText::new(title)
+            .size(23.0)
+            .color(theme::palette().text_0)
+            .strong(),
     );
     ui.add_space(8.0);
 
@@ -65,27 +69,31 @@ pub(super) fn show(ui: &mut Ui, state: &mut ShellState, props: HeaderProps<'_>) 
             );
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if audit::add_enabled(
-                ui,
-                audit::targets::CHAT_EXPORT,
-                export_enabled,
-                egui::Button::new("Export"),
-            )
-            .clicked()
-            {
-                export_conversation(ui, state, props.store, props.selected_session_id);
+            if retry_enabled {
+                if audit::add_enabled(
+                    ui,
+                    audit::targets::CHAT_RETRY,
+                    true,
+                    egui::Button::new("Retry"),
+                )
+                .clicked()
+                {
+                    state.queue_shell_action(PendingShellAction::Chat(
+                        PendingChatAction::RetryLatestRequest,
+                    ));
+                }
             }
-            if audit::add_enabled(
-                ui,
-                audit::targets::CHAT_RETRY,
-                retry_enabled,
-                egui::Button::new("Retry"),
-            )
-            .clicked()
-            {
-                state.queue_shell_action(PendingShellAction::Chat(
-                    PendingChatAction::RetryLatestRequest,
-                ));
+            if export_enabled {
+                if audit::add_enabled(
+                    ui,
+                    audit::targets::CHAT_EXPORT,
+                    true,
+                    egui::Button::new("Export"),
+                )
+                .clicked()
+                {
+                    export_conversation(ui, state, props.store, props.selected_session_id);
+                }
             }
         });
     });
@@ -179,7 +187,30 @@ fn breadcrumb(
                 .to_string()
         })
         .unwrap_or_else(|| "no agent".to_string());
-    let conversation = selected_session_id
+    let behavior = selected_session_id
+        .and_then(|session_id| store.session_behavior_id(session_id, selected_agent_did))
+        .or_else(|| {
+            selected_agent_did.and_then(|agent_did| {
+                store
+                    .default_behavior_id_for_agent(agent_did)
+                    .map(ToOwned::to_owned)
+            })
+        })
+        .and_then(|behavior_id| {
+            selected_agent_did.map(|agent_did| {
+                let display_name = store
+                    .behavior_row(agent_did, &behavior_id)
+                    .and_then(|row| row.display_name.as_deref());
+                simple_behavior_label(display_name, Some(behavior_id.as_str()))
+            })
+        })
+        .unwrap_or_else(|| "Inherited default".to_string());
+
+    format!("{agent} / {behavior}")
+}
+
+fn conversation_title(store: &ClientStore, selected_session_id: Option<&str>) -> String {
+    selected_session_id
         .and_then(|session_id| {
             store
                 .conversations
@@ -187,7 +218,7 @@ fn breadcrumb(
                 .find(|row| row.session_id == session_id)
                 .and_then(|row| row.title.as_deref())
         })
-        .unwrap_or("new conversation");
-
-    format!("{agent} / {conversation}")
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or("New Conversation")
+        .to_string()
 }

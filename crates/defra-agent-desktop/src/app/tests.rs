@@ -31,8 +31,8 @@ use tracing_subscriber::{prelude::*, EnvFilter};
 
 use crate::audit;
 use crate::client::{ClientCore, ClientCoreOptions, DesktopPaths};
-use crate::state::{Activity, LogsFilter, OperatorDraft, OperatorSection};
-use crate::telemetry::{global_log_layer, global_log_store, DesktopLogCategory, DesktopLogStore};
+use crate::state::{Activity, ManageDraft, ManageSection};
+use crate::telemetry::{global_log_layer, global_log_store, DesktopLogStore};
 
 #[path = "tests/support/live_fixture/mod.rs"]
 mod support_live_fixture;
@@ -43,7 +43,7 @@ mod support_seed;
 use support_seed::*;
 
 include!("tests/support/chat_flow.rs");
-include!("tests/support/operator_flow.rs");
+include!("tests/support/manage_flow.rs");
 include!("tests/support/bootstrap_runtime.rs");
 include!("tests/support/network.rs");
 include!("tests/support/wait.rs");
@@ -61,5 +61,5 @@ mod bootstrap;
 mod chat;
 mod first_launch;
 mod live;
-mod operator;
-mod peers;
+mod manage;
+mod setup;

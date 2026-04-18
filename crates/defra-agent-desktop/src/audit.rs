@@ -1,8 +1,5 @@
 use eframe::egui::{self, Response, Ui, Widget, WidgetText};
 
-use crate::state::{Activity, LogsFilter, OperatorSection};
-use crate::telemetry::DesktopLogCategory;
-
 #[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 struct TargetRecord {
@@ -12,16 +9,17 @@ struct TargetRecord {
 }
 
 pub(crate) mod targets {
-    use super::*;
+    #[cfg(test)]
+    use crate::state::ManageSection;
 
+    #[cfg(test)]
     pub(crate) const ACTIVITY_CHAT: &str = "activity.chat";
-    pub(crate) const ACTIVITY_OPERATOR: &str = "activity.operator";
-    pub(crate) const ACTIVITY_PEERS: &str = "activity.peers";
-    pub(crate) const ACTIVITY_LOGS: &str = "activity.logs";
+    #[cfg(test)]
+    pub(crate) const ACTIVITY_MANAGE: &str = "activity.manage";
     pub(crate) const CHAT_COMPOSER_TEXT: &str = "chat.composer.text";
     pub(crate) const CHAT_CREATE_CONVERSATION: &str = "chat.create_conversation";
     pub(crate) const CHAT_NEW_CONVERSATION: &str = "chat.new_conversation";
-    pub(crate) const CHAT_OPEN_PEERS_SETUP: &str = "chat.open_peers_setup";
+    pub(crate) const CHAT_OPEN_SETUP: &str = "chat.open_setup";
     pub(crate) const CHAT_RETRY: &str = "chat.retry";
     pub(crate) const CHAT_REASONING_PREFIX: &str = "chat.reasoning";
     pub(crate) const CHAT_SEND: &str = "chat.send";
@@ -29,46 +27,27 @@ pub(crate) mod targets {
     pub(crate) const CHAT_TOOL_ARGS_PREFIX: &str = "chat.tool_args";
     pub(crate) const CHAT_TOOL_OUTPUT_PREFIX: &str = "chat.tool_output";
     pub(crate) const CHAT_EXPORT: &str = "chat.export";
-    pub(crate) const LOGS_FILTER_ALL: &str = "logs.filter.all";
-    pub(crate) const LOGS_FILTER_REPLICATION: &str = "logs.filter.replication";
-    pub(crate) const LOGS_FILTER_PEERING: &str = "logs.filter.peering";
-    pub(crate) const LOGS_FILTER_TURNS: &str = "logs.filter.turns";
-    pub(crate) const LOGS_FILTER_WRITES: &str = "logs.filter.writes";
-    pub(crate) const LOGS_FILTER_WARNINGS: &str = "logs.filter.warnings";
-    pub(crate) const OPERATOR_APPLY: &str = "operator.apply";
-    pub(crate) const OPERATOR_DISCARD: &str = "operator.discard";
-    pub(crate) const OPERATOR_ENTITY_FILTER: &str = "operator.entity_filter";
-    pub(crate) const OPERATOR_NEW: &str = "operator.new";
-    pub(crate) const OPERATOR_RUN_NOW: &str = "operator.run_now";
-    pub(crate) const PEERS_ADD_ADDR: &str = "peers.add.addr";
-    pub(crate) const PEERS_ADD_AGENT_DID: &str = "peers.add.agent_did";
-    pub(crate) const PEERS_ADD_LABEL: &str = "peers.add.label";
-    pub(crate) const PEERS_CLEAR: &str = "peers.clear";
-    pub(crate) const PEERS_MAIN_COPY_DID: &str = "peers.main.copy_did";
-    pub(crate) const PEERS_REPAIR_NOW: &str = "peers.repair_now";
-    pub(crate) const PEERS_REMOVE: &str = "peers.remove";
-    pub(crate) const PEERS_RESTART_CLIENT: &str = "peers.restart_client";
-    pub(crate) const PEERS_TOGGLE_ADD_FORM: &str = "peers.toggle_add_form";
-    pub(crate) const PEERS_ONBOARDING_COPY_DID: &str = "peers.onboarding.copy_did";
-    pub(crate) const PEERS_SAVE: &str = "peers.save";
+    pub(crate) const MANAGE_APPLY: &str = "manage.apply";
+    pub(crate) const MANAGE_DISCARD: &str = "manage.discard";
+    pub(crate) const MANAGE_ENTITY_FILTER: &str = "manage.entity_filter";
+    pub(crate) const MANAGE_NEW: &str = "manage.new";
+    pub(crate) const MANAGE_RUN_NOW: &str = "manage.run_now";
+    pub(crate) const SETUP_ADD_ADDR: &str = "setup.add.addr";
+    pub(crate) const SETUP_ADD_AGENT_DID: &str = "setup.add.agent_did";
+    pub(crate) const SETUP_BACK_TO_DEPLOYMENTS: &str = "setup.back_to_deployments";
+    pub(crate) const SETUP_ADD_LABEL: &str = "setup.add.label";
+    pub(crate) const SETUP_CLEAR: &str = "setup.clear";
+    pub(crate) const SETUP_REPAIR_NOW: &str = "setup.repair_now";
+    pub(crate) const SETUP_REMOVE: &str = "setup.remove";
+    pub(crate) const SETUP_RESTART_CLIENT: &str = "setup.restart_client";
+    pub(crate) const SETUP_ONBOARDING_COPY_DID: &str = "setup.onboarding.copy_did";
+    pub(crate) const SETUP_SAVE: &str = "setup.save";
 
-    pub(crate) fn activity(activity: Activity) -> &'static str {
+    #[cfg(test)]
+    pub(crate) fn activity(activity: crate::state::Activity) -> &'static str {
         match activity {
-            Activity::Chat => ACTIVITY_CHAT,
-            Activity::Operator => ACTIVITY_OPERATOR,
-            Activity::Peers => ACTIVITY_PEERS,
-            Activity::Logs => ACTIVITY_LOGS,
-        }
-    }
-
-    pub(crate) fn logs_filter(filter: LogsFilter) -> &'static str {
-        match filter {
-            LogsFilter::All => LOGS_FILTER_ALL,
-            LogsFilter::Category(DesktopLogCategory::Replication) => LOGS_FILTER_REPLICATION,
-            LogsFilter::Category(DesktopLogCategory::Peering) => LOGS_FILTER_PEERING,
-            LogsFilter::Category(DesktopLogCategory::Turns) => LOGS_FILTER_TURNS,
-            LogsFilter::Category(DesktopLogCategory::Writes) => LOGS_FILTER_WRITES,
-            LogsFilter::Category(DesktopLogCategory::Warnings) => LOGS_FILTER_WARNINGS,
+            crate::state::Activity::Chat => ACTIVITY_CHAT,
+            crate::state::Activity::Manage => ACTIVITY_MANAGE,
         }
     }
 
@@ -104,37 +83,31 @@ pub(crate) mod targets {
         format!("{CHAT_TOOL_OUTPUT_PREFIX}.{card_id}")
     }
 
-    pub(crate) fn operator_agent(agent_did: &str) -> String {
-        format!("operator.agent.{agent_did}")
+    pub(crate) fn manage_agent(agent_did: &str) -> String {
+        format!("manage.agent.{agent_did}")
     }
 
-    pub(crate) fn operator_deployment(peer_id: &str) -> String {
-        format!("operator.deployment.{peer_id}")
+    pub(crate) fn manage_deployment(peer_id: &str) -> String {
+        format!("manage.deployment.{peer_id}")
     }
 
-    pub(crate) fn operator_entity(entity_id: &str) -> String {
-        format!("operator.entity.{entity_id}")
+    pub(crate) fn manage_entity(entity_id: &str) -> String {
+        format!("manage.entity.{entity_id}")
     }
 
-    pub(crate) fn operator_field(label: &str) -> String {
-        format!("operator.field.{label}")
+    pub(crate) fn manage_field(label: &str) -> String {
+        format!("manage.field.{label}")
     }
 
-    pub(crate) fn operator_toggle(label: &str) -> String {
-        format!("operator.toggle.{label}")
+    pub(crate) fn manage_toggle(label: &str) -> String {
+        format!("manage.toggle.{label}")
     }
 
-    pub(crate) fn operator_section(section: OperatorSection) -> String {
-        format!("operator.section.{}", section.label())
+    #[cfg(test)]
+    pub(crate) fn manage_section(section: ManageSection) -> String {
+        format!("manage.section.{}", section.label())
     }
 
-    pub(crate) fn peers_peer(record_id: &str) -> String {
-        format!("peers.peer.{record_id}")
-    }
-
-    pub(crate) fn peers_agent(record_id: &str) -> String {
-        format!("peers.agent.{record_id}")
-    }
 }
 
 pub(crate) fn button(

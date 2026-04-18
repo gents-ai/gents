@@ -15,9 +15,21 @@ fn desktop_app_clicks_through_live_agent_multi_turn_conversation() -> Result<()>
         "audit-live-multi",
         &AgentBackendConfig::mock(mock_endpoint.endpoint()),
     ))?;
+    let local_addr = core
+        .listen_addresses()
+        .first()
+        .cloned()
+        .ok_or_else(|| anyhow!("desktop core missing listen address"))?;
+    let saved_peer = runtime.block_on(core.add_peer(
+        "Audit Live Multi",
+        &local_addr,
+        &running_agent.did,
+    ))?;
     runtime.block_on(core.refresh_store())?;
 
     let mut driver = build_chat_driver(Arc::clone(&runtime), core);
+    driver.render();
+    driver.click_target(&audit::targets::chat_deployment(&saved_peer.peer_id));
     let session_id = ensure_chat_session_selected(
         &mut driver,
         "session selected for multi-turn audit",

@@ -5,10 +5,17 @@ fn desktop_app_blocks_chat_send_while_turn_is_waiting_for_claim() -> Result<()> 
     let runtime = test_runtime()?;
     let tempdir = tempfile::tempdir()?;
     let core = runtime.block_on(ClientCore::start_with_paths_and_options(
-        DesktopPaths::from_root(tempdir.path()),
+        DesktopPaths::from_root(tempdir.path().join("desktop")),
         ClientCoreOptions::local_only(),
     ))?;
-    runtime.block_on(seed_operator_documents(&core))?;
+    let local_addr = core
+        .listen_addresses()
+        .first()
+        .cloned()
+        .ok_or_else(|| anyhow!("desktop core missing listen address"))?;
+    let saved_peer =
+        runtime.block_on(core.add_peer("Amy Deployment", &local_addr, "did:defra:amy"))?;
+    runtime.block_on(seed_manage_documents(&core))?;
     let created =
         runtime.block_on(core.create_conversation("did:defra:amy", Some("amy-default")))?;
     runtime.block_on(core.submit_request(
@@ -29,9 +36,10 @@ fn desktop_app_blocks_chat_send_while_turn_is_waiting_for_claim() -> Result<()> 
         Arc::new(DesktopLogStore::new(64)),
     );
     app.state.activity = Activity::Chat;
-    app.state.chat.shell.selected_agent_did = Some("did:defra:amy".to_string());
-    app.state.chat.shell.selected_session_id = Some(created.session_id.clone());
     let mut driver = AuditDriver::new(app, ctx);
+    driver.render();
+    driver.click_target(&audit::targets::chat_deployment(&saved_peer.peer_id));
+    driver.click_target(&audit::targets::chat_conversation(&created.session_id));
 
     let waiting_texts = wait_for_value(
         "waiting-for-claim turn state",
@@ -40,7 +48,7 @@ fn desktop_app_blocks_chat_send_while_turn_is_waiting_for_claim() -> Result<()> 
             let texts = driver.render();
             texts
                 .iter()
-                .any(|text| text.contains("waiting for claim"))
+                .any(|text| text.contains("turn waiting..."))
                 .then_some(texts)
         },
     )?;

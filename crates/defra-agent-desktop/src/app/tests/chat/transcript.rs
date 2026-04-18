@@ -5,9 +5,19 @@ fn desktop_app_clicks_through_chat_reasoning_and_tool_card_disclosures() -> Resu
     let runtime = test_runtime()?;
     let tempdir = tempfile::tempdir()?;
     let core = runtime.block_on(ClientCore::start_with_paths_and_options(
-        DesktopPaths::from_root(tempdir.path()),
+        DesktopPaths::from_root(tempdir.path().join("desktop")),
         ClientCoreOptions::local_only(),
     ))?;
+    let peer = runtime.block_on(ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path().join("peer")),
+        ClientCoreOptions::local_only(),
+    ))?;
+    let peer_addr = peer
+        .listen_addresses()
+        .first()
+        .cloned()
+        .ok_or_else(|| anyhow!("peer missing listen address"))?;
+    let saved_peer = runtime.block_on(core.add_peer("Amy Deployment", &peer_addr, "did:defra:amy"))?;
     runtime.block_on(insert_agent_principal(
         &core,
         "did:defra:amy",
@@ -25,8 +35,9 @@ fn desktop_app_clicks_through_chat_reasoning_and_tool_card_disclosures() -> Resu
     ))?;
 
     let mut driver = build_chat_driver(Arc::clone(&runtime), core);
-    driver.app.state.chat.shell.selected_agent_did = Some("did:defra:amy".to_string());
-    driver.app.state.chat.shell.selected_session_id = Some(conversation.session_id.clone());
+    driver.render();
+    driver.click_target(&audit::targets::chat_deployment(&saved_peer.peer_id));
+    driver.click_target(&audit::targets::chat_conversation(&conversation.session_id));
     let initial = driver.render();
 
     assert!(initial
@@ -76,5 +87,7 @@ fn desktop_app_clicks_through_chat_reasoning_and_tool_card_disclosures() -> Resu
     assert!(reasoning_texts
         .iter()
         .any(|text| text.contains("I verified the latest request")));
+    driver.app.shutdown_client();
+    shutdown_core(runtime.as_ref(), peer)?;
     Ok(())
 }

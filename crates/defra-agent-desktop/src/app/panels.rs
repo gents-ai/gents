@@ -8,9 +8,10 @@ use super::DesktopApp;
 
 impl DesktopApp {
     pub(super) fn show_sidebar(&mut self, ui: &mut egui::Ui, store: Option<&ClientStore>) {
+        let width = responsive_sidebar_width(self.state.activity, ui.max_rect().width());
         Panel::left("activity_sidebar")
             .resizable(false)
-            .exact_size(self.state.activity.sidebar_width())
+            .exact_size(width)
             .show_inside(ui, |ui| {
                 views::show_sidebar(
                     ui,
@@ -23,58 +24,42 @@ impl DesktopApp {
     }
 
     pub(super) fn show_rail(&mut self, ui: &mut egui::Ui, store: Option<&ClientStore>) {
-        let Some(width) = self
+        let Some(base_width) = self
             .should_show_rail()
             .then(|| self.state.activity.rail_width())
             .flatten()
         else {
             return;
         };
-        let palette = theme::palette();
-        let content_rect = ui.max_rect();
-        let drawer_height = (content_rect.height() - 24.0).max(240.0);
-        let drawer_x = (content_rect.right() - width - 16.0).max(content_rect.left() + 12.0);
-        let drawer_pos = egui::pos2(drawer_x, content_rect.top() + 12.0);
-
-        egui::Area::new(egui::Id::new("activity_rail_overlay"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(drawer_pos)
-            .show(ui.ctx(), |ui| {
-                egui::Frame::new()
-                    .fill(palette.background_1)
-                    .stroke(egui::Stroke::new(1.0, palette.stroke_subtle))
-                    .corner_radius(8)
-                    .inner_margin(12)
-                    .show(ui, |ui| {
-                        ui.set_width(width);
-                        ui.set_min_size(egui::vec2(width, drawer_height));
-                        views::show_rail(
-                            ui,
-                            &mut self.state,
-                            self.client.as_deref(),
-                            store,
-                            self.log_store.as_ref(),
-                            self.runtime.as_ref(),
-                        );
-                    });
+        let width = responsive_rail_width(self.state.activity, ui.max_rect().width(), base_width);
+        Panel::right("activity_rail")
+            .resizable(false)
+            .exact_size(width)
+            .show_inside(ui, |ui| {
+                views::show_rail(
+                    ui,
+                    &mut self.state,
+                    self.client.as_deref(),
+                    store,
+                    self.log_store.as_ref(),
+                    self.runtime.as_ref(),
+                );
             });
     }
 
     fn should_show_rail(&self) -> bool {
         match self.state.activity {
             crate::state::Activity::Chat => false,
-            crate::state::Activity::Peers => false,
-            crate::state::Activity::Logs => true,
-            crate::state::Activity::Operator => {
-                use crate::state::OperatorSection;
+            crate::state::Activity::Manage => {
+                use crate::state::ManageSection;
 
                 matches!(
-                    self.state.operator.selected_section,
-                    OperatorSection::Runtime
-                        | OperatorSection::RequestTimeline
-                        | OperatorSection::RecentFailures
-                ) || self.state.operator.selected_entity_id.is_some()
-                    || self.state.operator.draft.is_some()
+                    self.state.manage.selected_section,
+                    ManageSection::Runtime
+                        | ManageSection::RequestTimeline
+                        | ManageSection::RecentFailures
+                ) || self.state.manage.selected_entity_id.is_some()
+                    || self.state.manage.draft.is_some()
             }
         }
     }
@@ -100,7 +85,7 @@ impl DesktopApp {
                     ui.spacing_mut().item_spacing.x = 12.0;
                     ui.label(
                         RichText::new(format!(
-                            "peers {}/{}",
+                            "deployments {}/{}",
                             self.state.status.peered_now, self.state.status.peered_target
                         ))
                         .monospace()
@@ -227,5 +212,33 @@ impl DesktopApp {
                     .color(palette.text_1),
             );
         });
+    }
+}
+
+fn responsive_sidebar_width(activity: crate::state::Activity, total_width: f32) -> f32 {
+    let desired = match activity {
+        crate::state::Activity::Chat => total_width * 0.22,
+        crate::state::Activity::Manage => total_width * 0.20,
+    };
+
+    match activity {
+        crate::state::Activity::Chat => desired.clamp(272.0, 340.0),
+        crate::state::Activity::Manage => desired.clamp(252.0, 320.0),
+    }
+}
+
+fn responsive_rail_width(
+    activity: crate::state::Activity,
+    total_width: f32,
+    base_width: f32,
+) -> f32 {
+    let desired = match activity {
+        crate::state::Activity::Manage => total_width * 0.27,
+        crate::state::Activity::Chat => base_width,
+    };
+
+    match activity {
+        crate::state::Activity::Manage => desired.clamp(320.0, 440.0),
+        crate::state::Activity::Chat => base_width,
     }
 }

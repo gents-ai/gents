@@ -138,11 +138,11 @@ impl ClientCore {
                 Err(error) => (
                     true,
                     Some(format!(
-                        "peer connected but replication setup failed: {error}"
+                        "deployment connected but replication setup failed: {error}"
                     )),
                 ),
             },
-            Err(error) => (false, Some(format!("peer saved but dial failed: {error}"))),
+            Err(error) => (false, Some(format!("deployment saved but dial failed: {error}"))),
         };
 
         self.update_peer_status(ClientPeerStatus {
@@ -160,14 +160,14 @@ impl ClientCore {
                 peer_id = %record.peer_id,
                 label = %record.label,
                 error = %warning,
-                "desktop peer add warning"
+                "desktop deployment add warning"
             );
         } else {
             tracing::info!(
                 target: "defra_agent_desktop::peer",
                 peer_id = %record.peer_id,
                 label = %record.label,
-                "desktop peer added"
+                "desktop deployment added"
             );
         }
 
@@ -202,7 +202,7 @@ impl ClientCore {
         let warning = previous_status
             .filter(|status| status.dial_succeeded)
             .map(|_| {
-                "saved peer removed; any active transport connection remains until restart"
+                "saved deployment removed; any active transport connection remains until restart"
                     .to_string()
             });
 
@@ -211,7 +211,7 @@ impl ClientCore {
             target: "defra_agent_desktop::peer",
             peer_id = %removed.peer_id,
             label = %removed.label,
-            "desktop peer removed"
+            "desktop deployment removed"
         );
         Ok(PeerMutationResult {
             peer_id: removed.peer_id,

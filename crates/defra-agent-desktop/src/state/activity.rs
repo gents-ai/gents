@@ -1,52 +1,14 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Activity {
     Chat,
-    Operator,
-    Peers,
-    Logs,
+    Manage,
 }
 
 impl Activity {
-    pub const ALL: [Self; 4] = [Self::Chat, Self::Operator, Self::Peers, Self::Logs];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Chat => "Chat",
-            Self::Operator => "Operator",
-            Self::Peers => "Peers",
-            Self::Logs => "Logs",
-        }
-    }
-
-    pub fn nav_hint(self) -> &'static str {
-        match self {
-            Self::Chat => "conversations",
-            Self::Operator => "config + runtime",
-            Self::Peers => "pairing + identity",
-            Self::Logs => "diagnostics",
-        }
-    }
-
-    pub fn nav_badge(self) -> &'static str {
-        match self {
-            Self::Chat => "CH",
-            Self::Operator => "OP",
-            Self::Peers => "PP",
-            Self::Logs => "LG",
-        }
-    }
-
-    pub fn sidebar_width(self) -> f32 {
-        let _ = self;
-        308.0
-    }
-
     pub fn rail_width(self) -> Option<f32> {
         match self {
             Self::Chat => None,
-            Self::Operator => Some(400.0),
-            Self::Peers => Some(380.0),
-            Self::Logs => Some(360.0),
+            Self::Manage => Some(400.0),
         }
     }
 }
@@ -63,9 +25,9 @@ pub enum PendingChatAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PendingOperatorAction {
+pub enum PendingManageAction {
     SelectDeployment { peer_id: String, agent_did: String },
-    SelectSection { section: super::OperatorSection },
+    SelectSection { section: super::ManageSection },
     SelectEntity { entity_id: String },
     StartNewDocument,
     DiscardDraft,
@@ -76,8 +38,8 @@ pub enum PendingOperatorAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PendingShellAction {
     Navigate(Activity),
-    OpenPeersSetup,
+    OpenDeploymentSetup,
     SelectScopedDeployment { peer_id: String, agent_did: String },
     Chat(PendingChatAction),
-    Operator(PendingOperatorAction),
+    Manage(PendingManageAction),
 }

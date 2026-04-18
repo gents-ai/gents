@@ -34,7 +34,7 @@ pub(super) struct BehaviorEntry {
     pub represented_behavior_id: Option<String>,
     pub override_behavior_id: Option<String>,
     pub label: String,
-    pub meta: &'static str,
+    pub meta: String,
 }
 
 pub fn build_deployment_entries(
@@ -137,32 +137,39 @@ pub(super) fn behavior_selection_entries(
     let mut rows = store.behavior_rows(agent_did);
     rows.sort_by(|left, right| left.behavior_id.cmp(&right.behavior_id));
 
-    let mut entries = Vec::new();
-
-    if let Some(default_behavior_id) = default_behavior_id {
+    let default_entry = if let Some(default_behavior_id) = default_behavior_id {
         if let Some(default_row) = rows
             .iter()
             .find(|row| row.behavior_id == default_behavior_id)
             .copied()
         {
-            entries.push(BehaviorEntry {
+            BehaviorEntry {
                 represented_behavior_id: Some(default_behavior_id.to_string()),
                 override_behavior_id: None,
                 label: simple_behavior_label(
                     default_row.display_name.as_deref(),
                     Some(default_behavior_id),
                 ),
-                meta: "default",
-            });
+                meta: behavior_meta(store, default_row.tool_selection_id.as_deref(), true),
+            }
         } else {
-            entries.push(BehaviorEntry {
+            BehaviorEntry {
                 represented_behavior_id: Some(default_behavior_id.to_string()),
                 override_behavior_id: None,
                 label: default_behavior_id.to_string(),
-                meta: "default",
-            });
+                meta: "default".to_string(),
+            }
         }
-    }
+    } else {
+        BehaviorEntry {
+            represented_behavior_id: None,
+            override_behavior_id: None,
+            label: "Inherited default".to_string(),
+            meta: "default".to_string(),
+        }
+    };
+
+    let mut entries = vec![default_entry];
 
     for row in rows {
         if Some(row.behavior_id.as_str()) == default_behavior_id {
@@ -172,8 +179,11 @@ pub(super) fn behavior_selection_entries(
         entries.push(BehaviorEntry {
             represented_behavior_id: Some(row.behavior_id.clone()),
             override_behavior_id: Some(row.behavior_id.clone()),
-            label: simple_behavior_label(row.display_name.as_deref(), Some(row.behavior_id.as_str())),
-            meta: "behavior",
+            label: simple_behavior_label(
+                row.display_name.as_deref(),
+                Some(row.behavior_id.as_str()),
+            ),
+            meta: behavior_meta(store, row.tool_selection_id.as_deref(), false),
         });
     }
 
@@ -227,7 +237,10 @@ fn abbreviate_address(value: &str) -> String {
     format!("{}..{}", &value[..10], &value[value.len() - 4..])
 }
 
-fn simple_behavior_label(display_name: Option<&str>, behavior_id: Option<&str>) -> String {
+pub(super) fn simple_behavior_label(
+    display_name: Option<&str>,
+    behavior_id: Option<&str>,
+) -> String {
     match (
         display_name
             .map(str::trim)
@@ -240,6 +253,43 @@ fn simple_behavior_label(display_name: Option<&str>, behavior_id: Option<&str>) 
         (_, Some(behavior_id)) => behavior_id.to_string(),
         _ => "Inherited default".to_string(),
     }
+}
+
+fn behavior_meta(store: &ClientStore, tool_selection_id: Option<&str>, is_default: bool) -> String {
+    let mut parts = vec![if is_default { "default" } else { "behavior" }.to_string()];
+    let hints = tool_hints(store, tool_selection_id);
+    if !hints.is_empty() {
+        parts.push(hints.join(" "));
+    }
+    parts.join("  ")
+}
+
+fn tool_hints(store: &ClientStore, tool_selection_id: Option<&str>) -> Vec<&'static str> {
+    let Some(selection_id) = tool_selection_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Vec::new();
+    };
+    let Some(selection) = store
+        .tool_selections
+        .iter()
+        .find(|row| row.selection_id == selection_id)
+    else {
+        return Vec::new();
+    };
+
+    let mut hints = Vec::new();
+    if selection.enable_file_tools.unwrap_or(false) {
+        hints.push("F");
+    }
+    if selection.enable_bash.unwrap_or(false) || !selection.cli_tool_names.is_empty() {
+        hints.push("B");
+    }
+    if selection.enable_meta_tools.unwrap_or(false) {
+        hints.push("M");
+    }
+    hints
 }
 
 fn parse_timestamp(value: &str) -> Option<chrono::DateTime<Local>> {
@@ -263,5 +313,49 @@ fn relative_timestamp_label(
         "yesterday".to_string()
     } else {
         timestamp.format("%Y-%m-%d").to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::behavior_selection_entries;
+    use crate::client::{ClientStore, ClientStoreRows};
+    use defra_agent_protocol::row::{AgentBehaviorRow, AgentPrincipalRow};
+
+    #[test]
+    fn behavior_selection_entries_keep_inherited_default_without_explicit_default_id() {
+        let store = ClientStore::from_rows(ClientStoreRows {
+            agent_principals: vec![AgentPrincipalRow {
+                agent_did: "did:defra:amy".to_string(),
+                display_name: Some("Amy".to_string()),
+                default_behavior_id: None,
+                enabled: Some(true),
+                created_at: None,
+                created_by: None,
+            }],
+            behaviors: vec![AgentBehaviorRow {
+                behavior_id: "amy-alt".to_string(),
+                agent_did: Some("did:defra:amy".to_string()),
+                display_name: Some("Amy Alt".to_string()),
+                system_prompt: None,
+                backend_id: None,
+                model_name: None,
+                tool_selection_id: None,
+                inference_profile_id: None,
+                compaction_strategy: None,
+                compaction_threshold: None,
+                enabled: Some(true),
+                created_at: None,
+            }],
+            ..ClientStoreRows::default()
+        });
+
+        let entries = behavior_selection_entries(&store, "did:defra:amy");
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].represented_behavior_id, None);
+        assert_eq!(entries[0].override_behavior_id, None);
+        assert_eq!(entries[0].label, "Inherited default");
+        assert_eq!(entries[0].meta, "default");
     }
 }

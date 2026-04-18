@@ -44,7 +44,7 @@ fn start_live_remote_deployment(
         agent_label,
         backend,
     ))?;
-    let docs = runtime.block_on(seed_live_operator_documents(
+    let docs = runtime.block_on(seed_live_manage_documents(
         remote_core.as_ref(),
         &running_agent.did,
         agent_label,

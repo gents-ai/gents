@@ -5,6 +5,7 @@ mod reasoning_cards;
 mod tool_cards;
 
 use defra_agent_protocol::client_protocol::ClientTurnState;
+use defra_agent_protocol::row::AgentRequestRow;
 use defra_agent_protocol::transcript::{present_persisted_message, PresentedMessageRole};
 use eframe::egui::{self, Ui};
 use egui_commonmark::CommonMarkCache;
@@ -65,20 +66,41 @@ pub fn show(
             .stick_to_bottom(state.chat.editor.transcript_stick_to_bottom)
             .show(ui, |ui| {
                 if transcript.messages.is_empty() {
-                    for request in requests {
-                        if let Some(content) = request.content.as_deref() {
+                    for chain in collapsed_request_chains(&requests, store) {
+                        if let Some(content) = chain
+                            .first_visible_request
+                            .content
+                            .as_deref()
+                            .filter(|content| !content.trim().is_empty())
+                        {
                             message_block(
                                 ui,
                                 markdown_cache,
-                                format!("request:{}:content", request.request_id),
+                                format!(
+                                    "request:{}:content",
+                                    chain.first_visible_request.request_id
+                                ),
                                 "USER",
                                 palette.text_1,
                                 content,
                             );
                             ui.add_space(10.0);
                         }
-                        if let Some(response) =
-                            store.latest_response_for_request(&request.request_id)
+                        if let Some(response) = store
+                            .latest_response_for_request(&chain.latest_request.request_id)
+                            .or_else(|| {
+                                store.responses.iter().rev().find(|response| {
+                                    response.session_id.as_deref() == Some(session_id)
+                                        && response.request_id.as_deref().is_some_and(
+                                            |request_id| {
+                                                request_belongs_to_chain(
+                                                    request_id,
+                                                    &chain.request_ids,
+                                                )
+                                            },
+                                        )
+                                })
+                            })
                         {
                             if let Some(content) = response_fallback_content(response) {
                                 message_block(
@@ -152,4 +174,49 @@ pub fn show(
     });
 
     show_tool_detail_modal(ui.ctx(), state, markdown_cache);
+}
+
+struct RequestChain<'a> {
+    root_request_id: &'a str,
+    first_visible_request: &'a AgentRequestRow,
+    latest_request: &'a AgentRequestRow,
+    request_ids: std::collections::BTreeSet<&'a str>,
+}
+
+fn collapsed_request_chains<'a>(
+    requests: &'a [&'a AgentRequestRow],
+    _store: &'a ClientStore,
+) -> Vec<RequestChain<'a>> {
+    let mut chains: Vec<RequestChain<'a>> = Vec::new();
+
+    for request in requests {
+        let key = request
+            .retry_root_request
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(request.request_id.as_str());
+        if let Some(existing) = chains.iter_mut().find(|chain| chain.root_request_id == key) {
+            existing.latest_request = request;
+            existing.request_ids.insert(request.request_id.as_str());
+            continue;
+        }
+
+        let mut request_ids = std::collections::BTreeSet::new();
+        request_ids.insert(request.request_id.as_str());
+        chains.push(RequestChain {
+            root_request_id: key,
+            first_visible_request: request,
+            latest_request: request,
+            request_ids,
+        });
+    }
+
+    chains
+}
+
+fn request_belongs_to_chain(
+    request_id: &str,
+    request_ids: &std::collections::BTreeSet<&str>,
+) -> bool {
+    request_ids.contains(request_id)
 }

@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn desktop_app_redirects_blank_first_launch_to_peers_onboarding() -> Result<()> {
+fn desktop_app_redirects_blank_first_launch_to_setup_onboarding() -> Result<()> {
     let runtime = test_runtime()?;
     let tempdir = tempfile::tempdir()?;
     let core = runtime.block_on(ClientCore::start_with_paths_and_options(
@@ -21,8 +21,10 @@ fn desktop_app_redirects_blank_first_launch_to_peers_onboarding() -> Result<()> 
 
     let texts = render_once(&mut app, &ctx);
 
-    assert_eq!(app.state.activity, Activity::Peers);
+    assert_eq!(app.state.activity, Activity::Chat);
     assert!(app.state.onboarding.first_launch_redirect_done);
+    assert!(app.state.setup.workspace_open);
+    assert!(app.state.setup.show_add_form);
     assert!(texts.iter().any(|text| text.contains("First Launch")));
     assert!(texts.iter().any(|text| text.contains("Add Deployment")));
     Ok(())
@@ -59,26 +61,28 @@ fn desktop_app_clicks_through_first_launch_add_peer_flow() -> Result<()> {
 
     let initial = driver.render();
     assert!(initial.iter().any(|text| text == "First Launch"));
-    assert_eq!(driver.app.state.activity, Activity::Peers);
+    assert_eq!(driver.app.state.activity, Activity::Chat);
+    assert!(driver.app.state.setup.workspace_open);
+    assert!(driver.app.state.setup.show_add_form);
 
-    driver.click_target(audit::targets::PEERS_ONBOARDING_COPY_DID);
+    driver.click_target(audit::targets::SETUP_ONBOARDING_COPY_DID);
     assert_eq!(
-        driver.app.state.peers.last_action_message.as_deref(),
+        driver.app.state.setup.last_action_message.as_deref(),
         Some("Copied desktop DID to clipboard.")
     );
 
-    driver.click_target(audit::targets::PEERS_ADD_LABEL);
+    driver.click_target(audit::targets::SETUP_ADD_LABEL);
     driver.type_text("Workshop Bay");
-    driver.click_target(audit::targets::PEERS_ADD_ADDR);
+    driver.click_target(audit::targets::SETUP_ADD_ADDR);
     driver.type_text(&peer_addr);
-    driver.click_target(audit::targets::PEERS_ADD_AGENT_DID);
+    driver.click_target(audit::targets::SETUP_ADD_AGENT_DID);
     driver.type_text("did:defra:peer");
-    let texts = driver.click_target(audit::targets::PEERS_SAVE);
+    let texts = driver.click_target(audit::targets::SETUP_SAVE);
 
-    assert!(driver.app.state.peers.selected_peer_id.is_some());
-    assert_eq!(driver.app.state.activity, Activity::Peers);
+    assert!(driver.app.state.setup.selected_peer_id.is_some());
+    assert_eq!(driver.app.state.activity, Activity::Chat);
     assert!(texts.iter().any(|text| text.contains("Workshop Bay")));
-    assert!(texts.iter().any(|text| text.contains("Peer Access")));
+    assert!(texts.iter().any(|text| text.contains("Conversation")));
     driver.app.shutdown_client();
     shutdown_core(runtime.as_ref(), peer)?;
     Ok(())
@@ -107,22 +111,22 @@ fn desktop_app_clicks_through_first_launch_add_peer_with_dial_warning() -> Resul
     let initial = driver.render();
     assert!(initial.iter().any(|text| text.contains("First Launch")));
 
-    driver.click_target(audit::targets::PEERS_ADD_LABEL);
+    driver.click_target(audit::targets::SETUP_ADD_LABEL);
     driver.type_text("Broken Relay");
-    driver.click_target(audit::targets::PEERS_ADD_ADDR);
+    driver.click_target(audit::targets::SETUP_ADD_ADDR);
     driver.type_text("iroh://bad-address");
-    driver.click_target(audit::targets::PEERS_ADD_AGENT_DID);
+    driver.click_target(audit::targets::SETUP_ADD_AGENT_DID);
     driver.type_text("did:defra:broken");
-    driver.click_target(audit::targets::PEERS_SAVE);
+    driver.click_target(audit::targets::SETUP_SAVE);
 
-    let warning_message = wait_for_value(
-        "peer save warning after invalid address",
+    let warning_message: String = wait_for_value(
+        "deployment save warning after invalid address",
         Duration::from_secs(5),
         || {
             driver
                 .app
                 .state
-                .peers
+                .setup
                 .last_action_message
                 .as_ref()
                 .filter(|message| message.contains("dial failed"))
@@ -132,7 +136,7 @@ fn desktop_app_clicks_through_first_launch_add_peer_with_dial_warning() -> Resul
     assert!(warning_message.contains("Saved Broken Relay."));
 
     wait_for_value(
-        "saved peer appears after dial warning",
+        "saved deployment appears after dial warning",
         Duration::from_secs(5),
         || {
             driver.app.client.as_ref().and_then(|client| {
@@ -153,7 +157,7 @@ fn desktop_app_clicks_through_first_launch_add_peer_with_dial_warning() -> Resul
 }
 
 #[test]
-fn desktop_app_clicks_chat_open_peers_setup_from_empty_sidebar() -> Result<()> {
+fn desktop_app_clicks_chat_open_setup_from_empty_sidebar() -> Result<()> {
     let runtime = test_runtime()?;
     let tempdir = tempfile::tempdir()?;
     let core = runtime.block_on(ClientCore::start_with_paths_and_options(
@@ -177,9 +181,10 @@ fn desktop_app_clicks_chat_open_peers_setup_from_empty_sidebar() -> Result<()> {
     let texts = driver.render();
     assert!(texts.iter().any(|text| text.contains("Add Deployment")));
 
-    let after_click = driver.click_target(audit::targets::CHAT_OPEN_PEERS_SETUP);
-    assert_eq!(driver.app.state.activity, Activity::Peers);
-    assert!(driver.app.state.peers.show_add_form);
+    let after_click = driver.click_target(audit::targets::CHAT_OPEN_SETUP);
+    assert_eq!(driver.app.state.activity, Activity::Chat);
+    assert!(driver.app.state.setup.workspace_open);
+    assert!(driver.app.state.setup.show_add_form);
     assert!(after_click.iter().any(|text| text.contains("First Launch")));
     Ok(())
 }
@@ -210,18 +215,21 @@ fn desktop_app_renders_broken_peer_warning_from_live_status() -> Result<()> {
     );
 
     wait_for_value(
-        "peers warning rendered from live status",
+        "deployment warning rendered from live status",
         Duration::from_secs(2),
         || {
-            let texts = driver.open_activity(Activity::Peers);
+            let _ = driver.open_activity(Activity::Chat);
+            driver.click_target(audit::targets::CHAT_OPEN_SETUP);
+            driver.click_target(audit::targets::SETUP_BACK_TO_DEPLOYMENTS);
+            let texts = driver.render();
             texts
                 .iter()
                 .any(|text| text.contains("Broken Relay"))
                 .then_some(texts)
         },
     )?;
-    let peers_texts = driver.render();
-    assert!(peers_texts
+    let setup_texts = driver.render();
+    assert!(setup_texts
         .iter()
         .any(|text| text.contains("peer Broken Relay dial failed")));
 

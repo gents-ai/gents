@@ -49,6 +49,9 @@ pub(crate) fn side_row(
     let palette = theme::palette();
     let width = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 42.0), Sense::click());
+    let clipped_painter = ui
+        .painter()
+        .with_clip_rect(rect.shrink2(egui::vec2(6.0, 2.0)));
 
     let fill = if selected {
         palette.background_2
@@ -70,17 +73,24 @@ pub(crate) fn side_row(
     }
 
     let dot_center = egui::pos2(rect.left() + 12.0, rect.center().y);
-    ui.painter().circle_filled(dot_center, 3.5, dot_color);
+    clipped_painter.circle_filled(dot_center, 3.5, dot_color);
 
     let text_left = rect.left() + 24.0;
-    ui.painter().text(
+    let text_right = rect.right() - if accessory.is_some() { 56.0 } else { 10.0 };
+    let text_clip_rect = egui::Rect::from_min_max(
+        egui::pos2(text_left, rect.top()),
+        egui::pos2(text_right.max(text_left), rect.bottom()),
+    );
+    let text_painter = ui.painter().with_clip_rect(text_clip_rect);
+
+    text_painter.text(
         egui::pos2(text_left, rect.top() + 10.0),
         Align2::LEFT_TOP,
         title,
         egui::FontId::new(13.0, egui::FontFamily::Proportional),
         palette.text_0,
     );
-    ui.painter().text(
+    text_painter.text(
         egui::pos2(text_left, rect.top() + 25.0),
         Align2::LEFT_TOP,
         meta,
@@ -89,7 +99,7 @@ pub(crate) fn side_row(
     );
 
     if let Some(accessory) = accessory {
-        ui.painter().text(
+        clipped_painter.text(
             egui::pos2(rect.right() - 10.0, rect.center().y - 1.0),
             Align2::RIGHT_CENTER,
             accessory,
@@ -145,14 +155,16 @@ pub(crate) fn toolbar(ui: &mut Ui, title: &str, breadcrumb: &str, badge: &str) {
                     .size(11.5)
                     .color(palette.text_2),
             );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    RichText::new(badge)
-                        .monospace()
-                        .size(10.5)
-                        .color(palette.text_1),
-                );
-            });
+            if !badge.trim().is_empty() {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        RichText::new(badge)
+                            .monospace()
+                            .size(10.5)
+                            .color(palette.text_1),
+                    );
+                });
+            }
         },
     );
 }

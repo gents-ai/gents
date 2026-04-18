@@ -22,7 +22,7 @@ fn desktop_bootstrap_init_launch_and_gui_chat_round_trip_without_manual_refresh(
         agent_name,
         &backend,
     ))?;
-    let docs = runtime.block_on(seed_live_operator_documents(
+    let docs = runtime.block_on(seed_live_manage_documents(
         remote_core.as_ref(),
         &running_agent.did,
         agent_name,
@@ -306,35 +306,35 @@ fn desktop_bootstrap_multi_agent_gui_switching_round_trip_without_manual_refresh
             "bravo transcript leaked alpha prompt after bootstrap switching",
         )?;
 
-        open_operator_entity_and_assert_visibility(
+        open_manage_entity_and_assert_visibility(
             driver,
             &alpha,
-            OperatorSection::Behaviors,
+            ManageSection::Behaviors,
             &alpha.docs.behavior_id,
             &[bravo.docs.behavior_id.as_str()],
-            "alpha behavior row after bootstrap operator switch",
+            "alpha behavior row after bootstrap manage switch",
         )?;
-        open_operator_request_timeline_and_assert_visibility(
+        open_manage_request_timeline_and_assert_visibility(
             driver,
             &alpha,
             &alpha_submission.request_id,
             &[bravo_submission.request_id.as_str()],
-            "alpha request row after bootstrap operator switch",
+            "alpha request row after bootstrap manage switch",
         )?;
-        open_operator_entity_and_assert_visibility(
+        open_manage_entity_and_assert_visibility(
             driver,
             &bravo,
-            OperatorSection::Behaviors,
+            ManageSection::Behaviors,
             &bravo.docs.behavior_id,
             &[alpha.docs.behavior_id.as_str()],
-            "bravo behavior row after bootstrap operator switch",
+            "bravo behavior row after bootstrap manage switch",
         )?;
-        open_operator_request_timeline_and_assert_visibility(
+        open_manage_request_timeline_and_assert_visibility(
             driver,
             &bravo,
             &bravo_submission.request_id,
             &[alpha_submission.request_id.as_str()],
-            "bravo request row after bootstrap operator switch",
+            "bravo request row after bootstrap manage switch",
         )?;
     }
 

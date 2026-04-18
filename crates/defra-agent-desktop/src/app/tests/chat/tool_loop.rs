@@ -20,6 +20,12 @@ fn desktop_app_executes_tool_loop_and_renders_tool_output() -> Result<()> {
     let behavior_id = default_behavior_id_for_agent(&agent_did);
     let backend_id = "audit-tool-loop-backend".to_string();
     let tool_selection_id = format!("{behavior_id}:tools");
+    let local_addr = core
+        .listen_addresses()
+        .first()
+        .cloned()
+        .ok_or_else(|| anyhow!("desktop core missing listen address"))?;
+    let saved_peer = runtime.block_on(core.add_peer("Tool Loop Deployment", &local_addr, &agent_did))?;
 
     runtime.block_on(core.refresh_store())?;
     let initial_generation = core
@@ -88,6 +94,8 @@ fn desktop_app_executes_tool_loop_and_renders_tool_output() -> Result<()> {
     )?;
 
     let mut driver = build_chat_driver(Arc::clone(&runtime), core);
+    driver.render();
+    driver.click_target(&audit::targets::chat_deployment(&saved_peer.peer_id));
     let session_id = ensure_chat_session_selected(
         &mut driver,
         "tool loop selected session",
