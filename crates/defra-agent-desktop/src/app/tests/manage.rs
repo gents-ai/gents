@@ -145,9 +145,7 @@ fn desktop_app_manage_creates_backend_and_rebinds_behavior() -> Result<()> {
         "MiniMax-M2.7-NVFP4",
     );
 
-    driver.click_target(&audit::targets::manage_section(
-        ManageSection::Behaviors,
-    ));
+    driver.click_target(&audit::targets::manage_section(ManageSection::Behaviors));
     driver.wait_for_target(
         "amy behavior entity target",
         Duration::from_secs(10),

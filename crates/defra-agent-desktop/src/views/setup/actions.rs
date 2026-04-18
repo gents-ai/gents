@@ -121,7 +121,10 @@ pub(super) fn remove_selected_peer(
             }
             state.setup.last_action_message = Some(match result.warning {
                 Some(warning) => format!("Removed {}. {}", result.label, warning),
-                None => format!("Removed {} from the local deployment directory.", result.label),
+                None => format!(
+                    "Removed {} from the local deployment directory.",
+                    result.label
+                ),
             });
         }
         Err(error) => {

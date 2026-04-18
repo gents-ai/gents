@@ -1,8 +1,8 @@
 mod activity;
 mod chat;
 mod manage;
-mod shell;
 mod setup;
+mod shell;
 mod status;
 
 pub use self::activity::{Activity, PendingChatAction, PendingManageAction, PendingShellAction};

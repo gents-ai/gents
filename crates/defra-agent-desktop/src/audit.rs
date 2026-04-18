@@ -107,7 +107,6 @@ pub(crate) mod targets {
     pub(crate) fn manage_section(section: ManageSection) -> String {
         format!("manage.section.{}", section.label())
     }
-
 }
 
 pub(crate) fn button(

@@ -2,8 +2,8 @@ use std::mem;
 
 use super::status::IdentityState;
 use super::{
-    Activity, ChatEditorState, ChatState, LogsState, OnboardingState, ManageState, SetupState,
-    PendingShellAction, StatusBarState,
+    Activity, ChatEditorState, ChatState, LogsState, ManageState, OnboardingState,
+    PendingShellAction, SetupState, StatusBarState,
 };
 
 #[derive(Debug, Clone)]

@@ -7,7 +7,9 @@ pub(crate) struct BootstrapReplicatorRequest {
 }
 
 pub(crate) struct BootstrapRuntimeApi {
+    label: String,
     graphql: String,
+    metrics: String,
     port: u16,
     stop: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
@@ -17,8 +19,10 @@ impl BootstrapRuntimeApi {
     fn start(
         runtime: &Arc<Runtime>,
         core: Arc<ClientCore>,
+        label: impl Into<String>,
         listen_address: String,
     ) -> Result<Self> {
+        let label = label.into();
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
@@ -27,6 +31,7 @@ impl BootstrapRuntimeApi {
         let handle = runtime.handle().clone();
         let core_for_thread = Arc::clone(&core);
         let listen_address_for_thread = listen_address.clone();
+        let label_for_thread = label.clone();
         let thread = thread::spawn(move || {
             while !stop_for_thread.load(Ordering::Relaxed) {
                 match listener.accept() {
@@ -61,6 +66,60 @@ impl BootstrapRuntimeApi {
                                 })
                                 .to_string(),
                             )),
+                            ("GET", "/metrics") => {
+                                let metrics = handle.block_on(async {
+                                    core_for_thread.refresh_store().await.ok();
+                                    let snapshot = core_for_thread.store().snapshot();
+                                    let connected_peers = core_for_thread
+                                        .p2p()
+                                        .connected_peers()
+                                        .await
+                                        .unwrap_or_default();
+                                    let latest_runtime = snapshot.latest_runtime(
+                                        snapshot
+                                            .behaviors
+                                            .first()
+                                            .and_then(|row| row.agent_did.as_deref())
+                                            .unwrap_or_default(),
+                                    );
+                                    let mut body = String::new();
+                                    body.push_str("# TYPE defra_desktop_test_connected_peers gauge\n");
+                                    body.push_str(&format!(
+                                        "defra_desktop_test_connected_peers{{label=\"{}\",peer_id=\"{}\"}} {}\n",
+                                        escape_prometheus_label(&label_for_thread),
+                                        escape_prometheus_label(core_for_thread.local_peer_id()),
+                                        connected_peers.len()
+                                    ));
+                                    body.push_str("# TYPE defra_desktop_test_requests_total gauge\n");
+                                    body.push_str(&format!(
+                                        "defra_desktop_test_requests_total{{label=\"{}\"}} {}\n",
+                                        escape_prometheus_label(&label_for_thread),
+                                        snapshot.requests.len()
+                                    ));
+                                    body.push_str("# TYPE defra_desktop_test_responses_total gauge\n");
+                                    body.push_str(&format!(
+                                        "defra_desktop_test_responses_total{{label=\"{}\"}} {}\n",
+                                        escape_prometheus_label(&label_for_thread),
+                                        snapshot.responses.len()
+                                    ));
+                                    body.push_str("# TYPE defra_desktop_test_conversations_total gauge\n");
+                                    body.push_str(&format!(
+                                        "defra_desktop_test_conversations_total{{label=\"{}\"}} {}\n",
+                                        escape_prometheus_label(&label_for_thread),
+                                        snapshot.conversations.len()
+                                    ));
+                                    body.push_str("# TYPE defra_desktop_test_runtime_generation gauge\n");
+                                    body.push_str(&format!(
+                                        "defra_desktop_test_runtime_generation{{label=\"{}\"}} {}\n",
+                                        escape_prometheus_label(&label_for_thread),
+                                        latest_runtime
+                                            .and_then(|row| row.router_generation.or(row.active_generation))
+                                            .unwrap_or_default()
+                                    ));
+                                    body
+                                });
+                                Ok(("200 OK", "text/plain; version=0.0.4", metrics))
+                            }
                             ("POST", "/api/v0/p2p/connect") => {
                                 let connect_result =
                                     serde_json::from_str::<Vec<String>>(&request.body)
@@ -154,15 +213,25 @@ impl BootstrapRuntimeApi {
         });
 
         Ok(Self {
+            label,
             graphql: format!("http://127.0.0.1:{port}/api/v0/graphql"),
+            metrics: format!("http://127.0.0.1:{port}/metrics"),
             port,
             stop,
             handle: Some(thread),
         })
     }
 
+    pub(crate) fn label(&self) -> &str {
+        &self.label
+    }
+
     fn graphql_url(&self) -> &str {
         &self.graphql
+    }
+
+    pub(crate) fn metrics_url(&self) -> &str {
+        &self.metrics
     }
 }
 
@@ -174,6 +243,10 @@ impl Drop for BootstrapRuntimeApi {
             let _ = handle.join();
         }
     }
+}
+
+fn escape_prometheus_label(value: &str) -> String {
+    value.replace('\\', r#"\\"#).replace('"', "\\\"")
 }
 
 pub(crate) fn bootstrap_live_core_options() -> ClientCoreOptions {

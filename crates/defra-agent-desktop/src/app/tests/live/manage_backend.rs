@@ -133,8 +133,7 @@ fn wait_for_live_backend_section_ready(
     if driver.app.state.manage.selected_peer_id.as_deref() != Some(deployment.peer_id.as_str()) {
         driver.click_target(&audit::targets::manage_deployment(&deployment.peer_id));
     }
-    if driver.app.state.manage.selected_agent_did.as_deref()
-        != Some(deployment.agent_did.as_str())
+    if driver.app.state.manage.selected_agent_did.as_deref() != Some(deployment.agent_did.as_str())
     {
         driver.click_target(&audit::targets::manage_agent(&deployment.agent_did));
     }
@@ -292,9 +291,7 @@ fn desktop_app_live_manage_creates_backend_and_uses_it_for_inference() -> Result
         )?;
         assert_backend_draft_fields(driver, &backend);
         if driver.app.state.manage.selected_section != ManageSection::Behaviors {
-            driver.click_target(&audit::targets::manage_section(
-                ManageSection::Behaviors,
-            ));
+            driver.click_target(&audit::targets::manage_section(ManageSection::Behaviors));
         }
         driver.wait_for_target(
             "live behavior entity target for backend rebinding",

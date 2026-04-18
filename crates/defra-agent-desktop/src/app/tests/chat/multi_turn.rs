@@ -20,11 +20,8 @@ fn desktop_app_clicks_through_live_agent_multi_turn_conversation() -> Result<()>
         .first()
         .cloned()
         .ok_or_else(|| anyhow!("desktop core missing listen address"))?;
-    let saved_peer = runtime.block_on(core.add_peer(
-        "Audit Live Multi",
-        &local_addr,
-        &running_agent.did,
-    ))?;
+    let saved_peer =
+        runtime.block_on(core.add_peer("Audit Live Multi", &local_addr, &running_agent.did))?;
     runtime.block_on(core.refresh_store())?;
 
     let mut driver = build_chat_driver(Arc::clone(&runtime), core);

@@ -103,11 +103,7 @@ impl DesktopApp {
     fn process_pending_manage_action(&mut self, action: PendingManageAction) {
         match action {
             PendingManageAction::SelectDeployment { peer_id, agent_did } => {
-                manage_controller::select_deployment(
-                    &mut self.state.manage,
-                    peer_id,
-                    agent_did,
-                );
+                manage_controller::select_deployment(&mut self.state.manage, peer_id, agent_did);
             }
             PendingManageAction::SelectSection { section } => {
                 manage_controller::select_section(&mut self.state.manage, section);
@@ -127,8 +123,7 @@ impl DesktopApp {
                         snapshot.as_ref(),
                     );
                 } else {
-                    self.state.manage.last_apply_error =
-                        Some("client core is offline".to_string());
+                    self.state.manage.last_apply_error = Some("client core is offline".to_string());
                 }
             }
             PendingManageAction::ApplyDraft => {

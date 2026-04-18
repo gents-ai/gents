@@ -30,7 +30,10 @@ pub fn sync_from_snapshot(
 }
 
 pub fn select_deployment(manage: &mut ManageState, peer_id: String, agent_did: String) {
-    reduce(manage, ManageAction::SelectDeployment { peer_id, agent_did });
+    reduce(
+        manage,
+        ManageAction::SelectDeployment { peer_id, agent_did },
+    );
 }
 
 pub fn select_section(manage: &mut ManageState, section: ManageSection) {
@@ -74,9 +77,7 @@ pub fn apply_draft(
         ManageDraft::Behavior(draft) => {
             runtime.block_on(client.save_behavior(&behavior_row(draft)?))
         }
-        ManageDraft::Backend(draft) => {
-            runtime.block_on(client.save_backend(&backend_row(draft)?))
-        }
+        ManageDraft::Backend(draft) => runtime.block_on(client.save_backend(&backend_row(draft)?)),
         ManageDraft::ToolSelection(draft) => {
             runtime.block_on(client.save_tool_selection(&tool_selection_row(draft)?))
         }

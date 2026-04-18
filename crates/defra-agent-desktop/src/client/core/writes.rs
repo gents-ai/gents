@@ -142,7 +142,10 @@ impl ClientCore {
                     )),
                 ),
             },
-            Err(error) => (false, Some(format!("deployment saved but dial failed: {error}"))),
+            Err(error) => (
+                false,
+                Some(format!("deployment saved but dial failed: {error}")),
+            ),
         };
 
         self.update_peer_status(ClientPeerStatus {

@@ -17,7 +17,8 @@ fn desktop_app_clicks_through_chat_reasoning_and_tool_card_disclosures() -> Resu
         .first()
         .cloned()
         .ok_or_else(|| anyhow!("peer missing listen address"))?;
-    let saved_peer = runtime.block_on(core.add_peer("Amy Deployment", &peer_addr, "did:defra:amy"))?;
+    let saved_peer =
+        runtime.block_on(core.add_peer("Amy Deployment", &peer_addr, "did:defra:amy"))?;
     runtime.block_on(insert_agent_principal(
         &core,
         "did:defra:amy",

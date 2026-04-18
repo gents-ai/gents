@@ -10,6 +10,25 @@ use super::*;
 const SOAK_ENDPOINT: &str = "http://100.73.235.38:8000/v1";
 const SOAK_MODEL: &str = "MiniMax-M2.7-NVFP4";
 
+#[derive(Debug, Clone)]
+pub(crate) struct LiveSoakConfig {
+    pub(crate) output_dir: PathBuf,
+    pub(crate) keep_workspace: bool,
+}
+
+impl LiveSoakConfig {
+    pub(crate) fn from_env(name: &str) -> Result<Self> {
+        let output_dir = LiveSoakDiagnostics::persistent_output_dir(name)?;
+        let keep_workspace = std::env::var("DEFRA_AGENT_DESKTOP_SOAK_KEEP_WORKDIR")
+            .ok()
+            .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"));
+        Ok(Self {
+            output_dir,
+            keep_workspace,
+        })
+    }
+}
+
 pub(crate) fn explicit_soak_backend() -> AgentBackendConfig {
     AgentBackendConfig::openai_compatible(SOAK_ENDPOINT, SOAK_MODEL)
 }
@@ -41,10 +60,14 @@ impl LiveSoakDiagnostics {
             .ancestors()
             .nth(2)
             .ok_or_else(|| anyhow!("failed to locate repo root from {}", manifest_dir.display()))?;
-        let output_dir = root.join("target").join("desktop-live-soak").join(format!(
-            "{}-{}",
+        let artifact_root = std::env::var("DEFRA_AGENT_DESKTOP_SOAK_ARTIFACT_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| root.join("target").join("desktop-live-soak"));
+        let output_dir = artifact_root.join(format!(
+            "{}-{}-{}",
             sanitize_filename_component(name),
-            chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
+            chrono::Utc::now().format("%Y%m%dT%H%M%SZ"),
+            uuid::Uuid::new_v4().simple()
         ));
         std::fs::create_dir_all(&output_dir)
             .with_context(|| format!("creating soak diagnostics dir {}", output_dir.display()))?;
@@ -298,6 +321,65 @@ impl LiveSoakDiagnostics {
         self.write_json("failure.json", &record)
     }
 
+    pub(crate) fn write_log_snapshot(&self, log_store: &DesktopLogStore) -> Result<()> {
+        #[derive(Serialize)]
+        struct LogRecord {
+            id: u64,
+            level: String,
+            target: String,
+            message: String,
+            timestamp: String,
+        }
+
+        let logs: Vec<_> = log_store
+            .snapshot()
+            .entries
+            .into_iter()
+            .map(|entry| LogRecord {
+                id: entry.id,
+                level: entry.level.to_string(),
+                target: entry.target,
+                message: entry.message,
+                timestamp: entry.timestamp.to_rfc3339(),
+            })
+            .collect();
+        self.write_json("desktop-logs.json", &logs)
+    }
+
+    pub(crate) fn scrape_runtime_metrics(
+        &self,
+        runtime_apis: &[BootstrapRuntimeApi],
+    ) -> Result<()> {
+        let metrics_dir = self.output_dir.join("runtime-metrics");
+        std::fs::create_dir_all(&metrics_dir)
+            .with_context(|| format!("creating {}", metrics_dir.display()))?;
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()?;
+        for runtime_api in runtime_apis {
+            let body = client
+                .get(runtime_api.metrics_url())
+                .send()
+                .with_context(|| format!("fetching {}", runtime_api.metrics_url()))?
+                .error_for_status()
+                .with_context(|| format!("reading {}", runtime_api.metrics_url()))?
+                .text()
+                .with_context(|| format!("reading metrics body {}", runtime_api.metrics_url()))?;
+            let path = metrics_dir.join(format!(
+                "{}.prom",
+                sanitize_filename_component(runtime_api.label())
+            ));
+            std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn capture_workspace(&self, workspace_root: &Path) -> Result<()> {
+        let destination = self.output_dir.join("workspace");
+        copy_dir_all(workspace_root, &destination)
+            .with_context(|| format!("copying workspace into {}", destination.display()))
+    }
+
     fn write_prometheus(
         &self,
         runtime: &Runtime,
@@ -414,4 +496,25 @@ fn sanitize_filename_component(input: &str) -> String {
 
 fn prometheus_escape(input: &str) -> String {
     input.replace('\\', r#"\\"#).replace('"', "\\\"")
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst).with_context(|| format!("creating {}", dst.display()))?;
+    for entry in std::fs::read_dir(src).with_context(|| format!("reading {}", src.display()))? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let destination = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_all(&entry.path(), &destination)?;
+        } else if file_type.is_file() {
+            std::fs::copy(entry.path(), &destination).with_context(|| {
+                format!(
+                    "copying {} -> {}",
+                    entry.path().display(),
+                    destination.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
 }

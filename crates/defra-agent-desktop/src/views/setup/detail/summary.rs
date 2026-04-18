@@ -22,7 +22,11 @@ pub(super) fn render_peer_summary(ui: &mut Ui, peer: &PeerEntry) {
         labeled_value(
             ui,
             "Status",
-            if peer.connected { "online" } else { "saved locally" },
+            if peer.connected {
+                "online"
+            } else {
+                "saved locally"
+            },
         );
         labeled_value(
             ui,

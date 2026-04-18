@@ -89,8 +89,8 @@ fn render_deployments(
         return;
     }
 
-        let selected = selected_scoped_deployment(state)
-            .map(|(peer_id, agent_did)| (peer_id.to_string(), agent_did.to_string()));
+    let selected = selected_scoped_deployment(state)
+        .map(|(peer_id, agent_did)| (peer_id.to_string(), agent_did.to_string()));
     for deployment in deployments {
         render_deployment_row(
             ui,

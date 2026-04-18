@@ -4,3 +4,4 @@
 /crates/defra-agent/proofs/build
 /demo/home/
 /demo/*.log
+/vendor/

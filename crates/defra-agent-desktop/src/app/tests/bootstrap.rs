@@ -32,8 +32,12 @@ fn desktop_bootstrap_init_launch_and_gui_chat_round_trip_without_manual_refresh(
         remote_core.as_ref(),
         "mock runtime",
     ))?;
-    let runtime_api =
-        BootstrapRuntimeApi::start(&runtime, Arc::clone(&remote_core), remote_addr.clone())?;
+    let runtime_api = BootstrapRuntimeApi::start(
+        &runtime,
+        Arc::clone(&remote_core),
+        "mock runtime",
+        remote_addr.clone(),
+    )?;
 
     let desktop_paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
     let agent_home = tempdir.path().join("agent-home");

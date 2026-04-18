@@ -182,8 +182,7 @@ fn desktop_app_live_manage_creates_profile_and_rebinds_behavior() -> Result<()> 
         if driver.app.state.activity != Activity::Manage {
             driver.open_activity(Activity::Manage);
         }
-        if driver.app.state.manage.selected_peer_id.as_deref()
-            != Some(deployment.peer_id.as_str())
+        if driver.app.state.manage.selected_peer_id.as_deref() != Some(deployment.peer_id.as_str())
         {
             driver.click_target(&audit::targets::manage_deployment(&deployment.peer_id));
         }

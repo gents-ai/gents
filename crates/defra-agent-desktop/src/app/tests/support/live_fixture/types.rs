@@ -16,6 +16,8 @@ pub(crate) struct LiveDesktopFixture {
     pub(crate) running_agent: Option<RunningAgent>,
     pub(crate) remote_core: Option<Arc<ClientCore>>,
     pub(crate) docs: LiveAgentDocs,
+    #[allow(dead_code)]
+    pub(crate) runtime_apis: Vec<BootstrapRuntimeApi>,
 }
 
 impl LiveDesktopFixture {
@@ -46,6 +48,7 @@ pub(crate) struct MultiAgentLiveDesktopFixture {
     pub(crate) driver: AuditDriver,
     pub(crate) deployments: Vec<LiveRemoteDeployment>,
     pub(crate) backend: AgentBackendConfig,
+    pub(crate) runtime_apis: Vec<BootstrapRuntimeApi>,
 }
 
 impl MultiAgentLiveDesktopFixture {

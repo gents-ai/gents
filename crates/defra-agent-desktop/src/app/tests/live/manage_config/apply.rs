@@ -90,10 +90,7 @@ fn apply_tool_selection_switch(
         "tool selection after config edit",
     )?;
     driver.click_target(&audit::targets::manage_toggle("Enable File Tools"));
-    driver.replace_text_in_target(
-        &audit::targets::manage_field("File Tools Mode"),
-        "ReadOnly",
-    );
+    driver.replace_text_in_target(&audit::targets::manage_field("File Tools Mode"), "ReadOnly");
     match driver.app.state.manage.draft.as_ref() {
         Some(ManageDraft::ToolSelection(draft)) => {
             assert_eq!(draft.selection_id, deployment.docs.tool_selection_id);

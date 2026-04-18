@@ -157,21 +157,17 @@ pub(super) fn render_editor_footer(
         )
         .clicked()
         {
-            state.queue_shell_action(PendingShellAction::Manage(
-                PendingManageAction::ApplyDraft,
-            ));
+            state.queue_shell_action(PendingShellAction::Manage(PendingManageAction::ApplyDraft));
         }
 
-        if matches!(
-            state.manage.selected_section,
-            ManageSection::ScheduledTasks
-        ) && audit::add_enabled(
-            ui,
-            audit::targets::MANAGE_RUN_NOW,
-            can_run_now,
-            egui::Button::new("Run Now"),
-        )
-        .clicked()
+        if matches!(state.manage.selected_section, ManageSection::ScheduledTasks)
+            && audit::add_enabled(
+                ui,
+                audit::targets::MANAGE_RUN_NOW,
+                can_run_now,
+                egui::Button::new("Run Now"),
+            )
+            .clicked()
         {
             state.queue_shell_action(PendingShellAction::Manage(
                 PendingManageAction::RunNowSelectedTask,

@@ -9,6 +9,7 @@ fn desktop_live_three_agent_multi_turn_soak() -> Result<()> {
     let _live_guard = live_desktop_test_guard();
     init_test_tracing();
 
+    let config = LiveSoakConfig::from_env("desktop-live-three-agent")?;
     let backend = explicit_soak_backend();
     let mut fixture = build_named_multi_agent_desktop_fixture_with_backend(
         "desktop-live-soak",
@@ -26,9 +27,11 @@ fn desktop_live_three_agent_multi_turn_soak() -> Result<()> {
             .as_ref()
             .ok_or_else(|| anyhow!("desktop client missing"))?,
     );
-    let diagnostics_dir = LiveSoakDiagnostics::persistent_output_dir("desktop-live-three-agent")?;
+    let diagnostics_dir = config.output_dir.clone();
     let mut diagnostics = LiveSoakDiagnostics::new(&diagnostics_dir)?;
     diagnostics.write_metadata(&fixture.deployments, &backend)?;
+    diagnostics.write_log_snapshot(global_log_store().as_ref())?;
+    diagnostics.scrape_runtime_metrics(&fixture.runtime_apis)?;
 
     let tool_roots: BTreeSet<_> = fixture
         .deployments
@@ -64,6 +67,8 @@ fn desktop_live_three_agent_multi_turn_soak() -> Result<()> {
         &fixture.driver,
         &fixture.deployments,
     )?;
+    diagnostics.write_log_snapshot(global_log_store().as_ref())?;
+    diagnostics.scrape_runtime_metrics(&fixture.runtime_apis)?;
 
     let deployments: Vec<_> = fixture
         .deployments
@@ -93,6 +98,9 @@ fn desktop_live_three_agent_multi_turn_soak() -> Result<()> {
                         &fixture.driver,
                         &fixture.deployments,
                     );
+                    let _ = diagnostics.write_log_snapshot(global_log_store().as_ref());
+                    let _ = diagnostics.scrape_runtime_metrics(&fixture.runtime_apis);
+                    let _ = diagnostics.capture_workspace(fixture._tempdir.path());
                     let recent_logs = soak_recent_problems(0);
                     let _ = diagnostics.record_problem("submit_turn", &error, &recent_logs);
                     return Err(error.context(format!(
@@ -148,6 +156,8 @@ fn desktop_live_three_agent_multi_turn_soak() -> Result<()> {
                 turn,
                 &submission,
             )?;
+            diagnostics.write_log_snapshot(global_log_store().as_ref())?;
+            diagnostics.scrape_runtime_metrics(&fixture.runtime_apis)?;
         }
     }
 
@@ -198,6 +208,9 @@ fn desktop_live_three_agent_multi_turn_soak() -> Result<()> {
         diagnostics_dir = %diagnostics_dir.display(),
         "desktop_live_three_agent_multi_turn_soak completed"
     );
+    if config.keep_workspace {
+        diagnostics.capture_workspace(fixture._tempdir.path())?;
+    }
     fixture.shutdown()
 }
 

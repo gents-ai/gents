@@ -117,9 +117,7 @@ fn resolve_agent_did(
 mod tests {
     use super::project_manage;
     use crate::client::ClientStore;
-    use crate::state::{
-        BackendDraft, ManageDraft, ManageDraftOrigin, ManageSection, ManageState,
-    };
+    use crate::state::{BackendDraft, ManageDraft, ManageDraftOrigin, ManageSection, ManageState};
 
     #[test]
     fn projection_preserves_new_backend_draft() {

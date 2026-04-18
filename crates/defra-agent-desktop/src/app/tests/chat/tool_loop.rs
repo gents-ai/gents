@@ -25,7 +25,8 @@ fn desktop_app_executes_tool_loop_and_renders_tool_output() -> Result<()> {
         .first()
         .cloned()
         .ok_or_else(|| anyhow!("desktop core missing listen address"))?;
-    let saved_peer = runtime.block_on(core.add_peer("Tool Loop Deployment", &local_addr, &agent_did))?;
+    let saved_peer =
+        runtime.block_on(core.add_peer("Tool Loop Deployment", &local_addr, &agent_did))?;
 
     runtime.block_on(core.refresh_store())?;
     let initial_generation = core

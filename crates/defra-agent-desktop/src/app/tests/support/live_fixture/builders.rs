@@ -55,8 +55,12 @@ fn start_live_remote_deployment(
         remote_core.as_ref(),
         deployment_label,
     ))?;
-    let runtime_api =
-        BootstrapRuntimeApi::start(runtime, Arc::clone(&remote_core), remote_addr.clone())?;
+    let runtime_api = BootstrapRuntimeApi::start(
+        runtime,
+        Arc::clone(&remote_core),
+        deployment_label,
+        remote_addr.clone(),
+    )?;
     let mut peer_record =
         crate::client::PeerRecord::new(deployment_label, &remote_addr, &running_agent.did);
     peer_record.graphql = Some(runtime_api.graphql_url().to_string());
@@ -136,7 +140,6 @@ pub(crate) fn build_live_desktop_fixture(
         core.local_peer_id(),
         "single-agent live runtime bootstrap",
     ))?;
-    drop(started.runtime_api);
     wait_for_live_deployment_docs_in_store(
         &core,
         &unique_label,
@@ -154,6 +157,7 @@ pub(crate) fn build_live_desktop_fixture(
         running_agent: Some(started.deployment.running_agent),
         remote_core: Some(started.deployment.core),
         docs: started.deployment.docs,
+        runtime_apis: vec![started.runtime_api],
     })
 }
 
@@ -230,7 +234,6 @@ pub(crate) fn build_named_multi_agent_desktop_fixture_with_backend(
             &format!("{} -> desktop", deployment.label),
         ))?;
     }
-    drop(runtime_apis);
     for deployment in &deployments {
         wait_for_live_deployment_docs_in_store(
             &desktop_core,
@@ -249,6 +252,7 @@ pub(crate) fn build_named_multi_agent_desktop_fixture_with_backend(
         driver,
         deployments,
         backend,
+        runtime_apis,
     })
 }
 
