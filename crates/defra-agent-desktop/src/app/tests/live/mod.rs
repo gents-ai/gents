@@ -7,6 +7,7 @@ pub(crate) use manage_config::*;
 
 mod chat;
 mod chat_followup;
+mod chat_soak;
 mod manage_backend;
 mod manage_behavior;
 mod manage_profile;

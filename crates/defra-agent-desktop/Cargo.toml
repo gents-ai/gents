@@ -33,5 +33,6 @@ uuid.workspace = true
 [dev-dependencies]
 async-trait = "0.1"
 defra-agent = { path = "../defra-agent" }
+pprof = { version = "0.14", features = ["flamegraph"] }
 rig-core = "0.31"
 tempfile = "3"

@@ -162,7 +162,25 @@ pub(crate) fn build_multi_agent_desktop_fixture_with_backend(
     backend: &AgentBackendConfig,
     log_store: Arc<DesktopLogStore>,
 ) -> Result<MultiAgentLiveDesktopFixture> {
+    build_named_multi_agent_desktop_fixture_with_backend(
+        label,
+        &["alpha", "bravo"],
+        backend,
+        log_store,
+    )
+}
+
+pub(crate) fn build_named_multi_agent_desktop_fixture_with_backend(
+    label: &str,
+    deployment_suffixes: &[&str],
+    backend: &AgentBackendConfig,
+    log_store: Arc<DesktopLogStore>,
+) -> Result<MultiAgentLiveDesktopFixture> {
     init_test_tracing();
+
+    if deployment_suffixes.is_empty() {
+        anyhow::bail!("expected at least one live deployment suffix");
+    }
 
     let backend = backend.clone();
     let runtime = test_runtime()?;
@@ -172,7 +190,7 @@ pub(crate) fn build_multi_agent_desktop_fixture_with_backend(
     let mut runtime_apis = Vec::new();
     let mut peer_records = Vec::new();
 
-    for suffix in ["alpha", "bravo"] {
+    for suffix in deployment_suffixes {
         let unique_label = format!("{label}-{suffix}-{}", uuid::Uuid::new_v4().simple());
         let deployment_label = format!("{} Server", title_case_ascii(suffix));
         let started = start_live_remote_deployment(

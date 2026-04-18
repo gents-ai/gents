@@ -10,14 +10,18 @@ pub(crate) struct AgentBackendConfig {
 }
 
 impl AgentBackendConfig {
-    pub(crate) fn mock(endpoint: &str) -> Self {
+    pub(crate) fn openai_compatible(endpoint: &str, model_name: &str) -> Self {
         Self {
             endpoint: endpoint.to_string(),
-            model_name: "default".to_string(),
+            model_name: model_name.to_string(),
             provider_kind: BackendProviderKind::OpenAiCompatible,
             api_key: None,
             api_key_env_var: None,
         }
+    }
+
+    pub(crate) fn mock(endpoint: &str) -> Self {
+        Self::openai_compatible(endpoint, "default")
     }
 
     pub(crate) fn live_from_env() -> Result<Self> {
