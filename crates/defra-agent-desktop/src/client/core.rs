@@ -286,6 +286,7 @@ impl ClientCore {
         self.p2p_control.lock().await.take();
         if let Some(task) = self.p2p_supervisor.lock().await.take() {
             tracing::info!("client core shutdown: stopping p2p supervisor");
+            task.abort();
             let _ = task.await;
         }
         if let Some(observer) = self.observer.lock().await.take() {
