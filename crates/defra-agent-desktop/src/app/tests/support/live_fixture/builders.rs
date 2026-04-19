@@ -13,10 +13,10 @@ struct StartedLiveRemoteDeployment {
 
 fn start_chat_driver(
     runtime: Arc<Runtime>,
-    core: ClientCore,
+    core: Arc<ClientCore>,
     log_store: Arc<DesktopLogStore>,
 ) -> AuditDriver {
-    let mut driver = build_driver(runtime, core, log_store);
+    let mut driver = build_driver_with_client(runtime, core, log_store);
     driver.app.state.activity = Activity::Chat;
     driver.render();
     driver
@@ -120,34 +120,44 @@ pub(crate) fn build_live_desktop_fixture(
     ))?;
     let peer_id = init_summary.peer_record_id.clone();
 
-    let core = runtime.block_on(ClientCore::start_with_paths_and_options(
+    let desktop_core = Arc::new(runtime.block_on(ClientCore::start_with_paths_and_options(
         desktop_paths,
         bootstrap_live_core_options(),
-    ))?;
-    if !core.bootstrap_errors().is_empty() {
+    ))?);
+    if !desktop_core.bootstrap_errors().is_empty() {
         anyhow::bail!(
             "unexpected bootstrap errors in live desktop fixture: {:?}",
-            core.bootstrap_errors()
+            desktop_core.bootstrap_errors()
         );
     }
+    let desktop_addr = runtime.block_on(wait_for_connectable_iroh_addr(
+        desktop_core.as_ref(),
+        "single-agent live desktop",
+    ))?;
+    let _desktop_api = BootstrapRuntimeApi::start(
+        &runtime,
+        Arc::clone(&desktop_core),
+        "Desktop",
+        desktop_addr,
+    )?;
     runtime.block_on(wait_for_connected_peer(
-        &core,
+        desktop_core.as_ref(),
         started.deployment.core.local_peer_id(),
         "single-agent live desktop bootstrap",
     ))?;
     runtime.block_on(wait_for_connected_peer(
         started.deployment.core.as_ref(),
-        core.local_peer_id(),
+        desktop_core.local_peer_id(),
         "single-agent live runtime bootstrap",
     ))?;
     wait_for_live_deployment_docs_in_store(
-        &core,
+        desktop_core.as_ref(),
         &unique_label,
         &started.deployment.agent_did,
         &started.deployment.docs,
     )?;
 
-    let mut driver = start_chat_driver(Arc::clone(&runtime), core, log_store);
+    let mut driver = start_chat_driver(Arc::clone(&runtime), Arc::clone(&desktop_core), log_store);
     wait_for_bootstrap_chat_ready(&mut driver, &peer_id, &started.deployment.agent_did)?;
 
     Ok(LiveDesktopFixture {
@@ -212,19 +222,29 @@ pub(crate) fn build_named_multi_agent_desktop_fixture_with_backend(
     }
 
     write_peer_directory_records(&desktop_paths, &peer_records)?;
-    let desktop_core = runtime.block_on(ClientCore::start_with_paths_and_options(
+    let desktop_core = Arc::new(runtime.block_on(ClientCore::start_with_paths_and_options(
         desktop_paths,
         bootstrap_live_core_options(),
-    ))?;
+    ))?);
     if !desktop_core.bootstrap_errors().is_empty() {
         anyhow::bail!(
             "unexpected bootstrap errors in multi-agent live desktop fixture: {:?}",
             desktop_core.bootstrap_errors()
         );
     }
+    let desktop_addr = runtime.block_on(wait_for_connectable_iroh_addr(
+        desktop_core.as_ref(),
+        "multi-agent live desktop",
+    ))?;
+    let desktop_api = BootstrapRuntimeApi::start(
+        &runtime,
+        Arc::clone(&desktop_core),
+        "Desktop",
+        desktop_addr,
+    )?;
     for deployment in &deployments {
         runtime.block_on(wait_for_connected_peer(
-            &desktop_core,
+            desktop_core.as_ref(),
             deployment.core.local_peer_id(),
             &format!("desktop -> {}", deployment.label),
         ))?;
@@ -243,13 +263,18 @@ pub(crate) fn build_named_multi_agent_desktop_fixture_with_backend(
         )?;
     }
 
-    let mut driver = start_chat_driver(Arc::clone(&runtime), desktop_core, log_store);
+    let mut driver = start_chat_driver(
+        Arc::clone(&runtime),
+        Arc::clone(&desktop_core),
+        log_store,
+    );
     wait_for_bootstrap_chat_rows(&mut driver, &deployments)?;
 
     Ok(MultiAgentLiveDesktopFixture {
         runtime,
         _tempdir: tempdir,
         driver,
+        desktop_api,
         deployments,
         backend,
         runtime_apis,

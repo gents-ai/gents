@@ -202,17 +202,22 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 );
                 let _ = lifecycle.record_failure_reason(&error.to_string()).await;
                 let _ = lifecycle.fail().await;
-                if !lifecycle.response_exists().await.unwrap_or(false) {
-                    if let Err(stream_error) = self
-                        .write_error_response(&request, lifecycle.behavior_id(), &error)
+                let response_exists = lifecycle.response_exists().await.unwrap_or(false);
+                let response_written = if response_exists {
+                    self.stream_writer
+                        .finalize_existing_request_error(&request.request_id, &error.to_string())
                         .await
-                    {
-                        tracing::error!(
-                            behavior_id = %self.behavior.name,
-                            error = %stream_error,
-                            "failed to write behavior-mismatch response"
-                        );
-                    }
+                } else {
+                    self.write_error_response(&request, lifecycle.behavior_id(), &error)
+                        .await
+                        .map(|_| true)
+                };
+                if let Err(stream_error) = response_written {
+                    tracing::error!(
+                        behavior_id = %self.behavior.name,
+                        error = %stream_error,
+                        "failed to write behavior-mismatch response"
+                    );
                 }
                 return;
             }
@@ -229,17 +234,22 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             );
             let _ = lifecycle.record_failure_reason(&error.to_string()).await;
             let _ = lifecycle.fail().await;
-            if !lifecycle.response_exists().await.unwrap_or(false) {
-                if let Err(stream_error) = self
-                    .write_error_response(&request, lifecycle.behavior_id(), &error)
+            let response_exists = lifecycle.response_exists().await.unwrap_or(false);
+            let response_written = if response_exists {
+                self.stream_writer
+                    .finalize_existing_request_error(&request.request_id, &error.to_string())
                     .await
-                {
-                    tracing::error!(
-                        behavior_id = %self.behavior.name,
-                        error = %stream_error,
-                        "failed to write session-preparation response"
-                    );
-                }
+            } else {
+                self.write_error_response(&request, lifecycle.behavior_id(), &error)
+                    .await
+                    .map(|_| true)
+            };
+            if let Err(stream_error) = response_written {
+                tracing::error!(
+                    behavior_id = %self.behavior.name,
+                    error = %stream_error,
+                    "failed to write session-preparation response"
+                );
             }
             return;
         }
@@ -267,17 +277,22 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 );
                 let _ = lifecycle.record_failure_reason(&error.to_string()).await;
                 let _ = lifecycle.fail().await;
-                if !lifecycle.response_exists().await.unwrap_or(false) {
-                    if let Err(stream_error) = self
-                        .write_error_response(&request, lifecycle.behavior_id(), &error)
+                let response_exists = lifecycle.response_exists().await.unwrap_or(false);
+                let response_written = if response_exists {
+                    self.stream_writer
+                        .finalize_existing_request_error(&request.request_id, &error.to_string())
                         .await
-                    {
-                        tracing::error!(
-                            behavior_id = %self.behavior.name,
-                            error = %stream_error,
-                            "failed to write error response"
-                        );
-                    }
+                } else {
+                    self.write_error_response(&request, lifecycle.behavior_id(), &error)
+                        .await
+                        .map(|_| true)
+                };
+                if let Err(stream_error) = response_written {
+                    tracing::error!(
+                        behavior_id = %self.behavior.name,
+                        error = %stream_error,
+                        "failed to write error response"
+                    );
                 }
             }
         }

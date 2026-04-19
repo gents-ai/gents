@@ -248,11 +248,14 @@ async fn fail_routed_request(
 
     let _ = lifecycle.record_failure_reason(error_message).await;
     let _ = lifecycle.fail().await;
+    let stream_writer = DefraStreamWriter::new(node, agent_did, Duration::from_millis(0));
     if lifecycle.response_exists().await.unwrap_or(false) {
+        stream_writer
+            .finalize_existing_request_error(&request.request_id, error_message)
+            .await?;
         return Ok(());
     }
 
-    let stream_writer = DefraStreamWriter::new(node, agent_did, Duration::from_millis(0));
     let doc_id = stream_writer
         .begin(&request.session_id, &request.request_id, behavior_id)
         .await?;

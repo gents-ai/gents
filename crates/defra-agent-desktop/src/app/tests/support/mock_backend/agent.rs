@@ -1,5 +1,6 @@
 use super::backend::{bind_default_behavior_backend, AgentBackendConfig};
 use super::*;
+use tracing::Instrument;
 
 pub(crate) struct RunningAgent {
     pub(crate) did: String,
@@ -48,6 +49,7 @@ pub(crate) async fn spawn_backed_agent(
             tool_root.join("notes.txt").display()
         )
     })?;
+    seed_repo_workspace(&tool_root)?;
 
     let identity = Arc::new(SimpleIdentity::new(name, key_path, None));
     bind_default_behavior_backend(
@@ -68,7 +70,15 @@ pub(crate) async fn spawn_backed_agent(
     )
     .await?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let run_task = tokio::spawn(agent.run(shutdown_rx));
+    let run_task = tokio::spawn(
+        agent
+            .run(shutdown_rx)
+            .instrument(tracing::info_span!(
+                "live_remote_agent",
+                deployment_label = %name,
+                agent_did = %did
+            )),
+    );
     wait_for_runtime_process_state(node.as_ref(), &did, "ready").await?;
     Ok(RunningAgent {
         did,
@@ -77,6 +87,79 @@ pub(crate) async fn spawn_backed_agent(
         shutdown_tx,
         run_task,
     })
+}
+
+fn seed_repo_workspace(tool_root: &std::path::Path) -> Result<()> {
+    let repo_root = workspace_repo_root()?;
+    let workspace_root = tool_root.join("workspace");
+    std::fs::create_dir_all(&workspace_root)
+        .with_context(|| format!("creating seeded workspace {}", workspace_root.display()))?;
+
+    for relative in [
+        "Cargo.toml",
+        "README.md",
+        "docs",
+        "crates/defra-agent",
+        "crates/defra-agent-cli",
+        "crates/defra-agent-desktop",
+        "crates/defra-agent-protocol",
+    ] {
+        let src = repo_root.join(relative);
+        let dst = workspace_root.join(relative);
+        if src.is_dir() {
+            copy_dir_all(&src, &dst)?;
+        } else if src.is_file() {
+            if let Some(parent) = dst.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("creating {}", parent.display()))?;
+            }
+            std::fs::copy(&src, &dst)
+                .with_context(|| format!("copying {} -> {}", src.display(), dst.display()))?;
+        }
+    }
+
+    let guide = "\
+This workspace is a seeded copy of key defra-agent repository files for live desktop soak tests.
+Start your exploration in ./workspace.
+Useful directories:
+- ./workspace/crates/defra-agent-desktop
+- ./workspace/crates/defra-agent-cli
+- ./workspace/crates/defra-agent-protocol
+- ./workspace/crates/defra-agent
+";
+    std::fs::write(tool_root.join("workspace-guide.txt"), guide).with_context(|| {
+        format!(
+            "writing {}",
+            tool_root.join("workspace-guide.txt").display()
+        )
+    })?;
+    Ok(())
+}
+
+fn workspace_repo_root() -> Result<std::path::PathBuf> {
+    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .ancestors()
+        .nth(2)
+        .map(std::path::Path::to_path_buf)
+        .ok_or_else(|| anyhow!("failed to locate repo root from {}", manifest_dir.display()))
+}
+
+fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
+    std::fs::create_dir_all(dst).with_context(|| format!("creating {}", dst.display()))?;
+    for entry in std::fs::read_dir(src).with_context(|| format!("reading {}", src.display()))? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let target = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_all(&entry.path(), &target)?;
+        } else if file_type.is_file() {
+            std::fs::copy(entry.path(), &target).with_context(|| {
+                format!("copying {} -> {}", entry.path().display(), target.display())
+            })?;
+        }
+    }
+    Ok(())
 }
 
 pub(crate) async fn wait_for_runtime_process_state(

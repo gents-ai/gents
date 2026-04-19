@@ -6,6 +6,12 @@ pub(crate) struct BootstrapReplicatorRequest {
     collections: Vec<String>,
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct GraphQlHttpRequest {
+    #[serde(default)]
+    query: String,
+}
+
 pub(crate) struct BootstrapRuntimeApi {
     label: String,
     graphql: String,
@@ -66,6 +72,17 @@ impl BootstrapRuntimeApi {
                                 })
                                 .to_string(),
                             )),
+                            ("POST", "/api/v0/graphql") => decode_graphql_query(&request.body)
+                                .and_then(|query| {
+                                    let response =
+                                        handle.block_on(async { core_for_thread.node().execute(&query).await });
+                                    Ok((
+                                        "200 OK",
+                                        "application/json",
+                                        serde_json::to_string(&response)
+                                            .expect("serialize bootstrap graphql response"),
+                                    ))
+                                }),
                             ("GET", "/metrics") => {
                                 let metrics = handle.block_on(async {
                                     core_for_thread.refresh_store().await.ok();
@@ -226,7 +243,7 @@ impl BootstrapRuntimeApi {
         &self.label
     }
 
-    fn graphql_url(&self) -> &str {
+    pub(crate) fn graphql_url(&self) -> &str {
         &self.graphql
     }
 
@@ -243,6 +260,21 @@ impl Drop for BootstrapRuntimeApi {
             let _ = handle.join();
         }
     }
+}
+
+fn decode_graphql_query(body: &str) -> Result<String> {
+    if let Ok(request) = serde_json::from_str::<GraphQlHttpRequest>(body) {
+        if !request.query.trim().is_empty() {
+            return Ok(request.query);
+        }
+    }
+
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("missing GraphQL query body");
+    }
+
+    Ok(trimmed.to_string())
 }
 
 fn escape_prometheus_label(value: &str) -> String {

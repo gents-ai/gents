@@ -1,7 +1,11 @@
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
+use crate::client::{ClientStore, ClientStoreRows};
+use crate::telemetry::DesktopLogEntry;
+use pprof::protos::Message;
 use pprof::ProfilerGuard;
 use serde::Serialize;
 
@@ -9,6 +13,91 @@ use super::*;
 
 const SOAK_ENDPOINT: &str = "http://100.73.235.38:8000/v1";
 const SOAK_MODEL: &str = "MiniMax-M2.7-NVFP4";
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct SoakLogRecord {
+    pub(crate) id: u64,
+    pub(crate) level: String,
+    pub(crate) target: String,
+    pub(crate) message: String,
+    pub(crate) timestamp: String,
+    pub(crate) fields: BTreeMap<String, String>,
+}
+
+impl SoakLogRecord {
+    pub(crate) fn summary_line(&self) -> String {
+        format!("{} {}: {}", self.level, self.target, self.message)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub(crate) struct SoakP2pDiagnostics {
+    pub(crate) peer_ids: Vec<String>,
+    pub(crate) collection_ids: Vec<String>,
+    pub(crate) document_ids: Vec<String>,
+    pub(crate) cids: Vec<String>,
+    pub(crate) topics: Vec<String>,
+}
+
+pub(crate) fn soak_log_record(entry: DesktopLogEntry) -> SoakLogRecord {
+    let fields = entry
+        .fields
+        .into_iter()
+        .map(|field| (field.name, field.value))
+        .collect();
+    SoakLogRecord {
+        id: entry.id,
+        level: entry.level.to_string(),
+        target: entry.target,
+        message: entry.message,
+        timestamp: entry.timestamp.to_rfc3339(),
+        fields,
+    }
+}
+
+pub(crate) fn summarize_p2p_logs(logs: &[SoakLogRecord]) -> SoakP2pDiagnostics {
+    use std::collections::BTreeSet;
+
+    let mut peer_ids = BTreeSet::new();
+    let mut collection_ids = BTreeSet::new();
+    let mut document_ids = BTreeSet::new();
+    let mut cids = BTreeSet::new();
+    let mut topics = BTreeSet::new();
+
+    for log in logs {
+        for (name, value) in &log.fields {
+            if value.is_empty() {
+                continue;
+            }
+            match name.as_str() {
+                "peer_id" | "remote_peer_id" | "sender_peer_id" | "target_peer_id" => {
+                    peer_ids.insert(value.clone());
+                }
+                "collection_id" => {
+                    collection_ids.insert(value.clone());
+                }
+                "doc_id" | "document_id" => {
+                    document_ids.insert(value.clone());
+                }
+                "cid" | "root_cid" => {
+                    cids.insert(value.clone());
+                }
+                "topic" | "topic_hash" => {
+                    topics.insert(value.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    SoakP2pDiagnostics {
+        peer_ids: peer_ids.into_iter().collect(),
+        collection_ids: collection_ids.into_iter().collect(),
+        document_ids: document_ids.into_iter().collect(),
+        cids: cids.into_iter().collect(),
+        topics: topics.into_iter().collect(),
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct LiveSoakConfig {
@@ -229,7 +318,9 @@ impl LiveSoakDiagnostics {
             sanitize_filename_component(&deployment.label)
         );
         self.write_json(filename, &record)?;
+        self.write_store_snapshots(runtime, desktop_core, deployments)?;
         self.write_prometheus(runtime, desktop_core, deployments)?;
+        let _ = self.write_profile_artifacts("latest");
         Ok(())
     }
 
@@ -295,21 +386,25 @@ impl LiveSoakDiagnostics {
             deployments: deployment_snapshots,
         };
         self.write_json("snapshot.json", &record)?;
-        self.write_prometheus(runtime, desktop_core, deployments)
+        self.write_store_snapshots(runtime, desktop_core, deployments)?;
+        self.write_prometheus(runtime, desktop_core, deployments)?;
+        let _ = self.write_profile_artifacts("latest");
+        Ok(())
     }
 
     pub(crate) fn record_problem(
         &self,
         phase: &str,
         error: &anyhow::Error,
-        recent_logs: &[String],
+        recent_logs: &[SoakLogRecord],
     ) -> Result<()> {
         #[derive(Serialize)]
         struct FailureRecord<'a> {
             timestamp: String,
             phase: &'a str,
             error: String,
-            recent_logs: &'a [String],
+            recent_logs: &'a [SoakLogRecord],
+            p2p_diagnostics: SoakP2pDiagnostics,
         }
 
         let record = FailureRecord {
@@ -317,33 +412,41 @@ impl LiveSoakDiagnostics {
             phase,
             error: format!("{error:#}"),
             recent_logs,
+            p2p_diagnostics: summarize_p2p_logs(recent_logs),
         };
-        self.write_json("failure.json", &record)
+        self.write_json("failure.json", &record)?;
+        let _ = self.write_profile_artifacts("failure");
+        Ok(())
     }
 
     pub(crate) fn write_log_snapshot(&self, log_store: &DesktopLogStore) -> Result<()> {
-        #[derive(Serialize)]
-        struct LogRecord {
-            id: u64,
-            level: String,
-            target: String,
-            message: String,
-            timestamp: String,
-        }
-
         let logs: Vec<_> = log_store
             .snapshot()
             .entries
             .into_iter()
-            .map(|entry| LogRecord {
-                id: entry.id,
-                level: entry.level.to_string(),
-                target: entry.target,
-                message: entry.message,
-                timestamp: entry.timestamp.to_rfc3339(),
-            })
+            .map(soak_log_record)
             .collect();
-        self.write_json("desktop-logs.json", &logs)
+        self.write_json("desktop-logs.json", &logs)?;
+
+        let by_scope_dir = self.output_dir.join("logs");
+        std::fs::create_dir_all(&by_scope_dir)
+            .with_context(|| format!("creating {}", by_scope_dir.display()))?;
+
+        for partition in log_scope_partitions(&logs) {
+            let scoped_logs: Vec<_> = logs
+                .iter()
+                .filter(|record| log_matches_partition(record, &partition))
+                .cloned()
+                .collect();
+            let path = by_scope_dir.join(format!(
+                "{}.json",
+                sanitize_filename_component(&partition)
+            ));
+            let bytes = serde_json::to_vec_pretty(&scoped_logs)?;
+            std::fs::write(&path, bytes).with_context(|| format!("writing {}", path.display()))?;
+        }
+
+        Ok(())
     }
 
     pub(crate) fn scrape_runtime_metrics(
@@ -466,14 +569,117 @@ impl LiveSoakDiagnostics {
     }
 
     fn flush_profile(&mut self) -> Result<()> {
-        let Some(profiler) = self.profiler.take() else {
+        let Some(_) = self.profiler.as_ref() else {
+            return Ok(());
+        };
+        self.write_profile_artifacts("final")?;
+        Ok(())
+    }
+
+    fn write_store_snapshots(
+        &self,
+        runtime: &Runtime,
+        desktop_core: &ClientCore,
+        deployments: &[LiveRemoteDeployment],
+    ) -> Result<()> {
+        #[derive(Serialize)]
+        struct StoreSnapshotRecord {
+            label: String,
+            peer_id: String,
+            connected_peers: Vec<String>,
+            row_count: usize,
+            approx_serialized_bytes: usize,
+            rows: ClientStoreRows,
+        }
+
+        fn rows_from_store(store: &ClientStore) -> ClientStoreRows {
+            ClientStoreRows {
+                agent_principals: store.agent_principals.clone(),
+                behaviors: store.behaviors.clone(),
+                runtimes: store.runtimes.clone(),
+                conversations: store.conversations.clone(),
+                requests: store.requests.clone(),
+                responses: store.responses.clone(),
+                messages: store.messages.clone(),
+                sessions: store.sessions.clone(),
+                tool_calls: store.tool_calls.clone(),
+                tool_results: store.tool_results.clone(),
+                compaction_entries: store.compaction_entries.clone(),
+                scheduled_tasks: store.scheduled_tasks.clone(),
+                tool_selections: store.tool_selections.clone(),
+                inference_backends: store.inference_backends.clone(),
+                inference_profiles: store.inference_profiles.clone(),
+                tool_service_registries: store.tool_service_registries.clone(),
+            }
+        }
+
+        let store_dir = self.output_dir.join("store-snapshots");
+        std::fs::create_dir_all(&store_dir)
+            .with_context(|| format!("creating {}", store_dir.display()))?;
+
+        runtime.block_on(desktop_core.refresh_store())?;
+        let desktop_snapshot = desktop_core.store().snapshot();
+        let desktop_record = StoreSnapshotRecord {
+            label: "Desktop".to_string(),
+            peer_id: desktop_core.local_peer_id().to_string(),
+            connected_peers: runtime
+                .block_on(desktop_core.p2p().connected_peers())
+                .unwrap_or_default(),
+            row_count: desktop_snapshot.row_count(),
+            approx_serialized_bytes: desktop_snapshot.approx_serialized_bytes(),
+            rows: rows_from_store(&desktop_snapshot),
+        };
+        self.write_json(store_dir.join("Desktop.json"), &desktop_record)?;
+
+        for remote in deployments {
+            runtime.block_on(remote.core.refresh_store())?;
+            let snapshot = remote.core.store().snapshot();
+            let record = StoreSnapshotRecord {
+                label: remote.label.clone(),
+                peer_id: remote.peer_id.clone(),
+                connected_peers: runtime
+                    .block_on(remote.core.p2p().connected_peers())
+                    .unwrap_or_default(),
+                row_count: snapshot.row_count(),
+                approx_serialized_bytes: snapshot.approx_serialized_bytes(),
+                rows: rows_from_store(&snapshot),
+            };
+            self.write_json(
+                store_dir.join(format!(
+                    "{}.json",
+                    sanitize_filename_component(&remote.label)
+                )),
+                &record,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn write_profile_artifacts(&self, stem: &str) -> Result<()> {
+        let Some(profiler) = self.profiler.as_ref() else {
             return Ok(());
         };
         let report = profiler.report().build()?;
-        let flamegraph_path = self.output_dir.join("soak-flamegraph.svg");
-        let file = File::create(&flamegraph_path)
+
+        let flamegraph_path = if stem == "final" {
+            self.output_dir.join("soak-flamegraph.svg")
+        } else {
+            self.output_dir.join(format!("soak-{stem}-flamegraph.svg"))
+        };
+        let flamegraph_file = File::create(&flamegraph_path)
             .with_context(|| format!("creating {}", flamegraph_path.display()))?;
-        report.flamegraph(file)?;
+        report.flamegraph(flamegraph_file)?;
+
+        let profile = report.pprof()?;
+        let profile_path = if stem == "final" {
+            self.output_dir.join("soak-profile.pb")
+        } else {
+            self.output_dir.join(format!("soak-{stem}-profile.pb"))
+        };
+        std::fs::write(&profile_path, profile.encode_to_vec())
+            .with_context(|| format!("writing {}", profile_path.display()))?;
+
         Ok(())
     }
 }
@@ -496,6 +702,46 @@ fn sanitize_filename_component(input: &str) -> String {
 
 fn prometheus_escape(input: &str) -> String {
     input.replace('\\', r#"\\"#).replace('"', "\\\"")
+}
+
+fn log_scope_partitions(logs: &[SoakLogRecord]) -> Vec<String> {
+    let mut partitions = BTreeSet::new();
+    for log in logs {
+        for partition in partitions_for_log(log) {
+            partitions.insert(partition);
+        }
+    }
+    partitions.into_iter().collect()
+}
+
+fn log_matches_partition(log: &SoakLogRecord, partition: &str) -> bool {
+    partitions_for_log(log).iter().any(|candidate| candidate == partition)
+}
+
+fn partitions_for_log(log: &SoakLogRecord) -> Vec<String> {
+    let mut partitions = Vec::new();
+
+    if let Some(deployment) = log_field(log, "span.deployment_label") {
+        partitions.push(format!("deployment-{deployment}"));
+    }
+
+    if let Some(agent_did) = log_field(log, "span.agent_did").or_else(|| log_field(log, "agent_did"))
+    {
+        partitions.push(format!("agent-{agent_did}"));
+    }
+
+    if partitions.is_empty() {
+        partitions.push("unscoped".to_string());
+    }
+
+    partitions
+}
+
+fn log_field<'a>(log: &'a SoakLogRecord, name: &str) -> Option<&'a str> {
+    log.fields
+        .get(name)
+        .map(String::as_str)
+        .filter(|value| !value.is_empty())
 }
 
 fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {

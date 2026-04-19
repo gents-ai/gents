@@ -58,6 +58,7 @@ mod support_response_wait;
 use support_response_wait::*;
 
 mod bootstrap;
+mod bootstrap_probe;
 mod chat;
 mod first_launch;
 mod live;

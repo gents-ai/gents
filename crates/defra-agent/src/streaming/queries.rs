@@ -6,6 +6,7 @@ use serde::Deserialize;
 pub(super) struct PersistedResponseState {
     #[serde(rename = "_docID")]
     pub doc_id: String,
+    pub request_id: String,
     pub content: String,
     pub status: String,
     pub token_count: usize,
@@ -50,6 +51,7 @@ pub(super) async fn load_response_state(
                 limit: 1
             ) {{
                 _docID
+                request_id
                 content
                 status
                 token_count
@@ -88,6 +90,7 @@ pub(super) async fn load_response_state_by_key(
                 limit: 1
             ) {{
                 _docID
+                request_id
                 content
                 status
                 token_count

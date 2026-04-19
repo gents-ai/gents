@@ -187,7 +187,7 @@ pub(crate) async fn seed_live_manage_documents(
         display_name: Some("Live Audit Profile".to_string()),
         context_window: Some(131072),
         max_output_tokens: Some(1024),
-        max_turns: Some(12),
+        max_turns: Some(50),
         temperature: Some(0.0),
         stream_batch_ms: Some(50),
         deadline_duration_secs: Some(300),

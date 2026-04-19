@@ -17,7 +17,10 @@ mod queries;
 #[cfg(test)]
 mod tests;
 
-use queries::{extract_mutation_doc_id, load_response_state, load_response_state_by_key};
+use queries::{
+    PersistedResponseState, extract_mutation_doc_id, load_response_state,
+    load_response_state_by_key,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamStatus {
@@ -167,6 +170,26 @@ impl DefraStreamWriter {
 
         Ok(())
     }
+
+    pub async fn finalize_existing_request_error(
+        &self,
+        request_id: &str,
+        error_message: &str,
+    ) -> Result<bool> {
+        let Some(existing) = load_response_state_by_key(&self.node, request_id).await? else {
+            return Ok(false);
+        };
+
+        if existing.status == StreamStatus::Error.as_str()
+            || existing.status == StreamStatus::Complete.as_str()
+        {
+            return Ok(true);
+        }
+
+        self.set_error_message(&existing.doc_id, error_message).await?;
+        self.finalize(&existing.doc_id, StreamStatus::Error).await?;
+        Ok(true)
+    }
 }
 
 impl StreamWriter for DefraStreamWriter {
@@ -292,6 +315,7 @@ impl StreamWriter for DefraStreamWriter {
     }
 
     async fn finalize(&self, doc_id: &str, status: StreamStatus) -> Result<StreamResult> {
+        let existing = load_response_state(&self.node, doc_id).await?;
         let snapshot = {
             let buffers = self.buffers.lock().await;
             buffers.get(doc_id).map(|buf| StreamBufferSnapshot {
@@ -301,7 +325,7 @@ impl StreamWriter for DefraStreamWriter {
             })
         };
         let now = chrono::Utc::now().to_rfc3339();
-        let mutation = build_finalize_mutation(doc_id, &status, &now, snapshot.as_ref());
+        let mutation = build_finalize_mutation(existing.as_ref(), doc_id, &status, &now, snapshot.as_ref());
         let operation = if snapshot.is_some() {
             "finalize_streaming_response"
         } else {
@@ -396,11 +420,15 @@ impl StreamWriter for DefraStreamWriter {
 }
 
 fn build_finalize_mutation(
+    existing: Option<&PersistedResponseState>,
     doc_id: &str,
     status: &StreamStatus,
     now: &str,
     snapshot: Option<&StreamBufferSnapshot>,
 ) -> String {
+    let request_transition = existing
+        .map(|existing| build_request_terminal_update(&existing.request_id, status))
+        .unwrap_or_default();
     match snapshot {
         Some(snapshot) => format!(
             r#"mutation {{
@@ -417,6 +445,7 @@ fn build_finalize_mutation(
                         completed_at: "{now}"
                     }}
                 ) {{ _docID }}
+                {request_transition}
             }}"#,
             content = escape_graphql_string(&snapshot.content),
             reasoning = escape_graphql_string(&snapshot.reasoning),
@@ -435,8 +464,30 @@ fn build_finalize_mutation(
                         completed_at: "{now}"
                     }}
                 ) {{ _docID }}
+                {request_transition}
             }}"#,
             status = status.as_str(),
         ),
     }
+}
+
+fn build_request_terminal_update(request_id: &str, status: &StreamStatus) -> String {
+    let (request_status, lifecycle_state) = match status {
+        StreamStatus::Complete => ("completed", "completed"),
+        StreamStatus::Error => ("error", "failed"),
+        StreamStatus::Streaming => return String::new(),
+    };
+    let escaped_request_id = escape_graphql_string(request_id);
+    format!(
+        r#"update_AgentRequest(
+                    filter: {{
+                        request_id: {{ _eq: "{escaped_request_id}" }},
+                        status: {{ _eq: "processing" }}
+                    }},
+                    input: {{
+                        status: "{request_status}",
+                        lifecycle_state: "{lifecycle_state}"
+                    }}
+                ) {{ _docID }}"#
+    )
 }

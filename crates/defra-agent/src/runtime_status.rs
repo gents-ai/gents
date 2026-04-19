@@ -6,6 +6,7 @@ use tokio::sync::Mutex;
 use crate::agent::ProcessLifecycleState;
 use crate::graphql::escape_graphql_string;
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
+use crate::session::execute_mutation_with_retry;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReconcilePhase {
@@ -294,7 +295,7 @@ async fn upsert_runtime_status(
         last_reconcile_completed_at = escape_graphql_string(&row.last_reconcile_completed_at),
         updated_at = escape_graphql_string(&row.updated_at),
     );
-    let response = node.execute(&mutation).await;
+    let response = execute_mutation_with_retry(node, &mutation, "upsert_runtime_status").await?;
     if response.has_errors() {
         anyhow::bail!("upsert AgentRuntime failed: {:?}", response.errors);
     }

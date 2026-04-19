@@ -3,9 +3,17 @@ pub(crate) fn build_driver(
     core: ClientCore,
     log_store: Arc<DesktopLogStore>,
 ) -> AuditDriver {
+    build_driver_with_client(runtime, Arc::new(core), log_store)
+}
+
+pub(crate) fn build_driver_with_client(
+    runtime: Arc<Runtime>,
+    core: Arc<ClientCore>,
+    log_store: Arc<DesktopLogStore>,
+) -> AuditDriver {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-    let app = DesktopApp::from_parts(&cc, runtime, Some(Arc::new(core)), Vec::new(), log_store);
+    let app = DesktopApp::from_parts(&cc, runtime, Some(core), Vec::new(), log_store);
     AuditDriver::new(app, ctx)
 }
 

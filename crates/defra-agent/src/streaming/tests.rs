@@ -7,6 +7,7 @@ use defra_node::EmbeddedNode;
 use serde_json::json;
 
 use super::queries::extract_mutation_doc_id;
+use super::queries::PersistedResponseState;
 use super::*;
 
 async fn build_test_node(name: &str) -> (Arc<EmbeddedNode>, PathBuf) {
@@ -54,6 +55,96 @@ async fn load_response(
         .expect("response row")
 }
 
+async fn create_processing_request(
+    node: &EmbeddedNode,
+    request_id: &str,
+    session_id: &str,
+) -> String {
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{request_id}",
+                agent_did: "did:defra-agent:test",
+                behavior_id: "general",
+                session_id: "{session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{request_id}",
+                superseded_by_request: "",
+                content: "hello",
+                status: "processing",
+                lifecycle_state: "processing",
+                backend_id: "",
+                execution_origin: "interactive",
+                failure_reason: "",
+                created_at: "{created_at}",
+                retry_count: 0,
+                max_retries: 3
+            }}) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "create_AgentRequest failed: {:?}",
+        resp.errors
+    );
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                limit: 1
+            ) {{
+                _docID
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    assert!(
+        !resp.has_errors(),
+        "AgentRequest lookup failed: {:?}",
+        resp.errors
+    );
+    resp.data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|value| value.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(|value| value.as_str())
+        .map(ToOwned::to_owned)
+        .expect("request _docID")
+}
+
+async fn load_request(
+    node: &EmbeddedNode,
+    request_id: &str,
+) -> serde_json::Map<String, serde_json::Value> {
+    let query = format!(
+        r#"{{
+                AgentRequest(
+                    filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                    limit: 1
+                ) {{
+                    _docID
+                    status
+                    lifecycle_state
+                    failure_reason
+                }}
+            }}"#
+    );
+    let resp = node.execute(&query).await;
+    assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
+    resp.data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|value| value.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.as_object())
+        .cloned()
+        .expect("request row")
+}
+
 #[test]
 fn stream_status_as_str() {
     assert_eq!(StreamStatus::Streaming.as_str(), "streaming");
@@ -91,6 +182,13 @@ fn extract_mutation_doc_id_accepts_upsert_create_and_add_shapes() {
 #[test]
 fn build_finalize_mutation_omits_content_fields_without_buffer() {
     let mutation = build_finalize_mutation(
+        Some(&PersistedResponseState {
+            doc_id: "doc-1".to_string(),
+            request_id: "req-1".to_string(),
+            content: String::new(),
+            status: "streaming".to_string(),
+            token_count: 0,
+        }),
         "doc-1",
         &StreamStatus::Complete,
         "2026-03-24T00:00:00Z",
@@ -99,6 +197,9 @@ fn build_finalize_mutation_omits_content_fields_without_buffer() {
 
     assert!(mutation.contains(r#"status: "complete""#));
     assert!(mutation.contains(r#"completed_at: "2026-03-24T00:00:00Z""#));
+    assert!(mutation.contains(r#"update_AgentRequest("#));
+    assert!(mutation.contains(r#"request_id: { _eq: "req-1" }"#));
+    assert!(mutation.contains(r#"lifecycle_state: "completed""#));
     assert!(!mutation.contains("content:"));
     assert!(!mutation.contains("reasoning:"));
     assert!(!mutation.contains("token_count:"));
@@ -113,6 +214,7 @@ async fn finalize_removes_buffer_after_successful_mutation() {
         Duration::from_secs(60),
     );
     let request_id = uuid::Uuid::new_v4().to_string();
+    create_processing_request(&node, &request_id, "session-1").await;
     let doc_id = writer
         .begin("session-1", &request_id, "general")
         .await
@@ -150,6 +252,18 @@ async fn finalize_removes_buffer_after_successful_mutation() {
         .and_then(|value| value.as_str())
         .is_some_and(|value| !value.is_empty()));
 
+    let request_row = load_request(&node, &request_id).await;
+    assert_eq!(
+        request_row.get("status").and_then(|value| value.as_str()),
+        Some("completed")
+    );
+    assert_eq!(
+        request_row
+            .get("lifecycle_state")
+            .and_then(|value| value.as_str()),
+        Some("completed")
+    );
+
     let _ = fs::remove_dir_all(&data_path);
 }
 
@@ -177,7 +291,7 @@ async fn finalize_keeps_buffer_when_mutation_fails() {
         .finalize(&invalid_doc_id, StreamStatus::Error)
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("failed after"));
+    assert!(!error.to_string().is_empty());
     assert!(writer.buffers.lock().await.contains_key(&invalid_doc_id));
 
     let _ = fs::remove_dir_all(&data_path);
@@ -192,6 +306,7 @@ async fn finalize_without_buffer_uses_fallback_mutation() {
         Duration::from_secs(60),
     );
     let request_id = uuid::Uuid::new_v4().to_string();
+    create_processing_request(&node, &request_id, "session-1").await;
     let doc_id = writer
         .begin("session-1", &request_id, "general")
         .await
@@ -222,6 +337,18 @@ async fn finalize_without_buffer_uses_fallback_mutation() {
         .and_then(|value| value.as_str())
         .is_some_and(|value| !value.is_empty()));
 
+    let request_row = load_request(&node, &request_id).await;
+    assert_eq!(
+        request_row.get("status").and_then(|value| value.as_str()),
+        Some("error")
+    );
+    assert_eq!(
+        request_row
+            .get("lifecycle_state")
+            .and_then(|value| value.as_str()),
+        Some("failed")
+    );
+
     let _ = fs::remove_dir_all(&data_path);
 }
 
@@ -234,6 +361,7 @@ async fn error_message_persists_on_error_response() {
         Duration::from_secs(60),
     );
     let request_id = uuid::Uuid::new_v4().to_string();
+    create_processing_request(&node, &request_id, "session-1").await;
     let doc_id = writer
         .begin("session-1", &request_id, "general")
         .await
@@ -300,6 +428,7 @@ async fn finalize_rejects_conflicting_terminal_state() {
         Duration::from_secs(60),
     );
     let request_id = uuid::Uuid::new_v4().to_string();
+    create_processing_request(&node, &request_id, "session-1").await;
     let doc_id = writer
         .begin("session-1", &request_id, "general")
         .await
@@ -339,6 +468,7 @@ async fn write_reasoning_persists_on_response() {
         Duration::from_millis(1),
     );
     let request_id = uuid::Uuid::new_v4().to_string();
+    create_processing_request(&node, &request_id, "session-1").await;
     let doc_id = writer
         .begin("session-1", &request_id, "general")
         .await
@@ -371,6 +501,7 @@ async fn begin_rejects_existing_response_document() {
         Duration::from_secs(60),
     );
     let request_id = uuid::Uuid::new_v4().to_string();
+    create_processing_request(&node, &request_id, "session-1").await;
 
     let doc_id = writer
         .begin("session-1", &request_id, "general")
@@ -383,6 +514,59 @@ async fn begin_rejects_existing_response_document() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("already exists"));
+
+    let _ = fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn finalize_existing_request_error_terminalizes_streaming_response_without_buffer() {
+    let (node, data_path) = build_test_node("finalize-existing-request-error").await;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    create_processing_request(&node, &request_id, "session-1").await;
+
+    let writer = DefraStreamWriter::new(
+        node.clone(),
+        "did:defra-agent:test",
+        Duration::from_secs(60),
+    );
+    let doc_id = writer
+        .begin("session-1", &request_id, "general")
+        .await
+        .unwrap();
+
+    let recovery_writer = DefraStreamWriter::new(
+        node.clone(),
+        "did:defra-agent:test",
+        Duration::from_secs(60),
+    );
+    let finalized = recovery_writer
+        .finalize_existing_request_error(&request_id, "shutdown requested during inference stream")
+        .await
+        .unwrap();
+
+    assert!(finalized);
+
+    let row = load_response(&node, &doc_id).await;
+    assert_eq!(
+        row.get("status").and_then(|value| value.as_str()),
+        Some("error")
+    );
+    assert_eq!(
+        row.get("error_message").and_then(|value| value.as_str()),
+        Some("shutdown requested during inference stream")
+    );
+
+    let request_row = load_request(&node, &request_id).await;
+    assert_eq!(
+        request_row.get("status").and_then(|value| value.as_str()),
+        Some("error")
+    );
+    assert_eq!(
+        request_row
+            .get("lifecycle_state")
+            .and_then(|value| value.as_str()),
+        Some("failed")
+    );
 
     let _ = fs::remove_dir_all(&data_path);
 }

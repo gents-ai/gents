@@ -72,10 +72,8 @@ impl RequestLifecycle {
             lifecycle_state = PersistedLifecycleState::Claimed.as_str(),
         );
 
-        let resp = self.node.execute(&mutation).await;
-        if resp.has_errors() {
-            anyhow::bail!("claiming request failed: {:?}", resp.errors);
-        }
+        let resp =
+            session::execute_mutation_with_retry(&self.node, &mutation, "claim_request").await?;
 
         if !resp
             .data

@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use tracing::field::{Field, Visit};
+use tracing::span::{Attributes, Id, Record};
 use tracing::{Event, Subscriber};
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
@@ -24,7 +25,35 @@ impl<S> Layer<S> for DesktopLogLayer
 where
     S: Subscriber + for<'span> LookupSpan<'span>,
 {
-    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
+        let Some(span) = ctx.span(id) else {
+            return;
+        };
+
+        let mut visitor = EventFieldVisitor::default();
+        attrs.record(&mut visitor);
+
+        span.extensions_mut()
+            .insert(RecordedSpanFields(visitor.fields));
+    }
+
+    fn on_record(&self, id: &Id, values: &Record<'_>, ctx: Context<'_, S>) {
+        let Some(span) = ctx.span(id) else {
+            return;
+        };
+
+        let mut visitor = EventFieldVisitor::default();
+        values.record(&mut visitor);
+
+        let mut extensions = span.extensions_mut();
+        if let Some(fields) = extensions.get_mut::<RecordedSpanFields>() {
+            fields.0.extend(visitor.fields);
+        } else {
+            extensions.insert(RecordedSpanFields(visitor.fields));
+        }
+    }
+
+    fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
         let metadata = event.metadata();
         let mut visitor = EventFieldVisitor::default();
         event.record(&mut visitor);
@@ -35,15 +64,34 @@ where
             .filter(|message| !message.is_empty())
             .unwrap_or_else(|| metadata.name().to_string());
 
+        let mut fields = visitor.fields;
+        if let Some(scope) = ctx.event_scope(event) {
+            for span in scope.from_root() {
+                fields.push(DesktopLogField {
+                    name: "span.name".to_string(),
+                    value: span.metadata().name().to_string(),
+                });
+                if let Some(span_fields) = span.extensions().get::<RecordedSpanFields>() {
+                    fields.extend(span_fields.0.iter().cloned().map(|field| DesktopLogField {
+                        name: format!("span.{}", field.name),
+                        value: field.value,
+                    }));
+                }
+            }
+        }
+
         self.store.record_entry(
             Utc::now(),
             *metadata.level(),
             metadata.target().to_string(),
             message,
-            visitor.fields,
+            fields,
         );
     }
 }
+
+#[derive(Debug, Clone, Default)]
+struct RecordedSpanFields(Vec<DesktopLogField>);
 
 #[derive(Debug, Default)]
 struct EventFieldVisitor {

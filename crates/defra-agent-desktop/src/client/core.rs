@@ -275,14 +275,19 @@ impl ClientCore {
     }
 
     pub async fn shutdown(&self) -> Result<()> {
+        tracing::info!("client core shutdown: begin");
         if let Some(task) = self.p2p_supervisor.lock().await.take() {
+            tracing::info!("client core shutdown: aborting p2p supervisor");
             task.abort();
             let _ = task.await;
         }
         if let Some(observer) = self.observer.lock().await.take() {
+            tracing::info!("client core shutdown: stopping observer");
             observer.shutdown().await;
         }
+        tracing::info!("client core shutdown: stopping embedded node");
         self.node.shutdown().await;
+        tracing::info!("client core shutdown: complete");
         Ok(())
     }
 }

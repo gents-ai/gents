@@ -17,21 +17,21 @@ repository = "https://github.com/sourcenetwork/defra-agent"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
-crypto = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "cfefd2f9" }
+crypto = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "97dae4e9" }
 defra-agent-protocol = { path = "crates/defra-agent-protocol" }
-defra-node = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "cfefd2f9" }
-defra-p2p-adapter = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "cfefd2f9" }
+defra-node = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "97dae4e9" }
+defra-p2p-adapter = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "97dae4e9" }
 dirs = "5"
 eframe = "0.34.1"
 egui = "0.34.1"
 egui_commonmark = { version = "0.23.0", features = ["better_syntax_highlighting"] }
-events = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "cfefd2f9" }
+events = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "97dae4e9" }
 hostname = "0.4"
-identity = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "cfefd2f9" }
+identity = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "97dae4e9" }
 opentelemetry = { version = "0.31", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"] }
-p2p = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "cfefd2f9" }
+p2p = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "97dae4e9" }
 pulldown-cmark = { version = "0.13", default-features = false }
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
@@ -46,6 +46,14 @@ tracing = "0.1"
 tracing-opentelemetry = { version = "0.32.1", default-features = false }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
+
+[patch."ssh://git@github.com/sourcenetwork/defradb.rs.git"]
+crypto = { path = "../defradb.rs-p2p-debug/crates/crypto" }
+defra-node = { path = "../defradb.rs-p2p-debug/crates/defra-node" }
+defra-p2p-adapter = { path = "../defradb.rs-p2p-debug/crates/p2p-adapter" }
+events = { path = "../defradb.rs-p2p-debug/crates/events" }
+identity = { path = "../defradb.rs-p2p-debug/crates/identity" }
+p2p = { path = "../defradb.rs-p2p-debug/crates/p2p" }
 
 [profile.release]
 lto = true
