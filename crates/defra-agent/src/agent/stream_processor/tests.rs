@@ -10,6 +10,7 @@ use rig::streaming::StreamingCompletionResponse;
 use super::*;
 use crate::ensure_schemas;
 use crate::hook::FailurePolicy;
+use crate::lifecycle::RequestLifecycle;
 use crate::watcher::AgentRequest;
 
 #[derive(Clone, Default)]
@@ -96,12 +97,14 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
         metadata: None,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
-    let mut lifecycle = RequestLifecycle::new_with_agent_did(
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        "general",
+        "test-agent",
         "did:defra-agent:test",
         request,
-        300,
+        30,
+        crate::lifecycle::ExecutionOrigin::Interactive,
+        "test-backend",
     );
     let stream_writer = crate::streaming::DefraStreamWriter::new(
         node.clone(),

@@ -3,6 +3,8 @@
 // transition invariants (S1, S3, S6). Splitting by transition direction
 // (complete/fail/supersede) would require re-exporting private helpers across
 // submodules with no readability gain.
+use anyhow::Context;
+
 use super::rows::{DedupRow, RequestStatusTransition};
 use super::*;
 
@@ -39,6 +41,12 @@ impl RequestLifecycle {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("advance() called before response doc created"))?;
         let next_progress_seq = self.progress_seq + 1;
+        tracing::debug!(
+            request_id = %self.request.request_id,
+            doc_id = %doc_id,
+            next_progress_seq,
+            "advancing response progress"
+        );
 
         let mutation = format!(
             r#"mutation {{
@@ -53,13 +61,14 @@ impl RequestLifecycle {
             progress_seq = next_progress_seq,
         );
 
-        let resp = self.node.execute(&mutation).await;
-        if resp.has_errors() {
-            anyhow::bail!(
-                "failed to advance progress_seq for doc_id={doc_id} progress_seq={next_progress_seq}: {:?}",
-                resp.errors
-            );
-        }
+        let operation = format!("advance_progress_seq_{next_progress_seq}");
+        let resp = session::execute_mutation_with_retry(&self.node, &mutation, &operation)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to advance progress_seq for doc_id={doc_id} progress_seq={next_progress_seq}"
+                )
+            })?;
 
         if !resp
             .data
@@ -344,15 +353,20 @@ impl RequestLifecycle {
                 escape_graphql_string(self.failure_reason.as_deref().unwrap_or_default()),
         );
 
-        let resp = self.node.execute(&mutation).await;
-        if resp.has_errors() {
-            anyhow::bail!(
-                "updating execution view {} -> {} for doc_id={doc_id}: {:?}",
-                from_lifecycle_state.as_str(),
-                target_lifecycle_state.as_str(),
-                resp.errors
-            );
-        }
+        let operation = format!(
+            "transition_execution_view_{}_to_{}",
+            from_lifecycle_state.as_str(),
+            target_lifecycle_state.as_str()
+        );
+        let resp = session::execute_mutation_with_retry(&self.node, &mutation, &operation)
+            .await
+            .with_context(|| {
+                format!(
+                    "updating execution view {} -> {} for doc_id={doc_id}",
+                    from_lifecycle_state.as_str(),
+                    target_lifecycle_state.as_str()
+                )
+            })?;
 
         if resp
             .data

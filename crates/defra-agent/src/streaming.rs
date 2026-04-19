@@ -67,6 +67,9 @@ pub trait StreamWriter: Send + Sync {
         reasoning: &str,
     ) -> impl std::future::Future<Output = Result<bool>> + Send;
 
+    fn flush_pending(&self, doc_id: &str)
+        -> impl std::future::Future<Output = Result<bool>> + Send;
+
     fn finalize(
         &self,
         doc_id: &str,
@@ -106,6 +109,13 @@ impl DefraStreamWriter {
     }
 
     async fn flush_snapshot(&self, doc_id: &str, snapshot: &StreamBufferSnapshot) -> Result<()> {
+        tracing::debug!(
+            doc_id = %doc_id,
+            token_count = snapshot.token_count,
+            content_len = snapshot.content.len(),
+            reasoning_len = snapshot.reasoning.len(),
+            "flushing streaming response snapshot"
+        );
         let mutation = format!(
             r#"mutation {{
                 update_AgentResponse(
@@ -147,6 +157,26 @@ impl DefraStreamWriter {
         }
 
         Ok(())
+    }
+
+    async fn pending_snapshot(
+        &self,
+        doc_id: &str,
+        force: bool,
+    ) -> Result<Option<StreamBufferSnapshot>> {
+        let mut buffers = self.buffers.lock().await;
+        let buf = buffers
+            .get_mut(doc_id)
+            .ok_or_else(|| anyhow::anyhow!("no buffer for doc_id={}", doc_id))?;
+        if !force && buf.last_flush_at.elapsed() < self.batch_interval {
+            return Ok(None);
+        }
+        buf.last_flush_at = Instant::now();
+        Ok(Some(StreamBufferSnapshot {
+            content: buf.content.clone(),
+            reasoning: buf.reasoning.clone(),
+            token_count: buf.token_count,
+        }))
     }
 
     pub async fn set_error_message(&self, doc_id: &str, error_message: &str) -> Result<()> {
@@ -261,24 +291,16 @@ impl StreamWriter for DefraStreamWriter {
     }
 
     async fn write_tokens(&self, doc_id: &str, tokens: &str) -> Result<bool> {
-        let snapshot = {
+        {
             let mut buffers = self.buffers.lock().await;
             let buf = buffers
                 .get_mut(doc_id)
                 .ok_or_else(|| anyhow::anyhow!("no buffer for doc_id={}", doc_id))?;
             buf.content.push_str(tokens);
             buf.token_count += tokens.split_whitespace().count();
-            if buf.last_flush_at.elapsed() < self.batch_interval {
-                None
-            } else {
-                buf.last_flush_at = Instant::now();
-                Some(StreamBufferSnapshot {
-                    content: buf.content.clone(),
-                    reasoning: buf.reasoning.clone(),
-                    token_count: buf.token_count,
-                })
-            }
-        };
+        }
+
+        let snapshot = self.pending_snapshot(doc_id, false).await?;
 
         let Some(snapshot) = snapshot else {
             return Ok(false);
@@ -289,28 +311,29 @@ impl StreamWriter for DefraStreamWriter {
     }
 
     async fn write_reasoning(&self, doc_id: &str, reasoning: &str) -> Result<bool> {
-        let snapshot = {
+        {
             let mut buffers = self.buffers.lock().await;
             let buf = buffers
                 .get_mut(doc_id)
                 .ok_or_else(|| anyhow::anyhow!("no buffer for doc_id={}", doc_id))?;
             buf.reasoning.push_str(reasoning);
-            if buf.last_flush_at.elapsed() < self.batch_interval {
-                None
-            } else {
-                buf.last_flush_at = Instant::now();
-                Some(StreamBufferSnapshot {
-                    content: buf.content.clone(),
-                    reasoning: buf.reasoning.clone(),
-                    token_count: buf.token_count,
-                })
-            }
-        };
+        }
+
+        let snapshot = self.pending_snapshot(doc_id, false).await?;
 
         let Some(snapshot) = snapshot else {
             return Ok(false);
         };
 
+        self.flush_snapshot(doc_id, &snapshot).await?;
+        Ok(true)
+    }
+
+    async fn flush_pending(&self, doc_id: &str) -> Result<bool> {
+        let snapshot = self.pending_snapshot(doc_id, true).await?;
+        let Some(snapshot) = snapshot else {
+            return Ok(false);
+        };
         self.flush_snapshot(doc_id, &snapshot).await?;
         Ok(true)
     }

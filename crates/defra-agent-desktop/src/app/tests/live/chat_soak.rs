@@ -363,7 +363,8 @@ Do not answer from memory; read files before answering.\n\
 Use the file tools (`list_files` and `read_file`) to explore the workspace.\n\
 Do not use the bash tool for repository exploration, directory listing, or file reading.\n\
 When using `read_file`, call it with exactly one `path` at a time, not an array of files.\n\
-Keep the final answer concise: at most 8 short bullets or 220 words.\n\
+Keep the final answer very concise: at most 4 short bullets and under 120 words total.\n\
+Stop immediately after the final bullet. Do not add an intro, conclusion, or extra explanation.\n\
 Do not quote large code blocks or paste long file excerpts.\n\
 Summarize findings in your own words and cite the files you inspected.\n\
 Start from these known paths in the seeded workspace:\n\
@@ -1000,22 +1001,17 @@ fn wait_for_session_settled(
         let snapshot = core.store().snapshot();
         let latest_request_id = snapshot.latest_request_id_for_session(session_id)?;
         let turn_state = snapshot.derive_turn(session_id)?;
-        let non_terminal_requests = snapshot
+        let active_status_requests = snapshot
             .requests_for_session(session_id)
             .into_iter()
-            .filter(|row| {
-                !matches!(
-                    row.lifecycle_state.as_deref(),
-                    Some("completed" | "failed" | "error" | "dead" | "superseded")
-                )
-            })
+            .filter(|row| matches!(row.status.as_deref(), Some("pending" | "processing")))
             .count();
         (latest_request_id == effective_request_id
             && matches!(
                 turn_state,
                 ClientTurnState::Completed | ClientTurnState::Failed | ClientTurnState::Superseded
             )
-            && non_terminal_requests == 0)
+            && active_status_requests == 0)
             .then_some(())
     })
 }

@@ -1,5 +1,3 @@
-use std::time::{Duration, Instant};
-
 use anyhow::Result;
 use rig::agent::MultiTurnStreamItem;
 use rig::completion::message::{
@@ -27,13 +25,10 @@ pub(super) struct StreamProcessor<'a> {
     pub(super) streamed_text: String,
     pub(super) final_text: Option<String>,
     doc_id: &'a str,
-    last_reasoning_progress_at: Option<Instant>,
 }
 
 #[cfg(test)]
 mod tests;
-
-const REASONING_PROGRESS_INTERVAL: Duration = Duration::from_millis(500);
 
 impl<'a> StreamProcessor<'a> {
     pub(super) fn new(
@@ -50,7 +45,6 @@ impl<'a> StreamProcessor<'a> {
             streamed_text: String::new(),
             final_text: None,
             doc_id,
-            last_reasoning_progress_at: None,
         }
     }
 
@@ -60,13 +54,13 @@ impl<'a> StreamProcessor<'a> {
     ) -> Result<StreamAction> {
         match item {
             Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text))) => {
+                let had_visible_text = !self.streamed_text.trim().is_empty();
                 self.assistant_turn.push_text(&text.text);
                 self.streamed_text.push_str(&text.text);
-                let flushed = self
-                    .stream_writer
-                    .write_tokens(self.doc_id, &text.text)
-                    .await?;
-                if flushed {
+                let _ = self.stream_writer.write_tokens(self.doc_id, &text.text).await?;
+                let has_visible_text = !self.streamed_text.trim().is_empty();
+                if !had_visible_text && has_visible_text {
+                    let _ = self.stream_writer.flush_pending(self.doc_id).await?;
                     self.lifecycle.advance().await?;
                 }
                 Ok(StreamAction::Continue)
@@ -82,7 +76,6 @@ impl<'a> StreamProcessor<'a> {
                         .write_reasoning(self.doc_id, &rendered)
                         .await?;
                 }
-                self.mark_reasoning_progress().await?;
                 Ok(StreamAction::Continue)
             }
             Ok(MultiTurnStreamItem::StreamAssistantItem(
@@ -95,21 +88,23 @@ impl<'a> StreamProcessor<'a> {
                         .write_reasoning(self.doc_id, &reasoning)
                         .await?;
                 }
-                self.mark_reasoning_progress().await?;
                 Ok(StreamAction::Continue)
             }
             Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall {
                 tool_call,
                 ..
             })) => {
-                self.assistant_turn.push_tool_call(tool_call);
+                let _ = self.stream_writer.flush_pending(self.doc_id).await?;
                 self.lifecycle.advance().await?;
+                self.assistant_turn.push_tool_call(tool_call);
                 Ok(StreamAction::Continue)
             }
             Ok(MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
                 tool_result: _tool_result,
                 ..
             })) => {
+                let _ = self.stream_writer.flush_pending(self.doc_id).await?;
+                self.lifecycle.advance().await?;
                 if let Some(message) = self.assistant_turn.take_message() {
                     self.persistence_hook.apply_persistence_policy(
                         self.persistence_hook
@@ -119,11 +114,12 @@ impl<'a> StreamProcessor<'a> {
                         "persist streamed assistant turn",
                     )?;
                 }
-                self.lifecycle.advance().await?;
                 Ok(StreamAction::Continue)
             }
             Ok(MultiTurnStreamItem::FinalResponse(response)) => {
                 self.assistant_turn.reconcile_text(response.response());
+                let _ = self.stream_writer.flush_pending(self.doc_id).await?;
+                self.lifecycle.advance().await?;
                 if let Some(message) = self.assistant_turn.take_message() {
                     self.persistence_hook.apply_persistence_policy(
                         self.persistence_hook
@@ -133,7 +129,6 @@ impl<'a> StreamProcessor<'a> {
                         "persist final assistant turn",
                     )?;
                 }
-                self.lifecycle.advance().await?;
                 self.final_text = Some(response.response().to_string());
                 Ok(StreamAction::Done)
             }
@@ -249,19 +244,6 @@ impl AssistantTurnAccumulator {
             || !self.reasoning.is_empty()
             || !self.pending_reasoning_delta_text.is_empty()
             || !self.tool_calls.is_empty()
-    }
-}
-
-impl<'a> StreamProcessor<'a> {
-    async fn mark_reasoning_progress(&mut self) -> Result<()> {
-        let should_advance = self
-            .last_reasoning_progress_at
-            .is_none_or(|last| last.elapsed() >= REASONING_PROGRESS_INTERVAL);
-        if should_advance {
-            self.lifecycle.advance().await?;
-            self.last_reasoning_progress_at = Some(Instant::now());
-        }
-        Ok(())
     }
 }
 

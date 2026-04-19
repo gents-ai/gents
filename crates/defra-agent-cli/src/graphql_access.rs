@@ -1,26 +1,33 @@
-use anyhow::{Context, Result};
-use defra_agent::graphql::escape_graphql_string;
-use serde_json::{json, Value};
+use anyhow::Result;
+use defra_agent_protocol::graphql::{
+    execute_graphql_async, extract_mutation_doc_id as shared_extract_mutation_doc_id,
+    first_graphql_row as shared_first_graphql_row,
+    graphql_bool_literal as shared_graphql_bool_literal,
+    graphql_endpoint_available as shared_graphql_endpoint_available,
+    graphql_input_literal as shared_graphql_input_literal, graphql_rows_from_response,
+    graphql_string_list_literal as shared_graphql_string_list_literal,
+    normalize_optional_rfc3339 as shared_normalize_optional_rfc3339,
+    nullable_string_field as shared_nullable_string_field,
+    optional_bool_field as shared_optional_bool_field,
+    optional_f64_field as shared_optional_f64_field,
+    optional_i64_field as shared_optional_i64_field,
+    optional_string_field as shared_optional_string_field,
+    string_list_field as shared_string_list_field, GraphqlRequestOptions,
+};
+use serde_json::Value;
 
 use crate::config_writes::ConfigAccess;
 
 pub(crate) async fn graphql_endpoint_available(graphql: &str) -> bool {
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .build()
-    {
-        Ok(client) => client,
-        Err(_) => return false,
-    };
-    match client
-        .post(graphql)
-        .json(&json!({ "query": "{ __typename }" }))
-        .send()
-        .await
-    {
-        Ok(response) => response.status().is_success(),
-        Err(_) => false,
-    }
+    shared_graphql_endpoint_available(
+        graphql,
+        GraphqlRequestOptions {
+            timeout: std::time::Duration::from_secs(2),
+            max_attempts: 1,
+            retry_backoff: std::time::Duration::from_millis(50),
+        },
+    )
+    .await
 }
 
 pub(crate) async fn graphql_rows(
@@ -29,12 +36,7 @@ pub(crate) async fn graphql_rows(
     query: &str,
 ) -> Result<Vec<Value>> {
     let response = access.execute(query).await?;
-    Ok(response
-        .get("data")
-        .and_then(|data| data.get(collection_name))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default())
+    Ok(graphql_rows_from_response(&response, collection_name))
 }
 
 pub(crate) async fn graphql_rows_or_empty_if_collection_missing(
@@ -56,159 +58,61 @@ pub(crate) fn is_collection_missing_error(collection_name: &str, error: &anyhow:
 }
 
 pub(crate) fn graphql_string_list_literal(values: &[String]) -> String {
-    format!(
-        "[{}]",
-        values
-            .iter()
-            .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
-            .collect::<Vec<_>>()
-            .join(", ")
-    )
+    shared_graphql_string_list_literal(values)
 }
 
 pub(crate) fn graphql_input_literal(value: &Value) -> Result<String> {
-    match value {
-        Value::Null => Ok("null".to_string()),
-        Value::Bool(value) => Ok(value.to_string()),
-        Value::Number(value) => Ok(value.to_string()),
-        Value::String(value) => Ok(graphql_string_literal(value)),
-        Value::Array(values) => {
-            let rendered = values
-                .iter()
-                .map(graphql_input_literal)
-                .collect::<Result<Vec<_>>>()?;
-            Ok(format!("[{}]", rendered.join(", ")))
-        }
-        Value::Object(map) => {
-            let rendered = map
-                .iter()
-                .map(|(key, value)| Ok(format!("{key}: {}", graphql_input_literal(value)?)))
-                .collect::<Result<Vec<_>>>()?;
-            Ok(format!("{{ {} }}", rendered.join(", ")))
-        }
-    }
-}
-
-fn graphql_string_literal(value: &str) -> String {
-    format!(r#""{}""#, escape_graphql_string(value))
+    shared_graphql_input_literal(value)
 }
 
 pub(crate) async fn post_graphql(graphql: &str, query: &str) -> Result<serde_json::Value> {
-    let client = reqwest::Client::new();
-    let response = client
-        .post(graphql)
-        .json(&json!({ "query": query }))
-        .send()
-        .await
-        .map_err(|error| {
-            anyhow::anyhow!(
-                "failed to post GraphQL to {graphql}: {error}\n{}",
-                graphql_diagnostic_hint(graphql)
-            )
-        })?;
-    let value: serde_json::Value = response.json().await.map_err(|error| {
-        anyhow::anyhow!(
-            "failed to decode GraphQL response from {graphql}: {error}\n{}",
-            graphql_diagnostic_hint(graphql)
-        )
-    })?;
-    if let Some(errors) = value.get("errors") {
-        anyhow::bail!(
-            "graphql returned errors from {graphql}: {errors}\n{}",
-            graphql_diagnostic_hint(graphql)
-        );
-    }
-    Ok(value)
+    execute_graphql_async(
+        graphql,
+        query,
+        GraphqlRequestOptions {
+            timeout: std::time::Duration::from_secs(30),
+            max_attempts: 5,
+            retry_backoff: std::time::Duration::from_millis(100),
+        },
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!("{error}\n{}", graphql_diagnostic_hint(graphql)))
 }
 
 pub(crate) fn extract_mutation_doc_id(response: &Value, collection_name: &str) -> Result<String> {
-    let data = response
-        .get("data")
-        .ok_or_else(|| anyhow::anyhow!("graphql response missing data: {response}"))?;
-    for field_name in [
-        format!("upsert_{collection_name}"),
-        format!("update_{collection_name}"),
-        format!("create_{collection_name}"),
-        format!("add_{collection_name}"),
-    ] {
-        if let Some(doc_id) = data
-            .get(&field_name)
-            .and_then(|value| value.get("_docID"))
-            .and_then(Value::as_str)
-        {
-            return Ok(doc_id.to_string());
-        }
-        if let Some(doc_id) = data
-            .get(&field_name)
-            .and_then(Value::as_array)
-            .and_then(|rows| rows.first())
-            .and_then(|row| row.get("_docID"))
-            .and_then(Value::as_str)
-        {
-            return Ok(doc_id.to_string());
-        }
-    }
-    anyhow::bail!("graphql mutation returned no _docID for {collection_name}: {response}");
+    shared_extract_mutation_doc_id(response, collection_name)
 }
 
 pub(crate) fn nullable_string_field(name: &str, value: Option<&str>) -> String {
-    match value.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(value) => format!(r#"{name}: "{}""#, escape_graphql_string(value)),
-        None => format!("{name}: null"),
-    }
+    shared_nullable_string_field(name, value)
 }
 
 pub(crate) fn graphql_bool_literal(value: bool) -> &'static str {
-    if value {
-        "true"
-    } else {
-        "false"
-    }
+    shared_graphql_bool_literal(value)
 }
 
 pub(crate) fn normalize_optional_rfc3339(value: Option<&str>) -> Result<Option<String>> {
-    match value.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(raw) => {
-            let parsed = chrono::DateTime::parse_from_rfc3339(raw)
-                .with_context(|| format!("parsing RFC3339 timestamp {raw}"))?;
-            Ok(Some(
-                parsed
-                    .with_timezone(&chrono::Utc)
-                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            ))
-        }
-        None => Ok(None),
-    }
+    shared_normalize_optional_rfc3339(value)
 }
 
 pub(crate) fn optional_i64_field(name: &str, value: Option<i64>) -> Option<String> {
-    value.map(|value| format!("{name}: {value}"))
+    shared_optional_i64_field(name, value)
 }
 
 pub(crate) fn optional_f64_field(name: &str, value: Option<f64>) -> Option<String> {
-    value.map(|value| format!("{name}: {value}"))
+    shared_optional_f64_field(name, value)
 }
 
 pub(crate) fn optional_bool_field(name: &str, value: Option<bool>) -> Option<String> {
-    value.map(|value| format!("{name}: {}", graphql_bool_literal(value)))
+    shared_optional_bool_field(name, value)
 }
 
 pub(crate) fn optional_string_field(name: &str, value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| format!(r#"{name}: "{}""#, escape_graphql_string(value)))
+    shared_optional_string_field(name, value)
 }
 
 pub(crate) fn string_list_field(name: &str, values: &[String]) -> Option<String> {
-    Some(format!(
-        "{name}: [{}]",
-        values
-            .iter()
-            .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
-            .collect::<Vec<_>>()
-            .join(", ")
-    ))
+    shared_string_list_field(name, values)
 }
 
 fn is_probably_local_graphql_endpoint(graphql: &str) -> bool {
@@ -230,10 +134,5 @@ pub(crate) fn first_graphql_row<'a>(
     response: &'a Value,
     collection_name: &str,
 ) -> Result<&'a Value> {
-    response
-        .get("data")
-        .and_then(|data| data.get(collection_name))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .ok_or_else(|| anyhow::anyhow!("graphql returned no rows for {collection_name}"))
+    shared_first_graphql_row(response, collection_name)
 }

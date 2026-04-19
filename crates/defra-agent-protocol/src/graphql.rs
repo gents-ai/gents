@@ -1,0 +1,760 @@
+//! Shared GraphQL query and mutation presets for agent-facing applications.
+//!
+//! This module keeps transport concerns out of the protocol crate. Callers are
+//! can either execute the rendered strings themselves or use the shared
+//! transport helpers here.
+
+use std::time::Duration;
+
+use anyhow::{anyhow, Context, Result};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::client_protocol::{
+    derive_turn as derive_client_turn, AttemptView, ClientTurnState, RequestLifecycleState,
+    RequestSnapshot, ResponseSnapshot, ResponseStatus,
+};
+use crate::row::{
+    AgentMessageRow, AgentRequestRow, AgentResponseRow, AgentToolCallRow, AgentToolResultRow,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GraphqlSubmittedRequest {
+    pub request_id: String,
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateAgentRequestInput<'a> {
+    pub request_id: &'a str,
+    pub agent_did: &'a str,
+    pub content: &'a str,
+    pub session_id: &'a str,
+    pub behavior_id: Option<&'a str>,
+    pub created_at: &'a str,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphqlTurnState {
+    pub request: Option<AgentRequestRow>,
+    pub response: Option<AgentResponseRow>,
+}
+
+impl GraphqlTurnState {
+    pub fn derived_turn_state(&self) -> Option<ClientTurnState> {
+        let attempt = self.attempt_view()?;
+        derive_client_turn(&[attempt])
+    }
+
+    pub fn response_is_durably_complete(&self) -> bool {
+        self.request.as_ref().is_some_and(|request| {
+            matches!(
+                request.lifecycle_state.as_deref(),
+                Some("completed" | "superseded")
+            )
+        }) && self.response.as_ref().is_some_and(|response| {
+            matches!(response.status.as_deref(), Some("complete" | "completed"))
+        })
+    }
+
+    pub fn successor_request_id(&self) -> Option<String> {
+        self.request
+            .as_ref()
+            .and_then(|row| clean_optional_string(row.superseded_by_request.as_deref()))
+    }
+
+    fn attempt_view(&self) -> Option<AttemptView> {
+        let request = self.request.as_ref()?;
+        let lifecycle =
+            RequestLifecycleState::try_from(request.lifecycle_state.as_deref().unwrap_or_default())
+                .ok()?;
+
+        Some(AttemptView {
+            request: RequestSnapshot {
+                request_id: request.request_id.clone(),
+                retry_parent_request: clean_optional_string(
+                    request.retry_parent_request.as_deref(),
+                ),
+                lifecycle_state: lifecycle,
+                is_superseded: clean_optional_string(request.superseded_by_request.as_deref())
+                    .is_some(),
+            },
+            response: self
+                .response
+                .as_ref()
+                .and_then(graphql_response_status)
+                .map(|status| ResponseSnapshot { status }),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphqlSessionShape {
+    pub session_id: String,
+    pub request_id: String,
+    pub turn_state: Option<String>,
+    pub request: Option<AgentRequestRow>,
+    pub response: Option<AgentResponseRow>,
+    pub messages: Vec<AgentMessageRow>,
+    pub tool_calls: Vec<AgentToolCallRow>,
+    pub tool_results: Vec<AgentToolResultRow>,
+}
+
+pub fn escape_graphql_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+pub fn create_agent_request_mutation(input: &CreateAgentRequestInput<'_>) -> String {
+    let behavior_field = input
+        .behavior_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            format!(
+                r#"
+                behavior_id: "{}","#,
+                escape_graphql_string(value)
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{request_id}",
+                agent_did: "{agent_did}",
+                {behavior_field}
+                session_id: "{session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{request_id}",
+                superseded_by_request: "",
+                content: "{content}",
+                status: "pending",
+                lifecycle_state: "pending",
+                backend_id: "",
+                execution_origin: "interactive",
+                failure_reason: "",
+                created_at: "{created_at}",
+                retry_count: 0,
+                max_retries: 3
+            }}) {{ _docID }}
+        }}"#,
+        request_id = escape_graphql_string(input.request_id),
+        agent_did = escape_graphql_string(input.agent_did),
+        behavior_field = behavior_field,
+        session_id = escape_graphql_string(input.session_id),
+        content = escape_graphql_string(input.content),
+        created_at = escape_graphql_string(input.created_at),
+    )
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct GraphqlRequestOptions {
+    pub timeout: Duration,
+    pub max_attempts: usize,
+    pub retry_backoff: Duration,
+}
+
+impl Default for GraphqlRequestOptions {
+    fn default() -> Self {
+        Self {
+            timeout: Duration::from_secs(30),
+            max_attempts: 5,
+            retry_backoff: Duration::from_millis(100),
+        }
+    }
+}
+
+pub async fn graphql_endpoint_available(graphql: &str, options: GraphqlRequestOptions) -> bool {
+    let client = match reqwest::Client::builder().timeout(options.timeout).build() {
+        Ok(client) => client,
+        Err(_) => return false,
+    };
+    match client
+        .post(graphql)
+        .json(&serde_json::json!({ "query": "{ __typename }" }))
+        .send()
+        .await
+    {
+        Ok(response) => response.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+pub async fn execute_graphql_async(
+    graphql: &str,
+    query: &str,
+    options: GraphqlRequestOptions,
+) -> Result<serde_json::Value> {
+    let client = reqwest::Client::builder()
+        .timeout(options.timeout)
+        .build()?;
+    let mut last_error = None;
+
+    for attempt in 0..options.max_attempts.max(1) {
+        let response = client
+            .post(graphql)
+            .json(&serde_json::json!({ "query": query }))
+            .send()
+            .await;
+        let response = match response {
+            Ok(response) => response,
+            Err(error)
+                if graphql_transport_error_is_retryable(&error)
+                    && attempt + 1 < options.max_attempts =>
+            {
+                tracing::warn!(
+                    attempt,
+                    graphql,
+                    error = %error,
+                    "retrying async GraphQL request after transport error"
+                );
+                last_error = Some(
+                    anyhow::Error::new(error).context(format!("posting GraphQL to {graphql}")),
+                );
+                tokio::time::sleep(scale_backoff(options.retry_backoff, attempt)).await;
+                continue;
+            }
+            Err(error) => {
+                return Err(
+                    anyhow::Error::new(error).context(format!("posting GraphQL to {graphql}"))
+                );
+            }
+        };
+
+        let response = match response.error_for_status() {
+            Ok(response) => response,
+            Err(error)
+                if graphql_transport_error_is_retryable(&error)
+                    && attempt + 1 < options.max_attempts =>
+            {
+                tracing::warn!(
+                    attempt,
+                    graphql,
+                    error = %error,
+                    "retrying async GraphQL request after response status error"
+                );
+                last_error = Some(
+                    anyhow::Error::new(error)
+                        .context(format!("reading GraphQL response from {graphql}")),
+                );
+                tokio::time::sleep(scale_backoff(options.retry_backoff, attempt)).await;
+                continue;
+            }
+            Err(error) => {
+                return Err(anyhow::Error::new(error)
+                    .context(format!("reading GraphQL response from {graphql}")));
+            }
+        };
+
+        let value = match response.json().await {
+            Ok(value) => value,
+            Err(error)
+                if graphql_transport_error_is_retryable(&error)
+                    && attempt + 1 < options.max_attempts =>
+            {
+                tracing::warn!(
+                    attempt,
+                    graphql,
+                    error = %error,
+                    "retrying async GraphQL request after decode error"
+                );
+                last_error = Some(
+                    anyhow::Error::new(error)
+                        .context(format!("decoding GraphQL response body from {graphql}")),
+                );
+                tokio::time::sleep(scale_backoff(options.retry_backoff, attempt)).await;
+                continue;
+            }
+            Err(error) => {
+                return Err(anyhow::Error::new(error)
+                    .context(format!("decoding GraphQL response body from {graphql}")));
+            }
+        };
+
+        return finish_graphql_response(graphql, value);
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow!("GraphQL request retries exhausted for {graphql}")))
+}
+
+pub fn execute_graphql_blocking(
+    graphql: &str,
+    query: &str,
+    options: GraphqlRequestOptions,
+) -> Result<serde_json::Value> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(options.timeout)
+        .pool_max_idle_per_host(0)
+        .build()?;
+    let mut last_error = None;
+
+    for attempt in 0..options.max_attempts.max(1) {
+        let response = client
+            .post(graphql)
+            .json(&serde_json::json!({ "query": query }))
+            .send();
+        let response = match response {
+            Ok(response) => response,
+            Err(error)
+                if graphql_transport_error_is_retryable(&error)
+                    && attempt + 1 < options.max_attempts =>
+            {
+                tracing::warn!(
+                    attempt,
+                    graphql,
+                    error = %error,
+                    "retrying blocking GraphQL request after transport error"
+                );
+                last_error = Some(
+                    anyhow::Error::new(error).context(format!("posting GraphQL to {graphql}")),
+                );
+                std::thread::sleep(scale_backoff(options.retry_backoff, attempt));
+                continue;
+            }
+            Err(error) => {
+                return Err(
+                    anyhow::Error::new(error).context(format!("posting GraphQL to {graphql}"))
+                );
+            }
+        };
+
+        let response = match response.error_for_status() {
+            Ok(response) => response,
+            Err(error)
+                if graphql_transport_error_is_retryable(&error)
+                    && attempt + 1 < options.max_attempts =>
+            {
+                tracing::warn!(
+                    attempt,
+                    graphql,
+                    error = %error,
+                    "retrying blocking GraphQL request after response status error"
+                );
+                last_error = Some(
+                    anyhow::Error::new(error)
+                        .context(format!("reading GraphQL response from {graphql}")),
+                );
+                std::thread::sleep(scale_backoff(options.retry_backoff, attempt));
+                continue;
+            }
+            Err(error) => {
+                return Err(anyhow::Error::new(error)
+                    .context(format!("reading GraphQL response from {graphql}")));
+            }
+        };
+
+        let value = match response.json() {
+            Ok(value) => value,
+            Err(error)
+                if graphql_transport_error_is_retryable(&error)
+                    && attempt + 1 < options.max_attempts =>
+            {
+                tracing::warn!(
+                    attempt,
+                    graphql,
+                    error = %error,
+                    "retrying blocking GraphQL request after decode error"
+                );
+                last_error = Some(
+                    anyhow::Error::new(error)
+                        .context(format!("decoding GraphQL response body from {graphql}")),
+                );
+                std::thread::sleep(scale_backoff(options.retry_backoff, attempt));
+                continue;
+            }
+            Err(error) => {
+                return Err(anyhow::Error::new(error)
+                    .context(format!("decoding GraphQL response body from {graphql}")));
+            }
+        };
+
+        return finish_graphql_response(graphql, value);
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow!("GraphQL request retries exhausted for {graphql}")))
+}
+
+pub fn extract_mutation_doc_id(
+    response: &serde_json::Value,
+    collection_name: &str,
+) -> Result<String> {
+    let data = response
+        .get("data")
+        .ok_or_else(|| anyhow!("graphql response missing data: {response}"))?;
+    for field_name in [
+        format!("upsert_{collection_name}"),
+        format!("update_{collection_name}"),
+        format!("create_{collection_name}"),
+        format!("add_{collection_name}"),
+    ] {
+        if let Some(doc_id) = data
+            .get(&field_name)
+            .and_then(|value| value.get("_docID"))
+            .and_then(serde_json::Value::as_str)
+        {
+            return Ok(doc_id.to_string());
+        }
+        if let Some(doc_id) = data
+            .get(&field_name)
+            .and_then(serde_json::Value::as_array)
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("_docID"))
+            .and_then(serde_json::Value::as_str)
+        {
+            return Ok(doc_id.to_string());
+        }
+    }
+    anyhow::bail!("graphql mutation returned no _docID for {collection_name}: {response}");
+}
+
+pub fn first_graphql_row<'a>(
+    response: &'a serde_json::Value,
+    collection_name: &str,
+) -> Result<&'a serde_json::Value> {
+    response
+        .get("data")
+        .and_then(|data| data.get(collection_name))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .ok_or_else(|| anyhow!("graphql returned no rows for {collection_name}"))
+}
+
+pub fn graphql_rows_from_response(response: &Value, collection_name: &str) -> Vec<Value> {
+    response
+        .get("data")
+        .and_then(|data| data.get(collection_name))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+pub fn graphql_string_list_literal(values: &[String]) -> String {
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+pub fn graphql_input_literal(value: &Value) -> Result<String> {
+    match value {
+        Value::Null => Ok("null".to_string()),
+        Value::Bool(value) => Ok(value.to_string()),
+        Value::Number(value) => Ok(value.to_string()),
+        Value::String(value) => Ok(graphql_string_literal(value)),
+        Value::Array(values) => {
+            let rendered = values
+                .iter()
+                .map(graphql_input_literal)
+                .collect::<Result<Vec<_>>>()?;
+            Ok(format!("[{}]", rendered.join(", ")))
+        }
+        Value::Object(map) => {
+            let rendered = map
+                .iter()
+                .map(|(key, value)| Ok(format!("{key}: {}", graphql_input_literal(value)?)))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(format!("{{ {} }}", rendered.join(", ")))
+        }
+    }
+}
+
+pub fn nullable_string_field(name: &str, value: Option<&str>) -> String {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => format!(r#"{name}: "{}""#, escape_graphql_string(value)),
+        None => format!("{name}: null"),
+    }
+}
+
+pub fn graphql_bool_literal(value: bool) -> &'static str {
+    if value {
+        "true"
+    } else {
+        "false"
+    }
+}
+
+pub fn normalize_optional_rfc3339(value: Option<&str>) -> Result<Option<String>> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(raw) => {
+            let parsed = chrono::DateTime::parse_from_rfc3339(raw)
+                .with_context(|| format!("parsing RFC3339 timestamp {raw}"))?;
+            Ok(Some(
+                parsed
+                    .with_timezone(&chrono::Utc)
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            ))
+        }
+        None => Ok(None),
+    }
+}
+
+pub fn optional_i64_field(name: &str, value: Option<i64>) -> Option<String> {
+    value.map(|value| format!("{name}: {value}"))
+}
+
+pub fn optional_f64_field(name: &str, value: Option<f64>) -> Option<String> {
+    value.map(|value| format!("{name}: {value}"))
+}
+
+pub fn optional_bool_field(name: &str, value: Option<bool>) -> Option<String> {
+    value.map(|value| format!("{name}: {}", graphql_bool_literal(value)))
+}
+
+pub fn optional_string_field(name: &str, value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!(r#"{name}: "{}""#, escape_graphql_string(value)))
+}
+
+pub fn string_list_field(name: &str, values: &[String]) -> Option<String> {
+    Some(format!("{name}: {}", graphql_string_list_literal(values)))
+}
+
+pub fn turn_state_query(request_id: &str) -> String {
+    let escaped_request_id = escape_graphql_string(request_id);
+    format!(
+        r#"{{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
+                request_id
+                retry_parent_request
+                superseded_by_request
+                lifecycle_state
+            }}
+            AgentResponse(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
+                response_key
+                request_id
+                status
+                content
+                error_message
+            }}
+        }}"#
+    )
+}
+
+pub fn session_shape_query(session_id: &str) -> String {
+    let escaped_session_id = escape_graphql_string(session_id);
+    format!(
+        r#"{{
+            AgentMessage(filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}, order: {{ sequence: ASC }}) {{
+                message_key
+                sequence
+                role
+                content
+                timestamp
+            }}
+            AgentToolCall(filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}, order: {{ message_sequence: ASC }}) {{
+                tool_call_key
+                session_id
+                message_sequence
+                tool_name
+                tool_call_id
+                status
+                args
+                result
+            }}
+            AgentToolResult(filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}, order: {{ created_at: ASC }}) {{
+                agent_did
+                session_id
+                tool_name
+                tool_input
+                output_text
+                truncated
+                truncation_metadata
+                conversation_doc_id
+                created_at
+            }}
+        }}"#
+    )
+}
+
+pub fn parse_turn_state_response(
+    value: &serde_json::Value,
+) -> serde_json::Result<GraphqlTurnState> {
+    let data = value
+        .get("data")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let request = data
+        .get("AgentRequest")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?;
+    let response = data
+        .get("AgentResponse")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?;
+
+    Ok(GraphqlTurnState { request, response })
+}
+
+pub fn parse_session_shape_response(
+    session_id: &str,
+    request_id: &str,
+    turn_state: GraphqlTurnState,
+    value: &serde_json::Value,
+) -> serde_json::Result<GraphqlSessionShape> {
+    let data = value
+        .get("data")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let messages = data
+        .get("AgentMessage")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?
+        .unwrap_or_default();
+    let tool_calls = data
+        .get("AgentToolCall")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?
+        .unwrap_or_default();
+    let tool_results = data
+        .get("AgentToolResult")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?
+        .unwrap_or_default();
+
+    Ok(GraphqlSessionShape {
+        session_id: session_id.to_string(),
+        request_id: request_id.to_string(),
+        turn_state: turn_state
+            .derived_turn_state()
+            .map(|state| format!("{state:?}")),
+        request: turn_state.request,
+        response: turn_state.response,
+        messages,
+        tool_calls,
+        tool_results,
+    })
+}
+
+fn graphql_response_status(row: &AgentResponseRow) -> Option<ResponseStatus> {
+    match row.status.as_deref().unwrap_or_default() {
+        "streaming" => Some(ResponseStatus::Streaming),
+        "complete" | "completed" => Some(ResponseStatus::Complete),
+        "error" | "failed" | "failure" => Some(ResponseStatus::Error),
+        _ => None,
+    }
+}
+
+fn finish_graphql_response(graphql: &str, value: serde_json::Value) -> Result<serde_json::Value> {
+    let errors = value
+        .get("errors")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if !errors.is_empty() {
+        anyhow::bail!(
+            "graphql returned errors from {graphql}: {}",
+            serde_json::Value::Array(errors)
+        );
+    }
+    Ok(value)
+}
+
+fn graphql_transport_error_is_retryable(error: &reqwest::Error) -> bool {
+    if error.is_timeout() || error.is_connect() || error.is_request() {
+        return true;
+    }
+
+    let message = error.to_string();
+    message.contains("connection closed before message completed")
+        || message.contains("connection reset")
+        || message.contains("broken pipe")
+        || message.contains("channel closed")
+        || message.contains("unexpected eof")
+        || message.contains("end of file before message length reached")
+        || message.contains("error decoding response body")
+}
+
+fn scale_backoff(base: Duration, attempt: usize) -> Duration {
+    let multiplier = attempt.saturating_add(1) as u32;
+    base.saturating_mul(multiplier)
+}
+
+fn clean_optional_string(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn graphql_string_literal(value: &str) -> String {
+    format!(r#""{}""#, escape_graphql_string(value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn turn_state_parser_derives_completed() {
+        let value = serde_json::json!({
+            "data": {
+                "AgentRequest": [{
+                    "request_id": "req-1",
+                    "retry_parent_request": "",
+                    "superseded_by_request": "",
+                    "lifecycle_state": "completed"
+                }],
+                "AgentResponse": [{
+                    "response_key": "resp-1",
+                    "request_id": "req-1",
+                    "status": "complete",
+                    "content": "hello",
+                    "error_message": ""
+                }]
+            }
+        });
+
+        let state = parse_turn_state_response(&value).expect("parse turn state");
+        assert_eq!(state.derived_turn_state(), Some(ClientTurnState::Completed));
+        assert!(state.response_is_durably_complete());
+    }
+
+    #[test]
+    fn graphql_rows_extract_collection_rows() {
+        let value = serde_json::json!({
+            "data": {
+                "Thing": [{ "id": "1" }, { "id": "2" }]
+            }
+        });
+        assert_eq!(graphql_rows_from_response(&value, "Thing").len(), 2);
+    }
+
+    #[test]
+    fn graphql_input_literal_renders_nested_values() {
+        let value = serde_json::json!({
+            "enabled": true,
+            "name": "alpha",
+            "tags": ["a", "b"]
+        });
+        let rendered = graphql_input_literal(&value).expect("render literal");
+        assert!(rendered.contains("enabled: true"));
+        assert!(rendered.contains(r#"name: "alpha""#));
+        assert!(rendered.contains(r#"tags: ["a", "b"]"#));
+    }
+}

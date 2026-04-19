@@ -163,6 +163,10 @@ pub(crate) async fn seed_live_manage_documents(
     agent_name: &str,
     backend: &AgentBackendConfig,
 ) -> Result<LiveAgentDocs> {
+    let stream_batch_ms = std::env::var("DEFRA_AGENT_DESKTOP_SOAK_STREAM_BATCH_MS")
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(500);
     let behavior_id = default_behavior_id_for_agent(agent_did);
     let backend_id = format!("{agent_name}-backend");
     let tool_selection_id = format!("{behavior_id}:tools");
@@ -189,7 +193,7 @@ pub(crate) async fn seed_live_manage_documents(
         max_output_tokens: Some(1024),
         max_turns: Some(50),
         temperature: Some(0.0),
-        stream_batch_ms: Some(50),
+        stream_batch_ms: Some(stream_batch_ms),
         deadline_duration_secs: Some(300),
     })
     .await?;
