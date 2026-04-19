@@ -295,7 +295,7 @@ impl LiveSoakDiagnostics {
             peer_id: deployment.peer_id.clone(),
             agent_did: deployment.agent_did.clone(),
             turn,
-            request_id: submission.request_id.clone(),
+            request_id: submission.effective_request_id.clone(),
             session_id: submission.session_id.clone(),
             prompt: submission.prompt.clone(),
             response: submission.response.clone(),
@@ -438,10 +438,8 @@ impl LiveSoakDiagnostics {
                 .filter(|record| log_matches_partition(record, &partition))
                 .cloned()
                 .collect();
-            let path = by_scope_dir.join(format!(
-                "{}.json",
-                sanitize_filename_component(&partition)
-            ));
+            let path =
+                by_scope_dir.join(format!("{}.json", sanitize_filename_component(&partition)));
             let bytes = serde_json::to_vec_pretty(&scoped_logs)?;
             std::fs::write(&path, bytes).with_context(|| format!("writing {}", path.display()))?;
         }
@@ -715,7 +713,9 @@ fn log_scope_partitions(logs: &[SoakLogRecord]) -> Vec<String> {
 }
 
 fn log_matches_partition(log: &SoakLogRecord, partition: &str) -> bool {
-    partitions_for_log(log).iter().any(|candidate| candidate == partition)
+    partitions_for_log(log)
+        .iter()
+        .any(|candidate| candidate == partition)
 }
 
 fn partitions_for_log(log: &SoakLogRecord) -> Vec<String> {
@@ -725,7 +725,8 @@ fn partitions_for_log(log: &SoakLogRecord) -> Vec<String> {
         partitions.push(format!("deployment-{deployment}"));
     }
 
-    if let Some(agent_did) = log_field(log, "span.agent_did").or_else(|| log_field(log, "agent_did"))
+    if let Some(agent_did) =
+        log_field(log, "span.agent_did").or_else(|| log_field(log, "agent_did"))
     {
         partitions.push(format!("agent-{agent_did}"));
     }

@@ -213,6 +213,7 @@ pub(crate) fn submit_custom_live_prompt_for_deployment(
 
     Ok(LiveSubmissionCase {
         prompt: prompt.to_string(),
+        effective_request_id: request_id.clone(),
         request_id,
         response,
         session_id,

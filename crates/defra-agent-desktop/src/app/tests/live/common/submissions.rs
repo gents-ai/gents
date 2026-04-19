@@ -65,7 +65,7 @@ pub(crate) fn assert_live_submission_rows(
             let request = snapshot
                 .requests
                 .iter()
-                .find(|row| row.request_id == submission.request_id)?;
+                .find(|row| row.request_id == submission.effective_request_id)?;
             let request_ok = request.agent_did.as_deref() == Some(deployment.agent_did.as_str())
                 && request.behavior_id.as_deref() == Some(deployment.docs.behavior_id.as_str())
                 && request.session_id.as_deref() == Some(submission.session_id.as_str())
@@ -83,7 +83,8 @@ pub(crate) fn assert_live_submission_rows(
                     Some("failed" | "dead" | "superseded")
                 );
 
-            let response = snapshot.latest_response_for_request(&submission.request_id)?;
+            let response =
+                snapshot.latest_response_for_request(&submission.effective_request_id)?;
             let response_ok = response.agent_did.as_deref() == Some(deployment.agent_did.as_str())
                 && response.behavior_id.as_deref() == Some(deployment.docs.behavior_id.as_str())
                 && response.session_id.as_deref() == Some(submission.session_id.as_str())
@@ -106,7 +107,8 @@ pub(crate) fn assert_live_submission_rows(
                 .is_some_and(|row| {
                     row.agent_did.as_deref() == Some(deployment.agent_did.as_str())
                         && row.behavior_id.as_deref() == Some(deployment.docs.behavior_id.as_str())
-                        && row.latest_request_id.as_deref() == Some(submission.request_id.as_str())
+                        && row.latest_request_id.as_deref()
+                            == Some(submission.effective_request_id.as_str())
                 });
             let session_ok = snapshot
                 .sessions
@@ -154,9 +156,11 @@ pub(crate) fn assert_live_deployment_default_config(
                 .find(|row| row.selection_id == deployment.docs.tool_selection_id)
                 .is_some_and(|row| {
                     row.agent_did.as_deref() == Some(deployment.agent_did.as_str())
-                        && row.enable_file_tools == Some(false)
-                        && row.enable_bash == Some(false)
-                        && row.cli_tool_names.is_empty()
+                        && row.enable_file_tools == Some(true)
+                        && row.file_tools_mode.as_deref() == Some("ReadOnly")
+                        && row.enable_bash == Some(true)
+                        && row.bash_mode.as_deref() == Some("ReadOnly")
+                        && row.cli_tool_names == vec!["rg".to_string()]
                         && row.delegate_to.is_empty()
                 });
             let profile_ok = snapshot
@@ -179,7 +183,7 @@ pub(crate) struct GraphqlSubmittedRequest {
     pub(crate) session_id: String,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub(crate) struct GraphqlRequestRow {
     pub(crate) request_id: String,
     #[serde(default)]
@@ -190,15 +194,83 @@ pub(crate) struct GraphqlRequestRow {
     pub(crate) lifecycle_state: Option<String>,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub(crate) struct GraphqlResponseRow {
+    #[serde(default)]
+    pub(crate) request_id: Option<String>,
     #[serde(default)]
     pub(crate) status: Option<String>,
     #[serde(default)]
     pub(crate) content: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub(crate) struct GraphqlMessageRow {
+    #[serde(default)]
+    pub(crate) message_key: Option<String>,
+    #[serde(default)]
+    pub(crate) sequence: Option<i64>,
+    #[serde(default)]
+    pub(crate) role: Option<String>,
+    #[serde(default)]
+    pub(crate) content: Option<String>,
+    #[serde(default)]
+    pub(crate) timestamp: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub(crate) struct GraphqlToolCallRow {
+    #[serde(default)]
+    pub(crate) tool_call_key: Option<String>,
+    #[serde(default)]
+    pub(crate) message_sequence: Option<i64>,
+    #[serde(default)]
+    pub(crate) tool_name: Option<String>,
+    #[serde(default)]
+    pub(crate) tool_call_id: Option<String>,
+    #[serde(default)]
+    pub(crate) status: Option<String>,
+    #[serde(default)]
+    pub(crate) args: Option<String>,
+    #[serde(default)]
+    pub(crate) result: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub(crate) struct GraphqlToolResultRow {
+    #[serde(default)]
+    pub(crate) agent_did: Option<String>,
+    #[serde(default)]
+    pub(crate) session_id: Option<String>,
+    #[serde(default)]
+    pub(crate) tool_name: Option<String>,
+    #[serde(default)]
+    pub(crate) tool_input: Option<String>,
+    #[serde(default)]
+    pub(crate) output_text: Option<String>,
+    #[serde(default)]
+    pub(crate) truncated: Option<bool>,
+    #[serde(default)]
+    pub(crate) truncation_metadata: Option<String>,
+    #[serde(default)]
+    pub(crate) conversation_doc_id: Option<String>,
+    #[serde(default)]
+    pub(crate) created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct GraphqlSessionShape {
+    pub(crate) session_id: String,
+    pub(crate) request_id: String,
+    pub(crate) turn_state: Option<String>,
+    pub(crate) request: Option<GraphqlRequestRow>,
+    pub(crate) response: Option<GraphqlResponseRow>,
+    pub(crate) messages: Vec<GraphqlMessageRow>,
+    pub(crate) tool_calls: Vec<GraphqlToolCallRow>,
+    pub(crate) tool_results: Vec<GraphqlToolResultRow>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct GraphqlTurnState {
     pub(crate) request: Option<GraphqlRequestRow>,
     pub(crate) response: Option<GraphqlResponseRow>,
@@ -210,12 +282,28 @@ impl GraphqlTurnState {
         derive_client_turn(&[attempt])
     }
 
+    pub(crate) fn response_is_durably_complete(&self) -> bool {
+        self.request.as_ref().is_some_and(|request| {
+            matches!(
+                request.lifecycle_state.as_deref(),
+                Some("completed" | "superseded")
+            )
+        }) && self.response.as_ref().is_some_and(|response| {
+            matches!(response.status.as_deref(), Some("complete" | "completed"))
+        })
+    }
+
+    pub(crate) fn successor_request_id(&self) -> Option<String> {
+        self.request
+            .as_ref()
+            .and_then(|row| clean_optional_string(row.superseded_by_request.as_deref()))
+    }
+
     fn attempt_view(&self) -> Option<AttemptView> {
         let request = self.request.as_ref()?;
-        let lifecycle = RequestLifecycleState::try_from(
-            request.lifecycle_state.as_deref().unwrap_or_default(),
-        )
-        .ok()?;
+        let lifecycle =
+            RequestLifecycleState::try_from(request.lifecycle_state.as_deref().unwrap_or_default())
+                .ok()?;
 
         Some(AttemptView {
             request: RequestSnapshot {
@@ -224,10 +312,8 @@ impl GraphqlTurnState {
                     request.retry_parent_request.as_deref(),
                 ),
                 lifecycle_state: lifecycle,
-                is_superseded: clean_optional_string(
-                    request.superseded_by_request.as_deref(),
-                )
-                .is_some(),
+                is_superseded: clean_optional_string(request.superseded_by_request.as_deref())
+                    .is_some(),
             },
             response: self
                 .response
@@ -297,53 +383,6 @@ pub(crate) fn create_live_agent_request_via_graphql(
     })
 }
 
-pub(crate) fn wait_for_derived_completed_turn(
-    graphql_url: &str,
-    request_id: &str,
-    timeout: Duration,
-    poll_interval: Duration,
-) -> Result<GraphqlTurnState> {
-    let deadline = Instant::now() + timeout;
-
-    loop {
-        let state = fetch_graphql_turn_state(graphql_url, request_id)?;
-        match state.derived_turn_state() {
-            Some(ClientTurnState::Completed) => {
-                if state
-                    .response
-                    .as_ref()
-                    .and_then(|row| row.content.as_deref())
-                    .is_some_and(|content| !content.trim().is_empty())
-                {
-                    return Ok(state);
-                }
-            }
-            Some(ClientTurnState::Failed | ClientTurnState::Superseded) => {
-                anyhow::bail!(
-                    "request {} reached terminal turn state {:?}: request={:?} response={:?}",
-                    request_id,
-                    state.derived_turn_state(),
-                    state.request,
-                    state.response
-                );
-            }
-            Some(ClientTurnState::WaitingForClaim | ClientTurnState::Streaming) | None => {}
-        }
-
-        if Instant::now() >= deadline {
-            anyhow::bail!(
-                "timed out waiting for derived completed turn for request {}: turn_state={:?} request={:?} response={:?}",
-                request_id,
-                state.derived_turn_state(),
-                state.request,
-                state.response
-            );
-        }
-
-        std::thread::sleep(poll_interval);
-    }
-}
-
 pub(crate) fn fetch_graphql_turn_state(
     graphql_url: &str,
     request_id: &str,
@@ -392,6 +431,82 @@ pub(crate) fn fetch_graphql_turn_state(
     })
 }
 
+pub(crate) fn fetch_graphql_session_shape(
+    graphql_url: &str,
+    session_id: &str,
+    request_id: &str,
+) -> Result<GraphqlSessionShape> {
+    let escaped_session_id = escape_graphql_string(session_id);
+    let turn_state = fetch_graphql_turn_state(graphql_url, request_id)?;
+    let query = format!(
+        r#"{{
+            AgentMessage(filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}, order: {{ sequence: ASC }}) {{
+                message_key
+                sequence
+                role
+                content
+                timestamp
+            }}
+            AgentToolCall(filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}, order: {{ message_sequence: ASC }}) {{
+                tool_call_key
+                message_sequence
+                tool_name
+                tool_call_id
+                status
+                args
+                result
+            }}
+            AgentToolResult(filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}, order: {{ created_at: ASC }}) {{
+                agent_did
+                session_id
+                tool_name
+                tool_input
+                output_text
+                truncated
+                truncation_metadata
+                conversation_doc_id
+                created_at
+            }}
+        }}"#
+    );
+    let response = execute_graphql(graphql_url, &query)?;
+    let data = response
+        .get("data")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let messages = data
+        .get("AgentMessage")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?
+        .unwrap_or_default();
+    let tool_calls = data
+        .get("AgentToolCall")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?
+        .unwrap_or_default();
+    let tool_results = data
+        .get("AgentToolResult")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?
+        .unwrap_or_default();
+
+    Ok(GraphqlSessionShape {
+        session_id: session_id.to_string(),
+        request_id: request_id.to_string(),
+        turn_state: turn_state
+            .derived_turn_state()
+            .map(|state| format!("{state:?}")),
+        request: turn_state.request,
+        response: turn_state.response,
+        messages,
+        tool_calls,
+        tool_results,
+    })
+}
+
 pub(crate) fn execute_graphql(url: &str, query: &str) -> Result<serde_json::Value> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -407,15 +522,13 @@ pub(crate) fn execute_graphql(url: &str, query: &str) -> Result<serde_json::Valu
         let response = match response {
             Ok(response) => response,
             Err(error) if graphql_transport_error_is_retryable(&error) && attempt < 4 => {
-                last_error = Some(
-                    anyhow::Error::new(error).context(format!("posting GraphQL to {url}")),
-                );
+                last_error =
+                    Some(anyhow::Error::new(error).context(format!("posting GraphQL to {url}")));
                 std::thread::sleep(Duration::from_millis(100 * (attempt + 1) as u64));
                 continue;
             }
             Err(error) => {
-                return Err(anyhow::Error::new(error)
-                    .context(format!("posting GraphQL to {url}")));
+                return Err(anyhow::Error::new(error).context(format!("posting GraphQL to {url}")));
             }
         };
 
@@ -423,7 +536,8 @@ pub(crate) fn execute_graphql(url: &str, query: &str) -> Result<serde_json::Valu
             Ok(response) => response,
             Err(error) if graphql_transport_error_is_retryable(&error) && attempt < 4 => {
                 last_error = Some(
-                    anyhow::Error::new(error).context(format!("reading GraphQL response from {url}")),
+                    anyhow::Error::new(error)
+                        .context(format!("reading GraphQL response from {url}")),
                 );
                 std::thread::sleep(Duration::from_millis(100 * (attempt + 1) as u64));
                 continue;

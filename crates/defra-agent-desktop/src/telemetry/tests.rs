@@ -1,6 +1,6 @@
 use chrono::{Duration, Utc};
-use tracing::Level;
 use tracing::Instrument;
+use tracing::Level;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::Registry;
 
@@ -75,16 +75,12 @@ async fn layer_captures_active_span_fields_on_events() {
 
     let snapshot = store.snapshot();
     let entry = snapshot.entries.first().expect("entry captured");
-    assert!(
-        entry
-            .fields
-            .iter()
-            .any(|field| field.name == "span.deployment_label" && field.value == "Alpha Server")
-    );
-    assert!(
-        entry
-            .fields
-            .iter()
-            .any(|field| field.name == "span.agent_did" && field.value == "did:defra:test")
-    );
+    assert!(entry
+        .fields
+        .iter()
+        .any(|field| field.name == "span.deployment_label" && field.value == "Alpha Server"));
+    assert!(entry
+        .fields
+        .iter()
+        .any(|field| field.name == "span.agent_did" && field.value == "did:defra:test"));
 }

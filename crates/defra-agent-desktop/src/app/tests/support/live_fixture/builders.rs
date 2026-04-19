@@ -134,12 +134,8 @@ pub(crate) fn build_live_desktop_fixture(
         desktop_core.as_ref(),
         "single-agent live desktop",
     ))?;
-    let _desktop_api = BootstrapRuntimeApi::start(
-        &runtime,
-        Arc::clone(&desktop_core),
-        "Desktop",
-        desktop_addr,
-    )?;
+    let _desktop_api =
+        BootstrapRuntimeApi::start(&runtime, Arc::clone(&desktop_core), "Desktop", desktop_addr)?;
     runtime.block_on(wait_for_connected_peer(
         desktop_core.as_ref(),
         started.deployment.core.local_peer_id(),
@@ -236,12 +232,8 @@ pub(crate) fn build_named_multi_agent_desktop_fixture_with_backend(
         desktop_core.as_ref(),
         "multi-agent live desktop",
     ))?;
-    let desktop_api = BootstrapRuntimeApi::start(
-        &runtime,
-        Arc::clone(&desktop_core),
-        "Desktop",
-        desktop_addr,
-    )?;
+    let desktop_api =
+        BootstrapRuntimeApi::start(&runtime, Arc::clone(&desktop_core), "Desktop", desktop_addr)?;
     for deployment in &deployments {
         runtime.block_on(wait_for_connected_peer(
             desktop_core.as_ref(),
@@ -263,11 +255,7 @@ pub(crate) fn build_named_multi_agent_desktop_fixture_with_backend(
         )?;
     }
 
-    let mut driver = start_chat_driver(
-        Arc::clone(&runtime),
-        Arc::clone(&desktop_core),
-        log_store,
-    );
+    let mut driver = start_chat_driver(Arc::clone(&runtime), Arc::clone(&desktop_core), log_store);
     wait_for_bootstrap_chat_rows(&mut driver, &deployments)?;
 
     Ok(MultiAgentLiveDesktopFixture {

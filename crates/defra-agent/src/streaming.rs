@@ -18,8 +18,8 @@ mod queries;
 mod tests;
 
 use queries::{
-    PersistedResponseState, extract_mutation_doc_id, load_response_state,
-    load_response_state_by_key,
+    extract_mutation_doc_id, load_response_state, load_response_state_by_key,
+    PersistedResponseState,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -186,7 +186,8 @@ impl DefraStreamWriter {
             return Ok(true);
         }
 
-        self.set_error_message(&existing.doc_id, error_message).await?;
+        self.set_error_message(&existing.doc_id, error_message)
+            .await?;
         self.finalize(&existing.doc_id, StreamStatus::Error).await?;
         Ok(true)
     }
@@ -325,7 +326,8 @@ impl StreamWriter for DefraStreamWriter {
             })
         };
         let now = chrono::Utc::now().to_rfc3339();
-        let mutation = build_finalize_mutation(existing.as_ref(), doc_id, &status, &now, snapshot.as_ref());
+        let mutation =
+            build_finalize_mutation(existing.as_ref(), doc_id, &status, &now, snapshot.as_ref());
         let operation = if snapshot.is_some() {
             "finalize_streaming_response"
         } else {

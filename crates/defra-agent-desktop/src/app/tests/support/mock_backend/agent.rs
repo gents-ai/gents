@@ -1,5 +1,6 @@
 use super::backend::{bind_default_behavior_backend, AgentBackendConfig};
 use super::*;
+use defra_agent::cli_tool;
 use tracing::Instrument;
 
 pub(crate) struct RunningAgent {
@@ -64,21 +65,21 @@ pub(crate) async fn spawn_backed_agent(
         Arc::clone(&node),
         identity,
         DocumentRuntimeOptions {
-            tool_ceiling: ToolCeiling::readwrite(tool_root.clone()),
+            tool_ceiling: ToolCeiling::readwrite(tool_root.clone()).with_cli_tool(cli_tool(
+                "rg",
+                "rg",
+                "Search files with ripgrep",
+            )),
             ..Default::default()
         },
     )
     .await?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let run_task = tokio::spawn(
-        agent
-            .run(shutdown_rx)
-            .instrument(tracing::info_span!(
-                "live_remote_agent",
-                deployment_label = %name,
-                agent_did = %did
-            )),
-    );
+    let run_task = tokio::spawn(agent.run(shutdown_rx).instrument(tracing::info_span!(
+        "live_remote_agent",
+        deployment_label = %name,
+        agent_did = %did
+    )));
     wait_for_runtime_process_state(node.as_ref(), &did, "ready").await?;
     Ok(RunningAgent {
         did,

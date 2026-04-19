@@ -162,8 +162,9 @@ pub(crate) struct MultiAgentLiveDesktopFixture {
 
 impl MultiAgentLiveDesktopFixture {
     pub(crate) fn shutdown(mut self) -> Result<()> {
+        let started = Instant::now();
         for deployment in &self.deployments {
-            tracing::info!(deployment = %deployment.label, "multi-agent fixture shutdown: waiting for remote quiescence");
+            tracing::debug!(deployment = %deployment.label, "multi-agent fixture shutdown: waiting for remote quiescence");
             wait_for_client_quiescence(
                 self.runtime.as_ref(),
                 deployment.core.as_ref(),
@@ -172,7 +173,7 @@ impl MultiAgentLiveDesktopFixture {
             )?;
         }
         if let Some(desktop_core) = self.driver.app.client.as_ref() {
-            tracing::info!("multi-agent fixture shutdown: waiting for desktop quiescence");
+            tracing::debug!("multi-agent fixture shutdown: waiting for desktop quiescence");
             wait_for_client_quiescence(
                 self.runtime.as_ref(),
                 desktop_core.as_ref(),
@@ -181,14 +182,17 @@ impl MultiAgentLiveDesktopFixture {
             )?;
         }
         for deployment in self.deployments.drain(..) {
-            tracing::info!(deployment = %deployment.label, "multi-agent fixture shutdown: stopping running agent");
+            tracing::debug!(deployment = %deployment.label, "multi-agent fixture shutdown: stopping running agent");
             self.runtime.block_on(deployment.running_agent.shutdown())?;
-            tracing::info!(deployment = %deployment.label, "multi-agent fixture shutdown: shutting down remote core");
+            tracing::debug!(deployment = %deployment.label, "multi-agent fixture shutdown: shutting down remote core");
             self.runtime.block_on(deployment.core.shutdown())?;
         }
-        tracing::info!("multi-agent fixture shutdown: shutting down desktop client");
+        tracing::debug!("multi-agent fixture shutdown: shutting down desktop client");
         self.driver.app.shutdown_client();
-        tracing::info!("multi-agent fixture shutdown: complete");
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "multi-agent fixture shutdown: complete"
+        );
         Ok(())
     }
 }
@@ -205,6 +209,7 @@ pub(crate) struct LiveDeploymentCase<'a> {
 pub(crate) struct LiveSubmissionCase {
     pub(crate) prompt: String,
     pub(crate) request_id: String,
+    pub(crate) effective_request_id: String,
     pub(crate) response: String,
     pub(crate) session_id: String,
 }

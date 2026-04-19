@@ -1,23 +1,67 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use defra_agent_protocol::client_protocol::ClientTurnState;
+
 use super::*;
 
 #[test]
 #[ignore = "hits the fixed MiniMax live backend and runs a long three-agent soak"]
 fn desktop_live_three_agent_multi_turn_soak() -> Result<()> {
+    run_named_scripted_graphql_soak(
+        "desktop-live-soak",
+        &["alpha", "bravo", "charlie"],
+        "desktop-live-three-agent",
+    )
+}
+
+#[test]
+#[ignore = "hits the fixed MiniMax live backend and runs a focused single-agent soak"]
+fn desktop_live_single_agent_scripted_turns_smoke() -> Result<()> {
+    run_named_scripted_graphql_soak(
+        "desktop-live-soak-single",
+        &["alpha"],
+        "desktop-live-single-agent",
+    )
+}
+
+#[test]
+#[ignore = "hits the fixed MiniMax live backend and runs a focused two-agent soak"]
+fn desktop_live_two_agent_scripted_turns_smoke() -> Result<()> {
+    run_named_scripted_graphql_soak(
+        "desktop-live-soak-two",
+        &["alpha", "bravo"],
+        "desktop-live-two-agent",
+    )
+}
+
+fn run_named_scripted_graphql_soak(
+    fixture_name: &str,
+    deployment_names: &[&str],
+    artifact_name: &str,
+) -> Result<()> {
     let _live_guard = live_desktop_test_guard();
     init_test_tracing();
 
-    let config = LiveSoakConfig::from_env("desktop-live-three-agent")?;
     let backend = explicit_soak_backend();
     let fixture = build_named_multi_agent_desktop_fixture_with_backend(
-        "desktop-live-soak",
-        &["alpha", "bravo", "charlie"],
+        fixture_name,
+        deployment_names,
         &backend,
         global_log_store(),
     )?;
-    assert_eq!(fixture.deployments.len(), 3);
+    run_scripted_graphql_soak(fixture, artifact_name)
+}
+
+fn run_scripted_graphql_soak(
+    fixture: MultiAgentLiveDesktopFixture,
+    artifact_name: &str,
+) -> Result<()> {
+    let config = LiveSoakConfig::from_env(artifact_name)?;
+    assert!(
+        !fixture.deployments.is_empty(),
+        "expected at least one live deployment in scripted soak"
+    );
 
     let desktop_client = Arc::clone(
         fixture
@@ -29,7 +73,7 @@ fn desktop_live_three_agent_multi_turn_soak() -> Result<()> {
     );
     let diagnostics_dir = config.output_dir.clone();
     let mut diagnostics = LiveSoakDiagnostics::new(&diagnostics_dir)?;
-    diagnostics.write_metadata(&fixture.deployments, &backend)?;
+    diagnostics.write_metadata(&fixture.deployments, &fixture.backend)?;
     diagnostics.write_log_snapshot(global_log_store().as_ref())?;
     diagnostics.scrape_runtime_metrics(&fixture.runtime_apis)?;
 
@@ -110,20 +154,6 @@ fn desktop_live_three_agent_multi_turn_soak() -> Result<()> {
                 }
             };
 
-            if let Err(error) = assert_soak_repo_response(
-                &deployment.label,
-                prompt_template,
-                &submission.response,
-                turn,
-            ) {
-                tracing::warn!(
-                    deployment = %deployment.label,
-                    turn,
-                    prompt = prompt_template.name,
-                    error = %error,
-                    "live soak response quality check failed; continuing because durable turn completion is the primary signal"
-                );
-            }
             assert_live_submission_rows(
                 fixture.runtime.as_ref(),
                 desktop_client.as_ref(),
@@ -139,6 +169,20 @@ fn desktop_live_three_agent_multi_turn_soak() -> Result<()> {
                 deployment,
                 &submission,
                 None,
+            )?;
+            wait_for_session_settled(
+                fixture.runtime.as_ref(),
+                desktop_client.as_ref(),
+                &format!("desktop {} turn {turn} settled", deployment.label),
+                &submission.session_id,
+                &submission.effective_request_id,
+            )?;
+            wait_for_session_settled(
+                fixture.runtime.as_ref(),
+                deployment.remote_core,
+                &format!("remote {} turn {turn} settled", deployment.label),
+                &submission.session_id,
+                &submission.effective_request_id,
             )?;
 
             if let Some(existing_session_id) = session_by_peer.get(&deployment.peer_id) {
@@ -169,6 +213,28 @@ fn desktop_live_three_agent_multi_turn_soak() -> Result<()> {
     }
 
     for (index, deployment) in deployments.iter().enumerate() {
+        wait_for_session_tool_activity(
+            fixture.runtime.as_ref(),
+            desktop_client.as_ref(),
+            &format!("desktop {} session tool activity", deployment.label),
+            session_by_peer
+                .get(&deployment.peer_id)
+                .ok_or_else(|| anyhow!("missing soak session for {}", deployment.label))?,
+            0,
+            1,
+            &[],
+        )?;
+        wait_for_session_tool_activity(
+            fixture.runtime.as_ref(),
+            deployment.remote_core,
+            &format!("remote {} session tool activity", deployment.label),
+            session_by_peer
+                .get(&deployment.peer_id)
+                .ok_or_else(|| anyhow!("missing soak session for {}", deployment.label))?,
+            0,
+            1,
+            &[],
+        )?;
         fixture.runtime.block_on(desktop_client.refresh_store())?;
         let desktop_snapshot = desktop_client.store().snapshot();
         let session_id = session_by_peer
@@ -233,41 +299,46 @@ fn desktop_live_three_agent_multi_turn_soak() -> Result<()> {
                 session_request_contents
             );
         }
-        let other = &deployments[(index + 1) % deployments.len()];
-        let other_prompt = prompts_by_peer
-            .get(&other.peer_id)
-            .and_then(|prompts| prompts.first())
-            .ok_or_else(|| anyhow!("missing comparison prompt for {}", other.label))?;
-        if session_request_contents
-            .iter()
-            .any(|content| content.contains(other_prompt))
-        {
-            anyhow::bail!(
-                "persisted transcript for {} leaked prompt from {}. session={} request_contents={:?}",
-                deployment.label,
-                other.label,
-                session_id,
-                session_request_contents
-            );
+        if deployments.len() > 1 {
+            let other = &deployments[(index + 1) % deployments.len()];
+            let other_prompt = prompts_by_peer
+                .get(&other.peer_id)
+                .and_then(|prompts| prompts.first())
+                .ok_or_else(|| anyhow!("missing comparison prompt for {}", other.label))?;
+            if session_request_contents
+                .iter()
+                .any(|content| content.contains(other_prompt))
+            {
+                anyhow::bail!(
+                    "persisted transcript for {} leaked prompt from {}. session={} request_contents={:?}",
+                    deployment.label,
+                    other.label,
+                    session_id,
+                    session_request_contents
+                );
+            }
         }
     }
 
     tracing::info!(
+        artifact_name,
         diagnostics_dir = %diagnostics_dir.display(),
-        "desktop_live_three_agent_multi_turn_soak completed"
+        "desktop live scripted soak completed"
     );
-    if let Err(error) = wait_for_post_completion_p2p_quiet(
-        fixture.runtime.as_ref(),
-        &fixture.driver,
-        &fixture.deployments,
-        Duration::from_secs(2),
-        Duration::from_secs(10),
-    ) {
-        tracing::warn!(
-            diagnostics_dir = %diagnostics_dir.display(),
-            error = %error,
-            "live soak observed continued P2P activity after completion"
-        );
+    if fixture.deployments.len() > 1 {
+        if let Err(error) = wait_for_post_completion_p2p_quiet(
+            fixture.runtime.as_ref(),
+            &fixture.driver,
+            &fixture.deployments,
+            Duration::from_secs(2),
+            Duration::from_secs(10),
+        ) {
+            tracing::warn!(
+                diagnostics_dir = %diagnostics_dir.display(),
+                error = %error,
+                "live soak observed continued P2P activity after completion"
+            );
+        }
     }
     diagnostics.record_snapshot(
         fixture.runtime.as_ref(),
@@ -283,18 +354,31 @@ fn desktop_live_three_agent_multi_turn_soak() -> Result<()> {
 }
 
 struct SoakPromptTemplate {
-    name: &'static str,
     body: &'static str,
+    starting_paths: &'static [&'static str],
 }
 
 impl SoakPromptTemplate {
     fn render(&self, deployment: &LiveDeploymentCase<'_>, turn: usize) -> String {
+        let starting_paths = self
+            .starting_paths
+            .iter()
+            .map(|path| format!("- {path}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         format!(
             "You are running a desktop live soak investigation for {deployment_label}.\n\
 Use the repo copy under ./workspace and cite the file paths you inspected.\n\
 Do not answer from memory; read files before answering.\n\
+Use the file tools (`list_files` and `read_file`) to explore the workspace.\n\
+Do not use the bash tool for repository exploration, directory listing, or file reading.\n\
+When using `read_file`, call it with exactly one `path` at a time, not an array of files.\n\
+Start from these known paths in the seeded workspace:\n\
+{starting_paths}\n\
+Prefer those exact files/directories before exploring anything else.\n\
 Turn {turn}: {body}",
             deployment_label = deployment.label,
+            starting_paths = starting_paths,
             body = self.body,
         )
     }
@@ -303,59 +387,36 @@ Turn {turn}: {body}",
 fn soak_repo_investigation_turns() -> &'static [SoakPromptTemplate] {
     &[
         SoakPromptTemplate {
-            name: "p2p-summary",
             body: "Please summarize how the desktop app and defra-agent communicate over P2P in this repository. Cite the files you used and keep the answer focused on the actual code paths.",
+            starting_paths: &[
+                "./workspace/crates/defra-agent-desktop/src/app/tests/live/chat_soak.rs",
+                "./workspace/crates/defra-agent-desktop/src/app/tests/support/live_fixture/builders.rs",
+                "./workspace/crates/defra-agent/src/watcher.rs",
+                "./workspace/crates/defra-agent/src/watcher/query.rs",
+                "./workspace/crates/defra-agent-protocol/src/client_protocol.rs",
+            ],
         },
         SoakPromptTemplate {
-            name: "identities",
             body: "Now explain which identities are involved in that exchange and how they affect authorization, routing, or trust. Build on your previous answer and cite the files you used.",
+            starting_paths: &[
+                "./workspace/crates/defra-agent/src/identity.rs",
+                "./workspace/crates/defra-agent/src/document_config/principal.rs",
+                "./workspace/crates/defra-agent/src/lifecycle/claim.rs",
+                "./workspace/crates/defra-agent/src/agent/runtime/context.rs",
+                "./workspace/crates/defra-agent/src/agent/runtime/router.rs",
+            ],
         },
         SoakPromptTemplate {
-            name: "failure-points",
             body: "Now identify the most likely failure points in that desktop-to-agent P2P flow and where you would instrument it for debugging. Cite the files you used.",
+            starting_paths: &[
+                "./workspace/crates/defra-agent/src/watcher.rs",
+                "./workspace/crates/defra-agent/src/watcher/query.rs",
+                "./workspace/crates/defra-agent/src/lifecycle/claim.rs",
+                "./workspace/crates/defra-agent-desktop/src/app/tests/live/common/submissions.rs",
+                "./workspace/docs/protocols/client-state-machine.md",
+            ],
         },
     ]
-}
-
-fn assert_soak_repo_response(
-    deployment_label: &str,
-    prompt: &SoakPromptTemplate,
-    response: &str,
-    turn: usize,
-) -> Result<()> {
-    let trimmed = response.trim();
-    if trimmed.len() < 200 {
-        anyhow::bail!(
-            "expected a substantive repo-backed response for {} turn {} ({}), got too little text: {}",
-            deployment_label,
-            turn,
-            prompt.name,
-            trimmed
-        );
-    }
-
-    let expected_markers = [
-        "workspace/",
-        "crates/",
-        "docs/",
-        ".rs",
-        "Cargo.toml",
-        "README.md",
-    ];
-    if !expected_markers
-        .iter()
-        .any(|marker| trimmed.contains(marker))
-    {
-        anyhow::bail!(
-            "expected repo/file references in soak response for {} turn {} ({}), got: {}",
-            deployment_label,
-            turn,
-            prompt.name,
-            trimmed
-        );
-    }
-
-    Ok(())
 }
 
 fn submit_soak_prompt_for_deployment(
@@ -380,10 +441,11 @@ fn submit_soak_prompt_for_deployment(
     )
     .with_context(|| format!("submit_request failed for {}", deployment.label))?;
 
-    let response_text = wait_for_soak_response_text(
+    let (effective_request_id, response_text) = wait_for_soak_response_text(
         desktop_graphql_url,
         deployment,
         &submitted.request_id,
+        &submitted.session_id,
         log_baseline,
         diagnostics_dir,
     )?;
@@ -391,6 +453,7 @@ fn submit_soak_prompt_for_deployment(
     Ok(LiveSubmissionCase {
         prompt: prompt.to_string(),
         request_id: submitted.request_id,
+        effective_request_id,
         response: response_text,
         session_id: submitted.session_id,
     })
@@ -400,10 +463,16 @@ fn wait_for_soak_response_text(
     desktop_graphql_url: &str,
     deployment: &LiveDeploymentCase<'_>,
     request_id: &str,
+    session_id: &str,
     log_baseline: u64,
     diagnostics_dir: &Path,
-) -> Result<String> {
+) -> Result<(String, String)> {
     let deadline = Instant::now() + Duration::from_secs(180);
+    let started = Instant::now();
+    let mut current_request_id = request_id.to_string();
+    let mut visited = std::collections::BTreeSet::from([current_request_id.clone()]);
+    let mut polls = 0usize;
+    let mut last_logged_signature: Option<String> = None;
     loop {
         if let Some(problem) = soak_p2p_problem_since(log_baseline) {
             anyhow::bail!(
@@ -415,58 +484,253 @@ fn wait_for_soak_response_text(
             );
         }
 
-        let state = match wait_for_derived_completed_turn(
-            desktop_graphql_url,
-            request_id,
-            Duration::from_millis(250),
-            Duration::from_millis(50),
-        ) {
-            Ok(state) => state,
-            Err(error) if Instant::now() < deadline => {
-                if error
-                    .to_string()
-                    .contains("timed out waiting for derived completed turn")
-                {
+        let state = fetch_graphql_turn_state(desktop_graphql_url, &current_request_id)
+            .with_context(|| {
+                format!(
+                    "fetching soak turn state for {} request {}",
+                    deployment.label, current_request_id
+                )
+            })?;
+        polls += 1;
+        let log_signature = format!(
+            "{}|{}|{}|{}",
+            current_request_id,
+            state
+                .request
+                .as_ref()
+                .and_then(|row| row.lifecycle_state.as_deref())
+                .unwrap_or_default(),
+            state
+                .response
+                .as_ref()
+                .and_then(|row| row.status.as_deref())
+                .unwrap_or_default(),
+            state
+                .derived_turn_state()
+                .map(|turn_state| format!("{turn_state:?}"))
+                .unwrap_or_default()
+        );
+        let should_log = polls == 1
+            || polls % 100 == 0
+            || last_logged_signature.as_deref() != Some(log_signature.as_str());
+        if should_log {
+            last_logged_signature = Some(log_signature);
+            persist_turn_wait_snapshot(
+                diagnostics_dir,
+                deployment,
+                request_id,
+                &current_request_id,
+                polls,
+                &state,
+            )?;
+            tracing::info!(
+                request_id = %request_id,
+                current_request_id = %current_request_id,
+                polls,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                turn_state = ?state.derived_turn_state(),
+                lifecycle_state = state.request.as_ref().and_then(|row| row.lifecycle_state.as_deref()).unwrap_or_default(),
+                response_status = state.response.as_ref().and_then(|row| row.status.as_deref()).unwrap_or_default(),
+                response_preview = state
+                    .response
+                    .as_ref()
+                    .and_then(|row| row.content.as_deref())
+                    .map(compact_response_preview)
+                    .unwrap_or_default(),
+                "waiting for soak response"
+            );
+        }
+
+        match state.derived_turn_state() {
+            Some(ClientTurnState::Completed) => {
+                if !state.response_is_durably_complete() {
                     std::thread::sleep(Duration::from_millis(50));
                     continue;
                 }
-                return Err(error.context(format!(
-                    "waiting for soak response for {} request {} (diagnostics: {})",
-                    deployment.label,
-                    request_id,
-                    diagnostics_dir.display()
-                )));
+                let response = state.response.as_ref().ok_or_else(|| {
+                    anyhow!(
+                        "soak request {} for {} derived Completed without AgentResponse row",
+                        current_request_id,
+                        deployment.label
+                    )
+                })?;
+                let content = response.content.as_deref().unwrap_or_default().trim();
+                if !content.is_empty() && !response_is_tool_call_only(content) {
+                    persist_session_shape_snapshot(
+                        desktop_graphql_url,
+                        diagnostics_dir,
+                        deployment,
+                        session_id,
+                        request_id,
+                        &current_request_id,
+                        "completed",
+                    )?;
+                    return Ok((current_request_id.clone(), content.to_string()));
+                }
+                if let Some(next_request_id) = state.successor_request_id() {
+                    if visited.insert(next_request_id.clone()) {
+                        tracing::info!(
+                            request_id = %request_id,
+                            current_request_id = %current_request_id,
+                            next_request_id = %next_request_id,
+                            "following completed request chain to successor"
+                        );
+                        current_request_id = next_request_id;
+                        std::thread::sleep(Duration::from_millis(50));
+                        continue;
+                    }
+                }
             }
-            Err(error) => {
-                return Err(error.context(format!(
-                    "waiting for soak response for {} request {} (diagnostics: {})",
+            Some(ClientTurnState::Superseded) => {
+                if let Some(next_request_id) = state.successor_request_id() {
+                    if visited.insert(next_request_id.clone()) {
+                        tracing::info!(
+                            request_id = %request_id,
+                            current_request_id = %current_request_id,
+                            next_request_id = %next_request_id,
+                            "following superseded request chain to successor"
+                        );
+                        current_request_id = next_request_id;
+                        std::thread::sleep(Duration::from_millis(50));
+                        continue;
+                    }
+                }
+                anyhow::bail!(
+                    "request {} for {} reached superseded turn state without a successor: request={:?} response={:?} (diagnostics: {})",
+                    current_request_id,
                     deployment.label,
-                    request_id,
+                    state.request,
+                    state.response,
                     diagnostics_dir.display()
-                )));
+                );
             }
-        };
+            Some(ClientTurnState::Failed) => {
+                anyhow::bail!(
+                    "soak request {} for {} reached failed turn state: request={:?} response={:?} (diagnostics: {})",
+                    current_request_id,
+                    deployment.label,
+                    state.request,
+                    state.response,
+                    diagnostics_dir.display()
+                );
+            }
+            Some(ClientTurnState::WaitingForClaim | ClientTurnState::Streaming) | None => {}
+        }
 
-        let response = state.response.as_ref().ok_or_else(|| {
-            anyhow!(
-                "soak request {} for {} derived Completed without AgentResponse row",
+        if Instant::now() >= deadline {
+            let _ = persist_session_shape_snapshot(
+                desktop_graphql_url,
+                diagnostics_dir,
+                deployment,
+                session_id,
                 request_id,
-                deployment.label
-            )
-        })?;
-        let content = response.content.as_deref().unwrap_or_default().trim();
-        if content.is_empty() {
+                &current_request_id,
+                "timeout",
+            );
             anyhow::bail!(
-                "soak request {} for {} reached Completed with empty response content: request={:?} response={:?} (diagnostics: {})",
-                request_id,
+                "timed out waiting for soak response for {} request {}: current_request_id={} turn_state={:?} request={:?} response={:?} (diagnostics: {})",
                 deployment.label,
+                request_id,
+                current_request_id,
+                state.derived_turn_state(),
                 state.request,
                 state.response,
                 diagnostics_dir.display()
             );
         }
-        return Ok(content.to_string());
+
+        std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+fn response_is_tool_call_only(content: &str) -> bool {
+    let trimmed = content.trim();
+    trimmed.starts_with("[TOOL_CALL]") && trimmed.ends_with("[/TOOL_CALL]")
+}
+
+fn compact_response_preview(content: &str) -> String {
+    const MAX_LEN: usize = 160;
+    let single_line = content.split_whitespace().collect::<Vec<_>>().join(" ");
+    if single_line.len() <= MAX_LEN {
+        single_line
+    } else {
+        format!("{}...", &single_line[..MAX_LEN])
+    }
+}
+
+fn persist_turn_wait_snapshot(
+    diagnostics_dir: &Path,
+    deployment: &LiveDeploymentCase<'_>,
+    root_request_id: &str,
+    current_request_id: &str,
+    polls: usize,
+    state: &GraphqlTurnState,
+) -> Result<()> {
+    #[derive(serde::Serialize)]
+    struct WaitSnapshot<'a> {
+        timestamp: String,
+        deployment: &'a str,
+        root_request_id: &'a str,
+        current_request_id: &'a str,
+        polls: usize,
+        turn_state: Option<String>,
+        state: &'a GraphqlTurnState,
+    }
+
+    let snapshots_dir = diagnostics_dir.join("store-snapshots");
+    std::fs::create_dir_all(&snapshots_dir)
+        .with_context(|| format!("creating {}", snapshots_dir.display()))?;
+    let path = snapshots_dir.join(format!(
+        "wait-{}-{}-{:04}.json",
+        soak_filename_component(&deployment.label),
+        soak_filename_component(root_request_id),
+        polls
+    ));
+    let snapshot = WaitSnapshot {
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        deployment: &deployment.label,
+        root_request_id,
+        current_request_id,
+        polls,
+        turn_state: state.derived_turn_state().map(|state| format!("{state:?}")),
+        state,
+    };
+    let bytes = serde_json::to_vec_pretty(&snapshot)?;
+    std::fs::write(&path, bytes).with_context(|| format!("writing {}", path.display()))
+}
+
+fn persist_session_shape_snapshot(
+    graphql_url: &str,
+    diagnostics_dir: &Path,
+    deployment: &LiveDeploymentCase<'_>,
+    session_id: &str,
+    root_request_id: &str,
+    current_request_id: &str,
+    phase: &str,
+) -> Result<()> {
+    let snapshots_dir = diagnostics_dir.join("store-snapshots");
+    std::fs::create_dir_all(&snapshots_dir)
+        .with_context(|| format!("creating {}", snapshots_dir.display()))?;
+    let path = snapshots_dir.join(format!(
+        "session-{}-{}-{}-{}.json",
+        soak_filename_component(&deployment.label),
+        soak_filename_component(root_request_id),
+        soak_filename_component(current_request_id),
+        soak_filename_component(phase)
+    ));
+    let snapshot = fetch_graphql_session_shape(graphql_url, session_id, current_request_id)?;
+    let bytes = serde_json::to_vec_pretty(&snapshot)?;
+    std::fs::write(&path, bytes).with_context(|| format!("writing {}", path.display()))
+}
+
+fn soak_filename_component(input: &str) -> String {
+    input
+        .chars()
+        .map(|ch| match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' => ch,
+            _ => '-',
+        })
+        .collect()
 }
 
 fn soak_p2p_problem_since(log_baseline: u64) -> Option<String> {
@@ -561,4 +825,36 @@ fn wait_for_post_completion_p2p_quiet(
 
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+fn wait_for_session_settled(
+    runtime: &Runtime,
+    core: &ClientCore,
+    label: &str,
+    session_id: &str,
+    effective_request_id: &str,
+) -> Result<()> {
+    wait_for_value(label, Duration::from_secs(15), || {
+        runtime.block_on(core.refresh_store()).ok()?;
+        let snapshot = core.store().snapshot();
+        let latest_request_id = snapshot.latest_request_id_for_session(session_id)?;
+        let turn_state = snapshot.derive_turn(session_id)?;
+        let non_terminal_requests = snapshot
+            .requests_for_session(session_id)
+            .into_iter()
+            .filter(|row| {
+                !matches!(
+                    row.lifecycle_state.as_deref(),
+                    Some("completed" | "failed" | "error" | "dead" | "superseded")
+                )
+            })
+            .count();
+        (latest_request_id == effective_request_id
+            && matches!(
+                turn_state,
+                ClientTurnState::Completed | ClientTurnState::Failed | ClientTurnState::Superseded
+            )
+            && non_terminal_requests == 0)
+            .then_some(())
+    })
 }

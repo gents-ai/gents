@@ -15,8 +15,8 @@ pub(crate) use soak::{
 };
 pub(crate) use submissions::{
     assert_live_deployment_default_config, assert_live_submission_rows,
-    create_live_agent_request_via_graphql, wait_for_derived_completed_turn,
-    wait_for_two_requests_in_flight,
+    create_live_agent_request_via_graphql, fetch_graphql_session_shape, fetch_graphql_turn_state,
+    wait_for_two_requests_in_flight, GraphqlTurnState,
 };
 pub(crate) use tooling::{
     assert_response_contains_tokens, tool_loop_prompt, wait_for_session_tool_activity,

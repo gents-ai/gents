@@ -18,6 +18,10 @@ enum InferenceAttemptOutcome {
     Finished(HandleRequestOutcome),
 }
 
+fn terminal_response_has_visible_output(streamed_text: &str, final_text: Option<&str>) -> bool {
+    !streamed_text.trim().is_empty() || final_text.is_some_and(|text| !text.trim().is_empty())
+}
+
 impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     pub(super) async fn run_inference(
         &mut self,
@@ -167,6 +171,21 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     }
                 }
 
+                if !terminal_response_has_visible_output(&streamed_text, final_text.as_deref()) {
+                    let error_reason =
+                        "agent stream completed without producing any visible response content";
+                    self.stream_writer
+                        .set_error_message(doc_id, error_reason)
+                        .await?;
+                    self.stream_writer
+                        .finalize(doc_id, StreamStatus::Error)
+                        .await?;
+
+                    return Ok(InferenceAttemptOutcome::Finished(
+                        HandleRequestOutcome::FailedAfterResponse(anyhow!(error_reason)),
+                    ));
+                }
+
                 self.stream_writer
                     .finalize(doc_id, StreamStatus::Complete)
                     .await?;
@@ -239,5 +258,19 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             .finalize(&doc_id, StreamStatus::Error)
             .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::terminal_response_has_visible_output;
+
+    #[test]
+    fn terminal_response_requires_visible_output() {
+        assert!(!terminal_response_has_visible_output("", None));
+        assert!(!terminal_response_has_visible_output("   ", Some("")));
+        assert!(!terminal_response_has_visible_output("", Some("   ")));
+        assert!(terminal_response_has_visible_output("hello", None));
+        assert!(terminal_response_has_visible_output("", Some("hello")));
     }
 }
