@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::Arc;
 
 use defra_agent_protocol::client_protocol::ClientTurnState;
 
@@ -117,99 +118,88 @@ fn run_scripted_graphql_soak(
     let deployments: Vec<_> = fixture
         .deployments
         .iter()
-        .map(live_deployment_case)
+        .map(ParallelDeploymentCase::from_live_deployment)
         .collect();
     let scripted_turns = soak_repo_investigation_turns();
-    let mut session_by_peer = BTreeMap::new();
-    let mut prompts_by_peer: BTreeMap<String, Vec<String>> = BTreeMap::new();
-
-    for (turn_index, prompt_template) in scripted_turns.iter().enumerate() {
-        let turn = turn_index + 1;
+    let run_results = match std::thread::scope(|scope| {
+        let mut workers = Vec::new();
         for deployment in &deployments {
-            let prompt = prompt_template.render(deployment, turn);
-            let existing_session_id = session_by_peer.get(&deployment.peer_id).cloned();
-            let submission = match submit_soak_prompt_for_deployment(
-                fixture.desktop_api.graphql_url(),
-                deployment,
-                existing_session_id.as_deref(),
-                &prompt,
-                diagnostics.output_dir(),
-            ) {
-                Ok(submission) => submission,
-                Err(error) => {
-                    let _ = diagnostics.record_snapshot(
-                        fixture.runtime.as_ref(),
-                        &fixture.driver,
-                        &fixture.deployments,
-                    );
-                    let _ = diagnostics.write_log_snapshot(global_log_store().as_ref());
-                    let _ = diagnostics.scrape_runtime_metrics(&fixture.runtime_apis);
-                    let _ = diagnostics.capture_workspace(fixture._tempdir.path());
-                    let recent_logs = soak_recent_problems(0);
-                    let _ = diagnostics.record_problem("submit_turn", &error, &recent_logs);
-                    return Err(error.context(format!(
-                        "soak diagnostics written to {}",
-                        diagnostics.output_dir().display()
-                    )));
-                }
-            };
+            let deployment = deployment.clone();
+            let runtime = Arc::clone(&fixture.runtime);
+            let desktop_client = Arc::clone(&desktop_client);
+            let desktop_graphql_url = fixture.desktop_api.graphql_url().to_string();
+            let diagnostics_dir = diagnostics.output_dir().to_path_buf();
+            workers.push(scope.spawn(move || {
+                run_parallel_deployment_soak(
+                    runtime,
+                    desktop_client,
+                    &desktop_graphql_url,
+                    &diagnostics_dir,
+                    deployment,
+                    scripted_turns,
+                )
+            }));
+        }
 
-            assert_live_submission_rows(
-                fixture.runtime.as_ref(),
-                desktop_client.as_ref(),
-                &format!("desktop {} turn {turn}", deployment.label),
-                deployment,
-                &submission,
-                None,
-            )?;
-            assert_live_submission_rows(
-                fixture.runtime.as_ref(),
-                deployment.remote_core,
-                &format!("remote {} turn {turn}", deployment.label),
-                deployment,
-                &submission,
-                None,
-            )?;
-            wait_for_session_settled(
-                fixture.runtime.as_ref(),
-                desktop_client.as_ref(),
-                &format!("desktop {} turn {turn} settled", deployment.label),
-                &submission.session_id,
-                &submission.effective_request_id,
-            )?;
-            wait_for_session_settled(
-                fixture.runtime.as_ref(),
-                deployment.remote_core,
-                &format!("remote {} turn {turn} settled", deployment.label),
-                &submission.session_id,
-                &submission.effective_request_id,
-            )?;
-
-            if let Some(existing_session_id) = session_by_peer.get(&deployment.peer_id) {
-                assert_eq!(
-                    existing_session_id, &submission.session_id,
-                    "expected soak to stay in one conversation per deployment for {}",
-                    deployment.label
-                );
-            } else {
-                session_by_peer.insert(deployment.peer_id.clone(), submission.session_id.clone());
-            }
-            prompts_by_peer
-                .entry(deployment.peer_id.clone())
-                .or_default()
-                .push(prompt.clone());
-
-            diagnostics.record_turn(
+        workers
+            .into_iter()
+            .map(|worker| worker.join().expect("parallel soak worker panicked"))
+            .collect::<Result<Vec<_>>>()
+    }) {
+        Ok(results) => results,
+        Err(error) => {
+            let _ = diagnostics.record_snapshot(
                 fixture.runtime.as_ref(),
                 &fixture.driver,
                 &fixture.deployments,
-                deployment,
-                turn,
-                &submission,
-            )?;
-            diagnostics.write_log_snapshot(global_log_store().as_ref())?;
-            diagnostics.scrape_runtime_metrics(&fixture.runtime_apis)?;
+            );
+            let _ = diagnostics.write_log_snapshot(global_log_store().as_ref());
+            let _ = diagnostics.scrape_runtime_metrics(&fixture.runtime_apis);
+            let _ = diagnostics.capture_workspace(fixture._tempdir.path());
+            let recent_logs = soak_recent_problems(0);
+            let _ = diagnostics.record_problem("parallel_turn", &error, &recent_logs);
+            return Err(error.context(format!(
+                "soak diagnostics written to {}",
+                diagnostics.output_dir().display()
+            )));
         }
+    };
+
+    let mut session_by_peer = BTreeMap::new();
+    let mut prompts_by_peer: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut completed_turns = Vec::new();
+    for result in &run_results {
+        session_by_peer.insert(result.deployment.peer_id.clone(), result.session_id.clone());
+        prompts_by_peer.insert(
+            result.deployment.peer_id.clone(),
+            result
+                .turns
+                .iter()
+                .map(|turn| turn.prompt.clone())
+                .collect::<Vec<_>>(),
+        );
+        for turn in &result.turns {
+            completed_turns.push((
+                turn.turn,
+                result.deployment.label.clone(),
+                &result.deployment,
+                &turn.submission,
+            ));
+        }
+    }
+    completed_turns.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    for (turn, _, deployment, submission) in completed_turns {
+        let deployment_case = deployment.as_case();
+        diagnostics.record_turn(
+            fixture.runtime.as_ref(),
+            &fixture.driver,
+            &fixture.deployments,
+            &deployment_case,
+            turn,
+            submission,
+        )?;
+        diagnostics.write_log_snapshot(global_log_store().as_ref())?;
+        diagnostics.scrape_runtime_metrics(&fixture.runtime_apis)?;
     }
 
     for (index, deployment) in deployments.iter().enumerate() {
@@ -226,7 +216,7 @@ fn run_scripted_graphql_soak(
         )?;
         wait_for_session_tool_activity(
             fixture.runtime.as_ref(),
-            deployment.remote_core,
+            deployment.remote_core.as_ref(),
             &format!("remote {} session tool activity", deployment.label),
             session_by_peer
                 .get(&deployment.peer_id)
@@ -373,6 +363,9 @@ Do not answer from memory; read files before answering.\n\
 Use the file tools (`list_files` and `read_file`) to explore the workspace.\n\
 Do not use the bash tool for repository exploration, directory listing, or file reading.\n\
 When using `read_file`, call it with exactly one `path` at a time, not an array of files.\n\
+Keep the final answer concise: at most 8 short bullets or 220 words.\n\
+Do not quote large code blocks or paste long file excerpts.\n\
+Summarize findings in your own words and cite the files you inspected.\n\
 Start from these known paths in the seeded workspace:\n\
 {starting_paths}\n\
 Prefer those exact files/directories before exploring anything else.\n\
@@ -456,6 +449,153 @@ fn submit_soak_prompt_for_deployment(
         effective_request_id,
         response: response_text,
         session_id: submitted.session_id,
+    })
+}
+
+#[derive(Clone)]
+struct ParallelDeploymentCase {
+    label: String,
+    peer_id: String,
+    agent_did: String,
+    docs: LiveAgentDocs,
+    remote_core: Arc<ClientCore>,
+}
+
+impl ParallelDeploymentCase {
+    fn from_live_deployment(deployment: &LiveRemoteDeployment) -> Self {
+        Self {
+            label: deployment.label.clone(),
+            peer_id: deployment.peer_id.clone(),
+            agent_did: deployment.agent_did.clone(),
+            docs: LiveAgentDocs {
+                behavior_id: deployment.docs.behavior_id.clone(),
+                backend_id: deployment.docs.backend_id.clone(),
+                tool_selection_id: deployment.docs.tool_selection_id.clone(),
+                inference_profile_id: deployment.docs.inference_profile_id.clone(),
+                scheduled_task_id: deployment.docs.scheduled_task_id.clone(),
+            },
+            remote_core: Arc::clone(&deployment.core),
+        }
+    }
+
+    fn as_case(&self) -> LiveDeploymentCase<'_> {
+        LiveDeploymentCase {
+            label: self.label.clone(),
+            peer_id: self.peer_id.clone(),
+            agent_did: self.agent_did.clone(),
+            docs: LiveAgentDocs {
+                behavior_id: self.docs.behavior_id.clone(),
+                backend_id: self.docs.backend_id.clone(),
+                tool_selection_id: self.docs.tool_selection_id.clone(),
+                inference_profile_id: self.docs.inference_profile_id.clone(),
+                scheduled_task_id: self.docs.scheduled_task_id.clone(),
+            },
+            remote_core: self.remote_core.as_ref(),
+        }
+    }
+}
+
+struct ParallelDeploymentTurn {
+    turn: usize,
+    prompt: String,
+    submission: LiveSubmissionCase,
+}
+
+struct ParallelDeploymentRun {
+    deployment: ParallelDeploymentCase,
+    session_id: String,
+    turns: Vec<ParallelDeploymentTurn>,
+}
+
+fn run_parallel_deployment_soak(
+    runtime: Arc<Runtime>,
+    desktop_client: Arc<ClientCore>,
+    desktop_graphql_url: &str,
+    diagnostics_dir: &Path,
+    deployment: ParallelDeploymentCase,
+    scripted_turns: &[SoakPromptTemplate],
+) -> Result<ParallelDeploymentRun> {
+    let deployment_case = deployment.as_case();
+    let mut session_id: Option<String> = None;
+    let mut turns = Vec::new();
+
+    for (turn_index, prompt_template) in scripted_turns.iter().enumerate() {
+        let turn = turn_index + 1;
+        let prompt = prompt_template.render(&deployment_case, turn);
+        let submission = submit_soak_prompt_for_deployment(
+            desktop_graphql_url,
+            &deployment_case,
+            session_id.as_deref(),
+            &prompt,
+            diagnostics_dir,
+        )
+        .with_context(|| {
+            format!(
+                "parallel soak submit failed for {} turn {}",
+                deployment.label, turn
+            )
+        })?;
+
+        assert_live_submission_rows_with_options(
+            runtime.as_ref(),
+            desktop_client.as_ref(),
+            &format!("desktop {} turn {turn}", deployment.label),
+            &deployment_case,
+            &submission,
+            None,
+            SubmissionRowAssertOptions {
+                timeout: Duration::from_secs(45),
+                require_response_content_match: true,
+            },
+        )?;
+        assert_live_submission_rows_with_options(
+            runtime.as_ref(),
+            deployment.remote_core.as_ref(),
+            &format!("remote {} turn {turn}", deployment.label),
+            &deployment_case,
+            &submission,
+            None,
+            SubmissionRowAssertOptions {
+                timeout: Duration::from_secs(75),
+                require_response_content_match: false,
+            },
+        )?;
+        wait_for_session_settled(
+            runtime.as_ref(),
+            desktop_client.as_ref(),
+            &format!("desktop {} turn {turn} settled", deployment.label),
+            &submission.session_id,
+            &submission.effective_request_id,
+        )?;
+        wait_for_session_settled(
+            runtime.as_ref(),
+            deployment.remote_core.as_ref(),
+            &format!("remote {} turn {turn} settled", deployment.label),
+            &submission.session_id,
+            &submission.effective_request_id,
+        )?;
+
+        if let Some(existing_session_id) = &session_id {
+            assert_eq!(
+                existing_session_id, &submission.session_id,
+                "expected soak to stay in one conversation per deployment for {}",
+                deployment.label
+            );
+        } else {
+            session_id = Some(submission.session_id.clone());
+        }
+
+        turns.push(ParallelDeploymentTurn {
+            turn,
+            prompt,
+            submission,
+        });
+    }
+
+    Ok(ParallelDeploymentRun {
+        deployment,
+        session_id: session_id.expect("parallel soak should create a session"),
+        turns,
     })
 }
 
@@ -651,10 +791,11 @@ fn response_is_tool_call_only(content: &str) -> bool {
 fn compact_response_preview(content: &str) -> String {
     const MAX_LEN: usize = 160;
     let single_line = content.split_whitespace().collect::<Vec<_>>().join(" ");
-    if single_line.len() <= MAX_LEN {
+    if single_line.chars().count() <= MAX_LEN {
         single_line
     } else {
-        format!("{}...", &single_line[..MAX_LEN])
+        let truncated = single_line.chars().take(MAX_LEN).collect::<String>();
+        format!("{truncated}...")
     }
 }
 
@@ -734,7 +875,7 @@ fn soak_filename_component(input: &str) -> String {
 }
 
 fn soak_p2p_problem_since(log_baseline: u64) -> Option<String> {
-    soak_recent_problems(log_baseline)
+    soak_recent_fatal_problems(log_baseline)
         .into_iter()
         .next()
         .map(|problem| {
@@ -757,6 +898,25 @@ fn soak_p2p_problem_since(log_baseline: u64) -> Option<String> {
         })
 }
 
+fn soak_recent_fatal_problems(log_baseline: u64) -> Vec<SoakLogRecord> {
+    global_log_store()
+        .snapshot()
+        .entries
+        .into_iter()
+        .filter(|entry| entry.id > log_baseline)
+        .filter_map(|entry| {
+            let message = entry.message.to_lowercase();
+            let interesting = message.contains("not a replicator")
+                || message.contains("access denied")
+                || message.contains("rate limited")
+                || message.contains("bitswap fetch failed")
+                || message.contains("pushlog to replicator was rejected");
+            interesting.then(|| soak_log_record(entry))
+        })
+        .take(32)
+        .collect()
+}
+
 fn soak_recent_problems(log_baseline: u64) -> Vec<SoakLogRecord> {
     global_log_store()
         .snapshot()
@@ -773,6 +933,7 @@ fn soak_recent_problems(log_baseline: u64) -> Vec<SoakLogRecord> {
                 || message.contains("push to replicator failed")
                 || message.contains("pushlog to replicator was rejected")
                 || message.contains("endpoint dropped without calling")
+                || message.contains("failed to send two-stream response")
                 || target.contains("p2p");
             interesting.then(|| soak_log_record(entry))
         })

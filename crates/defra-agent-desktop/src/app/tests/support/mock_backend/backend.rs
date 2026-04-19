@@ -74,10 +74,14 @@ impl AgentBackendConfig {
 }
 
 pub(crate) fn test_runtime() -> Result<Arc<Runtime>> {
+    // Live soak workers can build deep async stacks under multi-agent tool-heavy runs.
+    // Use a larger worker stack here so the harness is stable without external env tweaks.
+    const TEST_RUNTIME_STACK_BYTES: usize = 16 * 1024 * 1024;
     Ok(Arc::new(
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .worker_threads(4)
+            .thread_stack_size(TEST_RUNTIME_STACK_BYTES)
             .build()?,
     ))
 }

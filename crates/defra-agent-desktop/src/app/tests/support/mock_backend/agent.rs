@@ -103,6 +103,7 @@ fn seed_repo_workspace(tool_root: &std::path::Path) -> Result<()> {
         "crates/defra-agent",
         "crates/defra-agent-cli",
         "crates/defra-agent-desktop",
+        "crates/defra-node",
         "crates/defra-agent-protocol",
     ] {
         let src = repo_root.join(relative);
@@ -127,6 +128,7 @@ Useful directories:
 - ./workspace/crates/defra-agent-cli
 - ./workspace/crates/defra-agent-protocol
 - ./workspace/crates/defra-agent
+- ./workspace/crates/defra-node
 ";
     std::fs::write(tool_root.join("workspace-guide.txt"), guide).with_context(|| {
         format!(

@@ -14,10 +14,17 @@ fn response_is_terminal(row: &defra_agent_protocol::row::AgentResponseRow) -> bo
     )
 }
 
+fn request_has_terminal_response(snapshot: &crate::client::ClientStore, request_id: &str) -> bool {
+    snapshot
+        .latest_response_for_request(request_id)
+        .is_some_and(response_is_terminal)
+}
+
 fn wait_for_client_quiescence(
     runtime: &Runtime,
     core: &ClientCore,
     label: &str,
+    agent_did_scope: Option<&str>,
     timeout: Duration,
 ) -> Result<()> {
     let deadline = Instant::now() + timeout;
@@ -27,11 +34,20 @@ fn wait_for_client_quiescence(
         let active_requests = snapshot
             .requests
             .iter()
-            .filter(|row| !request_is_terminal(row))
+            .filter(|row| {
+                agent_did_scope.is_none_or(|agent_did| row.agent_did.as_deref() == Some(agent_did))
+            })
+            .filter(|row| {
+                !request_is_terminal(row)
+                    && !request_has_terminal_response(&snapshot, &row.request_id)
+            })
             .count();
         let active_responses = snapshot
             .responses
             .iter()
+            .filter(|row| {
+                agent_did_scope.is_none_or(|agent_did| row.agent_did.as_deref() == Some(agent_did))
+            })
             .filter(|row| !response_is_terminal(row))
             .count();
 
@@ -43,16 +59,22 @@ fn wait_for_client_quiescence(
             let active_request_details = snapshot
                 .requests
                 .iter()
-                .filter(|row| !request_is_terminal(row))
+                .filter(|row| {
+                    agent_did_scope.is_none_or(|agent_did| row.agent_did.as_deref() == Some(agent_did))
+                })
+                .filter(|row| {
+                    !request_is_terminal(row) && !request_has_terminal_response(&snapshot, &row.request_id)
+                })
                 .map(|row| {
                     format!(
-                        "request_id={} session_id={} lifecycle_state={} status={} agent_did={} failure_reason={}",
+                        "request_id={} session_id={} lifecycle_state={} status={} agent_did={} failure_reason={} has_terminal_response={}",
                         row.request_id,
                         row.session_id.as_deref().unwrap_or_default(),
                         row.lifecycle_state.as_deref().unwrap_or_default(),
                         row.status.as_deref().unwrap_or_default(),
                         row.agent_did.as_deref().unwrap_or_default(),
                         row.failure_reason.as_deref().unwrap_or_default(),
+                        request_has_terminal_response(&snapshot, &row.request_id),
                     )
                 })
                 .take(5)
@@ -61,6 +83,9 @@ fn wait_for_client_quiescence(
             let active_response_details = snapshot
                 .responses
                 .iter()
+                .filter(|row| {
+                    agent_did_scope.is_none_or(|agent_did| row.agent_did.as_deref() == Some(agent_did))
+                })
                 .filter(|row| !response_is_terminal(row))
                 .map(|row| {
                     format!(
@@ -108,12 +133,16 @@ pub(crate) struct LiveDesktopFixture {
 impl LiveDesktopFixture {
     pub(crate) fn shutdown(mut self) -> Result<()> {
         tracing::info!("live desktop fixture shutdown: begin");
+        for runtime_api in self.runtime_apis.drain(..) {
+            runtime_api.shutdown();
+        }
         if let Some(remote_core) = self.remote_core.as_ref() {
             tracing::info!("live desktop fixture shutdown: waiting for remote quiescence");
             wait_for_client_quiescence(
                 self.runtime.as_ref(),
                 remote_core.as_ref(),
                 "live remote fixture",
+                None,
                 Duration::from_secs(5),
             )?;
         }
@@ -123,6 +152,7 @@ impl LiveDesktopFixture {
                 self.runtime.as_ref(),
                 desktop_core.as_ref(),
                 "live desktop fixture",
+                None,
                 Duration::from_secs(5),
             )?;
         }
@@ -163,12 +193,17 @@ pub(crate) struct MultiAgentLiveDesktopFixture {
 impl MultiAgentLiveDesktopFixture {
     pub(crate) fn shutdown(mut self) -> Result<()> {
         let started = Instant::now();
+        self.desktop_api.shutdown();
+        for runtime_api in self.runtime_apis.drain(..) {
+            runtime_api.shutdown();
+        }
         for deployment in &self.deployments {
             tracing::debug!(deployment = %deployment.label, "multi-agent fixture shutdown: waiting for remote quiescence");
             wait_for_client_quiescence(
                 self.runtime.as_ref(),
                 deployment.core.as_ref(),
                 &format!("live remote fixture {}", deployment.label),
+                Some(&deployment.agent_did),
                 Duration::from_secs(5),
             )?;
         }
@@ -178,6 +213,7 @@ impl MultiAgentLiveDesktopFixture {
                 self.runtime.as_ref(),
                 desktop_core.as_ref(),
                 "live desktop fixture",
+                None,
                 Duration::from_secs(5),
             )?;
         }

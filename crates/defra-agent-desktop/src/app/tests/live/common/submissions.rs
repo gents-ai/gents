@@ -56,17 +56,65 @@ pub(crate) fn assert_live_submission_rows(
     submission: &LiveSubmissionCase,
     expected_backend_id: Option<&str>,
 ) -> Result<()> {
-    wait_for_value(
-        &format!("{label} submission rows for {}", deployment.label),
-        Duration::from_secs(30),
-        || {
-            runtime.block_on(core.refresh_store()).ok()?;
-            let snapshot = core.store().snapshot();
-            let request = snapshot
-                .requests
-                .iter()
-                .find(|row| row.request_id == submission.effective_request_id)?;
-            let request_ok = request.agent_did.as_deref() == Some(deployment.agent_did.as_str())
+    assert_live_submission_rows_with_options(
+        runtime,
+        core,
+        label,
+        deployment,
+        submission,
+        expected_backend_id,
+        SubmissionRowAssertOptions::default(),
+    )
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SubmissionRowAssertOptions {
+    pub(crate) timeout: Duration,
+    pub(crate) require_response_content_match: bool,
+}
+
+impl Default for SubmissionRowAssertOptions {
+    fn default() -> Self {
+        Self {
+            timeout: Duration::from_secs(30),
+            require_response_content_match: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SubmissionRowProgress {
+    request_ok: bool,
+    response_ok: bool,
+    conversation_ok: bool,
+    session_ok: bool,
+    request_lifecycle_state: String,
+    response_status: String,
+    conversation_latest_request_id: String,
+    response_preview: String,
+}
+
+pub(crate) fn assert_live_submission_rows_with_options(
+    runtime: &tokio::runtime::Runtime,
+    core: &ClientCore,
+    label: &str,
+    deployment: &LiveDeploymentCase<'_>,
+    submission: &LiveSubmissionCase,
+    expected_backend_id: Option<&str>,
+    options: SubmissionRowAssertOptions,
+) -> Result<()> {
+    let deadline = Instant::now() + options.timeout;
+
+    loop {
+        runtime.block_on(core.refresh_store())?;
+        let snapshot = core.store().snapshot();
+
+        let request = snapshot
+            .requests
+            .iter()
+            .find(|row| row.request_id == submission.effective_request_id);
+        let request_ok = request.is_some_and(|request| {
+            request.agent_did.as_deref() == Some(deployment.agent_did.as_str())
                 && request.behavior_id.as_deref() == Some(deployment.docs.behavior_id.as_str())
                 && request.session_id.as_deref() == Some(submission.session_id.as_str())
                 && expected_backend_id
@@ -81,11 +129,18 @@ pub(crate) fn assert_live_submission_rows(
                 && !matches!(
                     request.lifecycle_state.as_deref(),
                     Some("failed" | "dead" | "superseded")
-                );
+                )
+        });
 
-            let response =
-                snapshot.latest_response_for_request(&submission.effective_request_id)?;
-            let response_ok = response.agent_did.as_deref() == Some(deployment.agent_did.as_str())
+        let response = snapshot.latest_response_for_request(&submission.effective_request_id);
+        let response_ok = response.is_some_and(|response| {
+            let content_ok = response.content.as_deref().is_some_and(|content| {
+                let trimmed = content.trim();
+                !trimmed.is_empty()
+                    && (!options.require_response_content_match
+                        || trimmed.contains(submission.response.trim()))
+            });
+            response.agent_did.as_deref() == Some(deployment.agent_did.as_str())
                 && response.behavior_id.as_deref() == Some(deployment.docs.behavior_id.as_str())
                 && response.session_id.as_deref() == Some(submission.session_id.as_str())
                 && matches!(response.status.as_deref(), Some("complete" | "completed"))
@@ -95,32 +150,84 @@ pub(crate) fn assert_live_submission_rows(
                     .unwrap_or_default()
                     .trim()
                     .is_empty()
-                && response
-                    .content
-                    .as_deref()
-                    .is_some_and(|content| content.contains(submission.response.trim()));
+                && content_ok
+        });
 
-            let conversation_ok = snapshot
-                .conversations
-                .iter()
-                .find(|row| row.session_id == submission.session_id)
-                .is_some_and(|row| {
-                    row.agent_did.as_deref() == Some(deployment.agent_did.as_str())
-                        && row.behavior_id.as_deref() == Some(deployment.docs.behavior_id.as_str())
-                        && row.latest_request_id.as_deref()
-                            == Some(submission.effective_request_id.as_str())
-                });
-            let session_ok = snapshot
-                .sessions
-                .iter()
-                .find(|row| row.session_id == submission.session_id)
-                .is_some_and(|row| {
-                    row.behavior_id.as_deref() == Some(deployment.docs.behavior_id.as_str())
-                });
+        let conversation = snapshot
+            .conversations
+            .iter()
+            .find(|row| row.session_id == submission.session_id);
+        let conversation_ok = conversation.is_some_and(|row| {
+            row.agent_did.as_deref() == Some(deployment.agent_did.as_str())
+                && row.behavior_id.as_deref() == Some(deployment.docs.behavior_id.as_str())
+                && row.latest_request_id.as_deref()
+                    == Some(submission.effective_request_id.as_str())
+        });
 
-            (request_ok && response_ok && conversation_ok && session_ok).then_some(())
-        },
-    )
+        let session_ok = snapshot
+            .sessions
+            .iter()
+            .find(|row| row.session_id == submission.session_id)
+            .is_some_and(|row| {
+                row.behavior_id.as_deref() == Some(deployment.docs.behavior_id.as_str())
+            });
+
+        if request_ok && response_ok && conversation_ok && session_ok {
+            return Ok(());
+        }
+
+        let progress = SubmissionRowProgress {
+            request_ok,
+            response_ok,
+            conversation_ok,
+            session_ok,
+            request_lifecycle_state: request
+                .and_then(|row| row.lifecycle_state.as_deref())
+                .unwrap_or_default()
+                .to_string(),
+            response_status: response
+                .and_then(|row| row.status.as_deref())
+                .unwrap_or_default()
+                .to_string(),
+            conversation_latest_request_id: conversation
+                .and_then(|row| row.latest_request_id.as_deref())
+                .unwrap_or_default()
+                .to_string(),
+            response_preview: response
+                .and_then(|row| row.content.as_deref())
+                .map(compact_response_preview_for_assert)
+                .unwrap_or_default(),
+        };
+
+        if Instant::now() >= deadline {
+            anyhow::bail!(
+                "timed out waiting for {label} submission rows for {}: request_ok={} response_ok={} conversation_ok={} session_ok={} effective_request_id={} request_lifecycle_state={} response_status={} conversation_latest_request_id={} response_preview={}",
+                deployment.label,
+                progress.request_ok,
+                progress.response_ok,
+                progress.conversation_ok,
+                progress.session_ok,
+                submission.effective_request_id,
+                progress.request_lifecycle_state,
+                progress.response_status,
+                progress.conversation_latest_request_id,
+                progress.response_preview,
+            );
+        }
+
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn compact_response_preview_for_assert(content: &str) -> String {
+    const LIMIT: usize = 160;
+    let normalized = content.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= LIMIT {
+        normalized
+    } else {
+        let truncated = normalized.chars().take(LIMIT).collect::<String>();
+        format!("{truncated}...")
+    }
 }
 
 pub(crate) fn assert_live_deployment_default_config(
@@ -548,7 +655,21 @@ pub(crate) fn execute_graphql(url: &str, query: &str) -> Result<serde_json::Valu
             }
         };
 
-        let value: serde_json::Value = response.json()?;
+        let value: serde_json::Value = match response.json() {
+            Ok(value) => value,
+            Err(error) if graphql_transport_error_is_retryable(&error) && attempt < 4 => {
+                last_error = Some(
+                    anyhow::Error::new(error)
+                        .context(format!("decoding GraphQL response body from {url}")),
+                );
+                std::thread::sleep(Duration::from_millis(100 * (attempt + 1) as u64));
+                continue;
+            }
+            Err(error) => {
+                return Err(anyhow::Error::new(error)
+                    .context(format!("decoding GraphQL response body from {url}")));
+            }
+        };
         let errors = value
             .get("errors")
             .and_then(serde_json::Value::as_array)
@@ -574,6 +695,8 @@ fn graphql_transport_error_is_retryable(error: &reqwest::Error) -> bool {
         || message.contains("broken pipe")
         || message.contains("channel closed")
         || message.contains("unexpected eof")
+        || message.contains("end of file before message length reached")
+        || message.contains("error decoding response body")
 }
 
 fn graphql_response_status(row: &GraphqlResponseRow) -> Option<ResponseStatus> {

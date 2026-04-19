@@ -250,6 +250,14 @@ impl BootstrapRuntimeApi {
     pub(crate) fn metrics_url(&self) -> &str {
         &self.metrics
     }
+
+    pub(crate) fn shutdown(mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        let _ = TcpStream::connect(("127.0.0.1", self.port));
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 impl Drop for BootstrapRuntimeApi {
