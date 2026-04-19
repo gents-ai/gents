@@ -193,12 +193,22 @@ pub(crate) struct MultiAgentLiveDesktopFixture {
 impl MultiAgentLiveDesktopFixture {
     pub(crate) fn shutdown(mut self) -> Result<()> {
         let started = Instant::now();
+        let phase_started = Instant::now();
         self.desktop_api.shutdown();
+        tracing::info!(
+            elapsed_ms = phase_started.elapsed().as_millis() as u64,
+            "multi-agent fixture shutdown: desktop_api stopped"
+        );
+        let phase_started = Instant::now();
         for runtime_api in self.runtime_apis.drain(..) {
             runtime_api.shutdown();
         }
+        tracing::info!(
+            elapsed_ms = phase_started.elapsed().as_millis() as u64,
+            "multi-agent fixture shutdown: runtime_apis stopped"
+        );
         for deployment in &self.deployments {
-            tracing::debug!(deployment = %deployment.label, "multi-agent fixture shutdown: waiting for remote quiescence");
+            let phase_started = Instant::now();
             wait_for_client_quiescence(
                 self.runtime.as_ref(),
                 deployment.core.as_ref(),
@@ -206,9 +216,14 @@ impl MultiAgentLiveDesktopFixture {
                 Some(&deployment.agent_did),
                 Duration::from_secs(5),
             )?;
+            tracing::info!(
+                deployment = %deployment.label,
+                elapsed_ms = phase_started.elapsed().as_millis() as u64,
+                "multi-agent fixture shutdown: remote quiescence complete"
+            );
         }
         if let Some(desktop_core) = self.driver.app.client.as_ref() {
-            tracing::debug!("multi-agent fixture shutdown: waiting for desktop quiescence");
+            let phase_started = Instant::now();
             wait_for_client_quiescence(
                 self.runtime.as_ref(),
                 desktop_core.as_ref(),
@@ -216,15 +231,33 @@ impl MultiAgentLiveDesktopFixture {
                 None,
                 Duration::from_secs(5),
             )?;
+            tracing::info!(
+                elapsed_ms = phase_started.elapsed().as_millis() as u64,
+                "multi-agent fixture shutdown: desktop quiescence complete"
+            );
         }
         for deployment in self.deployments.drain(..) {
-            tracing::debug!(deployment = %deployment.label, "multi-agent fixture shutdown: stopping running agent");
+            let phase_started = Instant::now();
             self.runtime.block_on(deployment.running_agent.shutdown())?;
-            tracing::debug!(deployment = %deployment.label, "multi-agent fixture shutdown: shutting down remote core");
+            tracing::info!(
+                deployment = %deployment.label,
+                elapsed_ms = phase_started.elapsed().as_millis() as u64,
+                "multi-agent fixture shutdown: running agent stopped"
+            );
+            let phase_started = Instant::now();
             self.runtime.block_on(deployment.core.shutdown())?;
+            tracing::info!(
+                deployment = %deployment.label,
+                elapsed_ms = phase_started.elapsed().as_millis() as u64,
+                "multi-agent fixture shutdown: remote core stopped"
+            );
         }
-        tracing::debug!("multi-agent fixture shutdown: shutting down desktop client");
+        let phase_started = Instant::now();
         self.driver.app.shutdown_client();
+        tracing::info!(
+            elapsed_ms = phase_started.elapsed().as_millis() as u64,
+            "multi-agent fixture shutdown: desktop client stopped"
+        );
         tracing::info!(
             elapsed_ms = started.elapsed().as_millis() as u64,
             "multi-agent fixture shutdown: complete"

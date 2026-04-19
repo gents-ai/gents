@@ -59,13 +59,17 @@ fn run_scripted_graphql_soak(
     artifact_name: &str,
 ) -> Result<()> {
     let config = LiveSoakConfig::from_env(artifact_name)?;
+    let mut fixture = Some(fixture);
+    let fixture_ref = fixture
+        .as_ref()
+        .expect("fixture should be present while soak is running");
     assert!(
-        !fixture.deployments.is_empty(),
+        !fixture_ref.deployments.is_empty(),
         "expected at least one live deployment in scripted soak"
     );
 
     let desktop_client = Arc::clone(
-        fixture
+        fixture_ref
             .driver
             .app
             .client
@@ -74,24 +78,26 @@ fn run_scripted_graphql_soak(
     );
     let diagnostics_dir = config.output_dir.clone();
     let mut diagnostics = LiveSoakDiagnostics::new(&diagnostics_dir)?;
-    diagnostics.write_metadata(&fixture.deployments, &fixture.backend)?;
+    diagnostics.write_metadata(&fixture_ref.deployments, &fixture_ref.backend)?;
     diagnostics.write_log_snapshot(global_log_store().as_ref())?;
-    diagnostics.scrape_runtime_metrics(&fixture.runtime_apis)?;
+    diagnostics.scrape_runtime_metrics(&fixture_ref.runtime_apis)?;
 
     let tool_roots: BTreeSet<_> = fixture
+        .as_ref()
+        .expect("fixture present during soak")
         .deployments
         .iter()
         .map(|deployment| deployment.running_agent.tool_root.display().to_string())
         .collect();
     assert_eq!(
         tool_roots.len(),
-        fixture.deployments.len(),
+        fixture_ref.deployments.len(),
         "expected one isolated tool root per live deployment"
     );
 
-    for deployment in &fixture.deployments {
+    for deployment in &fixture_ref.deployments {
         wait_for_stable_runtime_ready(
-            fixture.runtime.as_ref(),
+            fixture_ref.runtime.as_ref(),
             deployment.core.as_ref(),
             &deployment.label,
             &deployment.agent_did,
@@ -99,7 +105,7 @@ fn run_scripted_graphql_soak(
             Duration::from_secs(60),
         )?;
         wait_for_stable_runtime_ready(
-            fixture.runtime.as_ref(),
+            fixture_ref.runtime.as_ref(),
             desktop_client.as_ref(),
             &format!("desktop mirror for {}", deployment.label),
             &deployment.agent_did,
@@ -108,14 +114,16 @@ fn run_scripted_graphql_soak(
         )?;
     }
     diagnostics.record_snapshot(
-        fixture.runtime.as_ref(),
-        &fixture.driver,
-        &fixture.deployments,
+        fixture_ref.runtime.as_ref(),
+        &fixture_ref.driver,
+        &fixture_ref.deployments,
     )?;
     diagnostics.write_log_snapshot(global_log_store().as_ref())?;
-    diagnostics.scrape_runtime_metrics(&fixture.runtime_apis)?;
+    diagnostics.scrape_runtime_metrics(&fixture_ref.runtime_apis)?;
 
     let deployments: Vec<_> = fixture
+        .as_ref()
+        .expect("fixture present during soak")
         .deployments
         .iter()
         .map(ParallelDeploymentCase::from_live_deployment)
@@ -125,9 +133,9 @@ fn run_scripted_graphql_soak(
         let mut workers = Vec::new();
         for deployment in &deployments {
             let deployment = deployment.clone();
-            let runtime = Arc::clone(&fixture.runtime);
+            let runtime = Arc::clone(&fixture_ref.runtime);
             let desktop_client = Arc::clone(&desktop_client);
-            let desktop_graphql_url = fixture.desktop_api.graphql_url().to_string();
+            let desktop_graphql_url = fixture_ref.desktop_api.graphql_url().to_string();
             let diagnostics_dir = diagnostics.output_dir().to_path_buf();
             workers.push(scope.spawn(move || {
                 run_parallel_deployment_soak(
@@ -149,19 +157,29 @@ fn run_scripted_graphql_soak(
         Ok(results) => results,
         Err(error) => {
             let _ = diagnostics.record_snapshot(
-                fixture.runtime.as_ref(),
-                &fixture.driver,
-                &fixture.deployments,
+                fixture_ref.runtime.as_ref(),
+                &fixture_ref.driver,
+                &fixture_ref.deployments,
             );
             let _ = diagnostics.write_log_snapshot(global_log_store().as_ref());
-            let _ = diagnostics.scrape_runtime_metrics(&fixture.runtime_apis);
-            let _ = diagnostics.capture_workspace(fixture._tempdir.path());
+            let _ = diagnostics.scrape_runtime_metrics(&fixture_ref.runtime_apis);
+            let _ = diagnostics.capture_workspace(fixture_ref._tempdir.path());
             let recent_logs = soak_recent_problems(0);
             let _ = diagnostics.record_problem("parallel_turn", &error, &recent_logs);
-            return Err(error.context(format!(
+            let shutdown_result = fixture
+                .take()
+                .expect("fixture should still be present on soak error")
+                .shutdown();
+            let error = error.context(format!(
                 "soak diagnostics written to {}",
                 diagnostics.output_dir().display()
-            )));
+            ));
+            return match shutdown_result {
+                Ok(()) => Err(error),
+                Err(shutdown_error) => Err(error.context(format!(
+                    "fixture shutdown after soak error also failed: {shutdown_error:#}"
+                ))),
+            };
         }
     };
 
@@ -191,20 +209,20 @@ fn run_scripted_graphql_soak(
     for (turn, _, deployment, submission) in completed_turns {
         let deployment_case = deployment.as_case();
         diagnostics.record_turn(
-            fixture.runtime.as_ref(),
-            &fixture.driver,
-            &fixture.deployments,
+            fixture_ref.runtime.as_ref(),
+            &fixture_ref.driver,
+            &fixture_ref.deployments,
             &deployment_case,
             turn,
             submission,
         )?;
         diagnostics.write_log_snapshot(global_log_store().as_ref())?;
-        diagnostics.scrape_runtime_metrics(&fixture.runtime_apis)?;
+        diagnostics.scrape_runtime_metrics(&fixture_ref.runtime_apis)?;
     }
 
     for (index, deployment) in deployments.iter().enumerate() {
         wait_for_session_tool_activity(
-            fixture.runtime.as_ref(),
+            fixture_ref.runtime.as_ref(),
             desktop_client.as_ref(),
             &format!("desktop {} session tool activity", deployment.label),
             session_by_peer
@@ -215,7 +233,7 @@ fn run_scripted_graphql_soak(
             &[],
         )?;
         wait_for_session_tool_activity(
-            fixture.runtime.as_ref(),
+            fixture_ref.runtime.as_ref(),
             deployment.remote_core.as_ref(),
             &format!("remote {} session tool activity", deployment.label),
             session_by_peer
@@ -225,7 +243,7 @@ fn run_scripted_graphql_soak(
             1,
             &[],
         )?;
-        fixture.runtime.block_on(desktop_client.refresh_store())?;
+        fixture_ref.runtime.block_on(desktop_client.refresh_store())?;
         let desktop_snapshot = desktop_client.store().snapshot();
         let session_id = session_by_peer
             .get(&deployment.peer_id)
@@ -315,11 +333,11 @@ fn run_scripted_graphql_soak(
         diagnostics_dir = %diagnostics_dir.display(),
         "desktop live scripted soak completed"
     );
-    if fixture.deployments.len() > 1 {
+    if fixture_ref.deployments.len() > 1 {
         if let Err(error) = wait_for_post_completion_p2p_quiet(
-            fixture.runtime.as_ref(),
-            &fixture.driver,
-            &fixture.deployments,
+            fixture_ref.runtime.as_ref(),
+            &fixture_ref.driver,
+            &fixture_ref.deployments,
             Duration::from_secs(2),
             Duration::from_secs(10),
         ) {
@@ -331,16 +349,19 @@ fn run_scripted_graphql_soak(
         }
     }
     diagnostics.record_snapshot(
-        fixture.runtime.as_ref(),
-        &fixture.driver,
-        &fixture.deployments,
+        fixture_ref.runtime.as_ref(),
+        &fixture_ref.driver,
+        &fixture_ref.deployments,
     )?;
     diagnostics.write_log_snapshot(global_log_store().as_ref())?;
-    diagnostics.scrape_runtime_metrics(&fixture.runtime_apis)?;
+    diagnostics.scrape_runtime_metrics(&fixture_ref.runtime_apis)?;
     if config.keep_workspace {
-        diagnostics.capture_workspace(fixture._tempdir.path())?;
+        diagnostics.capture_workspace(fixture_ref._tempdir.path())?;
     }
-    fixture.shutdown()
+    fixture
+        .take()
+        .expect("fixture should be present on soak success")
+        .shutdown()
 }
 
 struct SoakPromptTemplate {

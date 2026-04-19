@@ -151,7 +151,7 @@ pub struct ClientCore {
     peer_statuses: Arc<StdRwLock<Vec<ClientPeerStatus>>>,
     p2p_supervisor: Mutex<Option<JoinHandle<()>>>,
     p2p_health: watch::Sender<P2PHealth>,
-    p2p_control: mpsc::Sender<P2PSupervisorCommand>,
+    p2p_control: Mutex<Option<mpsc::Sender<P2PSupervisorCommand>>>,
     last_mutation_error: StdRwLock<Option<String>>,
     local_peer_id: String,
     listen_addresses: Vec<String>,
@@ -255,7 +255,14 @@ impl ClientCore {
     }
 
     pub async fn request_p2p_repair(&self) -> Result<()> {
-        self.p2p_control
+        let sender = self
+            .p2p_control
+            .lock()
+            .await
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("desktop P2P supervisor is shutting down"))?;
+        sender
             .send(P2PSupervisorCommand::RepairNow)
             .await
             .context("queueing desktop P2P repair request")
@@ -276,9 +283,9 @@ impl ClientCore {
 
     pub async fn shutdown(&self) -> Result<()> {
         tracing::info!("client core shutdown: begin");
+        self.p2p_control.lock().await.take();
         if let Some(task) = self.p2p_supervisor.lock().await.take() {
-            tracing::info!("client core shutdown: aborting p2p supervisor");
-            task.abort();
+            tracing::info!("client core shutdown: stopping p2p supervisor");
             let _ = task.await;
         }
         if let Some(observer) = self.observer.lock().await.take() {

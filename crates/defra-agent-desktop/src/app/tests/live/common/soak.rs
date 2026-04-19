@@ -458,14 +458,31 @@ impl LiveSoakDiagnostics {
             .timeout(Duration::from_secs(5))
             .build()?;
         for runtime_api in runtime_apis {
-            let body = client
+            let body = match client
                 .get(runtime_api.metrics_url())
                 .send()
-                .with_context(|| format!("fetching {}", runtime_api.metrics_url()))?
-                .error_for_status()
-                .with_context(|| format!("reading {}", runtime_api.metrics_url()))?
-                .text()
-                .with_context(|| format!("reading metrics body {}", runtime_api.metrics_url()))?;
+                .with_context(|| format!("fetching {}", runtime_api.metrics_url()))
+                .and_then(|response| {
+                    response
+                        .error_for_status()
+                        .with_context(|| format!("reading {}", runtime_api.metrics_url()))
+                })
+                .and_then(|response| {
+                    response
+                        .text()
+                        .with_context(|| format!("reading metrics body {}", runtime_api.metrics_url()))
+                }) {
+                Ok(body) => body,
+                Err(error) => {
+                    tracing::warn!(
+                        label = %runtime_api.label(),
+                        metrics_url = %runtime_api.metrics_url(),
+                        error = %error,
+                        "skipping runtime metrics scrape failure"
+                    );
+                    continue;
+                }
+            };
             let path = metrics_dir.join(format!(
                 "{}.prom",
                 sanitize_filename_component(runtime_api.label())

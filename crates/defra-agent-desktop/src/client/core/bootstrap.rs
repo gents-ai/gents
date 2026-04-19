@@ -116,7 +116,7 @@ impl ClientCore {
             peer_statuses,
             p2p_supervisor: tokio::sync::Mutex::new(Some(p2p_supervisor)),
             p2p_health,
-            p2p_control,
+            p2p_control: tokio::sync::Mutex::new(Some(p2p_control)),
             last_mutation_error: std::sync::RwLock::new(None),
             local_peer_id,
             listen_addresses,
