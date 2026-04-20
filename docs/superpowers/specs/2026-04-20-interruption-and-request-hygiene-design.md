@@ -204,7 +204,7 @@ type AgentRequest {
 
   # LIVE (existing) — gains values
   lifecycle_state: String          # gains "interrupted"
-  failure_reason: String           # gains "Stale", "Interrupted"
+  failure_reason: String           # gains "Stale" (for dead/Stale expire path)
 }
 ```
 
@@ -304,6 +304,17 @@ may already have promoted `pending → claimed`. The daemon's watcher picks
 up the interrupt on its first subscription read and drives
 `claimed → interrupted` via the `interrupt_claimed` transition. No race;
 both transitions are legal.
+
+**Interrupt arrives on an already-terminal request:** the submitter's
+`interrupt_request` helper is idempotent, but a submitter *could* write
+`interrupt_requested_at` on a request that has already reached
+`completed`, `failed`, `dead`, or `superseded`. By S1 (terminal
+irreversibility), no transition fires. The runtime observes the field
+change, logs at debug level, and takes no action. The client-facing
+behavior is the same as interrupting twice: the second call is a no-op.
+This case is legal in the Lean model (no transition is enabled from a
+terminal state) and requires no special handling beyond the observation
+that "observing a change" ≠ "taking a transition."
 
 ### Tool trait
 
@@ -457,9 +468,13 @@ fields where requests already appear.
   `interrupt_claimed`, `interrupt_processing`,
   `interrupt_input_required`.
 - Extend `Action` enum and `step?` function mechanically.
-- Reprove the five invariant lemmas (`step_sound`, `transition_complete`,
-  `replay_sound`, `trace_complete`, `transition_produces_coherent`) —
-  each arm follows the existing pattern.
+- Extend every existing lemma in `Request.lean` with new case arms for
+  the five new transitions — the list today includes `step_sound`,
+  `transition_complete`, `replay_sound`, `trace_complete`,
+  `transition_produces_coherent`, `backend_binding_preserved`,
+  `origin_preserved`, and `terminal_implies_released_local`
+  (plus the three `releaseToTerminal_*` helpers and `claimed_coherent_cases`).
+  Each new arm follows the existing pattern; most are one-liners.
 - Add S7 and S8 invariants.
 
 `proofs/Proofs/Properties/Safety.lean`:
@@ -542,7 +557,10 @@ fields where requests already appear.
 
 ## Implementation order
 
-Each step leaves the tree green.
+Each step leaves `cargo test --workspace` green. New conformance cases
+that describe not-yet-implemented runtime behavior land behind
+`#[ignore]` and graduate to active as the corresponding runtime code
+arrives. The Lean `lake build` stays green after step 1.
 
 1. **Lean first.** Extend `Request.lean` with new state, fields,
    transitions; prove S7, S8; extend L1. Extend `Composed.lean` with the
@@ -551,10 +569,12 @@ Each step leaves the tree green.
    `ToolResult`; update `schemas/README.md`; extend
    `defra-agent-protocol/src/row.rs` and the turn-state terminal
    classifier.
-3. **Conformance tests land first.** Update
+3. **Conformance scaffolding.** Update
    `tests/state_machine_conformance.rs` with the new transitions and
-   S7/S8 — these should *fail* until the runtime code is added, driving
-   the remaining steps.
+   S7/S8 cases; each new case gated behind `#[ignore]` with a comment
+   pointing at the step that unblocks it. The green-tree invariant holds
+   because ignored tests don't run under the default cargo test
+   invocation.
 4. **Scheduler claim check.** Add the pre-claim interrupt + stale
    branch. Exercise via conformance fixtures.
 5. **CancellationToken plumbing.** Add `request_token` ownership to the
