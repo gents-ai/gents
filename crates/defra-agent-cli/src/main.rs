@@ -76,10 +76,10 @@ Bootstrap a local home directory with one default backend, one default behavior,
 
 Examples:
   defra-agent init
-  defra-agent init http://HOST:PORT/v1 --model-name MODEL
+  defra-agent init --inference-url http://HOST:PORT/v1 --model-name MODEL
   defra-agent init --backend-preset openrouter --model-name MODEL
   defra-agent init --backend-preset openai --model-name MODEL
-  defra-agent init $INFERENCE_ENDPOINT --model-name MODEL --write-tools
+  defra-agent init --inference-url $INFERENCE_ENDPOINT --model-name MODEL --write-tools
 
 Next:
   ollama pull gemma4-26b-a4b

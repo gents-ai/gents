@@ -96,10 +96,14 @@ pub(crate) struct InitArgs {
     #[arg(long)]
     pub(crate) key_path: Option<PathBuf>,
     #[arg(
-        value_name = "INFERENCE_ENDPOINT",
+        long = "inference-url",
+        alias = "inference-endpoint",
+        value_name = "INFERENCE_URL",
         help = "Inference backend base URL, usually including /v1. Falls back to INFERENCE_ENDPOINT, then local Ollama."
     )]
     pub(crate) inference_endpoint: Option<String>,
+    #[arg(value_name = "INFERENCE_URL", hide = true)]
+    pub(crate) inference_endpoint_legacy: Option<String>,
     #[arg(
         long,
         help = "Optional backend document id. Defaults to <agent-name>-backend"
@@ -146,6 +150,14 @@ pub(crate) struct InitArgs {
         help = "Root directory for local file/bash tools. Defaults to the current working directory"
     )]
     pub(crate) tool_root: Option<PathBuf>,
+}
+
+impl InitArgs {
+    pub(crate) fn resolved_inference_endpoint(&self) -> Option<&str> {
+        self.inference_endpoint
+            .as_deref()
+            .or(self.inference_endpoint_legacy.as_deref())
+    }
 }
 
 #[derive(clap::Args)]

@@ -1,6 +1,10 @@
 use super::identity::{normalize_optional_string, resolve_p2p_peer_id};
 use super::pairing::P2pReplicatorRequest;
-use super::{render_human_summary, DesktopInitSummary, LOCAL_STANDARD_SOURCE};
+use super::{
+    dangerously_overwrite_desktop_home, render_human_summary, reset_desktop_runtime_state,
+    DesktopInitSummary, LOCAL_STANDARD_SOURCE,
+};
+use crate::client::DesktopPaths;
 
 fn sample_summary() -> DesktopInitSummary {
     DesktopInitSummary {
@@ -83,4 +87,31 @@ fn resolve_p2p_peer_id_falls_back_to_stored_value() {
     let peer_id = resolve_p2p_peer_id(None, None, Some("persisted-peer"));
 
     assert_eq!(peer_id.as_deref(), Some("persisted-peer"));
+}
+
+#[test]
+fn reset_desktop_runtime_state_removes_node_dir_only() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let paths = DesktopPaths::from_root(tempdir.path());
+    std::fs::create_dir_all(paths.node_data_dir()).expect("node dir");
+    std::fs::write(paths.node_data_dir().join("store.bin"), "x").expect("node data");
+    std::fs::write(paths.peer_directory_path(), "{}").expect("peer directory");
+
+    let cleared = reset_desktop_runtime_state(&paths).expect("reset desktop runtime state");
+
+    assert!(cleared);
+    assert!(!paths.node_data_dir().exists());
+    assert!(paths.peer_directory_path().exists());
+}
+
+#[test]
+fn dangerously_overwrite_desktop_home_removes_root_dir() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let desktop_root = tempdir.path().join("desktop");
+    std::fs::create_dir_all(&desktop_root).expect("desktop root");
+    std::fs::write(desktop_root.join("peers.json"), "{}").expect("desktop file");
+
+    dangerously_overwrite_desktop_home(&desktop_root).expect("overwrite desktop home");
+
+    assert!(!desktop_root.exists());
 }

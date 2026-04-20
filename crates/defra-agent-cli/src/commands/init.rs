@@ -297,7 +297,7 @@ fn is_probably_ollama_endpoint(endpoint: &str) -> bool {
 fn resolve_init_backend_config(args: &InitArgs) -> Result<ResolvedBackendConfig> {
     crate::resolve_backend_config_with_preset(
         args.backend_preset,
-        args.inference_endpoint.as_deref(),
+        args.resolved_inference_endpoint(),
         args.provider_kind.as_deref(),
         args.api_key.as_deref(),
         args.api_key_env_var.as_deref(),

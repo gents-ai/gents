@@ -5,7 +5,7 @@ mod pairing;
 #[cfg(test)]
 mod tests;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -78,6 +78,42 @@ struct ShareableAddressResponse {
 pub fn default_agent_home() -> Result<PathBuf> {
     let home = dirs::home_dir().context("unable to resolve home directory")?;
     Ok(home.join(".defra-agent"))
+}
+
+pub fn dangerously_overwrite_desktop_home(desktop_root: &Path) -> Result<()> {
+    if !desktop_root.exists() {
+        return Ok(());
+    }
+
+    if desktop_root.as_os_str().is_empty() || desktop_root == Path::new("/") {
+        anyhow::bail!(
+            "refusing to dangerously overwrite {}",
+            desktop_root.display()
+        );
+    }
+    if let Some(user_home) = std::env::var_os("HOME").map(PathBuf::from) {
+        if desktop_root == user_home {
+            anyhow::bail!(
+                "refusing to dangerously overwrite the user home directory {}; pass a dedicated desktop home instead",
+                desktop_root.display()
+            );
+        }
+    }
+
+    std::fs::remove_dir_all(desktop_root)
+        .with_context(|| format!("dangerously overwriting {}", desktop_root.display()))?;
+    Ok(())
+}
+
+pub fn reset_desktop_runtime_state(paths: &DesktopPaths) -> Result<bool> {
+    let node_data_dir = paths.node_data_dir();
+    if !node_data_dir.exists() {
+        return Ok(false);
+    }
+
+    std::fs::remove_dir_all(node_data_dir)
+        .with_context(|| format!("clearing desktop runtime state {}", node_data_dir.display()))?;
+    Ok(true)
 }
 
 pub async fn init_standard_local_runtime(

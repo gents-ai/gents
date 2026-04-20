@@ -5,7 +5,8 @@ use clap::{Parser, Subcommand};
 use defra_agent_desktop::app::DesktopApp;
 use defra_agent_desktop::client::DesktopPaths;
 use defra_agent_desktop::local_runtime::{
-    default_agent_home, init_standard_local_runtime, render_human_summary, DesktopInitOptions,
+    dangerously_overwrite_desktop_home, default_agent_home, init_standard_local_runtime,
+    render_human_summary, reset_desktop_runtime_state, DesktopInitOptions,
 };
 use defra_agent_desktop::telemetry::{global_log_layer, with_default_transport_noise_filters};
 use eframe::egui;
@@ -36,6 +37,18 @@ struct InitArgs {
         help = "Desktop data directory. Defaults to the platform-local desktop data dir"
     )]
     desktop_home: Option<PathBuf>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Delete the existing desktop data directory before re-initializing it"
+    )]
+    dangerously_overwrite: bool,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Clear persisted desktop runtime state before re-initializing it"
+    )]
+    reset: bool,
     #[arg(long, default_value = "Local Agent", help = "Saved deployment label")]
     label: String,
     #[arg(long, help = "Print machine-readable JSON instead of human output")]
@@ -64,6 +77,11 @@ fn run_command(command: Command) -> anyhow::Result<()> {
                 Some(root) => DesktopPaths::from_root(root),
                 None => DesktopPaths::discover()?,
             };
+            if args.dangerously_overwrite {
+                dangerously_overwrite_desktop_home(desktop_paths.root())?;
+            } else if args.reset {
+                let _ = reset_desktop_runtime_state(&desktop_paths)?;
+            }
             let summary = runtime.block_on(init_standard_local_runtime(DesktopInitOptions {
                 agent_home,
                 desktop_paths,
