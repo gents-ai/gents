@@ -57,7 +57,10 @@ impl<'a> StreamProcessor<'a> {
                 let had_visible_text = !self.streamed_text.trim().is_empty();
                 self.assistant_turn.push_text(&text.text);
                 self.streamed_text.push_str(&text.text);
-                let _ = self.stream_writer.write_tokens(self.doc_id, &text.text).await?;
+                let _ = self
+                    .stream_writer
+                    .write_tokens(self.doc_id, &text.text)
+                    .await?;
                 let has_visible_text = !self.streamed_text.trim().is_empty();
                 if !had_visible_text && has_visible_text {
                     let _ = self.stream_writer.flush_pending(self.doc_id).await?;

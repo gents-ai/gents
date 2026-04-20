@@ -468,9 +468,9 @@ impl LiveSoakDiagnostics {
                         .with_context(|| format!("reading {}", runtime_api.metrics_url()))
                 })
                 .and_then(|response| {
-                    response
-                        .text()
-                        .with_context(|| format!("reading metrics body {}", runtime_api.metrics_url()))
+                    response.text().with_context(|| {
+                        format!("reading metrics body {}", runtime_api.metrics_url())
+                    })
                 }) {
                 Ok(body) => body,
                 Err(error) => {

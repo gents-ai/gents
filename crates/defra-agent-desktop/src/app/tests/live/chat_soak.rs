@@ -243,7 +243,9 @@ fn run_scripted_graphql_soak(
             1,
             &[],
         )?;
-        fixture_ref.runtime.block_on(desktop_client.refresh_store())?;
+        fixture_ref
+            .runtime
+            .block_on(desktop_client.refresh_store())?;
         let desktop_snapshot = desktop_client.store().snapshot();
         let session_id = session_by_peer
             .get(&deployment.peer_id)
