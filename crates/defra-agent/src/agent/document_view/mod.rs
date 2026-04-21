@@ -65,6 +65,16 @@ impl DocumentRuntimeView {
         self.backends.values().any(|record| record.doc_id == doc_id)
     }
 
+    fn has_task_doc_id(&self, doc_id: &str) -> bool {
+        self.tasks.values().any(|record| record.doc_id == doc_id)
+    }
+
+    fn has_schedule_doc_id(&self, doc_id: &str) -> bool {
+        self.schedules
+            .values()
+            .any(|record| record.doc_id == doc_id)
+    }
+
     fn remove_behavior_by_doc_id(&mut self, doc_id: &str) -> bool {
         let key = self.behaviors.iter().find_map(|(behavior_id, record)| {
             (record.doc_id == doc_id).then_some(behavior_id.clone())
@@ -97,6 +107,21 @@ impl DocumentRuntimeView {
             (record.doc_id == doc_id).then_some(backend_id.clone())
         });
         key.is_some_and(|backend_id| self.backends.remove(&backend_id).is_some())
+    }
+
+    fn remove_task_by_doc_id(&mut self, doc_id: &str) -> bool {
+        let key = self
+            .tasks
+            .iter()
+            .find_map(|(task_id, record)| (record.doc_id == doc_id).then_some(task_id.clone()));
+        key.is_some_and(|task_id| self.tasks.remove(&task_id).is_some())
+    }
+
+    fn remove_schedule_by_doc_id(&mut self, doc_id: &str) -> bool {
+        let key = self.schedules.iter().find_map(|(schedule_id, record)| {
+            (record.doc_id == doc_id).then_some(schedule_id.clone())
+        });
+        key.is_some_and(|schedule_id| self.schedules.remove(&schedule_id).is_some())
     }
 
     fn references_profile(&self, profile_id: &str) -> bool {

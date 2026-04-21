@@ -2,7 +2,8 @@ use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use super::serde_helpers::rows_with_doc_id;
+use super::serde_helpers::{first_row_with_doc_id, rows_with_doc_id};
+use crate::graphql::escape_graphql_string;
 
 /// Apply-owned description of a task.
 ///
@@ -50,4 +51,41 @@ pub(crate) async fn list_task_records(node: &EmbeddedNode) -> Result<Vec<(String
     }
 
     Ok(rows_with_doc_id(resp.data.as_ref(), "Task"))
+}
+
+/// Load a single `Task` document by its DefraDB `_docID`.
+///
+/// Used by the control watcher's update-dispatch path to classify an updated
+/// document by collection when only the `_docID` is known.
+pub(crate) async fn load_task_by_doc_id(
+    node: &EmbeddedNode,
+    doc_id: &str,
+) -> Result<Option<(String, Task)>> {
+    let escaped_doc_id = escape_graphql_string(doc_id);
+    let query = format!(
+        r#"{{
+            Task(
+                filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                limit: 1
+            ) {{
+                _docID
+                task_id
+                name
+                description
+                behavior_id
+                prompt_template
+                enabled
+                output_schema_ref
+                created_at
+                updated_at
+            }}
+        }}"#
+    );
+
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        anyhow::bail!("query Task by _docID failed: {:?}", resp.errors);
+    }
+
+    Ok(first_row_with_doc_id(resp.data.as_ref(), "Task"))
 }

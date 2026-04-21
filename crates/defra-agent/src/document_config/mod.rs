@@ -36,9 +36,9 @@ pub use tool_selection::{load_tool_selection, upsert_tool_selection, ToolSelecti
 #[allow(unused_imports)]
 pub(crate) use event_trigger::EventTrigger;
 #[allow(unused_imports)]
-pub(crate) use schedule::{list_schedule_records, Schedule};
+pub(crate) use schedule::{list_schedule_records, load_schedule_by_doc_id, Schedule};
 #[allow(unused_imports)]
-pub(crate) use task::{list_task_records, Task};
+pub(crate) use task::{list_task_records, load_task_by_doc_id, Task};
 
 use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;

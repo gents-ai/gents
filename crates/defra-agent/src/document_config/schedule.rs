@@ -2,7 +2,8 @@ use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use super::serde_helpers::rows_with_doc_id;
+use super::serde_helpers::{first_row_with_doc_id, rows_with_doc_id};
+use crate::graphql::escape_graphql_string;
 
 /// Description of a scheduled trigger for a task.
 ///
@@ -60,4 +61,44 @@ pub(crate) async fn list_schedule_records(
     }
 
     Ok(rows_with_doc_id(resp.data.as_ref(), "Schedule"))
+}
+
+/// Load a single `Schedule` document by its DefraDB `_docID`.
+///
+/// Used by the control watcher's update-dispatch path to classify an updated
+/// document by collection when only the `_docID` is known.
+pub(crate) async fn load_schedule_by_doc_id(
+    node: &EmbeddedNode,
+    doc_id: &str,
+) -> Result<Option<(String, Schedule)>> {
+    let escaped_doc_id = escape_graphql_string(doc_id);
+    let query = format!(
+        r#"{{
+            Schedule(
+                filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                limit: 1
+            ) {{
+                _docID
+                schedule_id
+                task_id
+                interval_secs
+                enabled
+                concurrency
+                next_run_at
+                last_attempt_at
+                last_status
+                last_error
+                fire_count
+                created_at
+                updated_at
+            }}
+        }}"#
+    );
+
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        anyhow::bail!("query Schedule by _docID failed: {:?}", resp.errors);
+    }
+
+    Ok(first_row_with_doc_id(resp.data.as_ref(), "Schedule"))
 }
