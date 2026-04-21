@@ -459,4 +459,34 @@ theorem t_conv
       (applyAll L (diff M L)).desired d = some f :=
   apply_realizes_manifest hM hL
 
+/-- Exhaustive Collection pattern-match acting as a parity contract
+    with the Rust `defra_agent::Collection` enum. When the Rust enum
+    gains a variant, the Rust-side test
+    `collection::tests::canonical_variants_and_ranks` breaks first;
+    this example's pattern-match also becomes non-exhaustive and fails
+    the Lean build. Both must be updated together. -/
+example (c : Collection) : Nat :=
+  match c with
+  | .agentPrincipal       => 1
+  | .agentBehavior        => 2
+  | .toolSelection        => 0
+  | .inferenceBackend     => 0
+  | .inferenceProfile     => 0
+  | .toolServiceRegistry  => 0
+  | .scheduledTask        => 3
+
+/-- Sanity: the exhaustive example's rank map equals applyOrder. -/
+theorem applyOrder_matches_parity_contract : ∀ c : Collection,
+    Collection.applyOrder c =
+      (match c with
+       | .agentPrincipal       => 1
+       | .agentBehavior        => 2
+       | .toolSelection        => 0
+       | .inferenceBackend     => 0
+       | .inferenceProfile     => 0
+       | .toolServiceRegistry  => 0
+       | .scheduledTask        => 3) := by
+  intro c
+  cases c <;> rfl
+
 end ApplyReconcile

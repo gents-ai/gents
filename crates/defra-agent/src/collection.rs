@@ -140,6 +140,56 @@ mod tests {
     }
 
     #[test]
+    fn canonical_variants_and_ranks() {
+        // This list is the Rust side of the parity contract. The Lean
+        // inductive `ApplyReconcile.Collection` and the
+        // `ApplyReconcile.Collection.applyOrder` function in
+        // crates/defra-agent/proofs/Proofs/ApplyReconcile.lean must
+        // match this sequence exactly. When you add a variant here, you
+        // MUST also:
+        //
+        // 1. Add the variant to the Lean inductive.
+        // 2. Add the variant's rank to Collection.applyOrder in Lean.
+        // 3. Update the exhaustive pattern-match example at the bottom
+        //    of ApplyReconcile.lean (added in Task A4 alongside this test).
+        //
+        // Both the Lean build and this test must stay green.
+        let canonical: &[(Collection, u8, &str)] = &[
+            (Collection::AgentPrincipal, 1, "AgentPrincipal"),
+            (Collection::AgentBehavior, 2, "AgentBehavior"),
+            (Collection::ToolSelection, 0, "ToolSelection"),
+            (Collection::InferenceBackend, 0, "InferenceBackend"),
+            (Collection::InferenceProfile, 0, "InferenceProfile"),
+            (Collection::ToolServiceRegistry, 0, "ToolServiceRegistry"),
+            (Collection::ScheduledTask, 3, "ScheduledTask"),
+        ];
+
+        // ALL must list every canonical variant exactly once.
+        assert_eq!(Collection::ALL.len(), canonical.len());
+        for (variant, _, _) in canonical.iter() {
+            assert!(
+                Collection::ALL.contains(variant),
+                "Collection::ALL missing variant {variant:?}; \
+                 see ApplyReconcile.lean parity contract"
+            );
+        }
+
+        // apply_order and graphql_type must match the canonical values.
+        for (variant, expected_rank, expected_type) in canonical.iter() {
+            assert_eq!(
+                variant.apply_order(),
+                *expected_rank,
+                "Collection::{variant:?}.apply_order() drifted from Lean parity contract"
+            );
+            assert_eq!(
+                variant.graphql_type(),
+                *expected_type,
+                "Collection::{variant:?}.graphql_type() drifted from Lean parity contract"
+            );
+        }
+    }
+
+    #[test]
     fn apply_order_puts_referees_before_referrers() {
         assert!(
             Collection::InferenceBackend.apply_order() < Collection::AgentBehavior.apply_order()
