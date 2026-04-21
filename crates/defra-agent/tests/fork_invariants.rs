@@ -195,3 +195,23 @@ async fn fork_rejects_source_with_non_terminal_request() {
 
     assert!(matches!(err, ForkError::ForkSourceBusy), "expected ForkSourceBusy, got {:?}", err);
 }
+
+#[tokio::test]
+async fn fork_rejects_mismatched_caller_principal() {
+    let db = test_db("fork-wrong-principal").await;
+
+    let parent_session = "parent-wp";
+    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+    create_agent_message(&db.node, parent_session, 1, "user", "u1", "2026-04-21T10:00:01Z").await;
+
+    let err = fork(&db.node, ForkParams {
+        source_session_id: parent_session,
+        fork_at_user_turn: 0,
+        caller_agent_did: "did:defra-agent:someone-else",
+        target_behavior_id: None,
+    }).await.expect_err("fork must reject mismatched principal");
+
+    assert!(matches!(err, ForkError::ForkNotSameAgent), "expected ForkNotSameAgent, got {:?}", err);
+}

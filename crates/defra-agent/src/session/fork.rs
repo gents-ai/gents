@@ -77,7 +77,13 @@ pub async fn fork(
         .map_err(ForkError::ForkCopyFailed)?
         .ok_or_else(|| ForkError::ForkSourceNotFound(params.source_session_id.to_string()))?;
 
-    // Step 1b: reject busy sources before doing any copy work.
+    // Step 1b: reject callers that are not the same principal as the parent conversation.
+    let parent_agent_did = parent.agent_did.as_deref().unwrap_or("");
+    if parent_agent_did != params.caller_agent_did {
+        return Err(ForkError::ForkNotSameAgent);
+    }
+
+    // Step 1c: reject busy sources before doing any copy work.
     if !verify_source_idle(node, params.source_session_id)
         .await
         .map_err(ForkError::ForkCopyFailed)?
