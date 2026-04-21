@@ -183,3 +183,50 @@ fn manifest_with_behavior_referencing_backend_orders_backend_first() {
         );
     }
 }
+
+#[test]
+fn manifest_with_principal_referencing_behavior_orders_behavior_first() {
+    // Models AgentPrincipal.default_behavior_id as a structural reference.
+    // Principal (rank 3) must be written AFTER its referenced behavior
+    // (rank 1) so the control watcher does not observe a principal
+    // pointing at a missing behavior.
+    let behavior = r(Collection::AgentBehavior, "a1");
+    let principal = r(Collection::AgentPrincipal, "did:x");
+
+    let m = Manifest {
+        docs: {
+            let mut docs = BTreeMap::new();
+            docs.insert(behavior.clone(), DesiredFields::opaque("a1-desired"));
+            docs.insert(
+                principal.clone(),
+                DesiredFields::with_refs("did:x-desired", vec![behavior.clone()]),
+            );
+            docs
+        },
+    };
+    let l = LiveState {
+        desired: BTreeMap::new(),
+        live: BTreeMap::new(),
+    };
+
+    let steps: Vec<ApplyStep> = diff(&m, &l).into_steps();
+    assert_eq!(steps.len(), 2);
+    assert_eq!(
+        steps[0].target(),
+        &behavior,
+        "referenced behavior must be written before the principal that references it",
+    );
+    assert_eq!(steps[1].target(), &principal);
+
+    // After full apply, the principal's default-behavior reference resolves.
+    let after = apply_all(&l, &steps);
+    assert!(after.desired.contains_key(&behavior));
+    assert!(after.desired.contains_key(&principal));
+    for r in references_of(after.desired.get(&principal).unwrap()) {
+        assert!(
+            after.desired.contains_key(&r),
+            "principal's default_behavior reference {:?} should resolve after apply",
+            r,
+        );
+    }
+}

@@ -862,10 +862,18 @@ noncomputable def Manifest.behaviorIds (m : Manifest) : Finset BehaviorId :=
     - `runnable := allBehaviors.filter (· has a matching present DocRef in L)`
     - `unavailable := allBehaviors \ runnable`
 
-    `defaultBehavior` is a caller parameter because the model does not
-    include an `AgentPrincipal.default_behavior_id` projection; in the
-    production path the control watcher supplies it from the principal
-    document.
+    `defaultBehavior` is a caller parameter because the model's abstract
+    `DesiredFields` is opaque — the specific `AgentPrincipal.default_behavior_id`
+    field isn't named in the Lean inductive. The topological invariant
+    (Manifest.WellFormed's second conjunct, `refs go to strictly-lower-rank
+    collections`) does cover principal→behavior references: when a Manifest
+    carries an AgentPrincipal DocRef whose DesiredFields.refs includes an
+    AgentBehavior DocRef, the sort in `diff` writes the behavior first
+    (rank 1) before the principal (rank 3). This matches production's
+    control-watcher semantics: a principal whose default_behavior is not yet
+    visible is held in `PendingVisibility` until the behavior write lands.
+    Concrete reference populations (including default_behavior_id edges)
+    are exercised in the Rust conformance tests.
 
     Uses classical decidability on the existential predicate — the
     proofs that consume this snapshot (notably `toResolvedSnapshot_coverage`)

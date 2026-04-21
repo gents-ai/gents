@@ -86,6 +86,53 @@ fn referential_manifest_strategy() -> impl Strategy<Value = Manifest> {
 #[allow(dead_code)]
 const _LEAF_COLLECTIONS_USED: &[Collection] = LEAF_COLLECTIONS;
 
+/// Strategy generating manifests that may include an AgentPrincipal
+/// with a default_behavior-style reference to one of the behaviors
+/// already generated. Exercises the rank-3 → rank-1 edge.
+fn referential_manifest_strategy_with_principal() -> impl Strategy<Value = Manifest> {
+    referential_manifest_strategy().prop_flat_map(|m| {
+        // Collect behavior DocRefs from m.
+        let behavior_refs: Vec<DocRef> = m
+            .docs
+            .keys()
+            .filter(|d| d.collection == Collection::AgentBehavior)
+            .cloned()
+            .collect();
+
+        if behavior_refs.is_empty() {
+            // No behaviors → can't reference one; return m unchanged.
+            return Just(m).boxed();
+        }
+
+        let m_clone = m.clone();
+        (
+            Just(m_clone),
+            prop::option::of((0..behavior_refs.len(), "[a-z]{1,4}").prop_map({
+                let behavior_refs = behavior_refs.clone();
+                move |(idx, id)| {
+                    (
+                        DocRef {
+                            collection: Collection::AgentPrincipal,
+                            id,
+                        },
+                        DesiredFields::with_refs(
+                            "principal-content",
+                            vec![behavior_refs[idx].clone()],
+                        ),
+                    )
+                }
+            })),
+        )
+            .prop_map(|(mut m, principal_opt)| {
+                if let Some((pref, pfields)) = principal_opt {
+                    m.docs.insert(pref, pfields);
+                }
+                m
+            })
+            .boxed()
+    })
+}
+
 fn docref_strategy() -> impl Strategy<Value = DocRef> {
     (collection_strategy(), "[a-z]{1,4}").prop_map(|(collection, id)| DocRef { collection, id })
 }
@@ -208,6 +255,34 @@ proptest! {
                         "dangling reference {:?} from {:?} after step {:?}",
                         r,
                         d,
+                        s,
+                    );
+                }
+            }
+        }
+    }
+
+    /// P5 (principal→behavior): for manifests that carry an AgentPrincipal
+    /// with a default_behavior-style reference, the diff's sorted output
+    /// writes the referenced behavior strictly before the principal.
+    #[test]
+    fn apply_orders_behavior_before_principal(
+        m in referential_manifest_strategy_with_principal(),
+    ) {
+        let l = LiveState {
+            desired: BTreeMap::new(),
+            live: BTreeMap::new(),
+        };
+        let steps = diff(&m, &l).into_steps();
+        let mut acc = l.clone();
+        for s in &steps {
+            acc = apply_all(&acc, &[s.clone()]);
+            for (_d, payload) in &acc.desired {
+                for r in references_of(payload) {
+                    prop_assert!(
+                        acc.desired.contains_key(&r),
+                        "dangling reference {:?} after step {:?}",
+                        r,
                         s,
                     );
                 }
