@@ -875,3 +875,164 @@ async fn fork_rejects_unknown_target_behavior() {
         err
     );
 }
+
+/// Fork-of-fork: the spec requires that ancestry can be walked one link at a
+/// time via `forked_from_session_id`, and that each child is independent of
+/// deeper ancestors. This test covers the two-generation case:
+///   grandparent -> (fork @ turn 1) -> child -> (fork @ turn 1) -> grandchild
+/// Grandchild must:
+///   - exist as a regular session (messages, conversation present)
+///   - record `forked_from_session_id == child`, NOT `grandparent`
+///   - copy exactly the prefix of child (which itself already contains only
+///     grandparent's prefix plus child's post-fork messages)
+#[tokio::test]
+async fn fork_of_fork_links_to_immediate_parent_not_grandparent() {
+    let db = test_db("fork-of-fork").await;
+
+    // --- Generation 0: grandparent ---
+    let grandparent_session = "grandparent";
+    create_agent_session(
+        &db.node,
+        grandparent_session,
+        AGENT_NAME,
+        "2026-04-21T10:00:00Z",
+    )
+    .await;
+    create_agent_conversation(
+        &db.node,
+        grandparent_session,
+        AGENT_NAME,
+        "2026-04-21T10:00:00Z",
+    )
+    .await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+
+    // seq 1: user, 2: assistant, 3: user, 4: assistant
+    create_agent_message(
+        &db.node,
+        grandparent_session,
+        1,
+        "user",
+        "gp_u1",
+        "2026-04-21T10:00:01Z",
+    )
+    .await;
+    create_agent_message(
+        &db.node,
+        grandparent_session,
+        2,
+        "assistant",
+        "gp_a1",
+        "2026-04-21T10:00:02Z",
+    )
+    .await;
+    create_agent_message(
+        &db.node,
+        grandparent_session,
+        3,
+        "user",
+        "gp_u2",
+        "2026-04-21T10:00:03Z",
+    )
+    .await;
+    create_agent_message(
+        &db.node,
+        grandparent_session,
+        4,
+        "assistant",
+        "gp_a2",
+        "2026-04-21T10:00:04Z",
+    )
+    .await;
+
+    // --- Generation 1: child = fork(grandparent, user_turn=1) ---
+    // Cut is before grandparent's 2nd user message (seq 3), so child inherits
+    // seq 1 (gp_u1) and seq 2 (gp_a1).
+    let child_outcome = fork(
+        &db.node,
+        ForkParams {
+            source_session_id: grandparent_session,
+            fork_at_user_turn: 1,
+            caller_agent_did: AGENT_DID,
+            target_behavior_id: None,
+        },
+    )
+    .await
+    .expect("child fork succeeds");
+    assert_eq!(child_outcome.copied_messages, 2);
+
+    // Child extends history with its own post-fork turn.
+    create_agent_message(
+        &db.node,
+        &child_outcome.session_id,
+        3,
+        "user",
+        "child_u2",
+        "2026-04-21T10:10:00Z",
+    )
+    .await;
+    create_agent_message(
+        &db.node,
+        &child_outcome.session_id,
+        4,
+        "assistant",
+        "child_a2",
+        "2026-04-21T10:10:01Z",
+    )
+    .await;
+
+    // --- Generation 2: grandchild = fork(child, user_turn=1) ---
+    // Child's user messages are: gp_u1 at seq 1, child_u2 at seq 3. So
+    // user_turn=1 cuts before child_u2 (seq 3) and grandchild copies
+    // seq 1 (gp_u1) + seq 2 (gp_a1). This matches what the grandparent fork
+    // produced — fork-of-fork is consistent.
+    let grandchild_outcome = fork(
+        &db.node,
+        ForkParams {
+            source_session_id: &child_outcome.session_id,
+            fork_at_user_turn: 1,
+            caller_agent_did: AGENT_DID,
+            target_behavior_id: None,
+        },
+    )
+    .await
+    .expect("grandchild fork succeeds");
+    assert_eq!(
+        grandchild_outcome.copied_messages, 2,
+        "grandchild inherits child's prefix (which is grandparent's prefix)"
+    );
+
+    // Provenance: grandchild's forked_from points to CHILD, not grandparent.
+    let grandchild_conv =
+        support::snapshots::fetch_conversation_snapshot(&db.node, &grandchild_outcome.session_id)
+            .await
+            .expect("grandchild conversation exists");
+    assert_eq!(
+        grandchild_conv.forked_from_session_id.as_deref(),
+        Some(child_outcome.session_id.as_str()),
+        "grandchild must record its immediate parent (child), not its grandparent"
+    );
+    assert_eq!(grandchild_conv.fork_at_user_turn, Some(1));
+
+    // Verify the copied messages match the child's prefix (content carries
+    // grandparent's labels because they were copied verbatim at generation 1).
+    let grandchild_messages =
+        fetch_message_snapshots_for_session(&db.node, &grandchild_outcome.session_id).await;
+    assert_eq!(grandchild_messages.len(), 2);
+    assert_eq!(grandchild_messages[0].content, "gp_u1");
+    assert_eq!(grandchild_messages[1].content, "gp_a1");
+    // And grandchild's message_keys are remapped to its own session_id.
+    assert_eq!(
+        grandchild_messages[0].session_id,
+        grandchild_outcome.session_id
+    );
+    assert_eq!(
+        grandchild_messages[0].message_key,
+        format!("{}:1", grandchild_outcome.session_id)
+    );
+
+    // Child's rows must not appear in grandchild's query, and vice-versa.
+    assert!(!grandchild_messages
+        .iter()
+        .any(|m| m.session_id == child_outcome.session_id));
+}
