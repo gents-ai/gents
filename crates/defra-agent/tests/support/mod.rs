@@ -10,6 +10,7 @@ use tempfile::TempDir;
 
 pub mod fixtures;
 pub mod http_mock;
+pub mod mock_endpoint;
 pub mod snapshots;
 pub mod waits;
 
