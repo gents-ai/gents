@@ -97,9 +97,9 @@ This is called out explicitly here so that no one later reads T-Conv as a guaran
 
 ## Follow-on Issues
 
-- **I-1 (from code review):** Consolidate desired-state collection handling in `desired_state.rs`. The seven near-identical `Desired*` structs, the seven near-identical diff fields, and the seven parallel apply branches could share a trait, a macro, or a shared enum. Not blocking; flagged for when a second motivating refactor appears.
-- **I-2 (from apply-atomicity discussion):** Make apply transactional — on partial failure, roll back to the pre-apply state. This is the natural next-step UX work once T-Conv lands.
-- **I-3 (optional, tracking):** Model delete semantics when live-only removal is added. Stub for the future T-Delete-safety theorem.
+- **I-1 (#55, from code review):** Consolidate desired-state collection handling in `desired_state.rs`. The seven near-identical `Desired*` structs, the seven near-identical diff fields, and the seven parallel apply branches could share a trait, a macro, or a shared enum. Not blocking; flagged for when a second motivating refactor appears.
+- **I-2 (#56, from apply-atomicity discussion):** Make apply transactional — on partial failure, roll back to the pre-apply state. This is the natural next-step UX work once T-Conv lands.
+- **I-3 (#57, optional, tracking):** Model delete semantics when live-only removal is added. Stub for the future T-Delete-safety theorem.
 
 ## Out of Scope
 
