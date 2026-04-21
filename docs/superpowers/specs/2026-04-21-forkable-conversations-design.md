@@ -275,11 +275,11 @@ The test:
 5. Negative cases covering each error in the taxonomy, including:
    - `ForkBehaviorNotOwnedByPrincipal`: fork attempted with `target_behavior_id` pointing to an `AgentBehavior` whose `agent_did` differs from the parent's. Child must NOT be created; no copied rows must exist.
 
-### State-machine conformance additions
+### State-machine conformance addition
 
-`tests/state_machine_conformance.rs` and `tests/lifecycle_regression.rs` each get one new case:
+`crates/defra-agent/tests/state_machine_conformance.rs` gets one new case:
 
-- A fork performed while a parent session has only terminal-state `AgentRequest` rows does not transition any state in the Process, Request, or Persistence lifecycle state machines. This asserts that fork is orthogonal to the Lean-proven invariants.
+- A fork performed while a parent session has only terminal-state `AgentRequest` rows does not transition any state in the Process, Request, or Persistence lifecycle state machines. Snapshot the parent's request/response/conversation state before and after the fork; assert byte-equality. This asserts that fork is orthogonal to the Lean-proven invariants.
 
 ### Concurrent fork test
 
