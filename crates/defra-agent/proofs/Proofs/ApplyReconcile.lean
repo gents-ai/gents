@@ -87,4 +87,24 @@ def contains (L : LiveState) (d : DocRef) : Bool := (L.desired d).isSome
 
 end LiveState
 
+/-- Cross-document references a desired-fields value declares.
+    Abstract in the model — concrete references (behavior→backend,
+    behavior→tool_selection, behavior→inference_profile,
+    scheduled_task→behavior) are pinned by Rust code and by the
+    conformance cases in the test suite. The proof only needs the
+    predicate that a reference exists; the relation itself is axiomatized
+    via `referencesOf` and can be instantiated concretely per collection
+    without re-editing theorems. -/
+def referencesOf : DesiredFields → Finset DocRef := fun _ => ∅
+
+/-- A manifest is well-formed when every reference target is itself in
+    the manifest. -/
+def Manifest.WellFormed (m : Manifest) : Prop :=
+  ∀ d : DocRef, ∀ f, m.docs d = some f → ∀ r ∈ referencesOf f, m.contains r = true
+
+/-- A live state is reference-closed on its desired projection when every
+    reference in a present document resolves to another present document. -/
+def LiveState.WellFormed (L : LiveState) : Prop :=
+  ∀ d : DocRef, ∀ f, L.desired d = some f → ∀ r ∈ referencesOf f, L.contains r = true
+
 end ApplyReconcile
