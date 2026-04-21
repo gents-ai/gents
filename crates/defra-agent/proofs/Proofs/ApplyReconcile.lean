@@ -41,9 +41,9 @@ def Collection.applyOrder : Collection → Nat
   | .toolSelection         => 0
   | .inferenceProfile      => 0
   | .toolServiceRegistry   => 0
-  | .agentPrincipal        => 1
-  | .agentBehavior         => 2
-  | .scheduledTask         => 3
+  | .agentBehavior         => 1
+  | .scheduledTask         => 2
+  | .agentPrincipal        => 3
 
 /-- Comparison on Collection: by `applyOrder` rank. -/
 instance : LT Collection where
@@ -1016,25 +1016,25 @@ theorem t_conv_published
     the Lean build. Both must be updated together. -/
 example (c : Collection) : Nat :=
   match c with
-  | .agentPrincipal       => 1
-  | .agentBehavior        => 2
+  | .agentPrincipal       => 3
+  | .agentBehavior        => 1
   | .toolSelection        => 0
   | .inferenceBackend     => 0
   | .inferenceProfile     => 0
   | .toolServiceRegistry  => 0
-  | .scheduledTask        => 3
+  | .scheduledTask        => 2
 
 /-- Sanity: the exhaustive example's rank map equals applyOrder. -/
 theorem applyOrder_matches_parity_contract : ∀ c : Collection,
     Collection.applyOrder c =
       (match c with
-       | .agentPrincipal       => 1
-       | .agentBehavior        => 2
+       | .agentPrincipal       => 3
+       | .agentBehavior        => 1
        | .toolSelection        => 0
        | .inferenceBackend     => 0
        | .inferenceProfile     => 0
        | .toolServiceRegistry  => 0
-       | .scheduledTask        => 3) := by
+       | .scheduledTask        => 2) := by
   intro c
   cases c <;> rfl
 
