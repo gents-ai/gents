@@ -9,4 +9,7 @@ type AgentConversation @branchable {
     created_at: DateTime @index(direction: DESC)
     updated_at: DateTime @index(direction: DESC)
     latest_request_id: String @index
+    forked_from_session_id: String @index
+    fork_at_user_turn: Int
+    forked_at: DateTime
 }

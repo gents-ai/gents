@@ -12,7 +12,7 @@ use crate::{
     CHAT_AFTER_HELP, CLI_AFTER_HELP, CONFIG_AFTER_HELP, CONFIG_EXPORT_AFTER_HELP,
     CONFIG_IMPORT_AFTER_HELP, DEFAULT_INIT_ENDPOINT, DIAGNOSE_AFTER_HELP, INIT_AFTER_HELP,
     P2P_AFTER_HELP, REQUEST_AFTER_HELP, RESET_AFTER_HELP, RESPONSE_AFTER_HELP, SERVER_AFTER_HELP,
-    SHOW_AFTER_HELP, STATUS_AFTER_HELP,
+    SESSION_AFTER_HELP, SHOW_AFTER_HELP, STATUS_AFTER_HELP,
 };
 
 use crate::default_backend_max_queue_depth;
@@ -70,6 +70,11 @@ pub(crate) enum Command {
     Response {
         #[command(subcommand)]
         command: ResponseCommand,
+    },
+    #[command(about = "Manage and fork agent sessions", after_help = SESSION_AFTER_HELP)]
+    Session {
+        #[command(subcommand)]
+        command: SessionCommand,
     },
 }
 
@@ -906,6 +911,42 @@ pub(crate) struct RequestShowArgs {
     pub(crate) request_id_flag: Option<String>,
     #[arg(value_name = "REQUEST_ID")]
     pub(crate) request_id: Option<String>,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum SessionCommand {
+    #[command(about = "Fork an existing session at a user-turn boundary")]
+    Fork(SessionForkArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct SessionForkArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Reserved — remote GraphQL-mode fork is not yet implemented. \
+                Passing this flag today errors."
+    )]
+    pub(crate) graphql: Option<String>,
+    #[arg(
+        long,
+        help = "Override the caller agent DID (defaults to local identity)"
+    )]
+    pub(crate) agent_did: Option<String>,
+    #[arg(long, value_name = "SOURCE_SESSION_ID")]
+    pub(crate) from: String,
+    #[arg(
+        long,
+        value_name = "N",
+        help = "0-based user-turn index; fork cuts before this user message"
+    )]
+    pub(crate) at_user_turn: u32,
+    #[arg(
+        long,
+        help = "Target behavior_id for the child; omit to inherit the parent's behavior"
+    )]
+    pub(crate) behavior: Option<String>,
 }
 
 #[derive(Subcommand)]
