@@ -32,6 +32,7 @@ pub mod streaming;
 pub(crate) mod template;
 pub mod tool_surface;
 pub mod toolset;
+pub(crate) mod trigger_engine;
 pub mod truncation;
 pub mod watcher;
 
