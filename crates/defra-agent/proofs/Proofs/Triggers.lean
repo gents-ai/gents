@@ -111,3 +111,30 @@ structure RequestSeed where
 def dispatch (snap : TriggerSnapshot) (intent : FireIntent) :
     Option RequestSeed :=
   sorry
+
+/-- **Theorem T1 (enabled gate).**
+
+A fire intent that successfully dispatches into a `RequestSeed` implies
+its underlying trigger is present *and* enabled in the active snapshot
+at the time of the fire. Manual intents are unconstrained — they are
+not gated by a trigger document.
+
+This theorem locks the invariant that a disabled schedule or event
+trigger cannot admit new work, even if a stale scheduler tick races
+the reconcile publish. -/
+theorem T1_enabled_gate
+    (snap : TriggerSnapshot) (intent : FireIntent) (seed : RequestSeed) :
+    dispatch snap intent = some seed →
+    (intent.triggerKind = .schedule →
+      ∃ triggerId, intent.triggerId = some triggerId ∧
+        ∃ sched ∈ snap.activeSchedules,
+          sched.triggerId = triggerId ∧ sched.enabled = true) ∧
+    (intent.triggerKind = .event →
+      ∃ triggerId, intent.triggerId = some triggerId ∧
+        ∃ trig ∈ snap.activeEventTriggers,
+          trig.triggerId = triggerId ∧ trig.enabled = true) := by
+  -- Proof deferred: `dispatch` is itself a `sorry` placeholder at this
+  -- layer of the spec. Once a concrete operational definition is
+  -- supplied in a later PR, this proof reduces to an unfold + case on
+  -- `intent.triggerKind` + the `enabled` check.
+  sorry
