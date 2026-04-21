@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
 
+use defra_agent::{parse_template_for_validation, VariableRef};
+
 use super::DesiredStateManifest;
 
 pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Vec<String>) {
@@ -259,6 +261,42 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                 schedule.schedule_id, other
             )),
         }
+
+        // Schedule scope only supplies `event.*` — reject any `doc.*` or
+        // `args.*` references in the linked task's prompt template so the
+        // trigger cannot fail at render time with a missing scope.
+        if !task_id.is_empty() {
+            if let Some(task) = manifest.tasks.iter().find(|task| task.task_id == task_id) {
+                match parse_template_for_validation(&task.prompt_template) {
+                    Ok(refs) => {
+                        let mut reported: BTreeSet<&str> = BTreeSet::new();
+                        for var in &refs {
+                            if let Some(root) = var.root() {
+                                if (root == "doc" || root == "args") && reported.insert(root) {
+                                    errors.push(format!(
+                                        "schedule {} prompt template references forbidden scope: {}; schedule scope only permits event.*",
+                                        schedule.schedule_id,
+                                        format_variable_ref(var),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    Err(err) => errors.push(format!(
+                        "schedule {} prompt template failed to parse: {}",
+                        schedule.schedule_id, err
+                    )),
+                }
+            }
+        }
+    }
+}
+
+fn format_variable_ref(var: &VariableRef) -> String {
+    if var.path.is_empty() {
+        String::new()
+    } else {
+        var.path.join(".")
     }
 }
 

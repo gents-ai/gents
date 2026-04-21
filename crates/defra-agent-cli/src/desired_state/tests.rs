@@ -618,6 +618,70 @@ fn validate_rejects_task_unknown_behavior() {
 }
 
 #[test]
+fn validate_rejects_schedule_task_template_referencing_doc_scope() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut task = sample_task("summarize-inbox");
+    task.prompt_template =
+        "Schedule fired at {{ event.fired_at }} for {{ doc.foo }}.".to_string();
+    manifest.tasks.push(task);
+    manifest
+        .schedules
+        .push(sample_schedule("hourly", "summarize-inbox"));
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("hourly")
+                && message.contains("forbidden scope")
+                && message.contains("doc")
+                && message.contains("event.*")
+        }),
+        "expected schedule-scope rejection for doc.*, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_schedule_task_template_referencing_args_scope() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut task = sample_task("summarize-inbox");
+    task.prompt_template = "{{ args.target }}".to_string();
+    manifest.tasks.push(task);
+    manifest
+        .schedules
+        .push(sample_schedule("hourly", "summarize-inbox"));
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("hourly")
+                && message.contains("forbidden scope")
+                && message.contains("args")
+        }),
+        "expected schedule-scope rejection for args.*, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_accepts_schedule_task_template_using_only_event_scope() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut task = sample_task("summarize-inbox");
+    task.prompt_template =
+        "Run at {{ event.fired_at }} for {{ event.trigger_kind }}.".to_string();
+    manifest.tasks.push(task);
+    manifest
+        .schedules
+        .push(sample_schedule("hourly", "summarize-inbox"));
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        !errors
+            .iter()
+            .any(|message| message.contains("forbidden scope")),
+        "expected no schedule-scope rejections, got {errors:?}"
+    );
+}
+
+#[test]
 fn validate_rejects_schedule_unknown_task() {
     let mut manifest = manifest_with_default_behavior();
     manifest
