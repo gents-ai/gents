@@ -46,3 +46,75 @@ fn enforces_template_size_cap() {
     let err = render_template(&big, &scope).unwrap_err();
     assert!(matches!(err, TemplateError::Parse(_)));
 }
+
+#[test]
+fn parse_template_for_validation_collects_event_and_doc_paths() {
+    let template = "{{ event.fired_at }} {{ doc.customer.name }}";
+    let refs = parse_template_for_validation(template).unwrap();
+    assert_eq!(
+        refs,
+        vec![
+            VariableRef {
+                path: vec!["event".to_string(), "fired_at".to_string()],
+            },
+            VariableRef {
+                path: vec![
+                    "doc".to_string(),
+                    "customer".to_string(),
+                    "name".to_string(),
+                ],
+            },
+        ]
+    );
+}
+
+#[test]
+fn parse_template_for_validation_ignores_unrelated_identifiers() {
+    let refs = parse_template_for_validation("hello {{ user.name }} world").unwrap();
+    assert!(refs.is_empty());
+}
+
+#[test]
+fn parse_template_for_validation_supports_bracket_string_indexing() {
+    let template = r#"{{ event["fired_at"] }} {{ args['mode'] }}"#;
+    let refs = parse_template_for_validation(template).unwrap();
+    assert_eq!(
+        refs,
+        vec![
+            VariableRef {
+                path: vec!["event".to_string(), "fired_at".to_string()],
+            },
+            VariableRef {
+                path: vec!["args".to_string(), "mode".to_string()],
+            },
+        ]
+    );
+}
+
+#[test]
+fn parse_template_for_validation_handles_statements_and_comments() {
+    let template = "{# doc.ignored #}{% if event.ok %}yes{% endif %}";
+    let refs = parse_template_for_validation(template).unwrap();
+    assert_eq!(
+        refs,
+        vec![VariableRef {
+            path: vec!["event".to_string(), "ok".to_string()],
+        }]
+    );
+}
+
+#[test]
+fn parse_template_for_validation_skips_suffix_event_in_attr_access() {
+    let template = "{{ doc.event.name }}";
+    let refs = parse_template_for_validation(template).unwrap();
+    assert_eq!(
+        refs,
+        vec![VariableRef {
+            path: vec![
+                "doc".to_string(),
+                "event".to_string(),
+                "name".to_string(),
+            ],
+        }]
+    );
+}

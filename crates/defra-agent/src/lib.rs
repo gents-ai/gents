@@ -69,6 +69,7 @@ pub use schema::{
 };
 pub use session::load_history;
 pub use streaming::{DefraStreamWriter, StreamWriter};
+pub use template::{parse_template_for_validation, TemplateError, VariableRef};
 pub use tool_surface::{
     cli_tool, BashMode, BehaviorToolConfig, CustomToolFactory, FileToolMode, ToolCeiling,
     ToolRuntimeContext, ToolSelection, ToolSurface,
