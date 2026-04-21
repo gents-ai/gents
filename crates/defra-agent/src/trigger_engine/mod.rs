@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 
+pub(crate) mod production_materializer;
 pub(crate) mod schedule_source;
 
 #[cfg(test)]
@@ -181,18 +182,49 @@ impl TriggerEngine {
 
     /// Run the engine until `cancel` is triggered.
     ///
-    /// Scaffold only: Tasks 30-33 will drive `sources` via
-    /// `FuturesUnordered` / `select_all`, funnel each yielded `FireIntent`
-    /// into `dispatch`, and honor `cancel` for graceful shutdown.
+    /// Each `TriggerSource` is polled serially in its own loop: `next_fire`
+    /// yields one `FireIntent` at a time, which we hand to `dispatch` before
+    /// re-polling the source. Sources run in parallel with each other via a
+    /// `JoinSet`. The outer `select!` honors `cancel` so shutdown short-
+    /// circuits any in-flight `next_fire`/`dispatch` pair.
     pub(crate) async fn run(
         self,
-        mut sources: Vec<Box<dyn TriggerSource>>,
+        sources: Vec<Box<dyn TriggerSource>>,
         cancel: CancellationToken,
     ) {
-        // TODO(Task 30-33): drive sources via FuturesUnordered / select_all,
-        // funnel into `dispatch`.
-        let _ = (&mut sources, &cancel);
-        tracing::warn!("TriggerEngine::run is a scaffold; no sources are driven yet");
+        let engine = Arc::new(self);
+        let mut join_set = tokio::task::JoinSet::new();
+        for mut source in sources {
+            let engine = engine.clone();
+            let cancel = cancel.clone();
+            join_set.spawn(async move {
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = cancel.cancelled() => break,
+                        intent = source.next_fire() => {
+                            match intent {
+                                Some(intent) => {
+                                    let _ = engine.dispatch(intent).await;
+                                }
+                                None => break,
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        // Wait for all source drivers to terminate (either via cancel or
+        // their source returning `None`). Any panic in a driver task is
+        // logged — individual source failures must not bring down the
+        // entire engine.
+        while let Some(joined) = join_set.join_next().await {
+            if let Err(error) = joined {
+                if !error.is_cancelled() {
+                    tracing::error!(error = %error, "trigger engine source driver panicked");
+                }
+            }
+        }
     }
 
     /// Dispatch a single `FireIntent`.

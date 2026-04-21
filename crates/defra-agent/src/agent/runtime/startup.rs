@@ -97,7 +97,6 @@ pub(in crate::agent) async fn run_agent(
         hook_failure_policy: agent.hook_failure_policy,
         startup_barrier: startup_barrier.clone(),
     };
-    let scheduler_tool_runtime = runtime.tool_runtime.clone();
     let runtime_for_runner = runtime.clone();
     let generation_supervisor = GenerationSupervisor::bootstrap(
         resolved_snapshot,
@@ -122,24 +121,41 @@ pub(in crate::agent) async fn run_agent(
     let (reconcile_tx, reconcile_rx) = mpsc::channel(8);
     let _reconcile_tx_guard = reconcile_tx.clone();
 
-    let scheduler = crate::scheduler::Scheduler::new(
-        agent.node.clone(),
-        active_snapshot_rx.clone(),
-        scheduler_tool_runtime,
-        admission_registry.clone(),
-    );
-
-    let scheduler_cancel = cancel.child_token();
-    let scheduler_startup_barrier = startup_barrier.clone();
-    let scheduler_handle = tokio::spawn(async move {
-        let mut scheduler = scheduler;
+    // The legacy scheduler module has been replaced by the event-driven
+    // `TriggerEngine`. Construct a `ScheduleSource` backed by the active
+    // runtime snapshot and a `ProductionMaterializer` that writes
+    // `AgentRequest` documents with `caused_by_trigger_{id,kind}` lineage via
+    // the lifecycle module. PR 2 will add additional sources (event triggers,
+    // manual fire inbox) alongside the schedule source.
+    let trigger_engine_node = agent.node.clone();
+    let trigger_engine_source_snapshot_rx = active_snapshot_rx.clone();
+    let trigger_engine_engine_snapshot_rx = active_snapshot_rx.clone();
+    let trigger_engine_materializer_snapshot_rx = active_snapshot_rx.clone();
+    let trigger_engine_cancel = cancel.child_token();
+    let trigger_engine_startup_barrier = startup_barrier.clone();
+    let trigger_engine_handle = tokio::spawn(async move {
         tokio::select! {
-            _ = scheduler_cancel.cancelled() => return,
-            _ = scheduler_startup_barrier.wait_ready() => {}
+            _ = trigger_engine_cancel.cancelled() => return,
+            _ = trigger_engine_startup_barrier.wait_ready() => {}
         }
-        if let Err(error) = scheduler.run(scheduler_cancel).await {
-            tracing::error!(error = %error, "scheduler exited with error");
-        }
+        let materializer: Arc<dyn crate::trigger_engine::MaterializerHandle> = Arc::new(
+            crate::trigger_engine::production_materializer::ProductionMaterializer::new(
+                trigger_engine_node.clone(),
+                trigger_engine_materializer_snapshot_rx,
+            ),
+        );
+        let source: Box<dyn crate::trigger_engine::TriggerSource> = Box::new(
+            crate::trigger_engine::schedule_source::ScheduleSource::new(
+                trigger_engine_source_snapshot_rx,
+                trigger_engine_node,
+                trigger_engine_cancel.clone(),
+            ),
+        );
+        let engine = crate::trigger_engine::TriggerEngine::new(
+            trigger_engine_engine_snapshot_rx,
+            materializer,
+        );
+        engine.run(vec![source], trigger_engine_cancel).await;
     });
 
     let ready_cancel = cancel.child_token();
@@ -269,7 +285,7 @@ pub(in crate::agent) async fn run_agent(
     }
 
     let _ = readiness_handle.await;
-    let _ = scheduler_handle.await;
+    let _ = trigger_engine_handle.await;
 
     if let Some(observer) = &agent.process_state_observer {
         observer.on_process_state_change(ProcessLifecycleState::Shutdown);

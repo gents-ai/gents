@@ -10,14 +10,20 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use super::*;
+use crate::compaction::CompactionStrategy;
+use crate::config::{BehaviorConfig, SamplingConfig};
 use crate::document_config::list_schedule_records;
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
+use crate::identity::SimpleIdentity;
 use crate::runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedRuntimeSnapshot, ResolvedSchedule,
     ResolvedTask,
 };
+use crate::tool_surface::BehaviorToolConfig;
+use crate::trigger_engine::production_materializer::ProductionMaterializer;
 use crate::trigger_engine::schedule_source::ScheduleSource;
+use crate::BackendProviderKind;
 
 /// Recorded `materialize` invocation: `(trigger_id, trigger_kind, rendered_prompt)`.
 type MaterializeCall = (Option<String>, TriggerKind, String);
@@ -823,5 +829,181 @@ async fn schedule_source_next_fire_honors_cancellation_token() {
     assert!(
         elapsed < Duration::from_secs(1),
         "next_fire should return promptly on cancel, took {elapsed:?}"
+    );
+}
+
+/// Build a minimal `BehaviorConfig` suitable for the production materializer
+/// integration test. The behavior has a backend binding (required — the
+/// materializer rejects tasks whose behavior is not backend-bound) but does
+/// not drive any inference: the integration test asserts lineage on the
+/// persisted `AgentRequest` doc only, not execution.
+fn integration_test_behavior(behavior_name: &str) -> Arc<BehaviorConfig> {
+    let identity = Arc::new(SimpleIdentity::new(
+        behavior_name,
+        std::env::temp_dir().join(format!("{behavior_name}-{}.key", uuid::Uuid::new_v4())),
+        None,
+    ));
+    Arc::new(BehaviorConfig {
+        name: behavior_name.to_string(),
+        identity,
+        backend_id: Some("backend-it".to_string()),
+        backend_provider_kind: BackendProviderKind::OpenAiCompatible,
+        backend_endpoint: "http://localhost:0/v1".to_string(),
+        backend_api_key: None,
+        backend_api_key_env_var: None,
+        model_name: crate::config::DEFAULT_MODEL_NAME.to_string(),
+        context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
+        max_output_tokens: crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
+        max_turns: crate::config::DEFAULT_MAX_TURNS,
+        system_prompt: String::new(),
+        tools: BehaviorToolConfig::default(),
+        compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
+        compaction_strategy: CompactionStrategy::StripThenSummarize,
+        stream_batch_ms: crate::config::DEFAULT_STREAM_BATCH_MS,
+        deadline_duration: Duration::from_secs(crate::config::DEFAULT_DEADLINE_DURATION_SECS),
+        sampling: SamplingConfig::default(),
+    })
+}
+
+/// Build an `ActiveRuntimeSnapshot` containing the given behavior as loaded
+/// and the supplied active schedules. Used by the integration test below to
+/// hand the ProductionMaterializer a snapshot where `behavior_id` resolution
+/// succeeds.
+fn snapshot_with_behavior_and_schedules(
+    behavior: Arc<BehaviorConfig>,
+    schedules: HashMap<String, ResolvedSchedule>,
+) -> Arc<ActiveRuntimeSnapshot> {
+    let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
+        behavior.name.clone(),
+        vec![behavior],
+        HashMap::new(),
+        HashMap::new(),
+        HashMap::new(),
+    )
+    .with_schedules(schedules, HashSet::new());
+    Arc::new(resolved.activate(1, HashMap::new()))
+}
+
+/// Task 39 Step 1: end-to-end assertion that a due Schedule in the active
+/// snapshot drives the `TriggerEngine` + `ScheduleSource` +
+/// `ProductionMaterializer` pipeline to persist an `AgentRequest` carrying
+/// `caused_by_trigger_id = <schedule_id>` and `caused_by_trigger_kind =
+/// "schedule"` within a bounded wait.
+///
+/// Runs against a real `EmbeddedNode` because the ProductionMaterializer
+/// writes via DefraDB — there is no in-memory shortcut. The test does not
+/// assert execution (no inference is wired here); it only asserts the
+/// materialization boundary that Task 39 is restoring under the engine.
+#[tokio::test]
+async fn trigger_engine_materializes_agent_request_for_due_schedule_e2e() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    // Seed a Schedule whose next_run_at is 1s in the past — the ScheduleSource
+    // will emit an intent on its next tick.
+    let past = (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339();
+    create_schedule_with_next_run_at(node.as_ref(), "sched-e2e", "task-e2e", &past, "serial").await;
+
+    // Build the snapshot: one behavior loaded ("general"), one active
+    // schedule pointing at a task bound to that behavior.
+    let behavior = integration_test_behavior("general");
+    let task = ResolvedTask {
+        task_id: "task-e2e".to_string(),
+        behavior_id: behavior.name.clone(),
+        prompt_template: "integration fire".to_string(),
+        output_schema_ref: None,
+    };
+    let schedule = ResolvedSchedule {
+        schedule_id: "sched-e2e".to_string(),
+        task_id: task.task_id.clone(),
+        task,
+        interval_secs: 60,
+        enabled: true,
+        concurrency: ConcurrencyMode::Serial,
+    };
+    let snapshot = snapshot_with_behavior_and_schedules(
+        behavior,
+        HashMap::from([("sched-e2e".to_string(), schedule)]),
+    );
+    let (_tx, rx) = watch::channel(snapshot);
+
+    // Wire engine + source + materializer with the same watch::Receiver.
+    let cancel = CancellationToken::new();
+    let materializer: Arc<dyn MaterializerHandle> =
+        Arc::new(ProductionMaterializer::new(node.clone(), rx.clone()));
+    let source: Box<dyn TriggerSource> = Box::new(
+        ScheduleSource::new(rx.clone(), node.clone(), cancel.clone())
+            .with_tick_every(Duration::from_millis(50)),
+    );
+    let engine = TriggerEngine::new(rx, materializer);
+    let engine_cancel = cancel.clone();
+    let engine_handle = tokio::spawn(async move {
+        engine.run(vec![source], engine_cancel).await;
+    });
+
+    // Poll the DB for an AgentRequest with the lineage tuple. Bounded retry;
+    // 50ms * 80 = 4s total, well within the "within N seconds" ask.
+    let mut observed = None;
+    for _ in 0..80 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let query = r#"query {
+            AgentRequest(filter: {
+                caused_by_trigger_id: { _eq: "sched-e2e" },
+                caused_by_trigger_kind: { _eq: "schedule" }
+            }) {
+                _docID
+                caused_by_trigger_id
+                caused_by_trigger_kind
+                lifecycle_state
+                execution_origin
+                content
+            }
+        }"#;
+        let resp = node.execute(query).await;
+        assert!(!resp.has_errors(), "AgentRequest query errored: {:?}", resp.errors);
+        let rows = resp
+            .data
+            .as_ref()
+            .and_then(|d| d.get("AgentRequest"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if !rows.is_empty() {
+            observed = rows.into_iter().next();
+            break;
+        }
+    }
+
+    cancel.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(2), engine_handle).await;
+
+    let row = observed.expect(
+        "no AgentRequest with caused_by_trigger_id=sched-e2e observed within 4s; \
+         expected the TriggerEngine + ScheduleSource pipeline to have materialized one",
+    );
+    assert_eq!(
+        row.get("caused_by_trigger_id").and_then(|v| v.as_str()),
+        Some("sched-e2e"),
+        "persisted request is missing caused_by_trigger_id lineage: {row}"
+    );
+    assert_eq!(
+        row.get("caused_by_trigger_kind").and_then(|v| v.as_str()),
+        Some("schedule"),
+        "persisted request is missing caused_by_trigger_kind lineage: {row}"
+    );
+    assert_eq!(
+        row.get("execution_origin").and_then(|v| v.as_str()),
+        Some("scheduled"),
+        "trigger-driven fire should set execution_origin=scheduled: {row}"
+    );
+    assert_eq!(
+        row.get("lifecycle_state").and_then(|v| v.as_str()),
+        Some("claimed"),
+        "materialize_claimed_with_execution_binding should persist lifecycle_state=claimed: {row}"
+    );
+    assert_eq!(
+        row.get("content").and_then(|v| v.as_str()),
+        Some("integration fire"),
+        "rendered prompt template should land in AgentRequest.content: {row}"
     );
 }
