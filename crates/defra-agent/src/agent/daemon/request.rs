@@ -13,11 +13,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         &mut self,
         lifecycle: &mut crate::lifecycle::RequestLifecycle,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
-        interrupt_rx: tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
+        mut interrupt_rx: tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
     ) -> Result<HandleRequestOutcome> {
-        let _ = &interrupt_rx; // Unused in Task 6; Task 7 wires the select arm.
         let request_token = tokio_util::sync::CancellationToken::new();
-        let _ = &request_token; // Unused in Task 6; Task 7 wires the inference + tool children.
         let request = lifecycle.request().clone();
         let behavior_name = self.behavior.name.clone();
         let admission_context = AdmissionCallContext::for_request(
@@ -124,7 +122,15 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             let inference_behavior_id = lifecycle.behavior_id().to_string();
             let inference_backend_id = lifecycle.backend_id().to_string();
             let result = self
-                .run_inference(&request, &doc_id, &built.messages, lifecycle, &mut shutdown)
+                .run_inference(
+                    &request,
+                    &doc_id,
+                    &built.messages,
+                    lifecycle,
+                    &mut shutdown,
+                    &mut interrupt_rx,
+                    &request_token,
+                )
                 .instrument(tracing::info_span!(
                     "request.run_inference",
                     request_id = %request.request_id,
@@ -133,6 +139,36 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     backend_id = %inference_backend_id,
                 ))
                 .await;
+
+            if request_token.is_cancelled() {
+                // Interrupt detected inside run_inference — execute the 6-step flow.
+                let intent = interrupt_rx
+                    .borrow()
+                    .clone()
+                    .expect("request_token.is_cancelled ⇒ interrupt was signaled");
+
+                // 1. request_token is already cancelled (the inference arm fired it).
+                // 2. Grace wait so any in-flight work can observe cancellation.
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                // 3. Force-abort: no child tasks currently (Task 8 adds tool children).
+                // 4. Flip AgentResponse.interrupted_at (sequenced BEFORE step 5).
+                let interrupt_at = intent.at.to_rfc3339();
+                if let Err(error) = self
+                    .stream_writer
+                    .write_interrupted_at(&doc_id, &interrupt_at)
+                    .await
+                {
+                    tracing::warn!(
+                        behavior_id = %self.behavior.name,
+                        doc_id = %doc_id,
+                        error = %error,
+                        "failed to stamp interrupted_at on response; continuing to terminal transition"
+                    );
+                }
+                // 5. Write terminal lifecycle_state = interrupted.
+                lifecycle.transition_to_interrupted(&interrupt_at).await?;
+                return Ok(HandleRequestOutcome::Interrupted);
+            }
 
             match result {
                 Ok(outcome) => Ok(outcome),

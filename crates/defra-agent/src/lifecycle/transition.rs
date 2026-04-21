@@ -166,6 +166,33 @@ impl RequestLifecycle {
         Ok(())
     }
 
+    /// Mark a claimed/processing/inputRequired request as interrupted.
+    /// Writes `lifecycle_state="interrupted"` and `status="interrupted"` and
+    /// sets the in-memory state. Idempotent via the `_nin` filter on terminal
+    /// statuses: if the row is already terminal (completed/interrupted/dead/
+    /// superseded/error), the mutation is a no-op.
+    pub async fn transition_to_interrupted(&mut self, _interrupt_at: &str) -> Result<()> {
+        let doc_id = &self.request.doc_id;
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentRequest(
+                    filter: {{
+                        _docID: {{ _eq: "{doc_id}" }},
+                        status: {{ _nin: ["completed", "interrupted", "dead", "superseded", "error"] }}
+                    }},
+                    input: {{
+                        status: "interrupted",
+                        lifecycle_state: "interrupted"
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+        session::execute_mutation_with_retry(&self.node, &mutation, "transition_interrupted")
+            .await?;
+        self.state = LocalLifecycleState::Interrupted;
+        Ok(())
+    }
+
     pub async fn fail(&mut self) -> Result<()> {
         if self.state == LocalLifecycleState::Failed {
             return Ok(());

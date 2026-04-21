@@ -239,6 +239,25 @@ pub async fn set_interrupt_requested_at(node: &EmbeddedNode, doc_id: &str, at: &
     );
 }
 
+pub async fn set_request_lifecycle_state(node: &EmbeddedNode, doc_id: &str, lifecycle_state: &str) {
+    let doc_id = escape_graphql_string(doc_id);
+    let lifecycle_state = escape_graphql_string(lifecycle_state);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                input: {{ lifecycle_state: "{lifecycle_state}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "set_request_lifecycle_state failed: {:?}",
+        resp.errors
+    );
+}
+
 pub async fn set_valid_until(node: &EmbeddedNode, doc_id: &str, at: &str) {
     let doc_id = escape_graphql_string(doc_id);
     let at = escape_graphql_string(at);

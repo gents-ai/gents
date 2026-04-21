@@ -30,6 +30,8 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         history: &[rig::completion::message::Message],
         lifecycle: &mut crate::lifecycle::RequestLifecycle,
         shutdown: &mut tokio::sync::watch::Receiver<bool>,
+        interrupt_rx: &mut tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
+        request_token: &tokio_util::sync::CancellationToken,
     ) -> Result<HandleRequestOutcome> {
         let max_attempts = self.retry_policy.max_retries + 1;
         let mut last_inference_error: Option<crate::error::InferenceError> = None;
@@ -37,6 +39,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         for attempt in 0..max_attempts {
             if *shutdown.borrow() {
                 return Err(anyhow!("shutdown requested during inference"));
+            }
+            if interrupt_rx.borrow().is_some() {
+                request_token.cancel();
+                return Err(anyhow!("request interrupted during inference"));
             }
             if attempt > 0 {
                 let delay = self.retry_policy.delay_for_attempt(attempt - 1);
@@ -50,6 +56,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 tokio::select! {
                     _ = shutdown.changed() => {
                         return Err(anyhow!("shutdown requested during inference retry backoff"));
+                    }
+                    _ = interrupt_rx.changed() => {
+                        request_token.cancel();
+                        return Err(anyhow!("request interrupted during inference"));
                     }
                     _ = tokio::time::sleep(delay) => {}
                 }
@@ -81,6 +91,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             _ = shutdown.changed() => {
                                 Err(anyhow!("shutdown requested before inference stream started"))
                             }
+                            _ = interrupt_rx.changed() => {
+                                request_token.cancel();
+                                Err(anyhow!("request interrupted during inference"))
+                            }
                             stream = agent
                                 .stream_prompt(&request.content)
                                 .with_history(history.to_vec())
@@ -103,6 +117,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     let item = match tokio::select! {
                         _ = shutdown.changed() => {
                             return Err(anyhow!("shutdown requested during inference stream"));
+                        }
+                        _ = interrupt_rx.changed() => {
+                            request_token.cancel();
+                            return Err(anyhow!("request interrupted during inference"));
                         }
                         result = tokio::time::timeout(liveness_timeout, stream.next()) => result
                     } {

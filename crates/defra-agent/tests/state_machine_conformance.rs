@@ -1,17 +1,21 @@
+use std::time::Duration;
+
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
-use defra_agent::RequestLifecycle;
+use defra_agent::{DefraStreamWriter, RequestLifecycle};
 
 mod support;
 
 use support::snapshots::{
     fetch_conversation_snapshot, fetch_request_lineage_snapshot,
-    fetch_request_lineage_snapshot_by_tuple, fetch_request_snapshot, fetch_response_snapshot,
-    fetch_session_snapshot, ConversationSnapshot, RequestLineageSnapshot, RequestSnapshot,
-    ResponseSnapshot, SessionSnapshot,
+    fetch_request_lineage_snapshot_by_tuple, fetch_request_snapshot, fetch_response_content,
+    fetch_response_interrupted_at, fetch_response_snapshot, fetch_session_snapshot,
+    ConversationSnapshot, RequestLineageSnapshot, RequestSnapshot, ResponseSnapshot,
+    SessionSnapshot,
 };
 use support::{
-    build_request, create_request, create_response_with_status, set_interrupt_requested_at,
+    build_request, create_request, create_response_with_content_and_status,
+    create_response_with_status, set_interrupt_requested_at, set_request_lifecycle_state,
     set_valid_until, test_db, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
 };
 
@@ -554,6 +558,7 @@ async fn latest_only_transition_to_superseded() {
             max_retries: defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
+            failure_reason: "".into(),
         }
     );
 }
@@ -859,21 +864,150 @@ async fn pending_dead_stale_via_expire() {
 }
 
 #[tokio::test]
-#[ignore = "ungated in Task 7 (daemon select arm)"]
 async fn claimed_interrupted_via_watch_channel() {
-    todo!();
+    // Simulates: daemon claims a request, the interrupt observer signals, and the
+    // daemon calls `transition_to_interrupted`. This validates the transition method
+    // and idempotency at the lifecycle layer; the full `tokio::select!` arm is
+    // exercised at integration level (Task 11).
+    let db = test_db("claimed-interrupted").await;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+
+    let request = build_request(
+        doc_id.clone(),
+        request_id.clone(),
+        session_id.clone(),
+        created_at,
+    );
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+
+    let interrupt_at = chrono::Utc::now().to_rfc3339();
+    set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
+    lifecycle.transition_to_interrupted(&interrupt_at).await.unwrap();
+
+    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
+    assert_eq!(snap.status, "interrupted");
+    assert_eq!(snap.lifecycle_state, "interrupted");
 }
 
 #[tokio::test]
-#[ignore = "ungated in Task 7 (daemon select arm)"]
 async fn processing_interrupted_preserves_partial_response() {
-    todo!();
+    // Simulates: response streaming was in progress with partial content, then an
+    // interrupt fires. Expected: content is preserved on the response row, response
+    // has `interrupted_at` stamped, and the request row transitions to interrupted.
+    let db = test_db("processing-interrupted").await;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+
+    let request = build_request(
+        doc_id.clone(),
+        request_id.clone(),
+        session_id.clone(),
+        created_at,
+    );
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    lifecycle.prepare_session_with_identity().await.unwrap();
+    lifecycle.begin_execution().await.unwrap();
+
+    let partial_content = "partial streamed text";
+    let response_doc_id = create_response_with_content_and_status(
+        &db.node,
+        &format!("resp-{request_id}"),
+        &request_id,
+        &session_id,
+        partial_content,
+        "streaming",
+    )
+    .await;
+    lifecycle.set_response_doc_id(&response_doc_id);
+
+    // Stamp interrupted_at on the response row first, then transition the request.
+    let stream_writer =
+        DefraStreamWriter::new(db.node.clone(), AGENT_DID, Duration::from_millis(50));
+    let interrupt_at = chrono::Utc::now().to_rfc3339();
+    let stamped = stream_writer
+        .write_interrupted_at(&response_doc_id, &interrupt_at)
+        .await
+        .unwrap();
+    assert!(stamped, "expected interrupted_at to be stamped");
+
+    lifecycle.transition_to_interrupted(&interrupt_at).await.unwrap();
+
+    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
+    assert_eq!(snap.status, "interrupted");
+    assert_eq!(snap.lifecycle_state, "interrupted");
+
+    let content = fetch_response_content(&db.node, &response_doc_id).await;
+    assert_eq!(content, partial_content, "partial content must be preserved");
+
+    let interrupted_at = fetch_response_interrupted_at(&db.node, &response_doc_id).await;
+    assert_eq!(interrupted_at.as_deref(), Some(interrupt_at.as_str()));
 }
 
 #[tokio::test]
-#[ignore = "ungated in Task 7 (daemon select arm)"]
 async fn input_required_interrupted() {
-    todo!();
+    // Simulates an interrupt arriving while the request is parked in inputRequired.
+    // The lifecycle enum has an InputRequired state but no public transition helper
+    // yet, so we set the DB lifecycle_state directly and rely on the _nin filter in
+    // `transition_to_interrupted` to allow the move.
+    let db = test_db("input-required-interrupted").await;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+
+    let request = build_request(
+        doc_id.clone(),
+        request_id.clone(),
+        session_id.clone(),
+        created_at,
+    );
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    lifecycle.prepare_session_with_identity().await.unwrap();
+    lifecycle.begin_execution().await.unwrap();
+    set_request_lifecycle_state(&db.node, &doc_id, "inputRequired").await;
+
+    let interrupt_at = chrono::Utc::now().to_rfc3339();
+    set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
+    lifecycle.transition_to_interrupted(&interrupt_at).await.unwrap();
+
+    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
+    assert_eq!(snap.status, "interrupted");
+    assert_eq!(snap.lifecycle_state, "interrupted");
 }
 
 #[tokio::test]
@@ -912,9 +1046,49 @@ async fn pending_tie_break_prefers_interrupt_over_expire() {
 }
 
 #[tokio::test]
-#[ignore = "ungated in Task 7 (daemon select arm)"]
 async fn processing_tie_break_prefers_interrupt_over_deadline() {
-    todo!();
+    // Tie-break test for in-flight requests: while processing, both interrupt and
+    // deadline can potentially fire; interrupt must win. At this test layer we can
+    // only assert the persisted outcome of `transition_to_interrupted` once the
+    // interrupt path is chosen — the daemon-level race is integration-tested in
+    // Task 11. Here we verify the transition succeeds from the processing state
+    // (the typical in-flight state when the daemon's select arm fires).
+    let db = test_db("processing-tie-break").await;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+
+    let request = build_request(
+        doc_id.clone(),
+        request_id.clone(),
+        session_id.clone(),
+        created_at,
+    );
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    lifecycle.prepare_session_with_identity().await.unwrap();
+    lifecycle.begin_execution().await.unwrap();
+
+    // Submitter requests interrupt while the request is processing.
+    let interrupt_at = chrono::Utc::now().to_rfc3339();
+    set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
+
+    // Interrupt arm wins: transition_to_interrupted succeeds from processing.
+    lifecycle.transition_to_interrupted(&interrupt_at).await.unwrap();
+
+    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
+    assert_eq!(snap.status, "interrupted");
+    assert_eq!(snap.lifecycle_state, "interrupted");
 }
 
 #[tokio::test]
@@ -924,9 +1098,55 @@ async fn interrupt_request_is_idempotent() {
 }
 
 #[tokio::test]
-#[ignore = "ungated in Task 7 (daemon select arm)"]
 async fn interrupt_on_already_terminal_is_noop() {
-    todo!();
+    // A completed request that later gets an interrupt_requested_at write must not
+    // regress. `transition_to_interrupted` filters on `status._nin` of terminal
+    // statuses, so the mutation is a no-op on completed rows.
+    let db = test_db("interrupt-terminal-noop").await;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+
+    let request = build_request(
+        doc_id.clone(),
+        request_id.clone(),
+        session_id.clone(),
+        created_at,
+    );
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    lifecycle.prepare_session_with_identity().await.unwrap();
+    lifecycle.complete().await.unwrap();
+
+    let before = fetch_request_snapshot(&db.node, &doc_id).await;
+    assert_eq!(before.status, "completed");
+    assert_eq!(before.lifecycle_state, "completed");
+
+    // Late-arriving interrupt request: the field gets written to DB, but
+    // transition_to_interrupted must not mutate the terminal row.
+    let interrupt_at = chrono::Utc::now().to_rfc3339();
+    set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
+    lifecycle
+        .transition_to_interrupted(&interrupt_at)
+        .await
+        .unwrap();
+
+    let after = fetch_request_snapshot(&db.node, &doc_id).await;
+    assert_eq!(after.status, "completed", "terminal row must not regress");
+    assert_eq!(
+        after.lifecycle_state, "completed",
+        "terminal lifecycle_state must not regress"
+    );
 }
 
 #[tokio::test]

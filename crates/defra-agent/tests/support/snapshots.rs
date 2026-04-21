@@ -310,6 +310,56 @@ pub async fn fetch_session_snapshot(
     first_optional_row::<SessionSnapshot>(&resp, "AgentSession")
 }
 
+pub async fn fetch_response_interrupted_at(node: &EmbeddedNode, doc_id: &str) -> Option<String> {
+    let doc_id = escape_graphql_string(doc_id);
+    let query = format!(
+        r#"{{
+            AgentResponse(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                limit: 1
+            ) {{
+                interrupted_at
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
+    resp.data
+        .as_ref()
+        .and_then(|data| data.get("AgentResponse"))
+        .and_then(|rows| rows.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("interrupted_at"))
+        .and_then(|value| value.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+
+pub async fn fetch_response_content(node: &EmbeddedNode, doc_id: &str) -> String {
+    let doc_id = escape_graphql_string(doc_id);
+    let query = format!(
+        r#"{{
+            AgentResponse(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                limit: 1
+            ) {{
+                content
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
+    resp.data
+        .as_ref()
+        .and_then(|data| data.get("AgentResponse"))
+        .and_then(|rows| rows.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("content"))
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
+        .unwrap_or_default()
+}
+
 pub async fn fetch_response_snapshot(node: &EmbeddedNode, doc_id: &str) -> ResponseSnapshot {
     let doc_id = escape_graphql_string(doc_id);
     let query = format!(
