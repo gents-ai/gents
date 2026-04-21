@@ -2,9 +2,9 @@ use std::io::Read;
 
 use anyhow::{Context, Result};
 use defra_agent::graphql::escape_graphql_string;
+use defra_agent::Collection;
 use serde_json::Value;
 
-use crate::collection::Collection;
 use crate::config_bundle::{sanitize_import_document, select_apply_collection_docs};
 use crate::config_writes::{write_scheduled_task_document, ConfigAccess};
 use crate::desired_state;

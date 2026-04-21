@@ -9,34 +9,11 @@
 //!
 //! Variants, apply-order ranks, and `diff` ordering MUST agree with
 //! both the Lean `ApplyReconcile` module and the Rust
-//! `defra_agent_cli::collection::Collection` enum.
+//! `defra_agent::Collection` enum.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Collection {
-    InferenceBackend,
-    ToolSelection,
-    InferenceProfile,
-    ToolServiceRegistry,
-    AgentPrincipal,
-    AgentBehavior,
-    ScheduledTask,
-}
-
-impl Collection {
-    pub fn apply_order(self) -> u8 {
-        match self {
-            Collection::InferenceBackend
-            | Collection::ToolSelection
-            | Collection::InferenceProfile
-            | Collection::ToolServiceRegistry => 0,
-            Collection::AgentPrincipal => 1,
-            Collection::AgentBehavior => 2,
-            Collection::ScheduledTask => 3,
-        }
-    }
-}
+pub use crate::Collection;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DocRef {

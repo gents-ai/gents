@@ -7,8 +7,10 @@
 
 use std::fmt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum Collection {
+// PartialOrd/Ord derived for BTreeMap<DocRef, _> use in apply_model; ordering
+// is declaration order, NOT apply_order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Collection {
     AgentPrincipal,
     AgentBehavior,
     ToolSelection,
@@ -21,7 +23,7 @@ pub(crate) enum Collection {
 impl Collection {
     /// All variants in declaration order. Not sorted by `apply_order()` —
     /// callers that need apply-ordered iteration must sort explicitly.
-    pub(crate) const ALL: [Collection; 7] = [
+    pub const ALL: [Collection; 7] = [
         Collection::AgentPrincipal,
         Collection::AgentBehavior,
         Collection::ToolSelection,
@@ -32,7 +34,7 @@ impl Collection {
     ];
 
     /// Manifest file name on disk for the single-file form.
-    pub(crate) fn file_name(self) -> &'static str {
+    pub fn file_name(self) -> &'static str {
         match self {
             Collection::AgentPrincipal => "agent-principal.json",
             Collection::AgentBehavior => "agent-behaviors.json",
@@ -45,7 +47,7 @@ impl Collection {
     }
 
     /// Manifest directory name (for collections that support a per-doc dir form).
-    pub(crate) fn dir_name(self) -> Option<&'static str> {
+    pub fn dir_name(self) -> Option<&'static str> {
         match self {
             Collection::ToolServiceRegistry => Some("tool-services"),
             Collection::ScheduledTask => Some("scheduled-tasks"),
@@ -54,7 +56,7 @@ impl Collection {
     }
 
     /// DefraDB GraphQL type name for this collection.
-    pub(crate) fn graphql_type(self) -> &'static str {
+    pub fn graphql_type(self) -> &'static str {
         match self {
             Collection::AgentPrincipal => "AgentPrincipal",
             Collection::AgentBehavior => "AgentBehavior",
@@ -67,7 +69,7 @@ impl Collection {
     }
 
     /// Unique-id field name used in `filter: { <field>: { _eq: ... } }`.
-    pub(crate) fn unique_field(self) -> &'static str {
+    pub fn unique_field(self) -> &'static str {
         match self {
             Collection::AgentPrincipal => "agent_did",
             Collection::AgentBehavior => "behavior_id",
@@ -82,7 +84,7 @@ impl Collection {
     /// Apply ordering rank: lower ranks are written first so referenced
     /// documents exist before referrers. Mirrors
     /// `ApplyReconcile.Collection.applyOrder` in Lean.
-    pub(crate) fn apply_order(self) -> u8 {
+    pub fn apply_order(self) -> u8 {
         match self {
             Collection::InferenceBackend
             | Collection::ToolSelection

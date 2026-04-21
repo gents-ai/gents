@@ -10,7 +10,7 @@ use super::{
     DesiredScheduledTask, DesiredStateCounts, DesiredStateManifest, DesiredStateValidationReport,
     DesiredToolSelection, DesiredToolServiceRegistry,
 };
-use crate::collection::Collection;
+use defra_agent::Collection;
 
 pub(crate) fn validate_manifest_root(root: &Path) -> DesiredStateValidationReport {
     load_manifest_root(root).1

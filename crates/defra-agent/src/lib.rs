@@ -8,6 +8,7 @@ pub mod agent;
 pub mod apply_model;
 pub mod backend_provider;
 pub mod backend_registry;
+pub mod collection;
 pub mod compaction;
 pub(crate) mod completion_factory;
 pub mod config;
@@ -35,6 +36,8 @@ pub mod tool_surface;
 pub mod toolset;
 pub mod truncation;
 pub mod watcher;
+
+pub use collection::Collection;
 
 pub use agent::{
     BehaviorBuilder, DefraAgent, DefraAgentBuilder, DocumentRuntimeOptions,
