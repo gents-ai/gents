@@ -23,6 +23,10 @@ fn terminal_response_has_visible_output(streamed_text: &str, final_text: Option<
 }
 
 impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
+    // Threads request, admission, shutdown, and interrupt state into a single
+    // inference attempt loop. Splitting further would require re-threading the
+    // same receivers through private helpers with no readability gain.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_inference(
         &mut self,
         request: &crate::watcher::AgentRequest,
