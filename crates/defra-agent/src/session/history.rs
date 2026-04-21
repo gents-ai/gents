@@ -82,3 +82,27 @@ pub(crate) async fn save_message(
     super::retry::execute_mutation_with_retry(node, &mutation, "save_message").await?;
     Ok(())
 }
+
+pub(crate) async fn mark_response_materialized(
+    node: &EmbeddedNode,
+    request_id: &str,
+    sequence: u32,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let escaped_request_id = escape_graphql_string(request_id);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentResponse(
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                input: {{
+                    materialized_message_sequence: {sequence},
+                    materialized_at: "{now}"
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+
+    super::retry::execute_mutation_with_retry(node, &mutation, "mark_response_materialized")
+        .await?;
+    Ok(())
+}

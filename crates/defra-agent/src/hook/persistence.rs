@@ -156,7 +156,8 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                 id: response.message_id.clone(),
                 content: response.choice.clone(),
             };
-            self.persist_message(&message).await?;
+            let sequence = self.persist_message(&message).await?;
+            self.mark_current_response_materialized(sequence).await?;
             Ok(())
         }
         .await;

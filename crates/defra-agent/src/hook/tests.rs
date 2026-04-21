@@ -5,7 +5,7 @@ use rig::completion::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
     ToolResultContent, UserContent,
 };
-use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
+use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse, Usage};
 use rig::one_or_many::OneOrMany;
 use rig::streaming::StreamingCompletionResponse;
 use serde_json::json;
@@ -51,6 +51,38 @@ fn user_text_message(text: &str) -> Message {
             text: text.to_string(),
         })),
     }
+}
+
+async fn create_streaming_response(
+    node: &defra_node::EmbeddedNode,
+    request_id: &str,
+    session_id: &str,
+) {
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentResponse(input: {{
+                response_key: "{request_id}",
+                request_id: "{request_id}",
+                agent_did: "did:defra-agent:general",
+                behavior_id: "general",
+                session_id: "{session_id}",
+                content: "",
+                reasoning: "",
+                status: "streaming",
+                error_message: "",
+                token_count: 0,
+                progress_seq: 0,
+                created_at: "2026-04-21T00:00:00Z",
+                completed_at: ""
+            }}) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "create response failed: {:?}",
+        resp.errors
+    );
 }
 
 #[tokio::test]
@@ -224,6 +256,89 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     assert_eq!(
         row.get("status").and_then(|value| value.as_str()),
         Some("completed")
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn completion_response_marks_agent_response_as_materialized() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-hook-materialized-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:general",
+        FailurePolicy::default(),
+    );
+    let user_prompt = user_text_message("Explain the runtime model");
+    assert!(matches!(
+        PromptHook::<TestModel>::on_completion_call(&hook, &user_prompt, &[]).await,
+        HookAction::Continue
+    ));
+
+    let session_id = hook.session_id().await.expect("session id");
+    hook.set_active_request_id(Some("req-materialized".to_string()))
+        .await;
+    create_streaming_response(&node, "req-materialized", &session_id).await;
+
+    let response = CompletionResponse {
+        choice: OneOrMany::one(AssistantContent::Text(Text {
+            text: "Here is the answer.".to_string(),
+        })),
+        usage: Usage::new(),
+        raw_response: (),
+        message_id: None,
+    };
+
+    assert!(matches!(
+        PromptHook::<TestModel>::on_completion_response(&hook, &user_prompt, &response).await,
+        HookAction::Continue
+    ));
+
+    let resp = node
+        .execute(
+            r#"{
+                AgentResponse(filter: { request_id: { _eq: "req-materialized" } }, limit: 1) {
+                    materialized_message_sequence
+                    materialized_at
+                }
+            }"#,
+        )
+        .await;
+    assert!(
+        !resp.has_errors(),
+        "query response failed: {:?}",
+        resp.errors
+    );
+
+    let row = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentResponse"))
+        .and_then(|value| value.as_array())
+        .and_then(|rows| rows.first())
+        .cloned()
+        .expect("response row");
+
+    assert_eq!(
+        row.get("materialized_message_sequence")
+            .and_then(|value| value.as_u64()),
+        Some(2)
+    );
+    assert!(
+        row.get("materialized_at")
+            .and_then(|value| value.as_str())
+            .is_some()
     );
 
     let _ = std::fs::remove_dir_all(&data_path);

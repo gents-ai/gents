@@ -70,7 +70,7 @@ These documents record user requests, assistant output, and conversation history
 |------------|------------|------------|------------|---------|
 | `AgentRequest` | `request_id`, `agent_did`, `behavior_id`, `session_id`, sampling overrides, `metadata`, `status`, `lifecycle_state`, `backend_id`, `failure_reason` | belongs to an agent/session/behavior | `chat`, `request submit`, lifecycle transitions | router, CLI inspection, recovery |
 | `InferenceCall` | `call_id`, `request_id`, `backend_id`, `call_kind`, `call_state`, queue/timing/token fields | belongs to a request/backend | admission controller at terminal call state | benchmarking, RL reward shaping, debugging |
-| `AgentResponse` | `request_id`, `agent_did`, `behavior_id`, `session_id`, `status`, `content`, `reasoning`, `error_message`, `progress_seq` | latest response for a request | streaming/runtime code | `chat`, `response show`, `response wait`, TUI |
+| `AgentResponse` | `request_id`, `agent_did`, `behavior_id`, `session_id`, `status`, `content`, `reasoning`, `error_message`, `progress_seq`, `materialized_message_sequence` | latest response for a request; also the in-flight streaming overlay until committed into transcript | streaming/runtime code | `chat`, `response show`, `response wait`, TUI, rich clients |
 | `AgentSession` | `session_id`, `behavior_id`, `status`, `started`, `ended` | ties a sequence of requests to one behavior | session manager | `chat`, inspection, recovery |
 | `AgentConversation` | `session_id`, `agent_did`, `behavior_id`, `title`, `preview_text`, `status`, `latest_request_id` | high-level conversation summary per session | session/conversation layer | UI and inspection |
 | `AgentMessage` | `message_key`, `session_id`, `sequence`, `role`, `content`, `timestamp` | ordered transcript entries | session/history layer | chat history, TUI, debugging |
@@ -127,7 +127,9 @@ The normal CLI path is:
 2. runtime claims and executes the request
 3. streaming writes `AgentResponse`
 4. transcript/session layers write `AgentSession`, `AgentConversation`, `AgentMessage`
-5. tool activity writes `AgentToolCall` and `AgentToolResult`
+5. once the final assistant message is committed, `AgentResponse.materialized_message_sequence`
+   points at the committed `AgentMessage.sequence`
+6. tool activity writes `AgentToolCall` and `AgentToolResult`
 
 ### Reconcile
 

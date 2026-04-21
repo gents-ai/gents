@@ -542,6 +542,8 @@ pub fn turn_state_query(request_id: &str) -> String {
                 status
                 content
                 error_message
+                materialized_message_sequence
+                materialized_at
             }}
         }}"#
     )
