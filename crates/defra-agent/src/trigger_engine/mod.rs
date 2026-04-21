@@ -5,6 +5,14 @@
 //! Tasks 27-33; this module currently defines only the public types that
 //! downstream tasks will consume.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use tokio::sync::{watch, Mutex};
+use tokio_util::sync::CancellationToken;
+
+use crate::runtime_snapshot::ActiveRuntimeSnapshot;
+
 #[cfg(test)]
 mod tests;
 
@@ -101,4 +109,100 @@ pub(crate) trait TriggerSource: Send + Sync {
     fn next_fire(
         &mut self,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<FireIntent>> + Send + '_>>;
+}
+
+/// Abstraction over the request-materialization + trigger-aware bookkeeping
+/// the engine needs at fire time.
+///
+/// Production wiring (Task 30+) will point this at `crate::lifecycle`'s
+/// materialize entry points; tests can provide a lightweight spy. Keeping
+/// this as a trait avoids the engine having to depend directly on the
+/// lifecycle module while the two layers are still being wired together.
+pub(crate) trait MaterializerHandle: Send + Sync {
+    /// Create a new `AgentRequest` for `task` with the rendered prompt, using
+    /// `trigger_id` / `trigger_kind` as the provenance recorded on the
+    /// materialized document. Returns the new request id.
+    fn materialize(
+        &self,
+        task: &crate::runtime_snapshot::ResolvedTask,
+        trigger_id: Option<&str>,
+        trigger_kind: TriggerKind,
+        rendered_prompt: &str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + '_>>;
+
+    /// Check whether any non-terminal `AgentRequest` is currently bound to
+    /// this trigger. Used by the concurrency gate to decide whether a new
+    /// fire should skip or supersede.
+    fn has_nonterminal_request_for_trigger(
+        &self,
+        trigger_id: &str,
+        trigger_kind: TriggerKind,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>;
+
+    /// Supersede any non-terminal requests bound to this trigger. Returns the
+    /// number of requests transitioned. Invoked by `LatestOnly` concurrency
+    /// before materializing the new fire.
+    fn supersede_nonterminal_requests_for_trigger(
+        &self,
+        trigger_id: &str,
+        trigger_kind: TriggerKind,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<usize>> + Send + '_>>;
+}
+
+/// Scaffolding for the trigger engine.
+///
+/// The engine owns a read handle onto the active runtime snapshot (to look up
+/// behaviors / concurrency / enabled gates at fire time) and a materializer
+/// handle (to create requests). Per-trigger mutexes serialize dispatches that
+/// share a trigger id so the concurrency gate and request materialization
+/// land atomically with respect to each other.
+pub(crate) struct TriggerEngine {
+    #[allow(dead_code)]
+    snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+    #[allow(dead_code)]
+    materializer: Arc<dyn MaterializerHandle>,
+    #[allow(dead_code)]
+    per_trigger_locks: Mutex<HashMap<(String, TriggerKind), Arc<Mutex<()>>>>,
+}
+
+impl TriggerEngine {
+    pub(crate) fn new(
+        snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+        materializer: Arc<dyn MaterializerHandle>,
+    ) -> Self {
+        Self {
+            snapshot_rx,
+            materializer,
+            per_trigger_locks: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Run the engine until `cancel` is triggered.
+    ///
+    /// Scaffold only: Tasks 30-33 will drive `sources` via
+    /// `FuturesUnordered` / `select_all`, funnel each yielded `FireIntent`
+    /// into `dispatch`, and honor `cancel` for graceful shutdown.
+    pub(crate) async fn run(
+        self,
+        mut sources: Vec<Box<dyn TriggerSource>>,
+        cancel: CancellationToken,
+    ) {
+        // TODO(Task 30-33): drive sources via FuturesUnordered / select_all,
+        // funnel into `dispatch`.
+        let _ = (&mut sources, &cancel);
+        tracing::warn!("TriggerEngine::run is a scaffold; no sources are driven yet");
+    }
+
+    /// Dispatch a single `FireIntent`.
+    ///
+    /// Scaffold only: Tasks 30-33 will implement the enabled gate, prompt
+    /// render, concurrency handling, materialize call, and `on_result`
+    /// callback invocation.
+    #[allow(dead_code)]
+    async fn dispatch(&self, intent: FireIntent) -> FireResult {
+        let _ = intent;
+        FireResult::Errored {
+            error: "TriggerEngine::dispatch not implemented".to_string(),
+        }
+    }
 }
