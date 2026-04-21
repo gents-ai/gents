@@ -996,6 +996,25 @@ theorem t_conv_no_unavailable
   rw [h]
   exact Finset.sdiff_self _
 
+/-- **T-Conv — published form.** Corollary of t_conv: once the resolved
+    snapshot is activated (per RuntimeReconcile.ResolvedSnapshot.activate,
+    which is the model of the runtime's `publish` transition), the
+    resulting ActiveRuntimeSnapshot's runnable ∪ unavailable set still
+    equals M.behaviorIds. This is the spec's literal end-to-end
+    convergence claim: after apply + reconcile-publish, the published
+    snapshot reflects M. -/
+theorem t_conv_published
+    {M : Manifest} {L : LiveState}
+    (hM : M.WellFormed) (hL : L.WellFormed)
+    (defaultBehavior : BehaviorId)
+    (gen : Generation) :
+    let L' := applyAll L (diff M L)
+    let snapshot := L'.toResolvedSnapshot defaultBehavior M.behaviorIds
+    let active := snapshot.activate gen
+    active.runnable ∪ active.unavailable = M.behaviorIds := by
+  -- activate copies runnable/unavailable pointwise; the union is unchanged.
+  simpa [ResolvedSnapshot.activate] using t_conv hM hL defaultBehavior
+
 /-- Exhaustive Collection pattern-match acting as a parity contract
     with the Rust `defra_agent::Collection` enum. When the Rust enum
     gains a variant, the Rust-side test
