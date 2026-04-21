@@ -29,12 +29,16 @@ enum LocalLifecycleState {
     Completed,
     Failed,
     Superseded,
+    Interrupted,
+    Dead,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClaimOutcome {
     Claimed,
     Superseded,
+    Interrupted,
+    Expired,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,6 +77,7 @@ enum PersistedLifecycleState {
     Failed,
     Superseded,
     Dead,
+    Interrupted,
 }
 
 impl PersistedLifecycleState {
@@ -86,6 +91,7 @@ impl PersistedLifecycleState {
             Self::Failed => "failed",
             Self::Superseded => "superseded",
             Self::Dead => "dead",
+            Self::Interrupted => "interrupted",
         }
     }
 }
@@ -103,6 +109,14 @@ pub struct RequestLifecycle {
     progress_seq: u32,
     deadline_duration_secs: u64,
     state: LocalLifecycleState,
+    valid_until_at_claim: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl RequestLifecycle {
+    /// Test-only accessor for S8 caching validation. Do not call from production code.
+    pub fn valid_until_at_claim_for_test(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.valid_until_at_claim
+    }
 }
 
 #[derive(Debug, Default)]

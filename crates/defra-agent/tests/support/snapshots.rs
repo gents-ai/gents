@@ -18,6 +18,7 @@ struct RequestSnapshotRow {
     max_retries: i64,
     claimed_at: Option<String>,
     deadline: Option<String>,
+    failure_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +35,7 @@ pub struct RequestSnapshot {
     pub max_retries: i64,
     pub claimed_at_present: bool,
     pub deadline_present: bool,
+    pub failure_reason: String,
 }
 
 impl From<RequestSnapshotRow> for RequestSnapshot {
@@ -57,6 +59,7 @@ impl From<RequestSnapshotRow> for RequestSnapshot {
                 .deadline
                 .as_deref()
                 .is_some_and(|value| !value.is_empty()),
+            failure_reason: row.failure_reason.unwrap_or_default(),
         }
     }
 }
@@ -152,6 +155,7 @@ pub async fn fetch_request_snapshot(node: &EmbeddedNode, doc_id: &str) -> Reques
                 max_retries
                 claimed_at
                 deadline
+                failure_reason
             }}
         }}"#
     );

@@ -324,6 +324,8 @@ mod tests {
                     max_retries: None,
                     caused_by_trigger_id: None,
                     caused_by_trigger_kind: None,
+                    interrupt_requested_at: None,
+                    valid_until: None,
                 },
                 AgentRequestRow {
                     request_id: "req-other".to_string(),
@@ -346,6 +348,8 @@ mod tests {
                     max_retries: None,
                     caused_by_trigger_id: None,
                     caused_by_trigger_kind: None,
+                    interrupt_requested_at: None,
+                    valid_until: None,
                 },
             ],
             tasks: vec![

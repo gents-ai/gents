@@ -100,6 +100,8 @@ fn store_derives_turn_from_retry_chain_tip() {
                 max_retries: None,
                 caused_by_trigger_id: None,
                 caused_by_trigger_kind: None,
+                interrupt_requested_at: None,
+                valid_until: None,
             },
             AgentRequestRow {
                 request_id: "req-2".to_string(),
@@ -122,6 +124,8 @@ fn store_derives_turn_from_retry_chain_tip() {
                 max_retries: None,
                 caused_by_trigger_id: None,
                 caused_by_trigger_kind: None,
+                interrupt_requested_at: None,
+                valid_until: None,
             },
         ],
         responses: vec![
@@ -141,6 +145,7 @@ fn store_derives_turn_from_retry_chain_tip() {
                 materialized_at: None,
                 created_at: Some("2026-04-14T00:01:01Z".to_string()),
                 completed_at: None,
+                interrupted_at: None,
             },
             AgentResponseRow {
                 response_key: "resp-2".to_string(),
@@ -158,6 +163,7 @@ fn store_derives_turn_from_retry_chain_tip() {
                 materialized_at: None,
                 created_at: Some("2026-04-14T00:01:02Z".to_string()),
                 completed_at: Some("2026-04-14T00:01:03Z".to_string()),
+                interrupted_at: None,
             },
         ],
         ..ClientStoreRows::default()
@@ -206,6 +212,8 @@ fn store_derives_turn_from_conversation_latest_request_not_random_request_id_ord
                 max_retries: None,
                 caused_by_trigger_id: None,
                 caused_by_trigger_kind: None,
+                interrupt_requested_at: None,
+                valid_until: None,
             },
             AgentRequestRow {
                 request_id: "req-a-complete".to_string(),
@@ -228,6 +236,8 @@ fn store_derives_turn_from_conversation_latest_request_not_random_request_id_ord
                 max_retries: None,
                 caused_by_trigger_id: None,
                 caused_by_trigger_kind: None,
+                interrupt_requested_at: None,
+                valid_until: None,
             },
         ],
         responses: vec![AgentResponseRow {
@@ -246,6 +256,7 @@ fn store_derives_turn_from_conversation_latest_request_not_random_request_id_ord
             materialized_at: None,
             created_at: Some("2026-04-14T00:02:01Z".to_string()),
             completed_at: Some("2026-04-14T00:02:02Z".to_string()),
+            interrupted_at: None,
         }],
         ..ClientStoreRows::default()
     });

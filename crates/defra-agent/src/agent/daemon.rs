@@ -170,6 +170,24 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 );
                 return;
             }
+            Ok(ClaimOutcome::Interrupted) => {
+                tracing::info!(
+                    behavior_id = %self.behavior.name,
+                    request_id = %request.request_id,
+                    session_id = %request.session_id,
+                    "request interrupted before claim"
+                );
+                return;
+            }
+            Ok(ClaimOutcome::Expired) => {
+                tracing::info!(
+                    behavior_id = %self.behavior.name,
+                    request_id = %request.request_id,
+                    session_id = %request.session_id,
+                    "request expired (valid_until passed) before claim; marked dead"
+                );
+                return;
+            }
             Err(error) => {
                 tracing::warn!(
                     behavior_id = %self.behavior.name,

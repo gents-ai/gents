@@ -1,5 +1,46 @@
 use super::*;
 
+async fn fetch_interrupt_and_ttl(
+    node: &EmbeddedNode,
+    doc_id: &str,
+) -> Result<(Option<String>, Option<String>)> {
+    let escaped_doc_id = escape_graphql_string(doc_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                limit: 1
+            ) {{
+                interrupt_requested_at
+                valid_until
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        anyhow::bail!("fetch_interrupt_and_ttl for {doc_id}: {:?}", resp.errors);
+    }
+    let rows = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array());
+    let row = rows
+        .and_then(|arr| arr.first())
+        .ok_or_else(|| anyhow::anyhow!("AgentRequest {doc_id} not found"))?;
+    let interrupt = row
+        .get("interrupt_requested_at")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let valid = row
+        .get("valid_until")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    Ok((interrupt, valid))
+}
+
 impl RequestLifecycle {
     pub fn set_response_doc_id(&mut self, doc_id: &str) {
         self.ensure_state(
@@ -30,6 +71,43 @@ impl RequestLifecycle {
         .await
     }
 
+    async fn transition_pending_to_interrupted(&mut self, _interrupt_at: &str) -> Result<()> {
+        let doc_id = &self.request.doc_id;
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentRequest(
+                    filter: {{ _docID: {{ _eq: "{doc_id}" }}, status: {{ _eq: "pending" }} }},
+                    input: {{
+                        status: "interrupted",
+                        lifecycle_state: "interrupted"
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+        session::execute_mutation_with_retry(&self.node, &mutation, "interrupt_before_claim")
+            .await?;
+        Ok(())
+    }
+
+    async fn transition_pending_to_dead_stale(&mut self) -> Result<()> {
+        let doc_id = &self.request.doc_id;
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentRequest(
+                    filter: {{ _docID: {{ _eq: "{doc_id}" }}, status: {{ _eq: "pending" }} }},
+                    input: {{
+                        status: "dead",
+                        lifecycle_state: "dead",
+                        failure_reason: "Stale"
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+        session::execute_mutation_with_retry(&self.node, &mutation, "expire_stale").await?;
+        self.failure_reason = Some("Stale".to_string());
+        Ok(())
+    }
+
     async fn claim_inner(&mut self, _explicit_did: bool) -> Result<ClaimOutcome> {
         self.ensure_state(&[LocalLifecycleState::Pending], "claim")?;
         let dedup = self.check_deduplication().await?;
@@ -39,6 +117,36 @@ impl RequestLifecycle {
             self.state = LocalLifecycleState::Superseded;
             return Ok(ClaimOutcome::Superseded);
         }
+
+        let (interrupt_requested_at, valid_until) =
+            fetch_interrupt_and_ttl(&self.node, &self.request.doc_id).await?;
+
+        // Tie-break: interrupt always wins over stale
+        if let Some(interrupt_at) = interrupt_requested_at {
+            self.transition_pending_to_interrupted(&interrupt_at).await?;
+            self.state = LocalLifecycleState::Interrupted;
+            return Ok(ClaimOutcome::Interrupted);
+        }
+
+        let valid_until_at_claim = match valid_until.as_deref() {
+            Some(s) => {
+                let dt = chrono::DateTime::parse_from_rfc3339(s)
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "invalid valid_until on request {}: {e}",
+                            self.request.doc_id
+                        )
+                    })?
+                    .with_timezone(&chrono::Utc);
+                if chrono::Utc::now() > dt {
+                    self.transition_pending_to_dead_stale().await?;
+                    self.state = LocalLifecycleState::Dead;
+                    return Ok(ClaimOutcome::Expired);
+                }
+                Some(dt)
+            }
+            None => None,
+        };
 
         let now = chrono::Utc::now();
         let claimed_at = now.to_rfc3339();
@@ -103,6 +211,7 @@ impl RequestLifecycle {
         self.suppress_later_pending_duplicates(&dedup.duplicates_to_suppress)
             .await?;
         self.state = LocalLifecycleState::Claimed;
+        self.valid_until_at_claim = valid_until_at_claim;
 
         Ok(ClaimOutcome::Claimed)
     }

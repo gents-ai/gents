@@ -220,6 +220,44 @@ pub async fn upsert_conversation(
     );
 }
 
+pub async fn set_interrupt_requested_at(node: &EmbeddedNode, doc_id: &str, at: &str) {
+    let doc_id = escape_graphql_string(doc_id);
+    let at = escape_graphql_string(at);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                input: {{ interrupt_requested_at: "{at}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "set_interrupt_requested_at failed: {:?}",
+        resp.errors
+    );
+}
+
+pub async fn set_valid_until(node: &EmbeddedNode, doc_id: &str, at: &str) {
+    let doc_id = escape_graphql_string(doc_id);
+    let at = escape_graphql_string(at);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                input: {{ valid_until: "{at}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "set_valid_until failed: {:?}",
+        resp.errors
+    );
+}
+
 pub fn build_request(
     doc_id: String,
     request_id: String,

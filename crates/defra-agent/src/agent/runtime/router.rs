@@ -233,7 +233,9 @@ async fn fail_routed_request(
 
     match lifecycle.claim_with_identity().await {
         Ok(ClaimOutcome::Claimed) => {}
-        Ok(ClaimOutcome::Superseded) => return Ok(()),
+        Ok(ClaimOutcome::Superseded)
+        | Ok(ClaimOutcome::Interrupted)
+        | Ok(ClaimOutcome::Expired) => return Ok(()),
         Err(error) => {
             tracing::warn!(
                 request_id = %request.request_id,

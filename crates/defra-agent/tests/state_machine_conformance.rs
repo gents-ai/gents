@@ -11,8 +11,8 @@ use support::snapshots::{
     ResponseSnapshot, SessionSnapshot,
 };
 use support::{
-    build_request, create_request, create_response_with_status, test_db, AGENT_DID, AGENT_NAME,
-    BACKEND_ID, DEADLINE_SECS,
+    build_request, create_request, create_response_with_status, set_interrupt_requested_at,
+    set_valid_until, test_db, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
 };
 
 #[tokio::test]
@@ -56,6 +56,7 @@ async fn interactive_claim_snapshot_matches_claimed_waiting() {
             max_retries: defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
+            failure_reason: "".into(),
         }
     );
     assert_eq!(
@@ -166,6 +167,7 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
             max_retries: defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
+            failure_reason: "".into(),
         }
     );
     assert_eq!(
@@ -241,6 +243,7 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
             max_retries: defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
+            failure_reason: "".into(),
         }
     );
     assert_eq!(
@@ -295,6 +298,7 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
             max_retries: defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
+            failure_reason: "".into(),
         }
     );
     assert_eq!(
@@ -787,15 +791,71 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
 }
 
 #[tokio::test]
-#[ignore = "ungated in Task 5 (scheduler claim check)"]
 async fn pending_interrupted_via_interrupt_before_claim() {
-    todo!();
+    let db = test_db("pending-interrupted").await;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let interrupt_at = chrono::Utc::now().to_rfc3339();
+    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+
+    set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
+
+    let request = build_request(
+        doc_id.clone(),
+        request_id.clone(),
+        session_id.clone(),
+        created_at,
+    );
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Interrupted);
+
+    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
+    assert_eq!(snap.lifecycle_state, "interrupted");
+    assert_eq!(snap.status, "interrupted");
 }
 
 #[tokio::test]
-#[ignore = "ungated in Task 5 (scheduler claim check)"]
 async fn pending_dead_stale_via_expire() {
-    todo!();
+    let db = test_db("pending-dead-stale").await;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let valid_until = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+
+    set_valid_until(&db.node, &doc_id, &valid_until).await;
+
+    let request = build_request(
+        doc_id.clone(),
+        request_id.clone(),
+        session_id.clone(),
+        created_at,
+    );
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Expired);
+
+    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
+    assert_eq!(snap.lifecycle_state, "dead");
+    assert_eq!(snap.failure_reason, "Stale");
 }
 
 #[tokio::test]
@@ -817,9 +877,38 @@ async fn input_required_interrupted() {
 }
 
 #[tokio::test]
-#[ignore = "ungated in Task 5 (scheduler claim check)"]
 async fn pending_tie_break_prefers_interrupt_over_expire() {
-    todo!();
+    let db = test_db("tie-break-pending").await;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let past = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+    let interrupt_at = chrono::Utc::now().to_rfc3339();
+    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+
+    set_valid_until(&db.node, &doc_id, &past).await;
+    set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
+
+    let request = build_request(
+        doc_id.clone(),
+        request_id.clone(),
+        session_id.clone(),
+        created_at,
+    );
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Interrupted);
+
+    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
+    assert_eq!(snap.lifecycle_state, "interrupted");
 }
 
 #[tokio::test]
@@ -841,7 +930,45 @@ async fn interrupt_on_already_terminal_is_noop() {
 }
 
 #[tokio::test]
-#[ignore = "ungated in Task 5 (scheduler claim check)"]
 async fn valid_until_cached_at_claim_ignores_post_claim_extension() {
-    todo!();
+    let db = test_db("s8-cached-at-claim").await;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let future = (chrono::Utc::now() + chrono::Duration::seconds(60)).to_rfc3339();
+    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+
+    set_valid_until(&db.node, &doc_id, &future).await;
+
+    let request = build_request(
+        doc_id.clone(),
+        request_id.clone(),
+        session_id.clone(),
+        created_at,
+    );
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+
+    // Caller rewrites valid_until to a far-future value after claim. Lifecycle should
+    // not observe it: S8 says the scheduler reads valid_until exactly once at claim.
+    let much_later = (chrono::Utc::now() + chrono::Duration::hours(10)).to_rfc3339();
+    set_valid_until(&db.node, &doc_id, &much_later).await;
+
+    // Assert the cached field on the lifecycle is unchanged from what was read at claim.
+    let expected = chrono::DateTime::parse_from_rfc3339(&future)
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    assert_eq!(
+        lifecycle.valid_until_at_claim_for_test(),
+        Some(expected)
+    );
 }
