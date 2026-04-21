@@ -3,9 +3,10 @@ use defra_agent::session::{fork, ForkParams};
 mod support;
 
 use support::snapshots::fetch_message_snapshots_for_session;
+use support::snapshots::fetch_tool_call_snapshots_for_session;
 use support::{
     create_agent_behavior, create_agent_conversation, create_agent_message,
-    create_agent_session, test_db, AGENT_DID, AGENT_NAME,
+    create_agent_session, create_agent_tool_call, test_db, AGENT_DID, AGENT_NAME,
 };
 
 #[tokio::test]
@@ -64,4 +65,47 @@ async fn fork_copies_message_prefix_up_to_user_turn_boundary() {
 
     // Outcome counters.
     assert_eq!(outcome.copied_messages, 2);
+}
+
+#[tokio::test]
+async fn fork_copies_tool_calls_up_to_user_turn_boundary() {
+    let db = test_db("fork-copy-tool-calls").await;
+
+    let parent_session = "parent-tc";
+    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+
+    // Turn 1: u @ seq 1 → a @ seq 2 → tool_call @ seq 3 → u @ seq 4 → a @ seq 5
+    create_agent_message(&db.node, parent_session, 1, "user", "u1", "2026-04-21T10:00:01Z").await;
+    create_agent_message(&db.node, parent_session, 2, "assistant", "a1", "2026-04-21T10:00:02Z").await;
+    create_agent_tool_call(
+        &db.node, parent_session, 2, "tc-1", "read_file",
+        r#"{"path":"foo"}"#, "file contents", "completed",
+        "2026-04-21T10:00:02Z", "2026-04-21T10:00:02Z",
+    ).await;
+    create_agent_message(&db.node, parent_session, 3, "tool", "r1", "2026-04-21T10:00:03Z").await;
+    create_agent_message(&db.node, parent_session, 4, "user", "u2", "2026-04-21T10:00:04Z").await;
+    create_agent_tool_call(
+        &db.node, parent_session, 4, "tc-2", "write_file",
+        r#"{"path":"bar"}"#, "ok", "completed",
+        "2026-04-21T10:00:04Z", "2026-04-21T10:00:04Z",
+    ).await;
+    create_agent_message(&db.node, parent_session, 5, "assistant", "a2", "2026-04-21T10:00:05Z").await;
+
+    let outcome = fork(&db.node, ForkParams {
+        source_session_id: parent_session,
+        fork_at_user_turn: 1,
+        caller_agent_did: AGENT_DID,
+        target_behavior_id: None,
+    }).await.expect("fork succeeds");
+
+    let child_tool_calls = fetch_tool_call_snapshots_for_session(&db.node, &outcome.session_id).await;
+    assert_eq!(child_tool_calls.len(), 1, "only tc-1 (message_sequence=2) should be copied");
+    assert_eq!(child_tool_calls[0].tool_call_id, "tc-1");
+    assert_eq!(child_tool_calls[0].message_sequence, 2);
+    assert_eq!(child_tool_calls[0].session_id, outcome.session_id);
+    assert_eq!(child_tool_calls[0].tool_call_key, format!("{}:tc-1", outcome.session_id));
+
+    assert_eq!(outcome.copied_tool_calls, 1);
 }

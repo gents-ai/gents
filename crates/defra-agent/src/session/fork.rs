@@ -73,6 +73,15 @@ pub async fn fork(
     .await
     .map_err(ForkError::ForkCopyFailed)?;
 
+    let copied_tool_calls = copy_tool_calls(
+        node,
+        params.source_session_id,
+        &child_session_id,
+        cut_seq,
+    )
+    .await
+    .map_err(ForkError::ForkCopyFailed)?;
+
     create_child_session_and_conversation(
         node,
         &child_session_id,
@@ -86,6 +95,7 @@ pub async fn fork(
     Ok(ForkOutcome {
         session_id: child_session_id,
         copied_messages,
+        copied_tool_calls,
         ..ForkOutcome::default()
     })
 }
@@ -190,6 +200,79 @@ async fn copy_messages(
             timestamp_escaped = escape_graphql_string(timestamp),
         );
         execute_mutation_with_retry(node, &mutation, "fork::copy_message").await?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+async fn copy_tool_calls(
+    node: &EmbeddedNode,
+    source_session_id: &str,
+    child_session_id: &str,
+    cut_seq: u32,
+) -> Result<u32> {
+    let escaped_source = escape_graphql_string(source_session_id);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    session_id: {{ _eq: "{escaped_source}" }},
+                    message_sequence: {{ _lt: {cut_seq} }}
+                }},
+                order: {{ message_sequence: ASC }}
+            ) {{
+                message_sequence tool_name tool_call_id args result status started_at completed_at
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        anyhow::bail!("copy_tool_calls query failed: {:?}", resp.errors);
+    }
+    let rows = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut count = 0u32;
+    let child_session_escaped = escape_graphql_string(child_session_id);
+    for row in &rows {
+        let message_sequence = row.get("message_sequence").and_then(|v| v.as_u64())
+            .ok_or_else(|| anyhow::anyhow!("message_sequence missing"))?;
+        let tool_name = row.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
+        let tool_call_id = row.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or("");
+        let args = row.get("args").and_then(|v| v.as_str()).unwrap_or("");
+        let result = row.get("result").and_then(|v| v.as_str()).unwrap_or("");
+        let status = row.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        let started_at = row.get("started_at").and_then(|v| v.as_str()).unwrap_or("");
+        let completed_at = row.get("completed_at").and_then(|v| v.as_str()).unwrap_or("");
+        let tool_call_id_escaped = escape_graphql_string(tool_call_id);
+        let tool_call_key = format!("{child_session_escaped}:{tool_call_id_escaped}");
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentToolCall(input: {{
+                    tool_call_key: "{tool_call_key}",
+                    session_id: "{child_session_escaped}",
+                    message_sequence: {message_sequence},
+                    tool_name: "{tool_name_escaped}",
+                    tool_call_id: "{tool_call_id_escaped}",
+                    args: "{args_escaped}",
+                    result: "{result_escaped}",
+                    status: "{status_escaped}",
+                    started_at: "{started_at_escaped}",
+                    completed_at: "{completed_at_escaped}"
+                }}) {{ _docID }}
+            }}"#,
+            tool_name_escaped = escape_graphql_string(tool_name),
+            args_escaped = escape_graphql_string(args),
+            result_escaped = escape_graphql_string(result),
+            status_escaped = escape_graphql_string(status),
+            started_at_escaped = escape_graphql_string(started_at),
+            completed_at_escaped = escape_graphql_string(completed_at),
+        );
+        execute_mutation_with_retry(node, &mutation, "fork::copy_tool_call").await?;
         count += 1;
     }
     Ok(count)
