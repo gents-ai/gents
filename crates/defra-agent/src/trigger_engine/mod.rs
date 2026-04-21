@@ -13,6 +13,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 
+pub(crate) mod schedule_source;
+
 #[cfg(test)]
 mod tests;
 
