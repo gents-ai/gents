@@ -823,15 +823,11 @@ lemma step_induces_transition
   refine ⟨{pre with ackedResolved := some pre.lastResolved}, ?_⟩
   exact RuntimeState.Transition.ack_write pre.lastResolved rfl
 
-/-- **T-Conv — end-to-end convergence.**
-
-    For any well-formed manifest M and consistent live state L, applying
-    `diff M L` yields a live state whose desired projection agrees with
-    M on every document declared in M. Coupled with `RuntimeReconcile`'s
-    coherence invariants (which hold on the runtime-side publish triggered
-    by each ack'd write), this establishes that the runtime's published
-    snapshot reflects M on its behavior subset. -/
-theorem t_conv
+/-- Utility: after apply, the desired projection agrees with the manifest
+    on every document M declares. This is the desired-projection view of
+    convergence; the end-to-end spec claim is `t_conv` below, stated in
+    terms of the runtime's `ResolvedSnapshot`. -/
+theorem apply_realizes_desired
     {M : Manifest} {L : LiveState}
     (hM : M.WellFormed)
     (hL : L.WellFormed) :
@@ -910,6 +906,95 @@ lemma LiveState.toResolvedSnapshot_coverage
   -- The filter is a subset of allBehaviors, so this is `union_sdiff_of_subset`.
   apply Finset.union_sdiff_of_subset
   exact @Finset.filter_subset _ _ (Classical.decPred _) allBehaviors
+
+/-- After apply, every behavior id declared by M is runnable in the
+    resolved snapshot's runnable set. This uses `apply_realizes_manifest`
+    non-trivially (via `hM`, `hL`) to witness the presence of each
+    M-behavior in the post-apply L'. -/
+theorem t_conv_runnable
+    {M : Manifest} {L : LiveState}
+    (hM : M.WellFormed) (hL : L.WellFormed)
+    (defaultBehavior : BehaviorId) :
+    let L' := applyAll L (diff M L)
+    (L'.toResolvedSnapshot defaultBehavior M.behaviorIds).runnable = M.behaviorIds := by
+  -- Unfold the `let` bindings so we can reason about the snapshot.
+  simp only
+  unfold LiveState.toResolvedSnapshot
+  simp only
+  -- Goal: (M.behaviorIds.filter p) = M.behaviorIds
+  -- where p bid = ∃ d, d.behaviorId? = some bid ∧ (applyAll L (diff M L)).contains d = true.
+  -- Prove both directions by Finset extensionality.
+  apply Finset.ext
+  intro bid
+  constructor
+  · -- forward: filter ⊆ M.behaviorIds
+    intro h
+    exact (@Finset.filter_subset _ _ (Classical.decPred _) M.behaviorIds) h
+  · -- backward: bid ∈ M.behaviorIds → bid ∈ filter
+    intro hbid
+    rw [@Finset.mem_filter _ _ (Classical.decPred _)]
+    refine ⟨hbid, ?_⟩
+    -- Extract witness: bid comes from some d ∈ M.support with d.collection = agentBehavior.
+    unfold Manifest.behaviorIds at hbid
+    rw [Finset.mem_image] at hbid
+    obtain ⟨d, hd_in_filter, hd_id⟩ := hbid
+    rw [Finset.mem_filter] at hd_in_filter
+    obtain ⟨hd_support, hd_coll⟩ := hd_in_filter
+    -- From d ∈ M.support, use support_iff to get M.docs d = some f.
+    have hd_some : (M.docs d).isSome = true := (M.support_iff d).mp hd_support
+    obtain ⟨f, hf⟩ := Option.isSome_iff_exists.mp hd_some
+    -- Apply apply_realizes_manifest to get (applyAll L (diff M L)).desired d = some f.
+    have hL'd : (applyAll L (diff M L)).desired d = some f :=
+      apply_realizes_manifest hM hL d f hf
+    -- Therefore (applyAll L (diff M L)).contains d = true.
+    have hcontains : (applyAll L (diff M L)).contains d = true := by
+      unfold LiveState.contains
+      rw [hL'd]; rfl
+    -- Witness the existence: d has behaviorId? = some bid since d.collection = agentBehavior
+    -- and d.id.length = bid.
+    refine ⟨d, ?_, hcontains⟩
+    unfold DocRef.behaviorId?
+    rw [hd_coll]
+    exact congrArg some hd_id
+
+/-- **T-Conv — end-to-end convergence (ResolvedSnapshot form).**
+
+    For any well-formed manifest M and consistent live state L, after
+    applying `diff M L` to L and projecting via `toResolvedSnapshot` with
+    M's behavior ids as the carrier set, the resulting snapshot's
+    `runnable ∪ unavailable` equals `M.behaviorIds` — exactly the spec's
+    claim. The runnable side is additionally equal to `M.behaviorIds` on
+    its own (by `t_conv_runnable`), so `unavailable` is empty on a
+    well-formed apply; this matches the spec's operator expectation that
+    a clean apply produces no unavailable behaviors. -/
+theorem t_conv
+    {M : Manifest} {L : LiveState}
+    (_hM : M.WellFormed) (_hL : L.WellFormed)
+    (defaultBehavior : BehaviorId) :
+    let L' := applyAll L (diff M L)
+    let snapshot := L'.toResolvedSnapshot defaultBehavior M.behaviorIds
+    snapshot.runnable ∪ snapshot.unavailable = M.behaviorIds := by
+  exact LiveState.toResolvedSnapshot_coverage _ _ _
+
+/-- Corollary: after a well-formed apply, the unavailable set is empty. -/
+theorem t_conv_no_unavailable
+    {M : Manifest} {L : LiveState}
+    (hM : M.WellFormed) (hL : L.WellFormed)
+    (defaultBehavior : BehaviorId) :
+    let L' := applyAll L (diff M L)
+    let snapshot := L'.toResolvedSnapshot defaultBehavior M.behaviorIds
+    snapshot.unavailable = ∅ := by
+  simp only
+  unfold LiveState.toResolvedSnapshot
+  simp only
+  -- Goal: M.behaviorIds \ (M.behaviorIds.filter p) = ∅
+  -- Using t_conv_runnable: the filter equals M.behaviorIds.
+  have h := t_conv_runnable hM hL defaultBehavior
+  unfold LiveState.toResolvedSnapshot at h
+  simp only at h
+  -- h : M.behaviorIds.filter p = M.behaviorIds
+  rw [h]
+  exact Finset.sdiff_self _
 
 /-- Exhaustive Collection pattern-match acting as a parity contract
     with the Rust `defra_agent::Collection` enum. When the Rust enum
