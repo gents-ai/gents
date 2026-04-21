@@ -553,7 +553,12 @@ lemma apply_realizes_manifest
         rw [hs_pay] at this
         exact this
 
-/-- L-2: `applyAll` does not touch the `live` projection. -/
+/-- `applyAll` does not touch the `live` projection. Stated as a named
+    lemma so downstream users (property tests, conformance reasoning,
+    future runtime-side proofs) can rely on it directly. Not needed by
+    T-Conv's composition chain; kept as a general invariant of the
+    apply model. -/
+@[simp]
 lemma apply_preserves_live
     (L : LiveState) (steps : List ApplyStep) :
     (applyAll L steps).live = L.live := by
@@ -810,18 +815,6 @@ lemma apply_preserves_wellFormed
             applyOne_desired_ne _ _ _ heq
           rw [hpre] at hf
           exact ih_wf.2 d f hf r hr
-
-/-- Bridge to `RuntimeReconcile`: each `ApplyStep` induces at least one
-    legal runtime transition. `ack_write` alone suffices for T-Conv's
-    existence-witness form; fuller composition with publish is left as a
-    follow-up. -/
-lemma step_induces_transition
-    (pre : _root_.RuntimeState) (_s : ApplyStep) :
-    ∃ post : _root_.RuntimeState, RuntimeState.Transition pre post := by
-  -- `pre.lastResolved` is always available; `ack_write` is the simplest
-  -- witness: any acknowledged write is a legal transition.
-  refine ⟨{pre with ackedResolved := some pre.lastResolved}, ?_⟩
-  exact RuntimeState.Transition.ack_write pre.lastResolved rfl
 
 /-- Utility: after apply, the desired projection agrees with the manifest
     on every document M declares. This is the desired-projection view of
