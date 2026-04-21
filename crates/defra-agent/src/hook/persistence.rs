@@ -45,6 +45,9 @@ impl DefraSessionHook {
                     state.assistant_turn_saved = true;
                     (session_id, sequence, "assistant")
                 }
+                Message::System { .. } => {
+                    anyhow::bail!("system messages are not persisted in session history");
+                }
             }
         };
 

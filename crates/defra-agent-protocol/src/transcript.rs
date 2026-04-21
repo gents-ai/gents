@@ -74,17 +74,17 @@ pub fn present_persisted_message(role: &str, content: &str) -> PersistedMessageP
         Message::Assistant { content, .. } => content
             .iter()
             .any(|item| matches!(item, AssistantContent::ToolCall(_))),
-        Message::User { .. } => false,
+        Message::User { .. } | Message::System { .. } => false,
     };
     let has_tool_results = match &message {
         Message::User { content } => content
             .iter()
             .any(|item| matches!(item, UserContent::ToolResult(_))),
-        Message::Assistant { .. } => false,
+        Message::Assistant { .. } | Message::System { .. } => false,
     };
 
     let role = match &message {
-        Message::Assistant { .. } => PresentedMessageRole::Assistant,
+        Message::Assistant { .. } | Message::System { .. } => PresentedMessageRole::Assistant,
         Message::User { content } => {
             let has_text = content.iter().any(
                 |item| matches!(item, UserContent::Text(text) if !text.text.trim().is_empty()),
@@ -110,6 +110,7 @@ pub fn present_persisted_message(role: &str, content: &str) -> PersistedMessageP
 
 pub fn render_message_body_markdown(message: &Message) -> String {
     match message {
+        Message::System { content } => content.trim().to_string(),
         Message::User { content } => content
             .iter()
             .filter_map(|item| match item {

@@ -45,6 +45,9 @@ pub(super) fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileA
                 });
                 stripped_messages.push(Message::User { content });
             }
+            Message::System { content } => {
+                stripped_messages.push(Message::System { content });
+            }
         }
     }
 

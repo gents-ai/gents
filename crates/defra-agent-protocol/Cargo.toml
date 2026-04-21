@@ -9,7 +9,7 @@ description = "Shared schemas, client turn-observation protocol, and collection 
 anyhow = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
-rig-core = "0.31"
+rig-core.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["time"] }

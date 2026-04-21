@@ -71,19 +71,6 @@ pub(super) fn transcript_surface(ui: &mut Ui, body: impl FnOnce(&mut Ui)) {
     ui.set_clip_rect(prev_clip);
 }
 
-pub(super) fn centered_status_card(ui: &mut Ui, title: &str, body: &str) {
-    let available = ui.available_size();
-    ui.allocate_ui_with_layout(
-        available,
-        egui::Layout::top_down(egui::Align::Center),
-        |ui| {
-            ui.add_space((ui.available_height() * 0.08).max(12.0));
-            ui.set_max_width(460.0);
-            crate::views::card(ui, title, body);
-        },
-    );
-}
-
 pub(super) fn supporting_block(ui: &mut Ui, body: impl FnOnce(&mut Ui)) {
     let palette = theme::palette();
     let label_width = (ui.available_width() * 0.08).clamp(46.0, 64.0);
