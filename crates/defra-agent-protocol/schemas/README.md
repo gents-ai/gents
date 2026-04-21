@@ -69,14 +69,14 @@ These documents record user requests, assistant output, and conversation history
 
 | Collection | Key fields | References | Written by | Read by |
 |------------|------------|------------|------------|---------|
-| `AgentRequest` | `request_id`, `agent_did`, `behavior_id`, `session_id`, sampling overrides, `metadata`, `status`, `lifecycle_state`, `backend_id`, `failure_reason` | belongs to an agent/session/behavior | `chat`, `request submit`, lifecycle transitions | router, CLI inspection, recovery |
+| `AgentRequest` | `request_id`, `agent_did`, `behavior_id`, `session_id`, sampling overrides, `metadata`, `status`, `lifecycle_state`, `backend_id`, `failure_reason`, `interrupt_requested_at`, `valid_until` | belongs to an agent/session/behavior | `chat`, `request submit`, lifecycle transitions | router, CLI inspection, recovery |
 | `InferenceCall` | `call_id`, `request_id`, `backend_id`, `call_kind`, `call_state`, queue/timing/token fields | belongs to a request/backend | admission controller at terminal call state | benchmarking, RL reward shaping, debugging |
-| `AgentResponse` | `request_id`, `agent_did`, `behavior_id`, `session_id`, `status`, `content`, `reasoning`, `error_message`, `progress_seq`, `materialized_message_sequence` | latest response for a request; also the in-flight streaming overlay until committed into transcript | streaming/runtime code | `chat`, `response show`, `response wait`, TUI, rich clients |
+| `AgentResponse` | `request_id`, `agent_did`, `behavior_id`, `session_id`, `status`, `content`, `reasoning`, `error_message`, `progress_seq`, `materialized_message_sequence`, `interrupted_at` | latest response for a request; also the in-flight streaming overlay until committed into transcript | streaming/runtime code | `chat`, `response show`, `response wait`, TUI, rich clients |
 | `AgentSession` | `session_id`, `behavior_id`, `status`, `started`, `ended` | ties a sequence of requests to one behavior | session manager | `chat`, inspection, recovery |
 | `AgentConversation` | `session_id`, `agent_did`, `behavior_id`, `title`, `preview_text`, `status`, `latest_request_id` | high-level conversation summary per session | session/conversation layer | UI and inspection |
 | `AgentMessage` | `message_key`, `session_id`, `sequence`, `role`, `content`, `timestamp` | ordered transcript entries | session/history layer | chat history, TUI, debugging |
 | `AgentToolCall` | `tool_call_key`, `session_id`, `tool_name`, `tool_call_id`, `args`, `result`, `status` | concrete tool invocation records within a session | runtime/tool persistence | chat progress, TUI, diagnostics |
-| `AgentToolResult` | `agent_did`, `session_id`, `tool_name`, `tool_input`, `output_text`, `truncated` | normalized tool result persistence | tool persistence hook | compaction and later inspection |
+| `AgentToolResult` | `agent_did`, `session_id`, `tool_name`, `tool_input`, `output_text`, `truncated`, `discarded_because_interrupted` | normalized tool result persistence | tool persistence hook | compaction and later inspection |
 | `CompactionEntry` | `compaction_key`, `session_id`, `summary`, `messages_compacted`, token counts | persisted compaction summaries | compaction layer | session reconstruction and debugging |
 
 ### Tasks and Schedules

@@ -213,6 +213,10 @@ pub struct AgentRequestRow {
     pub retry_count: Option<i64>,
     #[serde(default)]
     pub max_retries: Option<i64>,
+    #[serde(default)]
+    pub interrupt_requested_at: Option<String>,
+    #[serde(default)]
+    pub valid_until: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -246,6 +250,8 @@ pub struct AgentResponseRow {
     pub created_at: Option<String>,
     #[serde(default)]
     pub completed_at: Option<String>,
+    #[serde(default)]
+    pub interrupted_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -321,6 +327,8 @@ pub struct AgentToolResultRow {
     pub conversation_doc_id: Option<String>,
     #[serde(default)]
     pub created_at: Option<String>,
+    #[serde(default)]
+    pub discarded_because_interrupted: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

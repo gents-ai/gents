@@ -8,4 +8,5 @@ type AgentToolResult @branchable {
     truncation_metadata: String
     conversation_doc_id: String
     created_at: String @index
+    discarded_because_interrupted: Boolean  # NEW: true if result never reached the model
 }

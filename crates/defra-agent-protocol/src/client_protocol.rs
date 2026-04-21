@@ -51,6 +51,7 @@ pub enum RequestLifecycleState {
     Failed,
     Superseded,
     Dead,
+    Interrupted,
 }
 
 impl RequestLifecycleState {
@@ -64,6 +65,7 @@ impl RequestLifecycleState {
             Self::Failed => "failed",
             Self::Superseded => "superseded",
             Self::Dead => "dead",
+            Self::Interrupted => "interrupted",
         }
     }
 }
@@ -101,6 +103,7 @@ impl TryFrom<&str> for RequestLifecycleState {
             "failed" => Ok(Self::Failed),
             "superseded" => Ok(Self::Superseded),
             "dead" => Ok(Self::Dead),
+            "interrupted" => Ok(Self::Interrupted),
             _ => Err(InvalidRequestLifecycleState {
                 state: value.to_string(),
             }),
@@ -153,7 +156,9 @@ pub fn derive_attempt(view: &AttemptView) -> ClientTurnState {
     match view.request.lifecycle_state {
         RequestLifecycleState::Superseded => ClientTurnState::Superseded,
         RequestLifecycleState::Completed => ClientTurnState::Completed,
-        RequestLifecycleState::Failed | RequestLifecycleState::Dead => ClientTurnState::Failed,
+        RequestLifecycleState::Failed
+        | RequestLifecycleState::Dead
+        | RequestLifecycleState::Interrupted => ClientTurnState::Failed,
         RequestLifecycleState::Pending
         | RequestLifecycleState::Claimed
         | RequestLifecycleState::Processing

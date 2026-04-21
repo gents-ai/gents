@@ -14,4 +14,5 @@ type AgentResponse @branchable {
     materialized_at: String
     created_at: String @index
     completed_at: String
+    interrupted_at: String               # NEW: RFC3339; null for complete, non-null ⇒ interrupted
 }

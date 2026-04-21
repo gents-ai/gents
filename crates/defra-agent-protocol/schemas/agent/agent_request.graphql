@@ -24,4 +24,6 @@ type AgentRequest @branchable {
     deadline: String
     retry_count: Int
     max_retries: Int
+    interrupt_requested_at: String       # NEW: RFC3339; null until interrupt requested
+    valid_until: String                  # NEW: RFC3339; null = no TTL
 }
