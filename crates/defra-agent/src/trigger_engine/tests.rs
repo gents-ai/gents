@@ -422,6 +422,68 @@ async fn dispatch_latest_only_supersedes_prior_and_fires_new() {
 }
 
 #[tokio::test]
+async fn dispatch_errors_and_skips_materialize_on_template_render_failure() {
+    // Template references `event.missing_field`, but the intent's event_vars
+    // has no such key. With strict-undefined semantics, rendering must fail,
+    // and dispatch must return Errored (with a "template:" prefix), skip the
+    // materializer entirely, and invoke `on_result` with the same Errored
+    // value so the upstream source can write back `last_status = "error"`.
+    let task = resolved_task("{{ event.missing_field }}");
+    let schedule = resolved_schedule("sched-1", task.clone());
+    let snapshot = snapshot_with_schedules(HashMap::from([(
+        "sched-1".to_string(),
+        schedule,
+    )]));
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = SpyMaterializer::new();
+    let engine = TriggerEngine::new(rx, materializer.clone());
+
+    let result_captured: Arc<Mutex<Option<FireResult>>> = Arc::new(Mutex::new(None));
+    let capture = result_captured.clone();
+
+    let intent = FireIntent {
+        trigger_id: Some("sched-1".to_string()),
+        trigger_kind: TriggerKind::Schedule,
+        task,
+        concurrency: ConcurrencyMode::Serial,
+        event_vars: serde_json::json!({}),
+        doc_vars: None,
+        args_vars: None,
+        on_result: Box::new(move |r| {
+            *capture.lock().unwrap() = Some(r);
+        }),
+    };
+
+    let result = engine.dispatch(intent).await;
+
+    match result.clone() {
+        FireResult::Errored { error } => assert!(
+            error.starts_with("template:"),
+            "expected template-render error, got: {error}"
+        ),
+        other => panic!("expected Errored, got {other:?}"),
+    }
+
+    assert!(
+        materializer.calls().is_empty(),
+        "no materialize call should have been made on render failure"
+    );
+    assert!(
+        materializer.supersede_calls().is_empty(),
+        "no supersede call should have been made on render failure"
+    );
+
+    let captured = result_captured.lock().unwrap().clone();
+    match captured {
+        Some(FireResult::Errored { error }) => assert!(
+            error.starts_with("template:"),
+            "expected callback Errored with template prefix, got: {error}"
+        ),
+        other => panic!("expected callback Errored, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn dispatch_latest_only_serializes_parallel_fires() {
     // Two LatestOnly dispatches for the same trigger fired in parallel. With
     // a materialize delay of ~60ms, the per-trigger lock must serialize them:

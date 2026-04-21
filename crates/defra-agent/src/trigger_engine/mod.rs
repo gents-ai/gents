@@ -195,12 +195,13 @@ impl TriggerEngine {
 
     /// Dispatch a single `FireIntent`.
     ///
-    /// Current scope (Tasks 30-31): enabled gate against the active snapshot,
-    /// then render the task's prompt template, then apply the intent's
-    /// concurrency mode (`Parallel` fires unconditionally; `Serial` skips when
-    /// a non-terminal request already exists for this trigger tuple), then
-    /// hand the rendered prompt to the materializer. `LatestOnly` lands in
-    /// Task 32 and render-failure bookkeeping in Task 33.
+    /// Current scope (Tasks 30-33): enabled gate against the active snapshot,
+    /// then render the task's prompt template (render failures return
+    /// `Errored` without materializing), then apply the intent's concurrency
+    /// mode (`Parallel` fires unconditionally; `Serial` skips when a
+    /// non-terminal request already exists for this trigger tuple;
+    /// `LatestOnly` supersedes any prior non-terminal request under a
+    /// per-trigger lock), then hand the rendered prompt to the materializer.
     #[allow(dead_code)]
     async fn dispatch(&self, intent: FireIntent) -> FireResult {
         let snapshot = self.snapshot_rx.borrow().clone();
@@ -254,8 +255,12 @@ impl TriggerEngine {
         {
             Ok(s) => s,
             Err(e) => {
-                // Task 33 will turn this into a proper Errored path with
-                // trigger-doc bookkeeping; for now surface the error verbatim.
+                // Render failure is reported as `Errored` with a `template:`
+                // prefix so upstream sources can route the result to
+                // `last_status = "error"` bookkeeping without having to parse
+                // the underlying minijinja message. The callback runs before
+                // return so the dispatched source observes the same value the
+                // caller will.
                 let result = FireResult::Errored {
                     error: format!("template: {e}"),
                 };
