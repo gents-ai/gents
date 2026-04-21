@@ -7,7 +7,7 @@
 //! reason about without running proptest.
 
 use defra_agent::apply_model::{
-    apply_all, diff, ApplyStep, Collection, DocRef, LiveState, Manifest,
+    apply_all, diff, ApplyStep, Collection, DesiredFields, DocRef, LiveState, Manifest,
 };
 use std::collections::BTreeMap;
 
@@ -21,7 +21,7 @@ fn r(c: Collection, id: &str) -> DocRef {
 fn manifest(pairs: &[(DocRef, &str)]) -> Manifest {
     let mut docs = BTreeMap::new();
     for (d, f) in pairs {
-        docs.insert(d.clone(), (*f).to_string());
+        docs.insert(d.clone(), DesiredFields::opaque(*f));
     }
     Manifest { docs }
 }
@@ -29,7 +29,7 @@ fn manifest(pairs: &[(DocRef, &str)]) -> Manifest {
 fn live(desired: &[(DocRef, &str)], live: &[(DocRef, &str)]) -> LiveState {
     let mut desired_map = BTreeMap::new();
     for (d, f) in desired {
-        desired_map.insert(d.clone(), (*f).to_string());
+        desired_map.insert(d.clone(), DesiredFields::opaque(*f));
     }
     let mut live_map = BTreeMap::new();
     for (d, f) in live {
@@ -101,8 +101,8 @@ fn apply_preserves_live_projection_end_to_end() {
         "apply must not touch the live projection"
     );
     assert_eq!(
-        after.desired.get(&backend),
-        Some(&"b1-desired".to_string()),
+        after.desired.get(&backend).map(|f| f.content.as_str()),
+        Some("b1-desired"),
         "apply must install the desired payload"
     );
 }
@@ -120,7 +120,7 @@ fn update_is_emitted_when_desired_differs_from_live_desired() {
     match &steps[0] {
         ApplyStep::Update(d, f) => {
             assert_eq!(d, &backend);
-            assert_eq!(f, "b1-new");
+            assert_eq!(f.content, "b1-new");
         }
         other => panic!("expected Update, got {:?}", other),
     }

@@ -1,5 +1,5 @@
 use defra_agent::apply_model::{
-    apply_all, diff, references_of, Collection, DocRef, LiveState, Manifest,
+    apply_all, diff, references_of, Collection, DesiredFields, DocRef, LiveState, Manifest,
 };
 use proptest::prelude::*;
 use std::collections::BTreeMap;
@@ -22,14 +22,18 @@ fn docref_strategy() -> impl Strategy<Value = DocRef> {
     (collection_strategy(), "[a-z]{1,4}").prop_map(|(collection, id)| DocRef { collection, id })
 }
 
+fn desired_fields_strategy() -> impl Strategy<Value = DesiredFields> {
+    "[a-z]{1,4}".prop_map(DesiredFields::opaque)
+}
+
 fn manifest_strategy() -> impl Strategy<Value = Manifest> {
-    prop::collection::btree_map(docref_strategy(), "[a-z]{1,4}", 0..8)
+    prop::collection::btree_map(docref_strategy(), desired_fields_strategy(), 0..8)
         .prop_map(|docs| Manifest { docs })
 }
 
 fn live_state_strategy() -> impl Strategy<Value = LiveState> {
     (
-        prop::collection::btree_map(docref_strategy(), "[a-z]{1,4}", 0..8),
+        prop::collection::btree_map(docref_strategy(), desired_fields_strategy(), 0..8),
         prop::collection::btree_map(docref_strategy(), "[a-z]{1,4}", 0..8),
     )
         .prop_map(|(desired, live)| LiveState { desired, live })
@@ -59,9 +63,9 @@ proptest! {
 
     /// P2 (ordering preserves references): applying `diff M L` one step at a
     /// time produces an intermediate state with no dangling references after
-    /// every step. With the abstract `references_of`, this is vacuously true;
-    /// the property becomes substantive when concrete reference relations
-    /// are pinned.
+    /// every step. With `desired_fields_strategy` producing only empty-refs
+    /// payloads, this is vacuously true; Task B5 will strengthen the generator
+    /// to produce real references and make this property substantive.
     #[test]
     fn apply_ordering_preserves_references(
         m in manifest_strategy(),
@@ -111,7 +115,7 @@ proptest! {
 }
 
 #[allow(dead_code)]
-fn _manifest_constructor_is_used(m: Manifest, l: LiveState) -> BTreeMap<DocRef, String> {
+fn _manifest_constructor_is_used(m: Manifest, l: LiveState) -> BTreeMap<DocRef, DesiredFields> {
     // Suppress "unused" warnings from imports when proptest-cfg'd.
     let _ = diff(&m, &l);
     m.docs

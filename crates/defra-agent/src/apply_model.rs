@@ -21,21 +21,49 @@ pub struct DocRef {
     pub id: String,
 }
 
+/// Mirrors the Lean `ApplyReconcile.DesiredFields` structure.
+/// `content` is the opaque payload; `refs` holds cross-document
+/// references that must point to strictly-lower-rank DocRefs for the
+/// manifest to be WellFormed.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DesiredFields {
+    pub content: String,
+    pub refs: Vec<DocRef>,
+}
+
+impl DesiredFields {
+    /// Shorthand constructor for payloads with no references.
+    pub fn opaque(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            refs: Vec::new(),
+        }
+    }
+
+    /// Constructor for payloads with references.
+    pub fn with_refs(content: impl Into<String>, refs: Vec<DocRef>) -> Self {
+        Self {
+            content: content.into(),
+            refs,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Manifest {
-    pub docs: BTreeMap<DocRef, String>,
+    pub docs: BTreeMap<DocRef, DesiredFields>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveState {
-    pub desired: BTreeMap<DocRef, String>,
-    pub live: BTreeMap<DocRef, String>,
+    pub desired: BTreeMap<DocRef, DesiredFields>,
+    pub live: BTreeMap<DocRef, String>, // live stays String — opaque runtime payload
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplyStep {
-    Create(DocRef, String),
-    Update(DocRef, String),
+    Create(DocRef, DesiredFields),
+    Update(DocRef, DesiredFields),
 }
 
 impl ApplyStep {
@@ -44,7 +72,7 @@ impl ApplyStep {
             ApplyStep::Create(d, _) | ApplyStep::Update(d, _) => d,
         }
     }
-    pub fn payload(&self) -> &String {
+    pub fn payload(&self) -> &DesiredFields {
         match self {
             ApplyStep::Create(_, f) | ApplyStep::Update(_, f) => f,
         }
@@ -70,12 +98,10 @@ impl DiffReport {
     }
 }
 
-/// References declared by a desired-fields payload. Abstract in the
-/// Lean model (`referencesOf` returns `∅`) and abstract here — the
-/// property tests keep it empty; conformance tests that care pin specific
-/// references by including appropriate documents in the manifest.
-pub fn references_of(_payload: &str) -> Vec<DocRef> {
-    Vec::new()
+/// References declared by a desired-fields payload. Projects `.refs` from the
+/// `DesiredFields` struct, mirroring the Lean `referencesOf` function.
+pub fn references_of(payload: &DesiredFields) -> Vec<DocRef> {
+    payload.refs.clone()
 }
 
 pub fn diff(m: &Manifest, l: &LiveState) -> DiffReport {
@@ -145,9 +171,12 @@ mod tests {
             desired: BTreeMap::new(),
             live: live.clone(),
         };
-        let s = ApplyStep::Create(d.clone(), "desired-payload".into());
+        let s = ApplyStep::Create(d.clone(), DesiredFields::opaque("desired-payload"));
         let out = apply_one(&l, &s);
         assert_eq!(out.live, live, "apply must not touch live");
-        assert_eq!(out.desired.get(&d), Some(&"desired-payload".to_string()));
+        assert_eq!(
+            out.desired.get(&d).map(|f| f.content.as_str()),
+            Some("desired-payload"),
+        );
     }
 }
