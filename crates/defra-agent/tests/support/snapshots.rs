@@ -384,6 +384,9 @@ pub struct ToolResultSnapshot {
     pub tool_name: String,
     pub tool_input: String,
     pub output_text: String,
+    pub truncated: bool,
+    pub truncation_metadata: String,
+    pub conversation_doc_id: String,
     pub created_at: String,
 }
 
@@ -398,7 +401,8 @@ pub async fn fetch_tool_result_snapshots_for_session(
                 filter: {{ session_id: {{ _eq: "{session_id}" }} }},
                 order: {{ created_at: ASC }}
             ) {{
-                agent_did session_id tool_name tool_input output_text created_at
+                agent_did session_id tool_name tool_input output_text
+                truncated truncation_metadata conversation_doc_id created_at
             }}
         }}"#
     );

@@ -300,6 +300,17 @@ async fn fork_copies_tool_results_strictly_before_cut_ts() {
     );
     assert_eq!(child_results[0].output_text, "early");
     assert_eq!(child_results[0].session_id, outcome.session_id);
+    // Every persisted column is faithfully copied (not just output_text).
+    // The helper seeds truncated=false, truncation_metadata="", conversation_doc_id="" —
+    // assert those survive the copy so future refactors can't accidentally zero-out
+    // or mis-serialize any spill field.
+    assert_eq!(child_results[0].agent_did, AGENT_DID);
+    assert_eq!(child_results[0].tool_name, "read_file");
+    assert_eq!(child_results[0].tool_input, "{}");
+    assert!(!child_results[0].truncated);
+    assert_eq!(child_results[0].truncation_metadata, "");
+    assert_eq!(child_results[0].conversation_doc_id, "");
+    assert_eq!(child_results[0].created_at, "2026-04-21T10:00:02Z");
     assert_eq!(outcome.copied_tool_results, 1);
 }
 
