@@ -29,6 +29,7 @@ pub mod scheduler;
 pub mod schema;
 pub mod session;
 pub mod streaming;
+pub(crate) mod template;
 pub mod tool_surface;
 pub mod toolset;
 pub mod truncation;
