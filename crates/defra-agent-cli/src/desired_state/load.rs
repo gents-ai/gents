@@ -3,7 +3,6 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::collection::Collection;
 use super::normalize::normalize_manifest;
 use super::validate::validate_manifest;
 use super::{
@@ -11,6 +10,7 @@ use super::{
     DesiredScheduledTask, DesiredStateCounts, DesiredStateManifest, DesiredStateValidationReport,
     DesiredToolSelection, DesiredToolServiceRegistry,
 };
+use crate::collection::Collection;
 
 pub(crate) fn validate_manifest_root(root: &Path) -> DesiredStateValidationReport {
     load_manifest_root(root).1
@@ -96,14 +96,18 @@ pub(crate) fn load_manifest_root(
     let tool_service_registries = load_optional_json_collection::<DesiredToolServiceRegistry>(
         root,
         Collection::ToolServiceRegistry.file_name(),
-        Collection::ToolServiceRegistry.dir_name().expect("tool-services has a dir form"),
+        Collection::ToolServiceRegistry
+            .dir_name()
+            .expect("tool-services has a dir form"),
         &mut errors,
     )
     .unwrap_or_default();
     let scheduled_tasks = load_optional_json_collection::<DesiredScheduledTask>(
         root,
         Collection::ScheduledTask.file_name(),
-        Collection::ScheduledTask.dir_name().expect("scheduled-tasks has a dir form"),
+        Collection::ScheduledTask
+            .dir_name()
+            .expect("scheduled-tasks has a dir form"),
         &mut errors,
     )
     .unwrap_or_default();

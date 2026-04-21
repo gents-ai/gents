@@ -121,43 +121,32 @@ mod tests {
 
     #[test]
     fn all_collections_have_distinct_file_names() {
-        let names: BTreeSet<&str> =
-            Collection::ALL.iter().map(|c| c.file_name()).collect();
+        let names: BTreeSet<&str> = Collection::ALL.iter().map(|c| c.file_name()).collect();
         assert_eq!(names.len(), Collection::ALL.len());
     }
 
     #[test]
     fn all_collections_have_distinct_graphql_types() {
-        let names: BTreeSet<&str> =
-            Collection::ALL.iter().map(|c| c.graphql_type()).collect();
+        let names: BTreeSet<&str> = Collection::ALL.iter().map(|c| c.graphql_type()).collect();
         assert_eq!(names.len(), Collection::ALL.len());
     }
 
     #[test]
     fn all_collections_have_distinct_display_strings() {
-        let names: BTreeSet<String> =
-            Collection::ALL.iter().map(|c| c.to_string()).collect();
+        let names: BTreeSet<String> = Collection::ALL.iter().map(|c| c.to_string()).collect();
         assert_eq!(names.len(), Collection::ALL.len());
     }
 
     #[test]
     fn apply_order_puts_referees_before_referrers() {
         assert!(
-            Collection::InferenceBackend.apply_order()
-                < Collection::AgentBehavior.apply_order()
+            Collection::InferenceBackend.apply_order() < Collection::AgentBehavior.apply_order()
         );
+        assert!(Collection::ToolSelection.apply_order() < Collection::AgentBehavior.apply_order());
         assert!(
-            Collection::ToolSelection.apply_order()
-                < Collection::AgentBehavior.apply_order()
+            Collection::InferenceProfile.apply_order() < Collection::AgentBehavior.apply_order()
         );
-        assert!(
-            Collection::InferenceProfile.apply_order()
-                < Collection::AgentBehavior.apply_order()
-        );
-        assert!(
-            Collection::AgentBehavior.apply_order()
-                < Collection::ScheduledTask.apply_order()
-        );
+        assert!(Collection::AgentBehavior.apply_order() < Collection::ScheduledTask.apply_order());
         // Rank-0 members must all agree on rank 0.
         assert_eq!(
             Collection::InferenceBackend.apply_order(),
