@@ -4,10 +4,11 @@ use std::time::Duration;
 
 use defra_node::EmbeddedNode;
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 
 use super::{
-    scope_call, scope_request, AdmissionCallContext, AdmissionRegistry, BackendAdmissionConfig,
-    CallKind,
+    scope_call, scope_call_with_token, scope_request, AdmissionCallContext, AdmissionRegistry,
+    BackendAdmissionConfig, CallKind,
 };
 use crate::schema::ensure_schemas;
 use crate::watcher::AgentRequest;
@@ -222,4 +223,72 @@ async fn compaction_calls_share_backend_capacity_with_inference_calls() {
     assert_eq!(rows[0]["call_state"], "completed");
     assert_eq!(rows[1]["call_state"], "completed");
     assert_eq!(rows[1]["queue_depth_at_enqueue"], 1);
+}
+
+#[tokio::test]
+async fn dropped_permit_with_cancelled_token_persists_cancelled_terminal() {
+    // Validates the Composed.lean::interrupted_request_cancels_calls runtime
+    // bridge for the mid-stream path: if the inference_token is cancelled
+    // at permit Drop time (e.g. daemon dropped the stream future because
+    // the request was interrupted), the persisted InferenceCall row lands
+    // as cancelled/Cancelled rather than the default
+    // failed/StreamDroppedBeforeTerminalResponse fallback.
+    let node = test_node().await;
+    let registry = AdmissionRegistry::new(node.clone());
+    registry.reconcile(
+        1,
+        &HashMap::from([("backend-a".to_string(), config("backend-a", 1, 1))]),
+    );
+    let context =
+        AdmissionCallContext::for_request(&request("req-cancel-drop"), "default", "backend-a");
+
+    let token = CancellationToken::new();
+    token.cancel();
+
+    scope_request(context, async {
+        scope_call_with_token(CallKind::Inference, 1, token, async {
+            let permit = registry.acquire_current_call().await.unwrap();
+            // Drop without calling finish_success/finish_failure — simulates
+            // the daemon dropping the stream future mid-stream after the
+            // request-level cancellation token fires.
+            drop(permit);
+        })
+        .await;
+    })
+    .await;
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let rows = call_rows(node.as_ref()).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["call_state"], "cancelled");
+    assert_eq!(rows[0]["failure_reason"], "Cancelled");
+}
+
+#[tokio::test]
+async fn dropped_permit_without_cancelled_token_persists_failed_terminal() {
+    // Protects the existing default-terminal behavior for non-interrupt
+    // scenarios: when the inference_token is absent (or present but not
+    // cancelled), a permit dropped without an explicit terminal still
+    // lands as failed/StreamDroppedBeforeTerminalResponse — i.e. a real
+    // provider-side stream drop, not a user interrupt.
+    let node = test_node().await;
+    let registry = AdmissionRegistry::new(node.clone());
+    registry.reconcile(
+        1,
+        &HashMap::from([("backend-a".to_string(), config("backend-a", 1, 1))]),
+    );
+    let context =
+        AdmissionCallContext::for_request(&request("req-default-drop"), "default", "backend-a");
+
+    scope_request(context, async {
+        let permit = registry.acquire_current_call().await.unwrap();
+        drop(permit);
+    })
+    .await;
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let rows = call_rows(node.as_ref()).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["call_state"], "failed");
+    assert_eq!(rows[0]["failure_reason"], "StreamDroppedBeforeTerminalResponse");
 }

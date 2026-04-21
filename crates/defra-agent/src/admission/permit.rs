@@ -3,6 +3,7 @@ use std::sync::Arc;
 use defra_node::EmbeddedNode;
 use rig::completion::{CompletionError, Usage};
 use tokio::sync::OwnedSemaphorePermit;
+use tokio_util::sync::CancellationToken;
 
 use super::controller::{BackendAdmissionController, InferenceCallRecord};
 use super::persistence::{persist_existing_call_terminal, spawn_persistence};
@@ -16,6 +17,11 @@ pub(crate) struct AdmissionPermit {
     _doc_id: String,
     terminal: Option<PermitTerminal>,
     finished: bool,
+    /// Observed at Drop. If cancelled and no terminal is set, the Drop
+    /// path persists the call as cancelled/Cancelled instead of the
+    /// default failed/StreamDroppedBeforeTerminalResponse fallback.
+    /// Set from `AdmissionCallContext::inference_token` by the controller.
+    cancel_observer: Option<CancellationToken>,
 }
 
 #[derive(Clone, Debug)]
@@ -32,6 +38,7 @@ impl AdmissionPermit {
         permit: OwnedSemaphorePermit,
         call: InferenceCallRecord,
         doc_id: String,
+        cancel_observer: Option<CancellationToken>,
     ) -> Self {
         Self {
             node,
@@ -41,6 +48,7 @@ impl AdmissionPermit {
             _doc_id: doc_id,
             terminal: None,
             finished: false,
+            cancel_observer,
         }
     }
 
@@ -133,10 +141,28 @@ impl Drop for AdmissionPermit {
             return;
         }
         self.finished = true;
-        let terminal = self.terminal.clone().unwrap_or(PermitTerminal {
-            call_state: "failed",
-            failure_reason: Some("StreamDroppedBeforeTerminalResponse".to_string()),
-            usage: None,
+        let terminal = self.terminal.clone().unwrap_or_else(|| {
+            // If the inference_token was cancelled, an interrupt caused the
+            // drop — persist as cancelled/Cancelled to satisfy the cross-layer
+            // bridge theorem (`Composed.lean::interrupted_request_cancels_calls`).
+            // Otherwise fall back to the stream-drop default.
+            if self
+                .cancel_observer
+                .as_ref()
+                .is_some_and(|t| t.is_cancelled())
+            {
+                PermitTerminal {
+                    call_state: "cancelled",
+                    failure_reason: Some("Cancelled".to_string()),
+                    usage: None,
+                }
+            } else {
+                PermitTerminal {
+                    call_state: "failed",
+                    failure_reason: Some("StreamDroppedBeforeTerminalResponse".to_string()),
+                    usage: None,
+                }
+            }
         });
         let node = self.node.clone();
         let call_id = self.call.call_id.clone();

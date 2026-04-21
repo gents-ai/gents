@@ -4,6 +4,7 @@ use std::sync::{Arc, Weak};
 use defra_node::EmbeddedNode;
 use rig::completion::CompletionError;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio_util::sync::CancellationToken;
 
 use super::client::CallKind;
 use super::config::BackendAdmissionConfig;
@@ -66,6 +67,7 @@ impl BackendAdmissionController {
         self: Arc<Self>,
         node: Arc<EmbeddedNode>,
         pending: PendingCallMetadata,
+        cancel_observer: Option<CancellationToken>,
     ) -> Result<AdmissionPermit, CompletionError> {
         if self.is_closed() {
             let call = self.call_record(pending, 0);
@@ -82,7 +84,9 @@ impl BackendAdmissionController {
         match self.semaphore.clone().try_acquire_owned() {
             Ok(permit) => {
                 let call = self.call_record(pending, 0);
-                return self.start_permit(node, permit, call).await;
+                return self
+                    .start_permit(node, permit, call, cancel_observer)
+                    .await;
             }
             Err(tokio::sync::TryAcquireError::Closed) => {
                 let call = self.call_record(pending, 0);
@@ -105,7 +109,9 @@ impl BackendAdmissionController {
                 match self.semaphore.clone().try_acquire_owned() {
                     Ok(permit) => {
                         let call = self.call_record(pending, queue_depth);
-                        return self.start_permit(node, permit, call).await;
+                        return self
+                            .start_permit(node, permit, call, cancel_observer)
+                            .await;
                     }
                     Err(tokio::sync::TryAcquireError::Closed) => {
                         let call = self.call_record(pending, queue_depth);
@@ -177,7 +183,14 @@ impl BackendAdmissionController {
             self.release_running();
             return Err(super::persistence::completion_persistence_error(error));
         }
-        Ok(AdmissionPermit::new(node, self, permit, call, doc_id))
+        Ok(AdmissionPermit::new(
+            node,
+            self,
+            permit,
+            call,
+            doc_id,
+            cancel_observer,
+        ))
     }
 
     async fn start_permit(
@@ -185,10 +198,18 @@ impl BackendAdmissionController {
         node: Arc<EmbeddedNode>,
         permit: OwnedSemaphorePermit,
         call: InferenceCallRecord,
+        cancel_observer: Option<CancellationToken>,
     ) -> Result<AdmissionPermit, CompletionError> {
         self.running.fetch_add(1, Ordering::SeqCst);
         match persist_call_started(node.clone(), &call).await {
-            Ok(doc_id) => Ok(AdmissionPermit::new(node, self, permit, call, doc_id)),
+            Ok(doc_id) => Ok(AdmissionPermit::new(
+                node,
+                self,
+                permit,
+                call,
+                doc_id,
+                cancel_observer,
+            )),
             Err(error) => {
                 self.release_running();
                 Err(error)
