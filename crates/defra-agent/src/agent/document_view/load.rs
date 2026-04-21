@@ -31,6 +31,9 @@ pub(crate) async fn load_document_runtime_view(
         tool_selections: HashMap::new(),
         inference_profiles: HashMap::new(),
         backends: HashMap::new(),
+        tasks: HashMap::new(),
+        schedules: HashMap::new(),
+        event_triggers: HashMap::new(),
     };
 
     for (doc_id, selection) in list_tool_selection_records(node, agent_did).await? {

@@ -1,8 +1,11 @@
 mod behavior;
+mod event_trigger;
 mod graphql_fields;
 mod inference_profile;
 mod principal;
+mod schedule;
 mod serde_helpers;
+mod task;
 mod tool_selection;
 
 pub use principal::{load_agent_principal, upsert_agent_principal, AgentPrincipal};
@@ -29,6 +32,13 @@ pub(crate) use tool_selection::{
     load_tool_selection_record,
 };
 pub use tool_selection::{load_tool_selection, upsert_tool_selection, ToolSelectionDocument};
+
+#[allow(unused_imports)]
+pub(crate) use event_trigger::EventTrigger;
+#[allow(unused_imports)]
+pub(crate) use schedule::Schedule;
+#[allow(unused_imports)]
+pub(crate) use task::Task;
 
 use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
