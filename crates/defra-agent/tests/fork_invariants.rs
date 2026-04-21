@@ -581,26 +581,35 @@ async fn fork_rejects_out_of_range_user_turn() {
         err
     );
 
-    // Also assert no orphan rows were created: no AgentMessage rows exist
-    // outside the parent session.
-    let query = format!(
-        r#"{{
-            AgentMessage(filter: {{ session_id: {{ _neq: "{parent_session}" }} }}) {{ session_id }}
-        }}"#
-    );
-    let resp = db.node.execute(&query).await;
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentMessage"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    assert!(
-        rows.is_empty(),
-        "out-of-range fork must not create orphans: got {:?}",
-        rows
-    );
+    // Also assert no orphan rows were created in ANY fork-touched collection:
+    // out-of-range must short-circuit before any write.
+    for collection in [
+        "AgentMessage",
+        "AgentSession",
+        "AgentConversation",
+        "AgentToolCall",
+        "AgentToolResult",
+        "CompactionEntry",
+    ] {
+        let query = format!(
+            r#"{{
+                {collection}(filter: {{ session_id: {{ _neq: "{parent_session}" }} }}) {{ session_id }}
+            }}"#
+        );
+        let resp = db.node.execute(&query).await;
+        let rows = resp
+            .data
+            .as_ref()
+            .and_then(|d| d.get(collection))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            rows.is_empty(),
+            "out-of-range fork must not create orphan {collection} rows: got {:?}",
+            rows
+        );
+    }
 }
 
 #[tokio::test]
@@ -682,8 +691,12 @@ async fn fork_leaves_parent_byte_identical() {
     }
 
     let before_messages = fetch_message_snapshots_for_session(&db.node, parent_session).await;
+    // Use the full-column snapshot here: fork's read-only-parent claim must hold
+    // across every AgentConversation field, not just the handful ConversationSnapshot
+    // exposes. Catches silent mutations on title, preview_text, agent_did, agent_name,
+    // created_at, updated_at if a future refactor adds parent-side writes.
     let before_conv =
-        support::snapshots::fetch_conversation_snapshot(&db.node, parent_session).await;
+        support::snapshots::fetch_full_conversation_snapshot(&db.node, parent_session).await;
 
     let _ = fork(
         &db.node,
@@ -699,7 +712,7 @@ async fn fork_leaves_parent_byte_identical() {
 
     let after_messages = fetch_message_snapshots_for_session(&db.node, parent_session).await;
     let after_conv =
-        support::snapshots::fetch_conversation_snapshot(&db.node, parent_session).await;
+        support::snapshots::fetch_full_conversation_snapshot(&db.node, parent_session).await;
 
     assert_eq!(
         before_messages, after_messages,
@@ -790,4 +803,64 @@ async fn concurrent_forks_of_same_parent_produce_disjoint_children() {
     assert_ne!(outcome_a.session_id, outcome_b.session_id);
     assert_eq!(outcome_a.copied_messages, 0); // cut before the 1st user message
     assert_eq!(outcome_b.copied_messages, 2); // u1 + a1
+}
+
+#[tokio::test]
+async fn fork_rejects_nonexistent_source_session() {
+    let db = test_db("fork-source-not-found").await;
+
+    let err = fork(
+        &db.node,
+        ForkParams {
+            source_session_id: "does-not-exist",
+            fork_at_user_turn: 0,
+            caller_agent_did: AGENT_DID,
+            target_behavior_id: None,
+        },
+    )
+    .await
+    .expect_err("fork must reject unknown source");
+
+    assert!(
+        matches!(err, ForkError::ForkSourceNotFound(ref id) if id == "does-not-exist"),
+        "expected ForkSourceNotFound(\"does-not-exist\"), got {:?}",
+        err
+    );
+}
+
+#[tokio::test]
+async fn fork_rejects_unknown_target_behavior() {
+    let db = test_db("fork-behavior-not-found").await;
+
+    let parent_session = "parent-unknown-behavior";
+    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+    create_agent_message(
+        &db.node,
+        parent_session,
+        1,
+        "user",
+        "u1",
+        "2026-04-21T10:00:01Z",
+    )
+    .await;
+
+    let err = fork(
+        &db.node,
+        ForkParams {
+            source_session_id: parent_session,
+            fork_at_user_turn: 0,
+            caller_agent_did: AGENT_DID,
+            target_behavior_id: Some("no-such-behavior"),
+        },
+    )
+    .await
+    .expect_err("fork must reject unknown target behavior");
+
+    assert!(
+        matches!(err, ForkError::ForkBehaviorNotFound(ref id) if id == "no-such-behavior"),
+        "expected ForkBehaviorNotFound(\"no-such-behavior\"), got {:?}",
+        err
+    );
 }

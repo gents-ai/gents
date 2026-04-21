@@ -175,6 +175,61 @@ pub async fn fetch_conversation_snapshot(
     first_optional_row::<ConversationSnapshot>(&resp, "AgentConversation")
 }
 
+/// Full-column snapshot of an `AgentConversation` row. Use in fork-invariant tests
+/// that claim the parent is byte-identical before and after a fork — the narrower
+/// `ConversationSnapshot` omits `title`, `preview_text`, `agent_did`, `agent_name`,
+/// `created_at`, and `updated_at`, which would hide silent mutations on those fields.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct FullConversationSnapshot {
+    pub session_id: String,
+    pub agent_name: String,
+    pub agent_did: String,
+    pub behavior_id: String,
+    pub title: String,
+    pub preview_text: String,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub latest_request_id: String,
+    #[serde(default)]
+    pub forked_from_session_id: Option<String>,
+    #[serde(default)]
+    pub fork_at_user_turn: Option<i64>,
+    #[serde(default)]
+    pub forked_at: Option<String>,
+}
+
+pub async fn fetch_full_conversation_snapshot(
+    node: &EmbeddedNode,
+    session_id: &str,
+) -> Option<FullConversationSnapshot> {
+    let session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentConversation(
+                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                limit: 1
+            ) {{
+                session_id
+                agent_name
+                agent_did
+                behavior_id
+                title
+                preview_text
+                status
+                created_at
+                updated_at
+                latest_request_id
+                forked_from_session_id
+                fork_at_user_turn
+                forked_at
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    first_optional_row::<FullConversationSnapshot>(&resp, "AgentConversation")
+}
+
 pub async fn fetch_session_snapshot(
     node: &EmbeddedNode,
     session_id: &str,

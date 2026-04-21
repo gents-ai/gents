@@ -48,6 +48,8 @@ pub(super) struct ConversationDocument {
     #[serde(default)]
     pub(super) agent_did: Option<String>,
     #[serde(default)]
+    pub(super) agent_name: Option<String>,
+    #[serde(default)]
     #[allow(dead_code)]
     pub(super) forked_from_session_id: Option<String>,
     #[serde(default)]

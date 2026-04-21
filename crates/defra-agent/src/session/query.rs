@@ -87,6 +87,7 @@ pub(super) async fn load_conversation_document(
                 behavior_id
                 created_at
                 agent_did
+                agent_name
                 forked_from_session_id
                 fork_at_user_turn
                 forked_at

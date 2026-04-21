@@ -4,7 +4,7 @@ use defra_agent::session::{fork, ForkError, ForkParams};
 use serde_json::json;
 
 use crate::cli::args::{SessionCommand, SessionForkArgs};
-use crate::{print_json, resolve_agent_did, resolve_graphql_endpoint, resolve_home_dir};
+use crate::{default_data_dir, print_json, resolve_agent_did, resolve_home_dir};
 
 pub(crate) async fn dispatch(command: SessionCommand) -> Result<()> {
     match command {
@@ -13,23 +13,42 @@ pub(crate) async fn dispatch(command: SessionCommand) -> Result<()> {
 }
 
 async fn session_fork(args: SessionForkArgs) -> Result<()> {
+    // Fork v1 runs in-process against the on-disk data directory; the embedded
+    // node holds an exclusive lock on that path. Talking to a remote server via
+    // GraphQL is a separate mode (see Open Issues in the design spec). Reject
+    // --graphql up front so callers don't silently get in-process behavior.
+    if args.graphql.is_some() {
+        anyhow::bail!(
+            "--graphql is not yet supported by `session fork`; fork currently runs \
+             in-process against the local data directory. Stop `defra-agent server` \
+             first, then rerun without --graphql."
+        );
+    }
+
     // CLI resolves the caller DID from local config unless overridden.
     let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())
         .context("resolving caller agent_did")?;
 
-    // Fork needs a handle to the embedded node (not the GraphQL HTTP surface),
-    // because it performs multiple correlated mutations and is currently
-    // implemented against `EmbeddedNode`. For v1 we open the agent's local
-    // data path and run the fork in-process. GraphQL remote mode is a
-    // follow-up (see Open Issues in the spec).
+    // Fork v1 runs in-process against the on-disk data directory. DefraDB's
+    // embedded node holds an exclusive lock on the data path, so this command
+    // cannot run while `defra-agent server` is running against the same home.
+    // GraphQL-mode fork (remote fork against a running server) is a follow-up
+    // (see Open Issues in the design spec).
     let home = resolve_home_dir(args.home.as_deref());
-    let _graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let data_dir = default_data_dir(&home);
 
     let node = EmbeddedNode::builder()
-        .data_path(home.as_path())
+        .data_path(&data_dir)
         .build()
         .await
-        .context("opening embedded node at home path")?;
+        .with_context(|| {
+            format!(
+                "opening embedded node at {}. If `defra-agent server` is running against \
+                 the same home, stop it first — fork holds an exclusive lock on the data \
+                 directory. GraphQL-mode fork against a running server is not yet implemented.",
+                data_dir.display()
+            )
+        })?;
     defra_agent::ensure_runtime_schemas(&node)
         .await
         .context("ensuring runtime schemas")?;

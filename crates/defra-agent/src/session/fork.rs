@@ -75,7 +75,14 @@ pub async fn fork(node: &EmbeddedNode, params: ForkParams<'_>) -> Result<ForkOut
         .ok_or_else(|| ForkError::ForkSourceNotFound(params.source_session_id.to_string()))?;
 
     // Step 1b: reject callers that are not the same principal as the parent conversation.
+    // A parent with an empty/missing agent_did is a malformed source — reject as not-found
+    // rather than silently matching an empty caller DID.
     let parent_agent_did = parent.agent_did.as_deref().unwrap_or("");
+    if parent_agent_did.is_empty() {
+        return Err(ForkError::ForkSourceNotFound(
+            params.source_session_id.to_string(),
+        ));
+    }
     if parent_agent_did != params.caller_agent_did {
         return Err(ForkError::ForkNotSameAgent);
     }
@@ -127,14 +134,15 @@ pub async fn fork(node: &EmbeddedNode, params: ForkParams<'_>) -> Result<ForkOut
             .await
             .map_err(ForkError::ForkCopyFailed)?;
 
-    // Look up child agent_did from parent to pass into copy_tool_results.
-    let child_agent_did = parent.agent_did.clone().unwrap_or_default();
+    // Child rows inherit the parent's principal (agent_did) and display name.
+    // parent_agent_did is already validated non-empty in step 1b.
+    let parent_agent_name = parent.agent_name.as_deref().unwrap_or("");
     let copied_tool_results = copy_tool_results(
         node,
         params.source_session_id,
         &child_session_id,
         &cut_ts,
-        &child_agent_did,
+        parent_agent_did,
     )
     .await
     .map_err(ForkError::ForkCopyFailed)?;
@@ -150,6 +158,8 @@ pub async fn fork(node: &EmbeddedNode, params: ForkParams<'_>) -> Result<ForkOut
         &resolved_behavior_id,
         params.source_session_id,
         params.fork_at_user_turn,
+        parent_agent_did,
+        parent_agent_name,
     )
     .await
     .map_err(ForkError::ForkCopyFailed)?;
@@ -565,18 +575,26 @@ async fn create_child_session_and_conversation(
     behavior_id: &str,
     source_session_id: &str,
     fork_at_user_turn: u32,
+    parent_agent_did: &str,
+    parent_agent_name: &str,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let child_session_escaped = escape_graphql_string(child_session_id);
     let behavior_id_escaped = escape_graphql_string(behavior_id);
     let forked_from_escaped = escape_graphql_string(source_session_id);
     let now_escaped = escape_graphql_string(&now);
+    let agent_did_escaped = escape_graphql_string(parent_agent_did);
+    let agent_name_escaped = escape_graphql_string(parent_agent_name);
 
+    // Write AgentSession first, then AgentConversation. Callers supply the
+    // pre-resolved parent principal fields so there is no intervening query
+    // between the two mutations — that keeps the crash window minimal and
+    // ensures the child rows are consistent (same agent_name on both).
     let session_mutation = format!(
         r#"mutation {{
             create_AgentSession(input: {{
                 session_id: "{child_session_escaped}",
-                agent_name: "",
+                agent_name: "{agent_name_escaped}",
                 behavior_id: "{behavior_id_escaped}",
                 started: "{now_escaped}",
                 status: "active"
@@ -584,44 +602,6 @@ async fn create_child_session_and_conversation(
         }}"#
     );
     execute_mutation_with_retry(node, &session_mutation, "fork::create_session").await?;
-
-    // We need agent_did on the child conversation. Borrow from the parent for now
-    // (future patch: carry in ForkParams or resolve via principal).
-    let parent_conv_query = format!(
-        r#"{{
-            AgentConversation(
-                filter: {{ session_id: {{ _eq: "{forked_from_escaped}" }} }},
-                limit: 1
-            ) {{ agent_did agent_name }}
-        }}"#
-    );
-    let parent_resp = node.execute(&parent_conv_query).await;
-    if parent_resp.has_errors() {
-        anyhow::bail!(
-            "fork::create_conversation query failed: {:?}",
-            parent_resp.errors
-        );
-    }
-    let parent_row = parent_resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentConversation"))
-        .and_then(|v| v.as_array())
-        .and_then(|a| a.first())
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("parent AgentConversation missing in child-create path"))?;
-    let agent_did_escaped = escape_graphql_string(
-        parent_row
-            .get("agent_did")
-            .and_then(|v| v.as_str())
-            .unwrap_or(""),
-    );
-    let agent_name_escaped = escape_graphql_string(
-        parent_row
-            .get("agent_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or(""),
-    );
 
     let conv_mutation = format!(
         r#"mutation {{

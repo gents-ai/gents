@@ -923,7 +923,11 @@ pub(crate) enum SessionCommand {
 pub(crate) struct SessionForkArgs {
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Reserved — remote GraphQL-mode fork is not yet implemented. \
+                Passing this flag today errors."
+    )]
     pub(crate) graphql: Option<String>,
     #[arg(
         long,
