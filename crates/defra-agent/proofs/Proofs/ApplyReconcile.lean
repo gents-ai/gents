@@ -107,4 +107,49 @@ def Manifest.WellFormed (m : Manifest) : Prop :=
 def LiveState.WellFormed (L : LiveState) : Prop :=
   ∀ d : DocRef, ∀ f, L.desired d = some f → ∀ r ∈ referencesOf f, L.contains r = true
 
+/-- A single write landing in the DB from the apply agent.
+    By construction carries only `DesiredFields` — no `LiveFields`
+    constructor exists, which is the Lean-side restatement of the
+    Rust `DesiredFields` bound on the apply boundary. -/
+inductive ApplyStep where
+  | create (d : DocRef) (f : DesiredFields)
+  | update (d : DocRef) (f : DesiredFields)
+  deriving Repr
+
+namespace ApplyStep
+
+def target : ApplyStep → DocRef
+  | .create d _ => d
+  | .update d _ => d
+
+def payload : ApplyStep → DesiredFields
+  | .create _ f => f
+  | .update _ f => f
+
+end ApplyStep
+
+/-- Apply a single step to a live state. Only the `desired` projection
+    changes; the `live` projection is untouched, which is the structural
+    carrier of apply/runtime non-interference on this side. -/
+def applyOne (L : LiveState) (s : ApplyStep) : LiveState where
+  desired := fun d => if d = s.target then some s.payload else L.desired d
+  live    := L.live
+
+/-- A full apply pass folds `applyOne` over the diff. -/
+def applyAll (L : LiveState) (steps : List ApplyStep) : LiveState :=
+  steps.foldl applyOne L
+
+/-- Diff M against L, producing an ordered list of apply-steps. Steps
+    are sorted primarily by `collection.applyOrder` then by document id,
+    matching Rust `defra_agent::apply_model::diff`. `live_only` documents
+    (present in L but not in M) do not produce steps — they are
+    reporting-only, consistent with the spec's non-goals on delete. -/
+noncomputable def diff (M : Manifest) (L : LiveState) : List ApplyStep :=
+  -- Placeholder: the Lean statement is scaffolded. The concrete
+  -- enumeration is pinned during Task 13 by extracting `Manifest` to a
+  -- finite-support representation when the proof of `apply_realizes_manifest`
+  -- requires it. `noncomputable` allows us to state T-Conv against the
+  -- abstract function while the concrete body is fleshed out.
+  []
+
 end ApplyReconcile
