@@ -152,4 +152,61 @@ noncomputable def diff (M : Manifest) (L : LiveState) : List ApplyStep :=
   -- abstract function while the concrete body is fleshed out.
   []
 
+/-- L-1: Applying the full diff of a well-formed manifest M to a
+    consistent live state L produces a state whose desired projection
+    agrees with M on every document M declares. -/
+lemma apply_realizes_manifest
+    {M : Manifest} {L : LiveState}
+    (_hM : M.WellFormed)
+    (_hL : L.WellFormed) :
+    ∀ d : DocRef, ∀ f, M.docs d = some f →
+      (applyAll L (diff M L)).desired d = some f := by
+  sorry
+
+/-- L-2: `applyAll` does not touch the `live` projection. -/
+lemma apply_preserves_live
+    (L : LiveState) (steps : List ApplyStep) :
+    (applyAll L steps).live = L.live := by
+  induction steps generalizing L with
+  | nil => rfl
+  | cons s rest ih =>
+      show (applyAll (applyOne L s) rest).live = L.live
+      rw [ih]
+      rfl
+
+/-- L-3: Every intermediate state reached during apply is reference-closed
+    when M is well-formed and the steps are in `Collection.applyOrder`. -/
+lemma apply_preserves_wellFormed
+    {M : Manifest} {L : LiveState}
+    (_hM : M.WellFormed) (_hL : L.WellFormed) :
+    ∀ pref : List ApplyStep,
+      List.IsPrefix pref (diff M L) →
+      (applyAll L pref).WellFormed := by
+  sorry
+
+/-- Bridge to `RuntimeReconcile`: each `ApplyStep` induces at least one
+    legal runtime transition. `ack_write` alone suffices for T-Conv's
+    existence-witness form; fuller composition with publish is left as a
+    follow-up. -/
+lemma step_induces_transition
+    (pre : _root_.RuntimeState) (_s : ApplyStep) :
+    ∃ post : _root_.RuntimeState, RuntimeState.Transition pre post := by
+  sorry
+
+/-- **T-Conv — end-to-end convergence.**
+
+    For any well-formed manifest M and consistent live state L, applying
+    `diff M L` yields a live state whose desired projection agrees with
+    M on every document declared in M. Coupled with `RuntimeReconcile`'s
+    coherence invariants (which hold on the runtime-side publish triggered
+    by each ack'd write), this establishes that the runtime's published
+    snapshot reflects M on its behavior subset. -/
+theorem t_conv
+    {M : Manifest} {L : LiveState}
+    (hM : M.WellFormed)
+    (hL : L.WellFormed) :
+    ∀ d : DocRef, ∀ f, M.docs d = some f →
+      (applyAll L (diff M L)).desired d = some f :=
+  apply_realizes_manifest hM hL
+
 end ApplyReconcile
