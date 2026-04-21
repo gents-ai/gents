@@ -144,7 +144,8 @@ impl Drop for AdmissionPermit {
         let terminal = self.terminal.clone().unwrap_or_else(|| {
             // If the inference_token was cancelled, an interrupt caused the
             // drop — persist as cancelled/Cancelled to satisfy the cross-layer
-            // bridge theorem (`Composed.lean::interrupted_request_cancels_calls`).
+            // bridge theorem
+            // (`Composed.lean::interrupted_request_cancels_calls_PLACEHOLDER`).
             // Otherwise fall back to the stream-drop default.
             if self
                 .cancel_observer

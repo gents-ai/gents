@@ -61,22 +61,27 @@ def initial : ComposedState :=
     }
   }
 
-/-- Cross-layer safety: an interrupted request's companion inference calls
-    will be persisted as cancelled.
+/-- Cross-layer safety placeholder: an interrupted request's companion
+    inference calls will be persisted as `call_state = "cancelled"`.
 
-    Runtime implementation (Task 9): `AdmissionPermit::mark_interrupted`
-    sets the permit's terminal to `call_state = "cancelled"` /
-    `failure_reason = "Cancelled"`, which `Drop` persists to the
-    `InferenceCall` row. The daemon's interrupt arm fires this via the
-    `inference_token` threaded through `AdmissionCallContext`.
+    Runtime bridge (complete as of Task 9 + mid-stream Drop fix):
+    - Pre-stream cancellation: `AdmittedCompletionModel::completion` /
+      `stream` observe `inference_token` via `tokio::select!` and call
+      `permit.mark_interrupted()` on cancel.
+    - Mid-stream cancellation: `AdmissionPermit::Drop` observes the same
+      `cancel_observer` token and writes `call_state = "cancelled"` /
+      `failure_reason = "Cancelled"` when dropped with the token cancelled.
 
-    This theorem is a placeholder until `InferenceCall` is modeled in
-    Lean (future work). Once that model exists, the theorem body should
-    state: "if `r.state = .interrupted`, then for every
-    `c : InferenceCall` with `c.request_id = r.request_id` and
-    `c.state ∈ {queued, running}`, there exists a sequence of
-    `InferenceCall` steps ending in `c.state = cancelled`." -/
-theorem interrupted_request_cancels_calls
+    # Not yet formally proven
+
+    This is a `True` placeholder. A formal Lean proof requires modeling
+    `InferenceCall` as a separate state machine and proving that for every
+    `c : InferenceCall` linked to `r : RequestContext` with `r.state =
+    .interrupted` and `c.state ∈ {queued, running}`, eventually
+    `c.state = cancelled`. The runtime implementation delivers this
+    property; the formal proof is tracked as follow-up work.
+-/
+theorem interrupted_request_cancels_calls_PLACEHOLDER
     (_r : RequestContext)
     (_h_interrupted : _r.state = .interrupted) :
     True := by

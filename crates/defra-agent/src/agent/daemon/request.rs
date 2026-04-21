@@ -163,26 +163,36 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     )));
                 };
 
-                // 1. request_token is already cancelled (the inference arm fired it).
-                // 2. Grace wait so any in-flight work can observe cancellation.
-                tokio::time::sleep(CANCELLATION_GRACE_PERIOD).await;
-                // 3. Force-abort: no child tasks currently (Task 8 adds tool children).
-                // 4. Flip AgentResponse.interrupted_at (sequenced BEFORE step 5).
                 let interrupt_at = intent.at.to_rfc3339();
-                if let Err(error) = self
-                    .stream_writer
-                    .write_interrupted_at(&doc_id, &interrupt_at)
-                    .await
-                {
-                    tracing::warn!(
-                        behavior_id = %self.behavior.name,
-                        doc_id = %doc_id,
-                        error = %error,
-                        "failed to stamp interrupted_at on response; continuing to terminal transition"
-                    );
+                let flow_span = tracing::info_span!(
+                    "interrupt.flow",
+                    request_id = %lifecycle.request().request_id,
+                    interrupt_at = %interrupt_at,
+                );
+                async {
+                    // 1. request_token is already cancelled (the inference arm fired it).
+                    // 2. Grace wait so any in-flight work can observe cancellation.
+                    tokio::time::sleep(CANCELLATION_GRACE_PERIOD).await;
+                    // 3. Force-abort: no child tasks currently (Task 8 adds tool children).
+                    // 4. Flip AgentResponse.interrupted_at (sequenced BEFORE step 5).
+                    if let Err(error) = self
+                        .stream_writer
+                        .write_interrupted_at(&doc_id, &interrupt_at)
+                        .await
+                    {
+                        tracing::warn!(
+                            behavior_id = %self.behavior.name,
+                            doc_id = %doc_id,
+                            error = %error,
+                            "failed to stamp interrupted_at on response; continuing to terminal transition"
+                        );
+                    }
+                    // 5. Write terminal lifecycle_state = interrupted.
+                    lifecycle.transition_to_interrupted().await?;
+                    Ok::<_, anyhow::Error>(())
                 }
-                // 5. Write terminal lifecycle_state = interrupted.
-                lifecycle.transition_to_interrupted().await?;
+                .instrument(flow_span)
+                .await?;
                 return Ok(HandleRequestOutcome::Interrupted);
             }
 

@@ -176,6 +176,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     behavior_id = %self.behavior.name,
                     request_id = %request.request_id,
                     session_id = %request.session_id,
+                    cancellation_source = "pre_claim",
                     "request interrupted before claim"
                 );
                 return;
@@ -185,6 +186,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     behavior_id = %self.behavior.name,
                     request_id = %request.request_id,
                     session_id = %request.session_id,
+                    cancellation_source = "stale_ttl",
                     "request expired (valid_until passed) before claim; marked dead"
                 );
                 return;
@@ -296,6 +298,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     behavior_id = %self.behavior.name,
                     request_id = %request.request_id,
                     session_id = %request.session_id,
+                    cancellation_source = "mid_flight",
                     "request interrupted mid-flight"
                 );
                 // Do NOT call lifecycle.complete() or fail() — transition_to_interrupted already ran.

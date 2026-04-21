@@ -227,8 +227,8 @@ async fn compaction_calls_share_backend_capacity_with_inference_calls() {
 
 #[tokio::test]
 async fn dropped_permit_with_cancelled_token_persists_cancelled_terminal() {
-    // Validates the Composed.lean::interrupted_request_cancels_calls runtime
-    // bridge for the mid-stream path: if the inference_token is cancelled
+    // Validates the Composed.lean::interrupted_request_cancels_calls_PLACEHOLDER
+    // runtime bridge for the mid-stream path: if the inference_token is cancelled
     // at permit Drop time (e.g. daemon dropped the stream future because
     // the request was interrupted), the persisted InferenceCall row lands
     // as cancelled/Cancelled rather than the default

@@ -192,6 +192,11 @@ pub fn spawn_request_interrupt_observer(
                         at: dt.with_timezone(&Utc),
                     };
                     let _ = interrupt_tx.send(Some(intent));
+                    tracing::info!(
+                        request_doc_id = %request_doc_id,
+                        interrupt_at = %dt.to_rfc3339(),
+                        "interrupt observer latched; signaled daemon"
+                    );
                     return;
                 }
                 Err(e) => {
