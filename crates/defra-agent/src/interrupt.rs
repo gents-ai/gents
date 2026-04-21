@@ -18,6 +18,22 @@ use crate::graphql::escape_graphql_string;
 /// polls this field and signals the daemon to cancel in-flight inference and
 /// transition the request to `interrupted`. Writing this field on a terminal
 /// request is harmless — the lifecycle state machine filters terminal statuses.
+///
+/// # Concurrent callers
+///
+/// Under two concurrent `interrupt_request` callers both observing an empty
+/// field, both will write; the last mutation wins. The latched value under
+/// contention is therefore "interrupt requested near T" rather than "at
+/// exactly T" — acceptable for audit semantics but weaker than a strict
+/// first-writer-wins contract. S7 (`interrupt_monotonicity`) holds on the
+/// ideal state machine as-stated (the field is never unset once set); the
+/// physical race only affects which timestamp gets persisted, not whether
+/// a timestamp is persisted.
+///
+/// In P2P-replicated deployments, independent writers on different nodes
+/// may each stamp, and CRDT merge will pick whichever timestamp sorts
+/// higher by DefraDB's LWW rules. Same conclusion: audit meaning is
+/// preserved; microsecond-exact ordering is not.
 pub async fn interrupt_request(node: &EmbeddedNode, request_id: &str) -> Result<()> {
     // Pre-check is an optimization: the submitter latches on first write, and
     // subsequent writers must not clobber the timestamp. DefraDB's update
