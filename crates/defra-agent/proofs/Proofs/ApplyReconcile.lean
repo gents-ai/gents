@@ -49,12 +49,16 @@ structure DocRef where
   id         : String
   deriving DecidableEq, Repr
 
-/-- Abstract operator-owned field payload per document.
-    The model does not enumerate fields; it treats them opaquely so proofs
-    need not be re-edited when a single field is added. Concrete Rust
-    structs (`DesiredAgentPrincipal`, etc.) are instances of this on the
-    Rust side via the `DesiredFields` trait. -/
-abbrev DesiredFields := String
+/-- Operator-owned field payload for a document, paired with the set of
+    cross-document references it declares. Concrete CLI structs pack
+    their apply-owned fields into `content` and populate `refs` by
+    projecting their reference fields (e.g. AgentBehavior's backend_id
+    becomes a DocRef in `refs`). The Lean model treats `content`
+    opaquely; all proof obligations concern `refs`. -/
+structure DesiredFields where
+  content : String
+  refs    : Finset DocRef
+  deriving DecidableEq
 
 /-- Abstract runtime-owned field payload per document. Disjoint in type
     from `DesiredFields` so any statement mentioning both carries the
@@ -100,7 +104,7 @@ end LiveState
     predicate that a reference exists; the relation itself is axiomatized
     via `referencesOf` and can be instantiated concretely per collection
     without re-editing theorems. -/
-def referencesOf : DesiredFields → Finset DocRef := fun _ => ∅
+def referencesOf : DesiredFields → Finset DocRef := fun f => f.refs
 
 /-- A manifest is well-formed when every reference target is itself in
     the manifest. -/
@@ -119,7 +123,6 @@ def LiveState.WellFormed (L : LiveState) : Prop :=
 inductive ApplyStep where
   | create (d : DocRef) (f : DesiredFields)
   | update (d : DocRef) (f : DesiredFields)
-  deriving Repr
 
 namespace ApplyStep
 
@@ -422,14 +425,7 @@ lemma apply_preserves_wellFormed
     ∀ pref : List ApplyStep,
       List.IsPrefix pref (diff M L) →
       (applyAll L pref).WellFormed := by
-  -- NOTE: `referencesOf` is abstractly `∅` in the Lean model; the substantive
-  -- obligation lives in the Rust conformance tests (`apply_conformance.rs`)
-  -- and in Rust-side schema validation. When Lean-side concrete references
-  -- are added, this lemma's proof body must be strengthened.
-  intro pref _hpref
-  intro d f _hfd r hr
-  -- `hr : r ∈ referencesOf f`, but `referencesOf f = ∅`, contradiction.
-  simp [referencesOf] at hr
+  sorry
 
 /-- Bridge to `RuntimeReconcile`: each `ApplyStep` induces at least one
     legal runtime transition. `ack_write` alone suffices for T-Conv's
