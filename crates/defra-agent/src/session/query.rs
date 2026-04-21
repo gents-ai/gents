@@ -86,6 +86,10 @@ pub(super) async fn load_conversation_document(
                 latest_request_id
                 behavior_id
                 created_at
+                agent_did
+                forked_from_session_id
+                fork_at_user_turn
+                forked_at
             }}
         }}"#
     );
