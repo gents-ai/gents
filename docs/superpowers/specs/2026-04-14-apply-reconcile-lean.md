@@ -111,12 +111,12 @@ This is called out explicitly here so that no one later reads T-Conv as a guaran
 
 ## Deliverables Checklist
 
-- [ ] `crates/defra-agent/proofs/Proofs/ApplyReconcile.lean` — new module with `Collection`, `DocRef`, `Manifest`, `LiveState`, `ApplyStep`, `diff`, `applyOne`, and T-Conv.
-- [ ] `crates/defra-agent/proofs/Proofs.lean` — register the new module.
-- [ ] `defra-agent-cli` — introduce `enum Collection` and thread it through `desired_state.rs`, `main.rs` dispatch, file naming.
-- [ ] `defra-agent-cli` (or shared crate) — typed `DesiredFields` / `LiveFields` at the apply-write boundary.
-- [ ] `crates/defra-agent/tests/apply_property.rs` — `proptest` properties listed above.
-- [ ] `crates/defra-agent/tests/apply_conformance.rs` — table-driven conformance cases.
-- [ ] `crates/defra-agent-cli/tests/cli_e2e.rs` — audit pass to remove tests subsumed by the new coverage.
-- [ ] Apply-atomicity known-limitation note in `crates/defra-agent/proofs/README.md`.
-- [ ] Issues I-1, I-2, I-3 filed.
+- [x] `crates/defra-agent/proofs/Proofs/ApplyReconcile.lean` — new module with `Collection`, `DocRef`, `Manifest`, `LiveState`, `ApplyStep`, `diff`, `applyOne`, and T-Conv.
+- [x] `crates/defra-agent/proofs/Proofs.lean` — register the new module.
+- [x] `defra-agent-cli` — introduce `enum Collection` and thread it through `desired_state.rs`, `main.rs` dispatch, file naming.
+- [x] `defra-agent-cli` (or shared crate) — typed `DesiredFields` / `LiveFields` at the apply-write boundary.
+- [x] `crates/defra-agent/tests/apply_property.rs` — `proptest` properties listed above.
+- [x] `crates/defra-agent/tests/apply_conformance.rs` — table-driven conformance cases.
+- [x] `crates/defra-agent-cli/tests/cli_e2e.rs` — audit pass to remove tests subsumed by the new coverage.
+- [x] Apply-atomicity known-limitation note in `crates/defra-agent/proofs/README.md`.
+- [x] Issues I-1, I-2, I-3 filed.
