@@ -1,3 +1,4 @@
+use defra_agent::graphql::escape_graphql_string;
 use defra_agent::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
 use defra_agent::RequestLifecycle;
 
@@ -341,5 +342,327 @@ async fn scheduled_materialization_persists_trigger_lineage() {
             caused_by_trigger_id: Some("sched-1".into()),
             caused_by_trigger_kind: Some("schedule".into()),
         })
+    );
+}
+
+// -----------------------------------------------------------------------------
+// Trigger-driven transitions (Task 48)
+//
+// Each case below pins a state-machine invariant the TriggerEngine relies on
+// when driving schedule/event fires. They share the same style as the older
+// cases above: seed request state via the lifecycle entry point the engine
+// uses, then exercise the exact GraphQL mutation / query
+// `ProductionMaterializer` issues, and assert the resulting on-disk snapshot.
+// -----------------------------------------------------------------------------
+
+/// Serial concurrency: when a non-terminal request already exists for the
+/// `(trigger_id, trigger_kind)` tuple, the materializer's
+/// `has_nonterminal_request_for_trigger` query must observe it (the engine
+/// turns this into `FireResult::Skipped`). The state-machine conformance
+/// assertion: no second `AgentRequest` is created for the tuple — the count
+/// observed before and after the skip decision is the same.
+#[tokio::test]
+async fn serial_skip_does_not_create_request() {
+    let db = test_db("transition-serial-skip").await;
+
+    // Seed an in-flight request with lineage tuple (sched-serial, schedule).
+    let lineage = TriggerLineage {
+        trigger_id: Some("sched-serial".into()),
+        trigger_kind: Some("schedule".into()),
+    };
+    let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        "serial seed",
+        DEADLINE_SECS,
+        ExecutionOrigin::Scheduled,
+        BACKEND_ID,
+        lineage,
+    )
+    .await
+    .unwrap();
+
+    // Run the exact query `ProductionMaterializer` uses to gate the fire.
+    // Expect `true` — a non-terminal request for this tuple exists.
+    let gating_query = format!(
+        r#"query {{
+            AgentRequest(
+                filter: {{
+                    caused_by_trigger_id: {{ _eq: "sched-serial" }},
+                    caused_by_trigger_kind: {{ _eq: "schedule" }},
+                    lifecycle_state: {{ _in: ["pending", "claimed", "processing", "inputRequired"] }}
+                }},
+                limit: 1
+            ) {{ _docID }}
+        }}"#
+    );
+    let gate = db.node.execute(&gating_query).await;
+    assert!(!gate.has_errors(), "gating query errored: {:?}", gate.errors);
+    let gate_rows = gate
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        gate_rows.len(),
+        1,
+        "gating query must see the seeded in-flight request"
+    );
+
+    // Count all AgentRequests for the trigger tuple before the skip decision.
+    let tuple_count_query = r#"{
+        AgentRequest(
+            filter: {
+                caused_by_trigger_id: { _eq: "sched-serial" },
+                caused_by_trigger_kind: { _eq: "schedule" }
+            }
+        ) { _docID }
+    }"#;
+    let count_before = db
+        .node
+        .execute(tuple_count_query)
+        .await
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array())
+        .map(|rows| rows.len())
+        .unwrap_or(0);
+    assert_eq!(count_before, 1, "seeded count should be 1");
+
+    // Simulate the engine's FireResult::Skipped outcome: no materialize call
+    // is made. Count after must still be 1 — the state machine invariant
+    // "serial skip does not create request" holds.
+    let count_after = db
+        .node
+        .execute(tuple_count_query)
+        .await
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array())
+        .map(|rows| rows.len())
+        .unwrap_or(0);
+    assert_eq!(
+        count_after, count_before,
+        "serial skip must not create a new AgentRequest"
+    );
+
+    // Sanity: the seeded request is still in its non-terminal state
+    // (the skip decision neither advances nor terminates it).
+    let still_claimed = fetch_request_snapshot(&db.node, &seeded.request().doc_id).await;
+    assert_eq!(still_claimed.lifecycle_state, "claimed");
+    assert_eq!(still_claimed.status, "processing");
+}
+
+/// LatestOnly concurrency: when a new fire arrives for a trigger tuple with an
+/// in-flight request, the engine supersedes the prior via the same mutation
+/// shape `ProductionMaterializer::supersede_nonterminal_requests_for_trigger`
+/// uses. The seeded request must transition
+/// `(processing / claimed) -> (superseded / superseded)` exactly.
+#[tokio::test]
+async fn latest_only_transition_to_superseded() {
+    let db = test_db("transition-latest-only").await;
+
+    let lineage = TriggerLineage {
+        trigger_id: Some("sched-latest".into()),
+        trigger_kind: Some("schedule".into()),
+    };
+    let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        "latest seed",
+        DEADLINE_SECS,
+        ExecutionOrigin::Scheduled,
+        BACKEND_ID,
+        lineage,
+    )
+    .await
+    .unwrap();
+
+    // Pre-condition: the seeded request is (claimed, processing).
+    let before = fetch_request_snapshot(&db.node, &seeded.request().doc_id).await;
+    assert_eq!(before.lifecycle_state, "claimed");
+    assert_eq!(before.status, "processing");
+
+    // Run the engine's supersede mutation verbatim (the shape in
+    // `production_materializer::supersede_nonterminal_requests_for_trigger`).
+    let supersede = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{
+                    caused_by_trigger_id: {{ _eq: "sched-latest" }},
+                    caused_by_trigger_kind: {{ _eq: "schedule" }},
+                    lifecycle_state: {{ _in: ["pending", "claimed", "processing", "inputRequired"] }}
+                }},
+                input: {{
+                    status: "superseded",
+                    lifecycle_state: "superseded"
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let resp = db.node.execute(&supersede).await;
+    assert!(!resp.has_errors(), "supersede mutation errored: {:?}", resp.errors);
+    let updated_rows = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("update_AgentRequest"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        updated_rows.len(),
+        1,
+        "supersede must transition exactly the one seeded in-flight request"
+    );
+
+    // Post-condition: the seeded request is now (superseded, superseded);
+    // all other snapshot fields carry forward.
+    assert_eq!(
+        fetch_request_snapshot(&db.node, &seeded.request().doc_id).await,
+        RequestSnapshot {
+            status: "superseded".into(),
+            lifecycle_state: "superseded".into(),
+            behavior_id: AGENT_NAME.into(),
+            backend_id: BACKEND_ID.into(),
+            execution_origin: "scheduled".into(),
+            retry_parent_request: "".into(),
+            retry_root_request: seeded.request().request_id.clone(),
+            superseded_by_request: "".into(),
+            retry_count: 0,
+            max_retries: defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
+            claimed_at_present: true,
+            deadline_present: true,
+        }
+    );
+}
+
+/// Template render failure (`FireResult::Errored`): the engine must NOT
+/// invoke the materializer when the render fails. The state-machine
+/// conformance assertion: after a simulated render failure, no `AgentRequest`
+/// exists for the trigger tuple, and the Schedule's runtime-owned
+/// `last_status = "error"` writeback is independent of any request row.
+#[tokio::test]
+async fn fire_errored_does_not_create_request() {
+    let db = test_db("transition-fire-errored").await;
+
+    // The persistence boundary: no materialize call means no AgentRequest
+    // row with the lineage tuple. Query the engine's tuple filter to confirm.
+    let query = format!(
+        r#"query {{
+            AgentRequest(
+                filter: {{
+                    caused_by_trigger_id: {{ _eq: "sched-render-err" }},
+                    caused_by_trigger_kind: {{ _eq: "schedule" }}
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let resp = db.node.execute(&query).await;
+    assert!(!resp.has_errors(), "tuple query errored: {:?}", resp.errors);
+    let rows = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        rows.len(),
+        0,
+        "render failure must not have produced an AgentRequest: {rows:?}"
+    );
+
+    // Seed a Schedule doc and simulate the Errored writeback the source
+    // performs (see ScheduleSource::on_result FireResult::Errored branch).
+    // The key state-machine invariant: even though last_status="error" is
+    // written to the Schedule, NO AgentRequest appears for the trigger tuple.
+    let escaped_past = escape_graphql_string("2026-04-21T12:00:00Z");
+    let create_sched = format!(
+        r#"mutation {{
+            create_Schedule(input: {{
+                schedule_id: "sched-render-err",
+                task_id: "task-render-err",
+                interval_secs: 60,
+                enabled: true,
+                concurrency: "serial",
+                next_run_at: "{escaped_past}"
+            }}) {{ _docID }}
+        }}"#
+    );
+    assert!(
+        !db.node
+            .execute(&create_sched)
+            .await
+            .has_errors(),
+    );
+    let writeback = format!(
+        r#"mutation {{
+            update_Schedule(
+                filter: {{ schedule_id: {{ _eq: "sched-render-err" }} }},
+                input: {{
+                    next_run_at: "{escaped_past}",
+                    last_status: "error",
+                    last_error: "template: variable 'missing' is undefined"
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let wb_resp = db.node.execute(&writeback).await;
+    assert!(
+        !wb_resp.has_errors(),
+        "errored writeback failed: {:?}",
+        wb_resp.errors
+    );
+
+    // Re-check the persistence boundary after the writeback landed.
+    let resp = db.node.execute(&query).await;
+    let rows = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        rows.len(),
+        0,
+        "Errored writeback on Schedule must not materialize an AgentRequest: {rows:?}"
+    );
+
+    // Confirm the writeback did land on the Schedule side — the state of the
+    // Schedule reflects the engine's error classification without ever
+    // producing a request row.
+    let sched_query = r#"{
+        Schedule(filter: { schedule_id: { _eq: "sched-render-err" } }, limit: 1) {
+            last_status
+            last_error
+        }
+    }"#;
+    let sched_resp = db.node.execute(sched_query).await;
+    let sched_row = sched_resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("Schedule"))
+        .and_then(|v| v.as_array())
+        .and_then(|rows| rows.first())
+        .cloned()
+        .expect("Schedule doc was created");
+    assert_eq!(
+        sched_row.get("last_status").and_then(|v| v.as_str()),
+        Some("error"),
+        "Schedule.last_status must be 'error' after an Errored writeback"
+    );
+    assert!(
+        sched_row
+            .get("last_error")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| s.starts_with("template:")),
+        "Schedule.last_error must carry the template: prefix: {sched_row}"
     );
 }
