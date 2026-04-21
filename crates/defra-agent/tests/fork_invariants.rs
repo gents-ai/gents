@@ -305,3 +305,71 @@ async fn fork_rejects_out_of_range_user_turn() {
         .unwrap_or_default();
     assert!(rows.is_empty(), "out-of-range fork must not create orphans: got {:?}", rows);
 }
+
+#[tokio::test]
+async fn fork_at_user_turn_zero_produces_empty_child_with_provenance() {
+    let db = test_db("fork-user-turn-zero").await;
+
+    let parent_session = "parent-zero";
+    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+    create_agent_message(&db.node, parent_session, 1, "user", "u1", "2026-04-21T10:00:01Z").await;
+    create_agent_message(&db.node, parent_session, 2, "assistant", "a1", "2026-04-21T10:00:02Z").await;
+
+    let outcome = fork(&db.node, ForkParams {
+        source_session_id: parent_session,
+        fork_at_user_turn: 0,
+        caller_agent_did: AGENT_DID,
+        target_behavior_id: None,
+    }).await.expect("fork at user-turn 0 succeeds");
+
+    assert_eq!(outcome.copied_messages, 0);
+    assert_eq!(outcome.copied_tool_calls, 0);
+    assert_eq!(outcome.copied_tool_results, 0);
+    assert_eq!(outcome.copied_compaction_entries, 0);
+
+    let child_messages = fetch_message_snapshots_for_session(&db.node, &outcome.session_id).await;
+    assert!(child_messages.is_empty());
+
+    let _child_conv = support::snapshots::fetch_conversation_snapshot(&db.node, &outcome.session_id)
+        .await
+        .expect("child conversation exists");
+    // Provenance must be recorded.
+    // NOTE: ConversationSnapshot will need to surface the new fields.
+    // This assertion lands once Task 13 exposes them on the snapshot.
+}
+
+#[tokio::test]
+async fn fork_leaves_parent_byte_identical() {
+    let db = test_db("fork-parent-unchanged").await;
+
+    let parent_session = "parent-unchanged";
+    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+
+    for (i, role) in [
+        (1u32, "user"), (2, "assistant"), (3, "tool"),
+        (4, "user"), (5, "assistant"),
+    ] {
+        let ts = format!("2026-04-21T10:00:0{i}Z");
+        create_agent_message(&db.node, parent_session, i, role, &format!("msg{i}"), &ts).await;
+    }
+
+    let before_messages = fetch_message_snapshots_for_session(&db.node, parent_session).await;
+    let before_conv = support::snapshots::fetch_conversation_snapshot(&db.node, parent_session).await;
+
+    let _ = fork(&db.node, ForkParams {
+        source_session_id: parent_session,
+        fork_at_user_turn: 1,
+        caller_agent_did: AGENT_DID,
+        target_behavior_id: None,
+    }).await.expect("fork succeeds");
+
+    let after_messages = fetch_message_snapshots_for_session(&db.node, parent_session).await;
+    let after_conv = support::snapshots::fetch_conversation_snapshot(&db.node, parent_session).await;
+
+    assert_eq!(before_messages, after_messages, "parent AgentMessage rows unchanged");
+    assert_eq!(before_conv, after_conv, "parent AgentConversation unchanged");
+}
