@@ -158,8 +158,40 @@ pub(crate) fn manifest_from_export_bundle(
             .iter()
             .map(tool_service_registry_from_live_value)
             .collect::<Result<Vec<_>>>()?,
-        tasks: Vec::new(),
-        schedules: Vec::new(),
+        tasks: bundle
+            .tasks
+            .iter()
+            .map(|value| {
+                desired_from_value(
+                    value,
+                    &[
+                        "task_id",
+                        "name",
+                        "description",
+                        "behavior_id",
+                        "prompt_template",
+                        "enabled",
+                        "output_schema_ref",
+                    ],
+                )
+            })
+            .collect::<Result<Vec<_>>>()?,
+        schedules: bundle
+            .schedules
+            .iter()
+            .map(|value| {
+                desired_from_value(
+                    value,
+                    &[
+                        "schedule_id",
+                        "task_id",
+                        "interval_secs",
+                        "enabled",
+                        "concurrency",
+                    ],
+                )
+            })
+            .collect::<Result<Vec<_>>>()?,
     };
     normalize_manifest(&mut manifest);
     Ok(manifest)
@@ -197,6 +229,17 @@ pub(crate) fn export_bundle_from_manifest(
             .collect::<serde_json::Result<Vec<_>>>()?,
         tool_service_registries: manifest
             .tool_service_registries
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<serde_json::Result<Vec<_>>>()?,
+        scheduled_tasks: Vec::new(),
+        tasks: manifest
+            .tasks
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<serde_json::Result<Vec<_>>>()?,
+        schedules: manifest
+            .schedules
             .iter()
             .map(serde_json::to_value)
             .collect::<serde_json::Result<Vec<_>>>()?,

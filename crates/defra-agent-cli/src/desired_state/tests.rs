@@ -3,8 +3,11 @@ use std::path::PathBuf;
 
 use serde_json::json;
 
-use super::convert::tool_service_registry_from_live_value;
+use super::convert::{
+    export_bundle_from_manifest, manifest_from_export_bundle, tool_service_registry_from_live_value,
+};
 use super::diff::{diff_collection, diff_manifests};
+use super::validate::validate_manifest;
 use super::*;
 
 fn empty_manifest(agent_did: &str) -> DesiredStateManifest {
@@ -23,6 +26,26 @@ fn empty_manifest(agent_did: &str) -> DesiredStateManifest {
         tasks: Vec::new(),
         schedules: Vec::new(),
     }
+}
+
+fn manifest_with_default_behavior() -> DesiredStateManifest {
+    let mut manifest = empty_manifest("did:defra-agent:test");
+    manifest.agent_principal.default_behavior_id =
+        Some("did:defra-agent:test:default".to_string());
+    manifest.agent_behaviors.push(DesiredAgentBehavior {
+        behavior_id: "did:defra-agent:test:default".to_string(),
+        agent_did: "did:defra-agent:test".to_string(),
+        display_name: None,
+        system_prompt: None,
+        backend_id: None,
+        model_name: None,
+        tool_selection_id: None,
+        inference_profile_id: None,
+        compaction_strategy: None,
+        compaction_threshold: None,
+        enabled: true,
+    });
+    manifest
 }
 
 fn sample_task(task_id: &str) -> DesiredTask {
@@ -448,4 +471,210 @@ fn diff_manifests_marks_schedule_update_when_interval_changes() {
     assert!(report.collections.schedules.create.is_empty());
     assert!(report.collections.schedules.unchanged.is_empty());
     assert_eq!(report.counts.schedules.update, 1);
+}
+
+fn validation_errors(manifest: &DesiredStateManifest) -> Vec<String> {
+    let mut errors = Vec::new();
+    validate_manifest(manifest, &mut errors);
+    errors
+}
+
+#[test]
+fn validate_rejects_empty_task_id() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut task = sample_task("");
+    task.task_id = String::new();
+    manifest.tasks.push(task);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors
+            .iter()
+            .any(|message| message.contains("empty task_id")),
+        "expected empty task_id rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_empty_task_behavior_id() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut task = sample_task("summarize-inbox");
+    task.behavior_id = String::new();
+    manifest.tasks.push(task);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors
+            .iter()
+            .any(|message| message.contains("summarize-inbox") && message.contains("behavior_id")),
+        "expected empty behavior_id rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_duplicate_task_id() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest.tasks.push(sample_task("summarize-inbox"));
+    manifest.tasks.push(sample_task("summarize-inbox"));
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("duplicate task_id") && message.contains("summarize-inbox")
+        }),
+        "expected duplicate task_id rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_empty_schedule_id() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest.tasks.push(sample_task("summarize-inbox"));
+    let mut schedule = sample_schedule("", "summarize-inbox");
+    schedule.schedule_id = String::new();
+    manifest.schedules.push(schedule);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors
+            .iter()
+            .any(|message| message.contains("empty schedule_id")),
+        "expected empty schedule_id rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_duplicate_schedule_id() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest.tasks.push(sample_task("summarize-inbox"));
+    manifest
+        .schedules
+        .push(sample_schedule("hourly", "summarize-inbox"));
+    manifest
+        .schedules
+        .push(sample_schedule("hourly", "summarize-inbox"));
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("duplicate schedule_id") && message.contains("hourly")
+        }),
+        "expected duplicate schedule_id rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_schedule_interval_zero_or_negative() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest.tasks.push(sample_task("summarize-inbox"));
+    let mut schedule = sample_schedule("hourly", "summarize-inbox");
+    schedule.interval_secs = 0;
+    manifest.schedules.push(schedule);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors
+            .iter()
+            .any(|message| message.contains("hourly") && message.contains("interval_secs")),
+        "expected interval_secs >= 1 rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_schedule_unknown_concurrency() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest.tasks.push(sample_task("summarize-inbox"));
+    let mut schedule = sample_schedule("hourly", "summarize-inbox");
+    schedule.concurrency = "everything-everywhere".to_string();
+    manifest.schedules.push(schedule);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("hourly")
+                && message.contains("concurrency")
+                && message.contains("everything-everywhere")
+        }),
+        "expected unknown concurrency rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_task_unknown_behavior() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut task = sample_task("summarize-inbox");
+    task.behavior_id = "did:defra-agent:test:missing".to_string();
+    manifest.tasks.push(task);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("summarize-inbox")
+                && message.contains("missing")
+                && message.contains("behavior_id")
+        }),
+        "expected missing behavior_id reference rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_schedule_unknown_task() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest
+        .schedules
+        .push(sample_schedule("hourly", "missing-task"));
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("hourly")
+                && message.contains("missing-task")
+                && message.contains("task_id")
+        }),
+        "expected missing task_id reference rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn export_bundle_round_trip_preserves_tasks_and_schedules() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest.tasks.push(sample_task("beta-task"));
+    manifest.tasks.push(sample_task("alpha-task"));
+    manifest
+        .schedules
+        .push(sample_schedule("beta-hourly", "beta-task"));
+    manifest
+        .schedules
+        .push(sample_schedule("alpha-hourly", "alpha-task"));
+
+    let bundle = export_bundle_from_manifest(&manifest, "local")
+        .expect("export bundle should be produced");
+    assert_eq!(bundle.tasks.len(), 2);
+    assert_eq!(bundle.schedules.len(), 2);
+
+    let round_tripped =
+        manifest_from_export_bundle(&bundle).expect("manifest should parse back from bundle");
+
+    // `manifest_from_export_bundle` normalizes (sorts by id).
+    let task_ids: Vec<_> = round_tripped
+        .tasks
+        .iter()
+        .map(|task| task.task_id.as_str())
+        .collect();
+    assert_eq!(task_ids, vec!["alpha-task", "beta-task"]);
+
+    let schedule_ids: Vec<_> = round_tripped
+        .schedules
+        .iter()
+        .map(|schedule| schedule.schedule_id.as_str())
+        .collect();
+    assert_eq!(schedule_ids, vec!["alpha-hourly", "beta-hourly"]);
+
+    let mut expected_tasks = manifest.tasks.clone();
+    expected_tasks.sort_by(|left, right| left.task_id.cmp(&right.task_id));
+    assert_eq!(round_tripped.tasks, expected_tasks);
+
+    let mut expected_schedules = manifest.schedules.clone();
+    expected_schedules.sort_by(|left, right| left.schedule_id.cmp(&right.schedule_id));
+    assert_eq!(round_tripped.schedules, expected_schedules);
 }

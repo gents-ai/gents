@@ -229,6 +229,8 @@ mod tests {
             inference_profiles,
             tool_service_registries: Vec::new(),
             scheduled_tasks: Vec::new(),
+            tasks: Vec::new(),
+            schedules: Vec::new(),
         }
     }
 

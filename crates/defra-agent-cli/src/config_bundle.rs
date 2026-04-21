@@ -169,6 +169,8 @@ pub(crate) async fn build_config_export_bundle(
         inference_profiles: profile_rows,
         tool_service_registries: tool_service_registry_rows,
         scheduled_tasks: scheduled_task_rows,
+        tasks: Vec::new(),
+        schedules: Vec::new(),
     })
 }
 
@@ -370,6 +372,8 @@ pub(crate) async fn build_desired_state_live_bundle(
         inference_profiles: profile_rows,
         tool_service_registries: tool_service_registry_rows,
         scheduled_tasks: scheduled_task_rows,
+        tasks: Vec::new(),
+        schedules: Vec::new(),
     })
 }
 

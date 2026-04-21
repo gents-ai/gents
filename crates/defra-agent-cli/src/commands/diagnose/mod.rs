@@ -48,6 +48,8 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         inference_profiles: Vec::new(),
         tool_service_registries: Vec::new(),
         scheduled_tasks: Vec::new(),
+        tasks: Vec::new(),
+        schedules: Vec::new(),
     });
     let runtime_row = match load_runtime_row(&access, &agent_did).await {
         Ok(Some(row)) => row,

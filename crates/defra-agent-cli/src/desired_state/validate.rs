@@ -189,6 +189,77 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             .push("agent-principal.json must contain a non-empty default_behavior_id".to_string()),
     }
 
+    let mut task_ids = BTreeSet::new();
+    for task in &manifest.tasks {
+        let task_id = task.task_id.trim();
+        if task_id.is_empty() {
+            errors.push("tasks manifest contains a task with an empty task_id".to_string());
+        } else if !task_ids.insert(task_id.to_string()) {
+            errors.push(format!("duplicate task_id in tasks manifest: {task_id}"));
+        }
+
+        if task.name.trim().is_empty() {
+            errors.push(format!(
+                "task {} in tasks manifest must contain a non-empty name",
+                task.task_id
+            ));
+        }
+
+        let behavior_id = task.behavior_id.trim();
+        if behavior_id.is_empty() {
+            errors.push(format!(
+                "task {} in tasks manifest must contain a non-empty behavior_id",
+                task.task_id
+            ));
+        } else if !behavior_ids.contains(behavior_id) {
+            errors.push(format!(
+                "task {} references missing behavior_id {}",
+                task.task_id, behavior_id
+            ));
+        }
+    }
+
+    let mut schedule_ids = BTreeSet::new();
+    for schedule in &manifest.schedules {
+        let schedule_id = schedule.schedule_id.trim();
+        if schedule_id.is_empty() {
+            errors.push(
+                "schedules manifest contains a schedule with an empty schedule_id".to_string(),
+            );
+        } else if !schedule_ids.insert(schedule_id.to_string()) {
+            errors.push(format!(
+                "duplicate schedule_id in schedules manifest: {schedule_id}"
+            ));
+        }
+
+        let task_id = schedule.task_id.trim();
+        if task_id.is_empty() {
+            errors.push(format!(
+                "schedule {} in schedules manifest must contain a non-empty task_id",
+                schedule.schedule_id
+            ));
+        } else if !task_ids.contains(task_id) {
+            errors.push(format!(
+                "schedule {} references missing task_id {}",
+                schedule.schedule_id, task_id
+            ));
+        }
+
+        if schedule.interval_secs < 1 {
+            errors.push(format!(
+                "schedule {} in schedules manifest must contain an interval_secs >= 1",
+                schedule.schedule_id
+            ));
+        }
+
+        match schedule.concurrency.trim() {
+            "parallel" | "serial" | "latest_only" => {}
+            other => errors.push(format!(
+                "schedule {} in schedules manifest has unknown concurrency {}",
+                schedule.schedule_id, other
+            )),
+        }
+    }
 }
 
 pub(crate) fn non_empty(value: &Option<String>) -> Option<&str> {
