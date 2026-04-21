@@ -198,6 +198,10 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub execution_origin: Option<String>,
     #[serde(default)]
+    pub caused_by_trigger_id: Option<String>,
+    #[serde(default)]
+    pub caused_by_trigger_kind: Option<String>,
+    #[serde(default)]
     pub failure_reason: Option<String>,
     #[serde(default)]
     pub created_at: Option<String>,

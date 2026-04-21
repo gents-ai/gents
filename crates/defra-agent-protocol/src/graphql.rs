@@ -32,6 +32,8 @@ pub struct CreateAgentRequestInput<'a> {
     pub session_id: &'a str,
     pub behavior_id: Option<&'a str>,
     pub created_at: &'a str,
+    pub caused_by_trigger_id: Option<&'a str>,
+    pub caused_by_trigger_kind: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,6 +130,30 @@ pub fn create_agent_request_mutation(input: &CreateAgentRequestInput<'_>) -> Str
             )
         })
         .unwrap_or_default();
+    let caused_by_trigger_id_field = input
+        .caused_by_trigger_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            format!(
+                r#"
+                caused_by_trigger_id: "{}","#,
+                escape_graphql_string(value)
+            )
+        })
+        .unwrap_or_default();
+    let caused_by_trigger_kind_field = input
+        .caused_by_trigger_kind
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            format!(
+                r#"
+                caused_by_trigger_kind: "{}","#,
+                escape_graphql_string(value)
+            )
+        })
+        .unwrap_or_default();
     format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -142,7 +168,7 @@ pub fn create_agent_request_mutation(input: &CreateAgentRequestInput<'_>) -> Str
                 status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "",
-                execution_origin: "interactive",
+                execution_origin: "interactive",{caused_by_trigger_id_field}{caused_by_trigger_kind_field}
                 failure_reason: "",
                 created_at: "{created_at}",
                 retry_count: 0,
@@ -155,6 +181,8 @@ pub fn create_agent_request_mutation(input: &CreateAgentRequestInput<'_>) -> Str
         session_id = escape_graphql_string(input.session_id),
         content = escape_graphql_string(input.content),
         created_at = escape_graphql_string(input.created_at),
+        caused_by_trigger_id_field = caused_by_trigger_id_field,
+        caused_by_trigger_kind_field = caused_by_trigger_kind_field,
     )
 }
 

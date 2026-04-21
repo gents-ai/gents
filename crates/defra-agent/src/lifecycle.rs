@@ -52,6 +52,16 @@ impl ExecutionOrigin {
     }
 }
 
+/// Lineage describing which trigger (if any) caused a request to be
+/// materialized. Both fields are `None` for interactive user submissions and
+/// for recovery paths; scheduled and event-driven triggers populate them so
+/// downstream readers can follow the causal chain.
+#[derive(Debug, Clone, Default)]
+pub struct TriggerLineage {
+    pub trigger_id: Option<String>,
+    pub trigger_kind: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 enum PersistedLifecycleState {

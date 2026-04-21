@@ -1,4 +1,4 @@
-use defra_agent::lifecycle::{ClaimOutcome, ExecutionOrigin};
+use defra_agent::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
 use defra_agent::RequestLifecycle;
 
 mod support;
@@ -264,6 +264,7 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
         DEADLINE_SECS,
         ExecutionOrigin::Scheduled,
         BACKEND_ID,
+        TriggerLineage::default(),
     )
     .await
     .unwrap();
