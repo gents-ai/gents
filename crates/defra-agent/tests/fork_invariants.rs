@@ -373,3 +373,46 @@ async fn fork_leaves_parent_byte_identical() {
     assert_eq!(before_messages, after_messages, "parent AgentMessage rows unchanged");
     assert_eq!(before_conv, after_conv, "parent AgentConversation unchanged");
 }
+
+#[tokio::test]
+async fn concurrent_forks_of_same_parent_produce_disjoint_children() {
+    let db = test_db("fork-concurrent").await;
+
+    let parent_session = "parent-concurrent";
+    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+    create_agent_message(&db.node, parent_session, 1, "user", "u1", "2026-04-21T10:00:01Z").await;
+    create_agent_message(&db.node, parent_session, 2, "assistant", "a1", "2026-04-21T10:00:02Z").await;
+    create_agent_message(&db.node, parent_session, 3, "user", "u2", "2026-04-21T10:00:03Z").await;
+
+    let node = db.node.clone();
+    let parent_session_a = parent_session.to_string();
+    let parent_session_b = parent_session.to_string();
+    let node_a = node.clone();
+    let node_b = node.clone();
+
+    let handle_a = tokio::spawn(async move {
+        fork(&node_a, ForkParams {
+            source_session_id: &parent_session_a,
+            fork_at_user_turn: 0,
+            caller_agent_did: AGENT_DID,
+            target_behavior_id: None,
+        }).await
+    });
+    let handle_b = tokio::spawn(async move {
+        fork(&node_b, ForkParams {
+            source_session_id: &parent_session_b,
+            fork_at_user_turn: 1,
+            caller_agent_did: AGENT_DID,
+            target_behavior_id: None,
+        }).await
+    });
+
+    let outcome_a = handle_a.await.expect("task a panicked").expect("fork a succeeds");
+    let outcome_b = handle_b.await.expect("task b panicked").expect("fork b succeeds");
+
+    assert_ne!(outcome_a.session_id, outcome_b.session_id);
+    assert_eq!(outcome_a.copied_messages, 0); // cut before the 1st user message
+    assert_eq!(outcome_b.copied_messages, 2); // u1 + a1
+}
