@@ -92,10 +92,18 @@ pub async fn fork(
     }
 
     // Step 2: compute cut_seq from the Nth user message.
-    let (cut_seq, cut_ts) = compute_cut(node, params.source_session_id, params.fork_at_user_turn)
+    let (cut_seq, cut_ts) = match compute_cut(node, params.source_session_id, params.fork_at_user_turn)
         .await
         .map_err(ForkError::ForkCopyFailed)?
-        .ok_or_else(|| ForkError::ForkAtUserTurnOutOfRange(params.fork_at_user_turn, 0))?;
+    {
+        Ok((seq, ts)) => (seq, ts),
+        Err(total_user_msgs) => {
+            return Err(ForkError::ForkAtUserTurnOutOfRange(
+                params.fork_at_user_turn,
+                total_user_msgs,
+            ));
+        }
+    };
 
     // Step 3: resolve child behavior (inherit parent, or swap to validated target).
     let resolved_behavior_id = if let Some(target) = params.target_behavior_id {
@@ -209,7 +217,7 @@ async fn compute_cut(
     node: &EmbeddedNode,
     source_session_id: &str,
     fork_at_user_turn: u32,
-) -> Result<Option<(u32, String)>> {
+) -> Result<std::result::Result<(u32, String), u32>> {
     let escaped = escape_graphql_string(source_session_id);
     let query = format!(
         r#"{{
@@ -233,8 +241,9 @@ async fn compute_cut(
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
+    let total_user_msgs = rows.len() as u32;
     if (fork_at_user_turn as usize) >= rows.len() {
-        return Ok(None);
+        return Ok(Err(total_user_msgs));
     }
     let row = &rows[fork_at_user_turn as usize];
     let seq = row
@@ -246,7 +255,7 @@ async fn compute_cut(
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("timestamp missing"))?
         .to_string();
-    Ok(Some((seq, ts)))
+    Ok(Ok((seq, ts)))
 }
 
 async fn copy_messages(

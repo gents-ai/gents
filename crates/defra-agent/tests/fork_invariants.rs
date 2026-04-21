@@ -265,3 +265,43 @@ async fn fork_rejects_behavior_owned_by_different_principal() {
         "expected ForkBehaviorNotOwnedByPrincipal, got {:?}", err
     );
 }
+
+#[tokio::test]
+async fn fork_rejects_out_of_range_user_turn() {
+    let db = test_db("fork-oor").await;
+
+    let parent_session = "parent-oor";
+    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+    create_agent_message(&db.node, parent_session, 1, "user", "u1", "2026-04-21T10:00:01Z").await;
+    create_agent_message(&db.node, parent_session, 2, "assistant", "a1", "2026-04-21T10:00:02Z").await;
+
+    // Only 1 user message exists (index 0). Requesting index 5 is out of range.
+    let err = fork(&db.node, ForkParams {
+        source_session_id: parent_session,
+        fork_at_user_turn: 5,
+        caller_agent_did: AGENT_DID,
+        target_behavior_id: None,
+    }).await.expect_err("fork must reject out-of-range user turn");
+
+    assert!(
+        matches!(err, ForkError::ForkAtUserTurnOutOfRange(5, 1)),
+        "expected ForkAtUserTurnOutOfRange(5, 1), got {:?}", err
+    );
+
+    // Also assert no orphan rows were created: no AgentMessage rows exist
+    // outside the parent session.
+    let query = format!(
+        r#"{{
+            AgentMessage(filter: {{ session_id: {{ _neq: "{parent_session}" }} }}) {{ session_id }}
+        }}"#
+    );
+    let resp = db.node.execute(&query).await;
+    let rows = resp.data.as_ref()
+        .and_then(|d| d.get("AgentMessage"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(rows.is_empty(), "out-of-range fork must not create orphans: got {:?}", rows);
+}
