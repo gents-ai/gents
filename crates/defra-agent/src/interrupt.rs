@@ -24,6 +24,9 @@ const OBSERVER_POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// Spawn an observer task that polls `interrupt_requested_at` for a single
 /// request and signals the channel when the field flips to non-null.
 ///
+/// Polls rather than subscribes because DefraDB lacks per-field watchpoints;
+/// the 2s interval is a compromise between Esc UX latency and DB load.
+///
 /// The task exits when:
 ///   - the channel has been signaled once (idempotent latch), OR
 ///   - the shutdown receiver changes, OR

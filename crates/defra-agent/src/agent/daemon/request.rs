@@ -8,6 +8,11 @@ use crate::prompt::PromptBuilder;
 use crate::session;
 use crate::streaming::{StreamStatus, StreamWriter};
 
+/// Grace period after cancellation before force-aborting children, so in-flight
+/// cancellable work can observe the cancel and return cleanly. Codex-aligned:
+/// long enough for HTTP futures to observe, short enough that Esc feels instant.
+const CANCELLATION_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_millis(100);
+
 impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     pub(super) async fn handle_request(
         &mut self,
@@ -142,14 +147,25 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
 
             if request_token.is_cancelled() {
                 // Interrupt detected inside run_inference — execute the 6-step flow.
-                let intent = interrupt_rx
-                    .borrow()
-                    .clone()
-                    .expect("request_token.is_cancelled ⇒ interrupt was signaled");
+                // Graceful fallback: if the token was cancelled by a path that did not
+                // also publish an InterruptIntent on the watch channel (e.g. a future
+                // tool-child cancellation from Task 8), treat it as a failure rather
+                // than panicking. This preserves safety as the cancellation hierarchy
+                // expands.
+                let Some(intent) = interrupt_rx.borrow().clone() else {
+                    tracing::warn!(
+                        request_id = %lifecycle.request().request_id,
+                        "request_token was cancelled without an interrupt intent on the channel; \
+                         treating as failure rather than interrupt"
+                    );
+                    return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow::anyhow!(
+                        "request_token cancelled without interrupt intent"
+                    )));
+                };
 
                 // 1. request_token is already cancelled (the inference arm fired it).
                 // 2. Grace wait so any in-flight work can observe cancellation.
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                tokio::time::sleep(CANCELLATION_GRACE_PERIOD).await;
                 // 3. Force-abort: no child tasks currently (Task 8 adds tool children).
                 // 4. Flip AgentResponse.interrupted_at (sequenced BEFORE step 5).
                 let interrupt_at = intent.at.to_rfc3339();
@@ -166,7 +182,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     );
                 }
                 // 5. Write terminal lifecycle_state = interrupted.
-                lifecycle.transition_to_interrupted(&interrupt_at).await?;
+                lifecycle.transition_to_interrupted().await?;
                 return Ok(HandleRequestOutcome::Interrupted);
             }
 

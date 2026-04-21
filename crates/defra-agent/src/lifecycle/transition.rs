@@ -171,7 +171,7 @@ impl RequestLifecycle {
     /// sets the in-memory state. Idempotent via the `_nin` filter on terminal
     /// statuses: if the row is already terminal (completed/interrupted/dead/
     /// superseded/error), the mutation is a no-op.
-    pub async fn transition_to_interrupted(&mut self, _interrupt_at: &str) -> Result<()> {
+    pub async fn transition_to_interrupted(&mut self) -> Result<()> {
         let doc_id = &self.request.doc_id;
         let mutation = format!(
             r#"mutation {{

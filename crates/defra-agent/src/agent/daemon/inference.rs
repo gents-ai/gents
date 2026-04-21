@@ -54,6 +54,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     "retrying inference after transient failure"
                 );
                 tokio::select! {
+                    biased;
                     _ = shutdown.changed() => {
                         return Err(anyhow!("shutdown requested during inference retry backoff"));
                     }
@@ -88,6 +89,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 let mut stream =
                     admission::scope_call(CallKind::Inference, attempt_index as i64, async {
                         tokio::select! {
+                            biased;
                             _ = shutdown.changed() => {
                                 Err(anyhow!("shutdown requested before inference stream started"))
                             }
@@ -115,6 +117,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
 
                 loop {
                     let item = match tokio::select! {
+                        biased;
                         _ = shutdown.changed() => {
                             return Err(anyhow!("shutdown requested during inference stream"));
                         }

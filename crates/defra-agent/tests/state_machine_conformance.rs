@@ -864,11 +864,11 @@ async fn pending_dead_stale_via_expire() {
 }
 
 #[tokio::test]
-async fn claimed_interrupted_via_watch_channel() {
-    // Simulates: daemon claims a request, the interrupt observer signals, and the
-    // daemon calls `transition_to_interrupted`. This validates the transition method
-    // and idempotency at the lifecycle layer; the full `tokio::select!` arm is
-    // exercised at integration level (Task 11).
+async fn transition_to_interrupted_from_claimed() {
+    // Validates the lifecycle transition from `claimed` to `interrupted` via
+    // `transition_to_interrupted`. This test does NOT exercise the observer or
+    // watch channel end-to-end — the full `tokio::select!` arm + observer race
+    // is covered at integration level in Task 11.
     let db = test_db("claimed-interrupted").await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -895,7 +895,7 @@ async fn claimed_interrupted_via_watch_channel() {
 
     let interrupt_at = chrono::Utc::now().to_rfc3339();
     set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
-    lifecycle.transition_to_interrupted(&interrupt_at).await.unwrap();
+    lifecycle.transition_to_interrupted().await.unwrap();
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(snap.status, "interrupted");
@@ -955,7 +955,7 @@ async fn processing_interrupted_preserves_partial_response() {
         .unwrap();
     assert!(stamped, "expected interrupted_at to be stamped");
 
-    lifecycle.transition_to_interrupted(&interrupt_at).await.unwrap();
+    lifecycle.transition_to_interrupted().await.unwrap();
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(snap.status, "interrupted");
@@ -1003,7 +1003,7 @@ async fn input_required_interrupted() {
 
     let interrupt_at = chrono::Utc::now().to_rfc3339();
     set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
-    lifecycle.transition_to_interrupted(&interrupt_at).await.unwrap();
+    lifecycle.transition_to_interrupted().await.unwrap();
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(snap.status, "interrupted");
@@ -1046,13 +1046,13 @@ async fn pending_tie_break_prefers_interrupt_over_expire() {
 }
 
 #[tokio::test]
-async fn processing_tie_break_prefers_interrupt_over_deadline() {
-    // Tie-break test for in-flight requests: while processing, both interrupt and
-    // deadline can potentially fire; interrupt must win. At this test layer we can
-    // only assert the persisted outcome of `transition_to_interrupted` once the
-    // interrupt path is chosen — the daemon-level race is integration-tested in
-    // Task 11. Here we verify the transition succeeds from the processing state
-    // (the typical in-flight state when the daemon's select arm fires).
+async fn transition_to_interrupted_from_processing() {
+    // Validates the lifecycle transition from `processing` to `interrupted`. The
+    // daemon-level tie-break race (interrupt vs deadline both firing in the same
+    // poll) cannot be expressed at the lifecycle layer alone — that is exercised
+    // end-to-end in Task 11. Here we verify the transition succeeds from the
+    // processing state (the typical in-flight state when the daemon's select arm
+    // fires).
     let db = test_db("processing-tie-break").await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -1084,7 +1084,7 @@ async fn processing_tie_break_prefers_interrupt_over_deadline() {
     set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
 
     // Interrupt arm wins: transition_to_interrupted succeeds from processing.
-    lifecycle.transition_to_interrupted(&interrupt_at).await.unwrap();
+    lifecycle.transition_to_interrupted().await.unwrap();
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(snap.status, "interrupted");
@@ -1136,10 +1136,7 @@ async fn interrupt_on_already_terminal_is_noop() {
     // transition_to_interrupted must not mutate the terminal row.
     let interrupt_at = chrono::Utc::now().to_rfc3339();
     set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
-    lifecycle
-        .transition_to_interrupted(&interrupt_at)
-        .await
-        .unwrap();
+    lifecycle.transition_to_interrupted().await.unwrap();
 
     let after = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(after.status, "completed", "terminal row must not regress");
