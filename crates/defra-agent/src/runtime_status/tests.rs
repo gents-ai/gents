@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -78,6 +78,9 @@ async fn runtime_status_persists_process_and_reconcile_state() {
                 "code".to_string(),
                 "behavior code is disabled".to_string(),
             )]),
+            active_schedules: HashMap::new(),
+            unavailable_schedules: HashSet::new(),
+            active_event_triggers: HashMap::new(),
             dispatchers: HashMap::new(),
         })
         .await;
@@ -109,6 +112,9 @@ async fn runtime_status_serializes_persisted_generation_updates() {
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
         unavailable_behaviors: HashMap::new(),
+        active_schedules: HashMap::new(),
+        unavailable_schedules: HashSet::new(),
+        active_event_triggers: HashMap::new(),
         dispatchers: HashMap::new(),
     };
     let applied = ActiveRuntimeSnapshot {
@@ -118,6 +124,9 @@ async fn runtime_status_serializes_persisted_generation_updates() {
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
         unavailable_behaviors: HashMap::new(),
+        active_schedules: HashMap::new(),
+        unavailable_schedules: HashSet::new(),
+        active_event_triggers: HashMap::new(),
         dispatchers: HashMap::new(),
     };
 

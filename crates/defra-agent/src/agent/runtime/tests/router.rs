@@ -11,6 +11,9 @@ async fn router_dispatches_first_request_after_snapshot_change_to_latest_generat
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
         unavailable_behaviors: HashMap::new(),
+        active_schedules: HashMap::new(),
+        unavailable_schedules: std::collections::HashSet::new(),
+        active_event_triggers: HashMap::new(),
         dispatchers: HashMap::new(),
     });
     let updated_snapshot = Arc::new(crate::runtime_snapshot::ActiveRuntimeSnapshot {
@@ -20,6 +23,9 @@ async fn router_dispatches_first_request_after_snapshot_change_to_latest_generat
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
         unavailable_behaviors: HashMap::new(),
+        active_schedules: HashMap::new(),
+        unavailable_schedules: std::collections::HashSet::new(),
+        active_event_triggers: HashMap::new(),
         dispatchers: HashMap::new(),
     });
     let (active_tx, mut active_rx) = watch::channel(initial_snapshot);
@@ -74,6 +80,9 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
         unavailable_behaviors: HashMap::new(),
+        active_schedules: HashMap::new(),
+        unavailable_schedules: std::collections::HashSet::new(),
+        active_event_triggers: HashMap::new(),
         dispatchers: HashMap::new(),
     });
     let updated_snapshot = Arc::new(crate::runtime_snapshot::ActiveRuntimeSnapshot {
@@ -83,6 +92,9 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
         unavailable_behaviors: HashMap::new(),
+        active_schedules: HashMap::new(),
+        unavailable_schedules: std::collections::HashSet::new(),
+        active_event_triggers: HashMap::new(),
         dispatchers: HashMap::new(),
     });
     let (active_tx, active_rx) = watch::channel(initial_snapshot.clone());

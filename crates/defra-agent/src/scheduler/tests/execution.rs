@@ -285,6 +285,9 @@ async fn scheduler_tick_shutdown_is_prompt_while_task_waits_for_backend_capacity
             },
         )]),
         unavailable_behaviors: std::collections::HashMap::new(),
+        active_schedules: std::collections::HashMap::new(),
+        unavailable_schedules: std::collections::HashSet::new(),
+        active_event_triggers: std::collections::HashMap::new(),
         dispatchers: std::collections::HashMap::new(),
     });
     let registry = test_admission_registry(node.clone(), "backend-blocked", 1);

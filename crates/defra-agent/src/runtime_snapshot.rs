@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use tokio::sync::{mpsc, watch};
@@ -10,6 +10,71 @@ use crate::watcher::AgentRequest;
 
 pub(crate) type DispatcherMap = HashMap<String, mpsc::Sender<AgentRequest>>;
 
+/// Resolved view of a `Task` document ready for the trigger engine to fire.
+///
+/// Captures only the fields the engine needs to build an `AgentRequest` at
+/// fire time — behavior, prompt template, and optional output-schema
+/// reference. Other `Task` fields (descriptions, timestamps, runtime-owned
+/// status) stay in `DocumentRuntimeView`.
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedTask {
+    pub(crate) task_id: String,
+    pub(crate) behavior_id: String,
+    pub(crate) prompt_template: String,
+    pub(crate) output_schema_ref: Option<String>,
+}
+
+/// Resolved view of a `Schedule` document paired with its resolved `Task`.
+///
+/// The task is embedded so the engine can "join once, fire many" — it does
+/// not need to look the task up again at each fire time. Only schedules with
+/// a resolvable task and an enabled, runnable behavior end up here; the rest
+/// go in `unavailable_schedules`.
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedSchedule {
+    pub(crate) schedule_id: String,
+    pub(crate) task_id: String,
+    pub(crate) task: ResolvedTask,
+    pub(crate) interval_secs: i64,
+    pub(crate) enabled: bool,
+    pub(crate) concurrency: ConcurrencyMode,
+}
+
+/// How a schedule handles overlapping runs when the previous fire has not
+/// completed by the next interval.
+///
+/// * `Parallel` — launch every tick regardless of in-flight runs.
+/// * `Serial` — skip a tick if a prior run is still in flight.
+/// * `LatestOnly` — supersede the in-flight run with the newer tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ConcurrencyMode {
+    Parallel,
+    Serial,
+    LatestOnly,
+}
+
+impl ConcurrencyMode {
+    /// Parse the schedule `concurrency` string. Strict exact match on
+    /// `"parallel"`, `"serial"`, or `"latest_only"` — no case folding,
+    /// aliases, or whitespace trimming. Unknown inputs return `None` so the
+    /// caller can mark the schedule unavailable.
+    pub(crate) fn parse(s: &str) -> Option<Self> {
+        match s {
+            "parallel" => Some(Self::Parallel),
+            "serial" => Some(Self::Serial),
+            "latest_only" => Some(Self::LatestOnly),
+            _ => None,
+        }
+    }
+}
+
+/// Placeholder for a resolved event trigger. PR 2 will populate real fields;
+/// for now this exists to lock in the snapshot shape so Task 18 / downstream
+/// callers can thread `active_event_triggers` through without churn when the
+/// event trigger wiring lands.
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedEventTrigger {}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ResolvedRuntimeSnapshot {
     pub(crate) default_behavior_id: String,
@@ -17,6 +82,9 @@ pub(crate) struct ResolvedRuntimeSnapshot {
     pub(crate) tool_surfaces: HashMap<String, Arc<ToolSurface>>,
     pub(crate) backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
     pub(crate) unavailable_behaviors: HashMap<String, String>,
+    pub(crate) active_schedules: HashMap<String, ResolvedSchedule>,
+    pub(crate) unavailable_schedules: HashSet<String>,
+    pub(crate) active_event_triggers: HashMap<String, ResolvedEventTrigger>,
 }
 
 impl ResolvedRuntimeSnapshot {
@@ -52,7 +120,36 @@ impl ResolvedRuntimeSnapshot {
             tool_surfaces,
             backend_admission_configs,
             unavailable_behaviors,
+            active_schedules: HashMap::new(),
+            unavailable_schedules: HashSet::new(),
+            active_event_triggers: HashMap::new(),
         }
+    }
+
+    /// Attach resolved schedules plus any schedule ids that failed resolution.
+    ///
+    /// Task 18 builds the schedule maps during `resolve_document_snapshot_*`
+    /// and layers them onto the snapshot via this builder so the existing
+    /// `from_parts_*` callers (tests, startup fallback) stay untouched.
+    #[allow(dead_code)]
+    pub(crate) fn with_schedules(
+        mut self,
+        active_schedules: HashMap<String, ResolvedSchedule>,
+        unavailable_schedules: HashSet<String>,
+    ) -> Self {
+        self.active_schedules = active_schedules;
+        self.unavailable_schedules = unavailable_schedules;
+        self
+    }
+
+    /// Attach resolved event triggers. Currently a stub; PR 2 populates it.
+    #[allow(dead_code)]
+    pub(crate) fn with_event_triggers(
+        mut self,
+        active_event_triggers: HashMap<String, ResolvedEventTrigger>,
+    ) -> Self {
+        self.active_event_triggers = active_event_triggers;
+        self
     }
 
     pub(crate) fn activate(
@@ -67,6 +164,9 @@ impl ResolvedRuntimeSnapshot {
             tool_surfaces: self.tool_surfaces,
             backend_admission_configs: self.backend_admission_configs,
             unavailable_behaviors: self.unavailable_behaviors,
+            active_schedules: self.active_schedules,
+            unavailable_schedules: self.unavailable_schedules,
+            active_event_triggers: self.active_event_triggers,
             dispatchers,
         }
     }
@@ -78,6 +178,9 @@ impl ResolvedRuntimeSnapshot {
             &self.tool_surfaces,
             &self.backend_admission_configs,
             &self.unavailable_behaviors,
+            &self.active_schedules,
+            &self.unavailable_schedules,
+            &self.active_event_triggers,
         )
     }
 }
@@ -90,6 +193,9 @@ pub(crate) struct ActiveRuntimeSnapshot {
     pub(crate) tool_surfaces: HashMap<String, Arc<ToolSurface>>,
     pub(crate) backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
     pub(crate) unavailable_behaviors: HashMap<String, String>,
+    pub(crate) active_schedules: HashMap<String, ResolvedSchedule>,
+    pub(crate) unavailable_schedules: HashSet<String>,
+    pub(crate) active_event_triggers: HashMap<String, ResolvedEventTrigger>,
     pub(crate) dispatchers: DispatcherMap,
 }
 
@@ -115,6 +221,9 @@ impl ActiveRuntimeSnapshot {
             &self.tool_surfaces,
             &self.backend_admission_configs,
             &self.unavailable_behaviors,
+            &self.active_schedules,
+            &self.unavailable_schedules,
+            &self.active_event_triggers,
         )
     }
 }
@@ -132,12 +241,16 @@ pub(crate) fn refresh_active_snapshot(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn configuration_fingerprint(
     default_behavior_id: &str,
     behaviors: &HashMap<String, Arc<BehaviorConfig>>,
     tool_surfaces: &HashMap<String, Arc<ToolSurface>>,
     backend_admission_configs: &HashMap<String, BackendAdmissionConfig>,
     unavailable_behaviors: &HashMap<String, String>,
+    active_schedules: &HashMap<String, ResolvedSchedule>,
+    unavailable_schedules: &HashSet<String>,
+    active_event_triggers: &HashMap<String, ResolvedEventTrigger>,
 ) -> String {
     let mut fingerprint = String::new();
     fingerprint.push_str("default:");
@@ -196,6 +309,40 @@ fn configuration_fingerprint(
         fingerprint.push_str(&behavior_id);
         fingerprint.push('=');
         fingerprint.push_str(reason);
+        fingerprint.push('\n');
+    }
+
+    let mut schedule_ids = active_schedules.keys().cloned().collect::<Vec<_>>();
+    schedule_ids.sort();
+    for schedule_id in schedule_ids {
+        let schedule = active_schedules
+            .get(&schedule_id)
+            .expect("schedule id came from active schedules map");
+        fingerprint.push_str("schedule:");
+        fingerprint.push_str(&schedule_id);
+        fingerprint.push('=');
+        fingerprint.push_str(&format!("{schedule:?}"));
+        fingerprint.push('\n');
+    }
+
+    let mut unavailable_schedule_ids = unavailable_schedules.iter().cloned().collect::<Vec<_>>();
+    unavailable_schedule_ids.sort();
+    for schedule_id in unavailable_schedule_ids {
+        fingerprint.push_str("unavailable_schedule:");
+        fingerprint.push_str(&schedule_id);
+        fingerprint.push('\n');
+    }
+
+    let mut event_trigger_ids = active_event_triggers.keys().cloned().collect::<Vec<_>>();
+    event_trigger_ids.sort();
+    for trigger_id in event_trigger_ids {
+        let trigger = active_event_triggers
+            .get(&trigger_id)
+            .expect("event trigger id came from active event triggers map");
+        fingerprint.push_str("event_trigger:");
+        fingerprint.push_str(&trigger_id);
+        fingerprint.push('=');
+        fingerprint.push_str(&format!("{trigger:?}"));
         fingerprint.push('\n');
     }
 
