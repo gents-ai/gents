@@ -332,12 +332,12 @@ async fn fork_at_user_turn_zero_produces_empty_child_with_provenance() {
     let child_messages = fetch_message_snapshots_for_session(&db.node, &outcome.session_id).await;
     assert!(child_messages.is_empty());
 
-    let _child_conv = support::snapshots::fetch_conversation_snapshot(&db.node, &outcome.session_id)
+    let child_conv = support::snapshots::fetch_conversation_snapshot(&db.node, &outcome.session_id)
         .await
         .expect("child conversation exists");
-    // Provenance must be recorded.
-    // NOTE: ConversationSnapshot will need to surface the new fields.
-    // This assertion lands once Task 13 exposes them on the snapshot.
+    assert_eq!(child_conv.forked_from_session_id.as_deref(), Some(parent_session));
+    assert_eq!(child_conv.fork_at_user_turn, Some(0));
+    assert!(child_conv.forked_at.is_some(), "forked_at must be set");
 }
 
 #[tokio::test]

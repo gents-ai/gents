@@ -104,6 +104,9 @@ async fn interactive_prepare_session_pins_behavior() {
             latest_request_id: request_id,
             behavior_id: AGENT_NAME.into(),
             status: "processing".into(),
+            forked_from_session_id: None,
+            fork_at_user_turn: None,
+            forked_at: None,
         })
     );
 }
@@ -169,6 +172,9 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
             latest_request_id: request_id,
             behavior_id: AGENT_NAME.into(),
             status: "processing".into(),
+            forked_from_session_id: None,
+            fork_at_user_turn: None,
+            forked_at: None,
         })
     );
     assert_eq!(
@@ -241,6 +247,9 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
             latest_request_id: request_id,
             behavior_id: AGENT_NAME.into(),
             status: "active".into(),
+            forked_from_session_id: None,
+            fork_at_user_turn: None,
+            forked_at: None,
         })
     );
     assert_eq!(
@@ -299,6 +308,9 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
             latest_request_id: lifecycle.request().request_id.clone(),
             behavior_id: AGENT_NAME.into(),
             status: "processing".into(),
+            forked_from_session_id: None,
+            fork_at_user_turn: None,
+            forked_at: None,
         })
     );
 }

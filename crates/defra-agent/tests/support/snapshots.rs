@@ -66,6 +66,12 @@ pub struct ConversationSnapshot {
     pub latest_request_id: String,
     pub behavior_id: String,
     pub status: String,
+    #[serde(default)]
+    pub forked_from_session_id: Option<String>,
+    #[serde(default)]
+    pub fork_at_user_turn: Option<i64>,
+    #[serde(default)]
+    pub forked_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -159,6 +165,9 @@ pub async fn fetch_conversation_snapshot(
                 latest_request_id
                 behavior_id
                 status
+                forked_from_session_id
+                fork_at_user_turn
+                forked_at
             }}
         }}"#
     );
