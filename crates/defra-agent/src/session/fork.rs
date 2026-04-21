@@ -51,7 +51,7 @@ pub async fn fork(
         .ok_or_else(|| ForkError::ForkSourceNotFound(params.source_session_id.to_string()))?;
 
     // Step 2: compute cut_seq from the Nth user message.
-    let (cut_seq, _cut_ts) = compute_cut(node, params.source_session_id, params.fork_at_user_turn)
+    let (cut_seq, cut_ts) = compute_cut(node, params.source_session_id, params.fork_at_user_turn)
         .await
         .map_err(ForkError::ForkCopyFailed)?
         .ok_or_else(|| ForkError::ForkAtUserTurnOutOfRange(params.fork_at_user_turn, 0))?;
@@ -82,6 +82,18 @@ pub async fn fork(
     .await
     .map_err(ForkError::ForkCopyFailed)?;
 
+    // Look up child agent_did from parent to pass into copy_tool_results.
+    let child_agent_did = parent.agent_did.clone().unwrap_or_default();
+    let copied_tool_results = copy_tool_results(
+        node,
+        params.source_session_id,
+        &child_session_id,
+        &cut_ts,
+        &child_agent_did,
+    )
+    .await
+    .map_err(ForkError::ForkCopyFailed)?;
+
     create_child_session_and_conversation(
         node,
         &child_session_id,
@@ -96,6 +108,7 @@ pub async fn fork(
         session_id: child_session_id,
         copied_messages,
         copied_tool_calls,
+        copied_tool_results,
         ..ForkOutcome::default()
     })
 }
@@ -273,6 +286,75 @@ async fn copy_tool_calls(
             completed_at_escaped = escape_graphql_string(completed_at),
         );
         execute_mutation_with_retry(node, &mutation, "fork::copy_tool_call").await?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+async fn copy_tool_results(
+    node: &EmbeddedNode,
+    source_session_id: &str,
+    child_session_id: &str,
+    cut_ts: &str,
+    child_agent_did: &str,
+) -> Result<u32> {
+    let escaped_source = escape_graphql_string(source_session_id);
+    let escaped_cut_ts = escape_graphql_string(cut_ts);
+    let query = format!(
+        r#"{{
+            AgentToolResult(
+                filter: {{
+                    session_id: {{ _eq: "{escaped_source}" }},
+                    created_at: {{ _lt: "{escaped_cut_ts}" }}
+                }},
+                order: {{ created_at: ASC }}
+            ) {{ tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        anyhow::bail!("copy_tool_results query failed: {:?}", resp.errors);
+    }
+    let rows = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolResult"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut count = 0u32;
+    let child_session_escaped = escape_graphql_string(child_session_id);
+    let child_agent_did_escaped = escape_graphql_string(child_agent_did);
+    for row in &rows {
+        let tool_name = row.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
+        let tool_input = row.get("tool_input").and_then(|v| v.as_str()).unwrap_or("");
+        let output_text = row.get("output_text").and_then(|v| v.as_str()).unwrap_or("");
+        let truncated = row.get("truncated").and_then(|v| v.as_bool()).unwrap_or(false);
+        let truncation_metadata = row.get("truncation_metadata").and_then(|v| v.as_str()).unwrap_or("");
+        let conversation_doc_id = row.get("conversation_doc_id").and_then(|v| v.as_str()).unwrap_or("");
+        let created_at = row.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentToolResult(input: {{
+                    agent_did: "{child_agent_did_escaped}",
+                    session_id: "{child_session_escaped}",
+                    tool_name: "{tool_name_escaped}",
+                    tool_input: "{tool_input_escaped}",
+                    output_text: "{output_text_escaped}",
+                    truncated: {truncated},
+                    truncation_metadata: "{truncation_metadata_escaped}",
+                    conversation_doc_id: "{conversation_doc_id_escaped}",
+                    created_at: "{created_at_escaped}"
+                }}) {{ _docID }}
+            }}"#,
+            tool_name_escaped = escape_graphql_string(tool_name),
+            tool_input_escaped = escape_graphql_string(tool_input),
+            output_text_escaped = escape_graphql_string(output_text),
+            truncation_metadata_escaped = escape_graphql_string(truncation_metadata),
+            conversation_doc_id_escaped = escape_graphql_string(conversation_doc_id),
+            created_at_escaped = escape_graphql_string(created_at),
+        );
+        execute_mutation_with_retry(node, &mutation, "fork::copy_tool_result").await?;
         count += 1;
     }
     Ok(count)
