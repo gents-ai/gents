@@ -7,7 +7,8 @@
 //! reason about without running proptest.
 
 use defra_agent::apply_model::{
-    apply_all, diff, ApplyStep, Collection, DesiredFields, DocRef, LiveState, Manifest,
+    apply_all, diff, references_of, ApplyStep, Collection, DesiredFields, DocRef, LiveState,
+    Manifest,
 };
 use std::collections::BTreeMap;
 
@@ -137,4 +138,48 @@ fn diff_sorts_same_applyorder_collections_by_id() {
     assert_eq!(steps.len(), 2);
     assert_eq!(steps[0].target(), &b1, "ids sort ascending within a rank");
     assert_eq!(steps[1].target(), &b2);
+}
+
+#[test]
+fn manifest_with_behavior_referencing_backend_orders_backend_first() {
+    let backend = r(Collection::InferenceBackend, "b1");
+    let behavior = r(Collection::AgentBehavior, "a1");
+
+    // a1 references b1 — so b1 must be written first.
+    let m = Manifest {
+        docs: {
+            let mut docs = BTreeMap::new();
+            docs.insert(backend.clone(), DesiredFields::opaque("b1-desired"));
+            docs.insert(
+                behavior.clone(),
+                DesiredFields::with_refs("a1-desired", vec![backend.clone()]),
+            );
+            docs
+        },
+    };
+    let l = LiveState {
+        desired: BTreeMap::new(),
+        live: BTreeMap::new(),
+    };
+
+    let steps: Vec<ApplyStep> = diff(&m, &l).into_steps();
+    assert_eq!(steps.len(), 2);
+    assert_eq!(
+        steps[0].target(),
+        &backend,
+        "referenced backend must be written before the behavior that references it",
+    );
+    assert_eq!(steps[1].target(), &behavior);
+
+    // After full apply, the behavior's reference resolves in acc.desired.
+    let after = apply_all(&l, &steps);
+    assert!(after.desired.contains_key(&backend));
+    assert!(after.desired.contains_key(&behavior));
+    for rf in references_of(after.desired.get(&behavior).unwrap()) {
+        assert!(
+            after.desired.contains_key(&rf),
+            "reference {:?} should resolve after apply",
+            rf,
+        );
+    }
 }

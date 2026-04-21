@@ -18,6 +18,74 @@ fn collection_strategy() -> impl Strategy<Value = Collection> {
     ]
 }
 
+// --- referential manifest generator (used by P2b) ---
+
+/// Rank-0 collections that carry no references and can be referrers'
+/// dependencies.
+const LEAF_COLLECTIONS: &[Collection] = &[
+    Collection::InferenceBackend,
+    Collection::ToolSelection,
+    Collection::InferenceProfile,
+    Collection::ToolServiceRegistry,
+];
+
+fn leaf_docref_strategy() -> impl Strategy<Value = DocRef> {
+    (
+        prop_oneof![
+            Just(Collection::InferenceBackend),
+            Just(Collection::ToolSelection),
+            Just(Collection::InferenceProfile),
+            Just(Collection::ToolServiceRegistry),
+        ],
+        "[a-z]{1,4}",
+    )
+        .prop_map(|(collection, id)| DocRef { collection, id })
+}
+
+/// Generate a manifest with 1..5 leaf docs (empty refs) and 0..3
+/// AgentBehavior docs whose `refs` point at one randomly-chosen leaf.
+/// This ensures P2b is non-vacuous: behaviors must sort after their leaf
+/// dependencies.
+fn referential_manifest_strategy() -> impl Strategy<Value = Manifest> {
+    prop::collection::btree_map(leaf_docref_strategy(), "[a-z]{1,4}", 1..5)
+        .prop_flat_map(|leaves| {
+            let leaf_keys: Vec<DocRef> = leaves.keys().cloned().collect();
+            let leaves_clone = leaves.clone();
+            let behavior_strategy = prop::collection::vec(
+                (0..leaf_keys.len(), "[a-z]{1,4}", "[a-z]{1,4}").prop_map({
+                    let leaf_keys = leaf_keys.clone();
+                    move |(refi, behavior_id, content)| {
+                        (
+                            DocRef {
+                                collection: Collection::AgentBehavior,
+                                id: behavior_id,
+                            },
+                            DesiredFields::with_refs(content, vec![leaf_keys[refi].clone()]),
+                        )
+                    }
+                }),
+                0..3,
+            );
+            (Just(leaves_clone), behavior_strategy)
+        })
+        .prop_map(|(leaves, behaviors)| {
+            let mut docs: BTreeMap<DocRef, DesiredFields> = BTreeMap::new();
+            for (k, v) in leaves {
+                docs.insert(k, DesiredFields::opaque(v));
+            }
+            for (k, v) in behaviors {
+                docs.insert(k, v);
+            }
+            Manifest { docs }
+        })
+}
+
+// Suppress dead-code warning: LEAF_COLLECTIONS is the authoritative
+// documentation of which ranks are "leaves" but the strategy expands it
+// inline via prop_oneof! to avoid a runtime index.
+#[allow(dead_code)]
+const _LEAF_COLLECTIONS_USED: &[Collection] = LEAF_COLLECTIONS;
+
 fn docref_strategy() -> impl Strategy<Value = DocRef> {
     (collection_strategy(), "[a-z]{1,4}").prop_map(|(collection, id)| DocRef { collection, id })
 }
@@ -61,11 +129,13 @@ proptest! {
         prop_assert_eq!(seen, union);
     }
 
-    /// P2 (ordering preserves references): applying `diff M L` one step at a
-    /// time produces an intermediate state with no dangling references after
-    /// every step. With `desired_fields_strategy` producing only empty-refs
-    /// payloads, this is vacuously true; Task B5 will strengthen the generator
-    /// to produce real references and make this property substantive.
+    /// P2 (ordering preserves references — vacuous): applying `diff M L` one
+    /// step at a time produces no dangling references after every step.
+    /// NOTE: this property is vacuously true for the general
+    /// `manifest_strategy` because `desired_fields_strategy` only emits
+    /// empty-refs payloads. P2b below covers the substantive case using
+    /// `referential_manifest_strategy`, which generates manifests with real
+    /// cross-document references.
     #[test]
     fn apply_ordering_preserves_references(
         m in manifest_strategy(),
@@ -111,6 +181,38 @@ proptest! {
         let steps = diff(&m, &l).into_steps();
         let after = apply_all(&l, &steps);
         prop_assert_eq!(after.live, l.live);
+    }
+
+    /// P2b (referential version of apply-ordering-preserves-references):
+    /// for manifests carrying real references, every intermediate state
+    /// after an apply step has no dangling reference. Because `diff` sorts
+    /// steps by `apply_order`, any leaf reference is written before its
+    /// behavior referrer. If this fails, that is a real sort-order bug in
+    /// `apply_model::diff` — do NOT suppress.
+    #[test]
+    fn apply_ordering_preserves_real_references(
+        m in referential_manifest_strategy(),
+    ) {
+        let l = LiveState {
+            desired: BTreeMap::new(),
+            live: BTreeMap::new(),
+        };
+        let steps = diff(&m, &l).into_steps();
+        let mut acc = l.clone();
+        for s in &steps {
+            acc = apply_all(&acc, &[s.clone()]);
+            for (d, payload) in &acc.desired {
+                for r in references_of(payload) {
+                    prop_assert!(
+                        acc.desired.contains_key(&r),
+                        "dangling reference {:?} from {:?} after step {:?}",
+                        r,
+                        d,
+                        s,
+                    );
+                }
+            }
+        }
     }
 }
 
