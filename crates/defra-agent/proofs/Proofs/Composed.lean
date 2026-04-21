@@ -61,4 +61,17 @@ def initial : ComposedState :=
     }
   }
 
+/-- S6 extension (placeholder): interrupted requests eventually have their
+    companion inference calls cancelled. The full statement requires the
+    `InferenceCall` layer that Task 9 of the interruption-and-TTL plan will
+    introduce; until then this theorem stands as a trivial placeholder
+    documenting the bridge obligation. See
+    `docs/superpowers/plans/2026-04-21-request-interruption-and-ttl.md`
+    Task 9 for the real statement. -/
+theorem interrupted_request_cancels_calls
+    (r : RequestContext)
+    (_h_interrupted : r.state = .interrupted) :
+    True := by
+  trivial
+
 end ComposedState
