@@ -109,6 +109,24 @@ This is called out explicitly here so that no one later reads T-Conv as a guaran
 - Apply atomicity implementation (I-2).
 - Delete semantics (I-3).
 
+## Post-Landing Work (2026-04-21)
+
+After the initial implementation landed, a critical review found that:
+
+- T-Conv proved only a desired-projection claim (`(applyAll L (diff M L)).desired d = some f`), not the spec's ResolvedSnapshot-form claim.
+- `referencesOf` was globally empty, making `apply_preserves_wellFormed` and the corresponding property test vacuous.
+- Production `apply_desired_state_changes` wrote `AgentPrincipal` last, disagreeing with its `apply_order` rank of 1.
+- `Collection` was defined in three places (CLI crate, apply_model, Lean) with no drift guard.
+
+A follow-up plan (`docs/superpowers/plans/2026-04-21-apply-reconcile-finish-promised-work.md`) addressed all four gaps plus a handful of smaller issues. The final state:
+
+- T-Conv now proves `snapshot.runnable ∪ snapshot.unavailable = M.behaviorIds` (ResolvedSnapshot form) and `active.runnable ∪ active.unavailable = M.behaviorIds` (ActiveRuntimeSnapshot form, via `ResolvedSnapshot.activate`).
+- `Manifest.WellFormed` gained a second conjunct requiring references to go to strictly-lower-rank collections. `apply_preserves_wellFormed` uses this non-vacuously.
+- `DesiredFields` carries explicit `refs : Finset DocRef` (Lean) / `Vec<DocRef>` (Rust). The property test `apply_ordering_preserves_real_references` exercises the non-vacuous closure property under a referential generator.
+- `Collection` is defined once in `defra_agent::collection`; consumer crates (CLI, apply_model) use the shared type. Lean inductive parity is enforced by an exhaustive pattern-match example + a rank-parity theorem.
+- Production apply order now matches `Collection::apply_order()`; an anchor test in `cli_config_apply_order.rs` pins this.
+- `DesiredApplyBundle::from_trusted_bundle` is `pub(super)` to `desired_state`, making intra-crate bypass impossible.
+
 ## Deliverables Checklist
 
 - [x] `crates/defra-agent/proofs/Proofs/ApplyReconcile.lean` — new module with `Collection`, `DocRef`, `Manifest`, `LiveState`, `ApplyStep`, `diff`, `applyOne`, and T-Conv.
