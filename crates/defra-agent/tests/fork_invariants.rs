@@ -215,3 +215,53 @@ async fn fork_rejects_mismatched_caller_principal() {
 
     assert!(matches!(err, ForkError::ForkNotSameAgent), "expected ForkNotSameAgent, got {:?}", err);
 }
+
+#[tokio::test]
+async fn fork_accepts_behavior_swap_within_same_principal() {
+    let db = test_db("fork-behavior-swap-ok").await;
+
+    let parent_session = "parent-swap-ok";
+    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+    // A second behavior owned by the same principal.
+    create_agent_behavior(&db.node, "alt-behavior", AGENT_DID).await;
+    create_agent_message(&db.node, parent_session, 1, "user", "u1", "2026-04-21T10:00:01Z").await;
+
+    let outcome = fork(&db.node, ForkParams {
+        source_session_id: parent_session,
+        fork_at_user_turn: 0,
+        caller_agent_did: AGENT_DID,
+        target_behavior_id: Some("alt-behavior"),
+    }).await.expect("fork with matching-principal behavior succeeds");
+
+    // Confirm the child's AgentConversation records the swapped behavior_id.
+    let child_conv = support::snapshots::fetch_conversation_snapshot(&db.node, &outcome.session_id)
+        .await
+        .expect("child conversation exists");
+    assert_eq!(child_conv.behavior_id, "alt-behavior");
+}
+
+#[tokio::test]
+async fn fork_rejects_behavior_owned_by_different_principal() {
+    let db = test_db("fork-behavior-swap-bad").await;
+
+    let parent_session = "parent-swap-bad";
+    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+    create_agent_behavior(&db.node, "foreign-behavior", "did:defra-agent:someone-else").await;
+    create_agent_message(&db.node, parent_session, 1, "user", "u1", "2026-04-21T10:00:01Z").await;
+
+    let err = fork(&db.node, ForkParams {
+        source_session_id: parent_session,
+        fork_at_user_turn: 0,
+        caller_agent_did: AGENT_DID,
+        target_behavior_id: Some("foreign-behavior"),
+    }).await.expect_err("fork must reject cross-principal behavior swap");
+
+    assert!(
+        matches!(err, ForkError::ForkBehaviorNotOwnedByPrincipal(_, _)),
+        "expected ForkBehaviorNotOwnedByPrincipal, got {:?}", err
+    );
+}

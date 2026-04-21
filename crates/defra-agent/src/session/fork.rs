@@ -97,11 +97,18 @@ pub async fn fork(
         .map_err(ForkError::ForkCopyFailed)?
         .ok_or_else(|| ForkError::ForkAtUserTurnOutOfRange(params.fork_at_user_turn, 0))?;
 
-    // Step 3: resolve child behavior (inherit parent for this task).
-    let resolved_behavior_id = parent
-        .behavior_id
-        .clone()
-        .unwrap_or_else(|| String::new());
+    // Step 3: resolve child behavior (inherit parent, or swap to validated target).
+    let resolved_behavior_id = if let Some(target) = params.target_behavior_id {
+        if let Some(err) = resolve_target_behavior(node, target, parent_agent_did)
+            .await
+            .map_err(ForkError::ForkCopyFailed)?
+        {
+            return Err(err);
+        }
+        target.to_string()
+    } else {
+        parent.behavior_id.clone().unwrap_or_default()
+    };
 
     // Step 4 & 5: copy messages, create child session + conversation.
     let child_session_id = uuid::Uuid::new_v4().to_string();
@@ -161,6 +168,41 @@ pub async fn fork(
         copied_tool_results,
         copied_compaction_entries,
     })
+}
+
+async fn resolve_target_behavior(
+    node: &EmbeddedNode,
+    target_behavior_id: &str,
+    parent_agent_did: &str,
+) -> Result<Option<ForkError>> {
+    let escaped = escape_graphql_string(target_behavior_id);
+    let query = format!(
+        r#"{{
+            AgentBehavior(filter: {{ behavior_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ agent_did }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        anyhow::bail!("resolve_target_behavior query failed: {:?}", resp.errors);
+    }
+    let rows = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentBehavior"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if rows.is_empty() {
+        return Ok(Some(ForkError::ForkBehaviorNotFound(target_behavior_id.to_string())));
+    }
+    let behavior_did = rows[0].get("agent_did").and_then(|v| v.as_str()).unwrap_or("");
+    if behavior_did != parent_agent_did {
+        return Ok(Some(ForkError::ForkBehaviorNotOwnedByPrincipal(
+            target_behavior_id.to_string(),
+            parent_agent_did.to_string(),
+        )));
+    }
+    Ok(None)
 }
 
 async fn compute_cut(
