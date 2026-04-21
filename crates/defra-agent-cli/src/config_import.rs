@@ -8,7 +8,7 @@ use crate::collection::Collection;
 use crate::config_bundle::{sanitize_import_document, select_apply_collection_docs};
 use crate::config_writes::{write_scheduled_task_document, ConfigAccess};
 use crate::desired_state;
-use crate::shared::{ConfigApplyCounts, ConfigExportBundle};
+use crate::shared::{ConfigApplyCounts, ConfigExportBundle, DesiredApplyBundle};
 use crate::{
     extract_mutation_doc_id, graphql_input_literal, CONFIG_EXPORT_FORMAT, CONFIG_EXPORT_FORMAT_V1,
 };
@@ -188,9 +188,10 @@ pub(crate) fn select_apply_principal_docs(
 
 pub(crate) async fn apply_desired_state_changes(
     access: &ConfigAccess,
-    desired_bundle: &ConfigExportBundle,
+    desired_bundle: &DesiredApplyBundle,
     planned: &desired_state::DesiredStateDiffReport,
 ) -> Result<ConfigApplyCounts> {
+    let desired_bundle = desired_bundle.as_bundle();
     let backend_docs = select_apply_collection_docs(
         &desired_bundle.inference_backends,
         Collection::InferenceBackend.unique_field(),

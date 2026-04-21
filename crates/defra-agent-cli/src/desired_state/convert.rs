@@ -184,8 +184,8 @@ pub(crate) fn manifest_from_export_bundle(
 pub(crate) fn export_bundle_from_manifest(
     manifest: &DesiredStateManifest,
     access_mode: &str,
-) -> Result<super::super::ConfigExportBundle> {
-    Ok(super::super::ConfigExportBundle {
+) -> Result<super::super::DesiredApplyBundle> {
+    let bundle = super::super::ConfigExportBundle {
         format: super::super::CONFIG_EXPORT_FORMAT.to_string(),
         agent_did: manifest.agent_principal.agent_did.clone(),
         exported_at: chrono::Utc::now().to_rfc3339(),
@@ -221,7 +221,10 @@ pub(crate) fn export_bundle_from_manifest(
             .iter()
             .map(serde_json::to_value)
             .collect::<serde_json::Result<Vec<_>>>()?,
-    })
+    };
+    Ok(super::super::DesiredApplyBundle::from_trusted_bundle(
+        bundle,
+    ))
 }
 
 pub(crate) fn desired_from_value<T>(value: &Value, allowed_fields: &[&str]) -> Result<T>

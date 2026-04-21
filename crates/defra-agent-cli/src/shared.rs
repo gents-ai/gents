@@ -164,6 +164,33 @@ pub(crate) struct ConfigExportBundle {
     pub(crate) scheduled_tasks: Vec<Value>,
 }
 
+/// A [`ConfigExportBundle`] whose contents are guaranteed to have been
+/// produced from a typed [`crate::desired_state::DesiredStateManifest`] —
+/// i.e. every field-carrying value in the bundle originated from a type
+/// implementing [`defra_agent::DesiredFields`].
+///
+/// The only public constructor lives in
+/// [`crate::desired_state::export_bundle_from_manifest`]. This makes it
+/// statically impossible to route a bundle that contains runtime-owned
+/// fields (for example one loaded via `config import <file.json>`) into
+/// [`crate::apply_desired_state_changes`].
+#[derive(Debug, Clone)]
+pub(crate) struct DesiredApplyBundle {
+    inner: ConfigExportBundle,
+}
+
+impl DesiredApplyBundle {
+    /// Internal constructor. Callers outside `desired_state` must not use
+    /// this directly — they must go through `export_bundle_from_manifest`.
+    pub(crate) fn from_trusted_bundle(inner: ConfigExportBundle) -> Self {
+        Self { inner }
+    }
+
+    pub(crate) fn as_bundle(&self) -> &ConfigExportBundle {
+        &self.inner
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ConfigApplyCounts {
     pub(crate) agent_principal: usize,
