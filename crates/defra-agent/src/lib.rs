@@ -5,6 +5,7 @@
 
 pub(crate) mod admission;
 pub mod agent;
+pub mod apply_model;
 pub mod backend_provider;
 pub mod backend_registry;
 pub mod compaction;
