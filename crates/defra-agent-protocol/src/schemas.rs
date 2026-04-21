@@ -35,6 +35,8 @@ pub const TOOL_SELECTION_NAME: &str = "ToolSelection";
 pub const TOOL_SELECTION: &str = include_str!("../schemas/agent/tool_selection.graphql");
 pub const TASK_NAME: &str = "Task";
 pub const TASK: &str = include_str!("../schemas/agent/task.graphql");
+pub const SCHEDULE_NAME: &str = "Schedule";
+pub const SCHEDULE: &str = include_str!("../schemas/agent/schedule.graphql");
 
 // inference domain
 pub const INFERENCE_BACKEND_NAME: &str = "InferenceBackend";
@@ -73,6 +75,7 @@ pub const ALL: &[&str] = &[
     COMPACTION_ENTRY,
     SCHEDULED_TASK,
     TASK,
+    SCHEDULE,
     TOOL_SERVICE_REGISTRY,
 ];
 pub const ALL_COLLECTION_NAMES: &[&str] = &[
@@ -92,6 +95,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     COMPACTION_ENTRY_NAME,
     SCHEDULED_TASK_NAME,
     TASK_NAME,
+    SCHEDULE_NAME,
     TOOL_SERVICE_REGISTRY_NAME,
 ];
 
@@ -105,7 +109,7 @@ mod tests {
     fn all_contains_every_schema() {
         assert_eq!(
             ALL.len(),
-            17,
+            18,
             "ALL should enumerate every non-runtime schema"
         );
     }

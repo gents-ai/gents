@@ -1,0 +1,14 @@
+type Schedule @branchable {
+    schedule_id: String @index(unique: true)
+    task_id: String @index
+    interval_secs: Int
+    enabled: Boolean @index
+    concurrency: String @index
+    next_run_at: DateTime @index(direction: ASC)
+    last_attempt_at: DateTime @index(direction: DESC)
+    last_status: String @index
+    last_error: String
+    fire_count: Int
+    created_at: DateTime @index(direction: DESC)
+    updated_at: DateTime @index(direction: DESC)
+}
