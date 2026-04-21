@@ -1,4 +1,4 @@
-use defra_agent::session::{fork, ForkParams};
+use defra_agent::session::{fork, ForkError, ForkParams};
 
 mod support;
 
@@ -9,7 +9,7 @@ use support::snapshots::fetch_compaction_entry_snapshots_for_session;
 use support::{
     create_agent_behavior, create_agent_conversation, create_agent_message,
     create_agent_session, create_agent_tool_call, create_agent_tool_result,
-    create_compaction_entry, test_db, AGENT_DID, AGENT_NAME,
+    create_compaction_entry, create_request, test_db, AGENT_DID, AGENT_NAME,
 };
 
 #[tokio::test]
@@ -171,4 +171,27 @@ async fn fork_copies_compaction_entries_strictly_before_cut_ts() {
     assert_eq!(child_compactions[0].sequence, 1); // preserved from parent
     assert_eq!(child_compactions[0].compaction_key, format!("{}:1", outcome.session_id));
     assert_eq!(outcome.copied_compaction_entries, 1);
+}
+
+#[tokio::test]
+async fn fork_rejects_source_with_non_terminal_request() {
+    let db = test_db("fork-busy-source").await;
+
+    let parent_session = "parent-busy";
+    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+    create_agent_message(&db.node, parent_session, 1, "user", "u1", "2026-04-21T10:00:01Z").await;
+
+    // Create a non-terminal AgentRequest (status=pending, lifecycle_state=pending).
+    create_request(&db.node, "req-pending", parent_session, "pending", "2026-04-21T10:00:02Z").await;
+
+    let err = fork(&db.node, ForkParams {
+        source_session_id: parent_session,
+        fork_at_user_turn: 0,
+        caller_agent_did: AGENT_DID,
+        target_behavior_id: None,
+    }).await.expect_err("fork must reject busy source");
+
+    assert!(matches!(err, ForkError::ForkSourceBusy), "expected ForkSourceBusy, got {:?}", err);
 }

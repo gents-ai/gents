@@ -40,6 +40,33 @@ pub enum ForkError {
     ForkCopyFailed(#[from] anyhow::Error),
 }
 
+async fn verify_source_idle(node: &EmbeddedNode, source_session_id: &str) -> Result<bool> {
+    let escaped = escape_graphql_string(source_session_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{
+                    session_id: {{ _eq: "{escaped}" }},
+                    lifecycle_state: {{ _in: ["pending", "claimed", "processing", "inputRequired"] }}
+                }},
+                limit: 1
+            ) {{ request_id }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        anyhow::bail!("verify_source_idle query failed: {:?}", resp.errors);
+    }
+    let rows = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    Ok(rows.is_empty())
+}
+
 pub async fn fork(
     node: &EmbeddedNode,
     params: ForkParams<'_>,
@@ -49,6 +76,14 @@ pub async fn fork(
         .await
         .map_err(ForkError::ForkCopyFailed)?
         .ok_or_else(|| ForkError::ForkSourceNotFound(params.source_session_id.to_string()))?;
+
+    // Step 1b: reject busy sources before doing any copy work.
+    if !verify_source_idle(node, params.source_session_id)
+        .await
+        .map_err(ForkError::ForkCopyFailed)?
+    {
+        return Err(ForkError::ForkSourceBusy);
+    }
 
     // Step 2: compute cut_seq from the Nth user message.
     let (cut_seq, cut_ts) = compute_cut(node, params.source_session_id, params.fork_at_user_turn)
