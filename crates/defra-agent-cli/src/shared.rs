@@ -161,8 +161,6 @@ pub(crate) struct ConfigExportBundle {
     #[serde(default)]
     pub(crate) tool_service_registries: Vec<Value>,
     #[serde(default)]
-    pub(crate) scheduled_tasks: Vec<Value>,
-    #[serde(default)]
     pub(crate) tasks: Vec<Value>,
     #[serde(default)]
     pub(crate) schedules: Vec<Value>,

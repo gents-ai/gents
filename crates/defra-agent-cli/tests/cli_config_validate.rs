@@ -225,14 +225,15 @@ async fn config_validate_reports_reference_errors_and_fails_nonzero() -> Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_validate_accepts_tool_services_dir_and_scheduled_tasks_dir() -> Result<()> {
+async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     let root = tempdir.path().join("infra").join("agents").join("fleet");
     fs::create_dir_all(&home_dir)?;
     fs::create_dir_all(&root)?;
     fs::create_dir_all(root.join("tool-services"))?;
-    fs::create_dir_all(root.join("scheduled-tasks"))?;
+    fs::create_dir_all(root.join("tasks"))?;
+    fs::create_dir_all(root.join("schedules"))?;
 
     let agent_did = format!("did:defra-agent:{}", Uuid::new_v4().simple());
     let default_behavior_id = format!("{agent_did}:default");
@@ -311,15 +312,25 @@ async fn config_validate_accepts_tool_services_dir_and_scheduled_tasks_dir() -> 
         }),
     )?;
     write_json_file(
-        &root.join("scheduled-tasks").join("nightly-audit.json"),
+        &root.join("tasks").join("nightly-audit.json"),
         &serde_json::json!({
             "task_id": "nightly-audit",
-            "agent_did": agent_did.clone(),
-            "behavior_id": default_behavior_id.clone(),
             "name": "Nightly Audit",
-            "prompt": "Audit the fleet state and summarize drift.",
+            "description": null,
+            "behavior_id": default_behavior_id.clone(),
+            "prompt_template": "Audit the fleet state and summarize drift.",
+            "enabled": false,
+            "output_schema_ref": null
+        }),
+    )?;
+    write_json_file(
+        &root.join("schedules").join("nightly-audit-hourly.json"),
+        &serde_json::json!({
+            "schedule_id": "nightly-audit-hourly",
+            "task_id": "nightly-audit",
             "interval_secs": 3600,
-            "enabled": false
+            "enabled": false,
+            "concurrency": "serial"
         }),
     )?;
 
@@ -345,9 +356,11 @@ async fn config_validate_accepts_tool_services_dir_and_scheduled_tasks_dir() -> 
         Some(1)
     );
     assert_eq!(
-        output
-            .pointer("/counts/scheduled_tasks")
-            .and_then(Value::as_u64),
+        output.pointer("/counts/tasks").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        output.pointer("/counts/schedules").and_then(Value::as_u64),
         Some(1)
     );
 

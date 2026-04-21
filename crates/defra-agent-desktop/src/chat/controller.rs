@@ -336,6 +336,8 @@ mod tests {
                 deadline: None,
                 retry_count: Some(0),
                 max_retries: Some(3),
+                caused_by_trigger_id: None,
+                caused_by_trigger_kind: None,
             }],
             responses: vec![AgentResponseRow {
                 response_key: "resp-1".to_string(),

@@ -1,12 +1,10 @@
 use anyhow::Result;
 use defra_agent_protocol::graphql::{
     execute_graphql_async, extract_mutation_doc_id as shared_extract_mutation_doc_id,
-    first_graphql_row as shared_first_graphql_row,
     graphql_bool_literal as shared_graphql_bool_literal,
     graphql_endpoint_available as shared_graphql_endpoint_available,
     graphql_input_literal as shared_graphql_input_literal, graphql_rows_from_response,
     graphql_string_list_literal as shared_graphql_string_list_literal,
-    normalize_optional_rfc3339 as shared_normalize_optional_rfc3339,
     nullable_string_field as shared_nullable_string_field,
     optional_bool_field as shared_optional_bool_field,
     optional_f64_field as shared_optional_f64_field,
@@ -91,10 +89,6 @@ pub(crate) fn graphql_bool_literal(value: bool) -> &'static str {
     shared_graphql_bool_literal(value)
 }
 
-pub(crate) fn normalize_optional_rfc3339(value: Option<&str>) -> Result<Option<String>> {
-    shared_normalize_optional_rfc3339(value)
-}
-
 pub(crate) fn optional_i64_field(name: &str, value: Option<i64>) -> Option<String> {
     shared_optional_i64_field(name, value)
 }
@@ -130,9 +124,3 @@ pub(crate) fn graphql_diagnostic_hint(graphql: &str) -> String {
     }
 }
 
-pub(crate) fn first_graphql_row<'a>(
-    response: &'a Value,
-    collection_name: &str,
-) -> Result<&'a Value> {
-    shared_first_graphql_row(response, collection_name)
-}

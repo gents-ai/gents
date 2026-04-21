@@ -239,6 +239,8 @@ mod tests {
                     deadline: None,
                     retry_count: None,
                     max_retries: None,
+                    caused_by_trigger_id: None,
+                    caused_by_trigger_kind: None,
                 },
                 AgentRequestRow {
                     request_id: "req-other".to_string(),
@@ -259,6 +261,8 @@ mod tests {
                     deadline: None,
                     retry_count: None,
                     max_retries: None,
+                    caused_by_trigger_id: None,
+                    caused_by_trigger_kind: None,
                 },
             ],
             scheduled_tasks: vec![

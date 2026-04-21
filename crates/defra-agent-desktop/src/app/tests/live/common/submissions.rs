@@ -303,6 +303,8 @@ pub(crate) fn create_live_agent_request_via_graphql(
         session_id: &session_id,
         behavior_id,
         created_at: &created_at,
+        caused_by_trigger_id: None,
+        caused_by_trigger_kind: None,
     });
     execute_graphql(graphql_url, &mutation)?;
 

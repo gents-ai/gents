@@ -148,7 +148,7 @@ async fn config_export_import_round_trips_offline_and_requires_override() -> Res
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_export_import_round_trips_tool_services_and_scheduled_tasks() -> Result<()> {
+async fn config_export_import_round_trips_tool_services_and_tasks() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let source_home = tempdir.path().join("source-home");
     let target_home = tempdir.path().join("target-home");
@@ -172,11 +172,6 @@ async fn config_export_import_round_trips_tool_services_and_scheduled_tasks() ->
     )?;
 
     let mut seeded_bundle = run_cli_json(&source_home, &["config", "export"])?;
-    let agent_did = seeded_bundle
-        .get("agent_did")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("seeded export missing agent_did"))?
-        .to_string();
     let behavior_id = seeded_bundle
         .pointer("/agent_principal/default_behavior_id")
         .and_then(Value::as_str)
@@ -184,6 +179,7 @@ async fn config_export_import_round_trips_tool_services_and_scheduled_tasks() ->
         .to_string();
     let service_id = format!("ops-mcp-{}", Uuid::new_v4().simple());
     let task_id = format!("nightly-audit-{}", Uuid::new_v4().simple());
+    let schedule_id = format!("{task_id}-hourly");
 
     seeded_bundle
         .get_mut("tool_service_registries")
@@ -200,17 +196,28 @@ async fn config_export_import_round_trips_tool_services_and_scheduled_tasks() ->
             "mcp_path": "/mcp"
         }));
     seeded_bundle
-        .get_mut("scheduled_tasks")
+        .get_mut("tasks")
         .and_then(Value::as_array_mut)
-        .ok_or_else(|| anyhow!("seeded export missing scheduled_tasks array"))?
+        .ok_or_else(|| anyhow!("seeded export missing tasks array"))?
         .push(serde_json::json!({
             "task_id": task_id.clone(),
-            "agent_did": agent_did.clone(),
-            "behavior_id": behavior_id.clone(),
             "name": "Nightly Audit",
-            "prompt": "Audit the fleet state and summarize drift.",
+            "description": null,
+            "behavior_id": behavior_id.clone(),
+            "prompt_template": "Audit the fleet state and summarize drift.",
+            "enabled": false,
+            "output_schema_ref": null
+        }));
+    seeded_bundle
+        .get_mut("schedules")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| anyhow!("seeded export missing schedules array"))?
+        .push(serde_json::json!({
+            "schedule_id": schedule_id.clone(),
+            "task_id": task_id.clone(),
             "interval_secs": 3600,
-            "enabled": false
+            "enabled": false,
+            "concurrency": "serial"
         }));
 
     fs::write(&export_path, serde_json::to_vec_pretty(&seeded_bundle)?)
@@ -232,8 +239,12 @@ async fn config_export_import_round_trips_tool_services_and_scheduled_tasks() ->
         Some(1)
     );
     assert_eq!(
+        seeded_import.pointer("/counts/tasks").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
         seeded_import
-            .pointer("/counts/scheduled_tasks")
+            .pointer("/counts/schedules")
             .and_then(Value::as_u64),
         Some(1)
     );
@@ -247,9 +258,15 @@ async fn config_export_import_round_trips_tool_services_and_scheduled_tasks() ->
     );
     assert_eq!(
         exported
-            .pointer("/scheduled_tasks/0/task_id")
+            .pointer("/tasks/0/task_id")
             .and_then(Value::as_str),
         Some(task_id.as_str())
+    );
+    assert_eq!(
+        exported
+            .pointer("/schedules/0/schedule_id")
+            .and_then(Value::as_str),
+        Some(schedule_id.as_str())
     );
     assert!(
         exported
@@ -262,14 +279,6 @@ async fn config_export_import_round_trips_tool_services_and_scheduled_tasks() ->
             .pointer("/tool_service_registries/0/tools")
             .is_none(),
         "tool-service export should omit discovered tools: {exported}"
-    );
-    assert!(
-        exported.pointer("/scheduled_tasks/0/created_at").is_none(),
-        "scheduled-task export should omit runtime timestamps: {exported}"
-    );
-    assert!(
-        exported.pointer("/scheduled_tasks/0/last_status").is_none(),
-        "scheduled-task export should omit runtime scheduler fields: {exported}"
     );
 
     fs::write(&export_path, serde_json::to_vec_pretty(&exported)?)
@@ -290,8 +299,12 @@ async fn config_export_import_round_trips_tool_services_and_scheduled_tasks() ->
         Some(1)
     );
     assert_eq!(
+        imported.pointer("/counts/tasks").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
         imported
-            .pointer("/counts/scheduled_tasks")
+            .pointer("/counts/schedules")
             .and_then(Value::as_u64),
         Some(1)
     );
@@ -316,15 +329,21 @@ async fn config_export_import_round_trips_tool_services_and_scheduled_tasks() ->
     );
     assert_eq!(
         reexported
-            .pointer("/scheduled_tasks/0/task_id")
+            .pointer("/tasks/0/task_id")
             .and_then(Value::as_str),
         Some(task_id.as_str())
     );
     assert_eq!(
         reexported
-            .pointer("/scheduled_tasks/0/prompt")
+            .pointer("/tasks/0/prompt_template")
             .and_then(Value::as_str),
         Some("Audit the fleet state and summarize drift.")
+    );
+    assert_eq!(
+        reexported
+            .pointer("/schedules/0/schedule_id")
+            .and_then(Value::as_str),
+        Some(schedule_id.as_str())
     );
 
     Ok(())

@@ -98,6 +98,8 @@ fn store_derives_turn_from_retry_chain_tip() {
                 deadline: None,
                 retry_count: None,
                 max_retries: None,
+                caused_by_trigger_id: None,
+                caused_by_trigger_kind: None,
             },
             AgentRequestRow {
                 request_id: "req-2".to_string(),
@@ -118,6 +120,8 @@ fn store_derives_turn_from_retry_chain_tip() {
                 deadline: None,
                 retry_count: None,
                 max_retries: None,
+                caused_by_trigger_id: None,
+                caused_by_trigger_kind: None,
             },
         ],
         responses: vec![
@@ -196,6 +200,8 @@ fn store_derives_turn_from_conversation_latest_request_not_random_request_id_ord
                 deadline: None,
                 retry_count: None,
                 max_retries: None,
+                caused_by_trigger_id: None,
+                caused_by_trigger_kind: None,
             },
             AgentRequestRow {
                 request_id: "req-a-complete".to_string(),
@@ -216,6 +222,8 @@ fn store_derives_turn_from_conversation_latest_request_not_random_request_id_ord
                 deadline: None,
                 retry_count: None,
                 max_retries: None,
+                caused_by_trigger_id: None,
+                caused_by_trigger_kind: None,
             },
         ],
         responses: vec![AgentResponseRow {

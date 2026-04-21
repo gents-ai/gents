@@ -182,7 +182,6 @@ pub(crate) async fn build_config_export_bundle(
         inference_backends: backend_rows,
         inference_profiles: profile_rows,
         tool_service_registries: tool_service_registry_rows,
-        scheduled_tasks: Vec::new(),
         tasks: task_rows,
         schedules: schedule_rows,
     })
@@ -399,7 +398,6 @@ pub(crate) async fn build_desired_state_live_bundle(
         inference_backends: backend_rows,
         inference_profiles: profile_rows,
         tool_service_registries: tool_service_registry_rows,
-        scheduled_tasks: Vec::new(),
         tasks: task_rows,
         schedules: schedule_rows,
     })

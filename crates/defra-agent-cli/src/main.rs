@@ -51,7 +51,7 @@ const DEFAULT_LOG_FILTER: &str = concat!(
     "defra_agent::hook=info,",
     "defra_agent::session::sessions=info,",
     "defra_agent::streaming=info,",
-    "defra_agent::scheduler::loop_impl=info"
+    "defra_agent::trigger_engine=info"
 );
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
 const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
@@ -473,8 +473,7 @@ mod tests {
                     "probe_status": "healthy"
                 }],
                 "inference_profiles": [],
-                "tool_service_registries": [],
-                "scheduled_tasks": []
+                "tool_service_registries": []
             }))
             .unwrap(),
         )

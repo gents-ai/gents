@@ -232,7 +232,6 @@ pub(crate) fn export_bundle_from_manifest(
             .iter()
             .map(serde_json::to_value)
             .collect::<serde_json::Result<Vec<_>>>()?,
-        scheduled_tasks: Vec::new(),
         tasks: manifest
             .tasks
             .iter()
