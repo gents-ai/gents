@@ -67,6 +67,7 @@ pub use schema::{
     TOOL_SERVICE_REGISTRY_SCHEMA,
 };
 pub use session::load_history;
+pub use session::{fork, ForkError, ForkOutcome, ForkParams};
 pub use streaming::{DefraStreamWriter, StreamWriter};
 pub use tool_surface::{
     cli_tool, BashMode, BehaviorToolConfig, CustomToolFactory, FileToolMode, ToolCeiling,
