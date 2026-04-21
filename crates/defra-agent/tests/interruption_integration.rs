@@ -73,6 +73,14 @@ async fn offline_replay_of_stale_requests_does_not_call_backend() {
         let snap = fetch_request_snapshot(&db.node, doc_id).await;
         assert_eq!(snap.lifecycle_state, "dead");
         assert_eq!(snap.failure_reason, "Stale");
+        assert_eq!(
+            snap.backend_id, "",
+            "stale request must not be bound to a backend"
+        );
+        assert!(
+            !snap.claimed_at_present,
+            "stale request must not be claimed"
+        );
     }
 }
 

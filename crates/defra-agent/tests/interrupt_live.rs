@@ -24,5 +24,9 @@ async fn live_interrupt_mid_stream_on_minimax() {
     if std::env::var("MINIMAX_LIVE").is_err() {
         return;
     }
+    if std::env::var("MINIMAX_API_KEY").is_err() {
+        eprintln!("MINIMAX_LIVE set but MINIMAX_API_KEY missing; skipping");
+        return;
+    }
     todo!("needs full BehaviorDaemon fixture + MiniMax credentials");
 }
