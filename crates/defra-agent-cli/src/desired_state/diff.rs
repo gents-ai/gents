@@ -73,6 +73,28 @@ pub(crate) fn diff_manifests(
             .map(|value| (value.service_id.clone(), value))
             .collect(),
     );
+    let tasks = diff_collection(
+        desired
+            .tasks
+            .iter()
+            .map(|value| (value.task_id.clone(), value))
+            .collect(),
+        live.tasks
+            .iter()
+            .map(|value| (value.task_id.clone(), value))
+            .collect(),
+    );
+    let schedules = diff_collection(
+        desired
+            .schedules
+            .iter()
+            .map(|value| (value.schedule_id.clone(), value))
+            .collect(),
+        live.schedules
+            .iter()
+            .map(|value| (value.schedule_id.clone(), value))
+            .collect(),
+    );
 
     let counts = DesiredStateDiffCollectionsCounts {
         agent_principal: agent_principal.counts(),
@@ -81,6 +103,8 @@ pub(crate) fn diff_manifests(
         inference_backends: inference_backends.counts(),
         inference_profiles: inference_profiles.counts(),
         tool_service_registries: tool_service_registries.counts(),
+        tasks: tasks.counts(),
+        schedules: schedules.counts(),
     };
     let ok = [
         &counts.agent_principal,
@@ -89,6 +113,8 @@ pub(crate) fn diff_manifests(
         &counts.inference_backends,
         &counts.inference_profiles,
         &counts.tool_service_registries,
+        &counts.tasks,
+        &counts.schedules,
     ]
     .iter()
     .all(|count| count.create == 0 && count.update == 0 && count.live_only == 0);
@@ -107,6 +133,8 @@ pub(crate) fn diff_manifests(
             inference_backends,
             inference_profiles,
             tool_service_registries,
+            tasks,
+            schedules,
         },
     }
 }

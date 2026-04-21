@@ -252,6 +252,8 @@ pub(crate) struct DesiredStateDiffCollections {
     pub(crate) inference_backends: DesiredStateCollectionDiff,
     pub(crate) inference_profiles: DesiredStateCollectionDiff,
     pub(crate) tool_service_registries: DesiredStateCollectionDiff,
+    pub(crate) tasks: DesiredStateCollectionDiff,
+    pub(crate) schedules: DesiredStateCollectionDiff,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -262,6 +264,8 @@ pub(crate) struct DesiredStateDiffCollectionsCounts {
     pub(crate) inference_backends: DesiredStateDiffCounts,
     pub(crate) inference_profiles: DesiredStateDiffCounts,
     pub(crate) tool_service_registries: DesiredStateDiffCounts,
+    pub(crate) tasks: DesiredStateDiffCounts,
+    pub(crate) schedules: DesiredStateDiffCounts,
 }
 
 #[derive(Debug, Clone, Serialize)]
