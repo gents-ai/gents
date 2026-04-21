@@ -9,6 +9,7 @@ use crate::graphql::{escape_graphql_string, response_has_documents};
 
 mod compaction_entries;
 mod conversation;
+mod fork;
 mod history;
 mod query;
 mod retry;
@@ -19,6 +20,7 @@ mod tests;
 mod tool_calls;
 
 pub use compaction_entries::{load_compaction_entries, save_compaction_entry};
+pub use fork::{fork, ForkError, ForkOutcome, ForkParams};
 #[allow(unused_imports)]
 pub(crate) use conversation::{
     update_conversation_status, update_conversation_status_if_latest_with_identity,
