@@ -90,9 +90,9 @@ impl Collection {
             | Collection::ToolSelection
             | Collection::InferenceProfile
             | Collection::ToolServiceRegistry => 0,
-            Collection::AgentPrincipal => 1,
-            Collection::AgentBehavior => 2,
-            Collection::ScheduledTask => 3,
+            Collection::AgentBehavior => 1,
+            Collection::ScheduledTask => 2,
+            Collection::AgentPrincipal => 3,
         }
     }
 }
@@ -155,13 +155,13 @@ mod tests {
         //
         // Both the Lean build and this test must stay green.
         let canonical: &[(Collection, u8, &str)] = &[
-            (Collection::AgentPrincipal, 1, "AgentPrincipal"),
-            (Collection::AgentBehavior, 2, "AgentBehavior"),
+            (Collection::AgentPrincipal, 3, "AgentPrincipal"),
+            (Collection::AgentBehavior, 1, "AgentBehavior"),
             (Collection::ToolSelection, 0, "ToolSelection"),
             (Collection::InferenceBackend, 0, "InferenceBackend"),
             (Collection::InferenceProfile, 0, "InferenceProfile"),
             (Collection::ToolServiceRegistry, 0, "ToolServiceRegistry"),
-            (Collection::ScheduledTask, 3, "ScheduledTask"),
+            (Collection::ScheduledTask, 2, "ScheduledTask"),
         ];
 
         // ALL must list every canonical variant exactly once.

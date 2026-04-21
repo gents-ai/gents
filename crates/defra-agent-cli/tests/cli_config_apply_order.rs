@@ -24,17 +24,17 @@ fn apply_desired_state_changes_order_matches_collection_apply_order() {
 
     // Expected order = Collection::ALL sorted by (apply_order, graphql_type):
     //   rank 0: InferenceBackend, InferenceProfile, ToolServiceRegistry, ToolSelection
-    //   rank 1: AgentPrincipal
-    //   rank 2: AgentBehavior
-    //   rank 3: ScheduledTask
+    //   rank 1: AgentBehavior
+    //   rank 2: ScheduledTask
+    //   rank 3: AgentPrincipal
     let expected = vec![
         "inference_backends",
         "inference_profiles",
         "tool_service_registries",
         "tool_selections",
-        "agent_principal",
         "agent_behaviors",
         "scheduled_tasks",
+        "agent_principal",
     ];
     assert_eq!(
         found, expected,
