@@ -195,14 +195,97 @@ impl TriggerEngine {
 
     /// Dispatch a single `FireIntent`.
     ///
-    /// Scaffold only: Tasks 30-33 will implement the enabled gate, prompt
-    /// render, concurrency handling, materialize call, and `on_result`
-    /// callback invocation.
+    /// Current scope (Task 30): enabled gate against the active snapshot, then
+    /// render the task's prompt template and hand the rendered prompt to the
+    /// materializer. Concurrency handling and render-failure bookkeeping land
+    /// in Tasks 31-33.
     #[allow(dead_code)]
     async fn dispatch(&self, intent: FireIntent) -> FireResult {
-        let _ = intent;
-        FireResult::Errored {
-            error: "TriggerEngine::dispatch not implemented".to_string(),
+        let snapshot = self.snapshot_rx.borrow().clone();
+
+        // 1. Enabled gate.
+        match intent.trigger_kind {
+            TriggerKind::Schedule => {
+                let Some(trigger_id) = intent.trigger_id.as_deref() else {
+                    let result = FireResult::Errored {
+                        error: "Schedule trigger missing trigger_id".to_string(),
+                    };
+                    (intent.on_result)(result.clone());
+                    return result;
+                };
+                if snapshot.active_schedules().get(trigger_id).is_none() {
+                    let result = FireResult::Skipped {
+                        reason: "trigger disabled".to_string(),
+                    };
+                    (intent.on_result)(result.clone());
+                    return result;
+                }
+            }
+            TriggerKind::Event => {
+                let Some(trigger_id) = intent.trigger_id.as_deref() else {
+                    let result = FireResult::Errored {
+                        error: "Event trigger missing trigger_id".to_string(),
+                    };
+                    (intent.on_result)(result.clone());
+                    return result;
+                };
+                if snapshot.active_event_triggers().get(trigger_id).is_none() {
+                    let result = FireResult::Skipped {
+                        reason: "trigger disabled".to_string(),
+                    };
+                    (intent.on_result)(result.clone());
+                    return result;
+                }
+            }
+            TriggerKind::Manual => {
+                // Manual runs bypass the enabled gate (operator-initiated).
+            }
         }
+
+        // 2. Render the prompt template against the intent's scope.
+        let scope = crate::template::TemplateScope {
+            event: intent.event_vars.clone(),
+            doc: intent.doc_vars.clone(),
+            args: intent.args_vars.clone(),
+        };
+        let rendered = match crate::template::render_template(&intent.task.prompt_template, &scope)
+        {
+            Ok(s) => s,
+            Err(e) => {
+                // Task 33 will turn this into a proper Errored path with
+                // trigger-doc bookkeeping; for now surface the error verbatim.
+                let result = FireResult::Errored {
+                    error: format!("template: {e}"),
+                };
+                (intent.on_result)(result.clone());
+                return result;
+            }
+        };
+
+        // 3. Materialize. Concurrency gating (Tasks 31-32) will layer on top of
+        // this minimal path; for Task 30 we materialize unconditionally.
+        let request_id = match self
+            .materializer
+            .materialize(
+                &intent.task,
+                intent.trigger_id.as_deref(),
+                intent.trigger_kind,
+                &rendered,
+            )
+            .await
+        {
+            Ok(id) => id,
+            Err(e) => {
+                let result = FireResult::Errored {
+                    error: format!("materialize: {e}"),
+                };
+                (intent.on_result)(result.clone());
+                return result;
+            }
+        };
+
+        let result = FireResult::Fired { request_id };
+        (intent.on_result)(result.clone());
+        result
     }
 }
