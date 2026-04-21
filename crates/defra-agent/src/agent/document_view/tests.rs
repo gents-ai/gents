@@ -218,3 +218,82 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
     assert!(tool_names.contains(&"read_file".to_string()));
     assert!(tool_names.contains(&"list_files".to_string()));
 }
+
+async fn create_task(node: &defra_node::EmbeddedNode, task_id: &str, name: &str) {
+    let escaped_task_id = escape_graphql_string(task_id);
+    let escaped_name = escape_graphql_string(name);
+    let mutation = format!(
+        r#"mutation {{
+            create_Task(input: {{
+                task_id: "{escaped_task_id}",
+                name: "{escaped_name}",
+                enabled: true
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create Task failed: {:?}",
+        response.errors
+    );
+}
+
+async fn create_schedule(node: &defra_node::EmbeddedNode, schedule_id: &str, task_id: &str) {
+    let escaped_schedule_id = escape_graphql_string(schedule_id);
+    let escaped_task_id = escape_graphql_string(task_id);
+    let mutation = format!(
+        r#"mutation {{
+            create_Schedule(input: {{
+                schedule_id: "{escaped_schedule_id}",
+                task_id: "{escaped_task_id}",
+                interval_secs: 60,
+                enabled: true
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create Schedule failed: {:?}",
+        response.errors
+    );
+}
+
+#[tokio::test]
+async fn load_document_runtime_view_populates_tasks_and_schedules() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-tasks-schedules"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-document-view-tasks",
+        "http://127.0.0.1:8123/v1",
+    )
+    .await;
+
+    create_task(node.as_ref(), "task-alpha", "Alpha").await;
+    create_task(node.as_ref(), "task-beta", "Beta").await;
+    create_schedule(node.as_ref(), "schedule-alpha", "task-alpha").await;
+
+    let view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("document view should load");
+
+    assert_eq!(view.tasks.len(), 2, "expected two Task documents");
+    assert!(view.tasks.contains_key("task-alpha"));
+    assert!(view.tasks.contains_key("task-beta"));
+
+    assert_eq!(view.schedules.len(), 1, "expected one Schedule document");
+    assert!(view.schedules.contains_key("schedule-alpha"));
+    let schedule_record = view
+        .schedules
+        .get("schedule-alpha")
+        .expect("schedule-alpha present");
+    assert_eq!(
+        schedule_record.value.task_id.as_deref(),
+        Some("task-alpha"),
+        "schedule references task-alpha"
+    );
+}
