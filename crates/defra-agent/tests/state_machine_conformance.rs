@@ -785,3 +785,63 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
         "parent AgentSession unchanged"
     );
 }
+
+#[tokio::test]
+#[ignore = "ungated in Task 5 (scheduler claim check)"]
+async fn pending_interrupted_via_interrupt_before_claim() {
+    todo!();
+}
+
+#[tokio::test]
+#[ignore = "ungated in Task 5 (scheduler claim check)"]
+async fn pending_dead_stale_via_expire() {
+    todo!();
+}
+
+#[tokio::test]
+#[ignore = "ungated in Task 7 (daemon select arm)"]
+async fn claimed_interrupted_via_watch_channel() {
+    todo!();
+}
+
+#[tokio::test]
+#[ignore = "ungated in Task 7 (daemon select arm)"]
+async fn processing_interrupted_preserves_partial_response() {
+    todo!();
+}
+
+#[tokio::test]
+#[ignore = "ungated in Task 7 (daemon select arm)"]
+async fn input_required_interrupted() {
+    todo!();
+}
+
+#[tokio::test]
+#[ignore = "ungated in Task 5 (scheduler claim check)"]
+async fn pending_tie_break_prefers_interrupt_over_expire() {
+    todo!();
+}
+
+#[tokio::test]
+#[ignore = "ungated in Task 7 (daemon select arm)"]
+async fn processing_tie_break_prefers_interrupt_over_deadline() {
+    todo!();
+}
+
+#[tokio::test]
+#[ignore = "ungated in Task 10 (submission API)"]
+async fn interrupt_request_is_idempotent() {
+    todo!();
+}
+
+#[tokio::test]
+#[ignore = "ungated in Task 7 (daemon select arm)"]
+async fn interrupt_on_already_terminal_is_noop() {
+    todo!();
+}
+
+#[tokio::test]
+#[ignore = "ungated in Task 5 (scheduler claim check)"]
+async fn valid_until_cached_at_claim_ignores_post_claim_extension() {
+    todo!();
+}
