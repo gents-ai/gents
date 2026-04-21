@@ -303,5 +303,5 @@ Two forks of the same parent (same and different `fork_at_user_turn`) issued con
 
 1. `session::fork` compiles, ships as `pub use session::fork`, and is invoked from the new CLI subcommand.
 2. The structural invariant test passes with the scenarios listed above.
-3. State-machine conformance tests pass unchanged except for the two new no-op cases.
+3. State-machine conformance tests pass unchanged except for the one new no-op case in `state_machine_conformance.rs`.
 4. A human can: create a parent session via `chat`, let it produce a few user + assistant turns, run `defra-agent session fork --from <ID> --at-user-turn 1`, receive a new `session_id`, and submit a new request against that session that begins where the fork cut.
