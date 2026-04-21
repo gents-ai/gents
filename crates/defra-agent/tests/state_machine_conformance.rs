@@ -1557,3 +1557,28 @@ fn conformance_mapping_all_9_lifecycle_states_round_trip() {
     assert!(RequestLifecycleState::try_from("").is_err());
     assert!(RequestLifecycleState::try_from("INTERRUPTED").is_err());
 }
+
+#[test]
+fn conformance_interrupted_lifecycle_maps_to_interrupted_client_turn() {
+    // The client projection must map `RequestLifecycleState::Interrupted`
+    // onto the distinct `ClientTurnState::Interrupted` terminal. This keeps
+    // the Rust projection in sync with `Proofs/Client.lean::deriveAttempt`,
+    // which now maps `.interrupted => .interrupted` rather than conflating
+    // it with `.failed`.
+    use defra_agent_protocol::client_protocol::{
+        derive_attempt, AttemptView, ClientTurnState, RequestLifecycleState, RequestSnapshot,
+    };
+
+    let view = AttemptView {
+        request: RequestSnapshot {
+            request_id: "r1".into(),
+            retry_parent_request: None,
+            lifecycle_state: RequestLifecycleState::Interrupted,
+            is_superseded: false,
+        },
+        response: None,
+    };
+    assert_eq!(derive_attempt(&view), ClientTurnState::Interrupted);
+    assert!(ClientTurnState::Interrupted.is_terminal());
+    assert_eq!(ClientTurnState::Interrupted.rank(), 2);
+}

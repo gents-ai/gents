@@ -166,6 +166,27 @@ fn dead_lifecycle() {
 }
 
 #[test]
+fn interrupted_lifecycle() {
+    assert_eq!(
+        derive_attempt(&attempt("req-1", None, "interrupted", None)),
+        ClientTurnState::Interrupted
+    );
+}
+
+#[test]
+fn interrupted_lifecycle_ignores_stale_streaming() {
+    assert_eq!(
+        derive_attempt(&attempt(
+            "req-1",
+            None,
+            "interrupted",
+            resp(ResponseStatus::Streaming)
+        )),
+        ClientTurnState::Interrupted
+    );
+}
+
+#[test]
 fn superseded_lifecycle() {
     assert_eq!(
         derive_attempt(&attempt("req-1", None, "superseded", None)),
@@ -391,7 +412,7 @@ fn monotonicity_response_streaming_to_error() {
 
 #[test]
 fn terminal_coherence_terminal_lifecycle_states() {
-    for lifecycle in &["completed", "failed", "dead", "superseded"] {
+    for lifecycle in &["completed", "failed", "dead", "superseded", "interrupted"] {
         let state = derive_attempt(&attempt("req-1", None, lifecycle, None));
         assert!(
             state.is_terminal(),

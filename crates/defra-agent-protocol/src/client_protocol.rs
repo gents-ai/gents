@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
-/// The 5 client-visible turn states, mirroring `ClientTurnState` in Client.lean.
+/// The 6 client-visible turn states, mirroring `ClientTurnState` in Client.lean.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientTurnState {
     WaitingForClaim,
@@ -20,6 +20,7 @@ pub enum ClientTurnState {
     Completed,
     Failed,
     Superseded,
+    Interrupted,
 }
 
 impl ClientTurnState {
@@ -31,12 +32,16 @@ impl ClientTurnState {
             Self::Completed => 2,
             Self::Failed => 2,
             Self::Superseded => 2,
+            Self::Interrupted => 2,
         }
     }
 
     /// Whether this state is terminal.
     pub fn is_terminal(self) -> bool {
-        matches!(self, Self::Completed | Self::Failed | Self::Superseded)
+        matches!(
+            self,
+            Self::Completed | Self::Failed | Self::Superseded | Self::Interrupted
+        )
     }
 }
 
@@ -156,9 +161,8 @@ pub fn derive_attempt(view: &AttemptView) -> ClientTurnState {
     match view.request.lifecycle_state {
         RequestLifecycleState::Superseded => ClientTurnState::Superseded,
         RequestLifecycleState::Completed => ClientTurnState::Completed,
-        RequestLifecycleState::Failed
-        | RequestLifecycleState::Dead
-        | RequestLifecycleState::Interrupted => ClientTurnState::Failed,
+        RequestLifecycleState::Failed | RequestLifecycleState::Dead => ClientTurnState::Failed,
+        RequestLifecycleState::Interrupted => ClientTurnState::Interrupted,
         RequestLifecycleState::Pending
         | RequestLifecycleState::Claimed
         | RequestLifecycleState::Processing

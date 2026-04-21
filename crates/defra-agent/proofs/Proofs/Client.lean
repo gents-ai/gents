@@ -14,13 +14,14 @@ transport problem, not a turn-state problem.
 Imports `Proofs.Request` to reuse `RequestState` from the server model.
 -/
 
-/-- The 5 client-visible turn states. -/
+/-- The 6 client-visible turn states. -/
 inductive ClientTurnState where
   | waitingForClaim
   | streaming
   | completed
   | failed
   | superseded
+  | interrupted
   deriving DecidableEq, Repr
 
 namespace ClientTurnState
@@ -33,13 +34,15 @@ def rank : ClientTurnState → Nat
   | .completed       => 2
   | .failed          => 2
   | .superseded      => 2
+  | .interrupted     => 2
 
 /-- Whether a client turn state is terminal. -/
 def isTerminal : ClientTurnState → Bool
-  | .completed  => true
-  | .failed     => true
-  | .superseded => true
-  | _           => false
+  | .completed   => true
+  | .failed      => true
+  | .superseded  => true
+  | .interrupted => true
+  | _            => false
 
 instance : HasTerminal ClientTurnState where
   isTerminal s := s.isTerminal = true
@@ -94,7 +97,7 @@ def deriveAttempt : AttemptView → ClientTurnState
     | .completed     => .completed
     | .failed        => .failed
     | .dead          => .failed
-    | .interrupted   => .failed
+    | .interrupted   => .interrupted
     -- Non-terminal: response may be more current than request
     | .pending | .claimed | .processing | .inputRequired =>
       match resp with
