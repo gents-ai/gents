@@ -213,6 +213,8 @@ pub(crate) struct DesiredStateManifest {
     pub(crate) inference_backends: Vec<DesiredInferenceBackend>,
     pub(crate) inference_profiles: Vec<DesiredInferenceProfile>,
     pub(crate) tool_service_registries: Vec<DesiredToolServiceRegistry>,
+    pub(crate) tasks: Vec<DesiredTask>,
+    pub(crate) schedules: Vec<DesiredSchedule>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -281,6 +283,8 @@ pub(crate) struct DesiredStateCounts {
     pub(crate) inference_backends: usize,
     pub(crate) inference_profiles: usize,
     pub(crate) tool_service_registries: usize,
+    pub(crate) tasks: usize,
+    pub(crate) schedules: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -7,8 +7,8 @@ use super::normalize::normalize_manifest;
 use super::validate::validate_manifest;
 use super::{
     DesiredAgentBehavior, DesiredAgentPrincipal, DesiredInferenceBackend, DesiredInferenceProfile,
-    DesiredStateCounts, DesiredStateManifest, DesiredStateValidationReport, DesiredToolSelection,
-    DesiredToolServiceRegistry,
+    DesiredSchedule, DesiredStateCounts, DesiredStateManifest, DesiredStateValidationReport,
+    DesiredTask, DesiredToolSelection, DesiredToolServiceRegistry,
 };
 
 const AGENT_PRINCIPAL_FILE: &str = "agent-principal.json";
@@ -18,6 +18,10 @@ const INFERENCE_BACKENDS_FILE: &str = "inference-backends.json";
 const INFERENCE_PROFILES_FILE: &str = "inference-profiles.json";
 const TOOL_SERVICES_FILE: &str = "tool-services.json";
 const TOOL_SERVICES_DIR: &str = "tool-services";
+const TASKS_FILE: &str = "tasks.json";
+const TASKS_DIR: &str = "tasks";
+const SCHEDULES_FILE: &str = "schedules.json";
+const SCHEDULES_DIR: &str = "schedules";
 
 pub(crate) fn validate_manifest_root(root: &Path) -> DesiredStateValidationReport {
     load_manifest_root(root).1
@@ -45,6 +49,8 @@ pub(crate) fn load_manifest_root(
                     inference_backends: 0,
                     inference_profiles: 0,
                     tool_service_registries: 0,
+                    tasks: 0,
+                    schedules: 0,
                 },
                 errors,
             },
@@ -66,6 +72,8 @@ pub(crate) fn load_manifest_root(
                     inference_backends: 0,
                     inference_profiles: 0,
                     tool_service_registries: 0,
+                    tasks: 0,
+                    schedules: 0,
                 },
                 errors,
             },
@@ -96,6 +104,20 @@ pub(crate) fn load_manifest_root(
         &mut errors,
     )
     .unwrap_or_default();
+    let tasks = load_optional_json_collection::<DesiredTask>(
+        root,
+        TASKS_FILE,
+        TASKS_DIR,
+        &mut errors,
+    )
+    .unwrap_or_default();
+    let schedules = load_optional_json_collection::<DesiredSchedule>(
+        root,
+        SCHEDULES_FILE,
+        SCHEDULES_DIR,
+        &mut errors,
+    )
+    .unwrap_or_default();
 
     let counts = DesiredStateCounts {
         agent_principal: usize::from(principal.is_some()),
@@ -104,6 +126,8 @@ pub(crate) fn load_manifest_root(
         inference_backends: backends.as_ref().map_or(0, Vec::len),
         inference_profiles: inference_profiles.len(),
         tool_service_registries: tool_service_registries.len(),
+        tasks: tasks.len(),
+        schedules: schedules.len(),
     };
 
     let agent_did = principal.as_ref().map(|value| value.agent_did.clone());
@@ -119,6 +143,8 @@ pub(crate) fn load_manifest_root(
                 inference_backends: backends,
                 inference_profiles,
                 tool_service_registries,
+                tasks,
+                schedules,
             };
             normalize_manifest(&mut manifest);
             validate_manifest(&manifest, &mut errors);

@@ -158,6 +158,8 @@ pub(crate) fn manifest_from_export_bundle(
             .iter()
             .map(tool_service_registry_from_live_value)
             .collect::<Result<Vec<_>>>()?,
+        tasks: Vec::new(),
+        schedules: Vec::new(),
     };
     normalize_manifest(&mut manifest);
     Ok(manifest)
