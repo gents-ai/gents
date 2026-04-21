@@ -399,24 +399,7 @@ pub fn entity_summaries(
         }
         ManageSection::RequestTimeline => request_timeline_summaries(store, selected_agent_did),
         ManageSection::RecentFailures => recent_failure_summaries(store, selected_agent_did),
-        _ => Vec::new(),
     }
-}
-
-pub fn filter_entity_summaries(entries: Vec<EntitySummary>, filter: &str) -> Vec<EntitySummary> {
-    let filter = filter.trim().to_lowercase();
-    if filter.is_empty() {
-        return entries;
-    }
-
-    entries
-        .into_iter()
-        .filter(|entry| {
-            [entry.id.as_str(), entry.title.as_str(), entry.meta.as_str()]
-                .into_iter()
-                .any(|field| field.to_lowercase().contains(&filter))
-        })
-        .collect()
 }
 
 pub fn request_timeline_summaries(

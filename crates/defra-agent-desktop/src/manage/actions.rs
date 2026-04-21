@@ -38,7 +38,6 @@ pub fn reduce(state: &mut ManageState, action: ManageAction) {
             state.selected_peer_id = Some(peer_id);
             state.selected_agent_did = Some(agent_did);
             state.selected_entity_id = None;
-            state.entity_filter.clear();
             state.draft = None;
             state.draft_origin = None;
             state.last_apply_error = None;
@@ -46,7 +45,6 @@ pub fn reduce(state: &mut ManageState, action: ManageAction) {
         ManageAction::SelectSection { section } => {
             state.selected_section = section;
             state.selected_entity_id = None;
-            state.entity_filter.clear();
             state.draft = None;
             state.draft_origin = None;
             state.last_apply_error = None;
@@ -59,7 +57,6 @@ pub fn reduce(state: &mut ManageState, action: ManageAction) {
         }
         ManageAction::StartNewDocument { draft } => {
             state.selected_entity_id = None;
-            state.entity_filter.clear();
             state.draft_origin = draft.as_ref().map(|_| ManageDraftOrigin::NewDocument);
             state.draft = draft;
             state.last_apply_error = None;

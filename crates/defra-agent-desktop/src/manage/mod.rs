@@ -9,8 +9,8 @@ mod shared;
 
 pub(crate) use deployments::{build_deployment_entries, DeploymentEntry};
 pub(crate) use documents::{
-    draft_for_selection, draft_matches_selection, entity_summaries, filter_entity_summaries,
-    new_draft_for_section, EntitySummary,
+    draft_for_selection, draft_matches_selection, entity_summaries, new_draft_for_section,
+    EntitySummary,
 };
 pub(crate) use rows::{
     backend_row, behavior_row, inference_profile_row, scheduled_task_row, tool_selection_row,

@@ -77,10 +77,9 @@ pub(crate) fn open_manage_entity_and_assert_visibility(
         if driver.app.state.manage.selected_section != section {
             driver.click_target(&audit::targets::manage_section(section));
         }
-        let mut texts = driver.render();
+        let texts = driver.render();
         if audit::target_interact_rect(&driver.ctx, &entity_target).is_none() {
-            driver.replace_text_in_target(audit::targets::MANAGE_ENTITY_FILTER, entity_id);
-            texts = driver.render();
+            driver.scroll_manage_entity_list(-260.0);
         }
         audit::target_interact_rect(&driver.ctx, &entity_target).map(|_| texts)
     })?;
@@ -121,10 +120,9 @@ pub(crate) fn open_manage_request_timeline_and_assert_visibility(
                 ManageSection::RequestTimeline,
             ));
         }
-        let mut texts = driver.render();
+        let texts = driver.render();
         if audit::target_interact_rect(&driver.ctx, &request_target).is_none() {
-            driver.replace_text_in_target(audit::targets::MANAGE_ENTITY_FILTER, request_id);
-            texts = driver.render();
+            driver.scroll_manage_entity_list(-260.0);
         }
         audit::target_interact_rect(&driver.ctx, &request_target).map(|_| texts)
     })?;

@@ -10,12 +10,13 @@ fn desktop_app_live_manage_scheduled_task_and_failures() -> Result<()> {
     {
         let driver = &mut fixture.driver;
         driver.open_activity(Activity::Manage);
-        assert_manage_filter_round_trip(
-            driver,
+        driver.click_target(&audit::targets::manage_section(
             ManageSection::ScheduledTasks,
-            "Live Audit Scheduled Task",
-            &docs.scheduled_task_id,
-            "definitely-missing-live-task",
+        ));
+        driver.wait_for_target(
+            "live scheduled task entity",
+            Duration::from_secs(10),
+            &audit::targets::manage_entity(&docs.scheduled_task_id),
         )?;
         driver.click_target(&audit::targets::manage_entity(&docs.scheduled_task_id));
 

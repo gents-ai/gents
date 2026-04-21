@@ -17,6 +17,7 @@ pub(crate) mod targets {
     #[cfg(test)]
     pub(crate) const ACTIVITY_MANAGE: &str = "activity.manage";
     pub(crate) const CHAT_COMPOSER_TEXT: &str = "chat.composer.text";
+    #[cfg(test)]
     pub(crate) const CHAT_CREATE_CONVERSATION: &str = "chat.create_conversation";
     pub(crate) const CHAT_NEW_CONVERSATION: &str = "chat.new_conversation";
     pub(crate) const CHAT_OPEN_SETUP: &str = "chat.open_setup";
@@ -29,7 +30,6 @@ pub(crate) mod targets {
     pub(crate) const CHAT_EXPORT: &str = "chat.export";
     pub(crate) const MANAGE_APPLY: &str = "manage.apply";
     pub(crate) const MANAGE_DISCARD: &str = "manage.discard";
-    pub(crate) const MANAGE_ENTITY_FILTER: &str = "manage.entity_filter";
     pub(crate) const MANAGE_NEW: &str = "manage.new";
     pub(crate) const MANAGE_RUN_NOW: &str = "manage.run_now";
     pub(crate) const SETUP_ADD_ADDR: &str = "setup.add.addr";

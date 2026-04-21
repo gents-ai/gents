@@ -1,4 +1,4 @@
-use eframe::egui::Ui;
+use eframe::egui::{self, Sense, Ui};
 use egui_commonmark::CommonMarkCache;
 use tokio::runtime::Runtime;
 
@@ -6,8 +6,8 @@ use crate::chat::projection::project_chat;
 use crate::client::{ClientCore, ClientStore};
 use crate::state::ShellState;
 use crate::views;
+use crate::views::components;
 
-use super::nudge::render_first_conversation_nudge;
 use super::view_model::{
     build_conversation_buckets, display_name_for_agent, effective_behavior_id,
 };
@@ -86,6 +86,9 @@ pub fn show_main(
     runtime: &Runtime,
     markdown_cache: &mut CommonMarkCache,
 ) {
+    ui.set_width(ui.available_width());
+    ui.set_min_width(ui.available_width());
+
     let Some(store) = store else {
         views::card(
             ui,
@@ -109,49 +112,256 @@ pub fn show_main(
     let selected_session_id = state.chat.shell.selected_session_id.clone();
     let turn_state = projection.turn_state;
     let send_status = projection.send_status;
-    let show_first_conversation_nudge = projection.show_first_conversation_nudge;
+    let available = ui.available_size();
+    ui.allocate_ui_with_layout(
+        available,
+        egui::Layout::left_to_right(egui::Align::Min),
+        |ui| {
+            let rail_visible = !state.chat.shell.sidebar_collapsed;
+            if rail_visible {
+                let sidebar_width = current_sidebar_width(state, available.x);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(sidebar_width, available.y),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        crate::views::show_sidebar(ui, state, client, Some(store), runtime);
+                    },
+                );
+                render_sidebar_splitter(ui, state, available.y);
+            }
 
-    egui::Panel::bottom("chat_composer_panel")
-        .resizable(false)
-        .default_size(108.0)
-        .min_size(92.0)
-        .max_size(136.0)
-        .show_inside(ui, |ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), available.y),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_width(ui.available_width());
+                    header::show(
+                        ui,
+                        state,
+                        header::HeaderProps {
+                            store,
+                            client,
+                            selected_agent_did: selected_agent_did.as_deref(),
+                            selected_session_id: selected_session_id.as_deref(),
+                            turn_state,
+                        },
+                    );
+                    ui.add_space(6.0);
+
+                    if selected_session_id.is_none() {
+                        render_pre_conversation_main(
+                            ui,
+                            state,
+                            store,
+                            selected_agent_did.as_deref(),
+                            turn_state,
+                            send_status,
+                        );
+                        return;
+                    }
+
+                    let composer_expanded = state.chat.editor.composer_expanded;
+                    let composer_height = current_composer_height(state, ui.available_height());
+                    let splitter_height = 6.0;
+                    let transcript_height =
+                        (ui.available_height() - composer_height - splitter_height).max(160.0);
+
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(ui.available_width(), transcript_height),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            transcript::show(
+                                ui,
+                                state,
+                                store,
+                                selected_session_id.as_deref(),
+                                turn_state,
+                                markdown_cache,
+                            );
+                        },
+                    );
+
+                    render_composer_splitter(ui, state);
+
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(ui.available_width(), composer_height),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            state.chat.editor.composer_panel_height =
+                                Some(ui.max_rect().height().clamp(
+                                    composer_min_height(composer_expanded),
+                                    composer_max_height(composer_expanded),
+                                ));
+                            composer::show(
+                                ui,
+                                state,
+                                store,
+                                selected_agent_did.as_deref(),
+                                turn_state,
+                                send_status,
+                            );
+                        },
+                    );
+                },
+            );
+        },
+    );
+}
+
+fn default_composer_panel_height(expanded: bool) -> f32 {
+    if expanded {
+        236.0
+    } else {
+        156.0
+    }
+}
+
+fn composer_min_height(expanded: bool) -> f32 {
+    if expanded {
+        196.0
+    } else {
+        148.0
+    }
+}
+
+fn composer_max_height(expanded: bool) -> f32 {
+    if expanded {
+        380.0
+    } else {
+        260.0
+    }
+}
+
+fn current_sidebar_width(state: &ShellState, total_width: f32) -> f32 {
+    state
+        .chat
+        .shell
+        .sidebar_width
+        .unwrap_or((total_width * 0.18).clamp(224.0, 288.0))
+        .clamp(208.0, 360.0)
+}
+
+fn current_composer_height(state: &ShellState, available_height: f32) -> f32 {
+    let expanded = state.chat.editor.composer_expanded;
+    state
+        .chat
+        .editor
+        .composer_panel_height
+        .unwrap_or(default_composer_panel_height(expanded))
+        .clamp(
+            composer_min_height(expanded),
+            composer_max_height(expanded)
+                .min((available_height - 180.0).max(composer_min_height(expanded))),
+        )
+}
+
+fn render_pre_conversation_main(
+    ui: &mut Ui,
+    state: &mut ShellState,
+    store: &ClientStore,
+    selected_agent_did: Option<&str>,
+    turn_state: Option<ClientTurnState>,
+    send_status: crate::chat::domain::submission::SendStatus,
+) {
+    ui.set_width(ui.available_width());
+    ui.set_max_width(720.0);
+    components::focus_panel(
+        ui,
+        Some("Chat"),
+        "Start the conversation",
+        "Send a message below and the first conversation will be created automatically.",
+        |_| {},
+    );
+    ui.add_space(12.0);
+
+    let composer_expanded = state.chat.editor.composer_expanded;
+    let composer_height = current_composer_height(state, ui.available_height().max(220.0));
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), composer_height),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            state.chat.editor.composer_panel_height = Some(ui.max_rect().height().clamp(
+                composer_min_height(composer_expanded),
+                composer_max_height(composer_expanded),
+            ));
             composer::show(
                 ui,
                 state,
                 store,
-                selected_agent_did.as_deref(),
+                selected_agent_did,
                 turn_state,
                 send_status,
             );
-        });
-    ui.vertical(|ui| {
-        header::show(
-            ui,
-            state,
-            header::HeaderProps {
-                store,
-                client,
-                selected_agent_did: selected_agent_did.as_deref(),
-                selected_session_id: selected_session_id.as_deref(),
-                turn_state,
-            },
+        },
+    );
+}
+
+fn render_sidebar_splitter(ui: &mut Ui, state: &mut ShellState, height: f32) {
+    let splitter_width = 8.0;
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(splitter_width, height), Sense::click_and_drag());
+    paint_splitter(ui, rect, true);
+
+    if response.drag_started() {
+        state.chat.shell.sidebar_drag_origin_width = state.chat.shell.sidebar_width;
+    }
+    if response.dragged() {
+        let start = state
+            .chat
+            .shell
+            .sidebar_drag_origin_width
+            .unwrap_or_else(|| current_sidebar_width(state, ui.available_width()));
+        state.chat.shell.sidebar_width =
+            Some((start + response.drag_delta().x).clamp(208.0, 360.0));
+    }
+    if response.drag_stopped() {
+        state.chat.shell.sidebar_drag_origin_width = None;
+    }
+}
+
+fn render_composer_splitter(ui: &mut Ui, state: &mut ShellState) {
+    let width = ui.available_width();
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 6.0), Sense::click_and_drag());
+    paint_splitter(ui, rect, false);
+
+    if response.drag_started() {
+        state.chat.editor.composer_drag_origin_height = state.chat.editor.composer_panel_height;
+    }
+    if response.dragged() {
+        let start =
+            state
+                .chat
+                .editor
+                .composer_drag_origin_height
+                .unwrap_or(default_composer_panel_height(
+                    state.chat.editor.composer_expanded,
+                ));
+        state.chat.editor.composer_panel_height = Some((start - response.drag_delta().y).clamp(
+            composer_min_height(state.chat.editor.composer_expanded),
+            composer_max_height(state.chat.editor.composer_expanded),
+        ));
+    }
+    if response.drag_stopped() {
+        state.chat.editor.composer_drag_origin_height = None;
+    }
+}
+
+fn paint_splitter(ui: &Ui, rect: egui::Rect, vertical: bool) {
+    let palette = crate::theme::palette();
+    let stroke = egui::Stroke::new(1.0, palette.stroke_subtle);
+    if vertical {
+        let x = rect.center().x;
+        ui.painter().line_segment(
+            [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+            stroke,
         );
-        ui.add_space(12.0);
-        if show_first_conversation_nudge {
-            render_first_conversation_nudge(ui, state, client, selected_agent_did.as_deref());
-        } else {
-            transcript::show(
-                ui,
-                state,
-                store,
-                selected_session_id.as_deref(),
-                turn_state,
-                markdown_cache,
-            );
-        }
-    });
+    } else {
+        let y = rect.center().y;
+        ui.painter().line_segment(
+            [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+            stroke,
+        );
+    }
 }
 
 pub fn send_disabled(

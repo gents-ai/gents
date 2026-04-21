@@ -1,5 +1,4 @@
 mod behavior_context;
-pub(crate) mod drafts;
 pub(crate) mod editors;
 mod entity_list;
 mod prepare;
@@ -8,13 +7,12 @@ mod recent_failures;
 mod request_timeline;
 mod runtime;
 mod shared;
-mod sidebar;
 
 use eframe::egui::{self, RichText, Ui};
 use tokio::runtime::Runtime;
 
 use crate::client::{ClientCore, ClientStore};
-use crate::manage::{entity_summaries, EntitySummary};
+use crate::manage::{build_deployment_entries, entity_summaries, EntitySummary};
 use crate::state::{
     Activity, ManageDraft, ManageSection, PendingManageAction, PendingShellAction, ShellState,
 };
@@ -34,12 +32,11 @@ pub fn prepare_state(
 }
 
 pub fn show_sidebar(
-    ui: &mut Ui,
-    state: &mut ShellState,
-    client: Option<&ClientCore>,
-    store: Option<&ClientStore>,
+    _ui: &mut Ui,
+    _state: &mut ShellState,
+    _client: Option<&ClientCore>,
+    _store: Option<&ClientStore>,
 ) {
-    sidebar::show_sidebar(ui, state, client, store);
 }
 
 pub fn show_main(
@@ -59,11 +56,13 @@ pub fn show_main(
 
     let section = state.manage.selected_section;
     let entries = entity_summaries(store, section, state.manage.selected_agent_did.as_deref());
-    let breadcrumb = entity_list::breadcrumb(state, section);
+    let breadcrumb = manage_toolbar_breadcrumb(state, client, store);
 
     ui.vertical(|ui| {
         views::toolbar(ui, "Manage Deployment", &breadcrumb, section.label());
         ui.add_space(8.0);
+        render_deployment_context(ui, state, client, store);
+        ui.add_space(12.0);
         ui.horizontal(|ui| {
             if ui.button("Back to Chat").clicked() {
                 state.queue_shell_action(PendingShellAction::Navigate(Activity::Chat));
@@ -73,7 +72,6 @@ pub fn show_main(
         render_section_tabs(ui, state);
         ui.add_space(12.0);
         match section {
-            ManageSection::Runtime => runtime::show_runtime_summary(ui, store, state),
             ManageSection::Behaviors
             | ManageSection::Backends
             | ManageSection::ToolSelections
@@ -146,19 +144,7 @@ fn render_management_workspace(
     entries: Vec<EntitySummary>,
 ) {
     let palette = theme::palette();
-    let filtered_entries =
-        crate::manage::filter_entity_summaries(entries, state.manage.entity_filter.as_str());
-
-    if filtered_entries.is_empty() && !state.manage.entity_filter.trim().is_empty() {
-        views::card(
-            ui,
-            "No Matches",
-            "The current filter does not match any replicated documents in this section.",
-        );
-        return;
-    }
-
-    if filtered_entries.is_empty() && !section.supports_new_documents() {
+    if entries.is_empty() && !section.supports_new_documents() {
         views::card(
             ui,
             "No Documents",
@@ -168,76 +154,22 @@ fn render_management_workspace(
     }
 
     ui.horizontal(|ui| {
-        let has_new_button = section.supports_new_documents();
-        let input_width = if has_new_button {
-            (ui.available_width() - 104.0).max(120.0)
-        } else {
-            ui.available_width().max(120.0)
-        };
-        crate::audit::add_sized(
-            ui,
-            crate::audit::targets::MANAGE_ENTITY_FILTER,
-            [input_width, 28.0],
-            egui::TextEdit::singleline(&mut state.manage.entity_filter)
-                .id_source(crate::audit::targets::MANAGE_ENTITY_FILTER)
-                .hint_text("Filter by name, id, backend, or model"),
+        ui.label(
+            RichText::new("Documents")
+                .monospace()
+                .size(10.5)
+                .color(palette.text_2),
         );
-        if has_new_button {
-            let response = crate::audit::add_sized(
-                ui,
-                crate::audit::targets::MANAGE_NEW,
-                egui::vec2(96.0, 28.0),
-                egui::Button::new("New"),
-            );
-            if response.clicked() {
-                state.queue_shell_action(PendingShellAction::Manage(
-                    PendingManageAction::StartNewDocument,
-                ));
-            }
-        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            entity_list::show_new_button(ui, state, section);
+        });
     });
     ui.add_space(10.0);
 
     ui.columns(2, |columns| {
         columns[0].set_min_width(260.0);
         egui::ScrollArea::vertical().show(&mut columns[0], |ui| {
-            if filtered_entries.is_empty() {
-                views::card(
-                    ui,
-                    "No Documents",
-                    "No documents are currently replicated for this section.",
-                );
-            } else {
-                for entry in &filtered_entries {
-                    let selected =
-                        state.manage.selected_entity_id.as_deref() == Some(entry.id.as_str());
-                    let response = views::side_row(
-                        ui,
-                        &entry.title,
-                        &entry.meta,
-                        selected,
-                        if selected {
-                            palette.accent
-                        } else {
-                            palette.text_3
-                        },
-                        None,
-                    );
-                    crate::audit::record(
-                        ui,
-                        &crate::audit::targets::manage_entity(&entry.id),
-                        &response,
-                    );
-                    if response.clicked() {
-                        state.queue_shell_action(PendingShellAction::Manage(
-                            PendingManageAction::SelectEntity {
-                                entity_id: entry.id.clone(),
-                            },
-                        ));
-                    }
-                    ui.add_space(6.0);
-                }
-            }
+            entity_list::entity_list_contents(ui, state, &entries);
         });
 
         columns[1].group(|ui| {
@@ -319,6 +251,148 @@ fn render_editor_workspace(
             let _ = store;
         }
     }
+}
+
+fn manage_toolbar_breadcrumb(
+    state: &ShellState,
+    client: Option<&ClientCore>,
+    store: &ClientStore,
+) -> String {
+    let Some(agent_did) = state.manage.selected_agent_did.as_deref() else {
+        return "Select a deployment".to_string();
+    };
+    let selected = state
+        .manage
+        .selected_peer_id
+        .as_deref()
+        .zip(Some(agent_did));
+    let deployment = client
+        .map(ClientCore::peer_statuses)
+        .map(|peer_statuses| build_deployment_entries(&peer_statuses, store))
+        .and_then(|entries| {
+            entries.into_iter().find(|entry| {
+                selected.is_some_and(|(peer_id, agent_did)| {
+                    entry.peer_id == peer_id && entry.agent_did == agent_did
+                })
+            })
+        });
+
+    deployment
+        .map(|entry| format!("{} · {}", entry.label, entry.agent_label))
+        .unwrap_or_else(|| agent_did.to_string())
+}
+
+fn render_deployment_context(
+    ui: &mut Ui,
+    state: &ShellState,
+    client: Option<&ClientCore>,
+    store: &ClientStore,
+) {
+    let Some(agent_did) = state.manage.selected_agent_did.as_deref() else {
+        views::card(
+            ui,
+            "Select Deployment",
+            "Choose a deployment from the sidebar to edit its behaviors and related documents.",
+        );
+        return;
+    };
+
+    let deployment = client
+        .map(ClientCore::peer_statuses)
+        .map(|peer_statuses| build_deployment_entries(&peer_statuses, store))
+        .and_then(|entries| {
+            entries.into_iter().find(|entry| {
+                state.manage.selected_peer_id.as_deref() == Some(entry.peer_id.as_str())
+                    && entry.agent_did == agent_did
+            })
+        });
+    let runtime_row = store.latest_runtime(agent_did);
+    let palette = theme::palette();
+
+    ui.group(|ui| {
+        ui.horizontal_wrapped(|ui| {
+            let title = deployment
+                .as_ref()
+                .map(|entry| entry.label.as_str())
+                .unwrap_or("Selected Deployment");
+            ui.label(
+                RichText::new(title)
+                    .family(theme::stencil_family())
+                    .size(13.0)
+                    .color(palette.text_1)
+                    .strong(),
+            );
+            ui.label(
+                RichText::new(agent_did)
+                    .monospace()
+                    .size(10.5)
+                    .color(palette.text_2),
+            );
+        });
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            if let Some(deployment) = deployment.as_ref() {
+                let connection = if deployment.peer_id.starts_with("local:") {
+                    "local"
+                } else if deployment.connected {
+                    "online"
+                } else {
+                    "saved"
+                };
+                ui.label(
+                    RichText::new(format!("status {connection}"))
+                        .monospace()
+                        .size(10.5)
+                        .color(palette.text_2),
+                );
+            }
+            if let Some(runtime_row) = runtime_row {
+                ui.label(
+                    RichText::new(format!(
+                        "process {}",
+                        runtime_row.process_state.as_deref().unwrap_or("unknown")
+                    ))
+                    .monospace()
+                    .size(10.5)
+                    .color(palette.text_2),
+                );
+                ui.label(
+                    RichText::new(format!(
+                        "default behavior {}",
+                        runtime_row
+                            .default_behavior_id
+                            .as_deref()
+                            .unwrap_or("unbound")
+                    ))
+                    .monospace()
+                    .size(10.5)
+                    .color(palette.text_2),
+                );
+            }
+            ui.label(
+                RichText::new(format!(
+                    "behaviors {}",
+                    store.behavior_rows(agent_did).len()
+                ))
+                .monospace()
+                .size(10.5)
+                .color(palette.text_2),
+            );
+            ui.label(
+                RichText::new(format!(
+                    "tasks {}",
+                    store
+                        .scheduled_tasks
+                        .iter()
+                        .filter(|row| row.agent_did.as_deref() == Some(agent_did))
+                        .count()
+                ))
+                .monospace()
+                .size(10.5)
+                .color(palette.text_2),
+            );
+        });
+    });
 }
 
 fn scroll_editor_body(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui)) {
