@@ -49,4 +49,42 @@ structure DocRef where
   id         : String
   deriving DecidableEq, Repr
 
+/-- Abstract operator-owned field payload per document.
+    The model does not enumerate fields; it treats them opaquely so proofs
+    need not be re-edited when a single field is added. Concrete Rust
+    structs (`DesiredAgentPrincipal`, etc.) are instances of this on the
+    Rust side via the `DesiredFields` trait. -/
+abbrev DesiredFields := String
+
+/-- Abstract runtime-owned field payload per document. Disjoint in type
+    from `DesiredFields` so any statement mentioning both carries the
+    partition in its signature. -/
+abbrev LiveFields := String
+
+/-- Operator-authored desired state — a finite partial map from
+    `DocRef` to the operator-owned fields the manifest declares for it. -/
+structure Manifest where
+  docs : DocRef → Option DesiredFields
+
+namespace Manifest
+
+/-- Does the manifest declare this document? -/
+def contains (m : Manifest) (d : DocRef) : Bool := (m.docs d).isSome
+
+end Manifest
+
+/-- DB state observable to both apply and runtime, exposing the desired-
+    and live-projection per document. `liveOnly` documents are those with
+    no manifest entry but nonzero live state — the current CLI reports
+    these diagnostically but does not delete them. -/
+structure LiveState where
+  desired : DocRef → Option DesiredFields
+  live    : DocRef → Option LiveFields
+
+namespace LiveState
+
+def contains (L : LiveState) (d : DocRef) : Bool := (L.desired d).isSome
+
+end LiveState
+
 end ApplyReconcile
