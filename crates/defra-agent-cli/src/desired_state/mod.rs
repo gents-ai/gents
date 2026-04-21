@@ -47,6 +47,18 @@ pub(crate) struct DesiredAgentBehavior {
     pub(crate) enabled: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DesiredTask {
+    pub(crate) task_id: String,
+    pub(crate) name: String,
+    pub(crate) description: Option<String>,
+    pub(crate) behavior_id: String,
+    pub(crate) prompt_template: String,
+    pub(crate) enabled: bool,
+    pub(crate) output_schema_ref: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DesiredToolSelection {
