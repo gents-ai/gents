@@ -8,10 +8,10 @@ mod support;
 
 use support::snapshots::{
     fetch_conversation_snapshot, fetch_request_lineage_snapshot,
-    fetch_request_lineage_snapshot_by_tuple, fetch_request_snapshot, fetch_response_content,
-    fetch_response_interrupted_at, fetch_response_snapshot, fetch_session_snapshot,
-    ConversationSnapshot, RequestLineageSnapshot, RequestSnapshot, ResponseSnapshot,
-    SessionSnapshot,
+    fetch_request_lineage_snapshot_by_tuple, fetch_request_snapshot,
+    fetch_request_snapshot_raw, fetch_response_content, fetch_response_interrupted_at,
+    fetch_response_snapshot, fetch_session_snapshot, ConversationSnapshot,
+    RequestLineageSnapshot, RequestSnapshot, ResponseSnapshot, SessionSnapshot,
 };
 use support::{
     build_request, create_request, create_response_with_content_and_status,
@@ -1221,4 +1221,339 @@ async fn valid_until_cached_at_claim_ignores_post_claim_extension() {
         lifecycle.valid_until_at_claim_for_test(),
         Some(expected)
     );
+}
+
+// ---------------------------------------------------------------------------
+// Property tests enforcing Lean invariants S7 / S8 / S1 + persistence ordering
+// + the conformance mapping round-trip. Each test's comment cites the Lean
+// theorem it guards against regression.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn s7_interrupt_requested_at_is_latch_never_rewritten() {
+    // Per S7 (`interrupt_monotonicity`) in
+    // `crates/defra-agent/proofs/Proofs/Properties/Safety.lean`: once
+    // `interruptRequestedAt.isSome`, no `RequestContext.Transition` rewrites
+    // it. The Rust mutations must preserve this latch across every lifecycle
+    // transition that touches the row.
+
+    let db = test_db("s7-interrupt-latch").await;
+    let t0 = "2026-04-20T12:00:00+00:00".to_string();
+
+    // Sequence A: pending -> interrupted (via claim's pre-claim branch)
+    let request_id_a = uuid::Uuid::new_v4().to_string();
+    let session_id_a = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let doc_id_a =
+        create_request(&db.node, &request_id_a, &session_id_a, "pending", &created_at).await;
+
+    set_interrupt_requested_at(&db.node, &doc_id_a, &t0).await;
+    let snap0 = fetch_request_snapshot_raw(&db.node, &doc_id_a).await;
+    assert_eq!(snap0.interrupt_requested_at.as_deref(), Some(t0.as_str()));
+
+    let request_a = build_request(
+        doc_id_a.clone(),
+        request_id_a.clone(),
+        session_id_a.clone(),
+        created_at.clone(),
+    );
+    let mut lifecycle_a = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        request_a,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+    assert_eq!(lifecycle_a.claim().await.unwrap(), ClaimOutcome::Interrupted);
+
+    let snap_a = fetch_request_snapshot_raw(&db.node, &doc_id_a).await;
+    assert_eq!(
+        snap_a.interrupt_requested_at.as_deref(),
+        Some(t0.as_str()),
+        "S7: interrupt_before_claim must not rewrite interrupt_requested_at"
+    );
+
+    // Sequence B: fresh row, claimed -> interrupted (via transition_to_interrupted)
+    let request_id_b = uuid::Uuid::new_v4().to_string();
+    let session_id_b = uuid::Uuid::new_v4().to_string();
+    let doc_id_b =
+        create_request(&db.node, &request_id_b, &session_id_b, "pending", &created_at).await;
+
+    let request_b = build_request(
+        doc_id_b.clone(),
+        request_id_b.clone(),
+        session_id_b.clone(),
+        created_at.clone(),
+    );
+    let mut lifecycle_b = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        request_b,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+    assert_eq!(lifecycle_b.claim().await.unwrap(), ClaimOutcome::Claimed);
+
+    // Submitter sets interrupt mid-flight, then the lifecycle flips the row.
+    set_interrupt_requested_at(&db.node, &doc_id_b, &t0).await;
+    let snap_b_pre = fetch_request_snapshot_raw(&db.node, &doc_id_b).await;
+    assert_eq!(
+        snap_b_pre.interrupt_requested_at.as_deref(),
+        Some(t0.as_str())
+    );
+    lifecycle_b.transition_to_interrupted().await.unwrap();
+
+    let snap_b = fetch_request_snapshot_raw(&db.node, &doc_id_b).await;
+    assert_eq!(
+        snap_b.interrupt_requested_at.as_deref(),
+        Some(t0.as_str()),
+        "S7: transition_to_interrupted must not rewrite interrupt_requested_at"
+    );
+}
+
+#[tokio::test]
+async fn s8_valid_until_never_rewritten_by_transitions() {
+    // Per S8 (`valid_until_monotonicity`) in
+    // `crates/defra-agent/proofs/Proofs/Properties/Safety.lean`: no
+    // `RequestContext.Transition` rewrites `validUntil` (unconditional). Run a
+    // full claim + begin_execution + transition_to_interrupted sequence and
+    // assert `valid_until` is unchanged after each persisted transition.
+
+    let db = test_db("s8-valid-until-preserved").await;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let t0 = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+
+    set_valid_until(&db.node, &doc_id, &t0).await;
+    let snap0 = fetch_request_snapshot_raw(&db.node, &doc_id).await;
+    assert_eq!(snap0.valid_until.as_deref(), Some(t0.as_str()));
+
+    // Claim (pending → claimed)
+    let request = build_request(
+        doc_id.clone(),
+        request_id.clone(),
+        session_id.clone(),
+        created_at,
+    );
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    let snap1 = fetch_request_snapshot_raw(&db.node, &doc_id).await;
+    assert_eq!(
+        snap1.valid_until.as_deref(),
+        Some(t0.as_str()),
+        "S8: claim must not rewrite valid_until"
+    );
+
+    // begin_execution (claimed → processing)
+    lifecycle.prepare_session_with_identity().await.unwrap();
+    lifecycle.begin_execution().await.unwrap();
+    let snap2 = fetch_request_snapshot_raw(&db.node, &doc_id).await;
+    assert_eq!(
+        snap2.valid_until.as_deref(),
+        Some(t0.as_str()),
+        "S8: begin_execution must not rewrite valid_until"
+    );
+
+    // transition_to_interrupted (processing → interrupted)
+    lifecycle.transition_to_interrupted().await.unwrap();
+    let snap3 = fetch_request_snapshot_raw(&db.node, &doc_id).await;
+    assert_eq!(
+        snap3.valid_until.as_deref(),
+        Some(t0.as_str()),
+        "S8: transition_to_interrupted must not rewrite valid_until"
+    );
+}
+
+#[tokio::test]
+async fn s1_interrupted_is_terminal_subsequent_transitions_are_no_ops() {
+    // Per S1 (`terminal_irreversibility`) in
+    // `crates/defra-agent/proofs/Proofs/Properties/Safety.lean`: no transition
+    // leaves `.interrupted` for a non-terminal state. Transition a claimed
+    // request to interrupted, then attempt subsequent transitions and assert
+    // the DB row stays `interrupted` regardless of whether the Rust method
+    // returns `Ok(())` (idempotent no-op) or `Err(...)` (caller mis-sequenced).
+
+    let db = test_db("s1-interrupted-terminal").await;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+
+    let request = build_request(
+        doc_id.clone(),
+        request_id.clone(),
+        session_id.clone(),
+        created_at,
+    );
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    lifecycle.transition_to_interrupted().await.unwrap();
+
+    let snap0 = fetch_request_snapshot(&db.node, &doc_id).await;
+    assert_eq!(snap0.lifecycle_state, "interrupted");
+    assert_eq!(snap0.status, "interrupted");
+
+    // Idempotent: calling transition_to_interrupted again is a no-op because
+    // the `status._nin` filter excludes terminal rows.
+    lifecycle.transition_to_interrupted().await.unwrap();
+    let snap1 = fetch_request_snapshot(&db.node, &doc_id).await;
+    assert_eq!(
+        snap1.lifecycle_state, "interrupted",
+        "S1: repeated transition_to_interrupted must stay interrupted"
+    );
+    assert_eq!(snap1.status, "interrupted");
+
+    // complete() on an interrupted lifecycle may return Err (state mismatch)
+    // or Ok (caller is expected to tolerate either). Either way, the DB row
+    // must stay interrupted.
+    let _complete_result = lifecycle.complete().await;
+    let snap2 = fetch_request_snapshot(&db.node, &doc_id).await;
+    assert_eq!(
+        snap2.lifecycle_state, "interrupted",
+        "S1: complete() on interrupted must not reverse the terminal"
+    );
+    assert_eq!(snap2.status, "interrupted");
+
+    // fail() same treatment.
+    let _fail_result = lifecycle.fail().await;
+    let snap3 = fetch_request_snapshot(&db.node, &doc_id).await;
+    assert_eq!(
+        snap3.lifecycle_state, "interrupted",
+        "S1: fail() on interrupted must not reverse the terminal"
+    );
+    assert_eq!(snap3.status, "interrupted");
+}
+
+#[tokio::test]
+async fn ordering_response_interrupted_at_before_request_lifecycle_flip() {
+    // The 6-step interrupt flow writes `AgentResponse.interrupted_at` BEFORE
+    // `AgentRequest.lifecycle_state=interrupted`, per the spec's persistence-
+    // ordering invariant: any subscriber observing the terminal lifecycle
+    // also observes the marked partial response.
+    //
+    // DefraDB doesn't expose commit timestamps at query time, so we assert
+    // the weaker observable: after the handler returns, BOTH writes exist.
+    // This protects against the regression where the lifecycle flips but
+    // `interrupted_at` is null. A stronger ordering assertion requires a
+    // subscription-based observer (covered end-to-end in Task 11).
+
+    let db = test_db("ordering-response-before-request").await;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+
+    // Set up a claimed request with a streaming response that has partial content.
+    let request = build_request(
+        doc_id.clone(),
+        request_id.clone(),
+        session_id.clone(),
+        created_at,
+    );
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    lifecycle.prepare_session_with_identity().await.unwrap();
+    lifecycle.begin_execution().await.unwrap();
+
+    let partial_content = "Hello wor";
+    let response_doc_id = create_response_with_content_and_status(
+        &db.node,
+        &format!("resp-{request_id}"),
+        &request_id,
+        &session_id,
+        partial_content,
+        "streaming",
+    )
+    .await;
+    lifecycle.set_response_doc_id(&response_doc_id);
+
+    // Execute the 6-step flow sequence (mirroring run_inference's path):
+    //   1. write interrupted_at on the response row
+    //   2. transition the request to interrupted
+    let intent_at = chrono::Utc::now().to_rfc3339();
+    let stream_writer =
+        DefraStreamWriter::new(db.node.clone(), AGENT_DID, Duration::from_millis(50));
+    let stamped = stream_writer
+        .write_interrupted_at(&response_doc_id, &intent_at)
+        .await
+        .unwrap();
+    assert!(stamped, "ordering: interrupted_at must be stamped");
+    lifecycle.transition_to_interrupted().await.unwrap();
+
+    // Assert both writes are present.
+    let response_interrupted_at = fetch_response_interrupted_at(&db.node, &response_doc_id).await;
+    let request_snap = fetch_request_snapshot(&db.node, &doc_id).await;
+    assert_eq!(request_snap.lifecycle_state, "interrupted");
+    assert_eq!(
+        response_interrupted_at.as_deref(),
+        Some(intent_at.as_str()),
+        "ordering: if request.lifecycle_state=interrupted, response.interrupted_at must also be set"
+    );
+    // The partial content must be preserved verbatim.
+    let response_content = fetch_response_content(&db.node, &response_doc_id).await;
+    assert_eq!(response_content, partial_content);
+}
+
+#[test]
+fn conformance_mapping_all_9_lifecycle_states_round_trip() {
+    // Per `Proofs/Conformance/DefraAgent.lean::toIdeal`, every
+    // `DefraLifecycleState` maps to a specific `RequestState`. The Rust
+    // `RequestLifecycleState` enum in `defra-agent-protocol::client_protocol`
+    // mirrors this. Assert all 9 string forms parse to the expected enum
+    // variant, that `as_str` round-trips, and that unknown strings reject.
+    use defra_agent_protocol::client_protocol::RequestLifecycleState;
+
+    let cases = &[
+        ("pending", RequestLifecycleState::Pending),
+        ("claimed", RequestLifecycleState::Claimed),
+        ("processing", RequestLifecycleState::Processing),
+        ("inputRequired", RequestLifecycleState::InputRequired),
+        ("completed", RequestLifecycleState::Completed),
+        ("failed", RequestLifecycleState::Failed),
+        ("superseded", RequestLifecycleState::Superseded),
+        ("dead", RequestLifecycleState::Dead),
+        ("interrupted", RequestLifecycleState::Interrupted),
+    ];
+
+    for (s, expected) in cases {
+        let parsed = RequestLifecycleState::try_from(*s)
+            .unwrap_or_else(|e| panic!("failed to parse '{}': {:?}", s, e));
+        assert_eq!(parsed, *expected, "round-trip mismatch for '{}'", s);
+        assert_eq!(parsed.as_str(), *s, "as_str must round-trip to the source string");
+    }
+
+    // Unknown strings must reject.
+    assert!(RequestLifecycleState::try_from("bogus").is_err());
+    assert!(RequestLifecycleState::try_from("").is_err());
+    assert!(RequestLifecycleState::try_from("INTERRUPTED").is_err());
 }
