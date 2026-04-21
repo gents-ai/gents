@@ -52,10 +52,6 @@ Fork is:
 - **Orthogonal to retry.** `retry_parent_request` / `retry_root_request` / `superseded_by_request` are within-session Request-lifecycle concerns. Fork is cross-session and does not set, read, or modify these fields.
 - **Out of formal spec.** The Lean state machines (Process, Request, Persistence) do not see fork. Fork's correctness is a structural invariant on document shape, enforced by Rust tests (see "Structural invariant" below).
 
-## Operational considerations
-
-**Behavior swap and tool-availability in replayed history.** When the child forks with a different `behavior_id` whose `ToolSelection` differs from the parent's, the copied `AgentMessage` and `AgentToolCall` rows may reference tools that are not in the child's current tool surface. This is expected and correct: history is a record of what happened under the parent's configuration, not a claim that those tools are currently available. The model sees the historical tool calls in context on its next turn; the current turn's tool surface is determined by the child's `ToolSelection` and `ToolCeiling`. If the model tries to call a tool that is no longer in the surface, the existing tool-surface-resolution path rejects it as it would in any other session.
-
 ## Target document model
 
 `AgentConversation` grows three fields. No other collection changes.
@@ -91,8 +87,6 @@ The new fields live on `AgentConversation` rather than `AgentSession` because:
 
 **Coordination note.** A separate draft spec (`2026-04-17-first-class-reasoning-design.md`) proposes absorbing `AgentConversation` into `AgentSession`. If that lands first, these three fields move to `AgentSession` unchanged — no other design changes needed. If this fork spec lands first, the reasoning spec carries the fields over when it consolidates the two collections.
 
-**Schema migration.** Adding fields to an existing `@branchable` collection is a schema change. Existing `AgentConversation` rows (created before this spec ships) will read back with null/empty values for `forked_from_session_id`, `fork_at_user_turn`, and `forked_at`. That is the correct representation of a root conversation: no parent. No data migration of existing rows is required. Queries that filter by `forked_from_session_id _eq "some_id"` naturally exclude empty-valued rows.
-
 ## The `session::fork` function
 
 Single public entry point, new module `crates/defra-agent/src/session/fork.rs`, re-exported from `session.rs` and from the crate root.
@@ -120,22 +114,19 @@ pub async fn fork(node: &EmbeddedNode, params: ForkParams<'_>) -> Result<ForkOut
 
 1. **Load and validate source.**
    - Fetch parent `AgentSession` and `AgentConversation` by `session_id`. Both must exist.
-   - Verify `parent.agent_did == params.caller_agent_did` (see "ACL enforcement" below for the v1 trust model). Mismatch → `ForkNotSameAgent`.
-   - Verify parent has **zero** `AgentRequest` rows with `lifecycle_state` in any non-terminal state. The persisted state string values are lowercase (`PersistedLifecycleState::as_str` in `crates/defra-agent/src/lifecycle.rs`): non-terminal values are `"pending"`, `"claimed"`, `"processing"`, `"inputRequired"`; terminal values are `"completed"`, `"failed"`, `"superseded"`, `"dead"`. The busy-check is a DefraDB filter for `lifecycle_state _in ["pending", "claimed", "processing", "inputRequired"]` returning zero rows. Mismatch → `ForkSourceBusy`.
+   - Verify `parent.agent_did == params.caller_agent_did`. Mismatch → `ForkNotSameAgent`.
+   - Verify parent has **zero** `AgentRequest` rows with `lifecycle_state` in any non-terminal state. The terminal states are those established by the Request Lifecycle state machine (`Completed`, `Failed`, `Superseded`, `Dead`). Mismatch → `ForkSourceBusy`.
 
-2. **Compute fork cut sequence and cut timestamp.**
+2. **Compute fork cut sequence.**
    - Query parent's `AgentMessage` rows ordered by `sequence` ascending.
-   - Find the message that is the Nth (0-based) occurrence of `role == "user"`, where N = `fork_at_user_turn`. Call its sequence `cut_seq` and its `timestamp` `cut_ts`.
+   - Find the message that is the Nth (0-based) occurrence of `role == "user"`, where N = `fork_at_user_turn`. Call its sequence `cut_seq`.
    - If fewer than `N + 1` user messages exist → `ForkAtUserTurnOutOfRange`.
-   - `AgentMessage.sequence` is 1-indexed (confirmed in `crates/defra-agent/src/hook/persistence.rs`: `state.sequence += 1` before use). So `fork_at_user_turn = 0` typically yields `cut_seq = 1`, and the copied prefix `sequence < 1` is empty — a legal "fork before everything" that produces a child inheriting only behavior and provenance.
-   - The child's copied prefix includes every `AgentMessage` / `AgentToolCall` with sequence strictly less than `cut_seq`, and every `AgentToolResult` / `CompactionEntry` with `created_at` strictly less than `cut_ts`. Timestamp-based filtering is safe here because fork is idle-only (step 1 guarantees no concurrent writes to the parent), so there is no race between "what's committed at `cut_ts`" and "what a still-running turn is about to commit."
+   - The child's copied prefix includes every parent row with the applicable sequence strictly less than `cut_seq`.
 
 3. **Resolve child behavior.**
-   - If `target_behavior_id` is `Some`:
-     - Verify an `AgentBehavior` with that id exists. Missing → `ForkBehaviorNotFound`.
-     - Verify `target_behavior.agent_did == parent.agent_did`. Mismatch → `ForkBehaviorNotOwnedByPrincipal`. This prevents a caller from escaping the principal boundary by swapping to a behavior owned by a different principal; it reinforces the "principal inherited" guarantee at the point where behavior is resolved.
-   - Otherwise inherit `parent.behavior_id` (whose `agent_did` equals `parent.agent_did` by existing config-resolution invariants).
-   - Principal (`agent_did`) is always inherited. The child's `AgentConversation.agent_did == parent.agent_did == resolved_behavior.agent_did`.
+   - If `target_behavior_id` is `Some`, verify an `AgentBehavior` with that id exists. Missing → `ForkBehaviorNotFound`.
+   - Otherwise inherit `parent.behavior_id`.
+   - Principal (`agent_did`) is always inherited.
 
 4. **Copy rows first.** For each collection below, query matching parent rows and insert new rows under the child's generated `session_id`. No `AgentSession` or `AgentConversation` row for the child is written yet.
 
@@ -145,20 +136,20 @@ pub async fn fork(node: &EmbeddedNode, params: ForkParams<'_>) -> Result<ForkOut
 
 ### Per-collection copy rules
 
-| Collection | Filter on parent | Key remap | Field preservation |
-|---|---|---|---|
-| `AgentMessage` | `sequence < cut_seq` | `message_key = "{child_session_id}:{sequence}"` | `timestamp` preserved from parent |
-| `AgentToolCall` | `message_sequence < cut_seq` | `tool_call_key = "{child_session_id}:{tool_call_id}"` | `started_at`, `completed_at` preserved |
-| `AgentToolResult` | `created_at < cut_ts` | DefraDB generates a fresh `_docID`; no application-level key | `created_at` preserved; `agent_did` inherited |
-| `CompactionEntry` | `created_at < cut_ts` | `compaction_key = "{child_session_id}:{sequence}"` (parent's compaction sequence preserved in the key and in the `sequence` field) | `created_at` preserved |
+| Collection | Filter on parent | Key remap |
+|---|---|---|
+| `AgentMessage` | `sequence < cut_seq` | `message_key = "{child_session_id}:{sequence}"` |
+| `AgentToolCall` | `message_sequence < cut_seq` | `tool_call_key = "{child_session_id}:{tool_call_id}"` |
+| `AgentToolResult` | rows whose `tool_name` / `tool_input` correspond to an `AgentToolCall` that passes the filter above (join via `tool_call_id`) | `session_id` remapped, `agent_did` inherited |
+| `CompactionEntry` | entries whose compaction window lies **entirely** in `sequence < cut_seq` | `compaction_key = "{child_session_id}:{sequence}"` |
 
 **Not copied:** `AgentRequest`, `AgentResponse`, `AgentSession` (parent's), `AgentConversation` (parent's). The child's `AgentSession` and `AgentConversation` are created fresh in step 5. `AgentRequest` / `AgentResponse` are per-turn lifecycle records whose states are terminal and owned by the parent; duplicating them under new IDs would produce data without meaning.
 
-**Timestamp preservation rationale.** Copied rows retain their original timestamps (`AgentMessage.timestamp`, `AgentToolCall.started_at`/`completed_at`, `AgentToolResult.created_at`, `CompactionEntry.created_at`). The rows represent a faithful reproduction of historical events, not new documents written at fork time. The fork's own timeline lives on `AgentConversation.forked_at`.
+**Compaction straddle rule.** If a `CompactionEntry` covers messages whose range crosses `cut_seq`, drop it from the copy. Rationale: the compaction represents a summary of a specific window; a partial window is not a valid summary. The child may need to recompact on its next compaction pass from the full prefix.
 
-**`AgentToolResult` schema note.** `AgentToolResult` (see `crates/defra-agent-protocol/schemas/agent/agent_tool_result.graphql`) has no `tool_call_id` or `sequence` / `message_sequence` field — it links to a tool call only by `(session_id, tool_name, tool_input)` and is used as a spill store for truncated tool output (written from `crates/defra-agent/src/truncation/spill.rs`; not read during history replay in `session::load_history`). Copying by `created_at < cut_ts` captures every spill that existed before the fork point without needing a join.
+### `AgentToolResult` filter implementation note
 
-**`CompactionEntry` schema note.** `CompactionEntry.sequence` is an independent monotonic counter for compaction events, not a pointer into `AgentMessage.sequence` (see `crates/defra-agent/src/session/compaction_entries.rs`: `sequence = previous.map_or(1, |entry| entry.sequence + 1)`). It has no explicit start/end pointer into the message stream; only a `messages_compacted` count. Filtering by `created_at < cut_ts` is the correct and only reliable rule. Child's compaction sequence continues from the largest copied sequence, so new post-fork compactions extend the sequence naturally without conflict.
+`AgentToolResult` does not directly carry a `message_sequence` field (see `crates/defra-agent-protocol/schemas/agent/agent_tool_result.graphql`). The filter is implemented by first materializing the set of `tool_call_id` values that pass the `AgentToolCall` filter, then selecting `AgentToolResult` rows whose `(session_id, tool_call_id)` pair matches. This is expected to be a small helper in the copy module; the exact query shape is an implementation detail for the writing-plans phase.
 
 ### Atomicity
 
@@ -172,32 +163,6 @@ DefraDB mutations are per-document; there is no multi-document transaction. The 
 
 Two forks of the same parent (same or different `fork_at_user_turn`) execute independently. Both only read from the parent; neither writes to the parent. The children receive disjoint `session_id`s and proceed without coordination.
 
-### ACL enforcement (v1 trust model)
-
-The same-principal check — `parent.agent_did == caller_agent_did` — is enforced at the Rust function boundary, not inside DefraDB's ACL layer. `caller_agent_did` is a parameter the caller passes in; it is not independently verified against the node's signing identity. This means:
-
-- For CLI callers, `caller_agent_did` is read from the local node identity / configuration. The `defra-agent session fork` command must look up the caller's identity the same way other identity-sensitive commands do today and pass it through.
-- For runtime callers (a future meta-tool, a scheduler path), the caller must pass the identity of the principal currently executing, which the runtime already has in its request context.
-- For in-process library callers, this is a trust-your-caller boundary.
-
-Implication: a hostile Rust caller with direct access to `session::fork` could pass any `caller_agent_did` and bypass the check. A future hardening pass — tracked in Open Issues — derives `caller_agent_did` from the node's signing identity inside `session::fork` itself, or relies on DefraDB ACLs to make reads of a foreign-principal session fail, at which point the parameter becomes redundant. Either path is non-breaking because it only tightens the check.
-
-### DefraDB ACL readiness
-
-The fork primitive is compatible with a future DefraDB ACL policy of the form "actor DID must match row's `agent_did`" without any additional schema reservations. Every identity-sensitive check fork performs goes through a collection that already carries `agent_did`:
-
-| Fork-time check | Collection read | Has `agent_did`? |
-|---|---|---|
-| "does the source exist and belong to caller?" | `AgentConversation` | ✓ |
-| "is the parent idle?" (busy-check) | `AgentRequest` | ✓ |
-| "does target behavior belong to the principal?" | `AgentBehavior` | ✓ |
-
-Writes on fork create a new `AgentSession` + `AgentConversation`. `AgentConversation.agent_did` is set to the inherited principal; a DefraDB ACL policy on writes (actor DID must equal the write's `agent_did`) is sufficient to gate that under the same-principal rule.
-
-**Orthogonal schema gap (not introduced by this spec).** `AgentSession`, `AgentMessage`, `AgentToolCall`, and `CompactionEntry` do not currently carry an `agent_did` field. Row-level ACLs on those collections would need either (a) a schema addition to add `agent_did` system-wide, or (b) a DefraDB ACL policy capable of resolving `agent_did` via a join to `AgentConversation` keyed by `session_id`. This spec does not close that gap — it is a broader schema-modernization concern affecting every write path (the persistence hook, tool-call hook, compaction layer), not just fork. The fork implementation is forward-compatible with either resolution: when `agent_did` is added to those collections, fork's copy step will populate the field with the child's (inherited) `agent_did` value in the same mutation — a one-line change. No design element in this spec conflicts with that future addition.
-
-**No new DID fields reserved in this spec.** A `forked_by_did` column on `AgentConversation` was considered and rejected: under the same-principal-only rule, it would always equal `agent_did`, making it redundant. If cross-principal forks are ever added, that spec can introduce the field and populate it on newly-created rows without migration — existing rows correctly represent same-principal forks where `forked_by_did == agent_did` by convention.
-
 ## Error taxonomy
 
 | Error | Condition | Class |
@@ -207,7 +172,6 @@ Writes on fork create a new `AgentSession` + `AgentConversation`. `AgentConversa
 | `ForkSourceBusy` | parent has any `AgentRequest` with non-terminal `lifecycle_state` | retryable (caller waits or supersedes) |
 | `ForkAtUserTurnOutOfRange` | fewer than `fork_at_user_turn + 1` user messages in parent | caller error |
 | `ForkBehaviorNotFound` | `target_behavior_id` set but no matching `AgentBehavior` | caller error |
-| `ForkBehaviorNotOwnedByPrincipal` | `target_behavior.agent_did != parent.agent_did` | caller error (principal boundary) |
 | `ForkCopyFailed(inner)` | a DefraDB mutation during the copy step failed | retryable |
 
 Transient DefraDB errors within each copy mutation are handled by the existing `session::retry::execute_mutation_with_retry` helper. `ForkCopyFailed` surfaces only after those retries are exhausted.
@@ -263,23 +227,20 @@ The test:
 1. Builds a parent session with N user turns + assistant turns + tool calls (some with results) + compaction entries (one window straddling multiple user turns).
 2. Forks at several `fork_at_user_turn` values: 0, mid-range, exactly N, out-of-range (expect `ForkAtUserTurnOutOfRange`).
 3. For each successful fork, asserts:
-   - **Prefix match:** child's `AgentMessage[sequence < cut_seq]` content equals parent's, key-remapped to the child's `session_id`. Timestamps preserved byte-identical.
-   - **Tool-call prefix match:** child's `AgentToolCall[message_sequence < cut_seq]` equals parent's, key-remapped.
-   - **Timestamp-based spill/compaction cutoff:** child's `AgentToolResult` / `CompactionEntry` rows each have `created_at < cut_ts` (the parent's cut_seq message timestamp); no row with `created_at >= cut_ts` is present.
-   - **Post-fork emptiness:** child has zero `AgentMessage` / `AgentToolCall` rows with `sequence >= cut_seq`.
-   - **Disjoint keys:** child's `message_key`, `tool_call_key`, `compaction_key` do not overlap the parent's (session_id portion differs).
-   - **Conversation provenance:** `child.forked_from_session_id == parent.session_id` and `child.fork_at_user_turn` matches the input; `child.forked_at` is set.
+   - **Prefix match:** child's `AgentMessage[sequence < cut_seq]` content equals parent's, key-remapped to the child's `session_id`.
+   - **Post-fork emptiness:** child has zero rows with `sequence >= cut_seq` in any copied collection.
+   - **Disjoint keys:** child's `message_key`, `tool_call_key`, `compaction_key` do not overlap the parent's.
+   - **Conversation provenance:** `child.forked_from_session_id == parent.session_id` and `child.fork_at_user_turn` matches the input.
    - **No request/response copied:** child has zero `AgentRequest` and zero `AgentResponse` rows.
-   - **`fork_at_user_turn = 0` corner case:** child has zero copied rows in every collection except `AgentSession` and `AgentConversation`; child is a legally empty fork whose provenance still points to the parent.
+   - **Compaction straddle dropped:** parent `CompactionEntry` whose window crosses `cut_seq` is absent from child.
 4. **Parent unchanged:** full row snapshot of the parent before and after each fork, asserted byte-equal.
-5. Negative cases covering each error in the taxonomy, including:
-   - `ForkBehaviorNotOwnedByPrincipal`: fork attempted with `target_behavior_id` pointing to an `AgentBehavior` whose `agent_did` differs from the parent's. Child must NOT be created; no copied rows must exist.
+5. Negative cases covering each error in the taxonomy.
 
-### State-machine conformance addition
+### State-machine conformance additions
 
-`crates/defra-agent/tests/state_machine_conformance.rs` gets one new case:
+`tests/state_machine_conformance.rs` and `tests/lifecycle_regression.rs` each get one new case:
 
-- A fork performed while a parent session has only terminal-state `AgentRequest` rows does not transition any state in the Process, Request, or Persistence lifecycle state machines. Snapshot the parent's request/response/conversation state before and after the fork; assert byte-equality. This asserts that fork is orthogonal to the Lean-proven invariants.
+- A fork performed while a parent session has only terminal-state `AgentRequest` rows does not transition any state in the Process, Request, or Persistence lifecycle state machines. This asserts that fork is orthogonal to the Lean-proven invariants.
 
 ### Concurrent fork test
 
@@ -293,9 +254,7 @@ Two forks of the same parent (same and different `fork_at_user_turn`) issued con
 
 ## Open issues
 
-- **ACL hardening.** v1 enforces same-principal via a Rust function-boundary parameter check (see "ACL enforcement"). A future hardening derives `caller_agent_did` from the node's signing identity inside `session::fork`, or relies on DefraDB ACLs to make foreign-principal reads fail, at which point the parameter is redundant. Non-breaking when it lands (the check only tightens). See "DefraDB ACL readiness" for the collections and fields that policy would pivot on.
-- **Row-level ACL on transcript collections.** `AgentSession` / `AgentMessage` / `AgentToolCall` / `CompactionEntry` do not carry `agent_did` today, so row-level DefraDB ACL on those collections is not directly expressible. Resolutions (schema addition or join-capable ACL policy) are a system-wide schema-modernization concern; the fork spec is forward-compatible with either path.
-- **Orphan GC.** A janitor that finds `AgentMessage` / `AgentToolCall` / `AgentToolResult` / `CompactionEntry` rows whose `session_id` has no `AgentSession` or `AgentConversation` and removes them. Deferred.
+- **Orphan GC.** A janitor that finds `AgentMessage` / `AgentToolCall` / etc. rows whose `session_id` has no `AgentSession` or `AgentConversation` and removes them. Deferred.
 - **Content-addressed dedup for large copied tool outputs.** `AgentToolResult.output_text` may be large; copy-on-fork duplicates it. A later blob-dedup layer could transparently deduplicate without changing this logical model. Deferred.
 - **Meta-tool exposure.** A `fork_conversation` meta-tool callable by an LLM is the natural way to wire sub-agent spawn. Its surface, scoping rules, and how it interacts with the existing agent-to-agent `AgentRequest` path are a separate design.
 
@@ -303,5 +262,5 @@ Two forks of the same parent (same and different `fork_at_user_turn`) issued con
 
 1. `session::fork` compiles, ships as `pub use session::fork`, and is invoked from the new CLI subcommand.
 2. The structural invariant test passes with the scenarios listed above.
-3. State-machine conformance tests pass unchanged except for the one new no-op case in `state_machine_conformance.rs`.
+3. State-machine conformance tests pass unchanged except for the two new no-op cases.
 4. A human can: create a parent session via `chat`, let it produce a few user + assistant turns, run `defra-agent session fork --from <ID> --at-user-turn 1`, receive a new `session_id`, and submit a new request against that session that begins where the fork cut.
