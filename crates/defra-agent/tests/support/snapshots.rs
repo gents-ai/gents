@@ -232,3 +232,137 @@ pub async fn fetch_runtime_snapshot(
     let resp = node.execute(&query).await;
     first_optional_row::<RuntimeSnapshot>(&resp, "AgentRuntime")
 }
+
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+pub struct MessageSnapshot {
+    pub message_key: String,
+    pub session_id: String,
+    pub sequence: u32,
+    pub role: String,
+    pub content: String,
+    pub timestamp: String,
+}
+
+pub async fn fetch_message_snapshots_for_session(
+    node: &EmbeddedNode,
+    session_id: &str,
+) -> Vec<MessageSnapshot> {
+    let session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentMessage(
+                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                order: {{ sequence: ASC }}
+            ) {{
+                message_key
+                session_id
+                sequence
+                role
+                content
+                timestamp
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    assert!(!resp.has_errors(), "fetch_message_snapshots failed: {:?}", resp.errors);
+    let data = resp.data.expect("data");
+    serde_json::from_value(data["AgentMessage"].clone()).expect("parse MessageSnapshot")
+}
+
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+pub struct ToolCallSnapshot {
+    pub tool_call_key: String,
+    pub session_id: String,
+    pub message_sequence: u32,
+    pub tool_name: String,
+    pub tool_call_id: String,
+    pub args: String,
+    pub result: String,
+    pub status: String,
+    pub started_at: String,
+    pub completed_at: String,
+}
+
+pub async fn fetch_tool_call_snapshots_for_session(
+    node: &EmbeddedNode,
+    session_id: &str,
+) -> Vec<ToolCallSnapshot> {
+    let session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                order: {{ message_sequence: ASC }}
+            ) {{
+                tool_call_key session_id message_sequence tool_name tool_call_id
+                args result status started_at completed_at
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    assert!(!resp.has_errors(), "fetch_tool_call_snapshots failed: {:?}", resp.errors);
+    let data = resp.data.expect("data");
+    serde_json::from_value(data["AgentToolCall"].clone()).expect("parse ToolCallSnapshot")
+}
+
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+pub struct ToolResultSnapshot {
+    pub agent_did: String,
+    pub session_id: String,
+    pub tool_name: String,
+    pub tool_input: String,
+    pub output_text: String,
+    pub created_at: String,
+}
+
+pub async fn fetch_tool_result_snapshots_for_session(
+    node: &EmbeddedNode,
+    session_id: &str,
+) -> Vec<ToolResultSnapshot> {
+    let session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentToolResult(
+                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                order: {{ created_at: ASC }}
+            ) {{
+                agent_did session_id tool_name tool_input output_text created_at
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    assert!(!resp.has_errors(), "fetch_tool_result_snapshots failed: {:?}", resp.errors);
+    let data = resp.data.expect("data");
+    serde_json::from_value(data["AgentToolResult"].clone()).expect("parse ToolResultSnapshot")
+}
+
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+pub struct CompactionEntrySnapshot {
+    pub compaction_key: String,
+    pub session_id: String,
+    pub sequence: u32,
+    pub summary: String,
+    pub messages_compacted: u32,
+    pub created_at: String,
+}
+
+pub async fn fetch_compaction_entry_snapshots_for_session(
+    node: &EmbeddedNode,
+    session_id: &str,
+) -> Vec<CompactionEntrySnapshot> {
+    let session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            CompactionEntry(
+                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                order: {{ sequence: ASC }}
+            ) {{
+                compaction_key session_id sequence summary messages_compacted created_at
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    assert!(!resp.has_errors(), "fetch_compaction_entry_snapshots failed: {:?}", resp.errors);
+    let data = resp.data.expect("data");
+    serde_json::from_value(data["CompactionEntry"].clone()).expect("parse CompactionEntrySnapshot")
+}
