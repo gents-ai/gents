@@ -422,7 +422,14 @@ lemma apply_preserves_wellFormed
     ∀ pref : List ApplyStep,
       List.IsPrefix pref (diff M L) →
       (applyAll L pref).WellFormed := by
-  sorry
+  -- NOTE: `referencesOf` is abstractly `∅` in the Lean model; the substantive
+  -- obligation lives in the Rust conformance tests (`apply_conformance.rs`)
+  -- and in Rust-side schema validation. When Lean-side concrete references
+  -- are added, this lemma's proof body must be strengthened.
+  intro pref _hpref
+  intro d f _hfd r hr
+  -- `hr : r ∈ referencesOf f`, but `referencesOf f = ∅`, contradiction.
+  simp [referencesOf] at hr
 
 /-- Bridge to `RuntimeReconcile`: each `ApplyStep` induces at least one
     legal runtime transition. `ack_write` alone suffices for T-Conv's
