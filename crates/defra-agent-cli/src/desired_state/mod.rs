@@ -59,6 +59,16 @@ pub(crate) struct DesiredTask {
     pub(crate) output_schema_ref: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DesiredSchedule {
+    pub(crate) schedule_id: String,
+    pub(crate) task_id: String,
+    pub(crate) interval_secs: i64,
+    pub(crate) enabled: bool,
+    pub(crate) concurrency: String,  // "parallel" | "serial" | "latest_only"
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DesiredToolSelection {
