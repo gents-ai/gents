@@ -7,7 +7,7 @@
 
 use std::fmt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Collection {
     AgentPrincipal,
     AgentBehavior,
@@ -19,6 +19,8 @@ pub(crate) enum Collection {
 }
 
 impl Collection {
+    /// All variants in declaration order. Not sorted by `apply_order()` —
+    /// callers that need apply-ordered iteration must sort explicitly.
     pub(crate) const ALL: [Collection; 7] = [
         Collection::AgentPrincipal,
         Collection::AgentBehavior,
@@ -93,6 +95,10 @@ impl Collection {
     }
 }
 
+/// Snake-case plural identifier used as the `ConfigExportBundle` /
+/// `DesiredStateManifest` field name for this collection. Note the
+/// irregular plural `tool_service_registries` — preserve it when
+/// renaming variants.
 impl fmt::Display for Collection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
@@ -128,6 +134,13 @@ mod tests {
     }
 
     #[test]
+    fn all_collections_have_distinct_display_strings() {
+        let names: BTreeSet<String> =
+            Collection::ALL.iter().map(|c| c.to_string()).collect();
+        assert_eq!(names.len(), Collection::ALL.len());
+    }
+
+    #[test]
     fn apply_order_puts_referees_before_referrers() {
         assert!(
             Collection::InferenceBackend.apply_order()
@@ -144,6 +157,19 @@ mod tests {
         assert!(
             Collection::AgentBehavior.apply_order()
                 < Collection::ScheduledTask.apply_order()
+        );
+        // Rank-0 members must all agree on rank 0.
+        assert_eq!(
+            Collection::InferenceBackend.apply_order(),
+            Collection::ToolSelection.apply_order(),
+        );
+        assert_eq!(
+            Collection::InferenceBackend.apply_order(),
+            Collection::InferenceProfile.apply_order(),
+        );
+        assert_eq!(
+            Collection::InferenceBackend.apply_order(),
+            Collection::ToolServiceRegistry.apply_order(),
         );
     }
 }
