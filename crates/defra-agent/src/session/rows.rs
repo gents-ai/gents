@@ -48,10 +48,13 @@ pub(super) struct ConversationDocument {
     #[serde(default)]
     pub(super) agent_did: Option<String>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub(super) forked_from_session_id: Option<String>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub(super) fork_at_user_turn: Option<i64>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub(super) forked_at: Option<String>,
 }
 
