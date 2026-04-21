@@ -1,6 +1,8 @@
 import Proofs.Basic
 import Proofs.RuntimeReconcile
 import Mathlib.Data.Finset.Basic
+import Mathlib.Data.Finset.Image
+import Mathlib.Data.Finset.SDiff
 
 /-!
 # Apply-Reconcile Composition
@@ -836,6 +838,78 @@ theorem t_conv
     ∀ d : DocRef, ∀ f, M.docs d = some f →
       (applyAll L (diff M L)).desired d = some f :=
   apply_realizes_manifest hM hL
+
+/-! ## Bridge to `RuntimeReconcile.ResolvedSnapshot`
+
+The runtime's control watcher + resolver ultimately publish a
+`ResolvedSnapshot` whose `runnable ∪ unavailable` is the set of
+behavior-ids declared by the manifest. Task C1 defines the structural
+bridge from `Manifest` / `LiveState` to `ResolvedSnapshot` and the
+coverage lemma that Task C2 will compose with `t_conv` to restate
+T-Conv in ResolvedSnapshot form.
+-/
+
+/-- If this DocRef names an agent behavior, project out a stable
+    `BehaviorId`. The model treats `BehaviorId` as `Nat`; we use the
+    id string's length as a placeholder mapping. The proofs are
+    mapping-agnostic — any total `String → BehaviorId` function works;
+    only totality matters for the coverage lemma. -/
+def DocRef.behaviorId? : DocRef → Option BehaviorId := fun d =>
+  match d.collection with
+  | .agentBehavior => some d.id.length
+  | _ => none
+
+/-- The set of behavior ids declared by this manifest, derived by
+    filtering `M.support` to `agentBehavior` DocRefs and mapping the
+    placeholder id→Nat. Concrete mapping choice does not matter for
+    the proofs that consume this set. -/
+noncomputable def Manifest.behaviorIds (m : Manifest) : Finset BehaviorId :=
+  (m.support.filter (fun d => d.collection = .agentBehavior)).image
+    (fun d => d.id.length)
+
+/-- Bridge from a post-apply `LiveState` + caller-supplied default
+    behavior + base behavior set into a `ResolvedSnapshot`. Follows the
+    runtime's reconcile semantics at an abstract level:
+    - `runnable := allBehaviors.filter (· has a matching present DocRef in L)`
+    - `unavailable := allBehaviors \ runnable`
+
+    `defaultBehavior` is a caller parameter because the model does not
+    include an `AgentPrincipal.default_behavior_id` projection; in the
+    production path the control watcher supplies it from the principal
+    document.
+
+    Uses classical decidability on the existential predicate — the
+    proofs that consume this snapshot (notably `toResolvedSnapshot_coverage`)
+    do not require the predicate to be computable; only that runnable
+    is a subset of `allBehaviors`, which follows from `Finset.filter_subset`. -/
+noncomputable def LiveState.toResolvedSnapshot
+    (L : LiveState) (defaultBehavior : BehaviorId)
+    (allBehaviors : Finset BehaviorId) : ResolvedSnapshot :=
+  let runnable : Finset BehaviorId :=
+    @Finset.filter _ (fun bid =>
+        ∃ d : DocRef, d.behaviorId? = some bid ∧ L.contains d = true)
+      (Classical.decPred _) allBehaviors
+  { defaultBehavior := defaultBehavior
+  , runnable := runnable
+  , unavailable := allBehaviors \ runnable }
+
+/-- Coverage: the resolved snapshot's `runnable` and `unavailable` sets
+    together cover the supplied base behavior set. This is the
+    structural fact Task C2 uses to restate T-Conv as the spec
+    originally framed it (the runtime publishes a snapshot whose
+    behavior set equals the manifest's behavior set). -/
+lemma LiveState.toResolvedSnapshot_coverage
+    (L : LiveState) (defaultBehavior : BehaviorId)
+    (allBehaviors : Finset BehaviorId) :
+    (L.toResolvedSnapshot defaultBehavior allBehaviors).runnable ∪
+      (L.toResolvedSnapshot defaultBehavior allBehaviors).unavailable =
+        allBehaviors := by
+  unfold LiveState.toResolvedSnapshot
+  simp only
+  -- Goal: (allBehaviors.filter p) ∪ (allBehaviors \ allBehaviors.filter p) = allBehaviors.
+  -- The filter is a subset of allBehaviors, so this is `union_sdiff_of_subset`.
+  apply Finset.union_sdiff_of_subset
+  exact @Finset.filter_subset _ _ (Classical.decPred _) allBehaviors
 
 /-- Exhaustive Collection pattern-match acting as a parity contract
     with the Rust `defra_agent::Collection` enum. When the Rust enum
