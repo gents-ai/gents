@@ -131,9 +131,11 @@ pub async fn fork(node: &EmbeddedNode, params: ForkParams<'_>) -> Result<ForkOut
    - The child's copied prefix includes every `AgentMessage` / `AgentToolCall` with sequence strictly less than `cut_seq`, and every `AgentToolResult` / `CompactionEntry` with `created_at` strictly less than `cut_ts`. Timestamp-based filtering is safe here because fork is idle-only (step 1 guarantees no concurrent writes to the parent), so there is no race between "what's committed at `cut_ts`" and "what a still-running turn is about to commit."
 
 3. **Resolve child behavior.**
-   - If `target_behavior_id` is `Some`, verify an `AgentBehavior` with that id exists. Missing → `ForkBehaviorNotFound`.
-   - Otherwise inherit `parent.behavior_id`.
-   - Principal (`agent_did`) is always inherited.
+   - If `target_behavior_id` is `Some`:
+     - Verify an `AgentBehavior` with that id exists. Missing → `ForkBehaviorNotFound`.
+     - Verify `target_behavior.agent_did == parent.agent_did`. Mismatch → `ForkBehaviorNotOwnedByPrincipal`. This prevents a caller from escaping the principal boundary by swapping to a behavior owned by a different principal; it reinforces the "principal inherited" guarantee at the point where behavior is resolved.
+   - Otherwise inherit `parent.behavior_id` (whose `agent_did` equals `parent.agent_did` by existing config-resolution invariants).
+   - Principal (`agent_did`) is always inherited. The child's `AgentConversation.agent_did == parent.agent_did == resolved_behavior.agent_did`.
 
 4. **Copy rows first.** For each collection below, query matching parent rows and insert new rows under the child's generated `session_id`. No `AgentSession` or `AgentConversation` row for the child is written yet.
 
@@ -180,6 +182,22 @@ The same-principal check — `parent.agent_did == caller_agent_did` — is enfor
 
 Implication: a hostile Rust caller with direct access to `session::fork` could pass any `caller_agent_did` and bypass the check. A future hardening pass — tracked in Open Issues — derives `caller_agent_did` from the node's signing identity inside `session::fork` itself, or relies on DefraDB ACLs to make reads of a foreign-principal session fail, at which point the parameter becomes redundant. Either path is non-breaking because it only tightens the check.
 
+### DefraDB ACL readiness
+
+The fork primitive is compatible with a future DefraDB ACL policy of the form "actor DID must match row's `agent_did`" without any additional schema reservations. Every identity-sensitive check fork performs goes through a collection that already carries `agent_did`:
+
+| Fork-time check | Collection read | Has `agent_did`? |
+|---|---|---|
+| "does the source exist and belong to caller?" | `AgentConversation` | ✓ |
+| "is the parent idle?" (busy-check) | `AgentRequest` | ✓ |
+| "does target behavior belong to the principal?" | `AgentBehavior` | ✓ |
+
+Writes on fork create a new `AgentSession` + `AgentConversation`. `AgentConversation.agent_did` is set to the inherited principal; a DefraDB ACL policy on writes (actor DID must equal the write's `agent_did`) is sufficient to gate that under the same-principal rule.
+
+**Orthogonal schema gap (not introduced by this spec).** `AgentSession`, `AgentMessage`, `AgentToolCall`, and `CompactionEntry` do not currently carry an `agent_did` field. Row-level ACLs on those collections would need either (a) a schema addition to add `agent_did` system-wide, or (b) a DefraDB ACL policy capable of resolving `agent_did` via a join to `AgentConversation` keyed by `session_id`. This spec does not close that gap — it is a broader schema-modernization concern affecting every write path (the persistence hook, tool-call hook, compaction layer), not just fork. The fork implementation is forward-compatible with either resolution: when `agent_did` is added to those collections, fork's copy step will populate the field with the child's (inherited) `agent_did` value in the same mutation — a one-line change. No design element in this spec conflicts with that future addition.
+
+**No new DID fields reserved in this spec.** A `forked_by_did` column on `AgentConversation` was considered and rejected: under the same-principal-only rule, it would always equal `agent_did`, making it redundant. If cross-principal forks are ever added, that spec can introduce the field and populate it on newly-created rows without migration — existing rows correctly represent same-principal forks where `forked_by_did == agent_did` by convention.
+
 ## Error taxonomy
 
 | Error | Condition | Class |
@@ -189,6 +207,7 @@ Implication: a hostile Rust caller with direct access to `session::fork` could p
 | `ForkSourceBusy` | parent has any `AgentRequest` with non-terminal `lifecycle_state` | retryable (caller waits or supersedes) |
 | `ForkAtUserTurnOutOfRange` | fewer than `fork_at_user_turn + 1` user messages in parent | caller error |
 | `ForkBehaviorNotFound` | `target_behavior_id` set but no matching `AgentBehavior` | caller error |
+| `ForkBehaviorNotOwnedByPrincipal` | `target_behavior.agent_did != parent.agent_did` | caller error (principal boundary) |
 | `ForkCopyFailed(inner)` | a DefraDB mutation during the copy step failed | retryable |
 
 Transient DefraDB errors within each copy mutation are handled by the existing `session::retry::execute_mutation_with_retry` helper. `ForkCopyFailed` surfaces only after those retries are exhausted.
@@ -253,7 +272,8 @@ The test:
    - **No request/response copied:** child has zero `AgentRequest` and zero `AgentResponse` rows.
    - **`fork_at_user_turn = 0` corner case:** child has zero copied rows in every collection except `AgentSession` and `AgentConversation`; child is a legally empty fork whose provenance still points to the parent.
 4. **Parent unchanged:** full row snapshot of the parent before and after each fork, asserted byte-equal.
-5. Negative cases covering each error in the taxonomy.
+5. Negative cases covering each error in the taxonomy, including:
+   - `ForkBehaviorNotOwnedByPrincipal`: fork attempted with `target_behavior_id` pointing to an `AgentBehavior` whose `agent_did` differs from the parent's. Child must NOT be created; no copied rows must exist.
 
 ### State-machine conformance additions
 
@@ -273,7 +293,8 @@ Two forks of the same parent (same and different `fork_at_user_turn`) issued con
 
 ## Open issues
 
-- **ACL hardening.** v1 enforces same-principal via a Rust function-boundary parameter check (see "ACL enforcement"). A future hardening derives `caller_agent_did` from the node's signing identity inside `session::fork`, or relies on DefraDB ACLs to make foreign-principal reads fail, at which point the parameter is redundant. Non-breaking when it lands (the check only tightens).
+- **ACL hardening.** v1 enforces same-principal via a Rust function-boundary parameter check (see "ACL enforcement"). A future hardening derives `caller_agent_did` from the node's signing identity inside `session::fork`, or relies on DefraDB ACLs to make foreign-principal reads fail, at which point the parameter is redundant. Non-breaking when it lands (the check only tightens). See "DefraDB ACL readiness" for the collections and fields that policy would pivot on.
+- **Row-level ACL on transcript collections.** `AgentSession` / `AgentMessage` / `AgentToolCall` / `CompactionEntry` do not carry `agent_did` today, so row-level DefraDB ACL on those collections is not directly expressible. Resolutions (schema addition or join-capable ACL policy) are a system-wide schema-modernization concern; the fork spec is forward-compatible with either path.
 - **Orphan GC.** A janitor that finds `AgentMessage` / `AgentToolCall` / `AgentToolResult` / `CompactionEntry` rows whose `session_id` has no `AgentSession` or `AgentConversation` and removes them. Deferred.
 - **Content-addressed dedup for large copied tool outputs.** `AgentToolResult.output_text` may be large; copy-on-fork duplicates it. A later blob-dedup layer could transparently deduplicate without changing this logical model. Deferred.
 - **Meta-tool exposure.** A `fork_conversation` meta-tool callable by an LLM is the natural way to wire sub-agent spawn. Its surface, scoping rules, and how it interacts with the existing agent-to-agent `AgentRequest` path are a separate design.
