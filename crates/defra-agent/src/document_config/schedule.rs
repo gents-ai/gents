@@ -5,6 +5,53 @@ use serde::{Deserialize, Serialize};
 use super::serde_helpers::{first_row_with_doc_id, rows_with_doc_id};
 use crate::graphql::escape_graphql_string;
 
+/// Load the runtime-owned `next_run_at` field for a single `Schedule` by its
+/// apply-owned `schedule_id`.
+///
+/// The schedule snapshot carries a stale copy of `next_run_at` (captured at
+/// reconcile time). The trigger engine's `ScheduleSource` needs the fresh
+/// value on every tick to decide whether a schedule is due, so this query
+/// projects only that one field to keep each tick cheap.
+///
+/// Returns:
+/// * `Ok(Some(next_run_at))` — schedule exists and has a non-null
+///   `next_run_at`. The string is the raw ISO-8601 timestamp as persisted.
+/// * `Ok(None)` — either the schedule doc doesn't exist or `next_run_at` is
+///   null (never scheduled a first fire). Callers treat both as "not due".
+pub(crate) async fn load_schedule_next_run_at(
+    node: &EmbeddedNode,
+    schedule_id: &str,
+) -> Result<Option<String>> {
+    let escaped_schedule_id = escape_graphql_string(schedule_id);
+    let query = format!(
+        r#"{{
+            Schedule(
+                filter: {{ schedule_id: {{ _eq: "{escaped_schedule_id}" }} }},
+                limit: 1
+            ) {{
+                next_run_at
+            }}
+        }}"#
+    );
+
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        anyhow::bail!("query Schedule next_run_at failed: {:?}", resp.errors);
+    }
+
+    let next_run_at = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("Schedule"))
+        .and_then(|value| value.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("next_run_at"))
+        .and_then(|value| value.as_str())
+        .map(|s| s.to_string());
+
+    Ok(next_run_at)
+}
+
 /// Description of a scheduled trigger for a task.
 ///
 /// Mirrors the `Schedule` GraphQL schema in

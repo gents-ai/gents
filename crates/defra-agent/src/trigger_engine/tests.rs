@@ -5,13 +5,18 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use chrono::{Duration as ChronoDuration, Utc};
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 
 use super::*;
+use crate::ensure_runtime_schemas;
+use crate::graphql::escape_graphql_string;
 use crate::runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedRuntimeSnapshot, ResolvedSchedule,
     ResolvedTask,
 };
+use crate::trigger_engine::schedule_source::ScheduleSource;
 
 /// Recorded `materialize` invocation: `(trigger_id, trigger_kind, rendered_prompt)`.
 type MaterializeCall = (Option<String>, TriggerKind, String);
@@ -168,6 +173,40 @@ fn resolved_schedule(schedule_id: &str, task: ResolvedTask) -> ResolvedSchedule 
         enabled: true,
         concurrency: ConcurrencyMode::Serial,
     }
+}
+
+/// Create a `Schedule` document with an explicit `next_run_at`. Used by
+/// `ScheduleSource::next_fire` tests to seed a due (or not-yet-due) schedule
+/// without going through the full reconcile/apply pipeline.
+async fn create_schedule_with_next_run_at(
+    node: &defra_node::EmbeddedNode,
+    schedule_id: &str,
+    task_id: &str,
+    next_run_at: &str,
+    concurrency: &str,
+) {
+    let escaped_schedule_id = escape_graphql_string(schedule_id);
+    let escaped_task_id = escape_graphql_string(task_id);
+    let escaped_next_run_at = escape_graphql_string(next_run_at);
+    let escaped_concurrency = escape_graphql_string(concurrency);
+    let mutation = format!(
+        r#"mutation {{
+            create_Schedule(input: {{
+                schedule_id: "{escaped_schedule_id}",
+                task_id: "{escaped_task_id}",
+                interval_secs: 60,
+                enabled: true,
+                concurrency: "{escaped_concurrency}",
+                next_run_at: "{escaped_next_run_at}"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create Schedule failed: {:?}",
+        response.errors
+    );
 }
 
 #[tokio::test]
@@ -550,5 +589,55 @@ async fn dispatch_latest_only_serializes_parallel_fires() {
         elapsed >= min_expected,
         "expected elapsed >= {min_expected:?} (2x delay, minus slack) proving \
          per-trigger serialization, got {elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
+    // Seed a Schedule document with `next_run_at` 1s in the past, build a
+    // snapshot that marks the same schedule active, and assert that
+    // `ScheduleSource::next_fire` yields a matching `FireIntent` within 2
+    // seconds. Also exercises the event_vars shape (fired_at, trigger_id,
+    // trigger_kind) the downstream materializer will see.
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let past = (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339();
+    create_schedule_with_next_run_at(node.as_ref(), "sched-1", "task-1", &past, "serial").await;
+
+    let task = ResolvedTask {
+        task_id: "task-1".to_string(),
+        behavior_id: "general".to_string(),
+        prompt_template: "hi".to_string(),
+        output_schema_ref: None,
+    };
+    let snapshot = snapshot_with_schedules(HashMap::from([(
+        "sched-1".to_string(),
+        resolved_schedule("sched-1", task),
+    )]));
+    let (_tx, rx) = watch::channel(snapshot);
+    let cancel = CancellationToken::new();
+    let mut source = ScheduleSource::new(rx, node.clone(), cancel.clone())
+        .with_tick_every(Duration::from_millis(50));
+
+    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("next_fire timed out")
+        .expect("next_fire returned None");
+
+    assert_eq!(intent.trigger_id.as_deref(), Some("sched-1"));
+    assert_eq!(intent.trigger_kind, TriggerKind::Schedule);
+    assert_eq!(intent.concurrency, ConcurrencyMode::Serial);
+    assert_eq!(intent.task.task_id, "task-1");
+    assert!(intent.doc_vars.is_none());
+    assert!(intent.args_vars.is_none());
+
+    let ev = &intent.event_vars;
+    assert_eq!(ev["trigger_id"].as_str(), Some("sched-1"));
+    assert_eq!(ev["trigger_kind"].as_str(), Some("schedule"));
+    assert!(
+        ev["fired_at"].is_string(),
+        "fired_at should be a string, got {:?}",
+        ev["fired_at"]
     );
 }

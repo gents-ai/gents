@@ -36,7 +36,9 @@ pub use tool_selection::{load_tool_selection, upsert_tool_selection, ToolSelecti
 #[allow(unused_imports)]
 pub(crate) use event_trigger::EventTrigger;
 #[allow(unused_imports)]
-pub(crate) use schedule::{list_schedule_records, load_schedule_by_doc_id, Schedule};
+pub(crate) use schedule::{
+    list_schedule_records, load_schedule_by_doc_id, load_schedule_next_run_at, Schedule,
+};
 #[allow(unused_imports)]
 pub(crate) use task::{list_task_records, load_task_by_doc_id, Task};
 
