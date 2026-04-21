@@ -1,14 +1,16 @@
 mod agent_behavior;
 mod common;
 mod inference_backend;
-mod scheduled_task;
+mod schedule;
+mod task;
 mod tool_selection;
 
 pub(crate) use agent_behavior::write_agent_behavior_document;
 pub(crate) use inference_backend::{
     write_inference_backend_document, InferenceBackendUpsertDocument,
 };
-pub(crate) use scheduled_task::write_scheduled_task_document;
+pub(crate) use schedule::write_schedule_document;
+pub(crate) use task::write_task_document;
 pub(crate) use tool_selection::write_tool_selection_document;
 
 use anyhow::Result;

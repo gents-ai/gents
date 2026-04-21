@@ -11,8 +11,8 @@ use crate::shared::ConfigExportBundle;
 use crate::{
     graphql_rows, graphql_rows_or_empty_if_collection_missing, graphql_string_list_literal,
     CONFIG_EXPORT_FORMAT, EXPORT_AGENT_BEHAVIOR_FIELDS, EXPORT_AGENT_PRINCIPAL_FIELDS,
-    EXPORT_INFERENCE_BACKEND_FIELDS, EXPORT_INFERENCE_PROFILE_FIELDS, EXPORT_SCHEDULED_TASK_FIELDS,
-    EXPORT_TOOL_SELECTION_FIELDS, EXPORT_TOOL_SERVICE_REGISTRY_FIELDS,
+    EXPORT_INFERENCE_BACKEND_FIELDS, EXPORT_INFERENCE_PROFILE_FIELDS, EXPORT_SCHEDULE_FIELDS,
+    EXPORT_TASK_FIELDS, EXPORT_TOOL_SELECTION_FIELDS, EXPORT_TOOL_SERVICE_REGISTRY_FIELDS,
 };
 
 pub(crate) async fn build_config_export_bundle(
@@ -139,23 +139,37 @@ pub(crate) async fn build_config_export_bundle(
     .await?;
     sort_document_rows(&mut tool_service_registry_rows, "service_id");
     normalize_tool_service_registry_export_rows(&mut tool_service_registry_rows)?;
-    let mut scheduled_task_rows = graphql_rows_or_empty_if_collection_missing(
+    let mut task_rows = graphql_rows_or_empty_if_collection_missing(
         access,
-        "ScheduledTask",
+        "Task",
         &format!(
             r#"{{
-                ScheduledTask(
-                    filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}
-                ) {{
+                Task {{
                     {fields}
                 }}
             }}"#,
-            agent_did = escape_graphql_string(agent_did),
-            fields = EXPORT_SCHEDULED_TASK_FIELDS,
+            fields = EXPORT_TASK_FIELDS,
         ),
     )
     .await?;
-    sort_document_rows(&mut scheduled_task_rows, "task_id");
+    sort_document_rows(&mut task_rows, "task_id");
+    let mut schedule_rows = graphql_rows_or_empty_if_collection_missing(
+        access,
+        "Schedule",
+        &format!(
+            r#"{{
+                Schedule {{
+                    {fields}
+                }}
+            }}"#,
+            fields = EXPORT_SCHEDULE_FIELDS,
+        ),
+    )
+    .await?;
+    sort_document_rows(&mut schedule_rows, "schedule_id");
+    // Task and Schedule are not keyed by agent_did in the schema, so they
+    // are fetched without an agent-scoped filter — scoping is the caller's
+    // responsibility via the manifest.
 
     Ok(ConfigExportBundle {
         format: CONFIG_EXPORT_FORMAT.to_string(),
@@ -168,9 +182,9 @@ pub(crate) async fn build_config_export_bundle(
         inference_backends: backend_rows,
         inference_profiles: profile_rows,
         tool_service_registries: tool_service_registry_rows,
-        scheduled_tasks: scheduled_task_rows,
-        tasks: Vec::new(),
-        schedules: Vec::new(),
+        scheduled_tasks: Vec::new(),
+        tasks: task_rows,
+        schedules: schedule_rows,
     })
 }
 
@@ -342,23 +356,37 @@ pub(crate) async fn build_desired_state_live_bundle(
         .await?
     };
     sort_document_rows(&mut tool_service_registry_rows, "service_id");
-    let mut scheduled_task_rows = graphql_rows_or_empty_if_collection_missing(
+    let mut task_rows = graphql_rows_or_empty_if_collection_missing(
         access,
-        "ScheduledTask",
+        "Task",
         &format!(
             r#"{{
-                ScheduledTask(
-                    filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}
-                ) {{
+                Task {{
                     {fields}
                 }}
             }}"#,
-            agent_did = escape_graphql_string(agent_did),
-            fields = EXPORT_SCHEDULED_TASK_FIELDS,
+            fields = EXPORT_TASK_FIELDS,
         ),
     )
     .await?;
-    sort_document_rows(&mut scheduled_task_rows, "task_id");
+    sort_document_rows(&mut task_rows, "task_id");
+    let mut schedule_rows = graphql_rows_or_empty_if_collection_missing(
+        access,
+        "Schedule",
+        &format!(
+            r#"{{
+                Schedule {{
+                    {fields}
+                }}
+            }}"#,
+            fields = EXPORT_SCHEDULE_FIELDS,
+        ),
+    )
+    .await?;
+    sort_document_rows(&mut schedule_rows, "schedule_id");
+    // Task and Schedule are not keyed by agent_did in the schema, so they
+    // are fetched without an agent-scoped filter — scoping is the caller's
+    // responsibility via the manifest.
 
     Ok(ConfigExportBundle {
         format: CONFIG_EXPORT_FORMAT.to_string(),
@@ -371,9 +399,9 @@ pub(crate) async fn build_desired_state_live_bundle(
         inference_backends: backend_rows,
         inference_profiles: profile_rows,
         tool_service_registries: tool_service_registry_rows,
-        scheduled_tasks: scheduled_task_rows,
-        tasks: Vec::new(),
-        schedules: Vec::new(),
+        scheduled_tasks: Vec::new(),
+        tasks: task_rows,
+        schedules: schedule_rows,
     })
 }
 
@@ -397,7 +425,8 @@ pub(crate) fn live_manifest_from_bundle(
                 inference_backends: Vec::new(),
                 inference_profiles: Vec::new(),
                 tool_service_registries: Vec::new(),
-                scheduled_tasks: Vec::new(),
+                tasks: Vec::new(),
+                schedules: Vec::new(),
             },
         ))
     }
@@ -440,7 +469,7 @@ pub(crate) fn sanitize_import_document(
     for_update: bool,
 ) -> Result<Value> {
     let mut object = match collection_name {
-        "InferenceBackend" | "ScheduledTask" | "ToolServiceRegistry" => {
+        "InferenceBackend" | "Task" | "Schedule" | "ToolServiceRegistry" => {
             doc.as_object().cloned().ok_or_else(|| {
                 anyhow::anyhow!("{collection_name} import document must be an object")
             })?
@@ -456,21 +485,35 @@ pub(crate) fn sanitize_import_document(
                 object.insert("last_probe".to_string(), Value::Null);
             }
         }
-        "ScheduledTask" => {
+        "Task" => {
+            // Task has no runtime-owned fields today. Strip timestamps so they
+            // are left untouched by apply on update (created_at is immutable,
+            // updated_at is owned by the writer).
+            for field in ["created_at", "updated_at"] {
+                object.remove(field);
+            }
+            if for_update {
+                object.insert("created_at".to_string(), Value::Null);
+                object.insert("updated_at".to_string(), Value::Null);
+            }
+        }
+        "Schedule" => {
+            // Strip BOTH runtime-owned fields (never written by apply) and
+            // apply-owned timestamps. Critically, runtime-owned fields are
+            // NOT re-inserted as Null on update — that would clobber live
+            // scheduler state. Only timestamps are nulled for update.
             for field in [
                 "next_run_at",
-                "last_run_at",
+                "last_attempt_at",
                 "last_status",
                 "last_error",
-                "run_count",
+                "fire_count",
                 "created_at",
                 "updated_at",
             ] {
                 object.remove(field);
             }
             if for_update {
-                object.insert("next_run_at".to_string(), Value::Null);
-                object.insert("last_run_at".to_string(), Value::Null);
                 object.insert("created_at".to_string(), Value::Null);
                 object.insert("updated_at".to_string(), Value::Null);
             }

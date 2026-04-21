@@ -186,7 +186,8 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "inference_backends": bundle.inference_backends.len(),
             "inference_profiles": bundle.inference_profiles.len(),
             "tool_service_registries": bundle.tool_service_registries.len(),
-            "scheduled_tasks": bundle.scheduled_tasks.len(),
+            "tasks": bundle.tasks.len(),
+            "schedules": bundle.schedules.len(),
         },
     });
     if let Some(map) = output.as_object_mut() {

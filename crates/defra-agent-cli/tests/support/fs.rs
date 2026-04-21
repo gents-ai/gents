@@ -150,25 +150,38 @@ pub fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<
         write_json_file(&root.join("tool-services.json"), &tool_service_registries)?;
     }
 
-    let scheduled_tasks = project_array_fields(
-        exported
-            .get("scheduled_tasks")
-            .ok_or_else(|| anyhow!("exported bundle missing scheduled_tasks"))?,
-        &[
-            "task_id",
-            "agent_did",
-            "behavior_id",
-            "name",
-            "prompt",
-            "interval_secs",
-            "enabled",
-        ],
-    )?;
-    if scheduled_tasks
-        .as_array()
-        .is_some_and(|rows| !rows.is_empty())
-    {
-        write_json_file(&root.join("scheduled-tasks.json"), &scheduled_tasks)?;
+    if let Some(tasks) = exported.get("tasks") {
+        let tasks = project_array_fields(
+            tasks,
+            &[
+                "task_id",
+                "name",
+                "description",
+                "behavior_id",
+                "prompt_template",
+                "enabled",
+                "output_schema_ref",
+            ],
+        )?;
+        if tasks.as_array().is_some_and(|rows| !rows.is_empty()) {
+            write_json_file(&root.join("tasks.json"), &tasks)?;
+        }
+    }
+
+    if let Some(schedules) = exported.get("schedules") {
+        let schedules = project_array_fields(
+            schedules,
+            &[
+                "schedule_id",
+                "task_id",
+                "interval_secs",
+                "enabled",
+                "concurrency",
+            ],
+        )?;
+        if schedules.as_array().is_some_and(|rows| !rows.is_empty()) {
+            write_json_file(&root.join("schedules.json"), &schedules)?;
+        }
     }
 
     Ok(())

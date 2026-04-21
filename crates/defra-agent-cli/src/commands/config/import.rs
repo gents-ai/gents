@@ -54,11 +54,19 @@ pub(super) async fn config_import(args: ConfigImportArgs) -> Result<()> {
         args.override_existing,
     )
     .await?;
-    let imported_scheduled_tasks = apply_import_collection(
+    let imported_tasks = apply_import_collection(
         &access,
-        "ScheduledTask",
+        "Task",
         "task_id",
-        &bundle.scheduled_tasks,
+        &bundle.tasks,
+        args.override_existing,
+    )
+    .await?;
+    let imported_schedules = apply_import_collection(
+        &access,
+        "Schedule",
+        "schedule_id",
+        &bundle.schedules,
         args.override_existing,
     )
     .await?;
@@ -88,7 +96,8 @@ pub(super) async fn config_import(args: ConfigImportArgs) -> Result<()> {
             "inference_backends": imported_backends,
             "inference_profiles": imported_profiles,
             "tool_service_registries": imported_tool_service_registries,
-            "scheduled_tasks": imported_scheduled_tasks,
+            "tasks": imported_tasks,
+            "schedules": imported_schedules,
         },
     });
     print_json(&output)?;

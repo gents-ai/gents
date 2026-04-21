@@ -176,7 +176,8 @@ pub(crate) struct ConfigApplyCounts {
     pub(crate) inference_backends: usize,
     pub(crate) inference_profiles: usize,
     pub(crate) tool_service_registries: usize,
-    pub(crate) scheduled_tasks: usize,
+    pub(crate) tasks: usize,
+    pub(crate) schedules: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
