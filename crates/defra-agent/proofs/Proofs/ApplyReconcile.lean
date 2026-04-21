@@ -43,11 +43,38 @@ def Collection.applyOrder : Collection → Nat
   | .agentBehavior         => 2
   | .scheduledTask         => 3
 
+/-- Comparison on Collection: by `applyOrder` rank. -/
+instance : LT Collection where
+  lt a b := Collection.applyOrder a < Collection.applyOrder b
+
+instance : LE Collection where
+  le a b := Collection.applyOrder a ≤ Collection.applyOrder b
+
+instance (a b : Collection) : Decidable (a < b) :=
+  Nat.decLt (Collection.applyOrder a) (Collection.applyOrder b)
+
+instance (a b : Collection) : Decidable (a ≤ b) :=
+  Nat.decLe (Collection.applyOrder a) (Collection.applyOrder b)
+
 /-- A document identifier — collection plus opaque id. -/
 structure DocRef where
   collection : Collection
   id         : String
   deriving DecidableEq, Repr
+
+/-- Comparison on DocRef: (collection.applyOrder, id) lexicographic.
+    Defined as a `Bool`-valued helper so it can drive `List.mergeSort`. -/
+def DocRef.le (a b : DocRef) : Bool :=
+  if a.collection.applyOrder < b.collection.applyOrder then true
+  else if a.collection.applyOrder > b.collection.applyOrder then false
+  else a.id ≤ b.id
+
+instance : LE DocRef where
+  le a b := DocRef.le a b = true
+
+instance (a b : DocRef) : Decidable (a ≤ b) := by
+  unfold LE.le instLEDocRef
+  infer_instance
 
 /-- Operator-owned field payload for a document, paired with the set of
     cross-document references it declares. Concrete CLI structs pack
@@ -134,6 +161,10 @@ def payload : ApplyStep → DesiredFields
   | .create _ f => f
   | .update _ f => f
 
+/-- Step-level comparator: orders by target's DocRef ordering.
+    `Bool`-valued so it can drive `List.mergeSort`. -/
+def le (a b : ApplyStep) : Bool := DocRef.le a.target b.target
+
 end ApplyStep
 
 /-- Apply a single step to a live state. Only the `desired` projection
@@ -155,13 +186,29 @@ def applyAll (L : LiveState) (steps : List ApplyStep) : LiveState :=
     The `none, _` arm of the `match` handles an impossible case: if
     `d ∈ M.support` then `M.docs d` is `some` by `support_iff`. We
     return `none` there because `filterMap` simply skips it; the arm
-    is dead code from the well-formed entry path. -/
+    is dead code from the well-formed entry path.
+
+    The output is sorted by `(collection.applyOrder, id)` via
+    `List.mergeSort` with `ApplyStep.le`, so rank-0 targets (potential
+    reference targets like backends and selections) precede rank-2
+    referrers (e.g. agent behaviors). Downstream proofs of reference
+    closure rely on this ordering. -/
 noncomputable def diff (M : Manifest) (L : LiveState) : List ApplyStep :=
-  M.support.toList.filterMap (fun d =>
+  (M.support.toList.filterMap (fun d =>
     match M.docs d, L.desired d with
     | some f, none     => some (ApplyStep.create d f)
     | some f, some g   => if f = g then none else some (ApplyStep.update d f)
-    | none,   _        => none)
+    | none,   _        => none)).mergeSort ApplyStep.le
+
+/-- `diff M L` is sorted by `applyOrder`: any step at position `i` has
+    `applyOrder` no greater than any step at position `j ≥ i`. Consumed
+    by the reference-closure argument for `apply_preserves_wellFormed`
+    (Task B3). -/
+lemma diff_sorted_by_applyOrder (M : Manifest) (L : LiveState)
+    (i j : Nat) (hij : i ≤ j) (hj : j < (diff M L).length) :
+    ((diff M L).get ⟨i, Nat.lt_of_le_of_lt hij hj⟩).target.collection.applyOrder
+      ≤ ((diff M L).get ⟨j, hj⟩).target.collection.applyOrder := by
+  sorry -- Task B3: discharge via List.Pairwise extraction on mergeSort output.
 
 /-- `applyOne` only changes the `desired` projection at the step's
     target; other documents are left untouched. -/
@@ -249,7 +296,7 @@ lemma apply_realizes_manifest
       let s : ApplyStep := ApplyStep.create d f
       have hs_mem : s ∈ diff M L := by
         unfold diff
-        rw [List.mem_filterMap]
+        rw [List.mem_mergeSort, List.mem_filterMap]
         refine ⟨d, ?_, ?_⟩
         · exact (Finset.mem_toList (s := M.support)).mpr hd_support
         · simp [hf, hLd, s]
@@ -258,7 +305,7 @@ lemma apply_realizes_manifest
       have hunique : ∀ s' ∈ diff M L, s'.target = d → s' = s := by
         intro s' hmem' htgt'
         unfold diff at hmem'
-        rw [List.mem_filterMap] at hmem'
+        rw [List.mem_mergeSort, List.mem_filterMap] at hmem'
         obtain ⟨d', _hd'mem, hd'prod⟩ := hmem'
         -- Case-split on match in the filterMap body to extract that
         -- d' = s'.target and then d' = d.
@@ -313,7 +360,7 @@ lemma apply_realizes_manifest
         have hno : ∀ s' ∈ diff M L, s'.target ≠ d := by
           intro s' hmem' htgt'
           unfold diff at hmem'
-          rw [List.mem_filterMap] at hmem'
+          rw [List.mem_mergeSort, List.mem_filterMap] at hmem'
           obtain ⟨d', _hd'mem, hd'prod⟩ := hmem'
           revert hd'prod
           cases hMd' : M.docs d' with
@@ -359,7 +406,7 @@ lemma apply_realizes_manifest
         let s : ApplyStep := ApplyStep.update d f
         have hs_mem : s ∈ diff M L := by
           unfold diff
-          rw [List.mem_filterMap]
+          rw [List.mem_mergeSort, List.mem_filterMap]
           refine ⟨d, ?_, ?_⟩
           · exact (Finset.mem_toList (s := M.support)).mpr hd_support
           · simp [hf, hLd, hfg, s]
@@ -368,7 +415,7 @@ lemma apply_realizes_manifest
         have hunique : ∀ s' ∈ diff M L, s'.target = d → s' = s := by
           intro s' hmem' htgt'
           unfold diff at hmem'
-          rw [List.mem_filterMap] at hmem'
+          rw [List.mem_mergeSort, List.mem_filterMap] at hmem'
           obtain ⟨d', _hd'mem, hd'prod⟩ := hmem'
           revert hd'prod
           cases hMd' : M.docs d' with
