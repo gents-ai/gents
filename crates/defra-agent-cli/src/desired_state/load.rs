@@ -7,8 +7,8 @@ use super::normalize::normalize_manifest;
 use super::validate::validate_manifest;
 use super::{
     DesiredAgentBehavior, DesiredAgentPrincipal, DesiredInferenceBackend, DesiredInferenceProfile,
-    DesiredScheduledTask, DesiredStateCounts, DesiredStateManifest, DesiredStateValidationReport,
-    DesiredToolSelection, DesiredToolServiceRegistry,
+    DesiredStateCounts, DesiredStateManifest, DesiredStateValidationReport, DesiredToolSelection,
+    DesiredToolServiceRegistry,
 };
 
 const AGENT_PRINCIPAL_FILE: &str = "agent-principal.json";
@@ -18,8 +18,6 @@ const INFERENCE_BACKENDS_FILE: &str = "inference-backends.json";
 const INFERENCE_PROFILES_FILE: &str = "inference-profiles.json";
 const TOOL_SERVICES_FILE: &str = "tool-services.json";
 const TOOL_SERVICES_DIR: &str = "tool-services";
-const SCHEDULED_TASKS_FILE: &str = "scheduled-tasks.json";
-const SCHEDULED_TASKS_DIR: &str = "scheduled-tasks";
 
 pub(crate) fn validate_manifest_root(root: &Path) -> DesiredStateValidationReport {
     load_manifest_root(root).1
@@ -47,7 +45,6 @@ pub(crate) fn load_manifest_root(
                     inference_backends: 0,
                     inference_profiles: 0,
                     tool_service_registries: 0,
-                    scheduled_tasks: 0,
                 },
                 errors,
             },
@@ -69,7 +66,6 @@ pub(crate) fn load_manifest_root(
                     inference_backends: 0,
                     inference_profiles: 0,
                     tool_service_registries: 0,
-                    scheduled_tasks: 0,
                 },
                 errors,
             },
@@ -100,13 +96,6 @@ pub(crate) fn load_manifest_root(
         &mut errors,
     )
     .unwrap_or_default();
-    let scheduled_tasks = load_optional_json_collection::<DesiredScheduledTask>(
-        root,
-        SCHEDULED_TASKS_FILE,
-        SCHEDULED_TASKS_DIR,
-        &mut errors,
-    )
-    .unwrap_or_default();
 
     let counts = DesiredStateCounts {
         agent_principal: usize::from(principal.is_some()),
@@ -115,7 +104,6 @@ pub(crate) fn load_manifest_root(
         inference_backends: backends.as_ref().map_or(0, Vec::len),
         inference_profiles: inference_profiles.len(),
         tool_service_registries: tool_service_registries.len(),
-        scheduled_tasks: scheduled_tasks.len(),
     };
 
     let agent_did = principal.as_ref().map(|value| value.agent_did.clone());
@@ -131,7 +119,6 @@ pub(crate) fn load_manifest_root(
                 inference_backends: backends,
                 inference_profiles,
                 tool_service_registries,
-                scheduled_tasks,
             };
             normalize_manifest(&mut manifest);
             validate_manifest(&manifest, &mut errors);

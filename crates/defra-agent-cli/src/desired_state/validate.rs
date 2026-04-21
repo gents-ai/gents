@@ -13,7 +13,6 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
     let mut tool_selection_ids = BTreeSet::new();
     let mut profile_ids = BTreeSet::new();
     let mut service_ids = BTreeSet::new();
-    let mut task_ids = BTreeSet::new();
 
     for backend in &manifest.inference_backends {
         let backend_id = backend.backend_id.trim();
@@ -190,52 +189,6 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             .push("agent-principal.json must contain a non-empty default_behavior_id".to_string()),
     }
 
-    for task in &manifest.scheduled_tasks {
-        let task_id = task.task_id.trim();
-        if task_id.is_empty() {
-            errors
-                .push("scheduled-tasks manifest contains a task with an empty task_id".to_string());
-        } else if !task_ids.insert(task_id.to_string()) {
-            errors.push(format!(
-                "duplicate task_id in scheduled-tasks manifest: {task_id}"
-            ));
-        }
-
-        if !principal_agent_did.is_empty() && task.agent_did.trim() != principal_agent_did {
-            errors.push(format!(
-                "scheduled task {} belongs to {} not {}",
-                task.task_id, task.agent_did, manifest.agent_principal.agent_did
-            ));
-        }
-
-        if task.name.trim().is_empty() {
-            errors.push(format!(
-                "scheduled task {} in scheduled-tasks manifest must contain a non-empty name",
-                task.task_id
-            ));
-        }
-
-        if task.prompt.trim().is_empty() {
-            errors.push(format!(
-                "scheduled task {} in scheduled-tasks manifest must contain a non-empty prompt",
-                task.task_id
-            ));
-        }
-
-        if task.interval_secs <= 0 {
-            errors.push(format!(
-                "scheduled task {} in scheduled-tasks manifest must contain interval_secs > 0",
-                task.task_id
-            ));
-        }
-
-        if !behavior_ids.contains(task.behavior_id.trim()) {
-            errors.push(format!(
-                "scheduled task {} references missing behavior_id {}",
-                task.task_id, task.behavior_id
-            ));
-        }
-    }
 }
 
 pub(crate) fn non_empty(value: &Option<String>) -> Option<&str> {

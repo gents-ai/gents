@@ -205,18 +205,6 @@ impl<'de> Deserialize<'de> for DesiredToolServiceRegistry {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct DesiredScheduledTask {
-    pub(crate) task_id: String,
-    pub(crate) agent_did: String,
-    pub(crate) behavior_id: String,
-    pub(crate) name: String,
-    pub(crate) prompt: String,
-    pub(crate) interval_secs: i64,
-    pub(crate) enabled: bool,
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct DesiredStateManifest {
     pub(crate) agent_principal: DesiredAgentPrincipal,
@@ -225,7 +213,6 @@ pub(crate) struct DesiredStateManifest {
     pub(crate) inference_backends: Vec<DesiredInferenceBackend>,
     pub(crate) inference_profiles: Vec<DesiredInferenceProfile>,
     pub(crate) tool_service_registries: Vec<DesiredToolServiceRegistry>,
-    pub(crate) scheduled_tasks: Vec<DesiredScheduledTask>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -263,7 +250,6 @@ pub(crate) struct DesiredStateDiffCollections {
     pub(crate) inference_backends: DesiredStateCollectionDiff,
     pub(crate) inference_profiles: DesiredStateCollectionDiff,
     pub(crate) tool_service_registries: DesiredStateCollectionDiff,
-    pub(crate) scheduled_tasks: DesiredStateCollectionDiff,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -274,7 +260,6 @@ pub(crate) struct DesiredStateDiffCollectionsCounts {
     pub(crate) inference_backends: DesiredStateDiffCounts,
     pub(crate) inference_profiles: DesiredStateDiffCounts,
     pub(crate) tool_service_registries: DesiredStateDiffCounts,
-    pub(crate) scheduled_tasks: DesiredStateDiffCounts,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -296,7 +281,6 @@ pub(crate) struct DesiredStateCounts {
     pub(crate) inference_backends: usize,
     pub(crate) inference_profiles: usize,
     pub(crate) tool_service_registries: usize,
-    pub(crate) scheduled_tasks: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]

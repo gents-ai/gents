@@ -18,9 +18,6 @@ pub(crate) fn normalize_manifest(manifest: &mut DesiredStateManifest) {
     manifest
         .tool_service_registries
         .sort_by(|left, right| left.service_id.cmp(&right.service_id));
-    manifest
-        .scheduled_tasks
-        .sort_by(|left, right| left.task_id.cmp(&right.task_id));
 
     for selection in &mut manifest.tool_selections {
         selection.cli_tool_names.sort();
