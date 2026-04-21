@@ -1,0 +1,11 @@
+type Task @branchable {
+    task_id: String @index(unique: true)
+    name: String @index
+    description: String
+    behavior_id: String @index
+    prompt_template: String
+    enabled: Boolean @index
+    output_schema_ref: String
+    created_at: DateTime @index(direction: DESC)
+    updated_at: DateTime @index(direction: DESC)
+}
