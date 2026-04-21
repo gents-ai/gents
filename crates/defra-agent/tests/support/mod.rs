@@ -262,7 +262,11 @@ pub async fn create_agent_session(
         }}"#
     );
     let resp = node.execute(&mutation).await;
-    assert!(!resp.has_errors(), "create_AgentSession failed: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "create_AgentSession failed: {:?}",
+        resp.errors
+    );
 }
 
 pub async fn create_agent_conversation(
@@ -291,7 +295,11 @@ pub async fn create_agent_conversation(
         }}"#
     );
     let resp = node.execute(&mutation).await;
-    assert!(!resp.has_errors(), "create_AgentConversation failed: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "create_AgentConversation failed: {:?}",
+        resp.errors
+    );
 }
 
 pub async fn create_agent_message(
@@ -320,7 +328,11 @@ pub async fn create_agent_message(
         }}"#
     );
     let resp = node.execute(&mutation).await;
-    assert!(!resp.has_errors(), "create_AgentMessage failed: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "create_AgentMessage failed: {:?}",
+        resp.errors
+    );
 }
 
 pub async fn create_agent_tool_call(
@@ -361,7 +373,11 @@ pub async fn create_agent_tool_call(
         }}"#
     );
     let resp = node.execute(&mutation).await;
-    assert!(!resp.has_errors(), "create_AgentToolCall failed: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "create_AgentToolCall failed: {:?}",
+        resp.errors
+    );
 }
 
 pub async fn create_agent_tool_result(
@@ -393,7 +409,11 @@ pub async fn create_agent_tool_result(
         }}"#
     );
     let resp = node.execute(&mutation).await;
-    assert!(!resp.has_errors(), "create_AgentToolResult failed: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "create_AgentToolResult failed: {:?}",
+        resp.errors
+    );
 }
 
 pub async fn create_compaction_entry(
@@ -425,14 +445,14 @@ pub async fn create_compaction_entry(
         }}"#
     );
     let resp = node.execute(&mutation).await;
-    assert!(!resp.has_errors(), "create_CompactionEntry failed: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "create_CompactionEntry failed: {:?}",
+        resp.errors
+    );
 }
 
-pub async fn create_agent_behavior(
-    node: &EmbeddedNode,
-    behavior_id: &str,
-    agent_did: &str,
-) {
+pub async fn create_agent_behavior(node: &EmbeddedNode, behavior_id: &str, agent_did: &str) {
     let behavior_id_escaped = escape_graphql_string(behavior_id);
     let agent_did_escaped = escape_graphql_string(agent_did);
     let mutation = format!(
@@ -454,7 +474,11 @@ pub async fn create_agent_behavior(
         }}"#
     );
     let resp = node.execute(&mutation).await;
-    assert!(!resp.has_errors(), "create_AgentBehavior failed: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "create_AgentBehavior failed: {:?}",
+        resp.errors
+    );
 }
 
 #[derive(Debug, Clone, Deserialize)]

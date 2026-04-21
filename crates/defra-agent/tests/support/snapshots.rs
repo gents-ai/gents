@@ -273,7 +273,11 @@ pub async fn fetch_message_snapshots_for_session(
         }}"#
     );
     let resp = node.execute(&query).await;
-    assert!(!resp.has_errors(), "fetch_message_snapshots failed: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "fetch_message_snapshots failed: {:?}",
+        resp.errors
+    );
     let data = resp.data.expect("data");
     serde_json::from_value(data["AgentMessage"].clone()).expect("parse MessageSnapshot")
 }
@@ -309,7 +313,11 @@ pub async fn fetch_tool_call_snapshots_for_session(
         }}"#
     );
     let resp = node.execute(&query).await;
-    assert!(!resp.has_errors(), "fetch_tool_call_snapshots failed: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "fetch_tool_call_snapshots failed: {:?}",
+        resp.errors
+    );
     let data = resp.data.expect("data");
     serde_json::from_value(data["AgentToolCall"].clone()).expect("parse ToolCallSnapshot")
 }
@@ -340,7 +348,11 @@ pub async fn fetch_tool_result_snapshots_for_session(
         }}"#
     );
     let resp = node.execute(&query).await;
-    assert!(!resp.has_errors(), "fetch_tool_result_snapshots failed: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "fetch_tool_result_snapshots failed: {:?}",
+        resp.errors
+    );
     let data = resp.data.expect("data");
     serde_json::from_value(data["AgentToolResult"].clone()).expect("parse ToolResultSnapshot")
 }
@@ -371,7 +383,11 @@ pub async fn fetch_compaction_entry_snapshots_for_session(
         }}"#
     );
     let resp = node.execute(&query).await;
-    assert!(!resp.has_errors(), "fetch_compaction_entry_snapshots failed: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "fetch_compaction_entry_snapshots failed: {:?}",
+        resp.errors
+    );
     let data = resp.data.expect("data");
     serde_json::from_value(data["CompactionEntry"].clone()).expect("parse CompactionEntrySnapshot")
 }

@@ -20,12 +20,12 @@ mod tests;
 mod tool_calls;
 
 pub use compaction_entries::{load_compaction_entries, save_compaction_entry};
-pub use fork::{fork, ForkError, ForkOutcome, ForkParams};
 #[allow(unused_imports)]
 pub(crate) use conversation::{
     update_conversation_status, update_conversation_status_if_latest_with_identity,
     upsert_conversation_from_request, upsert_conversation_from_request_with_identity,
 };
+pub use fork::{fork, ForkError, ForkOutcome, ForkParams};
 pub use history::load_history;
 pub(crate) use history::save_message;
 pub(crate) use query::load_session_behavior_id;

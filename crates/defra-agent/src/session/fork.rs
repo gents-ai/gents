@@ -1,9 +1,9 @@
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 
-use crate::graphql::escape_graphql_string;
 use super::query::load_conversation_document;
 use super::retry::execute_mutation_with_retry;
+use crate::graphql::escape_graphql_string;
 
 #[derive(Debug, Clone)]
 pub struct ForkParams<'a> {
@@ -67,10 +67,7 @@ async fn verify_source_idle(node: &EmbeddedNode, source_session_id: &str) -> Res
     Ok(rows.is_empty())
 }
 
-pub async fn fork(
-    node: &EmbeddedNode,
-    params: ForkParams<'_>,
-) -> Result<ForkOutcome, ForkError> {
+pub async fn fork(node: &EmbeddedNode, params: ForkParams<'_>) -> Result<ForkOutcome, ForkError> {
     // Step 1: load parent conversation (validates existence).
     let parent = load_conversation_document(node, params.source_session_id)
         .await
@@ -92,18 +89,19 @@ pub async fn fork(
     }
 
     // Step 2: compute cut_seq from the Nth user message.
-    let (cut_seq, cut_ts) = match compute_cut(node, params.source_session_id, params.fork_at_user_turn)
-        .await
-        .map_err(ForkError::ForkCopyFailed)?
-    {
-        Ok((seq, ts)) => (seq, ts),
-        Err(total_user_msgs) => {
-            return Err(ForkError::ForkAtUserTurnOutOfRange(
-                params.fork_at_user_turn,
-                total_user_msgs,
-            ));
-        }
-    };
+    let (cut_seq, cut_ts) =
+        match compute_cut(node, params.source_session_id, params.fork_at_user_turn)
+            .await
+            .map_err(ForkError::ForkCopyFailed)?
+        {
+            Ok((seq, ts)) => (seq, ts),
+            Err(total_user_msgs) => {
+                return Err(ForkError::ForkAtUserTurnOutOfRange(
+                    params.fork_at_user_turn,
+                    total_user_msgs,
+                ));
+            }
+        };
 
     // Step 3: resolve child behavior (inherit parent, or swap to validated target).
     let resolved_behavior_id = if let Some(target) = params.target_behavior_id {
@@ -120,23 +118,14 @@ pub async fn fork(
 
     // Step 4 & 5: copy messages, create child session + conversation.
     let child_session_id = uuid::Uuid::new_v4().to_string();
-    let copied_messages = copy_messages(
-        node,
-        params.source_session_id,
-        &child_session_id,
-        cut_seq,
-    )
-    .await
-    .map_err(ForkError::ForkCopyFailed)?;
+    let copied_messages = copy_messages(node, params.source_session_id, &child_session_id, cut_seq)
+        .await
+        .map_err(ForkError::ForkCopyFailed)?;
 
-    let copied_tool_calls = copy_tool_calls(
-        node,
-        params.source_session_id,
-        &child_session_id,
-        cut_seq,
-    )
-    .await
-    .map_err(ForkError::ForkCopyFailed)?;
+    let copied_tool_calls =
+        copy_tool_calls(node, params.source_session_id, &child_session_id, cut_seq)
+            .await
+            .map_err(ForkError::ForkCopyFailed)?;
 
     // Look up child agent_did from parent to pass into copy_tool_results.
     let child_agent_did = parent.agent_did.clone().unwrap_or_default();
@@ -150,14 +139,10 @@ pub async fn fork(
     .await
     .map_err(ForkError::ForkCopyFailed)?;
 
-    let copied_compaction_entries = copy_compaction_entries(
-        node,
-        params.source_session_id,
-        &child_session_id,
-        &cut_ts,
-    )
-    .await
-    .map_err(ForkError::ForkCopyFailed)?;
+    let copied_compaction_entries =
+        copy_compaction_entries(node, params.source_session_id, &child_session_id, &cut_ts)
+            .await
+            .map_err(ForkError::ForkCopyFailed)?;
 
     create_child_session_and_conversation(
         node,
@@ -201,9 +186,14 @@ async fn resolve_target_behavior(
         .cloned()
         .unwrap_or_default();
     if rows.is_empty() {
-        return Ok(Some(ForkError::ForkBehaviorNotFound(target_behavior_id.to_string())));
+        return Ok(Some(ForkError::ForkBehaviorNotFound(
+            target_behavior_id.to_string(),
+        )));
     }
-    let behavior_did = rows[0].get("agent_did").and_then(|v| v.as_str()).unwrap_or("");
+    let behavior_did = rows[0]
+        .get("agent_did")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if behavior_did != parent_agent_did {
         return Ok(Some(ForkError::ForkBehaviorNotOwnedByPrincipal(
             target_behavior_id.to_string(),
@@ -353,15 +343,23 @@ async fn copy_tool_calls(
     let mut count = 0u32;
     let child_session_escaped = escape_graphql_string(child_session_id);
     for row in &rows {
-        let message_sequence = row.get("message_sequence").and_then(|v| v.as_u64())
+        let message_sequence = row
+            .get("message_sequence")
+            .and_then(|v| v.as_u64())
             .ok_or_else(|| anyhow::anyhow!("message_sequence missing"))?;
         let tool_name = row.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
-        let tool_call_id = row.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or("");
+        let tool_call_id = row
+            .get("tool_call_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let args = row.get("args").and_then(|v| v.as_str()).unwrap_or("");
         let result = row.get("result").and_then(|v| v.as_str()).unwrap_or("");
         let status = row.get("status").and_then(|v| v.as_str()).unwrap_or("");
         let started_at = row.get("started_at").and_then(|v| v.as_str()).unwrap_or("");
-        let completed_at = row.get("completed_at").and_then(|v| v.as_str()).unwrap_or("");
+        let completed_at = row
+            .get("completed_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let tool_call_id_escaped = escape_graphql_string(tool_call_id);
         let tool_call_key = format!("{child_session_escaped}:{tool_call_id_escaped}");
         let mutation = format!(
@@ -429,10 +427,22 @@ async fn copy_tool_results(
     for row in &rows {
         let tool_name = row.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
         let tool_input = row.get("tool_input").and_then(|v| v.as_str()).unwrap_or("");
-        let output_text = row.get("output_text").and_then(|v| v.as_str()).unwrap_or("");
-        let truncated = row.get("truncated").and_then(|v| v.as_bool()).unwrap_or(false);
-        let truncation_metadata = row.get("truncation_metadata").and_then(|v| v.as_str()).unwrap_or("");
-        let conversation_doc_id = row.get("conversation_doc_id").and_then(|v| v.as_str()).unwrap_or("");
+        let output_text = row
+            .get("output_text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let truncated = row
+            .get("truncated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let truncation_metadata = row
+            .get("truncation_metadata")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let conversation_doc_id = row
+            .get("conversation_doc_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let created_at = row.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
         let mutation = format!(
             r#"mutation {{
@@ -496,14 +506,31 @@ async fn copy_compaction_entries(
     let mut count = 0u32;
     let child_session_escaped = escape_graphql_string(child_session_id);
     for row in &rows {
-        let sequence = row.get("sequence").and_then(|v| v.as_u64())
+        let sequence = row
+            .get("sequence")
+            .and_then(|v| v.as_u64())
             .ok_or_else(|| anyhow::anyhow!("compaction sequence missing"))?;
         let summary = row.get("summary").and_then(|v| v.as_str()).unwrap_or("");
-        let files_read = row.get("files_read").and_then(|v| v.as_str()).unwrap_or("[]");
-        let files_modified = row.get("files_modified").and_then(|v| v.as_str()).unwrap_or("[]");
-        let messages_compacted = row.get("messages_compacted").and_then(|v| v.as_u64()).unwrap_or(0);
-        let original_tokens = row.get("original_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-        let compacted_tokens = row.get("compacted_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let files_read = row
+            .get("files_read")
+            .and_then(|v| v.as_str())
+            .unwrap_or("[]");
+        let files_modified = row
+            .get("files_modified")
+            .and_then(|v| v.as_str())
+            .unwrap_or("[]");
+        let messages_compacted = row
+            .get("messages_compacted")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let original_tokens = row
+            .get("original_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let compacted_tokens = row
+            .get("compacted_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
         let created_at = row.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
         let compaction_key = format!("{child_session_escaped}:{sequence}");
         let mutation = format!(
@@ -570,7 +597,10 @@ async fn create_child_session_and_conversation(
     );
     let parent_resp = node.execute(&parent_conv_query).await;
     if parent_resp.has_errors() {
-        anyhow::bail!("fork::create_conversation query failed: {:?}", parent_resp.errors);
+        anyhow::bail!(
+            "fork::create_conversation query failed: {:?}",
+            parent_resp.errors
+        );
     }
     let parent_row = parent_resp
         .data
@@ -581,10 +611,16 @@ async fn create_child_session_and_conversation(
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("parent AgentConversation missing in child-create path"))?;
     let agent_did_escaped = escape_graphql_string(
-        parent_row.get("agent_did").and_then(|v| v.as_str()).unwrap_or(""),
+        parent_row
+            .get("agent_did")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
     );
     let agent_name_escaped = escape_graphql_string(
-        parent_row.get("agent_name").and_then(|v| v.as_str()).unwrap_or(""),
+        parent_row
+            .get("agent_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
     );
 
     let conv_mutation = format!(

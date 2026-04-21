@@ -925,13 +925,23 @@ pub(crate) struct SessionForkArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
-    #[arg(long, help = "Override the caller agent DID (defaults to local identity)")]
+    #[arg(
+        long,
+        help = "Override the caller agent DID (defaults to local identity)"
+    )]
     pub(crate) agent_did: Option<String>,
     #[arg(long, value_name = "SOURCE_SESSION_ID")]
     pub(crate) from: String,
-    #[arg(long, value_name = "N", help = "0-based user-turn index; fork cuts before this user message")]
+    #[arg(
+        long,
+        value_name = "N",
+        help = "0-based user-turn index; fork cuts before this user message"
+    )]
     pub(crate) at_user_turn: u32,
-    #[arg(long, help = "Target behavior_id for the child; omit to inherit the parent's behavior")]
+    #[arg(
+        long,
+        help = "Target behavior_id for the child; omit to inherit the parent's behavior"
+    )]
     pub(crate) behavior: Option<String>,
 }
 
