@@ -35,4 +35,5 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+regex = "1"
 tempfile = "3"

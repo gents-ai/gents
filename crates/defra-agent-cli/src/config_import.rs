@@ -266,6 +266,14 @@ pub(crate) async fn apply_desired_state_changes(
             true,
         )
         .await?,
+        agent_principal: apply_import_collection(
+            access,
+            Collection::AgentPrincipal.graphql_type(),
+            Collection::AgentPrincipal.unique_field(),
+            &principal_docs,
+            true,
+        )
+        .await?,
         agent_behaviors: apply_import_collection(
             access,
             Collection::AgentBehavior.graphql_type(),
@@ -279,14 +287,6 @@ pub(crate) async fn apply_desired_state_changes(
             Collection::ScheduledTask.graphql_type(),
             Collection::ScheduledTask.unique_field(),
             &scheduled_task_docs,
-            true,
-        )
-        .await?,
-        agent_principal: apply_import_collection(
-            access,
-            Collection::AgentPrincipal.graphql_type(),
-            Collection::AgentPrincipal.unique_field(),
-            &principal_docs,
             true,
         )
         .await?,
