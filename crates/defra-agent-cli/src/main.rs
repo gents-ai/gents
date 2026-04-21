@@ -11,6 +11,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 mod cli;
+mod collection;
 mod commands;
 mod config_bundle;
 mod config_import;
