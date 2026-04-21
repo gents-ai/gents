@@ -272,7 +272,14 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             return;
         }
 
-        match self.handle_request(&mut lifecycle, shutdown).await {
+        let (_interrupt_tx, interrupt_rx) =
+            tokio::sync::watch::channel::<Option<crate::interrupt::InterruptIntent>>(None);
+        // TODO(Task 7): store _interrupt_tx in a shared map so the scheduler can signal it.
+
+        match self
+            .handle_request(&mut lifecycle, shutdown, interrupt_rx)
+            .await
+        {
             Ok(HandleRequestOutcome::Completed) => {
                 let _ = lifecycle.complete().await;
             }

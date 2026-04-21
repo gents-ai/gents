@@ -13,7 +13,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         &mut self,
         lifecycle: &mut crate::lifecycle::RequestLifecycle,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
+        interrupt_rx: tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
     ) -> Result<HandleRequestOutcome> {
+        let _ = &interrupt_rx; // Unused in Task 6; Task 7 wires the select arm.
+        let request_token = tokio_util::sync::CancellationToken::new();
+        let _ = &request_token; // Unused in Task 6; Task 7 wires the inference + tool children.
         let request = lifecycle.request().clone();
         let behavior_name = self.behavior.name.clone();
         let admission_context = AdmissionCallContext::for_request(

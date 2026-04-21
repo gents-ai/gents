@@ -19,6 +19,7 @@ pub mod graphql;
 pub mod health_checker;
 pub mod hook;
 pub mod identity;
+pub mod interrupt;
 pub mod lifecycle;
 pub mod mcp_pool;
 pub mod meta_tools;
