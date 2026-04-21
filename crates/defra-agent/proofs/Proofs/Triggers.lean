@@ -112,6 +112,32 @@ def dispatch (snap : TriggerSnapshot) (intent : FireIntent) :
     Option RequestSeed :=
   sorry
 
+/-- A trigger is identified by `(triggerId, triggerKind)`. Pairing both
+    avoids collisions between, e.g., a schedule and an event trigger
+    that happen to share the same document id. -/
+abbrev TriggerKey := String × TriggerKind
+
+/-- Spec-layer projection of an AgentRequest sufficient to state the
+    trigger-engine theorems. The real `AgentRequest` carries far more
+    state; here we only track the fields the trigger engine reasons
+    about. -/
+structure AgentRequest where
+  id : String
+  causedBy : Option TriggerKey
+  concurrency : ConcurrencyMode
+  /-- Mirror of `RequestState`-level terminality without forcing the
+      trigger layer to unfold the full lifecycle state. -/
+  isTerminal : Bool
+  /-- Execution origin inherited from the trigger engine. -/
+  executionOrigin : ExecutionOrigin
+  deriving Repr
+
+/-- Aggregate system state observed by the trigger engine for
+    cross-request reasoning. -/
+structure SystemState where
+  requests : List AgentRequest
+  deriving Repr
+
 /-- **Theorem T1 (enabled gate).**
 
 A fire intent that successfully dispatches into a `RequestSeed` implies
@@ -137,4 +163,25 @@ theorem T1_enabled_gate
   -- layer of the spec. Once a concrete operational definition is
   -- supplied in a later PR, this proof reduces to an unfold + case on
   -- `intent.triggerKind` + the `enabled` check.
+  sorry
+
+/-- **Theorem T2 (serial at-most-one).**
+
+For any trigger key `t`, if every request in the system that was caused
+by `t` is declared `serial`, then at most one non-terminal request
+exists for `t` at any instant.
+
+The proof relies on the in-flight lock check performed by the
+dispatcher and on S1 (terminal irreversibility) from the request
+lifecycle. Until the operational lock check is modeled explicitly here,
+the proof is deferred. -/
+theorem T2_serial_at_most_one
+    (s : SystemState) (t : TriggerKey) :
+    (∀ r ∈ s.requests, r.causedBy = some t → r.concurrency = .serial) →
+    (s.requests.filter (fun r =>
+        decide (r.causedBy = some t) ∧ ¬ r.isTerminal)).length ≤ 1 := by
+  -- Proof deferred: requires modeling the per-trigger dispatch lock and
+  -- appealing to S1 (`terminal_implies_released_local` and friends in
+  -- `Request.lean`). The statement is the load-bearing contract for the
+  -- serial-mode Rust implementation.
   sorry
