@@ -303,11 +303,61 @@ impl TriggerEngine {
                 }
             }
             ConcurrencyMode::LatestOnly => {
-                // Task 32 implements latest_only.
+                // Manual + LatestOnly is unusual (no persisted trigger id to
+                // key a lock on); fall through to materialize without
+                // serialization rather than error.
+                if let Some(trigger_id) = intent.trigger_id.as_deref() {
+                    // Acquire (or create) the per-trigger async mutex. The
+                    // outer `per_trigger_locks` mutex is held only long enough
+                    // to clone the `Arc<Mutex<()>>` for this `(trigger_id,
+                    // trigger_kind)` tuple.
+                    let lock_key = (trigger_id.to_owned(), intent.trigger_kind);
+                    let lock = {
+                        let mut map = self.per_trigger_locks.lock().await;
+                        map.entry(lock_key)
+                            .or_insert_with(|| Arc::new(Mutex::new(())))
+                            .clone()
+                    };
+                    // `_guard` is bound at function scope so it outlives the
+                    // materialize call below — supersede + materialize run
+                    // inside the same critical section.
+                    let _guard = lock.lock().await;
+                    match self
+                        .materializer
+                        .supersede_nonterminal_requests_for_trigger(
+                            trigger_id,
+                            intent.trigger_kind,
+                        )
+                        .await
+                    {
+                        Ok(_count) => { /* proceed to materialize under lock */ }
+                        Err(e) => {
+                            let result = FireResult::Errored {
+                                error: format!("supersede: {e}"),
+                            };
+                            (intent.on_result)(result.clone());
+                            return result;
+                        }
+                    }
+                    // Materialize under the held lock. `_guard` stays alive
+                    // for the duration of this await because it's a local in
+                    // this block and Rust drops locals only when the enclosing
+                    // scope exits; `return` evaluates its expression first,
+                    // so the guard covers the materialize call.
+                    return self.materialize_after_lock(intent, rendered).await;
+                }
             }
         }
 
         // 4. Materialize.
+        self.materialize_after_lock(intent, rendered).await
+    }
+
+    /// Run the materialize step and fire the `on_result` callback. Factored
+    /// out so the `LatestOnly` path can call it while still holding the
+    /// per-trigger lock (the caller's `_guard` stays alive across this await
+    /// because it was declared in the caller's outer scope).
+    async fn materialize_after_lock(&self, intent: FireIntent, rendered: String) -> FireResult {
         let request_id = match self
             .materializer
             .materialize(
