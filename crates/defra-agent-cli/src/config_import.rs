@@ -8,7 +8,8 @@ use serde_json::Value;
 use crate::config_bundle::{sanitize_import_document, select_apply_collection_docs};
 use crate::config_writes::{write_scheduled_task_document, ConfigAccess};
 use crate::desired_state;
-use crate::shared::{ConfigApplyCounts, ConfigExportBundle, DesiredApplyBundle};
+use crate::desired_state::DesiredApplyBundle;
+use crate::shared::{ConfigApplyCounts, ConfigExportBundle};
 use crate::{
     extract_mutation_doc_id, graphql_input_literal, CONFIG_EXPORT_FORMAT, CONFIG_EXPORT_FORMAT_V1,
 };

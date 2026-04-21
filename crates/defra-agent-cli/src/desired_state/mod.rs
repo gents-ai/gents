@@ -1,3 +1,4 @@
+pub(crate) mod apply_bundle;
 pub(crate) mod convert;
 pub(crate) mod diff;
 pub(crate) mod load;
@@ -6,6 +7,7 @@ pub(crate) mod normalize;
 mod tests;
 pub(crate) mod validate;
 
+pub(crate) use apply_bundle::DesiredApplyBundle;
 pub(crate) use convert::{
     export_bundle_from_manifest, manifest_from_export_bundle,
     normalize_tool_service_registry_storage_fields,
