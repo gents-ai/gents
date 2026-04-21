@@ -3,11 +3,97 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::{bail, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use tokio::sync::watch;
 
 use crate::graphql::escape_graphql_string;
+
+/// Request a soft interrupt by latching `interrupt_requested_at` on the
+/// AgentRequest document. Idempotent: if the field is already set, the
+/// current timestamp is preserved and this call is a no-op.
+///
+/// The runtime's per-request observer (see `spawn_request_interrupt_observer`)
+/// polls this field and signals the daemon to cancel in-flight inference and
+/// transition the request to `interrupted`. Writing this field on a terminal
+/// request is harmless — the lifecycle state machine filters terminal statuses.
+pub async fn interrupt_request(node: &EmbeddedNode, request_id: &str) -> Result<()> {
+    // Pre-check is an optimization: the submitter latches on first write, and
+    // subsequent writers must not clobber the timestamp. DefraDB's update
+    // mutation does not have an atomic "set-if-null" so we read-then-write.
+    if fetch_interrupt_requested_at(node, request_id)
+        .await?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let escaped_request_id = escape_graphql_string(request_id);
+    let escaped_now = escape_graphql_string(&now);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                input: {{ interrupt_requested_at: "{escaped_now}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    if resp.has_errors() {
+        bail!(
+            "interrupt_request({request_id}) failed: {}",
+            resp.errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+    Ok(())
+}
+
+/// Read `interrupt_requested_at` for the given request. Returns `None` if the
+/// field is empty/unset or the request does not exist.
+pub async fn fetch_interrupt_requested_at(
+    node: &EmbeddedNode,
+    request_id: &str,
+) -> Result<Option<String>> {
+    let escaped = escape_graphql_string(request_id);
+    let query = format!(
+        r#"query {{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped}" }} }},
+                limit: 1
+            ) {{
+                interrupt_requested_at
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        bail!(
+            "fetch_interrupt_requested_at({request_id}) failed: {}",
+            resp.errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+    let value = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|row| row.get("interrupt_requested_at"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    Ok(value)
+}
 
 /// Signal sent from the per-request observer to the daemon when the request's
 /// `interrupt_requested_at` field flips from null to non-null.

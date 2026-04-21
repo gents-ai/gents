@@ -61,6 +61,7 @@ pub use document_config::{
 pub use health_checker::{spawn_health_checker, HealthStatus, ServiceHealth, ServiceHealthMap};
 pub use hook::{DefraSessionHook, FailurePolicy, HookStats};
 pub use identity::{AgentIdentity, ServiceAccount, SimpleIdentity};
+pub use interrupt::{fetch_interrupt_requested_at, interrupt_request};
 pub use lifecycle::{RecoveryReport, RequestLifecycle};
 pub use mcp_pool::McpPool;
 pub use meta_tools::build_meta_tools;

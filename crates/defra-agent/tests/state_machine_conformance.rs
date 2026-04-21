@@ -1092,9 +1092,42 @@ async fn transition_to_interrupted_from_processing() {
 }
 
 #[tokio::test]
-#[ignore = "ungated in Task 10 (submission API)"]
 async fn interrupt_request_is_idempotent() {
-    todo!();
+    // Two calls to `interrupt_request` on the same doc must latch exactly
+    // once: the daemon observer relies on the first submitter's timestamp
+    // so the interruption audit trail points at who pressed Esc, not at
+    // whichever caller wrote last. Proof: S7 (latch-once) in
+    // `proofs/Interrupt.lean`.
+    let db = test_db("interrupt-idempotent").await;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let _doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+
+    defra_agent::interrupt_request(&db.node, &request_id)
+        .await
+        .expect("first interrupt should succeed");
+    let after_first = defra_agent::fetch_interrupt_requested_at(&db.node, &request_id)
+        .await
+        .expect("fetch after first interrupt");
+    assert!(
+        after_first.is_some(),
+        "first interrupt should latch the field"
+    );
+
+    // Sleep long enough that, without the idempotent latch, a second write
+    // would produce a strictly later RFC3339 timestamp.
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    defra_agent::interrupt_request(&db.node, &request_id)
+        .await
+        .expect("second interrupt should be a no-op");
+    let after_second = defra_agent::fetch_interrupt_requested_at(&db.node, &request_id)
+        .await
+        .expect("fetch after second interrupt");
+    assert_eq!(
+        after_first, after_second,
+        "second call must not rewrite the latched timestamp"
+    );
 }
 
 #[tokio::test]
