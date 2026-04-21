@@ -61,16 +61,24 @@ def initial : ComposedState :=
     }
   }
 
-/-- S6 extension (placeholder): interrupted requests eventually have their
-    companion inference calls cancelled. The full statement requires the
-    `InferenceCall` layer that Task 9 of the interruption-and-TTL plan will
-    introduce; until then this theorem stands as a trivial placeholder
-    documenting the bridge obligation. See
-    `docs/superpowers/plans/2026-04-21-request-interruption-and-ttl.md`
-    Task 9 for the real statement. -/
+/-- Cross-layer safety: an interrupted request's companion inference calls
+    will be persisted as cancelled.
+
+    Runtime implementation (Task 9): `AdmissionPermit::mark_interrupted`
+    sets the permit's terminal to `call_state = "cancelled"` /
+    `failure_reason = "Cancelled"`, which `Drop` persists to the
+    `InferenceCall` row. The daemon's interrupt arm fires this via the
+    `inference_token` threaded through `AdmissionCallContext`.
+
+    This theorem is a placeholder until `InferenceCall` is modeled in
+    Lean (future work). Once that model exists, the theorem body should
+    state: "if `r.state = .interrupted`, then for every
+    `c : InferenceCall` with `c.request_id = r.request_id` and
+    `c.state ∈ {queued, running}`, there exists a sequence of
+    `InferenceCall` steps ending in `c.state = cancelled`." -/
 theorem interrupted_request_cancels_calls
-    (r : RequestContext)
-    (_h_interrupted : r.state = .interrupted) :
+    (_r : RequestContext)
+    (_h_interrupted : _r.state = .interrupted) :
     True := by
   trivial
 

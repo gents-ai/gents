@@ -86,8 +86,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 let persistence_hook = hook.clone();
 
                 let agent = agent_with_request_sampling(&self.agent, &self.behavior, request);
-                let mut stream =
-                    admission::scope_call(CallKind::Inference, attempt_index as i64, async {
+                let mut stream = admission::scope_call_with_token(
+                    CallKind::Inference,
+                    attempt_index as i64,
+                    request_token.clone(),
+                    async {
                         tokio::select! {
                             biased;
                             _ = shutdown.changed() => {
@@ -102,8 +105,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 .with_history(history.to_vec())
                                 .with_hook(hook) => Ok::<_, anyhow::Error>(stream)
                         }
-                    })
-                    .await?;
+                    },
+                )
+                .await?;
 
                 let liveness_timeout = Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS);
 

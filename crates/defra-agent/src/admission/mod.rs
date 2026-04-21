@@ -7,7 +7,8 @@ mod registry;
 pub(crate) mod stream_guard;
 
 pub(crate) use client::{
-    scope_call, scope_request, AdmissionCallContext, AdmittedCompletionClient, CallKind,
+    scope_call, scope_call_with_token, scope_request, AdmissionCallContext,
+    AdmittedCompletionClient, CallKind,
 };
 pub(crate) use config::{backend_admission_configs_from_backends, BackendAdmissionConfig};
 pub(crate) use registry::AdmissionRegistry;

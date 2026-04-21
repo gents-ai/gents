@@ -162,6 +162,7 @@ impl AdmissionRegistry {
             call_kind,
             attempt: 1,
             call_seq: Arc::new(AtomicU64::new(0)),
+            inference_token: None,
         };
         scope_request(context, async { self.acquire_current_call().await }).await
     }
