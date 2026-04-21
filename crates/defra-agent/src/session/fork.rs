@@ -94,6 +94,15 @@ pub async fn fork(
     .await
     .map_err(ForkError::ForkCopyFailed)?;
 
+    let copied_compaction_entries = copy_compaction_entries(
+        node,
+        params.source_session_id,
+        &child_session_id,
+        &cut_ts,
+    )
+    .await
+    .map_err(ForkError::ForkCopyFailed)?;
+
     create_child_session_and_conversation(
         node,
         &child_session_id,
@@ -109,7 +118,7 @@ pub async fn fork(
         copied_messages,
         copied_tool_calls,
         copied_tool_results,
-        ..ForkOutcome::default()
+        copied_compaction_entries,
     })
 }
 
@@ -355,6 +364,77 @@ async fn copy_tool_results(
             created_at_escaped = escape_graphql_string(created_at),
         );
         execute_mutation_with_retry(node, &mutation, "fork::copy_tool_result").await?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+async fn copy_compaction_entries(
+    node: &EmbeddedNode,
+    source_session_id: &str,
+    child_session_id: &str,
+    cut_ts: &str,
+) -> Result<u32> {
+    let escaped_source = escape_graphql_string(source_session_id);
+    let escaped_cut_ts = escape_graphql_string(cut_ts);
+    let query = format!(
+        r#"{{
+            CompactionEntry(
+                filter: {{
+                    session_id: {{ _eq: "{escaped_source}" }},
+                    created_at: {{ _lt: "{escaped_cut_ts}" }}
+                }},
+                order: {{ sequence: ASC }}
+            ) {{
+                sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        anyhow::bail!("copy_compaction_entries query failed: {:?}", resp.errors);
+    }
+    let rows = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("CompactionEntry"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut count = 0u32;
+    let child_session_escaped = escape_graphql_string(child_session_id);
+    for row in &rows {
+        let sequence = row.get("sequence").and_then(|v| v.as_u64())
+            .ok_or_else(|| anyhow::anyhow!("compaction sequence missing"))?;
+        let summary = row.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+        let files_read = row.get("files_read").and_then(|v| v.as_str()).unwrap_or("[]");
+        let files_modified = row.get("files_modified").and_then(|v| v.as_str()).unwrap_or("[]");
+        let messages_compacted = row.get("messages_compacted").and_then(|v| v.as_u64()).unwrap_or(0);
+        let original_tokens = row.get("original_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let compacted_tokens = row.get("compacted_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let created_at = row.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
+        let compaction_key = format!("{child_session_escaped}:{sequence}");
+        let mutation = format!(
+            r#"mutation {{
+                create_CompactionEntry(input: {{
+                    compaction_key: "{compaction_key}",
+                    session_id: "{child_session_escaped}",
+                    sequence: {sequence},
+                    summary: "{summary_escaped}",
+                    files_read: "{files_read_escaped}",
+                    files_modified: "{files_modified_escaped}",
+                    messages_compacted: {messages_compacted},
+                    original_tokens: {original_tokens},
+                    compacted_tokens: {compacted_tokens},
+                    created_at: "{created_at_escaped}"
+                }}) {{ _docID }}
+            }}"#,
+            summary_escaped = escape_graphql_string(summary),
+            files_read_escaped = escape_graphql_string(files_read),
+            files_modified_escaped = escape_graphql_string(files_modified),
+            created_at_escaped = escape_graphql_string(created_at),
+        );
+        execute_mutation_with_retry(node, &mutation, "fork::copy_compaction_entry").await?;
         count += 1;
     }
     Ok(count)

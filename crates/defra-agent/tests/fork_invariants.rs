@@ -5,10 +5,11 @@ mod support;
 use support::snapshots::fetch_message_snapshots_for_session;
 use support::snapshots::fetch_tool_call_snapshots_for_session;
 use support::snapshots::fetch_tool_result_snapshots_for_session;
+use support::snapshots::fetch_compaction_entry_snapshots_for_session;
 use support::{
     create_agent_behavior, create_agent_conversation, create_agent_message,
-    create_agent_session, create_agent_tool_call, create_agent_tool_result, test_db, AGENT_DID,
-    AGENT_NAME,
+    create_agent_session, create_agent_tool_call, create_agent_tool_result,
+    create_compaction_entry, test_db, AGENT_DID, AGENT_NAME,
 };
 
 #[tokio::test]
@@ -140,4 +141,34 @@ async fn fork_copies_tool_results_strictly_before_cut_ts() {
     assert_eq!(child_results[0].output_text, "early");
     assert_eq!(child_results[0].session_id, outcome.session_id);
     assert_eq!(outcome.copied_tool_results, 1);
+}
+
+#[tokio::test]
+async fn fork_copies_compaction_entries_strictly_before_cut_ts() {
+    let db = test_db("fork-copy-compactions").await;
+
+    let parent_session = "parent-ce";
+    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+
+    create_agent_message(&db.node, parent_session, 1, "user", "u1", "2026-04-21T10:00:01Z").await;
+    create_agent_message(&db.node, parent_session, 2, "user", "u2", "2026-04-21T10:00:03Z").await;
+    create_compaction_entry(&db.node, parent_session, 1, "early summary", 2, "2026-04-21T10:00:02Z").await;
+    create_compaction_entry(&db.node, parent_session, 2, "late summary",  3, "2026-04-21T10:00:04Z").await;
+
+    // Fork before user-turn 1. Cut_ts = 10:00:03Z.
+    let outcome = fork(&db.node, ForkParams {
+        source_session_id: parent_session,
+        fork_at_user_turn: 1,
+        caller_agent_did: AGENT_DID,
+        target_behavior_id: None,
+    }).await.expect("fork succeeds");
+
+    let child_compactions = fetch_compaction_entry_snapshots_for_session(&db.node, &outcome.session_id).await;
+    assert_eq!(child_compactions.len(), 1);
+    assert_eq!(child_compactions[0].summary, "early summary");
+    assert_eq!(child_compactions[0].sequence, 1); // preserved from parent
+    assert_eq!(child_compactions[0].compaction_key, format!("{}:1", outcome.session_id));
+    assert_eq!(outcome.copied_compaction_entries, 1);
 }
