@@ -62,6 +62,14 @@ impl From<RequestSnapshotRow> for RequestSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct RequestLineageSnapshot {
+    #[serde(default)]
+    pub caused_by_trigger_id: Option<String>,
+    #[serde(default)]
+    pub caused_by_trigger_kind: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ConversationSnapshot {
     pub latest_request_id: String,
     pub behavior_id: String,
@@ -143,6 +151,53 @@ pub async fn fetch_request_snapshot(node: &EmbeddedNode, doc_id: &str) -> Reques
     );
     let resp = node.execute(&query).await;
     first_row::<RequestSnapshotRow>(&resp, "AgentRequest").into()
+}
+
+pub async fn fetch_request_lineage_snapshot(
+    node: &EmbeddedNode,
+    doc_id: &str,
+) -> RequestLineageSnapshot {
+    let doc_id = escape_graphql_string(doc_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                limit: 1
+            ) {{
+                caused_by_trigger_id
+                caused_by_trigger_kind
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    first_row::<RequestLineageSnapshot>(&resp, "AgentRequest")
+}
+
+pub async fn fetch_request_lineage_snapshot_by_tuple(
+    node: &EmbeddedNode,
+    trigger_id: &str,
+    trigger_kind: &str,
+) -> Option<RequestLineageSnapshot> {
+    let trigger_id = escape_graphql_string(trigger_id);
+    let trigger_kind = escape_graphql_string(trigger_kind);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{
+                    _and: [
+                        {{ caused_by_trigger_id: {{ _eq: "{trigger_id}" }} }},
+                        {{ caused_by_trigger_kind: {{ _eq: "{trigger_kind}" }} }}
+                    ]
+                }},
+                limit: 1
+            ) {{
+                caused_by_trigger_id
+                caused_by_trigger_kind
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    first_optional_row::<RequestLineageSnapshot>(&resp, "AgentRequest")
 }
 
 pub async fn fetch_conversation_snapshot(

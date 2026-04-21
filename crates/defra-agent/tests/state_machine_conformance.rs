@@ -4,9 +4,10 @@ use defra_agent::RequestLifecycle;
 mod support;
 
 use support::snapshots::{
-    fetch_conversation_snapshot, fetch_request_snapshot, fetch_response_snapshot,
-    fetch_session_snapshot, ConversationSnapshot, RequestSnapshot, ResponseSnapshot,
-    SessionSnapshot,
+    fetch_conversation_snapshot, fetch_request_lineage_snapshot,
+    fetch_request_lineage_snapshot_by_tuple, fetch_request_snapshot, fetch_response_snapshot,
+    fetch_session_snapshot, ConversationSnapshot, RequestLineageSnapshot, RequestSnapshot,
+    ResponseSnapshot, SessionSnapshot,
 };
 use support::{
     build_request, create_request, create_response_with_status, test_db, AGENT_DID, AGENT_NAME,
@@ -300,6 +301,45 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
             latest_request_id: lifecycle.request().request_id.clone(),
             behavior_id: AGENT_NAME.into(),
             status: "processing".into(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn scheduled_materialization_persists_trigger_lineage() {
+    let db = test_db("scheduled-materialize-lineage").await;
+    let lineage = TriggerLineage {
+        trigger_id: Some("sched-1".into()),
+        trigger_kind: Some("schedule".into()),
+    };
+
+    let lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        "scheduled prompt body with lineage",
+        DEADLINE_SECS,
+        ExecutionOrigin::Scheduled,
+        BACKEND_ID,
+        lineage,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        fetch_request_lineage_snapshot(&db.node, &lifecycle.request().doc_id).await,
+        RequestLineageSnapshot {
+            caused_by_trigger_id: Some("sched-1".into()),
+            caused_by_trigger_kind: Some("schedule".into()),
+        }
+    );
+
+    // Bonus: confirm the tuple filter matches (validates indexes are wired end-to-end).
+    assert_eq!(
+        fetch_request_lineage_snapshot_by_tuple(&db.node, "sched-1", "schedule").await,
+        Some(RequestLineageSnapshot {
+            caused_by_trigger_id: Some("sched-1".into()),
+            caused_by_trigger_kind: Some("schedule".into()),
         })
     );
 }
