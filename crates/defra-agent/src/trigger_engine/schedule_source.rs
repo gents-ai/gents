@@ -30,7 +30,6 @@ pub(crate) struct ScheduleSource {
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     node: Arc<EmbeddedNode>,
     tick_every: Duration,
-    #[allow(dead_code)]
     cancel: CancellationToken,
 }
 
@@ -62,9 +61,14 @@ impl TriggerSource for ScheduleSource {
     fn next_fire(&mut self) -> Pin<Box<dyn Future<Output = Option<FireIntent>> + Send + '_>> {
         Box::pin(async move {
             // Step 1: sleep one tick before scanning so the source doesn't
-            // spam-query immediately on construction. Task 37 will add cancel
-            // integration here; for now we just sleep unconditionally.
-            tokio::time::sleep(self.tick_every).await;
+            // spam-query immediately on construction. Honor the cancellation
+            // token at this tick boundary so a caller that drops or cancels
+            // the token gets a prompt `None` back instead of having to wait
+            // for the full tick to elapse.
+            tokio::select! {
+                _ = tokio::time::sleep(self.tick_every) => {}
+                _ = self.cancel.cancelled() => return None,
+            }
 
             // Step 2: snapshot-read the active schedules and scan for the
             // first one whose DB-resident `next_run_at` has elapsed.

@@ -784,3 +784,44 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
     assert_eq!(skipped.task_id.as_deref(), Some("task-1"));
     assert_eq!(skipped.concurrency.as_deref(), Some("serial"));
 }
+
+/// Cancelling the `CancellationToken` before polling `next_fire` must short-
+/// circuit the tick-sleep and return `None` promptly — much faster than the
+/// configured `tick_every`. This is the graceful-shutdown path the engine
+/// relies on: on cancel the source is expected to drain back to `None` so the
+/// outer loop can tear it down.
+#[tokio::test]
+async fn schedule_source_next_fire_honors_cancellation_token() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    // No schedules are needed: cancellation must be observed before the tick
+    // body ever runs the snapshot scan.
+    let snapshot = snapshot_with_schedules(HashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+    let cancel = CancellationToken::new();
+    // Deliberately use a long tick so any wall-clock elapsed below 1s is
+    // strong evidence the select arm fired on cancel, not on sleep expiry.
+    let mut source = ScheduleSource::new(rx, node.clone(), cancel.clone())
+        .with_tick_every(Duration::from_secs(30));
+
+    // Cancel before calling next_fire so the select!'s cancel arm is
+    // immediately ready.
+    cancel.cancel();
+
+    let start = Instant::now();
+    let result = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("next_fire did not return within 2s after cancel");
+    let elapsed = start.elapsed();
+
+    assert!(
+        result.is_none(),
+        "expected None after cancel, got Some(intent) with trigger_id={:?}",
+        result.as_ref().and_then(|i| i.trigger_id.as_deref())
+    );
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "next_fire should return promptly on cancel, took {elapsed:?}"
+    );
+}
