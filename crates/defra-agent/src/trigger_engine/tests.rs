@@ -5,11 +5,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use chrono::{Duration as ChronoDuration, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use super::*;
+use crate::document_config::list_schedule_records;
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
 use crate::runtime_snapshot::{
@@ -640,4 +641,146 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
         "fired_at should be a string, got {:?}",
         ev["fired_at"]
     );
+}
+
+/// After a successful fire, the callback advances `next_run_at += interval`,
+/// writes `last_attempt_at`, sets `last_status = "fired"`, and bumps
+/// `fire_count` by 1. After a skipped fire on the same schedule (with a fresh
+/// intent generated from the already-advanced next_run_at), `last_status` must
+/// flip to `"skipped"`, `next_run_at` still advances, and `fire_count` stays
+/// put. Apply-owned fields (`interval_secs`, `enabled`, `task_id`,
+/// `concurrency`) must be untouched across both writes.
+#[tokio::test]
+async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    // Seed a Schedule that is already due (next_run_at 1s in the past) so
+    // next_fire() will immediately yield an intent.
+    let initial_next_run_at = (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339();
+    create_schedule_with_next_run_at(
+        node.as_ref(),
+        "sched-1",
+        "task-1",
+        &initial_next_run_at,
+        "serial",
+    )
+    .await;
+
+    let task = ResolvedTask {
+        task_id: "task-1".to_string(),
+        behavior_id: "general".to_string(),
+        prompt_template: "hi".to_string(),
+        output_schema_ref: None,
+    };
+    let schedule = resolved_schedule("sched-1", task);
+    let interval_secs = schedule.interval_secs;
+    let snapshot = snapshot_with_schedules(HashMap::from([(
+        "sched-1".to_string(),
+        schedule,
+    )]));
+    let (_tx, rx) = watch::channel(snapshot);
+    let cancel = CancellationToken::new();
+    let mut source = ScheduleSource::new(rx, node.clone(), cancel.clone())
+        .with_tick_every(Duration::from_millis(50));
+
+    // ---- Fired case ----
+    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("next_fire timed out (fired)")
+        .expect("next_fire returned None (fired)");
+    // Dispatch a synthetic Fired result into the callback. The callback spawns
+    // a background write, so poll the DB until it lands (bounded retry).
+    (intent.on_result)(FireResult::Fired {
+        request_id: "req-0".to_string(),
+    });
+    let expected_next_run_at_fired =
+        (DateTime::parse_from_rfc3339(&initial_next_run_at).unwrap().with_timezone(&Utc)
+            + ChronoDuration::seconds(interval_secs))
+        .to_rfc3339();
+    let mut fired_schedule = None;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let records = list_schedule_records(node.as_ref()).await.unwrap();
+        let (_doc_id, sched) = records
+            .iter()
+            .find(|(_d, s)| s.schedule_id == "sched-1")
+            .cloned()
+            .expect("Schedule doc disappeared");
+        if sched.last_status.as_deref() == Some("fired") {
+            fired_schedule = Some(sched);
+            break;
+        }
+    }
+    let fired = fired_schedule.expect("Schedule.last_status never became \"fired\"");
+    assert_eq!(fired.last_status.as_deref(), Some("fired"));
+    assert_eq!(fired.fire_count, Some(1));
+    assert_eq!(fired.next_run_at.as_deref(), Some(expected_next_run_at_fired.as_str()));
+    assert!(
+        fired.last_attempt_at.is_some(),
+        "last_attempt_at should be set after a fire"
+    );
+    // Apply-owned fields must not be clobbered by the runtime writeback.
+    assert_eq!(fired.interval_secs, Some(60));
+    assert!(fired.enabled);
+    assert_eq!(fired.task_id.as_deref(), Some("task-1"));
+    assert_eq!(fired.concurrency.as_deref(), Some("serial"));
+
+    // ---- Skipped case ----
+    // Rewind next_run_at into the past again so the source will yield another
+    // intent on the next tick. The new intent's on_result snapshot should
+    // advance relative to the *new* next_run_at we just persisted.
+    let rewound_next_run_at = (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339();
+    let escaped_schedule_id = escape_graphql_string("sched-1");
+    let escaped_rewound = escape_graphql_string(&rewound_next_run_at);
+    let mutation = format!(
+        r#"mutation {{
+            update_Schedule(
+                filter: {{ schedule_id: {{ _eq: "{escaped_schedule_id}" }} }},
+                input: {{ next_run_at: "{escaped_rewound}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(!resp.has_errors(), "rewind mutation failed: {:?}", resp.errors);
+
+    let intent2 = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("next_fire timed out (skipped)")
+        .expect("next_fire returned None (skipped)");
+    (intent2.on_result)(FireResult::Skipped {
+        reason: "serial: prior fire still in-flight".to_string(),
+    });
+    let expected_next_run_at_skipped = (DateTime::parse_from_rfc3339(&rewound_next_run_at)
+        .unwrap()
+        .with_timezone(&Utc)
+        + ChronoDuration::seconds(interval_secs))
+    .to_rfc3339();
+    let mut skipped_schedule = None;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let records = list_schedule_records(node.as_ref()).await.unwrap();
+        let (_doc_id, sched) = records
+            .iter()
+            .find(|(_d, s)| s.schedule_id == "sched-1")
+            .cloned()
+            .expect("Schedule doc disappeared");
+        if sched.last_status.as_deref() == Some("skipped") {
+            skipped_schedule = Some(sched);
+            break;
+        }
+    }
+    let skipped = skipped_schedule.expect("Schedule.last_status never became \"skipped\"");
+    assert_eq!(skipped.last_status.as_deref(), Some("skipped"));
+    // fire_count MUST NOT advance on skip.
+    assert_eq!(skipped.fire_count, Some(1));
+    assert_eq!(
+        skipped.next_run_at.as_deref(),
+        Some(expected_next_run_at_skipped.as_str())
+    );
+    // Apply-owned fields still intact.
+    assert_eq!(skipped.interval_secs, Some(60));
+    assert!(skipped.enabled);
+    assert_eq!(skipped.task_id.as_deref(), Some("task-1"));
+    assert_eq!(skipped.concurrency.as_deref(), Some("serial"));
 }

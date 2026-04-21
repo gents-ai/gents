@@ -10,14 +10,16 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use defra_node::EmbeddedNode;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-use crate::document_config::load_schedule_next_run_at;
+use crate::document_config::{
+    load_schedule_next_run_at, update_schedule_runtime_fields, ScheduleRuntimeUpdate,
+};
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
-use crate::trigger_engine::{FireIntent, TriggerKind, TriggerSource};
+use crate::trigger_engine::{FireIntent, FireResult, TriggerKind, TriggerSource};
 
 /// `TriggerSource` that drives the schedule clock.
 ///
@@ -113,6 +115,23 @@ impl TriggerSource for ScheduleSource {
                     "trigger_kind": "schedule",
                 });
 
+                // Precompute the advanced next_run_at using the DB-loaded
+                // `parsed` (not `now + interval`) so schedules that got behind
+                // still advance on a single-interval cadence. The DB write
+                // itself happens in the `on_result` callback below, off the
+                // engine's dispatch path.
+                let advanced_next_run_at = parsed + ChronoDuration::seconds(resolved.interval_secs);
+                let advanced_next_run_at_str = advanced_next_run_at.to_rfc3339();
+                let last_attempt_at = now.to_rfc3339();
+
+                // Values captured for the result-writeback closure. The
+                // callback is synchronous (`FnOnce(FireResult)`), so it spawns
+                // a background task that performs the DefraDB mutation; the
+                // engine's dispatch loop continues without waiting on
+                // bookkeeping I/O.
+                let node_for_callback = self.node.clone();
+                let schedule_id_for_callback = schedule_id.clone();
+
                 return Some(FireIntent {
                     trigger_id: Some(schedule_id.clone()),
                     trigger_kind: TriggerKind::Schedule,
@@ -121,10 +140,53 @@ impl TriggerSource for ScheduleSource {
                     event_vars,
                     doc_vars: None,
                     args_vars: None,
-                    // Task 36 fills in the runtime-field writeback (last_*,
-                    // fire_count, next_run_at advance); for Task 35 the
-                    // callback is a no-op placeholder.
-                    on_result: Box::new(|_result| { /* Task 36 */ }),
+                    on_result: Box::new(move |result| {
+                        let updates = match &result {
+                            FireResult::Fired { .. } => ScheduleRuntimeUpdate {
+                                next_run_at: Some(advanced_next_run_at_str.clone()),
+                                last_attempt_at: Some(last_attempt_at.clone()),
+                                last_status: Some("fired".to_string()),
+                                last_error: None,
+                                fire_count_delta: Some(1),
+                            },
+                            FireResult::Skipped { .. } => ScheduleRuntimeUpdate {
+                                // Skipped still advances `next_run_at` so a
+                                // serial-gated fire doesn't hammer the clock
+                                // every tick — the intent was that this tick
+                                // "happened", just without materializing.
+                                next_run_at: Some(advanced_next_run_at_str.clone()),
+                                last_attempt_at: Some(last_attempt_at.clone()),
+                                last_status: Some("skipped".to_string()),
+                                last_error: None,
+                                fire_count_delta: None,
+                            },
+                            FireResult::Errored { error } => ScheduleRuntimeUpdate {
+                                // Don't advance next_run_at on error so the
+                                // next tick retries this fire; only record
+                                // last_* bookkeeping.
+                                next_run_at: None,
+                                last_attempt_at: Some(last_attempt_at.clone()),
+                                last_status: Some("error".to_string()),
+                                last_error: Some(error.clone()),
+                                fire_count_delta: None,
+                            },
+                        };
+                        tokio::spawn(async move {
+                            if let Err(e) = update_schedule_runtime_fields(
+                                &node_for_callback,
+                                &schedule_id_for_callback,
+                                updates,
+                            )
+                            .await
+                            {
+                                tracing::warn!(
+                                    schedule_id = %schedule_id_for_callback,
+                                    error = %e,
+                                    "failed to write Schedule runtime fields after fire",
+                                );
+                            }
+                        });
+                    }),
                 });
             }
 
