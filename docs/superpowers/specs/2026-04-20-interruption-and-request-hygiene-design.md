@@ -59,13 +59,14 @@ In scope:
   by reading `valid_until` exactly once at the scheduler claim check and
   caching the result for the lifetime of the request; later rewrites to
   the field have no runtime effect.
-- Two new runtime-owned fields on `AgentMessage`: `request_id` (the
-  producing request, so partial messages can be joined to the request
-  that produced them without a positional lookup) and `interrupted_at`
-  (marks a streamed assistant message that was persisted before the
-  turn ended in an `interrupted` terminal). `request_id` is a new index
-  and ships on every new message regardless of interrupt — it is a
-  latent requirement the interrupt work surfaces, not interrupt-specific.
+- One new runtime-owned field on `AgentResponse`: `interrupted_at`.
+  Marks a streaming response whose content was preserved at interrupt.
+  `AgentResponse` is where `DefraStreamWriter` actually persists partial
+  content during streaming (via `update_AgentResponse` mutations on
+  `content` / `reasoning` / `token_count`), and it already carries
+  `request_id`, so the partial-preserve invariant is a direct FK query.
+  `AgentMessage` — the finalized conversation-turn record — is
+  orthogonal to this work.
 - One new runtime-owned field on `AgentToolResult`:
   `discarded_because_interrupted`. Written when a tool ran to completion
   but its result never reached the model because the turn was interrupted.
@@ -76,7 +77,7 @@ In scope:
   tools can opt into observing cancellation. Default is non-cancellable —
   tools run to completion and their results are discarded.
 - The delivery mechanism closing the admission spec's reserved
-  `InferenceCall.cancelled` terminal: `PermitGuard::mark_interrupted`,
+  `InferenceCall.cancelled` terminal: `AdmissionPermit::mark_interrupted`,
   discharge the reserved Lean axioms in `Composed.lean`.
 - New Lean transitions, invariants S7/S8, extended L1 bounded termination.
 - Client-side submission API: `interrupt_request` mutation,
@@ -124,12 +125,12 @@ Out of scope (tracked or deferred):
 | `valid_until` enforcement | Only on `pending → claimed` | Once claimed, the existing `deadline` is authoritative. Simpler mental model; no mid-stream expiry contention with `deadline_expire`. |
 | Stale on reconnect | Strict TTL; no auto-retry | Client comes back online → stale requests transition to `dead/Stale` as cheap writes, no backend load; user resends if still wanted. |
 | Tie-break when both interrupt + expiry hold on pending | Prefer `interrupted` | Explicit user intent is more informative than timeout. |
-| Observer location | Per-request daemon + scheduler claim check | Daemon already subscribes to its own request doc; scheduler already evaluates pending claim eligibility. No new architectural layer. |
+| Observer location | Scheduler doc-watch loop (both pre-claim and post-claim); scheduler signals the daemon via a new `watch::Receiver<Option<InterruptIntent>>` parallel to the existing shutdown receiver | The scheduler is already the doc-watching layer and already hands the daemon a shutdown `watch::Receiver`. Adding a second watch channel reuses the existing transport; the daemon does not need to subscribe to DB itself. |
 | Cancellation plumbing | `tokio_util::sync::CancellationToken` hierarchy | Codex-proven pattern; composable; drops cleanly with tasks. |
 | Graceful window | 100ms before force-abort on cancellable work | Codex-aligned. Long enough for HTTP futures to observe, short enough that Esc feels instant. |
 | Tool cancellation policy | Per-tool, default non-cancellable | Side-effectful tools (writes, exec) stay safe by default; cancellable tools opt in explicitly. |
-| Partial-response handling | Preserve already-streamed tokens, flag with `AgentMessage.interrupted_at` | Option C from brainstorming. Lets the user "continue to steer" with context the model can see. Matches codex's history marker. |
-| Cross-layer delivery | `PermitGuard::mark_interrupted`; `InferenceCall.cancelled` | Closes the admission spec's reserved terminal. No schema change on `InferenceCall`. |
+| Partial-response handling | Preserve already-streamed tokens, flag with `AgentResponse.interrupted_at` | Option C from brainstorming. `AgentResponse` is where the streaming writer already persists partial content per request — one row per request — so there is nothing new to create, just a field to flip. `AgentMessage` is the conversation-history record and is untouched. |
+| Cross-layer delivery | `AdmissionPermit::mark_interrupted`; `InferenceCall.cancelled` | Closes the admission spec's reserved terminal. No schema change on `InferenceCall`. |
 | `AgentToolResult` of a non-cancellable tool after interrupt | Written normally, `discarded_because_interrupted = true` | Preserves audit trail. |
 | Proof responsibility for cross-layer cancel | This spec | Discharges the admission spec's reserved axioms in `Composed.lean`. |
 | State machine source of truth | Lean 4 (project norm) | CLAUDE.md rule. |
@@ -202,8 +203,8 @@ implementation pins the choice. Tests assert the policy at every fork.
 - **S6 persistence before completion** — extended. The `interrupted`
   terminal joins the set of terminals that imply persistence. Each new
   `interrupt_*` transition must fire *after* the daemon has written
-  the `AgentMessage.interrupted_at` mark on any partial assistant
-  message, so that "terminal observed ⇒ persisted state is coherent"
+  the `AgentResponse.interrupted_at` mark on any partial streaming
+  row, so that "terminal observed ⇒ persisted state is coherent"
   holds. Proof shape matches the existing `finish`/`fail` cases.
 - **S7 interrupt monotonicity (new)** — if
   `pre.interruptRequestedAt = some t`, then for every `post` reachable from
@@ -237,34 +238,32 @@ type AgentRequest {
 }
 ```
 
-**`AgentMessage`** — two new runtime-owned fields:
+**`AgentResponse`** — one new runtime-owned field:
 
 ```graphql
-type AgentMessage {
+type AgentResponse {
   # ... existing fields ...
-  request_id: String @index   # producing request; indexed for filtering
-  interrupted_at: DateTime    # null for complete messages, non-null ⇒ truncated
+  interrupted_at: String   # RFC3339; null for complete, non-null ⇒ interrupted
 }
 ```
 
-`request_id` is the backing field for the "messages produced by this
-request" join and is what makes the interrupt invariant (below) have a
-clean foreign-key formulation. The streaming writer sets `request_id`
-on every new message regardless of interrupt; the field is not
-interrupt-specific.
-
-`interrupted_at` uses `DateTime` to match the existing `timestamp` field
-on `AgentMessage` rather than the `String` RFC3339 style used on
-`AgentRequest` (the type is per-collection in the current schema).
+`AgentResponse` is the streaming-state row: one per `AgentRequest`,
+linked by `request_id`, holding `content` / `reasoning` / `token_count`
+updated in place by `DefraStreamWriter`. The interrupt daemon flips
+`interrupted_at` on the matching row before writing the terminal
+`AgentRequest.lifecycle_state = interrupted`. `String` type matches the
+existing `created_at` / `completed_at` fields on this collection.
 
 Note: `AgentToolResult` already has a `truncated: Boolean` +
-`truncation_metadata: String` pair for a different concern
-(output-size truncation). `AgentMessage` uses the single-field
-`interrupted_at` shape because the timestamp itself is the metadata —
-there is nothing structured to spill into a second field. If future use
-cases require non-interrupt truncation on messages (e.g., context
-window cap), revisit and align on the `AgentToolResult` pattern at that
-time.
+`truncation_metadata: String` pair for a different concern (output-size
+truncation). `AgentResponse` uses a single `interrupted_at` field —
+the timestamp is the only metadata, and `AgentResponse` already carries
+the stream's `token_count` and `progress_seq` elsewhere. Revisit if a
+non-interrupt truncation reason ever needs to live on `AgentResponse`.
+
+`AgentMessage` (the conversation-turn record) is **not modified** by
+this spec. Finalized conversation messages are a separate collection
+and a separate lifecycle from the in-flight streaming state.
 
 **`AgentToolResult`** — one new runtime-owned field:
 
@@ -275,8 +274,8 @@ type AgentToolResult {
 }
 ```
 
-**`schemas/README.md`** — update the `AgentRequest`, `AgentMessage`, and
-`AgentToolResult` rows to list the new fields; extend the
+**`schemas/README.md`** — update the `AgentRequest`, `AgentResponse`,
+and `AgentToolResult` rows to list the new fields; extend the
 `lifecycle_state` and `failure_reason` enum lists.
 
 **Protocol-crate row mirrors** (`defra-agent-protocol/src/row.rs`) — the
@@ -325,11 +324,41 @@ thousand stale pending requests replicating in after an offline gap
 become a thousand cheap lifecycle writes, bounded by the scheduler's own
 throughput.
 
-**Per-request daemon watcher** (`defra-agent/src/agent/daemon/*.rs`):
+**Scheduler doc-watch (post-claim)**
+(`defra-agent/src/scheduler/loop_impl.rs` + `defra-agent/src/lifecycle/*.rs`):
 
-The daemon already subscribes to its own `AgentRequest` doc for state
-transitions. Extend the subscription handler to react to
-`interrupt_requested_at` flipping from null to non-null:
+Today the scheduler's loop reads pending `AgentRequest` rows for claim
+eligibility and hands each claimed request's lifecycle handle to the
+daemon along with a `tokio::sync::watch::Receiver<bool>` for shutdown.
+This spec extends the scheduler's loop to also observe
+`interrupt_requested_at` on *claimed, non-terminal* rows each tick and
+signal the matching daemon through a new per-request watch channel.
+
+For each in-flight request the scheduler owns:
+
+```rust
+// New per-request channel, created at claim time alongside the shutdown one.
+let (interrupt_tx, interrupt_rx) = watch::channel::<Option<InterruptIntent>>(None);
+// interrupt_tx is held by the scheduler; interrupt_rx is handed to the daemon.
+```
+
+On each scheduler tick, for every claimed request, re-read the
+`interrupt_requested_at` field. If it has just flipped from null to
+non-null, `interrupt_tx.send(Some(InterruptIntent { at: ts, … })).ok()`.
+The daemon's `handle_request` sees this via `interrupt_rx.changed().await`
+in a `tokio::select!` arm.
+
+This keeps all DB subscription in the scheduler and reuses the existing
+transport between scheduler and daemon — the daemon never subscribes
+to the DB itself. The pre-claim branch already lives in the scheduler
+(the `evaluate_pending` function above), so both observation paths share
+the same code location.
+
+**Per-request daemon, on interrupt signal**
+(`defra-agent/src/agent/daemon/request.rs::handle_request`):
+
+The daemon's main `tokio::select!` gains a new arm watching
+`interrupt_rx`. When the intent arrives:
 
 1. Call `request_token.cancel()` on the daemon's root `CancellationToken`.
 2. If at least one cancellable-work child token is live, await a bounded
@@ -339,21 +368,20 @@ transitions. Extend the subscription handler to react to
    inference or tool call yet).
 3. Force-abort any still-running cancellable work whose JoinHandle hasn't
    completed (`tokio::task::JoinHandle::abort()`).
-4. If an assistant message has been partially streamed into DefraDB, flip
-   its `interrupted_at` field to the interrupt timestamp. No new message
-   write — the partial is already persisted by the streaming writer; the
-   daemon just marks it. **This write is sequenced before step 5 so any
-   subscriber that observes the terminal also observes the marked
-   partial.** The invariant is:
+4. If an `AgentResponse` row exists for this request with non-empty
+   `content` or `reasoning`, flip its `interrupted_at` field to the
+   interrupt timestamp. No new row is created — the streaming writer
+   has already been persisting partials in place via
+   `update_AgentResponse`; the daemon just adds one more
+   `update_AgentResponse` that sets `interrupted_at`. **This write is
+   sequenced before step 5 so any subscriber that observes the terminal
+   also observes the marked partial.** The invariant is:
 
    > For any `AgentRequest r` with `r.lifecycle_state = interrupted`,
-   > every `AgentMessage m` with `m.request_id = r.request_id`,
-   > `m.role = "assistant"`, and `m.content ≠ ""` has `m.interrupted_at`
-   > set.
+   > the `AgentResponse` row with `response.request_id = r.request_id`
+   > satisfies: if `response.content ≠ ""` or `response.reasoning ≠ ""`,
+   > then `response.interrupted_at` is set.
 
-   The `AgentMessage.request_id` field (new this spec) is what makes
-   the invariant a straight foreign-key query rather than a positional
-   lookup on session + sequence + timestamps.
 5. Write the terminal `lifecycle_state = interrupted` on the request doc.
 6. Any non-cancellable tool still running continues to completion.
    When it finishes, its `AgentToolResult` is written with
@@ -378,10 +406,12 @@ from `core/src/tasks/mod.rs`.
 
 **Pending-interrupt races:** if an interrupt doc write lands in the narrow
 window between scheduler claim-check and daemon startup, the scheduler
-may already have promoted `pending → claimed`. The daemon's watcher picks
-up the interrupt on its first subscription read and drives
-`claimed → interrupted` via the `interrupt_claimed` transition. No race;
-both transitions are legal.
+may already have promoted `pending → claimed`. The scheduler's next
+tick re-reads the freshly-claimed request, observes
+`interrupt_requested_at`, and fires `interrupt_tx.send(Some(...))`; the
+daemon's select arm then drives `claimed → interrupted` via the
+`interrupt_claimed` transition. No race; both transitions are legal and
+the transport is the same per-request watch channel in either ordering.
 
 **Interrupt arrives on an already-terminal request:** the submitter's
 `interrupt_request` helper is idempotent, but a submitter *could* write
@@ -472,18 +502,21 @@ delivery mechanism. This spec closes it:
 2. The `inference_token`, a child of `request_token`, signals the
    `AdmittedCompletionModel` wrapper's cancellation-select arm.
 3. The arm calls `permit.mark_interrupted()` on the admission layer's
-   `PermitGuard` before dropping it.
-4. `PermitGuard::Drop` writes the terminal `InferenceCall` document with
+   `AdmissionPermit` before dropping it.
+4. `AdmissionPermit::Drop` writes the terminal `InferenceCall` document with
    `call_state = cancelled, failure_reason = Cancelled` — these are the
    values the admission design reserved.
 
-**New method on `PermitGuard`:**
+**New method on `AdmissionPermit`** (slots alongside the existing
+`finish_success` / `finish_failure` / `mark_stream_success` /
+`mark_stream_error` family in `crates/defra-agent/src/admission/permit.rs`):
 
 ```rust
-impl PermitGuard {
+impl AdmissionPermit {
+    /// Mark this permit for cancellation. On Drop the controller persists
+    /// the InferenceCall with call_state = cancelled, failure_reason = Cancelled.
+    /// Idempotent with the existing "already-finalized" guard in Drop.
     pub fn mark_interrupted(&mut self);
-    // Sets terminal to (call_state: cancelled, failure_reason: Cancelled).
-    // Idempotent with the admission design's existing "already-written" guard.
 }
 ```
 
@@ -636,8 +669,9 @@ follow-up.
   forward).
 - `claimed → interrupted` (interrupt after claim, before first backend
   call).
-- `processing → interrupted` (interrupt mid-stream; assert partial
-  message has `interrupted_at`).
+- `processing → interrupted` (interrupt mid-stream; assert the
+  matching `AgentResponse` row has `interrupted_at` set and the
+  already-streamed `content` is preserved, not cleared).
 - `inputRequired → interrupted`.
 - `processing → interrupted` with cancellable tool in flight: tool
   returns promptly with cancellation error; `AgentToolResult` normal.
@@ -698,13 +732,12 @@ arrives. The Lean `lake build` stays green after step 1.
    transitions; prove S7, S8; extend L1. Extend `Composed.lean` with the
    cross-layer cancellation theorem (discharges admission axioms).
 2. **Schema + protocol.** Add new fields to `AgentRequest`
-   (`interrupt_requested_at`, `valid_until`), `AgentMessage`
-   (`request_id`, `interrupted_at`), and `AgentToolResult`
+   (`interrupt_requested_at`, `valid_until`), `AgentResponse`
+   (`interrupted_at`), and `AgentToolResult`
    (`discarded_because_interrupted`); update `schemas/README.md`;
-   extend `defra-agent-protocol/src/row.rs` and the turn-state terminal
-   classifier. Update the streaming writer so that every new
-   `AgentMessage` row ships with its producing `request_id` —
-   backfilling existing rows is out of scope.
+   extend `defra-agent-protocol/src/row.rs` (`AgentRequestRow`,
+   `AgentResponseRow`, `AgentToolResultRow`) and the turn-state terminal
+   classifier. No change to `AgentMessage`.
 3. **Conformance scaffolding.** Update
    `tests/state_machine_conformance.rs` with the new transitions and
    S7/S8 cases; each new case gated behind `#[ignore]` with a comment
@@ -713,17 +746,24 @@ arrives. The Lean `lake build` stays green after step 1.
    invocation.
 4. **Scheduler claim check.** Add the pre-claim interrupt + stale
    branch. Exercise via conformance fixtures.
-5. **CancellationToken plumbing.** Add `request_token` ownership to the
-   daemon; thread child tokens through the inference path and the tool
-   dispatch path. No behavior change in this step — just wiring.
-6. **Daemon watcher.** Extend the existing subscription handler to
-   observe `interrupt_requested_at`; wire to `request_token.cancel()`.
-   Partial-message `interrupted_at` flip (before terminal write, per
-   S6). Terminal write. `AgentToolResult.discarded_because_interrupted`
-   path for non-cancellable tools that complete after the terminal.
+5. **CancellationToken plumbing + interrupt transport.** Add
+   `request_token` ownership to `handle_request`; thread child tokens
+   through the inference path and the tool dispatch path. Add the
+   per-request `watch::channel::<Option<InterruptIntent>>` created by
+   the scheduler at claim time and handed to `handle_request` alongside
+   the existing shutdown receiver. No behavior change yet — wiring only.
+6. **Scheduler interrupt observation + daemon select arm.** Scheduler's
+   tick loop re-reads `interrupt_requested_at` on claimed, non-terminal
+   rows; on a null→non-null flip it sends `Some(InterruptIntent)` on the
+   per-request channel. Daemon's `tokio::select!` in `handle_request`
+   gains an arm on that receiver that runs the six-step cancellation
+   flow: cancel token, grace wait, force abort, `AgentResponse.interrupted_at`
+   flip (before terminal, per S6), terminal write,
+   `AgentToolResult.discarded_because_interrupted` for non-cancellable
+   tools that complete after the terminal.
 7. **Tool trait.** Add `CancellableTool`; opt in HTTP / filesystem-read
    tools; wire the dispatch branch.
-8. **Admission-layer bridge.** Add `PermitGuard::mark_interrupted`;
+8. **Admission-layer bridge.** Add `AdmissionPermit::mark_interrupted`;
    `AdmittedCompletionModel` wires the cancellation-select arm to call
    it. The Composed.lean theorem now matches the runtime.
 9. **Submission API + resend.** `interrupt_request` mutation,
@@ -739,13 +779,14 @@ arrives. The Lean `lake build` stays green after step 1.
 - **Authority for interrupt.** v1 inherits DefraDB ACL (any principal
   with write on the request doc can interrupt). A follow-up spec may
   narrow to submitter-only or add a DID-policy layer.
-- **`AgentMessage.interrupted_at` vs. `truncated: Boolean` +
+- **`AgentResponse.interrupted_at` vs. `truncated: Boolean` +
   `truncation_metadata: String` (the existing `AgentToolResult`
-  pattern).** Chose single-field shape for `AgentMessage` (non-null
-  `interrupted_at` ⇒ truncated) because the timestamp is the only
-  metadata. If future use cases need a truncated message that is not
-  from an interrupt (e.g., length cap mid-stream with structured
-  reason), revisit and align on the two-field `AgentToolResult` shape.
+  pattern).** Chose single-field shape for `AgentResponse` because the
+  timestamp alone carries the metadata, and `AgentResponse` already
+  has `progress_seq` / `token_count` that already capture the
+  "how-much-was-streamed" picture. If a future truncation reason on
+  `AgentResponse` ever needs to be non-interrupt, revisit and align on
+  the two-field `AgentToolResult` shape.
 - **Non-cancellable tool completion semantics.** A non-cancellable tool
   running for minutes after an interrupt creates a transcript where the
   `interrupted` terminal appeared before the `AgentToolResult` with
@@ -773,7 +814,7 @@ arrives. The Lean `lake build` stays green after step 1.
 - **Tangential to context management** (#17). A long-running
   conversation may accumulate interrupted turns whose partial assistant
   messages become part of the transcript; compaction needs to recognize
-  `AgentMessage.interrupted_at` and handle truncated messages appropriately.
+  `AgentResponse.interrupted_at` and handle truncated streaming rows appropriately.
   Out of scope here — documented as a consumer of the new field.
 - **Lean proofs as source of truth** (CLAUDE.md). Every behavior change
   is driven from Lean first; the implementation satisfies the updated
