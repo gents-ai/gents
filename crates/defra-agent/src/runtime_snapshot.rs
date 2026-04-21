@@ -131,7 +131,6 @@ impl ResolvedRuntimeSnapshot {
     /// Task 18 builds the schedule maps during `resolve_document_snapshot_*`
     /// and layers them onto the snapshot via this builder so the existing
     /// `from_parts_*` callers (tests, startup fallback) stay untouched.
-    #[allow(dead_code)]
     pub(crate) fn with_schedules(
         mut self,
         active_schedules: HashMap<String, ResolvedSchedule>,

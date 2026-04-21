@@ -239,6 +239,35 @@ async fn create_task(node: &defra_node::EmbeddedNode, task_id: &str, name: &str)
     );
 }
 
+async fn create_task_bound(
+    node: &defra_node::EmbeddedNode,
+    task_id: &str,
+    behavior_id: &str,
+    prompt_template: &str,
+    enabled: bool,
+) {
+    let escaped_task_id = escape_graphql_string(task_id);
+    let escaped_behavior_id = escape_graphql_string(behavior_id);
+    let escaped_prompt_template = escape_graphql_string(prompt_template);
+    let mutation = format!(
+        r#"mutation {{
+            create_Task(input: {{
+                task_id: "{escaped_task_id}",
+                name: "{escaped_task_id}",
+                behavior_id: "{escaped_behavior_id}",
+                prompt_template: "{escaped_prompt_template}",
+                enabled: {enabled}
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create Task failed: {:?}",
+        response.errors
+    );
+}
+
 async fn create_schedule(node: &defra_node::EmbeddedNode, schedule_id: &str, task_id: &str) {
     let escaped_schedule_id = escape_graphql_string(schedule_id);
     let escaped_task_id = escape_graphql_string(task_id);
@@ -249,6 +278,34 @@ async fn create_schedule(node: &defra_node::EmbeddedNode, schedule_id: &str, tas
                 task_id: "{escaped_task_id}",
                 interval_secs: 60,
                 enabled: true
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create Schedule failed: {:?}",
+        response.errors
+    );
+}
+
+async fn create_schedule_with_concurrency(
+    node: &defra_node::EmbeddedNode,
+    schedule_id: &str,
+    task_id: &str,
+    concurrency: &str,
+) {
+    let escaped_schedule_id = escape_graphql_string(schedule_id);
+    let escaped_task_id = escape_graphql_string(task_id);
+    let escaped_concurrency = escape_graphql_string(concurrency);
+    let mutation = format!(
+        r#"mutation {{
+            create_Schedule(input: {{
+                schedule_id: "{escaped_schedule_id}",
+                task_id: "{escaped_task_id}",
+                interval_secs: 60,
+                enabled: true,
+                concurrency: "{escaped_concurrency}"
             }}) {{ _docID }}
         }}"#
     );
@@ -295,5 +352,143 @@ async fn load_document_runtime_view_populates_tasks_and_schedules() {
         schedule_record.value.task_id.as_deref(),
         Some("task-alpha"),
         "schedule references task-alpha"
+    );
+}
+
+#[tokio::test]
+async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-resolve-schedule-active"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-resolve-schedule-active",
+        "http://127.0.0.1:8124/v1",
+    )
+    .await;
+
+    let default_behavior_id = format!("{}:default", identity.did());
+    create_task_bound(
+        node.as_ref(),
+        "task-resolve-active",
+        &default_behavior_id,
+        "do the thing",
+        true,
+    )
+    .await;
+    create_schedule_with_concurrency(
+        node.as_ref(),
+        "schedule-resolve-active",
+        "task-resolve-active",
+        "serial",
+    )
+    .await;
+
+    let resolve_context = DocumentResolveContext {
+        identity: identity.clone(),
+        tool_ceiling: ToolCeiling::readonly(),
+    };
+    let view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("document view should load");
+
+    let snapshot =
+        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
+            .await
+            .expect("resolve should succeed");
+
+    assert_eq!(
+        snapshot.active_schedules.len(),
+        1,
+        "expected exactly one active schedule"
+    );
+    assert!(
+        snapshot.unavailable_schedules.is_empty(),
+        "expected no unavailable schedules, got {:?}",
+        snapshot.unavailable_schedules
+    );
+    let resolved = snapshot
+        .active_schedules
+        .get("schedule-resolve-active")
+        .expect("schedule-resolve-active present in active_schedules");
+    assert_eq!(resolved.task_id, "task-resolve-active");
+    assert_eq!(resolved.task.behavior_id, default_behavior_id);
+    assert_eq!(resolved.task.prompt_template, "do the thing");
+    assert_eq!(resolved.interval_secs, 60);
+    assert!(resolved.enabled);
+}
+
+#[tokio::test]
+async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-resolve-schedule-unavailable"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-resolve-schedule-unavailable",
+        "http://127.0.0.1:8125/v1",
+    )
+    .await;
+
+    let default_behavior_id = format!("{}:default", identity.did());
+    // Disabled task — schedule should be unavailable even though the task
+    // document exists.
+    create_task_bound(
+        node.as_ref(),
+        "task-resolve-disabled",
+        &default_behavior_id,
+        "disabled task",
+        false,
+    )
+    .await;
+    create_schedule_with_concurrency(
+        node.as_ref(),
+        "schedule-resolve-task-disabled",
+        "task-resolve-disabled",
+        "serial",
+    )
+    .await;
+    // Schedule whose task_id does not match any Task document.
+    create_schedule_with_concurrency(
+        node.as_ref(),
+        "schedule-resolve-task-missing",
+        "task-that-never-existed",
+        "serial",
+    )
+    .await;
+
+    let resolve_context = DocumentResolveContext {
+        identity: identity.clone(),
+        tool_ceiling: ToolCeiling::readonly(),
+    };
+    let view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("document view should load");
+
+    let snapshot =
+        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
+            .await
+            .expect("resolve should succeed");
+
+    assert!(
+        snapshot.active_schedules.is_empty(),
+        "expected no active schedules, got {:?}",
+        snapshot.active_schedules.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        snapshot
+            .unavailable_schedules
+            .contains("schedule-resolve-task-missing"),
+        "missing-task schedule should be in unavailable_schedules: {:?}",
+        snapshot.unavailable_schedules
+    );
+    assert!(
+        snapshot
+            .unavailable_schedules
+            .contains("schedule-resolve-task-disabled"),
+        "disabled-task schedule should be in unavailable_schedules: {:?}",
+        snapshot.unavailable_schedules
     );
 }
