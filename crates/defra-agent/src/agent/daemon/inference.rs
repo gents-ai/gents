@@ -86,10 +86,12 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 let persistence_hook = hook.clone();
 
                 let agent = agent_with_request_sampling(&self.agent, &self.behavior, request);
+                // Child token so any admission-layer cancel stays scoped to inference;
+                // cancels from request_token still propagate down via the parent.
                 let mut stream = admission::scope_call_with_token(
                     CallKind::Inference,
                     attempt_index as i64,
-                    request_token.clone(),
+                    request_token.child_token(),
                     async {
                         tokio::select! {
                             biased;

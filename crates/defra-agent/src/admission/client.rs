@@ -12,6 +12,14 @@ use super::stream_guard::hold_stream_guard;
 use super::AdmissionRegistry;
 use crate::watcher::AgentRequest;
 
+/// Error message used when a completion/stream call is cancelled by request
+/// interrupt signal via the inference_token in AdmissionCallContext. Callers
+/// that need to distinguish cancellation from other provider errors today
+/// must string-match on this value; a future rig update with a
+/// `CompletionError::Cancelled` variant would let them pattern-match
+/// structurally.
+const CANCELLED_BY_INTERRUPT_MSG: &str = "inference cancelled by request interrupt";
+
 #[derive(Clone)]
 pub(crate) struct AdmittedCompletionClient<C> {
     inner: C,
@@ -69,9 +77,7 @@ where
                     biased;
                     _ = token.cancelled() => {
                         permit.mark_interrupted();
-                        Err(CompletionError::ProviderError(
-                            "inference cancelled by request interrupt".into(),
-                        ))
+                        Err(CompletionError::ProviderError(CANCELLED_BY_INTERRUPT_MSG.into()))
                     }
                     result = self.inner.completion(request) => match result {
                         Ok(response) => {
@@ -119,9 +125,7 @@ where
                     biased;
                     _ = token.cancelled() => {
                         permit.mark_interrupted();
-                        Err(CompletionError::ProviderError(
-                            "inference cancelled by request interrupt".into(),
-                        ))
+                        Err(CompletionError::ProviderError(CANCELLED_BY_INTERRUPT_MSG.into()))
                     }
                     result = self.inner.stream(request) => match result {
                         Ok(stream) => Ok(hold_stream_guard(stream, permit)),
