@@ -21,7 +21,7 @@ mod tests;
 /// Schedule and Event triggers both drive the engine from stored trigger
 /// documents. Manual is reserved for direct fire requests (e.g. CLI / API
 /// invocations) that do not have a persisted trigger document.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum TriggerKind {
     Schedule,
     Event,
@@ -195,10 +195,12 @@ impl TriggerEngine {
 
     /// Dispatch a single `FireIntent`.
     ///
-    /// Current scope (Task 30): enabled gate against the active snapshot, then
-    /// render the task's prompt template and hand the rendered prompt to the
-    /// materializer. Concurrency handling and render-failure bookkeeping land
-    /// in Tasks 31-33.
+    /// Current scope (Tasks 30-31): enabled gate against the active snapshot,
+    /// then render the task's prompt template, then apply the intent's
+    /// concurrency mode (`Parallel` fires unconditionally; `Serial` skips when
+    /// a non-terminal request already exists for this trigger tuple), then
+    /// hand the rendered prompt to the materializer. `LatestOnly` lands in
+    /// Task 32 and render-failure bookkeeping in Task 33.
     #[allow(dead_code)]
     async fn dispatch(&self, intent: FireIntent) -> FireResult {
         let snapshot = self.snapshot_rx.borrow().clone();
@@ -262,8 +264,50 @@ impl TriggerEngine {
             }
         };
 
-        // 3. Materialize. Concurrency gating (Tasks 31-32) will layer on top of
-        // this minimal path; for Task 30 we materialize unconditionally.
+        // 3. Concurrency gate. `Parallel` skips the check entirely. `Serial`
+        // queries the materializer for a non-terminal request bound to the
+        // same `(trigger_id, trigger_kind)` tuple — matching on the tuple is
+        // load-bearing because trigger_id alone is not unique across kinds.
+        // `LatestOnly` lands in Task 32.
+        use crate::runtime_snapshot::ConcurrencyMode;
+        match intent.concurrency {
+            ConcurrencyMode::Parallel => {
+                // No coordination; proceed to materialize.
+            }
+            ConcurrencyMode::Serial => {
+                // Manual mode has trigger_id = None and isn't really
+                // Serial-vs-Parallel in practice; bypass the in-flight check
+                // if there's no trigger id to key on.
+                if let Some(trigger_id) = intent.trigger_id.as_deref() {
+                    match self
+                        .materializer
+                        .has_nonterminal_request_for_trigger(trigger_id, intent.trigger_kind)
+                        .await
+                    {
+                        Ok(true) => {
+                            let result = FireResult::Skipped {
+                                reason: "serial: prior fire still in-flight".to_string(),
+                            };
+                            (intent.on_result)(result.clone());
+                            return result;
+                        }
+                        Ok(false) => { /* no in-flight; proceed */ }
+                        Err(e) => {
+                            let result = FireResult::Errored {
+                                error: format!("in-flight query: {e}"),
+                            };
+                            (intent.on_result)(result.clone());
+                            return result;
+                        }
+                    }
+                }
+            }
+            ConcurrencyMode::LatestOnly => {
+                // Task 32 implements latest_only.
+            }
+        }
+
+        // 4. Materialize.
         let request_id = match self
             .materializer
             .materialize(

@@ -19,9 +19,15 @@ type MaterializeCall = (Option<String>, TriggerKind, String);
 /// `materialize` call it sees and hands back sequentially-numbered request ids
 /// so assertions can check both the call count and the rendered prompt that
 /// reached the materializer.
+///
+/// `nonterminal_for` pre-populates the set of `(trigger_id, trigger_kind)`
+/// tuples that `has_nonterminal_request_for_trigger` should report as having
+/// an in-flight request. The concurrency gate tests insert tuples here to
+/// simulate a prior fire that has not yet reached a terminal state.
 struct SpyMaterializer {
     materialize_calls: Arc<Mutex<Vec<MaterializeCall>>>,
     next_request_id: AtomicUsize,
+    nonterminal_for: Arc<Mutex<HashSet<(String, TriggerKind)>>>,
 }
 
 impl SpyMaterializer {
@@ -29,11 +35,22 @@ impl SpyMaterializer {
         Arc::new(Self {
             materialize_calls: Arc::new(Mutex::new(Vec::new())),
             next_request_id: AtomicUsize::new(0),
+            nonterminal_for: Arc::new(Mutex::new(HashSet::new())),
         })
     }
 
     fn calls(&self) -> Vec<MaterializeCall> {
         self.materialize_calls.lock().unwrap().clone()
+    }
+
+    /// Pre-populate the in-flight set with `(trigger_id, trigger_kind)` so the
+    /// next `has_nonterminal_request_for_trigger` call returns `true` for the
+    /// matching tuple.
+    fn mark_nonterminal(&self, trigger_id: &str, trigger_kind: TriggerKind) {
+        self.nonterminal_for
+            .lock()
+            .unwrap()
+            .insert((trigger_id.to_owned(), trigger_kind));
     }
 }
 
@@ -60,10 +77,12 @@ impl MaterializerHandle for SpyMaterializer {
 
     fn has_nonterminal_request_for_trigger(
         &self,
-        _trigger_id: &str,
-        _trigger_kind: TriggerKind,
+        trigger_id: &str,
+        trigger_kind: TriggerKind,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
-        Box::pin(async { Ok(false) })
+        let set = self.nonterminal_for.clone();
+        let key = (trigger_id.to_owned(), trigger_kind);
+        Box::pin(async move { Ok(set.lock().unwrap().contains(&key)) })
     }
 
     fn supersede_nonterminal_requests_for_trigger(
@@ -179,4 +198,136 @@ async fn dispatch_renders_and_materializes_when_schedule_active() {
     assert_eq!(trigger_id.as_deref(), Some("sched-1"));
     assert_eq!(*kind, TriggerKind::Schedule);
     assert_eq!(rendered, "fired at 2026-04-21T00:00:00Z");
+}
+
+#[tokio::test]
+async fn dispatch_parallel_materializes_every_intent() {
+    // Two fires for the same trigger with `Parallel` concurrency. Both should
+    // materialize unconditionally — the in-flight check is bypassed.
+    let task = resolved_task("tick");
+    let schedule = resolved_schedule("sched-1", task.clone());
+    let snapshot = snapshot_with_schedules(HashMap::from([(
+        "sched-1".to_string(),
+        schedule,
+    )]));
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = SpyMaterializer::new();
+    let engine = TriggerEngine::new(rx, materializer.clone());
+
+    let intent1 = FireIntent {
+        trigger_id: Some("sched-1".to_string()),
+        trigger_kind: TriggerKind::Schedule,
+        task: task.clone(),
+        concurrency: ConcurrencyMode::Parallel,
+        event_vars: serde_json::json!({}),
+        doc_vars: None,
+        args_vars: None,
+        on_result: Box::new(|_| {}),
+    };
+    let intent2 = FireIntent {
+        trigger_id: Some("sched-1".to_string()),
+        trigger_kind: TriggerKind::Schedule,
+        task,
+        concurrency: ConcurrencyMode::Parallel,
+        event_vars: serde_json::json!({}),
+        doc_vars: None,
+        args_vars: None,
+        on_result: Box::new(|_| {}),
+    };
+
+    let r1 = engine.dispatch(intent1).await;
+    let r2 = engine.dispatch(intent2).await;
+
+    assert!(
+        matches!(r1, FireResult::Fired { .. }),
+        "first parallel dispatch should Fire, got {r1:?}"
+    );
+    assert!(
+        matches!(r2, FireResult::Fired { .. }),
+        "second parallel dispatch should Fire, got {r2:?}"
+    );
+    assert_eq!(
+        materializer.calls().len(),
+        2,
+        "both parallel fires should materialize"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_serial_materializes_when_no_inflight() {
+    // Serial mode with no in-flight request for the trigger — should fire.
+    let task = resolved_task("tick");
+    let schedule = resolved_schedule("sched-1", task.clone());
+    let snapshot = snapshot_with_schedules(HashMap::from([(
+        "sched-1".to_string(),
+        schedule,
+    )]));
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = SpyMaterializer::new();
+    let engine = TriggerEngine::new(rx, materializer.clone());
+
+    let intent = FireIntent {
+        trigger_id: Some("sched-1".to_string()),
+        trigger_kind: TriggerKind::Schedule,
+        task,
+        concurrency: ConcurrencyMode::Serial,
+        event_vars: serde_json::json!({}),
+        doc_vars: None,
+        args_vars: None,
+        on_result: Box::new(|_| {}),
+    };
+
+    let result = engine.dispatch(intent).await;
+
+    assert!(
+        matches!(result, FireResult::Fired { .. }),
+        "serial dispatch with no in-flight should Fire, got {result:?}"
+    );
+    assert_eq!(
+        materializer.calls().len(),
+        1,
+        "serial dispatch with no in-flight should materialize once"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_serial_skips_when_inflight_exists() {
+    // Serial mode with an in-flight request pre-populated for
+    // (sched-1, Schedule). Dispatch should Skip and not materialize.
+    let task = resolved_task("tick");
+    let schedule = resolved_schedule("sched-1", task.clone());
+    let snapshot = snapshot_with_schedules(HashMap::from([(
+        "sched-1".to_string(),
+        schedule,
+    )]));
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = SpyMaterializer::new();
+    materializer.mark_nonterminal("sched-1", TriggerKind::Schedule);
+    let engine = TriggerEngine::new(rx, materializer.clone());
+
+    let intent = FireIntent {
+        trigger_id: Some("sched-1".to_string()),
+        trigger_kind: TriggerKind::Schedule,
+        task,
+        concurrency: ConcurrencyMode::Serial,
+        event_vars: serde_json::json!({}),
+        doc_vars: None,
+        args_vars: None,
+        on_result: Box::new(|_| {}),
+    };
+
+    let result = engine.dispatch(intent).await;
+
+    match result {
+        FireResult::Skipped { reason } => {
+            assert_eq!(reason, "serial: prior fire still in-flight");
+        }
+        other => panic!(
+            "expected Skipped {{ reason: \"serial: prior fire still in-flight\" }}, got {other:?}"
+        ),
+    }
+    assert!(
+        materializer.calls().is_empty(),
+        "serial dispatch with in-flight should not materialize"
+    );
 }
