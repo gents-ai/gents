@@ -68,3 +68,6 @@ opt-level = 1
 opt-level = 1
 debug = 0
 split-debuginfo = "off"
+
+[patch.crates-io]
+rig-core = { git = "https://github.com/0xPlaygrounds/rig.git", rev = "1396480f66cf28a7c4542545f02ae97a8331114f" }
