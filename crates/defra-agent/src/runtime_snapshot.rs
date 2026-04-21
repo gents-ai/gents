@@ -203,6 +203,14 @@ impl ActiveRuntimeSnapshot {
         self.behaviors.get(behavior_id)
     }
 
+    pub(crate) fn active_schedules(&self) -> &HashMap<String, ResolvedSchedule> {
+        &self.active_schedules
+    }
+
+    pub(crate) fn active_event_triggers(&self) -> &HashMap<String, ResolvedEventTrigger> {
+        &self.active_event_triggers
+    }
+
     pub(crate) fn tool_surface(&self, behavior_id: &str) -> Option<&Arc<ToolSurface>> {
         self.tool_surfaces.get(behavior_id)
     }
