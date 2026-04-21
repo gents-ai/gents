@@ -6,7 +6,7 @@ import type {
   InitSummary,
   P2PHealth,
 } from "../lib/types";
-import { displayAgentIdentity } from "../lib/types";
+import { displayAgentIdentity, displayConversationTitle } from "../lib/types";
 
 type SidebarProps = {
   running: boolean;
@@ -123,7 +123,13 @@ export function Sidebar({
                 key={conversation.sessionId}
                 onClick={() => onSelectSession(conversation.sessionId)}
               >
-                <span className="list-item-title">{conversation.title}</span>
+                <span
+                  className={
+                    conversation.title ? "list-item-title" : "list-item-title untitled-title"
+                  }
+                >
+                  {displayConversationTitle(conversation.title)}
+                </span>
                 <span className="list-item-meta">
                   {conversation.turnState ?? conversation.status ?? "idle"}
                 </span>

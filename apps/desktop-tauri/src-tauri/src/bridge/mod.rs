@@ -16,8 +16,8 @@ use self::snapshot::{
 };
 use self::state::{current_core, spawn_client_update_task, DesktopAppState};
 use self::types::{
-    ChatSendRequest, ChatSendResult, ClientUpdateEvent, DesktopBootstrapSummary,
-    DesktopClientSnapshot, DesktopInitRequest, DesktopSessionSnapshot,
+    ChatSendRequest, ChatSendResult, ClientUpdateEvent, ConversationRenameRequest,
+    DesktopBootstrapSummary, DesktopClientSnapshot, DesktopInitRequest, DesktopSessionSnapshot,
 };
 
 #[tauri::command]
@@ -26,9 +26,7 @@ fn desktop_bootstrap_summary() -> Result<DesktopBootstrapSummary, String> {
 }
 
 #[tauri::command]
-fn desktop_init_local_standard(
-    request: DesktopInitRequest,
-) -> Result<DesktopInitSummary, String> {
+fn desktop_init_local_standard(request: DesktopInitRequest) -> Result<DesktopInitSummary, String> {
     tauri::async_runtime::block_on(async move {
         let agent_home = match request.agent_home {
             Some(path) => path,
@@ -70,8 +68,7 @@ fn desktop_client_start(
     }
 
     let core = Arc::new(
-        tauri::async_runtime::block_on(ClientCore::start())
-            .map_err(|error| error.to_string())?,
+        tauri::async_runtime::block_on(ClientCore::start()).map_err(|error| error.to_string())?,
     );
     let updates_task = spawn_client_update_task(app.clone(), Arc::clone(&core));
 
@@ -137,7 +134,10 @@ fn desktop_session_snapshot(
     };
 
     let snapshot = tauri::async_runtime::block_on(async move { core.store().snapshot() });
-    Ok(build_session_snapshot_from_store(snapshot.as_ref(), &session_id))
+    Ok(build_session_snapshot_from_store(
+        snapshot.as_ref(),
+        &session_id,
+    ))
 }
 
 #[tauri::command]
@@ -174,11 +174,12 @@ fn desktop_chat_send(
             .filter(|value| !value.is_empty())
         {
             Some(session_id) => session_id.to_string(),
-            None => core
-                .create_conversation(&agent_did, behavior_id.as_deref())
-                .await
-                .map_err(|error| error.to_string())?
-                .session_id,
+            None => {
+                core.create_conversation(&agent_did, behavior_id.as_deref())
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .session_id
+            }
         };
 
         let submitted = core
@@ -195,6 +196,32 @@ fn desktop_chat_send(
     })
 }
 
+#[tauri::command]
+fn desktop_conversation_rename(
+    request: ConversationRenameRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<(), String> {
+    let Some(core) = current_core(&state) else {
+        return Err("desktop client is not running".to_string());
+    };
+
+    let session_id = request.session_id.trim().to_string();
+    if session_id.is_empty() {
+        return Err("session_id is required".to_string());
+    }
+
+    let title = request.title.trim().to_string();
+    if title.is_empty() {
+        return Err("title is required".to_string());
+    }
+
+    tauri::async_runtime::block_on(async move {
+        core.rename_conversation(&session_id, &title)
+            .await
+            .map_err(|error| error.to_string())
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -207,7 +234,8 @@ pub fn run() {
             desktop_client_shutdown,
             desktop_client_snapshot,
             desktop_session_snapshot,
-            desktop_chat_send
+            desktop_chat_send,
+            desktop_conversation_rename
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

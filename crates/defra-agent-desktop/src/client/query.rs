@@ -63,7 +63,7 @@ pub async fn load_agent_conversations(node: &EmbeddedNode) -> Result<Vec<AgentCo
     load_rows(
         node,
         "AgentConversation",
-        "query { AgentConversation { session_id agent_name agent_did behavior_id title preview_text status created_at updated_at latest_request_id } }",
+        "query { AgentConversation { session_id agent_name agent_did behavior_id title title_source preview_text status created_at updated_at latest_request_id } }",
     )
     .await
 }

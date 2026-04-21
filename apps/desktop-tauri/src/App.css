@@ -186,6 +186,8 @@ h3 {
   overflow: auto;
   display: grid;
   align-content: start;
+  scroll-behavior: smooth;
+  scroll-padding-bottom: 24px;
 }
 
 .composer-panel {
@@ -221,11 +223,62 @@ h3 {
   flex-wrap: wrap;
 }
 
+.chat-title-block {
+  min-width: 0;
+}
+
+.chat-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.chat-title-row h2 {
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.icon-button {
+  border: 1px solid rgba(214, 167, 103, 0.14);
+  background: rgba(18, 14, 11, 0.72);
+  color: #ccbca4;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.title-rename-form {
+  max-width: min(560px, 100%);
+}
+
+.title-rename-input {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid rgba(214, 167, 103, 0.22);
+  background: #16110d;
+  color: #f0e5d2;
+  padding: 10px 12px;
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
 .message-list,
 .list,
 .stack {
   display: grid;
   gap: 10px;
+}
+
+.message-list {
+  align-content: start;
+  padding-bottom: 6px;
 }
 
 .turn-block {
@@ -259,6 +312,10 @@ h3 {
 
 .list-item-title {
   font-weight: 600;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.25;
 }
 
 .list-item-meta {
@@ -277,6 +334,11 @@ h3 {
 .list-item-subtle {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.untitled-title {
+  color: #b19d81;
+  font-style: italic;
 }
 
 .list-item-subtle {
@@ -300,7 +362,17 @@ h3 {
 }
 
 .response-card {
-  border-color: rgba(89, 191, 112, 0.18);
+  border-color: rgba(89, 191, 112, 0.16);
+  background: rgba(24, 30, 22, 0.72);
+  box-shadow: inset 0 1px 0 rgba(157, 216, 171, 0.04);
+}
+
+.response-card .message-role {
+  color: #9dd8ab;
+}
+
+.response-card .message-content {
+  color: #dfecd8;
 }
 
 .message-role {
@@ -418,7 +490,7 @@ h3 {
 
 .tool-group {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .tool-group-meta {
@@ -426,6 +498,7 @@ h3 {
   justify-content: flex-start;
   align-items: center;
   gap: 8px;
+  margin-top: 2px;
 }
 
 .tool-group-label {
@@ -503,7 +576,7 @@ h3 {
 .tool-item-body {
   display: grid;
   gap: 10px;
-  padding: 4px 0 12px;
+  padding: 2px 0 10px 18px;
 }
 
 .tool-detail {
@@ -522,6 +595,11 @@ h3 {
   padding: 8px 10px;
   border-radius: 8px;
   background: #110d0a;
+}
+
+.transcript-end-anchor {
+  width: 100%;
+  height: 1px;
 }
 
 .tool-detail-key {

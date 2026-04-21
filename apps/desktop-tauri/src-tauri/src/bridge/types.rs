@@ -22,6 +22,13 @@ pub(crate) struct ChatSendRequest {
     pub content: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConversationRenameRequest {
+    pub session_id: String,
+    pub title: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SavedPeerView {
@@ -80,7 +87,7 @@ pub(crate) struct BehaviorView {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ConversationSummary {
     pub session_id: String,
-    pub title: String,
+    pub title: Option<String>,
     pub preview_text: Option<String>,
     pub status: Option<String>,
     pub behavior_id: Option<String>,

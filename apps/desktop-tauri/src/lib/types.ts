@@ -61,7 +61,7 @@ export type BehaviorView = {
 
 export type ConversationSummary = {
   sessionId: string;
-  title: string;
+  title?: string | null;
   previewText?: string | null;
   status?: string | null;
   behaviorId?: string | null;
@@ -193,6 +193,11 @@ export function displayBehaviorLabel(value?: string | null) {
     return null;
   }
   return value;
+}
+
+export function displayConversationTitle(value?: string | null) {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : "untitled";
 }
 
 export function formatBytes(value: number) {

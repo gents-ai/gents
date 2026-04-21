@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -10,7 +11,12 @@ import type {
   P2PHealth,
   ToolCallView,
 } from "../lib/types";
-import { displayAgentIdentity, displayBehaviorLabel, formatBytes } from "../lib/types";
+import {
+  displayAgentIdentity,
+  displayBehaviorLabel,
+  displayConversationTitle,
+  formatBytes,
+} from "../lib/types";
 
 function MarkdownContent({ value }: { value: string }) {
   return (
@@ -117,6 +123,7 @@ type ChatWorkspaceProps = {
   draft: string;
   sending: boolean;
   onStart: () => void;
+  onRenameConversationTitle: (sessionId: string, title: string) => void | Promise<void>;
   onSelectBehavior: (behaviorId: string) => void;
   onDraftChange: (value: string) => void;
   onSend: (event: FormEvent) => void;
@@ -285,7 +292,7 @@ function MessageList({
 
       {activeResponseOverlay?.content ? (
         <article className="message-card response-card">
-          <div className="message-role">assistant</div>
+          <div className="message-role">assistant live</div>
           <div className="message-content">
             <MarkdownContent
               value={normalizeTranscriptText(activeResponseOverlay.content)}
@@ -315,6 +322,7 @@ export function ChatWorkspace({
   draft,
   sending,
   onStart,
+  onRenameConversationTitle,
   onSelectBehavior,
   onDraftChange,
   onSend,
@@ -353,12 +361,139 @@ export function ChatWorkspace({
   const displayBehavior = displayBehaviorLabel(
     selectedBehaviorId ?? selectedDeployment.defaultBehaviorId ?? null,
   );
+  const visibleConversationTitle = selectedSessionId
+    ? displayConversationTitle(selectedConversationTitle)
+    : "Start a conversation";
+  const transcriptPanelRef = useRef<HTMLElement | null>(null);
+  const transcriptEndRef = useRef<HTMLDivElement | null>(null);
+  const [autoFollowTranscript, setAutoFollowTranscript] = useState(true);
+  const [isRenamingTitle, setIsRenamingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(selectedConversationTitle ?? "");
+  const [renamingTitle, setRenamingTitle] = useState(false);
+
+  const transcriptSignature = useMemo(
+    () =>
+      JSON.stringify({
+        sessionId: selectedSessionId,
+        messageCount: session?.messages.length ?? 0,
+        toolCount: sessionTools.length,
+        overlayContent: session?.activeResponseOverlay?.content ?? "",
+        overlayReasoning: session?.activeResponseOverlay?.reasoning ?? "",
+        turnState: session?.turnState ?? "",
+      }),
+    [
+      selectedSessionId,
+      session?.messages.length,
+      session?.activeResponseOverlay?.content,
+      session?.activeResponseOverlay?.reasoning,
+      session?.turnState,
+      sessionTools.length,
+    ],
+  );
+
+  useEffect(() => {
+    setAutoFollowTranscript(true);
+  }, [selectedSessionId]);
+
+  useEffect(() => {
+    setIsRenamingTitle(false);
+    setTitleDraft(selectedConversationTitle ?? "");
+  }, [selectedConversationTitle, selectedSessionId]);
+
+  useEffect(() => {
+    if (!autoFollowTranscript) {
+      return;
+    }
+
+    const scrollTarget = transcriptEndRef.current;
+    if (!scrollTarget) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      scrollTarget.scrollIntoView({ block: "end" });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [autoFollowTranscript, transcriptSignature]);
+
+  function handleTranscriptScroll() {
+    const panel = transcriptPanelRef.current;
+    if (!panel) {
+      return;
+    }
+
+    const remaining =
+      panel.scrollHeight - panel.scrollTop - panel.clientHeight;
+    setAutoFollowTranscript(remaining < 64);
+  }
+
+  async function submitTitleRename(event?: FormEvent) {
+    event?.preventDefault();
+    if (!selectedSessionId) {
+      return;
+    }
+
+    const trimmed = titleDraft.trim();
+    if (!trimmed) {
+      setIsRenamingTitle(false);
+      setTitleDraft(selectedConversationTitle ?? "");
+      return;
+    }
+
+    if (trimmed === (selectedConversationTitle ?? "").trim()) {
+      setIsRenamingTitle(false);
+      return;
+    }
+
+    setRenamingTitle(true);
+    try {
+      await onRenameConversationTitle(selectedSessionId, trimmed);
+      setIsRenamingTitle(false);
+    } catch {
+      // shell surfaces the error banner; keep the inline editor open for correction
+    } finally {
+      setRenamingTitle(false);
+    }
+  }
 
   return (
     <>
       <header className="chat-header">
-        <div>
-          <h2>{selectedConversationTitle ?? "New Conversation"}</h2>
+        <div className="chat-title-block">
+          {selectedSessionId ? (
+            isRenamingTitle ? (
+              <form className="title-rename-form" onSubmit={submitTitleRename}>
+                <input
+                  autoFocus
+                  className="title-rename-input"
+                  onBlur={() => void submitTitleRename()}
+                  onChange={(event) => setTitleDraft(event.currentTarget.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      setIsRenamingTitle(false);
+                      setTitleDraft(selectedConversationTitle ?? "");
+                    }
+                  }}
+                  value={titleDraft}
+                />
+              </form>
+            ) : (
+              <div className="chat-title-row">
+                <h2>{visibleConversationTitle}</h2>
+                <button
+                  className="icon-button"
+                  disabled={renamingTitle}
+                  onClick={() => setIsRenamingTitle(true)}
+                  type="button"
+                >
+                  Edit
+                </button>
+              </div>
+            )
+          ) : (
+            <h2>{visibleConversationTitle}</h2>
+          )}
           {displayAgentDid ? <p className="muted mono">{displayAgentDid}</p> : null}
         </div>
         <div className="chat-status">
@@ -375,7 +510,11 @@ export function ChatWorkspace({
 
       <section className="chat-workspace">
         <div className="chat-main">
-          <section className="panel transcript-panel">
+          <section
+            className="panel transcript-panel"
+            onScroll={handleTranscriptScroll}
+            ref={transcriptPanelRef}
+          >
             {selectedSessionId && session ? (
               <div className="message-list">
                 <MessageList
@@ -383,6 +522,7 @@ export function ChatWorkspace({
                   activeResponseOverlay={session.activeResponseOverlay}
                   tools={sessionTools}
                 />
+                <div className="transcript-end-anchor" ref={transcriptEndRef} />
               </div>
             ) : (
               <div className="empty-transcript compact-empty">

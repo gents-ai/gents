@@ -44,6 +44,9 @@ function App() {
             dialedPeerCount={shell.snapshot?.client?.dialedPeerCount ?? 0}
             draft={shell.draft}
             onDraftChange={shell.setDraft}
+            onRenameConversationTitle={(sessionId, title) =>
+              void shell.onRenameConversationTitle(sessionId, title)
+            }
             onSelectBehavior={shell.setSelectedBehaviorId}
             onSend={shell.onSendMessage}
             onStart={() => void shell.onStartClient()}

@@ -5,6 +5,7 @@ import {
   fetchDesktopSnapshot,
   fetchSessionSnapshot,
   initLocalStandardRuntime,
+  renameConversation,
   sendChatMessage,
   shutdownDesktopClient,
   startDesktopClient,
@@ -253,6 +254,18 @@ export function useDesktopShell() {
     }
   }
 
+  async function onRenameConversationTitle(sessionId: string, title: string) {
+    setError(null);
+    try {
+      await renameConversation({ sessionId, title });
+      await refreshSnapshot();
+      await refreshSession(sessionId);
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    }
+  }
+
   return {
     snapshot,
     session,
@@ -288,5 +301,6 @@ export function useDesktopShell() {
     onStartClient,
     onShutdownClient,
     onSendMessage,
+    onRenameConversationTitle,
   };
 }

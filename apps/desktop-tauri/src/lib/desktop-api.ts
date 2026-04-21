@@ -41,3 +41,10 @@ export async function sendChatMessage(request: {
 }) {
   return invoke<ChatSendResult>("desktop_chat_send", { request });
 }
+
+export async function renameConversation(request: {
+  sessionId: string;
+  title: string;
+}) {
+  return invoke<void>("desktop_conversation_rename", { request });
+}
