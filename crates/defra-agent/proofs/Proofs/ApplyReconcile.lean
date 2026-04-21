@@ -438,7 +438,10 @@ lemma apply_preserves_wellFormed
 lemma step_induces_transition
     (pre : _root_.RuntimeState) (_s : ApplyStep) :
     ∃ post : _root_.RuntimeState, RuntimeState.Transition pre post := by
-  sorry
+  -- `pre.lastResolved` is always available; `ack_write` is the simplest
+  -- witness: any acknowledged write is a legal transition.
+  refine ⟨{pre with ackedResolved := some pre.lastResolved}, ?_⟩
+  exact RuntimeState.Transition.ack_write pre.lastResolved rfl
 
 /-- **T-Conv — end-to-end convergence.**
 
