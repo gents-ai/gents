@@ -292,3 +292,58 @@ impl DesiredStateValidationReport {
         self.ok
     }
 }
+
+use defra_agent::DesiredFields;
+
+impl DesiredFields for DesiredAgentPrincipal {
+    fn collection_tag(&self) -> &'static str {
+        "agent_principal"
+    }
+}
+impl DesiredFields for DesiredAgentBehavior {
+    fn collection_tag(&self) -> &'static str {
+        "agent_behaviors"
+    }
+}
+impl DesiredFields for DesiredToolSelection {
+    fn collection_tag(&self) -> &'static str {
+        "tool_selections"
+    }
+}
+impl DesiredFields for DesiredInferenceBackend {
+    fn collection_tag(&self) -> &'static str {
+        "inference_backends"
+    }
+}
+impl DesiredFields for DesiredInferenceProfile {
+    fn collection_tag(&self) -> &'static str {
+        "inference_profiles"
+    }
+}
+impl DesiredFields for DesiredToolServiceRegistry {
+    fn collection_tag(&self) -> &'static str {
+        "tool_service_registries"
+    }
+}
+impl DesiredFields for DesiredScheduledTask {
+    fn collection_tag(&self) -> &'static str {
+        "scheduled_tasks"
+    }
+}
+
+#[cfg(test)]
+mod desired_fields_tests {
+    use super::*;
+    use defra_agent::DesiredFields;
+
+    #[test]
+    fn desired_structs_report_their_collection_tags() {
+        let p = DesiredAgentPrincipal {
+            agent_did: "did:x".into(),
+            display_name: None,
+            default_behavior_id: None,
+            enabled: true,
+        };
+        assert_eq!(p.collection_tag(), "agent_principal");
+    }
+}
