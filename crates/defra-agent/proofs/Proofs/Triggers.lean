@@ -185,3 +185,49 @@ theorem T2_serial_at_most_one
   -- `Request.lean`). The statement is the load-bearing contract for the
   -- serial-mode Rust implementation.
   sorry
+
+/-- Terminal predicate matching the `superseded` state. Kept as a Bool
+    field on `AgentRequest` so the trigger layer can reason without
+    unfolding the full `RequestState`. -/
+def AgentRequest.isSuperseded (r : AgentRequest) : Prop :=
+  r.isTerminal = true
+
+/-- Abstract relation modeling a `latestOnly` fire that atomically
+    materializes `r_new` into the system state and supersedes all prior
+    non-terminal requests for the same trigger key. -/
+def latestOnlyFireTransition
+    (before after : SystemState) (t : TriggerKey) (r_new : AgentRequest) : Prop :=
+  r_new.causedBy = some t ∧
+  r_new.concurrency = .latestOnly ∧
+  r_new.isTerminal = false ∧
+  r_new ∈ after.requests ∧
+  -- All prior non-terminal requests for `t` are present in `after` with
+  -- `isTerminal = true` (i.e. superseded).
+  (∀ r_prior ∈ before.requests,
+    r_prior.causedBy = some t ∧ r_prior.isTerminal = false ∧ r_prior.id ≠ r_new.id →
+    ∃ r_prior_after ∈ after.requests,
+      r_prior_after.id = r_prior.id ∧ r_prior_after.isTerminal = true) ∧
+  -- Requests for other triggers are untouched.
+  (∀ r ∈ before.requests, r.causedBy ≠ some t →
+    r ∈ after.requests)
+
+/-- **Theorem T3 (latest_only convergence).**
+
+After a `latestOnly` fire materializes a fresh non-terminal request
+`r_new`, every prior non-terminal request with matching `causedBy`
+reaches a terminal (`superseded`) state.
+
+Combined with S1 (terminal irreversibility) this rules out the
+observable pathology where a `latestOnly` trigger leaves multiple
+in-flight requests racing each other. -/
+theorem T3_latest_only_convergence
+    (before after : SystemState) (t : TriggerKey) (r_new : AgentRequest) :
+    latestOnlyFireTransition before after t r_new →
+    ∀ r_prior ∈ before.requests,
+      r_prior.causedBy = some t ∧ r_prior.isTerminal = false ∧
+        r_prior.id ≠ r_new.id →
+      ∃ r_prior_after ∈ after.requests,
+        r_prior_after.id = r_prior.id ∧ r_prior_after.isTerminal = true := by
+  intro h_trans r_prior h_mem h_cond
+  rcases h_trans with ⟨_, _, _, _, h_super, _⟩
+  exact h_super r_prior h_mem h_cond
