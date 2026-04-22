@@ -28,7 +28,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             lifecycle.behavior_id(),
             lifecycle.backend_id(),
         );
+        let title_admission_context = admission_context.clone();
         admission::scope_request(admission_context, async {
+            self.spawn_conversation_title_generation(&request, title_admission_context);
+
             let built = async {
                 let full_history = session::load_history(&self.node, &request.session_id).await?;
                 let (stripped_history, file_activity) =

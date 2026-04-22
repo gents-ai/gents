@@ -291,7 +291,7 @@ async fn create_session_with_id_is_idempotent() {
 }
 
 #[tokio::test]
-async fn upsert_conversation_from_request_preserves_initial_title() {
+async fn upsert_conversation_from_request_keeps_title_empty_until_generated() {
     let data_path = std::env::temp_dir().join(format!(
         "agent-daemon-conversation-{}",
         uuid::Uuid::new_v4()
@@ -339,6 +339,7 @@ async fn upsert_conversation_from_request_preserves_initial_title() {
                     agent_did
                     behavior_id
                     title
+                    title_source
                     preview_text
                     status
                     latest_request_id
@@ -361,9 +362,10 @@ async fn upsert_conversation_from_request_preserves_initial_title() {
         .cloned()
         .expect("conversation row");
 
+    assert_eq!(row.get("title").and_then(|value| value.as_str()), Some(""));
     assert_eq!(
-        row.get("title").and_then(|value| value.as_str()),
-        Some("Draft a weekly fleet report")
+        row.get("title_source").and_then(|value| value.as_str()),
+        Some("placeholder")
     );
     assert_eq!(
         row.get("preview_text").and_then(|value| value.as_str()),
@@ -385,6 +387,74 @@ async fn upsert_conversation_from_request_preserves_initial_title() {
     assert_eq!(
         row.get("behavior_id").and_then(|value| value.as_str()),
         Some("general")
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn update_conversation_title_with_source_persists_generated_title() {
+    let data_path = std::env::temp_dir().join(format!(
+        "agent-daemon-conversation-title-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let node = defra_node::EmbeddedNode::builder()
+        .data_path(&data_path)
+        .build()
+        .await
+        .unwrap();
+    ensure_schemas(&node).await.unwrap();
+
+    upsert_conversation_from_request(
+        &node,
+        "session-1",
+        "general",
+        "request-1",
+        "Draft a weekly fleet report",
+        "processing",
+    )
+    .await
+    .unwrap();
+
+    update_conversation_title_with_source(&node, "session-1", "fleet-report-draft", "generated")
+        .await
+        .unwrap();
+
+    let resp = node
+        .execute(
+            r#"{
+                AgentConversation(
+                    filter: { session_id: { _eq: "session-1" } },
+                    limit: 1
+                ) {
+                    title
+                    title_source
+                }
+            }"#,
+        )
+        .await;
+    assert!(
+        !resp.has_errors(),
+        "query conversation failed: {:?}",
+        resp.errors
+    );
+
+    let row = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentConversation"))
+        .and_then(|value| value.as_array())
+        .and_then(|rows| rows.first())
+        .cloned()
+        .expect("conversation row");
+
+    assert_eq!(
+        row.get("title").and_then(|value| value.as_str()),
+        Some("fleet-report-draft")
+    );
+    assert_eq!(
+        row.get("title_source").and_then(|value| value.as_str()),
+        Some("generated")
     );
 
     let _ = std::fs::remove_dir_all(&data_path);

@@ -81,6 +81,7 @@ pub(super) async fn load_conversation_document(
             ) {{
                 _docID
                 title
+                title_source
                 preview_text
                 status
                 latest_request_id
@@ -114,4 +115,56 @@ pub(super) async fn load_conversation_document(
     };
 
     Ok(rows.pop())
+}
+
+pub(super) async fn load_recent_conversation_titles(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    exclude_session_id: &str,
+    limit: usize,
+) -> Result<Vec<String>> {
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_session_id = escape_graphql_string(exclude_session_id);
+    let query = format!(
+        r#"{{
+            AgentConversation(
+                filter: {{
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
+                    session_id: {{ _ne: "{escaped_session_id}" }}
+                }},
+                order: {{ updated_at: DESC }},
+                limit: {limit}
+            ) {{
+                title
+                title_source
+            }}
+        }}"#
+    );
+
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        anyhow::bail!(
+            "loading recent conversation titles for agent_did={}: {:?}",
+            agent_did,
+            resp.errors
+        );
+    }
+
+    let rows: Vec<ConversationDocument> = match resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentConversation"))
+    {
+        Some(value) => serde_json::from_value(value.clone())?,
+        None => Vec::new(),
+    };
+
+    Ok(rows
+        .into_iter()
+        .filter(|row| row.title_source.as_deref() != Some("placeholder"))
+        .filter_map(|row| {
+            let trimmed = row.title.trim();
+            (!trimmed.is_empty()).then_some(trimmed.to_string())
+        })
+        .collect())
 }

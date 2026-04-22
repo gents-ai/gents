@@ -227,6 +227,32 @@ async fn compaction_calls_share_backend_capacity_with_inference_calls() {
 }
 
 #[tokio::test]
+async fn scoped_oneoff_calls_are_persisted_with_oneoff_kind() {
+    let node = test_node().await;
+    let registry = AdmissionRegistry::new(node.clone());
+    registry.reconcile(
+        1,
+        &HashMap::from([("backend-a".to_string(), config("backend-a", 1, 1))]),
+    );
+    let context = AdmissionCallContext::for_request(&request("req-oneoff"), "default", "backend-a");
+
+    scope_request(context, async {
+        scope_call(CallKind::OneOff, 1, async {
+            let mut permit = registry.acquire_current_call().await.unwrap();
+            permit.finish_success(None).await;
+        })
+        .await;
+    })
+    .await;
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let rows = call_rows(node.as_ref()).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["call_kind"], "oneoff");
+    assert_eq!(rows[0]["call_state"], "completed");
+}
+
+#[tokio::test]
 async fn dropped_permit_with_cancelled_token_persists_cancelled_terminal() {
     // Validates the Composed.lean::interrupted_request_cancels_calls_PLACEHOLDER
     // runtime bridge for the mid-stream path: if the inference_token is cancelled

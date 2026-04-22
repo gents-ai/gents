@@ -384,6 +384,7 @@ fn conversation(
         agent_did: Some(agent_did.to_string()),
         behavior_id: Some("amy-default".to_string()),
         title: Some("Conversation".to_string()),
+        title_source: Some("generated".to_string()),
         preview_text: None,
         status: Some("active".to_string()),
         created_at: Some("2026-04-14T00:00:00Z".to_string()),

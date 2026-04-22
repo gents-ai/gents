@@ -101,7 +101,7 @@ async fn create_conversation_writes_session_and_conversation() -> Result<()> {
     assert_eq!(conversation.agent_name, "amy");
     assert_eq!(conversation.agent_did, "did:defra:amy");
     assert_eq!(conversation.behavior_id, "amy-code");
-    assert_eq!(conversation.title, "New Conversation");
+    assert!(conversation.title.is_empty());
     assert!(conversation.preview_text.is_empty());
     assert_eq!(conversation.status, "active");
     assert!(conversation.latest_request_id.is_empty());

@@ -33,6 +33,26 @@ type SidebarProps = {
   onInit: (event: FormEvent) => void;
 };
 
+function conversationStatusClass(conversation: ConversationSummary) {
+  const state = (conversation.turnState ?? conversation.status ?? "").toLowerCase();
+
+  switch (state) {
+    case "completed":
+      return "conversation-status-dot conversation-status-dot-success";
+    case "failed":
+    case "error":
+    case "cancelled":
+      return "conversation-status-dot conversation-status-dot-error";
+    case "streaming":
+    case "waitingforclaim":
+    case "processing":
+    case "active":
+      return "conversation-status-dot conversation-status-dot-running";
+    default:
+      return "conversation-status-dot conversation-status-dot-idle";
+  }
+}
+
 export function Sidebar({
   running,
   starting,
@@ -80,6 +100,7 @@ export function Sidebar({
                     ? "list-item selected"
                     : "list-item"
                 }
+                data-testid={`deployment-${deployment.peerId}`}
                 key={deployment.peerId}
                 onClick={() => onSelectDeployment(deployment.agentDid)}
               >
@@ -120,22 +141,23 @@ export function Sidebar({
                     ? "list-item selected"
                     : "list-item"
                 }
+                data-testid={`conversation-${conversation.sessionId}`}
                 key={conversation.sessionId}
                 onClick={() => onSelectSession(conversation.sessionId)}
               >
-                <span
-                  className={
-                    conversation.title ? "list-item-title" : "list-item-title untitled-title"
-                  }
-                >
-                  {displayConversationTitle(conversation.title)}
+                <span className="conversation-list-row">
+                  <span
+                    aria-hidden="true"
+                    className={conversationStatusClass(conversation)}
+                  />
+                  <span
+                    className={
+                      conversation.title ? "list-item-title conversation-list-title" : "list-item-title conversation-list-title untitled-title"
+                    }
+                  >
+                    {displayConversationTitle(conversation.title)}
+                  </span>
                 </span>
-                <span className="list-item-meta">
-                  {conversation.turnState ?? conversation.status ?? "idle"}
-                </span>
-                {conversation.previewText ? (
-                  <span className="list-item-subtle">{conversation.previewText}</span>
-                ) : null}
               </button>
             ))}
           </div>

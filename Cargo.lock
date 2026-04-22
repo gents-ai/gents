@@ -4099,14 +4099,23 @@ dependencies = [
 name = "defra-agent-desktop-tauri"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "defra-agent",
  "defra-agent-desktop",
  "defra-agent-protocol",
+ "rig-core",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
+ "tempfile",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

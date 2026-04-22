@@ -206,9 +206,10 @@ fn sanitize_generated_title(raw_title: &str, fallback_source: &str) -> String {
 
 fn fallback_words(source: &str) -> Vec<String> {
     const STOPWORDS: &[&str] = &[
-        "a", "about", "agent", "amy", "an", "and", "are", "can", "desktop", "do", "for", "give",
-        "hello", "help", "hey", "how", "i", "in", "is", "me", "model", "of", "on", "please",
-        "tell", "the", "think", "to", "what", "with", "works", "you",
+        "a", "about", "agent", "amy", "an", "and", "are", "by", "can", "desktop", "do", "for",
+        "give", "hello", "help", "hey", "how", "i", "in", "is", "it", "its", "me", "model", "of",
+        "on", "please", "s", "tell", "that", "thats", "the", "think", "this", "to", "used", "via",
+        "what", "with", "works", "you",
     ];
 
     let mut words = source
@@ -244,6 +245,14 @@ mod tests {
         assert_eq!(
             sanitize_generated_title("", "please inspect p2p request model"),
             "inspect-p2p-request"
+        );
+    }
+
+    #[test]
+    fn sanitize_generated_title_filters_contraction_noise() {
+        assert_eq!(
+            sanitize_generated_title("", "document-based request model that's used by this agent"),
+            "document-based-request"
         );
     }
 }

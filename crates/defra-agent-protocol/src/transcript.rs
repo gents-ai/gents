@@ -36,6 +36,14 @@ impl PersistedMessagePresentation {
     }
 }
 
+pub fn normalize_markdown_text(text: &str) -> String {
+    let mut normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    while normalized.contains("\n\n\n") {
+        normalized = normalized.replace("\n\n\n", "\n\n");
+    }
+    normalized.trim().to_string()
+}
+
 pub fn decode_persisted_message(role: &str, content: &str) -> Message {
     if let Ok(message) = serde_json::from_str::<Message>(content) {
         return message;
@@ -110,12 +118,12 @@ pub fn present_persisted_message(role: &str, content: &str) -> PersistedMessageP
 
 pub fn render_message_body_markdown(message: &Message) -> String {
     match message {
-        Message::System { content } => content.trim().to_string(),
+        Message::System { content } => normalize_markdown_text(content),
         Message::User { content } => content
             .iter()
             .filter_map(|item| match item {
                 UserContent::Text(text) if !text.text.trim().is_empty() => {
-                    Some(text.text.trim().to_string())
+                    Some(normalize_markdown_text(&text.text))
                 }
                 UserContent::ToolResult(tool_result) => {
                     let rendered = render_tool_result(tool_result);
@@ -129,7 +137,8 @@ pub fn render_message_body_markdown(message: &Message) -> String {
             .iter()
             .filter_map(|item| match item {
                 AssistantContent::Text(text) if !text.text.trim().is_empty() => {
-                    Some(text.text.trim().to_string())
+                    let normalized = normalize_markdown_text(&text.text);
+                    (!looks_like_tool_call_markup(&normalized)).then_some(normalized)
                 }
                 _ => None,
             })
@@ -154,7 +163,7 @@ pub fn extract_message_reasoning(message: &Message) -> Option<String> {
         })
         .collect::<Vec<_>>();
 
-    (!chunks.is_empty()).then_some(chunks.join("\n\n"))
+    (!chunks.is_empty()).then_some(normalize_markdown_text(&chunks.join("\n\n")))
 }
 
 fn render_tool_result(tool_result: &ToolResult) -> String {
@@ -163,7 +172,7 @@ fn render_tool_result(tool_result: &ToolResult) -> String {
         .iter()
         .filter_map(|item| match item {
             ToolResultContent::Text(text) if !text.text.trim().is_empty() => {
-                Some(text.text.trim().to_string())
+                Some(normalize_markdown_text(&text.text))
             }
             ToolResultContent::Text(_) => None,
             _ => Some("[opaque tool result]".to_string()),
@@ -186,7 +195,21 @@ fn render_reasoning_summary(reasoning: &Reasoning) -> String {
         }
         out.push_str(piece);
     }
-    out
+    normalize_markdown_text(&out)
+}
+
+fn looks_like_tool_call_markup(text: &str) -> bool {
+    let trimmed = text.trim();
+    [
+        "<tool_call>",
+        "</tool_call>",
+        "<arg_key>",
+        "</arg_key>",
+        "<arg_value>",
+        "</arg_value>",
+    ]
+    .iter()
+    .any(|marker| trimmed.contains(marker))
 }
 
 #[cfg(test)]
@@ -247,5 +270,35 @@ mod tests {
 
         assert_eq!(presentation.role, PresentedMessageRole::Assistant);
         assert_eq!(presentation.body_markdown, "hello markdown");
+    }
+
+    #[test]
+    fn assistant_tool_call_markup_is_hidden_from_visible_body() {
+        let presentation = present_persisted_message(
+            "assistant",
+            "<tool_call>list_files<arg_key>path</arg_key><arg_value>/repo</arg_value></tool_call>",
+        );
+
+        assert_eq!(presentation.role, PresentedMessageRole::Assistant);
+        assert_eq!(presentation.body_markdown, "");
+    }
+
+    #[test]
+    fn assistant_partial_tool_call_markup_is_hidden_from_visible_body() {
+        let presentation = present_persisted_message(
+            "assistant",
+            "recursive</arg_key><arg_value>false</arg_value></tool_call>",
+        );
+
+        assert_eq!(presentation.role, PresentedMessageRole::Assistant);
+        assert_eq!(presentation.body_markdown, "");
+    }
+
+    #[test]
+    fn normalize_markdown_text_collapses_excess_blank_lines() {
+        assert_eq!(
+            normalize_markdown_text("line 1\n\n\nline 2\r\n\r\n\r\nline 3\n"),
+            "line 1\n\nline 2\n\nline 3"
+        );
     }
 }

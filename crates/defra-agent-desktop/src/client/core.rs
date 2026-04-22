@@ -28,7 +28,9 @@ const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 const BOOTSTRAP_OPERATION_BACKOFF: Duration = Duration::from_millis(250);
 const P2P_SUPERVISOR_INTERVAL: Duration = Duration::from_secs(2);
-const P2P_OPERATION_TIMEOUT: Duration = Duration::from_secs(3);
+// Live tool-heavy turns can keep the embedded transport busy long enough that
+// short probe deadlines misclassify healthy peers as wedged.
+const P2P_OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
 const P2P_WEDGED_FAILURE_THRESHOLD: u32 = 3;
 const DESKTOP_P2P_MAX_CONCURRENT_PUSH_TASKS: usize = 32;
 const DESKTOP_P2P_RATE_LIMIT_BURST: u32 = 5_000;

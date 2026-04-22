@@ -9,6 +9,7 @@ use tracing::Instrument;
 
 mod inference;
 mod request;
+mod title;
 
 use super::runtime::StartupBarrier;
 use crate::compaction::{CompactionOptions, DefraCompactor};
