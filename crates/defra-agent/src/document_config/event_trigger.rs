@@ -5,6 +5,159 @@ use serde::{Deserialize, Serialize};
 use super::serde_helpers::{first_row_with_doc_id, rows_with_doc_id};
 use crate::graphql::escape_graphql_string;
 
+/// Runtime-owned EventTrigger fields the trigger engine writes back after a
+/// fire attempt.
+///
+/// Each field is optional so callers can update a subset — the helper only
+/// emits GraphQL input entries for the fields that are `Some`, leaving
+/// apply-owned fields (`enabled`, `task_id`, `source_collection`,
+/// `event_kind`, `filter`, `concurrency`) untouched. `fire_count_delta`
+/// expresses the desired increment (typically `+1` on a successful fire); the
+/// helper performs a read-then-write because DefraDB does not currently expose
+/// atomic increments. Racing writes may undercount, which is acceptable for
+/// PR 2 (fire_count is bookkeeping, not a correctness-critical counter).
+#[allow(dead_code)]
+#[derive(Debug, Default, Clone)]
+pub(crate) struct EventTriggerRuntimeUpdate {
+    pub(crate) last_attempt_at: Option<String>,
+    pub(crate) last_fired_source_doc_id: Option<String>,
+    pub(crate) last_status: Option<String>,
+    pub(crate) last_error: Option<String>,
+    pub(crate) fire_count_delta: Option<i64>,
+}
+
+/// Update the runtime-owned fields on an `EventTrigger` document identified by
+/// its apply-owned `trigger_id`.
+///
+/// Only writes fields present in `updates`; apply-owned fields (`enabled`,
+/// `task_id`, `source_collection`, `event_kind`, `filter`, `concurrency`) are
+/// never touched. Returns `Ok` even when the trigger doc is missing — the
+/// caller is assumed to have raced a delete from apply, which the reconcile
+/// path will resolve.
+///
+/// `fire_count_delta` triggers a read-then-write: the current `fire_count` is
+/// loaded, the delta added, and the new value written. DefraDB does not
+/// expose atomic increments today, so racing concurrent updates may
+/// undercount; this is acceptable for the EventTrigger `fire_count` field per
+/// the event-driven-tasks PR 2 plan.
+#[allow(dead_code)]
+pub(crate) async fn update_event_trigger_runtime_fields(
+    node: &EmbeddedNode,
+    trigger_id: &str,
+    updates: EventTriggerRuntimeUpdate,
+) -> Result<()> {
+    // Short-circuit: nothing to write.
+    if updates.last_attempt_at.is_none()
+        && updates.last_fired_source_doc_id.is_none()
+        && updates.last_status.is_none()
+        && updates.last_error.is_none()
+        && updates.fire_count_delta.is_none()
+    {
+        return Ok(());
+    }
+
+    // Resolve the current fire_count if we need to increment it. Also use this
+    // to detect whether the trigger doc still exists (idempotent behavior on
+    // a deleted trigger).
+    let current_fire_count = if updates.fire_count_delta.is_some() {
+        let escaped_trigger_id = escape_graphql_string(trigger_id);
+        let query = format!(
+            r#"{{
+                EventTrigger(
+                    filter: {{ trigger_id: {{ _eq: "{escaped_trigger_id}" }} }},
+                    limit: 1
+                ) {{
+                    fire_count
+                }}
+            }}"#
+        );
+        let resp = node.execute(&query).await;
+        if resp.has_errors() {
+            anyhow::bail!(
+                "query EventTrigger fire_count for runtime update failed: {:?}",
+                resp.errors
+            );
+        }
+        let rows = resp
+            .data
+            .as_ref()
+            .and_then(|data| data.get("EventTrigger"))
+            .and_then(|value| value.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if rows.is_empty() {
+            // EventTrigger doc disappeared; nothing to update.
+            tracing::info!(
+                trigger_id,
+                "EventTrigger doc missing during runtime update; skipping"
+            );
+            return Ok(());
+        }
+        rows.first()
+            .and_then(|row| row.get("fire_count"))
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    // Build the input literal with only the requested fields so apply-owned
+    // fields are never overwritten.
+    let mut entries: Vec<String> = Vec::new();
+    if let Some(v) = updates.last_attempt_at.as_ref() {
+        entries.push(format!(
+            "last_attempt_at: \"{}\"",
+            escape_graphql_string(v)
+        ));
+    }
+    if let Some(v) = updates.last_fired_source_doc_id.as_ref() {
+        entries.push(format!(
+            "last_fired_source_doc_id: \"{}\"",
+            escape_graphql_string(v)
+        ));
+    }
+    if let Some(v) = updates.last_status.as_ref() {
+        entries.push(format!(
+            "last_status: \"{}\"",
+            escape_graphql_string(v)
+        ));
+    }
+    if let Some(v) = updates.last_error.as_ref() {
+        entries.push(format!(
+            "last_error: \"{}\"",
+            escape_graphql_string(v)
+        ));
+    }
+    if let Some(delta) = updates.fire_count_delta {
+        let new_fire_count = current_fire_count.saturating_add(delta);
+        entries.push(format!("fire_count: {new_fire_count}"));
+    }
+    let input_literal = format!("{{ {} }}", entries.join(", "));
+
+    let escaped_trigger_id = escape_graphql_string(trigger_id);
+    // Use a filter-based mutation so we key on the apply-owned trigger_id and
+    // don't need to resolve the _docID separately. DefraDB matches at most one
+    // trigger (trigger_id is unique) so this updates the single target doc.
+    let mutation = format!(
+        r#"mutation {{
+            update_EventTrigger(
+                filter: {{ trigger_id: {{ _eq: "{escaped_trigger_id}" }} }},
+                input: {input_literal}
+            ) {{ _docID }}
+        }}"#
+    );
+
+    let resp = node.execute(&mutation).await;
+    if resp.has_errors() {
+        anyhow::bail!(
+            "update EventTrigger runtime fields for {trigger_id} failed: {:?}",
+            resp.errors
+        );
+    }
+
+    Ok(())
+}
+
 /// Description of an event-driven trigger for a task.
 ///
 /// Mirrors the `EventTrigger` GraphQL schema in
