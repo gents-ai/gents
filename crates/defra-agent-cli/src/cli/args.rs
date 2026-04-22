@@ -593,6 +593,10 @@ pub(crate) struct BackendDiscoverModelsArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct ConfigExportArgs {
+    #[arg(long, value_name = "ROOT", help = "Directory to write the manifest root into")]
+    pub(crate) root: PathBuf,
+    #[arg(long, default_value_t = false, help = "Overwrite the root dir if it is non-empty")]
+    pub(crate) force: bool,
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
