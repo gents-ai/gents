@@ -3,6 +3,7 @@ mod render;
 use eframe::egui::{self, RichText, TextEdit, Ui};
 
 use crate::audit;
+use crate::client::ClientStore;
 use crate::state::{
     BackendDraft, BehaviorDraft, EventTriggerDraft, InferenceProfileDraft, ScheduleDraft, TaskDraft,
     ToolSelectionDraft,
@@ -25,8 +26,8 @@ pub(super) fn render_inference_profile_editor(ui: &mut Ui, draft: &mut Inference
     render::render_inference_profile_editor(ui, draft);
 }
 
-pub(super) fn render_task_editor(ui: &mut Ui, draft: &mut TaskDraft) {
-    render::render_task_editor(ui, draft);
+pub(super) fn render_task_editor(ui: &mut Ui, draft: &mut TaskDraft, store: &ClientStore) {
+    render::render_task_editor(ui, draft, store);
 }
 
 pub(super) fn render_schedule_editor(ui: &mut Ui, draft: &mut ScheduleDraft) {

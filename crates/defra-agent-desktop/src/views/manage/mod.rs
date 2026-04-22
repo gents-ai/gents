@@ -254,7 +254,7 @@ fn render_editor_workspace(
                 // re-borrowing `state.manage.draft`.
                 let task_id = draft.task_id.clone();
                 let task_enabled = draft.enabled;
-                scroll_editor_body(ui, |ui| render_task_editor(ui, draft));
+                scroll_editor_body(ui, |ui| render_task_editor(ui, draft, store));
                 render_task_run_now_row(ui, state, client, &task_id, task_enabled);
                 rail::render_editor_footer(ui, state, client);
             } else {

@@ -1,5 +1,6 @@
 use eframe::egui::Ui;
 
+use crate::client::ClientStore;
 use crate::state::{
     BackendDraft, BehaviorDraft, EventTriggerDraft, InferenceProfileDraft, ScheduleDraft, TaskDraft,
     ToolSelectionDraft,
@@ -72,7 +73,15 @@ pub(super) fn render_inference_profile_editor(ui: &mut Ui, draft: &mut Inference
 /// Task 51 renders a minimal read-only detail view for tasks. Task 52
 /// will replace this with the real editor (description,
 /// prompt_template, output_schema_ref wired into mutations).
-pub(super) fn render_task_editor(ui: &mut Ui, draft: &mut TaskDraft) {
+///
+/// The "Recent Runs" section below the apply-owned fields surfaces
+/// trigger-engine bookkeeping aggregated across every Schedule and
+/// EventTrigger that references this task -- operators can see a
+/// single rolled-up fire summary without clicking into every trigger.
+/// The bookkeeping values are owned by the trigger engine; the apply
+/// writer never projects them, so displaying them here does not
+/// threaten the apply/runtime split.
+pub(super) fn render_task_editor(ui: &mut Ui, draft: &mut TaskDraft, store: &ClientStore) {
     editor_heading(ui, "Task");
     text_field(ui, "Task ID", &mut draft.task_id);
     text_field(ui, "Name", &mut draft.name);
@@ -83,6 +92,30 @@ pub(super) fn render_task_editor(ui: &mut Ui, draft: &mut TaskDraft) {
     text_field(ui, "Output Schema Ref", &mut draft.output_schema_ref);
     read_only_field(ui, "Created At", draft.created_at.as_str());
     read_only_field(ui, "Updated At", draft.updated_at.as_str());
+
+    ui.add_space(8.0);
+    editor_heading(ui, "Recent Runs");
+    let runs = store.recent_runs_for_task(draft.task_id.as_str());
+    read_only_field(ui, "Total Fires", &runs.total_fires.to_string());
+    read_only_field(
+        ui,
+        "Last Attempt",
+        runs.last_attempt_at.as_deref().unwrap_or("(never)"),
+    );
+    read_only_field(
+        ui,
+        "Last Status",
+        runs.last_status.as_deref().unwrap_or("(none)"),
+    );
+    read_only_multiline(ui, "Last Error", runs.last_error.as_deref().unwrap_or(""), 3);
+    read_only_field(
+        ui,
+        "Triggers Referenced",
+        &format!(
+            "{} schedules, {} event triggers",
+            runs.schedule_count, runs.event_trigger_count
+        ),
+    );
 }
 
 /// Schedule detail editor.
