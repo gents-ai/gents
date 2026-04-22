@@ -1,11 +1,12 @@
 use anyhow::Result;
 use defra_agent_protocol::row::{
-    AgentBehaviorRow, InferenceBackendRow, InferenceProfileRow, ScheduleRow, TaskRow,
-    ToolSelectionRow,
+    AgentBehaviorRow, EventTriggerRow, InferenceBackendRow, InferenceProfileRow, ScheduleRow,
+    TaskRow, ToolSelectionRow,
 };
 
 use crate::state::{
-    BackendDraft, BehaviorDraft, InferenceProfileDraft, ScheduleDraft, TaskDraft, ToolSelectionDraft,
+    BackendDraft, BehaviorDraft, EventTriggerDraft, InferenceProfileDraft, ScheduleDraft, TaskDraft,
+    ToolSelectionDraft,
 };
 
 use super::{
@@ -119,5 +120,36 @@ pub fn schedule_row(draft: &ScheduleDraft) -> Result<ScheduleRow> {
         fire_count: parse_optional_i64("fire_count", &draft.fire_count)?,
         created_at: parse_optional_rfc3339("created_at", &draft.created_at)?,
         updated_at: parse_optional_rfc3339("updated_at", &draft.updated_at)?,
+    })
+}
+
+/// Build an `EventTriggerRow` from the draft shown in the EventTrigger
+/// manage section.
+///
+/// Runtime-owned fields (`last_attempt_at`, `last_fired_source_doc_id`,
+/// `last_status`, `last_error`, `fire_count`) are carried across
+/// unchanged from the draft (which was populated from the store on
+/// load) so the row we hand to the apply path preserves the observed
+/// runtime state. The mutation writer then projects only the
+/// apply-owned fields into GraphQL, so this bookkeeping is never
+/// clobbered even if the `Row` snapshot is stale.
+pub fn event_trigger_row(draft: &EventTriggerDraft) -> Result<EventTriggerRow> {
+    Ok(EventTriggerRow {
+        trigger_id: normalize_required("trigger_id", &draft.trigger_id)?.to_string(),
+        task_id: Some(normalize_required("task_id", &draft.task_id)?.to_string()),
+        source_collection: Some(
+            normalize_required("source_collection", &draft.source_collection)?.to_string(),
+        ),
+        event_kind: Some(normalize_required("event_kind", &draft.event_kind)?.to_string()),
+        filter: normalize_optional_owned(&draft.filter),
+        enabled: Some(draft.enabled),
+        concurrency: normalize_optional_owned(&draft.concurrency),
+        created_at: parse_optional_rfc3339("created_at", &draft.created_at)?,
+        updated_at: parse_optional_rfc3339("updated_at", &draft.updated_at)?,
+        last_attempt_at: parse_optional_rfc3339("last_attempt_at", &draft.last_attempt_at)?,
+        last_fired_source_doc_id: normalize_optional_owned(&draft.last_fired_source_doc_id),
+        last_status: normalize_optional_owned(&draft.last_status),
+        last_error: normalize_optional_owned(&draft.last_error),
+        fire_count: parse_optional_i64("fire_count", &draft.fire_count)?,
     })
 }

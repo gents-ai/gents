@@ -49,7 +49,7 @@ pub(super) fn show_sidebar(
         .iter()
         .map(|b| b.behavior_id.as_str())
         .collect();
-    let task_count = store
+    let agent_task_ids: Vec<&str> = store
         .tasks
         .iter()
         .filter(|row| {
@@ -57,14 +57,17 @@ pub(super) fn show_sidebar(
                 .as_deref()
                 .is_some_and(|bid| behavior_ids.contains(&bid))
         })
-        .count();
-    let schedule_count = store.schedules.len();
+        .map(|row| row.task_id.as_str())
+        .collect();
+    let task_count = agent_task_ids.len();
+    let schedule_count = store.schedules_for_tasks(&agent_task_ids).len();
+    let event_trigger_count = store.event_triggers_for_tasks(&agent_task_ids).len();
 
     views::card(
         ui,
         "Selected Deployment",
         &format!(
-            "{}\n\n{} behaviors · {} backends · {} profiles · {} tasks · {} schedules",
+            "{}\n\n{} behaviors · {} backends · {} profiles · {} tasks · {} schedules · {} triggers",
             state
                 .manage
                 .selected_peer_id
@@ -74,7 +77,8 @@ pub(super) fn show_sidebar(
             backend_count,
             profile_count,
             task_count,
-            schedule_count
+            schedule_count,
+            event_trigger_count
         ),
     );
 

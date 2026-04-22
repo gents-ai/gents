@@ -5,8 +5,8 @@ use crate::client::{ClientCore, ClientPeerStatus, ClientStore};
 use crate::manage::actions::{reduce, ManageAction};
 use crate::manage::projection::{project_manage, ManageProjection};
 use crate::manage::{
-    backend_row, behavior_row, inference_profile_row, new_draft_for_section, schedule_row,
-    task_row, tool_selection_row,
+    backend_row, behavior_row, event_trigger_row, inference_profile_row, new_draft_for_section,
+    schedule_row, task_row, tool_selection_row,
 };
 use crate::state::{ManageDraft, ManageSection, ManageState};
 
@@ -87,6 +87,9 @@ pub fn apply_draft(
         ManageDraft::Task(draft) => runtime.block_on(client.save_task(&task_row(draft)?)),
         ManageDraft::Schedule(draft) => {
             runtime.block_on(client.save_schedule(&schedule_row(draft)?))
+        }
+        ManageDraft::EventTrigger(draft) => {
+            runtime.block_on(client.save_event_trigger(&event_trigger_row(draft)?))
         }
     };
 
