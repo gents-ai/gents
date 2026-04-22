@@ -18,6 +18,7 @@ struct RequestSnapshotRow {
     max_retries: i64,
     claimed_at: Option<String>,
     deadline: Option<String>,
+    failure_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +35,7 @@ pub struct RequestSnapshot {
     pub max_retries: i64,
     pub claimed_at_present: bool,
     pub deadline_present: bool,
+    pub failure_reason: String,
 }
 
 impl From<RequestSnapshotRow> for RequestSnapshot {
@@ -57,6 +59,7 @@ impl From<RequestSnapshotRow> for RequestSnapshot {
                 .deadline
                 .as_deref()
                 .is_some_and(|value| !value.is_empty()),
+            failure_reason: row.failure_reason.unwrap_or_default(),
         }
     }
 }
@@ -152,6 +155,7 @@ pub async fn fetch_request_snapshot(node: &EmbeddedNode, doc_id: &str) -> Reques
                 max_retries
                 claimed_at
                 deadline
+                failure_reason
             }}
         }}"#
     );
@@ -204,6 +208,56 @@ pub async fn fetch_request_lineage_snapshot_by_tuple(
     );
     let resp = node.execute(&query).await;
     first_optional_row::<RequestLineageSnapshot>(&resp, "AgentRequest")
+}
+
+/// Raw-string view of `AgentRequest` latch fields used by property tests. Unlike
+/// [`RequestSnapshot`], this preserves the exact `interrupt_requested_at` and
+/// `valid_until` string values so tests can assert the Lean S7/S8 invariants
+/// (no transition rewrites these fields).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestSnapshotRaw {
+    pub status: String,
+    pub lifecycle_state: String,
+    pub interrupt_requested_at: Option<String>,
+    pub valid_until: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct RequestSnapshotRawRow {
+    status: String,
+    lifecycle_state: String,
+    interrupt_requested_at: Option<String>,
+    valid_until: Option<String>,
+}
+
+impl From<RequestSnapshotRawRow> for RequestSnapshotRaw {
+    fn from(row: RequestSnapshotRawRow) -> Self {
+        Self {
+            status: row.status,
+            lifecycle_state: row.lifecycle_state,
+            interrupt_requested_at: row.interrupt_requested_at.filter(|value| !value.is_empty()),
+            valid_until: row.valid_until.filter(|value| !value.is_empty()),
+        }
+    }
+}
+
+pub async fn fetch_request_snapshot_raw(node: &EmbeddedNode, doc_id: &str) -> RequestSnapshotRaw {
+    let doc_id = escape_graphql_string(doc_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                limit: 1
+            ) {{
+                status
+                lifecycle_state
+                interrupt_requested_at
+                valid_until
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    first_row::<RequestSnapshotRawRow>(&resp, "AgentRequest").into()
 }
 
 pub async fn fetch_conversation_snapshot(
@@ -304,6 +358,56 @@ pub async fn fetch_session_snapshot(
     );
     let resp = node.execute(&query).await;
     first_optional_row::<SessionSnapshot>(&resp, "AgentSession")
+}
+
+pub async fn fetch_response_interrupted_at(node: &EmbeddedNode, doc_id: &str) -> Option<String> {
+    let doc_id = escape_graphql_string(doc_id);
+    let query = format!(
+        r#"{{
+            AgentResponse(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                limit: 1
+            ) {{
+                interrupted_at
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
+    resp.data
+        .as_ref()
+        .and_then(|data| data.get("AgentResponse"))
+        .and_then(|rows| rows.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("interrupted_at"))
+        .and_then(|value| value.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+
+pub async fn fetch_response_content(node: &EmbeddedNode, doc_id: &str) -> String {
+    let doc_id = escape_graphql_string(doc_id);
+    let query = format!(
+        r#"{{
+            AgentResponse(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                limit: 1
+            ) {{
+                content
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
+    resp.data
+        .as_ref()
+        .and_then(|data| data.get("AgentResponse"))
+        .and_then(|rows| rows.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("content"))
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
+        .unwrap_or_default()
 }
 
 pub async fn fetch_response_snapshot(node: &EmbeddedNode, doc_id: &str) -> ResponseSnapshot {

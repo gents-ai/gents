@@ -61,4 +61,30 @@ def initial : ComposedState :=
     }
   }
 
+/-- Cross-layer safety placeholder: an interrupted request's companion
+    inference calls will be persisted as `call_state = "cancelled"`.
+
+    Runtime bridge (complete as of Task 9 + mid-stream Drop fix):
+    - Pre-stream cancellation: `AdmittedCompletionModel::completion` /
+      `stream` observe `inference_token` via `tokio::select!` and call
+      `permit.mark_interrupted()` on cancel.
+    - Mid-stream cancellation: `AdmissionPermit::Drop` observes the same
+      `cancel_observer` token and writes `call_state = "cancelled"` /
+      `failure_reason = "Cancelled"` when dropped with the token cancelled.
+
+    # Not yet formally proven
+
+    This is a `True` placeholder. A formal Lean proof requires modeling
+    `InferenceCall` as a separate state machine and proving that for every
+    `c : InferenceCall` linked to `r : RequestContext` with `r.state =
+    .interrupted` and `c.state ∈ {queued, running}`, eventually
+    `c.state = cancelled`. The runtime implementation delivers this
+    property; the formal proof is tracked as follow-up work.
+-/
+theorem interrupted_request_cancels_calls_PLACEHOLDER
+    (_r : RequestContext)
+    (_h_interrupted : _r.state = .interrupted) :
+    True := by
+  trivial
+
 end ComposedState

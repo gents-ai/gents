@@ -31,8 +31,7 @@ fn empty_manifest(agent_did: &str) -> DesiredStateManifest {
 
 fn manifest_with_default_behavior() -> DesiredStateManifest {
     let mut manifest = empty_manifest("did:defra-agent:test");
-    manifest.agent_principal.default_behavior_id =
-        Some("did:defra-agent:test:default".to_string());
+    manifest.agent_principal.default_behavior_id = Some("did:defra-agent:test:default".to_string());
     manifest.agent_behaviors.push(DesiredAgentBehavior {
         behavior_id: "did:defra-agent:test:default".to_string(),
         agent_did: "did:defra-agent:test".to_string(),
@@ -297,7 +296,10 @@ fn load_manifest_root_loads_tasks_and_schedules() {
 
     assert_eq!(manifest.tasks.len(), 1);
     assert_eq!(manifest.tasks[0].task_id, "summarize-inbox");
-    assert_eq!(manifest.tasks[0].behavior_id, "did:defra-agent:test:default");
+    assert_eq!(
+        manifest.tasks[0].behavior_id,
+        "did:defra-agent:test:default"
+    );
 
     assert_eq!(manifest.schedules.len(), 1);
     assert_eq!(manifest.schedules[0].schedule_id, "summarize-inbox-hourly");
@@ -797,8 +799,7 @@ fn validate_rejects_task_unknown_behavior() {
 fn validate_rejects_schedule_task_template_referencing_doc_scope() {
     let mut manifest = manifest_with_default_behavior();
     let mut task = sample_task("summarize-inbox");
-    task.prompt_template =
-        "Schedule fired at {{ event.fired_at }} for {{ doc.foo }}.".to_string();
+    task.prompt_template = "Schedule fired at {{ event.fired_at }} for {{ doc.foo }}.".to_string();
     manifest.tasks.push(task);
     manifest
         .schedules
@@ -841,8 +842,7 @@ fn validate_rejects_schedule_task_template_referencing_args_scope() {
 fn validate_accepts_schedule_task_template_using_only_event_scope() {
     let mut manifest = manifest_with_default_behavior();
     let mut task = sample_task("summarize-inbox");
-    task.prompt_template =
-        "Run at {{ event.fired_at }} for {{ event.trigger_kind }}.".to_string();
+    task.prompt_template = "Run at {{ event.fired_at }} for {{ event.trigger_kind }}.".to_string();
     manifest.tasks.push(task);
     manifest
         .schedules
@@ -1012,8 +1012,8 @@ fn export_bundle_round_trip_preserves_tasks_and_schedules() {
         .schedules
         .push(sample_schedule("alpha-hourly", "alpha-task"));
 
-    let bundle = export_bundle_from_manifest(&manifest, "local")
-        .expect("export bundle should be produced");
+    let bundle =
+        export_bundle_from_manifest(&manifest, "local").expect("export bundle should be produced");
     assert_eq!(bundle.as_bundle().tasks.len(), 2);
     assert_eq!(bundle.as_bundle().schedules.len(), 2);
 

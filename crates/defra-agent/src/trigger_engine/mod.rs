@@ -188,11 +188,7 @@ impl TriggerEngine {
     /// re-polling the source. Sources run in parallel with each other via a
     /// `JoinSet`. The outer `select!` honors `cancel` so shutdown short-
     /// circuits any in-flight `next_fire`/`dispatch` pair.
-    pub(crate) async fn run(
-        self,
-        sources: Vec<Box<dyn TriggerSource>>,
-        cancel: CancellationToken,
-    ) {
+    pub(crate) async fn run(self, sources: Vec<Box<dyn TriggerSource>>, cancel: CancellationToken) {
         let engine = Arc::new(self);
         let mut join_set = tokio::task::JoinSet::new();
         for mut source in sources {
@@ -364,10 +360,7 @@ impl TriggerEngine {
                     let _guard = lock.lock().await;
                     match self
                         .materializer
-                        .supersede_nonterminal_requests_for_trigger(
-                            trigger_id,
-                            intent.trigger_kind,
-                        )
+                        .supersede_nonterminal_requests_for_trigger(trigger_id, intent.trigger_kind)
                         .await
                     {
                         Ok(_count) => { /* proceed to materialize under lock */ }

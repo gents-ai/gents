@@ -420,6 +420,8 @@ fn request(
         max_retries: Some(3),
         caused_by_trigger_id: None,
         caused_by_trigger_kind: None,
+        interrupt_requested_at: None,
+        valid_until: None,
     }
 }
 
@@ -446,5 +448,6 @@ fn response(
         materialized_at: None,
         created_at: Some("2026-04-14T00:04:01Z".to_string()),
         completed_at: Some("2026-04-14T00:04:02Z".to_string()),
+        interrupted_at: None,
     }
 }

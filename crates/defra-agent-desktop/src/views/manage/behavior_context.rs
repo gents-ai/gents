@@ -41,12 +41,7 @@ pub(super) fn render_behavior_context(
         requests.len(),
     );
 
-    render_summary_block(
-        ui,
-        "Tasks",
-        &tasks,
-        "No tasks are bound to this behavior.",
-    );
+    render_summary_block(ui, "Tasks", &tasks, "No tasks are bound to this behavior.");
     render_summary_block(
         ui,
         "Schedules",
@@ -324,6 +319,8 @@ mod tests {
                     max_retries: None,
                     caused_by_trigger_id: None,
                     caused_by_trigger_kind: None,
+                    interrupt_requested_at: None,
+                    valid_until: None,
                 },
                 AgentRequestRow {
                     request_id: "req-other".to_string(),
@@ -346,6 +343,8 @@ mod tests {
                     max_retries: None,
                     caused_by_trigger_id: None,
                     caused_by_trigger_kind: None,
+                    interrupt_requested_at: None,
+                    valid_until: None,
                 },
             ],
             tasks: vec![

@@ -221,6 +221,29 @@ impl DefraStreamWriter {
         self.finalize(&existing.doc_id, StreamStatus::Error).await?;
         Ok(true)
     }
+
+    /// Mark an existing response row as interrupted. Writes `interrupted_at`
+    /// to the doc; does NOT change `status`. Called by the daemon's interrupt
+    /// flow, sequenced BEFORE the terminal `AgentRequest.lifecycle_state` write.
+    pub async fn write_interrupted_at(&self, doc_id: &str, at: &str) -> Result<bool> {
+        let escaped_doc_id = escape_graphql_string(doc_id);
+        let escaped_at = escape_graphql_string(at);
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentResponse(
+                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    input: {{ interrupted_at: "{escaped_at}" }}
+                ) {{ _docID }}
+            }}"#
+        );
+        let resp =
+            execute_mutation_with_retry(&self.node, &mutation, "write_interrupted_at").await?;
+        Ok(resp
+            .data
+            .as_ref()
+            .and_then(|d| d.get("update_AgentResponse"))
+            .is_some_and(response_has_documents))
+    }
 }
 
 impl StreamWriter for DefraStreamWriter {

@@ -46,10 +46,7 @@ pub async fn upsert_task(node: &EmbeddedNode, row: &TaskRow) -> Result<()> {
         .unwrap_or_else(|| now.clone());
 
     let add_fields = [
-        Some(format!(
-            r#"task_id: "{}""#,
-            escape_graphql_string(task_id)
-        )),
+        Some(format!(r#"task_id: "{}""#, escape_graphql_string(task_id))),
         Some(graphql_string_field("name", row.name.as_deref())),
         Some(graphql_string_field(
             "description",
@@ -96,10 +93,7 @@ pub async fn upsert_task(node: &EmbeddedNode, row: &TaskRow) -> Result<()> {
             "output_schema_ref",
             row.output_schema_ref.as_deref(),
         )),
-        Some(format!(
-            r#"updated_at: "{}""#,
-            escape_graphql_string(&now)
-        )),
+        Some(format!(r#"updated_at: "{}""#, escape_graphql_string(&now))),
     ];
 
     let mutation = format!(
@@ -151,11 +145,11 @@ pub async fn upsert_schedule(node: &EmbeddedNode, row: &ScheduleRow) -> Result<(
             r#"schedule_id: "{}""#,
             escape_graphql_string(schedule_id)
         )),
-        Some(format!(
-            r#"task_id: "{}""#,
-            escape_graphql_string(task_id)
+        Some(format!(r#"task_id: "{}""#, escape_graphql_string(task_id))),
+        Some(graphql_optional_int_field(
+            "interval_secs",
+            row.interval_secs,
         )),
-        Some(graphql_optional_int_field("interval_secs", row.interval_secs)),
         Some(graphql_optional_bool_field("enabled", row.enabled)),
         Some(graphql_string_field(
             "concurrency",
@@ -171,20 +165,17 @@ pub async fn upsert_schedule(node: &EmbeddedNode, row: &ScheduleRow) -> Result<(
         )),
     ];
     let update_fields = [
-        Some(format!(
-            r#"task_id: "{}""#,
-            escape_graphql_string(task_id)
+        Some(format!(r#"task_id: "{}""#, escape_graphql_string(task_id))),
+        Some(graphql_optional_int_field(
+            "interval_secs",
+            row.interval_secs,
         )),
-        Some(graphql_optional_int_field("interval_secs", row.interval_secs)),
         Some(graphql_optional_bool_field("enabled", row.enabled)),
         Some(graphql_string_field(
             "concurrency",
             row.concurrency.as_deref(),
         )),
-        Some(format!(
-            r#"updated_at: "{}""#,
-            escape_graphql_string(&now)
-        )),
+        Some(format!(r#"updated_at: "{}""#, escape_graphql_string(&now))),
     ];
 
     let mutation = format!(

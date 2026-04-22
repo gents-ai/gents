@@ -4,8 +4,8 @@ mod manage;
 mod setup;
 
 pub use chat::{
-    create_conversation, rename_conversation, retry_request, submit_request, CreatedConversation,
-    SubmittedRequest,
+    create_conversation, interrupt_request, rename_conversation, resend_request, retry_request,
+    submit_request, CreatedConversation, SubmitRequestOptions, SubmittedRequest,
 };
 pub use manage::{
     fire_schedule_now, upsert_agent_behavior, upsert_event_trigger, upsert_inference_backend,

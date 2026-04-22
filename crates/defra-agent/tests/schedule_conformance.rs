@@ -58,9 +58,7 @@ use std::time::Duration;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
-use defra_agent::{
-    AgentIdentity, DefraAgent, DocumentRuntimeOptions, SimpleIdentity, ToolCeiling,
-};
+use defra_agent::{AgentIdentity, DefraAgent, DocumentRuntimeOptions, SimpleIdentity, ToolCeiling};
 
 mod support;
 
@@ -333,7 +331,10 @@ async fn fetch_schedule_row(
             .and_then(|v| v.as_str())
             .map(str::to_owned),
         fire_count: row.get("fire_count").and_then(|v| v.as_i64()),
-        enabled: row.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false),
+        enabled: row
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         interval_secs: row.get("interval_secs").and_then(|v| v.as_i64()),
         concurrency: row
             .get("concurrency")
@@ -623,7 +624,11 @@ async fn fires_at_next_run_at() {
         }}"#
     );
     let resp = db.node.execute(&query).await;
-    assert!(!resp.has_errors(), "AgentRequest query errored: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "AgentRequest query errored: {:?}",
+        resp.errors
+    );
     let row = resp
         .data
         .as_ref()
@@ -663,7 +668,14 @@ async fn fires_at_next_run_at() {
     // ScheduleSource::on_result callback would, so the persistence contract
     // is pinned end-to-end even though the engine loop is exercised by the
     // in-crate test.
-    create_task(db.node.as_ref(), "task-fires", AGENT_NAME, "template fires", true).await;
+    create_task(
+        db.node.as_ref(),
+        "task-fires",
+        AGENT_NAME,
+        "template fires",
+        true,
+    )
+    .await;
     let past = (Utc::now() - ChronoDuration::seconds(120)).to_rfc3339();
     create_schedule(
         db.node.as_ref(),
@@ -678,7 +690,14 @@ async fn fires_at_next_run_at() {
     let past_parsed = parse_rfc3339(&past);
     let advanced = (past_parsed + ChronoDuration::seconds(60)).to_rfc3339();
     let last_attempt_at = Utc::now().to_rfc3339();
-    schedule_writeback_fired(db.node.as_ref(), "sched-fires", &advanced, &last_attempt_at, 1).await;
+    schedule_writeback_fired(
+        db.node.as_ref(),
+        "sched-fires",
+        &advanced,
+        &last_attempt_at,
+        1,
+    )
+    .await;
 
     let sched = fetch_schedule_row(db.node.as_ref(), "sched-fires")
         .await
@@ -732,12 +751,8 @@ async fn enabled_false_does_not_fire() {
     );
     // No AgentRequest should exist for the trigger tuple when the Schedule is
     // disabled (the engine never materializes a fire for it).
-    let count = count_agent_requests_for_trigger(
-        db.node.as_ref(),
-        "sched-disabled",
-        "schedule",
-    )
-    .await;
+    let count =
+        count_agent_requests_for_trigger(db.node.as_ref(), "sched-disabled", "schedule").await;
     assert_eq!(
         count, 0,
         "disabled Schedule must not have any associated AgentRequest"
@@ -862,12 +877,7 @@ async fn serial_skips_when_prior_non_terminal() {
 
     // Exactly one in-flight request exists.
     assert_eq!(
-        count_agent_requests_for_trigger(
-            db.node.as_ref(),
-            "sched-serial-skip",
-            "schedule",
-        )
-        .await,
+        count_agent_requests_for_trigger(db.node.as_ref(), "sched-serial-skip", "schedule",).await,
         1
     );
     // The engine's gating query must see it.
@@ -918,12 +928,7 @@ async fn serial_skips_when_prior_non_terminal() {
     // The seed request still exists; no second AgentRequest was added for
     // this trigger tuple.
     assert_eq!(
-        count_agent_requests_for_trigger(
-            db.node.as_ref(),
-            "sched-serial-skip",
-            "schedule",
-        )
-        .await,
+        count_agent_requests_for_trigger(db.node.as_ref(), "sched-serial-skip", "schedule",).await,
         1,
         "serial skip must NOT create a second AgentRequest"
     );
@@ -1061,12 +1066,7 @@ async fn latest_only_supersedes_prior_fire() {
     // There must now be exactly two AgentRequests for the tuple: the
     // superseded prior + the newly claimed current fire.
     assert_eq!(
-        count_agent_requests_for_trigger(
-            db.node.as_ref(),
-            "sched-latest-only",
-            "schedule",
-        )
-        .await,
+        count_agent_requests_for_trigger(db.node.as_ref(), "sched-latest-only", "schedule",).await,
         2
     );
     // The gating query must NOT see the superseded prior (it's terminal);

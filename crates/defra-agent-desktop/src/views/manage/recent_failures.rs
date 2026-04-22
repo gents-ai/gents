@@ -67,7 +67,8 @@ fn render_schedule_failure_detail(ui: &mut Ui, store: &ClientStore, schedule: &S
     read_only_field(
         ui,
         "Task Name",
-        task.and_then(|task| task.name.as_deref()).unwrap_or("unset"),
+        task.and_then(|task| task.name.as_deref())
+            .unwrap_or("unset"),
     );
     read_only_field(
         ui,

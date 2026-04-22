@@ -239,7 +239,9 @@ async fn config_export_import_round_trips_tool_services_and_tasks() -> Result<()
         Some(1)
     );
     assert_eq!(
-        seeded_import.pointer("/counts/tasks").and_then(Value::as_u64),
+        seeded_import
+            .pointer("/counts/tasks")
+            .and_then(Value::as_u64),
         Some(1)
     );
     assert_eq!(
@@ -257,9 +259,7 @@ async fn config_export_import_round_trips_tool_services_and_tasks() -> Result<()
         Some(service_id.as_str())
     );
     assert_eq!(
-        exported
-            .pointer("/tasks/0/task_id")
-            .and_then(Value::as_str),
+        exported.pointer("/tasks/0/task_id").and_then(Value::as_str),
         Some(task_id.as_str())
     );
     assert_eq!(

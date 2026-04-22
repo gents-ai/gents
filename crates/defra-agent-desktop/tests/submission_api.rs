@@ -1,7 +1,9 @@
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use defra_agent_desktop::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+use defra_agent_desktop::client::{
+    ClientCore, ClientCoreOptions, DesktopPaths, SubmitRequestOptions,
+};
 use serde::Deserialize;
 use tokio::time::{sleep, Instant};
 
@@ -196,6 +198,112 @@ async fn submit_request_writes_request_and_updates_conversation_summary() -> Res
     assert_eq!(core.store().snapshot().requests.len(), 1);
     core.shutdown().await?;
     Ok(())
+}
+
+/// Regression test for the "resend drops overrides" bug. Previously,
+/// `fetch_request_view` only queried `session_id`, `agent_did`, `behavior_id`,
+/// `content`, `lifecycle_state`, `failure_reason` — so `resend_request`
+/// silently rebuilt the new row without the original sampling overrides or
+/// metadata. Resend must preserve submitter intent across the retry chain.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resend_preserves_request_overrides_and_metadata() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path()),
+        ClientCoreOptions::local_only(),
+    )
+    .await?;
+
+    let created = core
+        .create_conversation("did:defra:amy", Some("amy-code"))
+        .await?;
+
+    // Submit with explicit sampling overrides + metadata.
+    let metadata_value = r#"{"key":"preserve-me"}"#.to_string();
+    let options = SubmitRequestOptions {
+        temperature: Some(0.7),
+        top_p: Some(0.95),
+        top_k: Some(40),
+        max_tokens: Some(1234),
+        metadata: Some(metadata_value.clone()),
+        ..SubmitRequestOptions::default()
+    };
+    let original = core
+        .submit_request_with_options(
+            &created.session_id,
+            "did:defra:amy",
+            "please preserve my overrides",
+            None,
+            options,
+        )
+        .await?;
+
+    // Force the row to a stale-terminal state (dead + Stale) directly via the
+    // embedded node. `resend_request` only accepts rows in that exact shape.
+    let force_stale = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                input: {{ lifecycle_state: "dead", failure_reason: "Stale" }}
+            ) {{ _docID }}
+        }}"#,
+        request_id = original.request_id,
+    );
+    let resp = core.node().execute(&force_stale).await;
+    assert!(
+        !resp.has_errors(),
+        "forcing stale state failed: {:?}",
+        resp.errors
+    );
+
+    // Resend — this is what we're testing.
+    let resent = core.resend_request(&original.request_id).await?;
+
+    // The new row must carry identical sampling overrides + metadata.
+    let new_row: RequestWithOverridesRow = query_single(
+        core.node(),
+        &format!(
+            r#"{{
+                AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    request_id
+                    retry_parent_request
+                    retry_root_request
+                    temperature
+                    top_p
+                    top_k
+                    max_tokens
+                    metadata
+                }}
+            }}"#,
+            resent.request_id
+        ),
+        "AgentRequest",
+    )
+    .await?;
+    assert_eq!(new_row.request_id, resent.request_id);
+    assert_eq!(new_row.retry_parent_request, original.request_id);
+    // Root should chain back to the original (this was the root of its own chain).
+    assert_eq!(new_row.retry_root_request, original.request_id);
+    assert_eq!(new_row.temperature, Some(0.7));
+    assert_eq!(new_row.top_p, Some(0.95));
+    assert_eq!(new_row.top_k, Some(40));
+    assert_eq!(new_row.max_tokens, Some(1234));
+    assert_eq!(new_row.metadata.as_deref(), Some(metadata_value.as_str()));
+
+    core.shutdown().await?;
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+struct RequestWithOverridesRow {
+    request_id: String,
+    retry_parent_request: String,
+    retry_root_request: String,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    top_k: Option<i64>,
+    max_tokens: Option<i64>,
+    metadata: Option<String>,
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

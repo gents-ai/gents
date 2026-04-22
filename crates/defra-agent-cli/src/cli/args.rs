@@ -826,6 +826,10 @@ pub(crate) enum RequestCommand {
     Submit(RequestSubmitArgs),
     #[command(about = "Show a stored AgentRequest document")]
     Show(RequestShowArgs),
+    #[command(about = "Signal interrupt on an in-flight request (idempotent latch)")]
+    Interrupt(RequestInterruptArgs),
+    #[command(about = "Resend a stale-terminal request with a fresh TTL")]
+    Resend(RequestResendArgs),
 }
 
 #[derive(clap::Args)]
@@ -854,9 +858,46 @@ pub(crate) struct RequestSubmitArgs {
     pub(crate) max_tokens: Option<i64>,
     #[arg(long)]
     pub(crate) metadata: Option<String>,
+    #[arg(
+        long = "valid-until",
+        help = "TTL for this request (e.g. 30s, 5m, 2h, 1d). Default: 5m. Use \"none\" or 0 to disable."
+    )]
+    pub(crate) valid_until: Option<String>,
     #[arg(long = "output-file")]
     pub(crate) output_file: Option<PathBuf>,
     #[arg(long, default_value_t = false)]
+    pub(crate) no_wait: bool,
+    #[arg(long, default_value_t = 300)]
+    pub(crate) timeout_secs: u64,
+    #[arg(long, default_value_t = 1)]
+    pub(crate) poll_secs: u64,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct RequestInterruptArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long = "request-id")]
+    pub(crate) request_id_flag: Option<String>,
+    #[arg(value_name = "REQUEST_ID")]
+    pub(crate) request_id: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct RequestResendArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long = "request-id")]
+    pub(crate) request_id_flag: Option<String>,
+    #[arg(value_name = "REQUEST_ID")]
+    pub(crate) request_id: Option<String>,
+    #[arg(long = "output-file")]
+    pub(crate) output_file: Option<PathBuf>,
+    #[arg(long, default_value_t = true)]
     pub(crate) no_wait: bool,
     #[arg(long, default_value_t = 300)]
     pub(crate) timeout_secs: u64,
