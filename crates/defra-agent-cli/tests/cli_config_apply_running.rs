@@ -33,17 +33,21 @@ async fn config_apply_reconciles_running_runtime_without_restart() -> Result<()>
         ],
     )?;
 
-    let exported = run_cli_json(&home_dir, &["config", "export"])?;
-    write_manifest_root_from_export(&root, &exported)?;
+    run_cli_text(&home_dir, &["config", "export", "--root", root.to_str().expect("utf-8 root")])?;
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
-    let behavior_id = exported
-        .pointer("/agent_behaviors/0/behavior_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("exported bundle missing agent_behaviors[0].behavior_id"))?
+    let behaviors_dir = root.join("agent-behaviors");
+    let behavior_entry = fs::read_dir(&behaviors_dir)
+        .context("reading agent-behaviors dir after export")?
+        .next()
+        .ok_or_else(|| anyhow!("no agent-behavior subdirs after export"))??;
+    let behavior_id = behavior_entry
+        .file_name()
+        .to_str()
+        .ok_or_else(|| anyhow!("non-utf8 behavior dir name"))?
         .to_string();
     let behaviors_path = root
         .join("agent-behaviors")

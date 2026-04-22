@@ -41,13 +41,12 @@ async fn config_apply_reconciles_tool_services_tasks_and_schedules_end_to_end() 
         ],
     )?;
 
-    let exported = run_cli_json(&home_dir, &["config", "export"])?;
-    write_manifest_root_from_export(&root, &exported)?;
-
-    let behavior_id = exported
-        .pointer("/agent_principal/default_behavior_id")
+    run_cli_text(&home_dir, &["config", "export", "--root", &root.to_string_lossy()])?;
+    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let behavior_id = principal
+        .get("default_behavior_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("exported bundle missing default behavior id"))?
+        .ok_or_else(|| anyhow!("missing default_behavior_id after export"))?
         .to_string();
     let service_id = format!("ops-mcp-{}", Uuid::new_v4().simple());
     let task_id = format!("nightly-audit-{}", Uuid::new_v4().simple());
