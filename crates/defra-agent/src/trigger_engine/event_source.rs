@@ -432,6 +432,66 @@ impl EventSource {
         Ok(row.clone())
     }
 
+    /// Spawn a background task that writes the runtime-owned bookkeeping
+    /// fields on the `EventTrigger` document referenced by `trigger_id`.
+    ///
+    /// Invoked from the `on_result` callback on a `FireIntent` emitted by
+    /// `next_fire`. Runs off the engine's dispatch path so the inner loop
+    /// isn't blocked on DefraDB I/O. Mirrors `ScheduleSource`'s callback:
+    ///
+    /// - `Fired`: `last_status = "fired"`, `fire_count += 1`, stamp the
+    ///   source doc id that caused the fire, and clear `last_error`.
+    /// - `Skipped`: `last_status = "skipped"`, record the skip reason in
+    ///   `last_error` (for operator visibility into concurrency/latest-only
+    ///   collapse), leave `fire_count` untouched.
+    /// - `Errored`: `last_status = "error"`, record the failure string in
+    ///   `last_error`, leave `fire_count` untouched.
+    ///
+    /// Writes are best-effort: a failing DefraDB update is logged at `warn`
+    /// so an operator can correlate missing runtime fields with a backing
+    /// mutation error, but it does not propagate (the event has already
+    /// fired into the materializer).
+    pub(super) fn spawn_runtime_field_write(
+        node: Arc<EmbeddedNode>,
+        trigger_id: String,
+        source_doc_id: String,
+        result: crate::trigger_engine::FireResult,
+    ) {
+        tokio::spawn(async move {
+            let now = chrono::Utc::now().to_rfc3339_opts(
+                chrono::SecondsFormat::Secs, true);
+            let (status, error_value, fire_delta) = match &result {
+                crate::trigger_engine::FireResult::Fired { .. } => ("fired", None, Some(1)),
+                crate::trigger_engine::FireResult::Skipped { reason } => {
+                    ("skipped", Some(reason.clone()), None)
+                }
+                crate::trigger_engine::FireResult::Errored { error } => {
+                    ("error", Some(error.clone()), None)
+                }
+            };
+            let update = crate::document_config::EventTriggerRuntimeUpdate {
+                last_attempt_at: Some(now),
+                last_fired_source_doc_id: Some(source_doc_id),
+                last_status: Some(status.to_string()),
+                last_error: error_value,
+                fire_count_delta: fire_delta,
+            };
+            if let Err(error) = crate::document_config::update_event_trigger_runtime_fields(
+                &node,
+                &trigger_id,
+                update,
+            )
+            .await
+            {
+                tracing::warn!(
+                    trigger_id = %trigger_id,
+                    %error,
+                    "event trigger runtime-field update failed"
+                );
+            }
+        });
+    }
+
     /// Find the first active event trigger whose `source_collection` matches
     /// `collection_name` AND whose `event_kind` matches `kind` (currently
     /// always `"created"` per the v1 spec; `kind` is validated at resolve
@@ -670,6 +730,16 @@ impl TriggerSource for EventSource {
                     "event source matched event to trigger; emitting fire intent",
                 );
 
+                // Values captured for the result-writeback closure. The
+                // callback is synchronous (`FnOnce(FireResult)`), so it
+                // spawns a background task that performs the DefraDB
+                // mutation; the engine's dispatch loop continues without
+                // waiting on bookkeeping I/O. Mirrors the pattern used by
+                // `ScheduleSource::next_fire`.
+                let trigger_id_for_callback = trigger.trigger_id.clone();
+                let source_doc_id_for_callback = doc_id.clone();
+                let node_for_callback = self.node.clone();
+
                 return Some(FireIntent {
                     trigger_id: Some(trigger.trigger_id.clone()),
                     trigger_kind: TriggerKind::Event,
@@ -678,9 +748,14 @@ impl TriggerSource for EventSource {
                     event_vars,
                     doc_vars,
                     args_vars: None,
-                    // Task 22 owns the on_result callback body (bookkeeping
-                    // writebacks on fire/skip/supersede/error).
-                    on_result: Box::new(move |_result| {}),
+                    on_result: Box::new(move |result| {
+                        EventSource::spawn_runtime_field_write(
+                            node_for_callback,
+                            trigger_id_for_callback,
+                            source_doc_id_for_callback,
+                            result,
+                        );
+                    }),
                 });
             }
         })

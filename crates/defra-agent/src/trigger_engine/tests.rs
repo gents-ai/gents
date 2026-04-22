@@ -12,7 +12,9 @@ use tokio_util::sync::CancellationToken;
 use super::*;
 use crate::compaction::CompactionStrategy;
 use crate::config::{BehaviorConfig, SamplingConfig};
-use crate::document_config::{list_schedule_records, load_schedule_next_run_at};
+use crate::document_config::{
+    list_event_trigger_records, list_schedule_records, load_schedule_next_run_at,
+};
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
 use crate::identity::SimpleIdentity;
@@ -1675,6 +1677,342 @@ async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
         doc_vars["_docID"].as_str().is_some_and(|s| !s.is_empty()),
         "doc_vars must always carry _docID, got {doc_vars}"
     );
+
+    cancel.cancel();
+}
+
+/// Helper: create an `EventTrigger` document keyed by `trigger_id` via a raw
+/// GraphQL mutation, matching the shape used by the CLI apply path and the
+/// `schedule_snapshot_reconcile` integration test. The `fire_count: 0` seed
+/// is required so the runtime's `fire_count += 1` increment has a value to
+/// read back.
+async fn create_event_trigger_doc(
+    node: &defra_node::EmbeddedNode,
+    trigger_id: &str,
+    task_id: &str,
+    source_collection: &str,
+) {
+    let escaped_trigger_id = escape_graphql_string(trigger_id);
+    let escaped_task_id = escape_graphql_string(task_id);
+    let escaped_source_collection = escape_graphql_string(source_collection);
+    let mutation = format!(
+        r#"mutation {{
+            create_EventTrigger(input: {{
+                trigger_id: "{escaped_trigger_id}",
+                task_id: "{escaped_task_id}",
+                source_collection: "{escaped_source_collection}",
+                event_kind: "created",
+                enabled: true,
+                concurrency: "serial",
+                fire_count: 0
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create EventTrigger failed: {:?}",
+        response.errors,
+    );
+}
+
+/// Task 22: a Fired result dispatched through the `on_result` callback must
+/// write the runtime-owned bookkeeping fields back onto the `EventTrigger`
+/// document: `last_status = "fired"`, `fire_count += 1`,
+/// `last_fired_source_doc_id` set to the source doc id that caused the fire,
+/// and `last_attempt_at` populated. Apply-owned fields (`enabled`, `task_id`,
+/// `source_collection`, `event_kind`, `concurrency`) must be untouched.
+#[tokio::test]
+async fn event_source_on_result_writes_runtime_fields_on_fired() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    // Register the source collection the trigger will observe.
+    let webhook_sdl = r#"
+        type WebhookEvent {
+            external_id: String
+            payload: String
+        }
+    "#;
+    node.add_schema(webhook_sdl)
+        .await
+        .expect("add_schema for WebhookEvent");
+
+    // Seed the EventTrigger doc so `update_event_trigger_runtime_fields` has
+    // a row to write back against. Apply-path fields are set here; the
+    // runtime writeback must leave them alone.
+    create_event_trigger_doc(
+        node.as_ref(),
+        "trigger-fired",
+        "task-webhook",
+        "WebhookEvent",
+    )
+    .await;
+
+    let task = ResolvedTask {
+        task_id: "task-webhook".to_string(),
+        behavior_id: "general".to_string(),
+        prompt_template: "handle webhook".to_string(),
+        output_schema_ref: None,
+    };
+    let trigger = resolved_event_trigger("trigger-fired", "WebhookEvent", task.clone());
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([("trigger-fired".to_string(), trigger)]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+
+    let cancel = CancellationToken::new();
+    let mut source = EventSource::new(rx, node.clone(), cancel.clone());
+    // Open the subscription BEFORE writing the source doc so the mutation
+    // lands after the bus has a listener. Otherwise the event is dropped.
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+
+    let node_for_mutation = node.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mutation = r#"mutation {
+            create_WebhookEvent(input: {
+                external_id: "wh-fire",
+                payload: "{}"
+            }) { _docID }
+        }"#;
+        let resp = node_for_mutation.execute(mutation).await;
+        assert!(
+            !resp.has_errors(),
+            "create_WebhookEvent failed: {:?}",
+            resp.errors,
+        );
+    });
+
+    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("next_fire timed out waiting for WebhookEvent")
+        .expect("next_fire returned None instead of emitting a FireIntent");
+
+    // Capture the source doc id the intent carries so we can assert the
+    // writeback stamps it onto `last_fired_source_doc_id`.
+    let fired_source_doc_id = intent
+        .event_vars
+        .get("source_doc_id")
+        .and_then(|v| v.as_str())
+        .expect("event_vars.source_doc_id must be a string")
+        .to_string();
+
+    // Dispatch a synthetic Fired result into the callback. The callback
+    // spawns a background write, so poll the DB until it lands (bounded
+    // retry). This mirrors the ScheduleSource Fired test pattern.
+    (intent.on_result)(FireResult::Fired {
+        request_id: "req-0".to_string(),
+    });
+
+    let mut fired_trigger = None;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let records = list_event_trigger_records(node.as_ref()).await.unwrap();
+        let (_doc_id, trig) = records
+            .iter()
+            .find(|(_d, t)| t.trigger_id == "trigger-fired")
+            .cloned()
+            .expect("EventTrigger doc disappeared");
+        if trig.last_status.as_deref() == Some("fired") {
+            fired_trigger = Some(trig);
+            break;
+        }
+    }
+    let fired = fired_trigger.expect("EventTrigger.last_status never became \"fired\"");
+    assert_eq!(fired.last_status.as_deref(), Some("fired"));
+    assert_eq!(fired.fire_count, Some(1));
+    assert_eq!(
+        fired.last_fired_source_doc_id.as_deref(),
+        Some(fired_source_doc_id.as_str()),
+        "last_fired_source_doc_id should match the source doc id carried \
+         by the intent",
+    );
+    assert!(
+        fired.last_attempt_at.is_some(),
+        "last_attempt_at should be set after a fire",
+    );
+    assert_eq!(
+        fired.last_error, None,
+        "last_error must be cleared on a successful fire",
+    );
+    // Apply-owned fields must not be clobbered by the runtime writeback.
+    assert_eq!(fired.task_id.as_deref(), Some("task-webhook"));
+    assert_eq!(fired.source_collection.as_deref(), Some("WebhookEvent"));
+    assert_eq!(fired.event_kind.as_deref(), Some("created"));
+    assert_eq!(fired.enabled, Some(true));
+    assert_eq!(fired.concurrency.as_deref(), Some("serial"));
+
+    cancel.cancel();
+}
+
+/// Task 22: a Skipped result writes `last_status = "skipped"` and records
+/// the skip reason in `last_error` without advancing `fire_count`. A
+/// subsequent Errored result flips `last_status` to `"error"` and replaces
+/// `last_error` with the failure string. Both writes must go through a
+/// single source instance (and a single intent) to exercise the callback
+/// directly without re-driving `next_fire` for each phase — per the spec,
+/// the callback is a pure synthesizer of runtime-field updates from a
+/// `FireResult` value.
+#[tokio::test]
+async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let webhook_sdl = r#"
+        type WebhookEvent {
+            external_id: String
+            payload: String
+        }
+    "#;
+    node.add_schema(webhook_sdl)
+        .await
+        .expect("add_schema for WebhookEvent");
+
+    create_event_trigger_doc(
+        node.as_ref(),
+        "trigger-skip-err",
+        "task-webhook",
+        "WebhookEvent",
+    )
+    .await;
+
+    let task = ResolvedTask {
+        task_id: "task-webhook".to_string(),
+        behavior_id: "general".to_string(),
+        prompt_template: "handle webhook".to_string(),
+        output_schema_ref: None,
+    };
+    let trigger = resolved_event_trigger("trigger-skip-err", "WebhookEvent", task.clone());
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([("trigger-skip-err".to_string(), trigger)]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+
+    let cancel = CancellationToken::new();
+    let mut source = EventSource::new(rx, node.clone(), cancel.clone());
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+
+    let node_for_mutation = node.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mutation = r#"mutation {
+            create_WebhookEvent(input: {
+                external_id: "wh-skip",
+                payload: "{}"
+            }) { _docID }
+        }"#;
+        let resp = node_for_mutation.execute(mutation).await;
+        assert!(
+            !resp.has_errors(),
+            "create_WebhookEvent failed: {:?}",
+            resp.errors,
+        );
+    });
+
+    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("next_fire timed out waiting for WebhookEvent")
+        .expect("next_fire returned None instead of emitting a FireIntent");
+
+    // ---- Skipped phase ----
+    // The callback is a `FnOnce` closure so we can only invoke it once per
+    // intent. To drive two phases in one test we'd need two intents. The
+    // simpler path: invoke with Skipped here, then synthesize a second
+    // writeback by calling `spawn_runtime_field_write` directly for the
+    // Errored case below. That mirrors exactly what the intent closure does
+    // internally, and keeps the test focused on the writeback shape.
+    let trigger_id = "trigger-skip-err".to_string();
+    let source_doc_id = intent
+        .event_vars
+        .get("source_doc_id")
+        .and_then(|v| v.as_str())
+        .expect("event_vars.source_doc_id must be a string")
+        .to_string();
+
+    (intent.on_result)(FireResult::Skipped {
+        reason: "serial: prior fire still in-flight".to_string(),
+    });
+
+    let mut skipped_trigger = None;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let records = list_event_trigger_records(node.as_ref()).await.unwrap();
+        let (_doc_id, trig) = records
+            .iter()
+            .find(|(_d, t)| t.trigger_id == "trigger-skip-err")
+            .cloned()
+            .expect("EventTrigger doc disappeared");
+        if trig.last_status.as_deref() == Some("skipped") {
+            skipped_trigger = Some(trig);
+            break;
+        }
+    }
+    let skipped = skipped_trigger.expect("EventTrigger.last_status never became \"skipped\"");
+    assert_eq!(skipped.last_status.as_deref(), Some("skipped"));
+    // fire_count MUST NOT advance on skip.
+    assert_eq!(skipped.fire_count, Some(0));
+    assert_eq!(
+        skipped.last_error.as_deref(),
+        Some("serial: prior fire still in-flight"),
+        "last_error should carry the skip reason for operator visibility",
+    );
+    assert!(
+        skipped.last_attempt_at.is_some(),
+        "last_attempt_at should be set on a skip",
+    );
+    assert_eq!(
+        skipped.last_fired_source_doc_id.as_deref(),
+        Some(source_doc_id.as_str()),
+        "last_fired_source_doc_id should record the candidate even on skip",
+    );
+    // Apply-owned fields intact.
+    assert_eq!(skipped.task_id.as_deref(), Some("task-webhook"));
+    assert_eq!(skipped.enabled, Some(true));
+    assert_eq!(skipped.concurrency.as_deref(), Some("serial"));
+
+    // ---- Errored phase ----
+    // Drive the same writeback path with an Errored result. The helper is
+    // an inherent `fn` on EventSource so we can call it directly — this is
+    // exactly the path the `on_result` closure takes internally.
+    EventSource::spawn_runtime_field_write(
+        node.clone(),
+        trigger_id.clone(),
+        source_doc_id.clone(),
+        FireResult::Errored {
+            error: "materializer failed: backend timeout".to_string(),
+        },
+    );
+
+    let mut errored_trigger = None;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let records = list_event_trigger_records(node.as_ref()).await.unwrap();
+        let (_doc_id, trig) = records
+            .iter()
+            .find(|(_d, t)| t.trigger_id == "trigger-skip-err")
+            .cloned()
+            .expect("EventTrigger doc disappeared");
+        if trig.last_status.as_deref() == Some("error") {
+            errored_trigger = Some(trig);
+            break;
+        }
+    }
+    let errored = errored_trigger.expect("EventTrigger.last_status never became \"error\"");
+    assert_eq!(errored.last_status.as_deref(), Some("error"));
+    // fire_count MUST still not advance on error.
+    assert_eq!(errored.fire_count, Some(0));
+    assert_eq!(
+        errored.last_error.as_deref(),
+        Some("materializer failed: backend timeout"),
+        "last_error should carry the failure string on Errored",
+    );
+    // Apply-owned fields intact.
+    assert_eq!(errored.task_id.as_deref(), Some("task-webhook"));
+    assert_eq!(errored.enabled, Some(true));
+    assert_eq!(errored.concurrency.as_deref(), Some("serial"));
 
     cancel.cancel();
 }
