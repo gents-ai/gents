@@ -494,6 +494,152 @@ async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
 }
 
 #[tokio::test]
+async fn resolve_produces_active_event_trigger_when_task_and_behavior_exist() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-resolve-trigger-active"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-resolve-trigger-active",
+        "http://127.0.0.1:8127/v1",
+    )
+    .await;
+
+    let default_behavior_id = format!("{}:default", identity.did());
+    create_task_bound(
+        node.as_ref(),
+        "task-trigger-active",
+        &default_behavior_id,
+        "do the thing on event",
+        true,
+    )
+    .await;
+    create_event_trigger(
+        node.as_ref(),
+        "trigger-active",
+        "task-trigger-active",
+        "CustomerSignup",
+        "created",
+        "serial",
+    )
+    .await;
+
+    let resolve_context = DocumentResolveContext {
+        identity: identity.clone(),
+        tool_ceiling: ToolCeiling::readonly(),
+    };
+    let view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("document view should load");
+
+    let snapshot =
+        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
+            .await
+            .expect("resolve should succeed");
+
+    assert_eq!(
+        snapshot.active_event_triggers.len(),
+        1,
+        "expected exactly one active event trigger"
+    );
+    assert!(
+        snapshot.unavailable_event_triggers.is_empty(),
+        "expected no unavailable event triggers, got {:?}",
+        snapshot.unavailable_event_triggers
+    );
+    let resolved = snapshot
+        .active_event_triggers
+        .get("trigger-active")
+        .expect("trigger-active present in active_event_triggers");
+    assert_eq!(resolved.trigger_id, "trigger-active");
+    assert_eq!(resolved.task_id, "task-trigger-active");
+    assert_eq!(resolved.task.behavior_id, default_behavior_id);
+    assert_eq!(resolved.task.prompt_template, "do the thing on event");
+    assert_eq!(resolved.source_collection, "CustomerSignup");
+    assert_eq!(resolved.event_kind, "created");
+    assert!(resolved.enabled);
+}
+
+#[tokio::test]
+async fn resolve_marks_event_trigger_unavailable_when_task_missing_or_disabled() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-resolve-trigger-unavailable"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-resolve-trigger-unavailable",
+        "http://127.0.0.1:8128/v1",
+    )
+    .await;
+
+    let default_behavior_id = format!("{}:default", identity.did());
+    // Disabled task — trigger should be unavailable even though the task
+    // document exists.
+    create_task_bound(
+        node.as_ref(),
+        "task-trigger-disabled",
+        &default_behavior_id,
+        "disabled task",
+        false,
+    )
+    .await;
+    create_event_trigger(
+        node.as_ref(),
+        "trigger-task-disabled",
+        "task-trigger-disabled",
+        "CustomerSignup",
+        "created",
+        "serial",
+    )
+    .await;
+    // Trigger whose task_id does not match any Task document.
+    create_event_trigger(
+        node.as_ref(),
+        "trigger-task-missing",
+        "task-that-never-existed",
+        "CustomerSignup",
+        "created",
+        "serial",
+    )
+    .await;
+
+    let resolve_context = DocumentResolveContext {
+        identity: identity.clone(),
+        tool_ceiling: ToolCeiling::readonly(),
+    };
+    let view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("document view should load");
+
+    let snapshot =
+        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
+            .await
+            .expect("resolve should succeed");
+
+    assert!(
+        snapshot.active_event_triggers.is_empty(),
+        "expected no active event triggers, got {:?}",
+        snapshot.active_event_triggers.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        snapshot
+            .unavailable_event_triggers
+            .contains("trigger-task-missing"),
+        "missing-task trigger should be in unavailable_event_triggers: {:?}",
+        snapshot.unavailable_event_triggers
+    );
+    assert!(
+        snapshot
+            .unavailable_event_triggers
+            .contains("trigger-task-disabled"),
+        "disabled-task trigger should be in unavailable_event_triggers: {:?}",
+        snapshot.unavailable_event_triggers
+    );
+}
+
+#[tokio::test]
 async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
