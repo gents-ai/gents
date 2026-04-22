@@ -85,9 +85,21 @@ pub(super) fn render_task_editor(ui: &mut Ui, draft: &mut TaskDraft) {
     read_only_field(ui, "Updated At", draft.updated_at.as_str());
 }
 
-/// Task 51 renders a minimal read-only detail view for schedules. Task
-/// 52 wires the editor; Task 53 surfaces the fire-bookkeeping fields
-/// (last_attempt_at, last_status, last_error, fire_count) cleanly.
+/// Schedule detail editor.
+///
+/// The Schedule collection straddles the apply/runtime boundary: the
+/// apply path owns the description of the schedule (`schedule_id`,
+/// `task_id`, `interval_secs`, `enabled`, `concurrency`,
+/// `created_at`, `updated_at`) while the trigger engine owns the fire
+/// bookkeeping (`next_run_at`, `last_attempt_at`, `last_status`,
+/// `last_error`, `fire_count`).
+///
+/// Task 53 groups those halves visually so operators can tell at a
+/// glance which fields they can change and which reflect what the
+/// scheduler has actually done. The apply-path mutation writer in
+/// `client/mutations/manage/task.rs` projects only the apply-owned
+/// fields, so the runtime bookkeeping shown here is never clobbered by
+/// a desktop save.
 pub(super) fn render_schedule_editor(ui: &mut Ui, draft: &mut ScheduleDraft) {
     editor_heading(ui, "Schedule");
     text_field(ui, "Schedule ID", &mut draft.schedule_id);
@@ -95,11 +107,19 @@ pub(super) fn render_schedule_editor(ui: &mut Ui, draft: &mut ScheduleDraft) {
     text_field(ui, "Interval Secs", &mut draft.interval_secs);
     toggle_field(ui, "Enabled", &mut draft.enabled);
     text_field(ui, "Concurrency", &mut draft.concurrency);
-    text_field(ui, "Next Run At", &mut draft.next_run_at);
+    read_only_field(ui, "Created At", draft.created_at.as_str());
+    read_only_field(ui, "Updated At", draft.updated_at.as_str());
+
+    ui.add_space(8.0);
+    editor_heading(ui, "Runtime State");
+    // These five fields are owned by the trigger engine. They are
+    // shown read-only so the desktop cannot accidentally reset the
+    // scheduler's bookkeeping by re-applying a Schedule edit. The
+    // mutation writer enforces the same contract at the GraphQL layer
+    // by omitting these fields from upsert input.
+    read_only_field(ui, "Next Run At", draft.next_run_at.as_str());
     read_only_field(ui, "Last Attempt At", draft.last_attempt_at.as_str());
     read_only_field(ui, "Last Status", draft.last_status.as_str());
     read_only_multiline(ui, "Last Error", draft.last_error.as_str(), 4);
     read_only_field(ui, "Fire Count", draft.fire_count.as_str());
-    read_only_field(ui, "Created At", draft.created_at.as_str());
-    read_only_field(ui, "Updated At", draft.updated_at.as_str());
 }

@@ -74,14 +74,9 @@ fn desktop_app_live_manage_schedule_and_failures() -> Result<()> {
             &audit::targets::manage_toggle("Enabled"),
         )?;
         driver.click_target(&audit::targets::manage_toggle("Enabled"));
-        driver.scroll_right_rail_until_target(
-            "live schedule next-run field",
-            &audit::targets::manage_field("Next Run At"),
-        )?;
-        driver.replace_text_in_target(
-            &audit::targets::manage_field("Next Run At"),
-            "2035-04-15T12:34:56Z",
-        );
+        // `next_run_at` is runtime-owned (Task 53): the desktop shows
+        // it as read-only and the mutation writer never projects it.
+        // We don't try to edit it from the UI here.
         driver.scroll_right_rail_until_target(
             "live schedule apply",
             audit::targets::MANAGE_APPLY,
