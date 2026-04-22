@@ -756,7 +756,7 @@ fn hydrate_sidecar_errors_on_non_utf8() {
     use super::load::hydrate_sidecar;
 
     let dir = tempdir().unwrap();
-    fs::write(dir.path().join("bad.md"), &[0xff, 0xfe, 0xfd]).unwrap();
+    fs::write(dir.path().join("bad.md"), [0xff, 0xfe, 0xfd]).unwrap();
     let mut value = Some("./bad.md".to_string());
     let err = hydrate_sidecar(&mut value, dir.path()).unwrap_err();
     assert!(err.contains("not valid UTF-8"), "got: {err}");
