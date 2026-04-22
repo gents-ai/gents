@@ -255,7 +255,7 @@ fn render_editor_workspace(
                 let task_id = draft.task_id.clone();
                 let task_enabled = draft.enabled;
                 scroll_editor_body(ui, |ui| render_task_editor(ui, draft, store));
-                render_task_run_now_row(ui, state, client, &task_id, task_enabled);
+                render_task_run_now_row(ui, state, client, store, &task_id, task_enabled);
                 rail::render_editor_footer(ui, state, client);
             } else {
                 views::card(
@@ -464,18 +464,31 @@ fn scroll_editor_body(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui)) {
 /// Render the "Run Now" row below the Task editor.
 ///
 /// The button opens the manual-run args modal. It is disabled when the
-/// client is offline or the task is disabled, mirroring the enablement
-/// rule that `fire_task_now` enforces at the mutation layer.
+/// client is offline, the task is disabled, or the draft does not yet
+/// correspond to a persisted `Task` row in the store. Requiring a
+/// persisted row matches what the controller's submit path looks up
+/// (`manage::controller::submit_fire_task_draft` resolves against
+/// `client.store().snapshot().tasks`) — without this guard, an unsaved
+/// task (or an existing task whose `task_id` has been edited but not
+/// saved) would offer a button that then fails with
+/// `task ... disappeared from store`.
 fn render_task_run_now_row(
     ui: &mut Ui,
     state: &mut ShellState,
     client: Option<&ClientCore>,
+    store: &ClientStore,
     task_id: &str,
     task_enabled: bool,
 ) {
     ui.separator();
     ui.horizontal(|ui| {
-        let can_fire = client.is_some() && task_enabled && !task_id.trim().is_empty();
+        let persisted_row_exists = task_row_is_persisted(store, task_id);
+        let can_fire = task_run_now_enabled(
+            client.is_some(),
+            task_enabled,
+            task_id,
+            persisted_row_exists,
+        );
         let response = ui.add_enabled(can_fire, egui::Button::new("Run Now"));
         if response.clicked() {
             state.manage.fire_task_draft = Some(FireTaskDraft::new(task_id.to_string()));
@@ -487,8 +500,39 @@ fn render_task_run_now_row(
                     .size(10.5)
                     .color(theme::palette().text_2),
             );
+        } else if !persisted_row_exists {
+            // Distinguishing this from "task disabled" matters: the
+            // operator's fix is different (save vs. enable).
+            ui.label(
+                RichText::new("save the task first")
+                    .monospace()
+                    .size(10.5)
+                    .color(theme::palette().text_2),
+            );
         }
     });
+}
+
+/// True when the Task draft corresponds to a persisted `Task` row in the
+/// store. The controller's submit path resolves against
+/// `client.store().snapshot().tasks`, so a draft whose `task_id` does not
+/// appear there would submit and immediately fail with
+/// `task ... disappeared from store`.
+fn task_row_is_persisted(store: &ClientStore, task_id: &str) -> bool {
+    let trimmed = task_id.trim();
+    !trimmed.is_empty() && store.tasks.iter().any(|row| row.task_id == trimmed)
+}
+
+/// Pure enablement predicate for the "Run Now" button. Mirrors the
+/// guard the controller enforces at submit time so the button is never
+/// offered for a state the controller would refuse.
+fn task_run_now_enabled(
+    client_online: bool,
+    task_enabled: bool,
+    task_id: &str,
+    persisted_row_exists: bool,
+) -> bool {
+    client_online && task_enabled && !task_id.trim().is_empty() && persisted_row_exists
 }
 
 /// Render the manual-run args modal when `fire_task_draft` is set.
@@ -550,5 +594,86 @@ fn render_fire_task_modal(ui: &mut Ui, state: &mut ShellState) {
     }
     if close_requested {
         state.manage.fire_task_draft = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::client::ClientStoreRows;
+    use defra_agent_protocol::row::TaskRow;
+
+    fn store_with_tasks(task_ids: &[&str]) -> ClientStore {
+        ClientStore::from_rows(ClientStoreRows {
+            tasks: task_ids
+                .iter()
+                .map(|id| TaskRow {
+                    task_id: (*id).to_string(),
+                    name: None,
+                    description: None,
+                    behavior_id: None,
+                    prompt_template: None,
+                    enabled: Some(true),
+                    output_schema_ref: None,
+                    created_at: None,
+                    updated_at: None,
+                })
+                .collect(),
+            ..ClientStoreRows::default()
+        })
+    }
+
+    #[test]
+    fn task_row_is_persisted_true_for_exact_match() {
+        let store = store_with_tasks(&["task-a", "task-b"]);
+        assert!(task_row_is_persisted(&store, "task-a"));
+        assert!(task_row_is_persisted(&store, "task-b"));
+    }
+
+    #[test]
+    fn task_row_is_persisted_false_for_empty_or_missing_task_id() {
+        let store = store_with_tasks(&["task-a"]);
+        // Empty/whitespace-only task_id never matches a stored row.
+        assert!(!task_row_is_persisted(&store, ""));
+        assert!(!task_row_is_persisted(&store, "   "));
+        // An unsaved draft (or an edited-but-unsaved task_id) has no
+        // corresponding row in the store yet.
+        assert!(!task_row_is_persisted(&store, "task-new"));
+    }
+
+    #[test]
+    fn task_run_now_disabled_when_row_is_not_persisted() {
+        // Pins Finding 2: even with a non-empty task_id, the button must
+        // be disabled when no persisted row exists. Submitting from that
+        // state would hit `task ... disappeared from store` in the
+        // controller.
+        assert!(!task_run_now_enabled(
+            /* client_online */ true,
+            /* task_enabled */ true,
+            "task-new",
+            /* persisted_row_exists */ false,
+        ));
+    }
+
+    #[test]
+    fn task_run_now_enabled_when_all_gates_pass() {
+        assert!(task_run_now_enabled(true, true, "task-a", true));
+    }
+
+    #[test]
+    fn task_run_now_disabled_when_client_offline() {
+        assert!(!task_run_now_enabled(false, true, "task-a", true));
+    }
+
+    #[test]
+    fn task_run_now_disabled_when_task_disabled() {
+        assert!(!task_run_now_enabled(true, false, "task-a", true));
+    }
+
+    #[test]
+    fn task_run_now_disabled_when_task_id_blank() {
+        assert!(!task_run_now_enabled(true, true, "", true));
+        assert!(!task_run_now_enabled(true, true, "   ", true));
     }
 }
