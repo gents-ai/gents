@@ -250,7 +250,11 @@ async fn resend_preserves_request_overrides_and_metadata() -> Result<()> {
         request_id = original.request_id,
     );
     let resp = core.node().execute(&force_stale).await;
-    assert!(!resp.has_errors(), "forcing stale state failed: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "forcing stale state failed: {:?}",
+        resp.errors
+    );
 
     // Resend — this is what we're testing.
     let resent = core.resend_request(&original.request_id).await?;

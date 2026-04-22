@@ -65,7 +65,10 @@ async fn observer_sends_intent_when_field_becomes_non_null() {
 
     // Observer should self-exit after signaling (latch).
     tokio::time::sleep(Duration::from_millis(2500)).await;
-    assert!(observer.is_finished(), "observer must self-exit after latching");
+    assert!(
+        observer.is_finished(),
+        "observer must self-exit after latching"
+    );
 }
 
 #[tokio::test]
@@ -126,7 +129,10 @@ async fn observer_survives_malformed_interrupt_timestamp() {
 
     // Wait briefly; observer should still be running and have NOT signaled.
     tokio::time::sleep(Duration::from_secs(3)).await;
-    assert!(!observer.is_finished(), "observer must not exit on parse error");
+    assert!(
+        !observer.is_finished(),
+        "observer must not exit on parse error"
+    );
     assert!(
         interrupt_rx.borrow().is_none(),
         "observer must not signal on parse error"

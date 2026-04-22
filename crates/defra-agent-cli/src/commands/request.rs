@@ -189,8 +189,7 @@ async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
 
 async fn request_resend(args: RequestResendArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let stale_id =
-        resolve_request_id(args.request_id.as_deref(), args.request_id_flag.as_deref())?;
+    let stale_id = resolve_request_id(args.request_id.as_deref(), args.request_id_flag.as_deref())?;
     let stale = fetch_request_view(&graphql, &stale_id).await?;
     if stale.lifecycle_state != "dead" || stale.failure_reason != "Stale" {
         anyhow::bail!(

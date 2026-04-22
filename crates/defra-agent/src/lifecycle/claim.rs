@@ -123,7 +123,8 @@ impl RequestLifecycle {
 
         // Tie-break: interrupt always wins over stale
         if let Some(interrupt_at) = interrupt_requested_at {
-            self.transition_pending_to_interrupted(&interrupt_at).await?;
+            self.transition_pending_to_interrupted(&interrupt_at)
+                .await?;
             self.state = LocalLifecycleState::Interrupted;
             return Ok(ClaimOutcome::Interrupted);
         }

@@ -84,9 +84,7 @@ impl BackendAdmissionController {
         match self.semaphore.clone().try_acquire_owned() {
             Ok(permit) => {
                 let call = self.call_record(pending, 0);
-                return self
-                    .start_permit(node, permit, call, cancel_observer)
-                    .await;
+                return self.start_permit(node, permit, call, cancel_observer).await;
             }
             Err(tokio::sync::TryAcquireError::Closed) => {
                 let call = self.call_record(pending, 0);
@@ -109,9 +107,7 @@ impl BackendAdmissionController {
                 match self.semaphore.clone().try_acquire_owned() {
                     Ok(permit) => {
                         let call = self.call_record(pending, queue_depth);
-                        return self
-                            .start_permit(node, permit, call, cancel_observer)
-                            .await;
+                        return self.start_permit(node, permit, call, cancel_observer).await;
                     }
                     Err(tokio::sync::TryAcquireError::Closed) => {
                         let call = self.call_record(pending, queue_depth);

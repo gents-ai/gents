@@ -43,8 +43,14 @@ fn resolved_snapshot_activate_preserves_generation_and_dispatchers() {
 
 #[test]
 fn concurrency_mode_parse_accepts_exact_known_values() {
-    assert_eq!(ConcurrencyMode::parse("parallel"), Some(ConcurrencyMode::Parallel));
-    assert_eq!(ConcurrencyMode::parse("serial"), Some(ConcurrencyMode::Serial));
+    assert_eq!(
+        ConcurrencyMode::parse("parallel"),
+        Some(ConcurrencyMode::Parallel)
+    );
+    assert_eq!(
+        ConcurrencyMode::parse("serial"),
+        Some(ConcurrencyMode::Serial)
+    );
     assert_eq!(
         ConcurrencyMode::parse("latest_only"),
         Some(ConcurrencyMode::LatestOnly)

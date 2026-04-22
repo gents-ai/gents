@@ -235,9 +235,7 @@ impl From<RequestSnapshotRawRow> for RequestSnapshotRaw {
         Self {
             status: row.status,
             lifecycle_state: row.lifecycle_state,
-            interrupt_requested_at: row
-                .interrupt_requested_at
-                .filter(|value| !value.is_empty()),
+            interrupt_requested_at: row.interrupt_requested_at.filter(|value| !value.is_empty()),
             valid_until: row.valid_until.filter(|value| !value.is_empty()),
         }
     }

@@ -154,11 +154,7 @@ impl ClientStore {
     /// `_agent_did` parameter is kept so call sites that pass an agent scope
     /// (today's behavior-diagnostics view, for example) stay ergonomic; the
     /// filter is intentionally behavior-scoped only.
-    pub fn tasks_for_behavior(
-        &self,
-        _agent_did: &str,
-        behavior_id: &str,
-    ) -> Vec<&TaskRow> {
+    pub fn tasks_for_behavior(&self, _agent_did: &str, behavior_id: &str) -> Vec<&TaskRow> {
         self.tasks
             .iter()
             .filter(|row| clean_string(row.behavior_id.as_deref()).as_deref() == Some(behavior_id))

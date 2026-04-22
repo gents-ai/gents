@@ -116,9 +116,12 @@ pub(crate) async fn create_agent_request(
             )
         })
         .unwrap_or_default();
-    let valid_until_literal = options
-        .valid_until
-        .map(|at| format!(r#"valid_until: "{}""#, escape_graphql_string(&at.to_rfc3339())));
+    let valid_until_literal = options.valid_until.map(|at| {
+        format!(
+            r#"valid_until: "{}""#,
+            escape_graphql_string(&at.to_rfc3339())
+        )
+    });
     let request_override_fields = vec![
         optional_f64_field("temperature", options.temperature),
         optional_f64_field("top_p", options.top_p),
@@ -139,10 +142,7 @@ pub(crate) async fn create_agent_request(
     } else {
         format!("{request_override_fields},\n                ")
     };
-    let retry_parent_value = options
-        .retry_parent_request
-        .as_deref()
-        .unwrap_or_default();
+    let retry_parent_value = options.retry_parent_request.as_deref().unwrap_or_default();
     let retry_root_value = options
         .retry_root_request
         .as_deref()
@@ -400,9 +400,7 @@ fn parse_duration_suffix(raw: &str) -> Result<Duration> {
 /// Resolve the `--valid-until` flag to an absolute deadline. `None` on the
 /// CLI defaults to `now + 5m` — the standard TTL for interactive requests.
 /// Pass `"none"` or `"0"` to explicitly disable the TTL for this submission.
-pub(crate) fn parse_valid_until_flag(
-    raw: Option<&str>,
-) -> Result<Option<DateTime<Utc>>> {
+pub(crate) fn parse_valid_until_flag(raw: Option<&str>) -> Result<Option<DateTime<Utc>>> {
     match raw.map(str::trim) {
         None => Ok(Some(Utc::now() + chrono::Duration::minutes(5))),
         Some("") | Some("none") | Some("0") => Ok(None),

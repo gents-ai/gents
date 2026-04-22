@@ -5,7 +5,8 @@ use defra_agent_protocol::row::{
 };
 
 use crate::state::{
-    BackendDraft, BehaviorDraft, InferenceProfileDraft, ScheduleDraft, TaskDraft, ToolSelectionDraft,
+    BackendDraft, BehaviorDraft, InferenceProfileDraft, ScheduleDraft, TaskDraft,
+    ToolSelectionDraft,
 };
 
 use super::{

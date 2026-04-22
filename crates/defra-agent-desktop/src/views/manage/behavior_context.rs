@@ -41,12 +41,7 @@ pub(super) fn render_behavior_context(
         requests.len(),
     );
 
-    render_summary_block(
-        ui,
-        "Tasks",
-        &tasks,
-        "No tasks are bound to this behavior.",
-    );
+    render_summary_block(ui, "Tasks", &tasks, "No tasks are bound to this behavior.");
     render_summary_block(
         ui,
         "Schedules",

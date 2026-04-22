@@ -64,10 +64,7 @@ fn desktop_app_live_manage_schedule_and_failures() -> Result<()> {
             "live schedule concurrency field",
             &audit::targets::manage_field("Concurrency"),
         )?;
-        driver.replace_text_in_target(
-            &audit::targets::manage_field("Concurrency"),
-            "latest_only",
-        );
+        driver.replace_text_in_target(&audit::targets::manage_field("Concurrency"), "latest_only");
         driver.scroll_right_rail_until_target(
             "live schedule enabled toggle",
             &audit::targets::manage_toggle("Enabled"),
@@ -76,10 +73,8 @@ fn desktop_app_live_manage_schedule_and_failures() -> Result<()> {
         // `next_run_at` is runtime-owned (Task 53): the desktop shows
         // it as read-only and the mutation writer never projects it.
         // We don't try to edit it from the UI here.
-        driver.scroll_right_rail_until_target(
-            "live schedule apply",
-            audit::targets::MANAGE_APPLY,
-        )?;
+        driver
+            .scroll_right_rail_until_target("live schedule apply", audit::targets::MANAGE_APPLY)?;
         driver.click_target(audit::targets::MANAGE_APPLY);
         wait_for_value(
             "live schedule edits persisted",
@@ -113,22 +108,18 @@ fn desktop_app_live_manage_schedule_and_failures() -> Result<()> {
             audit::targets::MANAGE_APPLY,
         )?;
         driver.click_target(audit::targets::MANAGE_APPLY);
-        wait_for_value(
-            "live schedule re-enabled",
-            Duration::from_secs(5),
-            || {
-                driver.app.client.as_ref().and_then(|client| {
-                    client
-                        .store()
-                        .snapshot()
-                        .schedules
-                        .iter()
-                        .find(|row| row.schedule_id == docs.schedule_id)
-                        .filter(|row| row.enabled == Some(true))
-                        .map(|row| row.schedule_id.clone())
-                })
-            },
-        )?;
+        wait_for_value("live schedule re-enabled", Duration::from_secs(5), || {
+            driver.app.client.as_ref().and_then(|client| {
+                client
+                    .store()
+                    .snapshot()
+                    .schedules
+                    .iter()
+                    .find(|row| row.schedule_id == docs.schedule_id)
+                    .filter(|row| row.enabled == Some(true))
+                    .map(|row| row.schedule_id.clone())
+            })
+        })?;
 
         // The manual "run now" path is intentionally stubbed in PR 1;
         // PR 3 will wire the real manual-run surface. Assert the stub
@@ -209,7 +200,10 @@ fn desktop_app_live_manage_schedule_and_failures() -> Result<()> {
                 ))
                 .await;
             if resp.has_errors() {
-                anyhow::bail!("update_Schedule (failure bookkeeping) failed: {:?}", resp.errors);
+                anyhow::bail!(
+                    "update_Schedule (failure bookkeeping) failed: {:?}",
+                    resp.errors
+                );
             }
             client.refresh_store().await?;
             Ok::<_, anyhow::Error>(())

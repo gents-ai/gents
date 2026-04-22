@@ -117,9 +117,7 @@ pub(crate) fn render_template(
 /// reference a scope the Schedule trigger does not supply, so this suffices.
 /// The function never panics; on a malformed block it simply stops scanning
 /// at the malformed point and returns what it found so far.
-pub fn parse_template_for_validation(
-    template: &str,
-) -> Result<Vec<VariableRef>, TemplateError> {
+pub fn parse_template_for_validation(template: &str) -> Result<Vec<VariableRef>, TemplateError> {
     if template.len() > MAX_TEMPLATE_BYTES {
         return Err(TemplateError::Parse(format!(
             "template exceeds {} bytes",
@@ -337,8 +335,5 @@ fn is_ws(c: u8) -> bool {
 }
 
 fn prev_non_ws_char(body: &str, idx: usize) -> Option<char> {
-    body[..idx]
-        .chars()
-        .rev()
-        .find(|c| !c.is_whitespace())
+    body[..idx].chars().rev().find(|c| !c.is_whitespace())
 }

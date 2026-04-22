@@ -290,5 +290,8 @@ async fn dropped_permit_without_cancelled_token_persists_failed_terminal() {
     let rows = call_rows(node.as_ref()).await;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["call_state"], "failed");
-    assert_eq!(rows[0]["failure_reason"], "StreamDroppedBeforeTerminalResponse");
+    assert_eq!(
+        rows[0]["failure_reason"],
+        "StreamDroppedBeforeTerminalResponse"
+    );
 }

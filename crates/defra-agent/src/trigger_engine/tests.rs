@@ -17,8 +17,7 @@ use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
 use crate::identity::SimpleIdentity;
 use crate::runtime_snapshot::{
-    ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedRuntimeSnapshot, ResolvedSchedule,
-    ResolvedTask,
+    ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedRuntimeSnapshot, ResolvedSchedule, ResolvedTask,
 };
 use crate::tool_surface::BehaviorToolConfig;
 use crate::trigger_engine::production_materializer::ProductionMaterializer;
@@ -252,10 +251,7 @@ async fn dispatch_skips_when_schedule_not_in_active_schedules() {
 async fn dispatch_renders_and_materializes_when_schedule_active() {
     let task = resolved_task("fired at {{ event.fired_at }}");
     let schedule = resolved_schedule("sched-1", task.clone());
-    let snapshot = snapshot_with_schedules(HashMap::from([(
-        "sched-1".to_string(),
-        schedule,
-    )]));
+    let snapshot = snapshot_with_schedules(HashMap::from([("sched-1".to_string(), schedule)]));
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
     let engine = TriggerEngine::new(rx, materializer.clone());
@@ -291,10 +287,7 @@ async fn dispatch_parallel_materializes_every_intent() {
     // materialize unconditionally — the in-flight check is bypassed.
     let task = resolved_task("tick");
     let schedule = resolved_schedule("sched-1", task.clone());
-    let snapshot = snapshot_with_schedules(HashMap::from([(
-        "sched-1".to_string(),
-        schedule,
-    )]));
+    let snapshot = snapshot_with_schedules(HashMap::from([("sched-1".to_string(), schedule)]));
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
     let engine = TriggerEngine::new(rx, materializer.clone());
@@ -343,10 +336,7 @@ async fn dispatch_serial_materializes_when_no_inflight() {
     // Serial mode with no in-flight request for the trigger — should fire.
     let task = resolved_task("tick");
     let schedule = resolved_schedule("sched-1", task.clone());
-    let snapshot = snapshot_with_schedules(HashMap::from([(
-        "sched-1".to_string(),
-        schedule,
-    )]));
+    let snapshot = snapshot_with_schedules(HashMap::from([("sched-1".to_string(), schedule)]));
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
     let engine = TriggerEngine::new(rx, materializer.clone());
@@ -381,10 +371,7 @@ async fn dispatch_serial_skips_when_inflight_exists() {
     // (sched-1, Schedule). Dispatch should Skip and not materialize.
     let task = resolved_task("tick");
     let schedule = resolved_schedule("sched-1", task.clone());
-    let snapshot = snapshot_with_schedules(HashMap::from([(
-        "sched-1".to_string(),
-        schedule,
-    )]));
+    let snapshot = snapshot_with_schedules(HashMap::from([("sched-1".to_string(), schedule)]));
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
     materializer.mark_nonterminal("sched-1", TriggerKind::Schedule);
@@ -424,10 +411,7 @@ async fn dispatch_latest_only_supersedes_prior_and_fires_new() {
     // new fire, (3) return Fired.
     let task = resolved_task("tick");
     let schedule = resolved_schedule("sched-1", task.clone());
-    let snapshot = snapshot_with_schedules(HashMap::from([(
-        "sched-1".to_string(),
-        schedule,
-    )]));
+    let snapshot = snapshot_with_schedules(HashMap::from([("sched-1".to_string(), schedule)]));
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
     materializer.mark_nonterminal("sched-1", TriggerKind::Schedule);
@@ -476,10 +460,7 @@ async fn dispatch_errors_and_skips_materialize_on_template_render_failure() {
     // value so the upstream source can write back `last_status = "error"`.
     let task = resolved_task("{{ event.missing_field }}");
     let schedule = resolved_schedule("sched-1", task.clone());
-    let snapshot = snapshot_with_schedules(HashMap::from([(
-        "sched-1".to_string(),
-        schedule,
-    )]));
+    let snapshot = snapshot_with_schedules(HashMap::from([("sched-1".to_string(), schedule)]));
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
     let engine = TriggerEngine::new(rx, materializer.clone());
@@ -538,10 +519,7 @@ async fn dispatch_latest_only_serializes_parallel_fires() {
     // least 2 * delay.
     let task = resolved_task("tick");
     let schedule = resolved_schedule("sched-1", task.clone());
-    let snapshot = snapshot_with_schedules(HashMap::from([(
-        "sched-1".to_string(),
-        schedule,
-    )]));
+    let snapshot = snapshot_with_schedules(HashMap::from([("sched-1".to_string(), schedule)]));
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
     let delay = Duration::from_millis(60);
@@ -681,10 +659,7 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
     };
     let schedule = resolved_schedule("sched-1", task);
     let interval_secs = schedule.interval_secs;
-    let snapshot = snapshot_with_schedules(HashMap::from([(
-        "sched-1".to_string(),
-        schedule,
-    )]));
+    let snapshot = snapshot_with_schedules(HashMap::from([("sched-1".to_string(), schedule)]));
     let (_tx, rx) = watch::channel(snapshot);
     let cancel = CancellationToken::new();
     let mut source = ScheduleSource::new(rx, node.clone(), cancel.clone())
@@ -700,10 +675,11 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
     (intent.on_result)(FireResult::Fired {
         request_id: "req-0".to_string(),
     });
-    let expected_next_run_at_fired =
-        (DateTime::parse_from_rfc3339(&initial_next_run_at).unwrap().with_timezone(&Utc)
-            + ChronoDuration::seconds(interval_secs))
-        .to_rfc3339();
+    let expected_next_run_at_fired = (DateTime::parse_from_rfc3339(&initial_next_run_at)
+        .unwrap()
+        .with_timezone(&Utc)
+        + ChronoDuration::seconds(interval_secs))
+    .to_rfc3339();
     let mut fired_schedule = None;
     for _ in 0..40 {
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -782,7 +758,11 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
         }}"#
     );
     let resp = node.execute(&mutation).await;
-    assert!(!resp.has_errors(), "rewind mutation failed: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "rewind mutation failed: {:?}",
+        resp.errors
+    );
 
     let intent2 = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
@@ -1003,7 +983,11 @@ async fn trigger_engine_materializes_agent_request_for_due_schedule_e2e() {
             }
         }"#;
         let resp = node.execute(query).await;
-        assert!(!resp.has_errors(), "AgentRequest query errored: {:?}", resp.errors);
+        assert!(
+            !resp.has_errors(),
+            "AgentRequest query errored: {:?}",
+            resp.errors
+        );
         let rows = resp
             .data
             .as_ref()

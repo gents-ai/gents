@@ -8,10 +8,10 @@ mod support;
 
 use support::snapshots::{
     fetch_conversation_snapshot, fetch_request_lineage_snapshot,
-    fetch_request_lineage_snapshot_by_tuple, fetch_request_snapshot,
-    fetch_request_snapshot_raw, fetch_response_content, fetch_response_interrupted_at,
-    fetch_response_snapshot, fetch_session_snapshot, ConversationSnapshot,
-    RequestLineageSnapshot, RequestSnapshot, ResponseSnapshot, SessionSnapshot,
+    fetch_request_lineage_snapshot_by_tuple, fetch_request_snapshot, fetch_request_snapshot_raw,
+    fetch_response_content, fetch_response_interrupted_at, fetch_response_snapshot,
+    fetch_session_snapshot, ConversationSnapshot, RequestLineageSnapshot, RequestSnapshot,
+    ResponseSnapshot, SessionSnapshot,
 };
 use support::{
     build_request, create_request, create_response_with_content_and_status,
@@ -418,7 +418,11 @@ async fn serial_skip_does_not_create_request() {
         }}"#
     );
     let gate = db.node.execute(&gating_query).await;
-    assert!(!gate.has_errors(), "gating query errored: {:?}", gate.errors);
+    assert!(
+        !gate.has_errors(),
+        "gating query errored: {:?}",
+        gate.errors
+    );
     let gate_rows = gate
         .data
         .as_ref()
@@ -527,7 +531,11 @@ async fn latest_only_transition_to_superseded() {
         }}"#
     );
     let resp = db.node.execute(&supersede).await;
-    assert!(!resp.has_errors(), "supersede mutation errored: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "supersede mutation errored: {:?}",
+        resp.errors
+    );
     let updated_rows = resp
         .data
         .as_ref()
@@ -616,12 +624,7 @@ async fn fire_errored_does_not_create_request() {
             }}) {{ _docID }}
         }}"#
     );
-    assert!(
-        !db.node
-            .execute(&create_sched)
-            .await
-            .has_errors(),
-    );
+    assert!(!db.node.execute(&create_sched).await.has_errors(),);
     let writeback = format!(
         r#"mutation {{
             update_Schedule(
@@ -962,7 +965,10 @@ async fn processing_interrupted_preserves_partial_response() {
     assert_eq!(snap.lifecycle_state, "interrupted");
 
     let content = fetch_response_content(&db.node, &response_doc_id).await;
-    assert_eq!(content, partial_content, "partial content must be preserved");
+    assert_eq!(
+        content, partial_content,
+        "partial content must be preserved"
+    );
 
     let interrupted_at = fetch_response_interrupted_at(&db.node, &response_doc_id).await;
     assert_eq!(interrupted_at.as_deref(), Some(interrupt_at.as_str()));
@@ -1238,10 +1244,7 @@ async fn valid_until_cached_at_claim_ignores_post_claim_extension() {
     let expected = chrono::DateTime::parse_from_rfc3339(&future)
         .unwrap()
         .with_timezone(&chrono::Utc);
-    assert_eq!(
-        lifecycle.valid_until_at_claim_for_test(),
-        Some(expected)
-    );
+    assert_eq!(lifecycle.valid_until_at_claim_for_test(), Some(expected));
 }
 
 // ---------------------------------------------------------------------------
@@ -1265,8 +1268,14 @@ async fn s7_interrupt_requested_at_is_latch_never_rewritten() {
     let request_id_a = uuid::Uuid::new_v4().to_string();
     let session_id_a = uuid::Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
-    let doc_id_a =
-        create_request(&db.node, &request_id_a, &session_id_a, "pending", &created_at).await;
+    let doc_id_a = create_request(
+        &db.node,
+        &request_id_a,
+        &session_id_a,
+        "pending",
+        &created_at,
+    )
+    .await;
 
     set_interrupt_requested_at(&db.node, &doc_id_a, &t0).await;
     let snap0 = fetch_request_snapshot_raw(&db.node, &doc_id_a).await;
@@ -1287,7 +1296,10 @@ async fn s7_interrupt_requested_at_is_latch_never_rewritten() {
         ExecutionOrigin::Interactive,
         BACKEND_ID,
     );
-    assert_eq!(lifecycle_a.claim().await.unwrap(), ClaimOutcome::Interrupted);
+    assert_eq!(
+        lifecycle_a.claim().await.unwrap(),
+        ClaimOutcome::Interrupted
+    );
 
     let snap_a = fetch_request_snapshot_raw(&db.node, &doc_id_a).await;
     assert_eq!(
@@ -1299,8 +1311,14 @@ async fn s7_interrupt_requested_at_is_latch_never_rewritten() {
     // Sequence B: fresh row, claimed -> interrupted (via transition_to_interrupted)
     let request_id_b = uuid::Uuid::new_v4().to_string();
     let session_id_b = uuid::Uuid::new_v4().to_string();
-    let doc_id_b =
-        create_request(&db.node, &request_id_b, &session_id_b, "pending", &created_at).await;
+    let doc_id_b = create_request(
+        &db.node,
+        &request_id_b,
+        &session_id_b,
+        "pending",
+        &created_at,
+    )
+    .await;
 
     let request_b = build_request(
         doc_id_b.clone(),
@@ -1570,7 +1588,11 @@ fn conformance_mapping_all_9_lifecycle_states_round_trip() {
         let parsed = RequestLifecycleState::try_from(*s)
             .unwrap_or_else(|e| panic!("failed to parse '{}': {:?}", s, e));
         assert_eq!(parsed, *expected, "round-trip mismatch for '{}'", s);
-        assert_eq!(parsed.as_str(), *s, "as_str must round-trip to the source string");
+        assert_eq!(
+            parsed.as_str(),
+            *s,
+            "as_str must round-trip to the source string"
+        );
     }
 
     // Unknown strings must reject.

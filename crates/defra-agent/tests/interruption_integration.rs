@@ -50,12 +50,7 @@ async fn offline_replay_of_stale_requests_does_not_call_backend() {
     // the embedded-datastore transaction-conflict retry limit we'd hit with
     // fully parallel claims on the shared AgentRequest secondary indexes.
     for (doc_id, request_id, session_id) in request_doc_ids.clone() {
-        let request = build_request(
-            doc_id,
-            request_id,
-            session_id,
-            created_at.clone(),
-        );
+        let request = build_request(doc_id, request_id, session_id, created_at.clone());
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             db.node.clone(),
             AGENT_NAME,
