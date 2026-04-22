@@ -373,6 +373,11 @@ impl DesiredFields for DesiredSchedule {
         "schedules"
     }
 }
+impl DesiredFields for DesiredEventTrigger {
+    fn collection_tag(&self) -> &'static str {
+        "event_triggers"
+    }
+}
 
 #[cfg(test)]
 mod desired_fields_tests {

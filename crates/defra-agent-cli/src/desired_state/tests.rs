@@ -875,6 +875,131 @@ fn validate_rejects_schedule_unknown_task() {
     );
 }
 
+fn sample_event_trigger_for(trigger_id: &str, task_id: &str) -> DesiredEventTrigger {
+    DesiredEventTrigger {
+        trigger_id: trigger_id.to_string(),
+        task_id: task_id.to_string(),
+        source_collection: "CustomerSignup".to_string(),
+        event_kind: "created".to_string(),
+        filter: None,
+        enabled: true,
+        concurrency: "serial".to_string(),
+    }
+}
+
+#[test]
+fn validate_rejects_event_trigger_referencing_unknown_task() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest
+        .event_triggers
+        .push(sample_event_trigger_for("new-customer-greet", "missing-task"));
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("new-customer-greet")
+                && message.contains("unknown task_id")
+                && message.contains("missing-task")
+        }),
+        "expected unknown task_id rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_event_trigger_unknown_event_kind() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest.tasks.push(sample_task("summarize-inbox"));
+    let mut trig = sample_event_trigger_for("new-customer-greet", "summarize-inbox");
+    trig.event_kind = "updated".to_string();
+    manifest.event_triggers.push(trig);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("new-customer-greet") && message.contains("unsupported event_kind")
+        }),
+        "expected unsupported event_kind rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_event_trigger_template_referencing_args_scope() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut task = sample_task("summarize-inbox");
+    task.prompt_template = "{{ args.foo }}".to_string();
+    manifest.tasks.push(task);
+    manifest
+        .event_triggers
+        .push(sample_event_trigger_for("new-customer-greet", "summarize-inbox"));
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("new-customer-greet")
+                && message.contains("forbidden scope: args")
+        }),
+        "expected event-trigger forbidden-args rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_accepts_event_trigger_template_using_event_and_doc_scopes() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut task = sample_task("summarize-inbox");
+    task.prompt_template = "{{ event.fired_at }} {{ doc.name }}".to_string();
+    manifest.tasks.push(task);
+    manifest
+        .event_triggers
+        .push(sample_event_trigger_for("new-customer-greet", "summarize-inbox"));
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        !errors
+            .iter()
+            .any(|message| message.contains("forbidden scope")),
+        "expected no forbidden-scope rejections for event+doc scopes, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_duplicate_event_trigger_id() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest.tasks.push(sample_task("summarize-inbox"));
+    manifest
+        .event_triggers
+        .push(sample_event_trigger_for("new-customer-greet", "summarize-inbox"));
+    manifest
+        .event_triggers
+        .push(sample_event_trigger_for("new-customer-greet", "summarize-inbox"));
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("duplicate") && message.contains("new-customer-greet")
+        }),
+        "expected duplicate trigger_id rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_event_trigger_unknown_concurrency() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest.tasks.push(sample_task("summarize-inbox"));
+    let mut trig = sample_event_trigger_for("new-customer-greet", "summarize-inbox");
+    trig.concurrency = "weird".to_string();
+    manifest.event_triggers.push(trig);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("new-customer-greet")
+                && message.contains("unknown concurrency")
+                && message.contains("weird")
+        }),
+        "expected unknown concurrency rejection, got {errors:?}"
+    );
+}
+
 #[test]
 fn export_bundle_round_trip_preserves_tasks_and_schedules() {
     let mut manifest = manifest_with_default_behavior();

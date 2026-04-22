@@ -290,6 +290,86 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             }
         }
     }
+
+    let mut event_trigger_ids = BTreeSet::new();
+    for trig in &manifest.event_triggers {
+        let trigger_id = trig.trigger_id.trim();
+        if trigger_id.is_empty() {
+            errors.push(
+                "event-triggers manifest contains a trigger with an empty trigger_id".to_string(),
+            );
+            continue;
+        }
+        if !event_trigger_ids.insert(trigger_id.to_string()) {
+            errors.push(format!(
+                "duplicate trigger_id in event-triggers manifest: {trigger_id}"
+            ));
+        }
+
+        let task_id = trig.task_id.trim();
+        if task_id.is_empty() {
+            errors.push(format!(
+                "event_trigger {} in event-triggers manifest must contain a non-empty task_id",
+                trig.trigger_id
+            ));
+        }
+
+        if trig.source_collection.trim().is_empty() {
+            errors.push(format!(
+                "event_trigger {} in event-triggers manifest must contain a non-empty source_collection",
+                trig.trigger_id
+            ));
+        }
+
+        // v1 only supports "created"
+        if trig.event_kind != "created" {
+            errors.push(format!(
+                "event_trigger {} uses unsupported event_kind {:?} (v1 supports only \"created\")",
+                trig.trigger_id, trig.event_kind
+            ));
+        }
+
+        match trig.concurrency.trim() {
+            "parallel" | "serial" | "latest_only" => {}
+            other => errors.push(format!(
+                "event_trigger {} in event-triggers manifest has unknown concurrency {}; expected parallel|serial|latest_only",
+                trig.trigger_id, other
+            )),
+        }
+
+        // Cross-ref: task_id must exist in manifest.tasks
+        if !task_id.is_empty() && !manifest.tasks.iter().any(|t| t.task_id == task_id) {
+            errors.push(format!(
+                "event_trigger {} references unknown task_id {}",
+                trig.trigger_id, trig.task_id
+            ));
+        }
+
+        // Template scope validation: doc.* IS allowed for event triggers; args.* is NOT.
+        if !task_id.is_empty() {
+            if let Some(task) = manifest.tasks.iter().find(|t| t.task_id == task_id) {
+                match parse_template_for_validation(&task.prompt_template) {
+                    Ok(refs) => {
+                        let mut reported: BTreeSet<&str> = BTreeSet::new();
+                        for vref in &refs {
+                            if let Some(root) = vref.root() {
+                                if root == "args" && reported.insert("args") {
+                                    errors.push(format!(
+                                        "event_trigger {} prompt template references forbidden scope: args; event scope only permits event.* and doc.*",
+                                        trig.trigger_id
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    Err(err) => errors.push(format!(
+                        "event_trigger {} prompt template failed to parse: {}",
+                        trig.trigger_id, err
+                    )),
+                }
+            }
+        }
+    }
 }
 
 fn format_variable_ref(var: &VariableRef) -> String {
