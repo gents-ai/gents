@@ -211,7 +211,7 @@ mod load_manifest_root {
     }
 
     #[test]
-    fn loads_minimal_root_with_only_principal() {
+    fn loads_minimal_valid_root() {
         let tmp = tempdir().unwrap();
         write_minimal_root(tmp.path());
 
