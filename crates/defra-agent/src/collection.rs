@@ -19,12 +19,13 @@ pub enum Collection {
     ToolServiceRegistry,
     Task,
     Schedule,
+    EventTrigger,
 }
 
 impl Collection {
     /// All variants in declaration order. Not sorted by `apply_order()` —
     /// callers that need apply-ordered iteration must sort explicitly.
-    pub const ALL: [Collection; 8] = [
+    pub const ALL: [Collection; 9] = [
         Collection::AgentPrincipal,
         Collection::AgentBehavior,
         Collection::ToolSelection,
@@ -33,6 +34,7 @@ impl Collection {
         Collection::ToolServiceRegistry,
         Collection::Task,
         Collection::Schedule,
+        Collection::EventTrigger,
     ];
 
     /// Manifest file name on disk for the single-file form.
@@ -46,6 +48,7 @@ impl Collection {
             Collection::ToolServiceRegistry => "tool-services.json",
             Collection::Task => "tasks.json",
             Collection::Schedule => "schedules.json",
+            Collection::EventTrigger => "event_triggers.json",
         }
     }
 
@@ -55,6 +58,7 @@ impl Collection {
             Collection::ToolServiceRegistry => Some("tool-services"),
             Collection::Task => Some("tasks"),
             Collection::Schedule => Some("schedules"),
+            Collection::EventTrigger => Some("event_triggers"),
             _ => None,
         }
     }
@@ -70,6 +74,7 @@ impl Collection {
             Collection::ToolServiceRegistry => "ToolServiceRegistry",
             Collection::Task => "Task",
             Collection::Schedule => "Schedule",
+            Collection::EventTrigger => "EventTrigger",
         }
     }
 
@@ -84,6 +89,7 @@ impl Collection {
             Collection::ToolServiceRegistry => "service_id",
             Collection::Task => "task_id",
             Collection::Schedule => "schedule_id",
+            Collection::EventTrigger => "trigger_id",
         }
     }
 
@@ -100,6 +106,7 @@ impl Collection {
             Collection::Task => 2,
             Collection::Schedule => 2,
             Collection::AgentPrincipal => 3,
+            Collection::EventTrigger => 3,
         }
     }
 }
@@ -119,6 +126,7 @@ impl fmt::Display for Collection {
             Collection::ToolServiceRegistry => "tool_service_registries",
             Collection::Task => "tasks",
             Collection::Schedule => "schedules",
+            Collection::EventTrigger => "event_triggers",
         };
         f.write_str(name)
     }
@@ -171,6 +179,7 @@ mod tests {
             (Collection::ToolServiceRegistry, 0, "ToolServiceRegistry"),
             (Collection::Task, 2, "Task"),
             (Collection::Schedule, 2, "Schedule"),
+            (Collection::EventTrigger, 3, "EventTrigger"),
         ];
 
         // ALL must list every canonical variant exactly once.
