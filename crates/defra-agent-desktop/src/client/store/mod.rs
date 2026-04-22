@@ -8,8 +8,8 @@ use defra_agent_protocol::client_protocol::ClientTurnState;
 use defra_agent_protocol::row::{
     AgentBehaviorRow, AgentConversationRow, AgentMessageRow, AgentPrincipalRow, AgentRequestRow,
     AgentResponseRow, AgentRuntimeRow, AgentSessionRow, AgentToolCallRow, AgentToolResultRow,
-    CompactionEntryRow, InferenceBackendRow, InferenceProfileRow, ScheduleRow, TaskRow,
-    ToolSelectionRow, ToolServiceRegistryRow,
+    CompactionEntryRow, EventTriggerRow, InferenceBackendRow, InferenceProfileRow, ScheduleRow,
+    TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
 };
 use serde::Serialize;
 
@@ -30,6 +30,7 @@ pub struct ClientStoreRows {
     pub compaction_entries: Vec<CompactionEntryRow>,
     pub tasks: Vec<TaskRow>,
     pub schedules: Vec<ScheduleRow>,
+    pub event_triggers: Vec<EventTriggerRow>,
     pub tool_selections: Vec<ToolSelectionRow>,
     pub inference_backends: Vec<InferenceBackendRow>,
     pub inference_profiles: Vec<InferenceProfileRow>,
@@ -51,6 +52,7 @@ pub struct ClientStore {
     pub compaction_entries: Vec<CompactionEntryRow>,
     pub tasks: Vec<TaskRow>,
     pub schedules: Vec<ScheduleRow>,
+    pub event_triggers: Vec<EventTriggerRow>,
     pub tool_selections: Vec<ToolSelectionRow>,
     pub inference_backends: Vec<InferenceBackendRow>,
     pub inference_profiles: Vec<InferenceProfileRow>,
@@ -178,6 +180,24 @@ impl ClientStore {
             .collect()
     }
 
+    /// Return every `EventTrigger` whose `task_id` matches one of the
+    /// provided tasks. Mirrors `schedules_for_tasks` so manage views can
+    /// list the triggers attached to a behavior indirectly (via its
+    /// tasks).
+    pub fn event_triggers_for_tasks(&self, task_ids: &[&str]) -> Vec<&EventTriggerRow> {
+        if task_ids.is_empty() {
+            return Vec::new();
+        }
+        self.event_triggers
+            .iter()
+            .filter(|row| {
+                row.task_id
+                    .as_deref()
+                    .is_some_and(|task_id| task_ids.iter().any(|candidate| *candidate == task_id))
+            })
+            .collect()
+    }
+
     pub fn conversation_rows(&self, agent_did: &str) -> Vec<&AgentConversationRow> {
         self.conversations_by_agent_did
             .get(agent_did)
@@ -244,6 +264,7 @@ impl ClientStore {
             + self.compaction_entries.len()
             + self.tasks.len()
             + self.schedules.len()
+            + self.event_triggers.len()
             + self.tool_selections.len()
             + self.inference_backends.len()
             + self.inference_profiles.len()
@@ -265,6 +286,7 @@ impl ClientStore {
             compaction_entries: self.compaction_entries.clone(),
             tasks: self.tasks.clone(),
             schedules: self.schedules.clone(),
+            event_triggers: self.event_triggers.clone(),
             tool_selections: self.tool_selections.clone(),
             inference_backends: self.inference_backends.clone(),
             inference_profiles: self.inference_profiles.clone(),

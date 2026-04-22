@@ -118,6 +118,17 @@ pub(super) fn show_rail(
                     );
                 }
             }
+            ManageSection::EventTriggers => {
+                if state.manage.draft.is_some() {
+                    render_runtime_inspector(ui, store, state);
+                } else {
+                    views::card(
+                        ui,
+                        "Diagnostics",
+                        "Select an event trigger to inspect the current runtime state for the selected deployment.",
+                    );
+                }
+            }
             ManageSection::RequestTimeline => {
                 render_request_timeline_detail(ui, state, store);
             }

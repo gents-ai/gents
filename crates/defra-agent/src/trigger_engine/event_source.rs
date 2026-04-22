@@ -1,0 +1,763 @@
+//! Event-trigger `TriggerSource`.
+//!
+//! Subscribes to DefraDB document events and emits `FireIntent`s whenever an
+//! event from a `source_collection` referenced by the active runtime
+//! snapshot's `active_event_triggers` lands. The subscription set is kept in
+//! sync with the snapshot generation — see `reconcile_subscriptions` (Task 19).
+//!
+//! This file lands in staged tasks:
+//! - Task 18: skeleton only — struct, constructor, no-op `next_fire` stub.
+//! - Task 19: `reconcile_subscriptions` drives the desired-collections set
+//!   from the snapshot at each generation bump.
+//! - Task 20: full `next_fire` loop (poll subscription, filter by desired
+//!   collections, build `FireIntent`).
+//! - Task 21 (this file): filter probe + doc-var hydration via an
+//!   introspected source-doc projection cached per source collection.
+//! - Task 22: `on_result` callback body for bookkeeping writes.
+
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::time::Duration;
+
+use chrono::{SecondsFormat, Utc};
+use defra_node::{EmbeddedNode, EventName};
+use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
+
+use crate::runtime_snapshot::ActiveRuntimeSnapshot;
+
+use super::{FireIntent, TriggerKind, TriggerSource};
+
+/// `TriggerSource` that fans DefraDB document events out to
+/// `active_event_triggers`.
+///
+/// Holds a single global `events::Subscription` (the `defra-node` API exposes
+/// only `subscribe(&[EventName])` — there is no per-collection subscription)
+/// and filters incoming events by `desired_collections` on the dispatch hot
+/// path. That set is recomputed from the snapshot whenever
+/// `snapshot.generation` bumps.
+pub(crate) struct EventSource {
+    snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+    node: Arc<EmbeddedNode>,
+    /// Single global subscription. Task 19 populates this on first
+    /// reconciliation; Task 20's `next_fire` consumes from it.
+    subscription: Option<events::Subscription>,
+    /// Source-collection names that any `active_event_triggers` entry
+    /// currently references. Task 20 consults this set as the client-side
+    /// filter before dispatching an event to matching triggers.
+    desired_collections: HashSet<String>,
+    /// The snapshot generation whose `active_event_triggers` produced the
+    /// current `desired_collections`. Task 19 compares against
+    /// `snapshot.generation` at tick boundaries to decide whether to
+    /// reconcile.
+    reconciled_generation: u64,
+    /// Debounce window for snapshot-publish-driven reconciliation. Reserved
+    /// for Tasks 19-20 — reconciliation is currently driven by the tick loop
+    /// rather than a timer.
+    #[allow(dead_code)]
+    reconcile_debounce: Duration,
+    cancel: CancellationToken,
+    /// Per-source-collection schema cache used by `fetch_source_doc` to
+    /// build a field-projection query. Entries are populated lazily on first
+    /// hydration against a given source collection and reused for the
+    /// lifetime of the source (collection schemas are stable across a
+    /// deployment's runtime; no invalidation is needed here).
+    source_schema_cache: SourceSchemaCache,
+    /// Cache of `collection_id -> collection name` mappings. The Update event
+    /// carries only the stable `collection_id` string (see `events::Update`),
+    /// but `source_collection` on an `EventTrigger` is the human-readable
+    /// collection name. We resolve lazily on first-encountered event, then
+    /// reuse the cached mapping for subsequent events in the same collection.
+    /// Entries are never invalidated — collection IDs are stable for the
+    /// lifetime of a collection's existence.
+    collection_id_to_name: HashMap<String, String>,
+}
+
+/// Per-source-collection schema cache.
+///
+/// `fields_for(collection, node)` runs a one-shot GraphQL introspection
+/// (`__type(name: "<collection>") { fields { name } }`) the first time a
+/// given source collection is seen, then memoizes the resulting projectable
+/// field list. Subsequent hydrations for the same collection are a pure
+/// cache hit. Entries are never invalidated — the active schema for a
+/// collection is stable across the runtime's lifetime, and any schema
+/// migration produces a new collection version whose identity the fire
+/// path treats as a distinct source.
+///
+/// Filtering: DefraDB's GraphQL introspection exposes several auto-
+/// generated fields on every collection (aggregates like `_count`,
+/// `_sum`, and per-field wrappers). These are not direct scalars and
+/// cannot be included in a plain projection — selecting them without
+/// required arguments produces a parse error. We filter aggressively:
+/// drop anything starting with `_` (GraphQL meta / DefraDB aggregate) and
+/// anything whose name is an upper-case aggregate keyword.
+#[derive(Default)]
+pub(crate) struct SourceSchemaCache {
+    by_collection: tokio::sync::Mutex<HashMap<String, Vec<String>>>,
+}
+
+impl SourceSchemaCache {
+    /// Return the projectable scalar-ish field names for `collection`,
+    /// querying the node's GraphQL schema on first access and caching the
+    /// result. Errors from the introspection query (or a missing
+    /// `__type.fields` array) bubble up so the caller can skip the fire
+    /// rather than materialize against a half-populated doc.
+    async fn fields_for(
+        &self,
+        collection: &str,
+        node: &EmbeddedNode,
+    ) -> anyhow::Result<Vec<String>> {
+        let mut guard = self.by_collection.lock().await;
+        if let Some(fields) = guard.get(collection) {
+            return Ok(fields.clone());
+        }
+        let query = format!(
+            r#"query {{
+                __type(name: "{name}") {{
+                    fields {{ name }}
+                }}
+            }}"#,
+            name = collection,
+        );
+        let response = node.execute(&query).await;
+        if response.has_errors() {
+            anyhow::bail!("introspect {} failed: {:?}", collection, response.errors);
+        }
+        let Some(fields_arr) = response
+            .data
+            .as_ref()
+            .and_then(|d| d.get("__type"))
+            .and_then(|t| t.get("fields"))
+            .and_then(serde_json::Value::as_array)
+        else {
+            anyhow::bail!("introspection returned no fields for {}", collection);
+        };
+        let fields: Vec<String> = fields_arr
+            .iter()
+            .filter_map(|f| f.get("name").and_then(|n| n.as_str()).map(str::to_string))
+            // Skip GraphQL meta fields and DefraDB's `_count`-style
+            // aggregate wrappers — they can't be projected as plain
+            // scalars.
+            .filter(|name| !name.starts_with('_'))
+            // Skip DefraDB's upper-case aggregate/search verbs — they take
+            // required arguments and can't appear in a bare projection.
+            .filter(|name| !is_defradb_aggregate_field(name))
+            .collect();
+        guard.insert(collection.to_string(), fields.clone());
+        Ok(fields)
+    }
+}
+
+/// DefraDB generates per-collection GraphQL fields for aggregates and
+/// full-text search that share the collection's scalar namespace but
+/// require arguments to project. Include them in the `__type.fields`
+/// response; reject them here so `fetch_source_doc`'s projection stays
+/// syntactically valid. Mirrors the CLI's `is_aggregate_field` list in
+/// `defradb.rs`'s `cli/src/commands/client/collection/introspection.rs`.
+fn is_defradb_aggregate_field(name: &str) -> bool {
+    matches!(
+        name,
+        "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "GROUP" | "SIMILARITY" | "BM25"
+    )
+}
+
+impl EventSource {
+    /// Build an event source wired to the given snapshot receiver and
+    /// embedded node.
+    ///
+    /// The subscription itself is not created here — Task 19's
+    /// `reconcile_subscriptions` opens it on the first tick once the
+    /// snapshot's `active_event_triggers` have been read.
+    pub(crate) fn new(
+        snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+        node: Arc<EmbeddedNode>,
+        cancel: CancellationToken,
+    ) -> Self {
+        Self {
+            snapshot_rx,
+            node,
+            subscription: None,
+            desired_collections: HashSet::new(),
+            reconciled_generation: 0,
+            reconcile_debounce: Duration::from_millis(250),
+            cancel,
+            source_schema_cache: SourceSchemaCache::default(),
+            collection_id_to_name: HashMap::new(),
+        }
+    }
+
+    /// Override the reconciliation debounce. Test-only hook mirroring
+    /// `ScheduleSource::with_tick_every`.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn with_reconcile_debounce(mut self, debounce: Duration) -> Self {
+        self.reconcile_debounce = debounce;
+        self
+    }
+
+    /// Snapshot of the source-collection names the event source is currently
+    /// filtering on. Test-only accessor.
+    #[cfg(test)]
+    pub(crate) fn subscribed_collections(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.desired_collections.iter().cloned().collect();
+        v.sort();
+        v
+    }
+
+    /// Refresh `desired_collections` from the supplied snapshot's
+    /// `active_event_triggers` and ensure the global `events::Subscription`
+    /// exists.
+    ///
+    /// `defra-node` only exposes `subscribe(&[EventName])` — a single
+    /// process-wide stream of `Update` events, with the collection carried
+    /// in the event payload. So "reconciliation" here is twofold:
+    ///
+    /// 1. Recompute the filter set (`desired_collections`) that Task 20's
+    ///    `next_fire` will consult before dispatching an event to matching
+    ///    triggers. Collections whose last `active_event_trigger` was
+    ///    removed drop out; newly referenced collections appear.
+    /// 2. Lazily open the global subscription the first time we have at
+    ///    least one desired collection. If the desired set later shrinks to
+    ///    empty we keep the subscription open — reopening is cheap only in
+    ///    principle, and events.Bus has no "pause" API; Task 20 short-
+    ///    circuits on an empty filter set instead.
+    ///
+    /// Finally, stamp `reconciled_generation = snapshot.generation` so the
+    /// `next_fire` tick loop can detect further snapshot bumps.
+    pub(crate) async fn reconcile_subscriptions(&mut self, snapshot: &ActiveRuntimeSnapshot) {
+        let desired: HashSet<String> = snapshot
+            .active_event_triggers()
+            .values()
+            .map(|t| t.source_collection.clone())
+            .collect();
+
+        // Trace added / removed collections so operators can correlate a
+        // config change with the subscription-set delta. Keeping this at
+        // `info!` matches `ScheduleSource::next_fire`'s first-seen logs.
+        for added in desired.difference(&self.desired_collections) {
+            tracing::info!(
+                source_collection = %added,
+                generation = snapshot.generation,
+                "event source now observing source collection",
+            );
+        }
+        for removed in self.desired_collections.difference(&desired) {
+            tracing::info!(
+                source_collection = %removed,
+                generation = snapshot.generation,
+                "event source no longer observing source collection",
+            );
+        }
+
+        self.desired_collections = desired;
+
+        // Lazily open the global subscription. We defer opening until the
+        // first non-empty desired set so a runtime with no event triggers
+        // never materializes an unused subscription.
+        if self.subscription.is_none() && !self.desired_collections.is_empty() {
+            let subscription = self.node.subscribe(&[EventName::Update]);
+            tracing::info!(
+                collections = self.desired_collections.len(),
+                generation = snapshot.generation,
+                "event source opened global Update subscription",
+            );
+            self.subscription = Some(subscription);
+        }
+
+        self.reconciled_generation = snapshot.generation;
+    }
+
+    /// Resolve an event's `collection_id` (the stable hash-like ID carried
+    /// in the `Update` event payload) to the human-readable collection name
+    /// used by `EventTrigger.source_collection`.
+    ///
+    /// Caches results in `collection_id_to_name`. On cache miss walks every
+    /// active collection known to the node — this is a one-shot cost per
+    /// collection-id (entries never invalidate because a collection's
+    /// `collection_id` is stable for its lifetime).
+    ///
+    /// Returns `None` on query failure or when the id doesn't correspond to
+    /// any active collection, which the caller treats as "no matching
+    /// trigger; ignore this event".
+    async fn resolve_collection_name(&mut self, collection_id: &str) -> Option<String> {
+        if let Some(name) = self.collection_id_to_name.get(collection_id) {
+            return Some(name.clone());
+        }
+
+        let names = match self.node.list_collections() {
+            Ok(names) => names,
+            Err(e) => {
+                tracing::warn!(
+                    collection_id = %collection_id,
+                    error = %e,
+                    "event source failed to list collections; dropping event",
+                );
+                return None;
+            }
+        };
+
+        for name in names {
+            let def = match self.node.get_collection(&name) {
+                Ok(Some(def)) => def,
+                Ok(None) => continue,
+                Err(e) => {
+                    tracing::warn!(
+                        name = %name,
+                        error = %e,
+                        "event source failed to fetch collection definition while resolving id",
+                    );
+                    continue;
+                }
+            };
+            // Populate the cache eagerly for every collection we touched
+            // during the scan so the next event on any of those collections
+            // is a pure cache hit.
+            self.collection_id_to_name
+                .insert(def.collection_id.clone(), def.name.clone());
+        }
+
+        self.collection_id_to_name.get(collection_id).cloned()
+    }
+
+    /// Run the trigger's `filter` against the source doc, narrowed by
+    /// `_docID`, via a `limit: 1` probe. Returns `Ok(true)` when the doc
+    /// matches (so the fire should proceed), `Ok(false)` when it doesn't
+    /// (so the dispatch loop should skip), and `Err` when the probe query
+    /// itself errored — the caller treats errors as "skip this fire" so a
+    /// transient GraphQL failure doesn't brick the source.
+    ///
+    /// Trust boundary: `trigger.filter` is operator-authored and validated
+    /// at apply time (the apply path rejects ill-formed filter objects
+    /// before the trigger ever lands in `active_event_triggers`). It's
+    /// interpolated directly as a filter-object fragment — we do NOT run
+    /// it through `escape_graphql_string`, because that helper escapes
+    /// scalar string literals and would break the object syntax. The
+    /// `_docID` value, which comes from the event payload (external
+    /// input), IS escaped.
+    async fn probe_filter(
+        &self,
+        source_doc_id: &str,
+        trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
+    ) -> anyhow::Result<bool> {
+        let user_filter = trigger
+            .filter
+            .as_deref()
+            .map(str::trim)
+            .filter(|f| !f.is_empty());
+        let filter_literal = match user_filter {
+            Some(f) => format!(
+                r#"{{ _docID: {{ _eq: "{id}" }}, _and: [ {user_filter} ] }}"#,
+                id = crate::graphql::escape_graphql_string(source_doc_id),
+                user_filter = f,
+            ),
+            None => format!(
+                r#"{{ _docID: {{ _eq: "{id}" }} }}"#,
+                id = crate::graphql::escape_graphql_string(source_doc_id),
+            ),
+        };
+        let query = format!(
+            r#"query {{
+                {collection}(filter: {filter_literal}, limit: 1) {{
+                    _docID
+                }}
+            }}"#,
+            collection = trigger.source_collection,
+            filter_literal = filter_literal,
+        );
+        let response = self.node.execute(&query).await;
+        if response.has_errors() {
+            anyhow::bail!("filter probe errors: {:?}", response.errors);
+        }
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|d| d.get(&trigger.source_collection))
+            .and_then(serde_json::Value::as_array);
+        Ok(rows.is_some_and(|rs| !rs.is_empty()))
+    }
+
+    /// Project the source doc's scalar-ish fields into a JSON object that
+    /// populates the FireIntent's `doc_vars`. Looks up (and caches) the
+    /// collection's projectable field list via introspection, then runs a
+    /// `{collection}(filter: { _docID: _eq }, limit: 1) { _docID <fields> }`
+    /// query. Returns an error if the doc can't be found or the query
+    /// itself fails — the caller treats errors as "skip this fire".
+    async fn fetch_source_doc(
+        &self,
+        collection: &str,
+        source_doc_id: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        let fields = self
+            .source_schema_cache
+            .fields_for(collection, &self.node)
+            .await?;
+        // Even an empty `fields` list is valid: `_docID` alone still
+        // round-trips the doc's identity so downstream render scopes can
+        // reference `doc._docID`.
+        let projection = fields.join("\n                    ");
+        let query = format!(
+            r#"query {{
+                {collection}(filter: {{ _docID: {{ _eq: "{id}" }} }}, limit: 1) {{
+                    _docID
+                    {projection}
+                }}
+            }}"#,
+            collection = collection,
+            id = crate::graphql::escape_graphql_string(source_doc_id),
+            projection = projection,
+        );
+        let response = self.node.execute(&query).await;
+        if response.has_errors() {
+            anyhow::bail!("fetch source doc errors: {:?}", response.errors);
+        }
+        let Some(rows) = response
+            .data
+            .as_ref()
+            .and_then(|d| d.get(collection))
+            .and_then(serde_json::Value::as_array)
+        else {
+            anyhow::bail!(
+                "source doc {} not found in {} (no rows in response)",
+                source_doc_id,
+                collection
+            );
+        };
+        let Some(row) = rows.first() else {
+            anyhow::bail!(
+                "source doc {} not found in {} (empty rows)",
+                source_doc_id,
+                collection
+            );
+        };
+        Ok(row.clone())
+    }
+
+    /// Spawn a background task that writes the runtime-owned bookkeeping
+    /// fields on the `EventTrigger` document referenced by `trigger_id`.
+    ///
+    /// Invoked from the `on_result` callback on a `FireIntent` emitted by
+    /// `next_fire`. Runs off the engine's dispatch path so the inner loop
+    /// isn't blocked on DefraDB I/O. Mirrors `ScheduleSource`'s callback:
+    ///
+    /// - `Fired`: `last_status = "fired"`, `fire_count += 1`, stamp the
+    ///   source doc id that caused the fire, and clear `last_error`.
+    /// - `Skipped`: `last_status = "skipped"`, record the skip reason in
+    ///   `last_error` (for operator visibility into concurrency/latest-only
+    ///   collapse), leave `fire_count` untouched.
+    /// - `Errored`: `last_status = "error"`, record the failure string in
+    ///   `last_error`, leave `fire_count` untouched.
+    ///
+    /// Writes are best-effort: a failing DefraDB update is logged at `warn`
+    /// so an operator can correlate missing runtime fields with a backing
+    /// mutation error, but it does not propagate (the event has already
+    /// fired into the materializer).
+    pub(super) fn spawn_runtime_field_write(
+        node: Arc<EmbeddedNode>,
+        trigger_id: String,
+        source_doc_id: String,
+        result: crate::trigger_engine::FireResult,
+    ) {
+        tokio::spawn(async move {
+            let now = chrono::Utc::now().to_rfc3339_opts(
+                chrono::SecondsFormat::Secs, true);
+            let (status, error_value, fire_delta) = match &result {
+                crate::trigger_engine::FireResult::Fired { .. } => ("fired", None, Some(1)),
+                crate::trigger_engine::FireResult::Skipped { reason } => {
+                    ("skipped", Some(reason.clone()), None)
+                }
+                crate::trigger_engine::FireResult::Errored { error } => {
+                    ("error", Some(error.clone()), None)
+                }
+            };
+            let update = crate::document_config::EventTriggerRuntimeUpdate {
+                last_attempt_at: Some(now),
+                last_fired_source_doc_id: Some(source_doc_id),
+                last_status: Some(status.to_string()),
+                last_error: error_value,
+                fire_count_delta: fire_delta,
+            };
+            if let Err(error) = crate::document_config::update_event_trigger_runtime_fields(
+                &node,
+                &trigger_id,
+                update,
+            )
+            .await
+            {
+                tracing::warn!(
+                    trigger_id = %trigger_id,
+                    %error,
+                    "event trigger runtime-field update failed"
+                );
+            }
+        });
+    }
+
+    /// Find the first active event trigger whose `source_collection` matches
+    /// `collection_name` AND whose `event_kind` matches `kind` (currently
+    /// always `"created"` per the v1 spec; `kind` is validated at resolve
+    /// time). Triggers are ordered by `trigger_id` for determinism so the
+    /// "first" match doesn't shift across ticks when multiple triggers key on
+    /// the same collection.
+    ///
+    /// Returns a clone so the caller drops its snapshot borrow before
+    /// building the `FireIntent`.
+    fn first_matching_trigger(
+        snapshot: &ActiveRuntimeSnapshot,
+        collection_name: &str,
+        kind: &str,
+    ) -> Option<crate::runtime_snapshot::ResolvedEventTrigger> {
+        let mut matches: Vec<_> = snapshot
+            .active_event_triggers()
+            .values()
+            .filter(|t| t.source_collection == collection_name && t.event_kind == kind)
+            .collect();
+        matches.sort_by(|a, b| a.trigger_id.cmp(&b.trigger_id));
+        matches.first().map(|t| (*t).clone())
+    }
+}
+
+impl TriggerSource for EventSource {
+    fn next_fire(
+        &mut self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<FireIntent>> + Send + '_>>
+    {
+        Box::pin(async move {
+            // Outer loop: reconcile-on-generation-bump, then race subscription
+            // vs. snapshot-change vs. cancel. `None` here means "source is
+            // permanently done, drop it" — an idle tick or an unmatched event
+            // must not exit. Return `None` only on cancel or subscription
+            // channel closure; keep looping otherwise so the engine's outer
+            // driver doesn't teardown the source on the first miss.
+            loop {
+                // Step 1: snapshot-read; reconcile if the generation moved.
+                // Reconciliation might open the subscription on first non-
+                // empty desired set.
+                let snapshot = self.snapshot_rx.borrow().clone();
+                if snapshot.generation > self.reconciled_generation {
+                    self.reconcile_subscriptions(snapshot.as_ref()).await;
+                }
+
+                // Step 2: empty-filter-set short-circuit. If no triggers are
+                // live the subscription was never opened (or reconciled down
+                // to an empty set with an already-open subscription that we
+                // ignore). Either way, sit on `snapshot_rx.changed()` or
+                // cancel — no events to dispatch.
+                if self.subscription.is_none() || self.desired_collections.is_empty() {
+                    tokio::select! {
+                        biased;
+                        _ = self.cancel.cancelled() => return None,
+                        res = self.snapshot_rx.changed() => {
+                            if res.is_err() {
+                                // The snapshot publisher has hung up. Treat
+                                // this as permanent source exhaustion.
+                                return None;
+                            }
+                            continue;
+                        }
+                    }
+                }
+
+                // Step 3: race the subscription against snapshot changes and
+                // cancel. Subscription is guaranteed Some here by the check
+                // above, so we can take a &mut borrow for the recv poll.
+                let subscription = self
+                    .subscription
+                    .as_mut()
+                    .expect("subscription is Some when desired_collections is non-empty");
+                let message = tokio::select! {
+                    biased;
+                    _ = self.cancel.cancelled() => return None,
+                    res = self.snapshot_rx.changed() => {
+                        if res.is_err() {
+                            return None;
+                        }
+                        // New snapshot — loop back to reconcile. Any event
+                        // in-flight on the subscription will be seen on the
+                        // next tick (events::Subscription buffers behind the
+                        // mpsc receiver, so no loss).
+                        continue;
+                    }
+                    msg = subscription.recv() => {
+                        match msg {
+                            Some(m) => m,
+                            None => {
+                                // The subscription channel closed. This is
+                                // effectively source death; returning None so
+                                // the engine drops us.
+                                tracing::warn!(
+                                    "event source subscription channel closed; \
+                                     source exiting",
+                                );
+                                return None;
+                            }
+                        }
+                    }
+                };
+
+                let dropped = subscription.check_and_reset_dropped();
+                if dropped > 0 {
+                    // Dropped events are a correctness hazard for this
+                    // source — without a full-resync path we can't know what
+                    // we missed. Log loudly; Task 22+ may add a resync hook.
+                    tracing::warn!(
+                        dropped = dropped,
+                        "event source dropped messages; may have missed event triggers",
+                    );
+                }
+
+                // Step 4: decode the Update payload. Non-Update messages are
+                // filtered by the subscription mask, but `as_update()` is the
+                // idiomatic way to narrow and we get a defensive check for
+                // free.
+                let Some(update) = message.as_update() else {
+                    continue;
+                };
+
+                // Step 5: resolve collection_id -> collection name. The
+                // Update event carries a stable `collection_id` hash; our
+                // trigger docs key on the human-readable name. Unknown ids
+                // (e.g. a transiently-dropped collection) drop the event.
+                let collection_id = update.collection_id.clone();
+                let doc_id = update.doc_id.clone();
+                let Some(collection_name) = self.resolve_collection_name(&collection_id).await
+                else {
+                    tracing::trace!(
+                        collection_id = %collection_id,
+                        doc_id = %doc_id,
+                        "event source could not resolve collection_id to name; skipping event",
+                    );
+                    continue;
+                };
+
+                // Step 6: client-side filter against desired_collections.
+                // This is the fast path for events in collections no trigger
+                // cares about.
+                if !self.desired_collections.contains(&collection_name) {
+                    continue;
+                }
+
+                // Step 7: find the first matching trigger in the snapshot we
+                // read at the top of the loop. Re-borrow the snapshot so
+                // we're always checking against the latest published view,
+                // not the copy we captured for the generation-bump check
+                // (those might diverge if a snapshot published while we were
+                // awaiting `subscription.recv()`).
+                let snapshot = self.snapshot_rx.borrow().clone();
+                // v1 spec: event_kind is always "created". If that widens,
+                // map the event variant (Update carries no kind field today
+                // — all writes go through Update, distinguished only by
+                // block contents) to the right string.
+                let event_kind = "created";
+                let Some(trigger) =
+                    Self::first_matching_trigger(snapshot.as_ref(), &collection_name, event_kind)
+                else {
+                    // We filter-pass matched at the collection level but no
+                    // trigger in the snapshot keys on this collection+kind.
+                    // That can happen briefly after a reconcile removes a
+                    // trigger or after a snapshot bump raced with this event;
+                    // drop silently.
+                    continue;
+                };
+
+                // Step 8: probe the trigger's operator-authored `filter`
+                // against the source doc (narrowed by `_docID`). A filter
+                // miss quietly drops the event — other collections may still
+                // match this tick. A probe error is logged and dropped for
+                // the same reason: a transient GraphQL failure shouldn't
+                // kill the source.
+                match self.probe_filter(&doc_id, &trigger).await {
+                    Ok(true) => { /* filter matched; fall through to hydrate */ }
+                    Ok(false) => {
+                        tracing::trace!(
+                            trigger_id = %trigger.trigger_id,
+                            source_collection = %collection_name,
+                            source_doc_id = %doc_id,
+                            "event source: filter miss, skipping event",
+                        );
+                        continue;
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            trigger_id = %trigger.trigger_id,
+                            source_collection = %collection_name,
+                            source_doc_id = %doc_id,
+                            %err,
+                            "event source: filter probe failed; skipping event",
+                        );
+                        continue;
+                    }
+                }
+
+                // Step 9: hydrate `doc_vars` from the source doc so the
+                // dispatcher / prompt render has the full document scope.
+                // Unlike the probe, a hydration failure means we can't
+                // safely fire at all — we drop this event rather than
+                // materialize with a partial scope.
+                let doc_vars = match self
+                    .fetch_source_doc(&trigger.source_collection, &doc_id)
+                    .await
+                {
+                    Ok(value) => Some(value),
+                    Err(err) => {
+                        tracing::warn!(
+                            trigger_id = %trigger.trigger_id,
+                            source_collection = %collection_name,
+                            source_doc_id = %doc_id,
+                            %err,
+                            "event source: source-doc fetch failed; skipping fire",
+                        );
+                        continue;
+                    }
+                };
+
+                // Step 10: build the FireIntent. `event_vars` carries the
+                // trigger identity; `doc_vars` carries the hydrated source
+                // doc. Task 22 fills in the `on_result` body; for now it's
+                // a no-op.
+                let fired_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+                let event_vars = serde_json::json!({
+                    "fired_at": fired_at,
+                    "trigger_id": trigger.trigger_id,
+                    "trigger_kind": TriggerKind::Event.as_str(),
+                    "source_collection": collection_name,
+                    "source_doc_id": doc_id,
+                });
+
+                tracing::info!(
+                    trigger_id = %trigger.trigger_id,
+                    source_collection = %collection_name,
+                    source_doc_id = %doc_id,
+                    "event source matched event to trigger; emitting fire intent",
+                );
+
+                // Values captured for the result-writeback closure. The
+                // callback is synchronous (`FnOnce(FireResult)`), so it
+                // spawns a background task that performs the DefraDB
+                // mutation; the engine's dispatch loop continues without
+                // waiting on bookkeeping I/O. Mirrors the pattern used by
+                // `ScheduleSource::next_fire`.
+                let trigger_id_for_callback = trigger.trigger_id.clone();
+                let source_doc_id_for_callback = doc_id.clone();
+                let node_for_callback = self.node.clone();
+
+                return Some(FireIntent {
+                    trigger_id: Some(trigger.trigger_id.clone()),
+                    trigger_kind: TriggerKind::Event,
+                    task: trigger.task.clone(),
+                    concurrency: trigger.concurrency,
+                    event_vars,
+                    doc_vars,
+                    args_vars: None,
+                    on_result: Box::new(move |result| {
+                        EventSource::spawn_runtime_field_write(
+                            node_for_callback,
+                            trigger_id_for_callback,
+                            source_doc_id_for_callback,
+                            result,
+                        );
+                    }),
+                });
+            }
+        })
+    }
+}

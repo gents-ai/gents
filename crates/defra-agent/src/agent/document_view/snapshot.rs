@@ -8,7 +8,7 @@ use crate::admission::backend_admission_configs_from_backends;
 use crate::config::BehaviorConfig;
 use crate::document_config::{default_behavior_id_for_agent, AgentBehavior};
 use crate::runtime_snapshot::{
-    ConcurrencyMode, ResolvedRuntimeSnapshot, ResolvedSchedule, ResolvedTask,
+    ConcurrencyMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot, ResolvedSchedule, ResolvedTask,
 };
 use crate::tool_surface::ToolSelection;
 
@@ -149,6 +149,8 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     )?;
 
     let (active_schedules, unavailable_schedules) = resolve_schedules(view, &unavailable_behaviors);
+    let (active_event_triggers, unavailable_event_triggers) =
+        resolve_event_triggers(view, &unavailable_behaviors);
 
     Ok(ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         default_behavior_id,
@@ -157,7 +159,8 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         backend_admission_configs,
         unavailable_behaviors,
     )
-    .with_schedules(active_schedules, unavailable_schedules))
+    .with_schedules(active_schedules, unavailable_schedules)
+    .with_event_triggers(active_event_triggers, unavailable_event_triggers))
 }
 
 /// Classify every `Schedule` in `view` into either `active_schedules`
@@ -240,6 +243,97 @@ fn resolve_schedules(
     }
 
     (active_schedules, unavailable_schedules)
+}
+
+/// Classify every `EventTrigger` in `view` into either `active_event_triggers`
+/// (resolvable with its task and behavior) or `unavailable_event_triggers`
+/// (anything that fails one of the resolution gates). Mirrors
+/// `resolve_schedules`: we never fail the whole snapshot for a single
+/// unresolvable trigger; we mark it unavailable instead.
+fn resolve_event_triggers(
+    view: &DocumentRuntimeView,
+    unavailable_behaviors: &HashMap<String, String>,
+) -> (HashMap<String, ResolvedEventTrigger>, HashSet<String>) {
+    let mut active_event_triggers = HashMap::new();
+    let mut unavailable_event_triggers = HashSet::new();
+
+    for trigger_record in view.event_triggers.values() {
+        let trigger = &trigger_record.value;
+        let trigger_id = trigger.trigger_id.clone();
+
+        let concurrency =
+            match ConcurrencyMode::parse(trigger.concurrency.as_deref().unwrap_or("")) {
+                Some(mode) => mode,
+                None => {
+                    unavailable_event_triggers.insert(trigger_id);
+                    continue;
+                }
+            };
+
+        if trigger.enabled != Some(true) {
+            unavailable_event_triggers.insert(trigger_id);
+            continue;
+        }
+
+        let task_id = trigger.task_id.as_deref().unwrap_or("");
+        let task_record = match view.tasks.get(task_id) {
+            Some(record) => record,
+            None => {
+                unavailable_event_triggers.insert(trigger_id);
+                continue;
+            }
+        };
+        let task = &task_record.value;
+
+        if !task.enabled {
+            unavailable_event_triggers.insert(trigger_id);
+            continue;
+        }
+
+        let behavior_id = task.behavior_id.as_deref().unwrap_or("");
+        let behavior_record = match view.behaviors.get(behavior_id) {
+            Some(record) => record,
+            None => {
+                unavailable_event_triggers.insert(trigger_id);
+                continue;
+            }
+        };
+        if !behavior_record.value.enabled {
+            unavailable_event_triggers.insert(trigger_id);
+            continue;
+        }
+        if unavailable_behaviors.contains_key(behavior_id) {
+            unavailable_event_triggers.insert(trigger_id);
+            continue;
+        }
+
+        let source_collection = trigger.source_collection.clone().unwrap_or_default();
+        let event_kind = trigger.event_kind.clone().unwrap_or_default();
+        if source_collection.is_empty() || event_kind.is_empty() {
+            unavailable_event_triggers.insert(trigger_id);
+            continue;
+        }
+
+        let resolved_task = ResolvedTask {
+            task_id: task.task_id.clone(),
+            behavior_id: task.behavior_id.clone().unwrap_or_default(),
+            prompt_template: task.prompt_template.clone().unwrap_or_default(),
+            output_schema_ref: task.output_schema_ref.clone(),
+        };
+        let resolved_trigger = ResolvedEventTrigger {
+            trigger_id: trigger.trigger_id.clone(),
+            task_id: trigger.task_id.clone().unwrap_or_default(),
+            task: resolved_task,
+            source_collection,
+            event_kind,
+            filter: trigger.filter.clone(),
+            enabled: true,
+            concurrency,
+        };
+        active_event_triggers.insert(resolved_trigger.trigger_id.clone(), resolved_trigger);
+    }
+
+    (active_event_triggers, unavailable_event_triggers)
 }
 
 pub(super) fn collect_unresolved_behavior_references(

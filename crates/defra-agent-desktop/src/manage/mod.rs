@@ -13,7 +13,8 @@ pub(crate) use documents::{
     EntitySummary,
 };
 pub(crate) use rows::{
-    backend_row, behavior_row, inference_profile_row, schedule_row, task_row, tool_selection_row,
+    backend_row, behavior_row, event_trigger_row, inference_profile_row, schedule_row, task_row,
+    tool_selection_row,
 };
 pub(crate) use shared::{
     abbreviate_identifier, bool_word, compact_timestamp, normalize_optional_owned,

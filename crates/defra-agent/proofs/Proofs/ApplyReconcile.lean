@@ -33,6 +33,7 @@ inductive Collection where
   | toolServiceRegistry
   | task
   | schedule
+  | eventTrigger
   deriving DecidableEq, Repr
 
 /-- Apply ordering rank. Must agree with Rust
@@ -46,6 +47,7 @@ def Collection.applyOrder : Collection → Nat
   | .task                  => 2
   | .schedule              => 2
   | .agentPrincipal        => 3
+  | .eventTrigger          => 3
 
 /-- Comparison on Collection: by `applyOrder` rank. -/
 instance : LT Collection where
@@ -1034,6 +1036,7 @@ example (c : Collection) : Nat :=
   | .toolServiceRegistry  => 0
   | .task                 => 2
   | .schedule             => 2
+  | .eventTrigger         => 3
 
 /-- Sanity: the exhaustive example's rank map equals applyOrder. -/
 theorem applyOrder_matches_parity_contract : ∀ c : Collection,
@@ -1046,7 +1049,8 @@ theorem applyOrder_matches_parity_contract : ∀ c : Collection,
        | .inferenceProfile     => 0
        | .toolServiceRegistry  => 0
        | .task                 => 2
-       | .schedule             => 2) := by
+       | .schedule             => 2
+       | .eventTrigger         => 3) := by
   intro c
   cases c <;> rfl
 

@@ -6,18 +6,20 @@ pub enum ManageSection {
     InferenceProfiles,
     Tasks,
     Schedules,
+    EventTriggers,
     RequestTimeline,
     RecentFailures,
 }
 
 impl ManageSection {
-    pub const MANAGE: [Self; 6] = [
+    pub const MANAGE: [Self; 7] = [
         Self::Behaviors,
         Self::Backends,
         Self::ToolSelections,
         Self::InferenceProfiles,
         Self::Tasks,
         Self::Schedules,
+        Self::EventTriggers,
     ];
 
     pub const INSPECT: [Self; 2] = [Self::RequestTimeline, Self::RecentFailures];
@@ -30,6 +32,7 @@ impl ManageSection {
             Self::InferenceProfiles => "Inference Profiles",
             Self::Tasks => "Tasks",
             Self::Schedules => "Schedules",
+            Self::EventTriggers => "Event Triggers",
             Self::RequestTimeline => "Request Timeline",
             Self::RecentFailures => "Recent Failures",
         }
@@ -44,6 +47,7 @@ impl ManageSection {
                 | Self::InferenceProfiles
                 | Self::Tasks
                 | Self::Schedules
+                | Self::EventTriggers
         )
     }
 }
@@ -142,6 +146,31 @@ pub struct ScheduleDraft {
     pub updated_at: String,
 }
 
+/// Draft shown in the EventTrigger manage section.
+///
+/// Apply-owned fields are editable; runtime-owned fields
+/// (`last_attempt_at`, `last_fired_source_doc_id`, `last_status`,
+/// `last_error`, `fire_count`) are shown read-only in the editor so an
+/// operator can see the last fire outcome without the apply path ever
+/// overwriting them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EventTriggerDraft {
+    pub trigger_id: String,
+    pub task_id: String,
+    pub source_collection: String,
+    pub event_kind: String,
+    pub filter: String,
+    pub enabled: bool,
+    pub concurrency: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub last_attempt_at: String,
+    pub last_fired_source_doc_id: String,
+    pub last_status: String,
+    pub last_error: String,
+    pub fire_count: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ManageDraft {
     Behavior(BehaviorDraft),
@@ -150,6 +179,7 @@ pub enum ManageDraft {
     InferenceProfile(InferenceProfileDraft),
     Task(TaskDraft),
     Schedule(ScheduleDraft),
+    EventTrigger(EventTriggerDraft),
 }
 
 impl ManageDraft {
@@ -161,6 +191,7 @@ impl ManageDraft {
             Self::InferenceProfile(draft) => &draft.profile_id,
             Self::Task(draft) => &draft.task_id,
             Self::Schedule(draft) => &draft.schedule_id,
+            Self::EventTrigger(draft) => &draft.trigger_id,
         }
     }
 
@@ -172,6 +203,7 @@ impl ManageDraft {
             Self::InferenceProfile(_) => ManageSection::InferenceProfiles,
             Self::Task(_) => ManageSection::Tasks,
             Self::Schedule(_) => ManageSection::Schedules,
+            Self::EventTrigger(_) => ManageSection::EventTriggers,
         }
     }
 }

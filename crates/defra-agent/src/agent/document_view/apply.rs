@@ -3,7 +3,7 @@ use defra_node::EmbeddedNode;
 
 use crate::backend_registry::lookup_backend_by_doc_id;
 use crate::document_config::{
-    load_agent_behavior_by_doc_id, load_agent_principal_by_doc_id,
+    load_agent_behavior_by_doc_id, load_agent_principal_by_doc_id, load_event_trigger_by_doc_id,
     load_inference_profile_by_doc_id, load_schedule_by_doc_id, load_task_by_doc_id,
     load_tool_selection_by_doc_id,
 };
@@ -164,9 +164,27 @@ pub(crate) async fn apply_control_update(
         return Ok(ControlUpdateOutcome::Applied);
     }
 
-    // EventTrigger subscription is deferred to PR 2 of the event-driven-tasks
-    // series; the stub `event_triggers` map on `DocumentRuntimeView` stays
-    // empty for now, so we intentionally do not dispatch on it here.
+    // EventTriggers, like schedules and tasks, are globally addressed; any
+    // EventTrigger create/update needs to drive a snapshot reload so the
+    // runtime's `active_event_triggers` can pick up the change.
+    if let Some((loaded_doc_id, trigger)) = load_event_trigger_by_doc_id(node, doc_id).await? {
+        if trigger.trigger_id.trim().is_empty() {
+            return Ok(ControlUpdateOutcome::Irrelevant);
+        }
+        view.remove_event_trigger_by_doc_id(doc_id);
+        view.event_triggers.insert(
+            trigger.trigger_id.clone(),
+            DocumentRecord {
+                doc_id: loaded_doc_id,
+                value: trigger,
+            },
+        );
+        return Ok(ControlUpdateOutcome::Applied);
+    }
+    if view.has_event_trigger_doc_id(doc_id) {
+        view.remove_event_trigger_by_doc_id(doc_id);
+        return Ok(ControlUpdateOutcome::Applied);
+    }
 
     Ok(ControlUpdateOutcome::Irrelevant)
 }

@@ -1,7 +1,7 @@
 use crate::client::ClientStore;
 use crate::state::{
-    BackendDraft, BehaviorDraft, InferenceProfileDraft, ManageDraft, ManageDraftOrigin,
-    ManageSection, ScheduleDraft, TaskDraft, ToolSelectionDraft,
+    BackendDraft, BehaviorDraft, EventTriggerDraft, InferenceProfileDraft, ManageDraft,
+    ManageDraftOrigin, ManageSection, ScheduleDraft, TaskDraft, ToolSelectionDraft,
 };
 
 use super::{
@@ -172,6 +172,37 @@ pub fn draft_for_selection(
                     updated_at: row.updated_at.clone().unwrap_or_default(),
                 })
             }),
+        ManageSection::EventTriggers => store
+            .event_triggers
+            .iter()
+            .find(|row| row.trigger_id == entity_id)
+            .map(|row| {
+                ManageDraft::EventTrigger(EventTriggerDraft {
+                    trigger_id: row.trigger_id.clone(),
+                    task_id: row.task_id.clone().unwrap_or_default(),
+                    source_collection: row.source_collection.clone().unwrap_or_default(),
+                    event_kind: row
+                        .event_kind
+                        .clone()
+                        .unwrap_or_else(|| "created".to_string()),
+                    filter: row.filter.clone().unwrap_or_default(),
+                    enabled: row.enabled.unwrap_or(true),
+                    concurrency: row.concurrency.clone().unwrap_or_default(),
+                    created_at: row.created_at.clone().unwrap_or_default(),
+                    updated_at: row.updated_at.clone().unwrap_or_default(),
+                    last_attempt_at: row.last_attempt_at.clone().unwrap_or_default(),
+                    last_fired_source_doc_id: row
+                        .last_fired_source_doc_id
+                        .clone()
+                        .unwrap_or_default(),
+                    last_status: row.last_status.clone().unwrap_or_default(),
+                    last_error: row.last_error.clone().unwrap_or_default(),
+                    fire_count: row
+                        .fire_count
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                })
+            }),
         _ => {
             let _ = selected_agent_did;
             None
@@ -259,6 +290,25 @@ pub fn new_draft_for_section(
             fire_count: String::new(),
             created_at: String::new(),
             updated_at: String::new(),
+        })),
+        ManageSection::EventTriggers => Some(ManageDraft::EventTrigger(EventTriggerDraft {
+            trigger_id: String::new(),
+            task_id: String::new(),
+            source_collection: String::new(),
+            // PR 2 only supports "created" events; other event kinds
+            // will land in later PRs as the event-source gains more
+            // probe surfaces.
+            event_kind: "created".to_string(),
+            filter: String::new(),
+            enabled: true,
+            concurrency: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+            last_attempt_at: String::new(),
+            last_fired_source_doc_id: String::new(),
+            last_status: String::new(),
+            last_error: String::new(),
+            fire_count: String::new(),
         })),
         _ => None,
     }
@@ -495,6 +545,59 @@ pub fn entity_summaries(
                             .map(|value| value.to_string())
                             .unwrap_or_else(|| "na".to_string()),
                         schedule_next_run_label(row),
+                        row.fire_count
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "0".to_string()),
+                    ),
+                })
+                .collect()
+        }
+        ManageSection::EventTriggers => {
+            // EventTriggers are globally addressed by `trigger_id`. Like
+            // Schedules, when a deployment is selected we narrow to
+            // triggers whose task is bound to a behavior owned by that
+            // agent.
+            let task_ids_for_agent: std::collections::HashSet<String> = match selected_agent_did {
+                Some(agent_did) => store
+                    .tasks
+                    .iter()
+                    .filter(|task| {
+                        task.behavior_id
+                            .as_deref()
+                            .is_some_and(|behavior_id| {
+                                store.behavior_row(agent_did, behavior_id).is_some()
+                            })
+                    })
+                    .map(|task| task.task_id.clone())
+                    .collect(),
+                None => store.tasks.iter().map(|task| task.task_id.clone()).collect(),
+            };
+
+            let mut rows: Vec<_> = store
+                .event_triggers
+                .iter()
+                .filter(|row| match row.task_id.as_deref() {
+                    Some(task_id) => task_ids_for_agent.contains(task_id),
+                    None => selected_agent_did.is_none(),
+                })
+                .collect();
+            rows.sort_by(|left, right| left.trigger_id.cmp(&right.trigger_id));
+            rows.into_iter()
+                .map(|row| EntitySummary {
+                    id: row.trigger_id.clone(),
+                    title: row
+                        .task_id
+                        .clone()
+                        .unwrap_or_else(|| row.trigger_id.clone()),
+                    meta: format!(
+                        "{}  {}  source {}  fires {}",
+                        if row.enabled == Some(false) {
+                            "disabled"
+                        } else {
+                            "enabled"
+                        },
+                        row.event_kind.as_deref().unwrap_or("created"),
+                        row.source_collection.as_deref().unwrap_or("unbound"),
                         row.fire_count
                             .map(|value| value.to_string())
                             .unwrap_or_else(|| "0".to_string()),

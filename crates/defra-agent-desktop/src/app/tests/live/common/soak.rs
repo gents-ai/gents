@@ -622,6 +622,7 @@ impl LiveSoakDiagnostics {
                 compaction_entries: store.compaction_entries.clone(),
                 tasks: store.tasks.clone(),
                 schedules: store.schedules.clone(),
+                event_triggers: store.event_triggers.clone(),
                 tool_selections: store.tool_selections.clone(),
                 inference_backends: store.inference_backends.clone(),
                 inference_profiles: store.inference_profiles.clone(),

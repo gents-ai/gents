@@ -19,8 +19,9 @@ use crate::state::{
 use crate::theme;
 use crate::views;
 use editors::{
-    render_backend_editor, render_behavior_editor, render_inference_profile_editor,
-    render_schedule_editor, render_task_editor, render_tool_selection_editor,
+    render_backend_editor, render_behavior_editor, render_event_trigger_editor,
+    render_inference_profile_editor, render_schedule_editor, render_task_editor,
+    render_tool_selection_editor,
 };
 
 pub fn prepare_state(
@@ -77,7 +78,8 @@ pub fn show_main(
             | ManageSection::ToolSelections
             | ManageSection::InferenceProfiles
             | ManageSection::Tasks
-            | ManageSection::Schedules => {
+            | ManageSection::Schedules
+            | ManageSection::EventTriggers => {
                 render_management_workspace(ui, state, client, store, section, entries);
             }
             ManageSection::RequestTimeline | ManageSection::RecentFailures => {
@@ -260,6 +262,18 @@ fn render_editor_workspace(
                 );
             }
         }
+        ManageSection::EventTriggers => {
+            if let Some(ManageDraft::EventTrigger(draft)) = state.manage.draft.as_mut() {
+                scroll_editor_body(ui, |ui| render_event_trigger_editor(ui, draft));
+                rail::render_editor_footer(ui, state, client);
+            } else {
+                views::card(
+                    ui,
+                    "Event Trigger Editor",
+                    "Select an event trigger from the list or create a new one to edit it here.",
+                );
+            }
+        }
         _ => {
             let _ = store;
         }
@@ -396,17 +410,26 @@ fn render_deployment_context(
                 .iter()
                 .map(|row| row.behavior_id.clone())
                 .collect();
+            let agent_task_ids: Vec<&str> = store
+                .tasks
+                .iter()
+                .filter(|row| {
+                    row.behavior_id
+                        .as_deref()
+                        .is_some_and(|bid| agent_behavior_ids.contains(bid))
+                })
+                .map(|row| row.task_id.as_str())
+                .collect();
+            ui.label(
+                RichText::new(format!("tasks {}", agent_task_ids.len()))
+                    .monospace()
+                    .size(10.5)
+                    .color(palette.text_2),
+            );
             ui.label(
                 RichText::new(format!(
-                    "tasks {}",
-                    store
-                        .tasks
-                        .iter()
-                        .filter(|row| row
-                            .behavior_id
-                            .as_deref()
-                            .is_some_and(|bid| agent_behavior_ids.contains(bid)))
-                        .count()
+                    "triggers {}",
+                    store.event_triggers_for_tasks(&agent_task_ids).len()
                 ))
                 .monospace()
                 .size(10.5)

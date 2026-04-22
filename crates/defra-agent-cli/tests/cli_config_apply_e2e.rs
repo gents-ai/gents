@@ -586,3 +586,616 @@ async fn config_apply_reconciles_tool_services_tasks_and_schedules_end_to_end() 
 
     Ok(())
 }
+
+/// End-to-end test for the EventTrigger apply path.
+///
+/// Covers the runtime-ownership contract for `EventTrigger`:
+///   * creation of a `Task` + `EventTrigger` pair from a manifest,
+///   * apply-owned field reconciliation after a manifest edit, and
+///   * the critical invariant that apply NEVER writes runtime-owned
+///     `EventTrigger` fields (`last_attempt_at`,
+///     `last_fired_source_doc_id`, `last_status`, `last_error`,
+///     `fire_count`) — live trigger-engine state injected via direct
+///     GraphQL mutation must survive a reapply, even when apply-owned
+///     fields change in the same apply.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("default");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-apply-trigger-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let agent_name = format!("cli-apply-trigger-{}", Uuid::new_v4().simple());
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    let exported = run_cli_json(&home_dir, &["config", "export"])?;
+    write_manifest_root_from_export(&root, &exported)?;
+
+    let behavior_id = exported
+        .pointer("/agent_principal/default_behavior_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("exported bundle missing default behavior id"))?
+        .to_string();
+    let task_id = format!("greet-signup-{}", Uuid::new_v4().simple());
+    let trigger_id = format!("on-signup-created-{}", Uuid::new_v4().simple());
+    let task_path = root.join("tasks").join("greet-signup.json");
+    let trigger_path = root.join("event_triggers").join("on-signup-created.json");
+
+    // Use InferenceBackend as the source collection — it's registered on
+    // every defra-agent server, so the apply-time live validation (filter
+    // syntax probe + `doc.*` field resolution) can succeed against a
+    // known-good schema. `name` and `enabled` are real fields on
+    // InferenceBackend.
+    write_json_file(
+        &task_path,
+        &serde_json::json!({
+            "task_id": task_id.clone(),
+            "name": "Greet New Signup",
+            "description": "Send a personalized welcome to a new backend signup.",
+            "behavior_id": behavior_id.clone(),
+            "prompt_template": "Greet new backend {{ doc.name }}.",
+            "enabled": true,
+        }),
+    )?;
+    write_json_file(
+        &trigger_path,
+        &serde_json::json!({
+            "trigger_id": trigger_id.clone(),
+            "task_id": task_id.clone(),
+            "source_collection": "InferenceBackend",
+            "event_kind": "created",
+            "filter": "{ enabled: { _eq: true } }",
+            "enabled": true,
+            "concurrency": "serial",
+        }),
+    )?;
+
+    let root_str = root
+        .to_str()
+        .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
+    let validated = run_cli_json(&home_dir, &["config", "validate", "--root", root_str])?;
+    assert_eq!(
+        validated.pointer("/counts/tasks").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        validated
+            .pointer("/counts/event_triggers")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(
+        &graphql,
+        &format!("did:defra-agent:{agent_name}"),
+        Duration::from_secs(30),
+    )
+    .await?;
+
+    let planned = run_cli_json(&home_dir, &["config", "diff", "--root", root_str])?;
+    assert_eq!(
+        planned
+            .pointer("/counts/tasks/create")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        planned
+            .pointer("/counts/event_triggers/create")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    // --- Initial apply: creates Task + EventTrigger ---
+    let applied = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
+    assert_eq!(
+        applied.get("status").and_then(Value::as_str),
+        Some("applied")
+    );
+    assert_eq!(applied.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        applied.pointer("/applied/tasks").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        applied
+            .pointer("/applied/event_triggers")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    // --- EventTrigger reconciled with apply-owned fields; runtime-owned
+    //     fields start unset (the trigger engine has not yet fired) ---
+    let trigger_response = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{
+                EventTrigger(filter: {{ trigger_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    _docID
+                    trigger_id
+                    task_id
+                    source_collection
+                    event_kind
+                    filter
+                    enabled
+                    concurrency
+                    last_attempt_at
+                    last_fired_source_doc_id
+                    last_status
+                    last_error
+                    fire_count
+                }}
+            }}"#,
+            escape_graphql_string(&trigger_id),
+        ),
+    )
+    .await?;
+    let trigger_row = first_graphql_row(&trigger_response, "EventTrigger")?;
+    assert_eq!(
+        trigger_row.get("trigger_id").and_then(Value::as_str),
+        Some(trigger_id.as_str())
+    );
+    assert_eq!(
+        trigger_row.get("task_id").and_then(Value::as_str),
+        Some(task_id.as_str())
+    );
+    assert_eq!(
+        trigger_row
+            .get("source_collection")
+            .and_then(Value::as_str),
+        Some("InferenceBackend")
+    );
+    assert_eq!(
+        trigger_row.get("event_kind").and_then(Value::as_str),
+        Some("created")
+    );
+    assert_eq!(
+        trigger_row.get("filter").and_then(Value::as_str),
+        Some("{ enabled: { _eq: true } }")
+    );
+    assert_eq!(
+        trigger_row.get("enabled").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        trigger_row.get("concurrency").and_then(Value::as_str),
+        Some("serial")
+    );
+    // Runtime-owned fields must be null before the trigger engine fires.
+    assert!(
+        trigger_row
+            .get("last_status")
+            .map(Value::is_null)
+            .unwrap_or(true),
+        "last_status should be null before any fire: {trigger_row}"
+    );
+    assert!(
+        trigger_row
+            .get("fire_count")
+            .map(Value::is_null)
+            .unwrap_or(true),
+        "fire_count should be null before any fire: {trigger_row}"
+    );
+    assert!(
+        trigger_row
+            .get("last_fired_source_doc_id")
+            .map(Value::is_null)
+            .unwrap_or(true),
+        "last_fired_source_doc_id should be null before any fire: {trigger_row}"
+    );
+    let initial_trigger_doc_id = trigger_row
+        .get("_docID")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("EventTrigger row missing _docID: {trigger_row}"))?
+        .to_string();
+
+    // --- Reapply with no manifest change: noop, no counts incremented ---
+    let noop = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
+    assert_eq!(noop.get("status").and_then(Value::as_str), Some("noop"));
+    assert_eq!(
+        noop.pointer("/applied/event_triggers")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+
+    // --- Simulate the trigger engine writing runtime-owned fields ---
+    //
+    // Note: DefraDB's GraphQL layer rejects string literals for `DateTime`
+    // via `update_*` in this test (same limitation documented in the
+    // Schedule e2e). We exercise the apply-ownership boundary with the
+    // non-DateTime runtime fields — `last_status`, `last_error`,
+    // `fire_count`, `last_fired_source_doc_id`. `last_attempt_at`
+    // ownership is covered by the trigger_engine e2e tests which drive
+    // the real write path.
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{
+                update_EventTrigger(
+                    docID: "{doc_id}",
+                    input: {{
+                        last_status: "fired",
+                        last_error: null,
+                        fire_count: 3,
+                        last_fired_source_doc_id: "src-abc"
+                    }}
+                ) {{ _docID }}
+            }}"#,
+            doc_id = escape_graphql_string(&initial_trigger_doc_id),
+        ),
+    )
+    .await?;
+
+    // --- Reapply: runtime-owned fields must not trigger apply-side drift ---
+    let runtime_noop = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
+    assert_eq!(
+        runtime_noop.get("status").and_then(Value::as_str),
+        Some("noop"),
+        "runtime-owned fields must not trigger apply-side drift"
+    );
+    assert_eq!(
+        runtime_noop
+            .pointer("/applied/event_triggers")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+
+    // Confirm runtime-owned EventTrigger fields survive the noop reapply.
+    let trigger_after_noop = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{
+                EventTrigger(filter: {{ trigger_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    _docID
+                    last_status
+                    last_error
+                    fire_count
+                    last_fired_source_doc_id
+                }}
+            }}"#,
+            escape_graphql_string(&trigger_id),
+        ),
+    )
+    .await?;
+    let trigger_after_noop_row = first_graphql_row(&trigger_after_noop, "EventTrigger")?;
+    assert_eq!(
+        trigger_after_noop_row
+            .get("_docID")
+            .and_then(Value::as_str),
+        Some(initial_trigger_doc_id.as_str()),
+        "EventTrigger docID must be stable across noop apply"
+    );
+    assert_eq!(
+        trigger_after_noop_row
+            .get("last_status")
+            .and_then(Value::as_str),
+        Some("fired"),
+        "runtime-owned last_status must survive noop apply"
+    );
+    assert_eq!(
+        trigger_after_noop_row
+            .get("fire_count")
+            .and_then(Value::as_i64),
+        Some(3),
+        "runtime-owned fire_count must survive noop apply"
+    );
+    assert_eq!(
+        trigger_after_noop_row
+            .get("last_fired_source_doc_id")
+            .and_then(Value::as_str),
+        Some("src-abc"),
+        "runtime-owned last_fired_source_doc_id must survive noop apply"
+    );
+
+    // --- Edit the manifest; apply should reconcile apply-owned fields
+    //     while leaving runtime-owned fields untouched ---
+    let mut trigger_manifest = read_json_file(&trigger_path)?;
+    // Stay within a valid GraphQL filter literal so the apply-time live
+    // validation still passes. `provider_kind` is a real field on
+    // InferenceBackend.
+    trigger_manifest["filter"] = Value::String(
+        "{ enabled: { _eq: true }, provider_kind: { _eq: \"openai\" } }".to_string(),
+    );
+    trigger_manifest["enabled"] = Value::from(false);
+    trigger_manifest["concurrency"] = Value::String("latest_only".to_string());
+    write_json_file(&trigger_path, &trigger_manifest)?;
+
+    let updated = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
+    assert_eq!(
+        updated.get("status").and_then(Value::as_str),
+        Some("applied")
+    );
+    assert_eq!(
+        updated
+            .pointer("/applied/event_triggers")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    // Confirm apply-owned fields updated AND runtime-owned fields preserved.
+    let trigger_after_update = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{
+                EventTrigger(filter: {{ trigger_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    filter
+                    enabled
+                    concurrency
+                    last_status
+                    last_error
+                    fire_count
+                    last_fired_source_doc_id
+                }}
+            }}"#,
+            escape_graphql_string(&trigger_id),
+        ),
+    )
+    .await?;
+    let trigger_after_update_row = first_graphql_row(&trigger_after_update, "EventTrigger")?;
+    assert_eq!(
+        trigger_after_update_row.get("filter").and_then(Value::as_str),
+        Some("{ enabled: { _eq: true }, provider_kind: { _eq: \"openai\" } }"),
+        "apply must update filter"
+    );
+    assert_eq!(
+        trigger_after_update_row
+            .get("enabled")
+            .and_then(Value::as_bool),
+        Some(false),
+        "apply must update enabled"
+    );
+    assert_eq!(
+        trigger_after_update_row
+            .get("concurrency")
+            .and_then(Value::as_str),
+        Some("latest_only"),
+        "apply must update concurrency"
+    );
+    assert_eq!(
+        trigger_after_update_row
+            .get("last_status")
+            .and_then(Value::as_str),
+        Some("fired"),
+        "runtime-owned last_status must survive apply-side update"
+    );
+    assert_eq!(
+        trigger_after_update_row
+            .get("fire_count")
+            .and_then(Value::as_i64),
+        Some(3),
+        "runtime-owned fire_count must survive apply-side update"
+    );
+    assert_eq!(
+        trigger_after_update_row
+            .get("last_fired_source_doc_id")
+            .and_then(Value::as_str),
+        Some("src-abc"),
+        "runtime-owned last_fired_source_doc_id must survive apply-side update"
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Apply-time EventTrigger live-schema validation (Task 25 / PR 2).
+//
+// The three tests below cover the LIVE half of EventTrigger apply-time
+// validation, which probes the running node's GraphQL schema:
+//   * malformed `filter` syntax is caught by a `limit:1` probe query;
+//   * `{{ doc.<field> }}` references in the Task's `prompt_template` are
+//     checked against the source collection's introspected field list;
+//   * valid filter + valid `doc.*` paths apply cleanly.
+//
+// All three use `InferenceBackend` as the source collection — it is one of
+// the runtime-registered agent schemas on any defra-agent server, so the
+// probe and introspection queries hit a known-good type without requiring
+// an external schema-registration path.
+// ---------------------------------------------------------------------------
+
+/// Seed a manifest root into `home_dir` and return paths + ids for the
+/// EventTrigger + Task the live-validation tests below manipulate.
+struct LiveValidationFixture {
+    home_dir: std::path::PathBuf,
+    root: std::path::PathBuf,
+    task_id: String,
+    trigger_id: String,
+    task_path: std::path::PathBuf,
+    trigger_path: std::path::PathBuf,
+    // Keep the server process alive for the duration of the test.
+    _serve: ServeProcess,
+    // Holding the mock endpoint alive keeps the model reachable during init.
+    _mock_endpoint: MockModelEndpoint,
+    // Hold the tempdir so the filesystem root survives until drop.
+    _tempdir: tempfile::TempDir,
+}
+
+async fn prepare_live_validation_fixture(
+    suffix: &str,
+) -> Result<LiveValidationFixture> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("default");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-live-validate-model-{suffix}");
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let agent_name = format!("cli-live-validate-{suffix}");
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    let exported = run_cli_json(&home_dir, &["config", "export"])?;
+    write_manifest_root_from_export(&root, &exported)?;
+
+    let behavior_id = exported
+        .pointer("/agent_principal/default_behavior_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("exported bundle missing default behavior id"))?
+        .to_string();
+    let task_id = format!("greet-{suffix}");
+    let trigger_id = format!("on-created-{suffix}");
+    let task_path = root.join("tasks").join("greet.json");
+    let trigger_path = root.join("event_triggers").join("on-created.json");
+
+    // Seed the Task + Trigger with a VALID baseline. Individual tests
+    // overwrite fields to exercise specific failure modes.
+    write_json_file(
+        &task_path,
+        &serde_json::json!({
+            "task_id": task_id.clone(),
+            "name": "Greet",
+            "description": "Greet a new signup.",
+            "behavior_id": behavior_id.clone(),
+            "prompt_template": "Greet new backend {{ doc.name }}.",
+            "enabled": true,
+        }),
+    )?;
+    write_json_file(
+        &trigger_path,
+        &serde_json::json!({
+            "trigger_id": trigger_id.clone(),
+            "task_id": task_id.clone(),
+            "source_collection": "InferenceBackend",
+            "event_kind": "created",
+            "filter": "{ enabled: { _eq: true } }",
+            "enabled": true,
+            "concurrency": "serial",
+        }),
+    )?;
+
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(
+        &graphql,
+        &format!("did:defra-agent:{agent_name}"),
+        Duration::from_secs(30),
+    )
+    .await?;
+
+    Ok(LiveValidationFixture {
+        home_dir,
+        root,
+        task_id,
+        trigger_id,
+        task_path,
+        trigger_path,
+        _serve: serve,
+        _mock_endpoint: mock_endpoint,
+        _tempdir: tempdir,
+    })
+}
+
+/// Apply-time live validation rejects an EventTrigger whose `filter` is
+/// syntactically broken. The DefraDB filter probe returns a GraphQL error
+/// which we propagate into the apply failure.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_rejects_event_trigger_with_malformed_filter() -> Result<()> {
+    let fx = prepare_live_validation_fixture(&Uuid::new_v4().simple().to_string()).await?;
+
+    // Overwrite trigger with a malformed filter.
+    let mut trigger_manifest = read_json_file(&fx.trigger_path)?;
+    trigger_manifest["filter"] = Value::String("{ not_a_field: }".to_string());
+    write_json_file(&fx.trigger_path, &trigger_manifest)?;
+
+    let root_str = fx
+        .root
+        .to_str()
+        .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
+    let stderr = run_cli_failure_stderr(&fx.home_dir, &["config", "apply", "--root", root_str])?;
+    assert!(
+        stderr.contains(&format!("event_trigger {} filter syntax error", fx.trigger_id)),
+        "expected filter syntax error for trigger {} in stderr, got: {stderr}",
+        fx.trigger_id,
+    );
+    Ok(())
+}
+
+/// Apply-time live validation rejects a Task `prompt_template` whose
+/// `{{ doc.* }}` references a field that does not exist on the configured
+/// source collection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_rejects_event_trigger_template_referencing_unknown_doc_field() -> Result<()> {
+    let fx = prepare_live_validation_fixture(&Uuid::new_v4().simple().to_string()).await?;
+
+    // Rewrite the Task prompt to reference a doc field that does NOT exist
+    // on InferenceBackend. Keep the trigger's filter valid so the failure
+    // is unambiguously the template check.
+    let mut task_manifest = read_json_file(&fx.task_path)?;
+    task_manifest["prompt_template"] =
+        Value::String("Greet {{ doc.nonexistent }}.".to_string());
+    write_json_file(&fx.task_path, &task_manifest)?;
+
+    let root_str = fx
+        .root
+        .to_str()
+        .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
+    let stderr = run_cli_failure_stderr(&fx.home_dir, &["config", "apply", "--root", root_str])?;
+    assert!(
+        stderr.contains(&format!(
+            "event_trigger {} template references doc.nonexistent but InferenceBackend has no such field",
+            fx.trigger_id
+        )),
+        "expected doc.nonexistent rejection for trigger {} in stderr, got: {stderr}",
+        fx.trigger_id,
+    );
+    Ok(())
+}
+
+/// Apply-time live validation accepts an EventTrigger whose filter is
+/// syntactically valid GraphQL and whose `doc.*` references exist on the
+/// source collection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_accepts_event_trigger_with_valid_filter_and_doc_paths() -> Result<()> {
+    let fx = prepare_live_validation_fixture(&Uuid::new_v4().simple().to_string()).await?;
+
+    // The fixture seeds a valid filter (`{ enabled: { _eq: true } }`) and a
+    // valid doc.* reference (`doc.name` is a field on InferenceBackend).
+    let root_str = fx
+        .root
+        .to_str()
+        .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
+    let applied = run_cli_json(&fx.home_dir, &["config", "apply", "--root", root_str])?;
+    assert_eq!(
+        applied.get("status").and_then(Value::as_str),
+        Some("applied")
+    );
+    assert_eq!(applied.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        applied
+            .pointer("/applied/event_triggers")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        applied.pointer("/applied/tasks").and_then(Value::as_u64),
+        Some(1)
+    );
+    Ok(())
+}
+

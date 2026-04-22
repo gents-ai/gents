@@ -6,9 +6,10 @@ use serde::Deserialize;
 use super::normalize::normalize_manifest;
 use super::validate::validate_manifest;
 use super::{
-    DesiredAgentBehavior, DesiredAgentPrincipal, DesiredInferenceBackend, DesiredInferenceProfile,
-    DesiredSchedule, DesiredStateCounts, DesiredStateManifest, DesiredStateValidationReport,
-    DesiredTask, DesiredToolSelection, DesiredToolServiceRegistry, HasUniqueId,
+    DesiredAgentBehavior, DesiredAgentPrincipal, DesiredEventTrigger, DesiredInferenceBackend,
+    DesiredInferenceProfile, DesiredSchedule, DesiredStateCounts, DesiredStateManifest,
+    DesiredStateValidationReport, DesiredTask, DesiredToolSelection, DesiredToolServiceRegistry,
+    HasUniqueId,
 };
 use defra_agent::Collection;
 
@@ -47,6 +48,8 @@ pub(crate) fn load_manifest_root(
         load_per_doc_collection(root, Collection::Task, &mut errors);
     let schedules: Vec<DesiredSchedule> =
         load_per_doc_collection(root, Collection::Schedule, &mut errors);
+    let event_triggers: Vec<DesiredEventTrigger> =
+        load_per_doc_collection(root, Collection::EventTrigger, &mut errors);
 
     // Hydrate sidecars AFTER collection parse but BEFORE normalize/validate.
     for behavior in &mut agent_behaviors {
@@ -73,6 +76,7 @@ pub(crate) fn load_manifest_root(
         tool_service_registries: tool_service_registries.len(),
         tasks: tasks.len(),
         schedules: schedules.len(),
+        event_triggers: event_triggers.len(),
     };
 
     let agent_did = principal.as_ref().map(|p| p.agent_did.clone());
@@ -87,6 +91,7 @@ pub(crate) fn load_manifest_root(
             tool_service_registries,
             tasks,
             schedules,
+            event_triggers,
         };
         normalize_manifest(&mut manifest);
         validate_manifest(&manifest, &mut errors);
@@ -124,6 +129,7 @@ fn empty_report(
             tool_service_registries: 0,
             tasks: 0,
             schedules: 0,
+            event_triggers: 0,
         },
         errors,
     }

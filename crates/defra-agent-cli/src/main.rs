@@ -224,6 +224,8 @@ pub(crate) const EXPORT_TASK_FIELDS: &str =
     "task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at";
 pub(crate) const EXPORT_SCHEDULE_FIELDS: &str =
     "schedule_id task_id interval_secs enabled concurrency created_at updated_at";
+pub(crate) const EXPORT_EVENT_TRIGGER_FIELDS: &str =
+    "trigger_id task_id source_collection event_kind filter enabled concurrency created_at updated_at";
 
 #[tokio::main]
 async fn main() -> Result<()> {

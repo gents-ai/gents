@@ -4,8 +4,9 @@ use defra_node::EmbeddedNode;
 use crate::backend_registry::list_backend_records;
 use crate::document_config::{
     ensure_agent_principal, list_agent_behavior_records, list_all_tool_selection_records,
-    list_inference_profile_records, list_schedule_records, list_task_records,
-    list_tool_selection_records, load_tool_selection_record, ToolSelectionDocument,
+    list_event_trigger_records, list_inference_profile_records, list_schedule_records,
+    list_task_records, list_tool_selection_records, load_tool_selection_record,
+    ToolSelectionDocument,
 };
 
 use super::{DocumentRecord, DocumentRuntimeView};
@@ -109,6 +110,23 @@ pub(crate) async fn load_document_runtime_view(
             DocumentRecord {
                 doc_id,
                 value: schedule,
+            },
+        );
+    }
+
+    for (doc_id, trigger) in list_event_trigger_records(node).await? {
+        if trigger.trigger_id.trim().is_empty() {
+            tracing::warn!(
+                doc_id = %doc_id,
+                "runtime document view ignoring EventTrigger with empty trigger_id"
+            );
+            continue;
+        }
+        view.event_triggers.insert(
+            trigger.trigger_id.clone(),
+            DocumentRecord {
+                doc_id,
+                value: trigger,
             },
         );
     }

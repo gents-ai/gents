@@ -164,6 +164,8 @@ pub(crate) struct ConfigExportBundle {
     pub(crate) tasks: Vec<Value>,
     #[serde(default)]
     pub(crate) schedules: Vec<Value>,
+    #[serde(default)]
+    pub(crate) event_triggers: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -176,6 +178,7 @@ pub(crate) struct ConfigApplyCounts {
     pub(crate) tool_service_registries: usize,
     pub(crate) tasks: usize,
     pub(crate) schedules: usize,
+    pub(crate) event_triggers: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]

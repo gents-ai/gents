@@ -1,7 +1,7 @@
 use eframe::egui::Ui;
 
 use crate::state::{
-    BackendDraft, BehaviorDraft, InferenceProfileDraft, ScheduleDraft, TaskDraft,
+    BackendDraft, BehaviorDraft, EventTriggerDraft, InferenceProfileDraft, ScheduleDraft, TaskDraft,
     ToolSelectionDraft,
 };
 
@@ -122,4 +122,55 @@ pub(super) fn render_schedule_editor(ui: &mut Ui, draft: &mut ScheduleDraft) {
     read_only_field(ui, "Last Status", draft.last_status.as_str());
     read_only_multiline(ui, "Last Error", draft.last_error.as_str(), 4);
     read_only_field(ui, "Fire Count", draft.fire_count.as_str());
+}
+
+/// EventTrigger detail editor.
+///
+/// Like Schedule, EventTrigger straddles the apply/runtime boundary. The
+/// apply path owns the description of the trigger (`trigger_id`,
+/// `task_id`, `source_collection`, `event_kind`, `filter`, `enabled`,
+/// `concurrency`, `created_at`, `updated_at`); the event-source engine
+/// owns the fire bookkeeping (`last_attempt_at`,
+/// `last_fired_source_doc_id`, `last_status`, `last_error`,
+/// `fire_count`).
+///
+/// The editor groups those halves visually. `event_kind` is restricted
+/// to "created" for PR 2 — the event-source engine only probes the
+/// created event today; additional event kinds will land as the engine
+/// grows more probe surfaces. The mutation writer in
+/// `client/mutations/manage/task.rs` projects only apply-owned fields,
+/// so the runtime bookkeeping shown here is never clobbered by a
+/// desktop save.
+pub(super) fn render_event_trigger_editor(ui: &mut Ui, draft: &mut EventTriggerDraft) {
+    editor_heading(ui, "Event Trigger");
+    text_field(ui, "Trigger ID", &mut draft.trigger_id);
+    text_field(ui, "Task ID", &mut draft.task_id);
+    text_field(ui, "Source Collection", &mut draft.source_collection);
+    // PR 2 only supports the "created" event kind; the field is kept
+    // editable (not locked) so future PRs can introduce more event
+    // kinds without reshaping the draft, but today the only valid
+    // value is "created". The apply-time validator in
+    // `defra-agent-cli` enforces the same constraint.
+    text_field(ui, "Event Kind", &mut draft.event_kind);
+    multiline_field(ui, "Filter", &mut draft.filter, 6);
+    toggle_field(ui, "Enabled", &mut draft.enabled);
+    text_field(ui, "Concurrency", &mut draft.concurrency);
+    read_only_field(ui, "Created At", draft.created_at.as_str());
+    read_only_field(ui, "Updated At", draft.updated_at.as_str());
+
+    ui.add_space(8.0);
+    editor_heading(ui, "Runtime State");
+    // Event-source-owned fields. Shown read-only so the desktop cannot
+    // accidentally reset the engine's bookkeeping by re-applying a
+    // trigger edit. The mutation writer enforces the same contract at
+    // the GraphQL layer by omitting these fields from upsert input.
+    read_only_field(ui, "Last Attempt At", draft.last_attempt_at.as_str());
+    read_only_field(ui, "Last Status", draft.last_status.as_str());
+    read_only_multiline(ui, "Last Error", draft.last_error.as_str(), 4);
+    read_only_field(ui, "Fire Count", draft.fire_count.as_str());
+    read_only_field(
+        ui,
+        "Last Fired Source Doc",
+        draft.last_fired_source_doc_id.as_str(),
+    );
 }

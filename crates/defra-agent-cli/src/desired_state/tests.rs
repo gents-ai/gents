@@ -25,6 +25,7 @@ fn empty_manifest(agent_did: &str) -> DesiredStateManifest {
         tool_service_registries: Vec::new(),
         tasks: Vec::new(),
         schedules: Vec::new(),
+        event_triggers: Vec::new(),
     }
 }
 
@@ -67,6 +68,24 @@ fn sample_schedule(schedule_id: &str, task_id: &str) -> DesiredSchedule {
         enabled: true,
         concurrency: "serial".to_string(),
     }
+}
+
+fn sample_event_trigger() -> DesiredEventTrigger {
+    DesiredEventTrigger {
+        trigger_id: "new-customer-greet".into(),
+        task_id: "summarize-inbox".into(),
+        source_collection: "CustomerSignup".into(),
+        event_kind: "created".into(),
+        filter: None,
+        enabled: true,
+        concurrency: "serial".into(),
+    }
+}
+
+fn empty_manifest_with_event_trigger(t: DesiredEventTrigger) -> DesiredStateManifest {
+    let mut m = empty_manifest("did:defra-agent:test");
+    m.event_triggers.push(t);
+    m
 }
 
 #[test]
@@ -317,6 +336,95 @@ mod load_manifest_root {
             report.errors
         );
     }
+
+    // Ported from PR #68 (EventTrigger): adapted from flat-file format to the
+    // per-doc layout introduced by PR #67.
+    #[test]
+    fn loads_event_trigger_from_per_doc_dir() {
+        let tmp = tempdir().unwrap();
+        write_minimal_root(tmp.path());
+
+        // Add a task so the event trigger's task_id reference is valid.
+        let task_dir = tmp.path().join("tasks").join("summarize-inbox");
+        fs::create_dir_all(&task_dir).unwrap();
+        fs::write(
+            task_dir.join("object.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "task_id": "summarize-inbox",
+                "name": "Summarize inbox",
+                "behavior_id": "default",
+                "prompt_template": "Summarize the unread emails.",
+                "enabled": true,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        // Add an event trigger in the per-doc directory layout.
+        let trigger_dir = tmp.path().join("event_triggers").join("new-customer-greet");
+        fs::create_dir_all(&trigger_dir).unwrap();
+        fs::write(
+            trigger_dir.join("object.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "trigger_id": "new-customer-greet",
+                "task_id": "summarize-inbox",
+                "source_collection": "CustomerSignup",
+                "event_kind": "created",
+                "enabled": true,
+                "concurrency": "serial",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let (manifest, report) = load_manifest_root(tmp.path());
+        assert!(report.ok, "expected valid manifest, got {:?}", report.errors);
+        let manifest = manifest.expect("manifest should load");
+
+        assert_eq!(report.counts.event_triggers, 1);
+        assert_eq!(manifest.event_triggers.len(), 1);
+        assert_eq!(manifest.event_triggers[0].trigger_id, "new-customer-greet");
+        assert_eq!(manifest.event_triggers[0].source_collection, "CustomerSignup");
+        assert_eq!(manifest.event_triggers[0].event_kind, "created");
+        assert!(manifest.event_triggers[0].enabled);
+    }
+
+    // Ported from PR #68: deprecated capability fields on DesiredInferenceBackend
+    // must be ignored by serde (deny_unknown_fields is NOT set on that struct).
+    #[test]
+    fn deprecated_backend_capability_fields_are_ignored() {
+        let tmp = tempdir().unwrap();
+        write_minimal_root(tmp.path());
+
+        // Write an inference-backend per-doc dir with deprecated capability fields.
+        let backend_dir = tmp.path().join("inference-backends").join("local");
+        fs::create_dir_all(&backend_dir).unwrap();
+        // Write with deprecated capability fields; serde must ignore them.
+        fs::write(
+            backend_dir.join("object.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "backend_id": "local",
+                "name": "Local",
+                "provider_kind": "OpenAiCompatible",
+                "endpoint": "http://127.0.0.1:11434/v1",
+                "api_key": null,
+                "api_key_env_var": null,
+                "max_concurrent": 1,
+                "max_queue_depth": 100,
+                "enabled": true,
+                "supports_tool_calls": true,
+                "supports_streaming": true,
+                "supports_structured_outputs": false,
+                "supports_json_schema": false,
+                "models": ["test-model"],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let (_, report) = load_manifest_root(tmp.path());
+        assert!(report.ok, "expected valid manifest, got {:?}", report.errors);
+    }
 }
 
 #[test]
@@ -422,6 +530,53 @@ fn diff_manifests_marks_schedule_update_when_interval_changes() {
     assert!(report.collections.schedules.create.is_empty());
     assert!(report.collections.schedules.unchanged.is_empty());
     assert_eq!(report.counts.schedules.update, 1);
+}
+
+#[test]
+fn diff_manifests_creates_event_trigger_when_live_is_empty() {
+    let manifest = empty_manifest_with_event_trigger(sample_event_trigger());
+    let live = empty_manifest("did:defra-agent:test");
+
+    let report = diff_manifests(
+        &PathBuf::from("/tmp/fake-root"),
+        "local",
+        &manifest,
+        Some(&live.agent_principal),
+        &live,
+    );
+
+    assert_eq!(
+        report.collections.event_triggers.create,
+        vec!["new-customer-greet"]
+    );
+    assert!(report.collections.event_triggers.update.is_empty());
+    assert!(report.collections.event_triggers.unchanged.is_empty());
+    assert!(report.collections.event_triggers.live_only.is_empty());
+    assert_eq!(report.counts.event_triggers.create, 1);
+}
+
+#[test]
+fn diff_manifests_marks_event_trigger_update_when_filter_changes() {
+    let mut desired = sample_event_trigger();
+    desired.filter = Some(r#"{ plan: { _eq: "paid" } }"#.to_string());
+    let live = sample_event_trigger();
+    let manifest = empty_manifest_with_event_trigger(desired);
+    let live_manifest = empty_manifest_with_event_trigger(live);
+
+    let report = diff_manifests(
+        &PathBuf::from("/tmp/fake-root"),
+        "local",
+        &manifest,
+        Some(&live_manifest.agent_principal),
+        &live_manifest,
+    );
+
+    assert_eq!(
+        report.collections.event_triggers.update,
+        vec!["new-customer-greet"]
+    );
+    assert!(report.collections.event_triggers.create.is_empty());
+    assert!(report.collections.event_triggers.unchanged.is_empty());
 }
 
 fn validation_errors(manifest: &DesiredStateManifest) -> Vec<String> {
@@ -645,6 +800,131 @@ fn validate_rejects_schedule_unknown_task() {
                 && message.contains("task_id")
         }),
         "expected missing task_id reference rejection, got {errors:?}"
+    );
+}
+
+fn sample_event_trigger_for(trigger_id: &str, task_id: &str) -> DesiredEventTrigger {
+    DesiredEventTrigger {
+        trigger_id: trigger_id.to_string(),
+        task_id: task_id.to_string(),
+        source_collection: "CustomerSignup".to_string(),
+        event_kind: "created".to_string(),
+        filter: None,
+        enabled: true,
+        concurrency: "serial".to_string(),
+    }
+}
+
+#[test]
+fn validate_rejects_event_trigger_referencing_unknown_task() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest
+        .event_triggers
+        .push(sample_event_trigger_for("new-customer-greet", "missing-task"));
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("new-customer-greet")
+                && message.contains("unknown task_id")
+                && message.contains("missing-task")
+        }),
+        "expected unknown task_id rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_event_trigger_unknown_event_kind() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest.tasks.push(sample_task("summarize-inbox"));
+    let mut trig = sample_event_trigger_for("new-customer-greet", "summarize-inbox");
+    trig.event_kind = "updated".to_string();
+    manifest.event_triggers.push(trig);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("new-customer-greet") && message.contains("unsupported event_kind")
+        }),
+        "expected unsupported event_kind rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_event_trigger_template_referencing_args_scope() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut task = sample_task("summarize-inbox");
+    task.prompt_template = "{{ args.foo }}".to_string();
+    manifest.tasks.push(task);
+    manifest
+        .event_triggers
+        .push(sample_event_trigger_for("new-customer-greet", "summarize-inbox"));
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("new-customer-greet")
+                && message.contains("forbidden scope: args")
+        }),
+        "expected event-trigger forbidden-args rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_accepts_event_trigger_template_using_event_and_doc_scopes() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut task = sample_task("summarize-inbox");
+    task.prompt_template = "{{ event.fired_at }} {{ doc.name }}".to_string();
+    manifest.tasks.push(task);
+    manifest
+        .event_triggers
+        .push(sample_event_trigger_for("new-customer-greet", "summarize-inbox"));
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        !errors
+            .iter()
+            .any(|message| message.contains("forbidden scope")),
+        "expected no forbidden-scope rejections for event+doc scopes, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_duplicate_event_trigger_id() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest.tasks.push(sample_task("summarize-inbox"));
+    manifest
+        .event_triggers
+        .push(sample_event_trigger_for("new-customer-greet", "summarize-inbox"));
+    manifest
+        .event_triggers
+        .push(sample_event_trigger_for("new-customer-greet", "summarize-inbox"));
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("duplicate") && message.contains("new-customer-greet")
+        }),
+        "expected duplicate trigger_id rejection, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_event_trigger_unknown_concurrency() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest.tasks.push(sample_task("summarize-inbox"));
+    let mut trig = sample_event_trigger_for("new-customer-greet", "summarize-inbox");
+    trig.concurrency = "weird".to_string();
+    manifest.event_triggers.push(trig);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("new-customer-greet")
+                && message.contains("unknown concurrency")
+                && message.contains("weird")
+        }),
+        "expected unknown concurrency rejection, got {errors:?}"
     );
 }
 
@@ -972,6 +1252,7 @@ pub(super) mod write_manifest_root {
                 output_schema_ref: None,
             }],
             schedules: Vec::new(),
+            event_triggers: Vec::new(),
         }
     }
 

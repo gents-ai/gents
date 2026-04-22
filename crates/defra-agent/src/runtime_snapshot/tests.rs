@@ -16,6 +16,7 @@ fn snapshot(generation: u64, default_behavior_id: &str) -> Arc<ActiveRuntimeSnap
         active_schedules: HashMap::new(),
         unavailable_schedules: HashSet::new(),
         active_event_triggers: HashMap::new(),
+        unavailable_event_triggers: HashSet::new(),
         dispatchers: HashMap::new(),
     })
 }
@@ -31,6 +32,7 @@ fn resolved_snapshot_activate_preserves_generation_and_dispatchers() {
         active_schedules: HashMap::new(),
         unavailable_schedules: HashSet::new(),
         active_event_triggers: HashMap::new(),
+        unavailable_event_triggers: HashSet::new(),
     };
     let (general_tx, _general_rx) = mpsc::channel(1);
     let active = resolved.activate(1, HashMap::from([("general".to_string(), general_tx)]));
@@ -78,6 +80,7 @@ fn configuration_fingerprint_reflects_schedule_set() {
         active_schedules: HashMap::new(),
         unavailable_schedules: HashSet::new(),
         active_event_triggers: HashMap::new(),
+        unavailable_event_triggers: HashSet::new(),
     };
     let baseline = base.configuration_fingerprint();
 

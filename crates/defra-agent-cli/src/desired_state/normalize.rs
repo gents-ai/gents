@@ -24,6 +24,9 @@ pub(crate) fn normalize_manifest(manifest: &mut DesiredStateManifest) {
     manifest
         .schedules
         .sort_by(|left, right| left.schedule_id.cmp(&right.schedule_id));
+    manifest
+        .event_triggers
+        .sort_by(|left, right| left.trigger_id.cmp(&right.trigger_id));
 
     for selection in &mut manifest.tool_selections {
         selection.cli_tool_names.sort();
