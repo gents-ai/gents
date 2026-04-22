@@ -6,9 +6,9 @@ use serde::Deserialize;
 use super::normalize::normalize_manifest;
 use super::validate::validate_manifest;
 use super::{
-    DesiredAgentBehavior, DesiredAgentPrincipal, DesiredInferenceBackend, DesiredInferenceProfile,
-    DesiredSchedule, DesiredStateCounts, DesiredStateManifest, DesiredStateValidationReport,
-    DesiredTask, DesiredToolSelection, DesiredToolServiceRegistry,
+    DesiredAgentBehavior, DesiredAgentPrincipal, DesiredEventTrigger, DesiredInferenceBackend,
+    DesiredInferenceProfile, DesiredSchedule, DesiredStateCounts, DesiredStateManifest,
+    DesiredStateValidationReport, DesiredTask, DesiredToolSelection, DesiredToolServiceRegistry,
 };
 use defra_agent::Collection;
 
@@ -122,6 +122,15 @@ pub(crate) fn load_manifest_root(
         &mut errors,
     )
     .unwrap_or_default();
+    let event_triggers = load_optional_json_collection::<DesiredEventTrigger>(
+        root,
+        Collection::EventTrigger.file_name(),
+        Collection::EventTrigger
+            .dir_name()
+            .expect("event_triggers has a dir form"),
+        &mut errors,
+    )
+    .unwrap_or_default();
 
     let counts = DesiredStateCounts {
         agent_principal: usize::from(principal.is_some()),
@@ -132,7 +141,7 @@ pub(crate) fn load_manifest_root(
         tool_service_registries: tool_service_registries.len(),
         tasks: tasks.len(),
         schedules: schedules.len(),
-        event_triggers: 0,
+        event_triggers: event_triggers.len(),
     };
 
     let agent_did = principal.as_ref().map(|value| value.agent_did.clone());
@@ -150,7 +159,7 @@ pub(crate) fn load_manifest_root(
                 tool_service_registries,
                 tasks,
                 schedules,
-                event_triggers: Vec::new(),
+                event_triggers,
             };
             normalize_manifest(&mut manifest);
             validate_manifest(&manifest, &mut errors);
