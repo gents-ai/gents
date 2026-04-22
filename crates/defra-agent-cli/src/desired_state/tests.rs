@@ -872,6 +872,111 @@ mod load_per_doc_collection {
     }
 }
 
+pub(super) mod write_manifest_root {
+    use std::fs;
+    use tempfile::tempdir;
+
+    use crate::desired_state::{
+        write_manifest_root, DesiredAgentBehavior, DesiredAgentPrincipal,
+        DesiredStateManifest, DesiredTask,
+    };
+
+    pub(in crate::desired_state::tests) fn minimal_manifest() -> DesiredStateManifest {
+        DesiredStateManifest {
+            agent_principal: DesiredAgentPrincipal {
+                agent_did: "did:key:example".to_string(),
+                display_name: None,
+                default_behavior_id: Some("default".to_string()),
+                enabled: true,
+            },
+            agent_behaviors: vec![DesiredAgentBehavior {
+                behavior_id: "default".to_string(),
+                agent_did: "did:key:example".to_string(),
+                display_name: None,
+                system_prompt: Some("You are helpful.".to_string()),
+                backend_id: None,
+                model_name: None,
+                tool_selection_id: None,
+                inference_profile_id: None,
+                compaction_strategy: None,
+                compaction_threshold: None,
+                enabled: true,
+            }],
+            tool_selections: Vec::new(),
+            inference_backends: Vec::new(),
+            inference_profiles: Vec::new(),
+            tool_service_registries: Vec::new(),
+            tasks: vec![DesiredTask {
+                task_id: "seed-health".to_string(),
+                name: "Seed fleet health".to_string(),
+                description: None,
+                behavior_id: "default".to_string(),
+                prompt_template: "Check the fleet.".to_string(),
+                enabled: true,
+                output_schema_ref: None,
+            }],
+            schedules: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn writes_principal_and_per_doc_dirs_with_sidecars() {
+        let tmp = tempdir().unwrap();
+        write_manifest_root(tmp.path(), &minimal_manifest(), false).unwrap();
+
+        assert!(tmp.path().join("agent-principal.json").is_file());
+
+        let behavior_object = tmp.path().join("agent-behaviors/default/object.json");
+        assert!(behavior_object.is_file());
+        let behavior_sidecar = tmp.path().join("agent-behaviors/default/system_prompt.md");
+        assert!(behavior_sidecar.is_file());
+        assert_eq!(fs::read_to_string(&behavior_sidecar).unwrap(), "You are helpful.");
+        let behavior_body: serde_json::Value =
+            serde_json::from_slice(&fs::read(&behavior_object).unwrap()).unwrap();
+        assert_eq!(
+            behavior_body.get("system_prompt").and_then(|v| v.as_str()),
+            Some("./system_prompt.md")
+        );
+
+        let task_object = tmp.path().join("tasks/seed-health/object.json");
+        assert!(task_object.is_file());
+        let task_sidecar = tmp.path().join("tasks/seed-health/prompt.md");
+        assert!(task_sidecar.is_file());
+        assert_eq!(fs::read_to_string(&task_sidecar).unwrap(), "Check the fleet.");
+        let task_body: serde_json::Value =
+            serde_json::from_slice(&fs::read(&task_object).unwrap()).unwrap();
+        assert_eq!(
+            task_body.get("prompt_template").and_then(|v| v.as_str()),
+            Some("./prompt.md")
+        );
+    }
+
+    #[test]
+    fn none_system_prompt_omits_sidecar_and_field() {
+        let tmp = tempdir().unwrap();
+        let mut m = minimal_manifest();
+        m.agent_behaviors[0].system_prompt = None;
+        write_manifest_root(tmp.path(), &m, false).unwrap();
+
+        let sidecar = tmp.path().join("agent-behaviors/default/system_prompt.md");
+        assert!(!sidecar.exists());
+        let body: serde_json::Value = serde_json::from_slice(
+            &fs::read(tmp.path().join("agent-behaviors/default/object.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(body.get("system_prompt").is_none());
+    }
+
+    #[test]
+    fn rejects_behavior_with_unsafe_id() {
+        let tmp = tempdir().unwrap();
+        let mut m = minimal_manifest();
+        m.agent_behaviors[0].behavior_id = "bad/id".to_string();
+        let err = write_manifest_root(tmp.path(), &m, false).unwrap_err();
+        assert!(err.contains("filesystem-unsafe"), "got: {err}");
+    }
+}
+
 mod write_manifest_root_safe_id {
     use crate::desired_state::write::check_filesystem_safe_id;
 

@@ -1,6 +1,11 @@
+use std::fs;
 use std::path::Path;
 
-use super::DesiredStateManifest;
+use serde_json::Value;
+
+use defra_agent::Collection;
+
+use super::{DesiredStateManifest, HasUniqueId};
 
 /// Verify that `id` is a valid per-document directory handle. Rejects any
 /// character that would break filesystem semantics or produce ambiguous
@@ -30,13 +35,183 @@ pub(crate) fn check_filesystem_safe_id(id: &str) -> Result<(), String> {
 /// Write a `DesiredStateManifest` to `root` as a manifest root directory.
 /// See `docs/superpowers/specs/2026-04-22-per-agent-manifest-roots-design.md`
 /// for the on-disk layout contract.
-// Implemented in Task 7 (per-agent manifest roots, #67).
-#[allow(dead_code)]
 pub(crate) fn write_manifest_root(
     root: &Path,
     manifest: &DesiredStateManifest,
     force: bool,
 ) -> Result<(), String> {
-    let _ = (root, manifest, force);
-    unimplemented!("implemented in Task 7")
+    prepare_root(root, force)?;
+
+    // agent-principal.json at the top level.
+    let principal_value = serde_json::to_value(&manifest.agent_principal)
+        .map_err(|e| format!("serializing agent_principal failed: {e}"))?;
+    write_json_file(
+        &root.join(
+            Collection::AgentPrincipal
+                .file_name()
+                .expect("AgentPrincipal has a top-level file"),
+        ),
+        &principal_value,
+    )?;
+
+    // Per-doc collections, mirror of the loader.
+    write_per_doc_collection(
+        root,
+        Collection::AgentBehavior,
+        &manifest.agent_behaviors,
+        spill_behavior_sidecar,
+    )?;
+    write_per_doc_collection(
+        root,
+        Collection::ToolSelection,
+        &manifest.tool_selections,
+        no_sidecar,
+    )?;
+    write_per_doc_collection(
+        root,
+        Collection::InferenceBackend,
+        &manifest.inference_backends,
+        no_sidecar,
+    )?;
+    write_per_doc_collection(
+        root,
+        Collection::InferenceProfile,
+        &manifest.inference_profiles,
+        no_sidecar,
+    )?;
+    write_per_doc_collection(
+        root,
+        Collection::ToolServiceRegistry,
+        &manifest.tool_service_registries,
+        no_sidecar,
+    )?;
+    write_per_doc_collection(
+        root,
+        Collection::Task,
+        &manifest.tasks,
+        spill_task_sidecar,
+    )?;
+    write_per_doc_collection(
+        root,
+        Collection::Schedule,
+        &manifest.schedules,
+        no_sidecar,
+    )?;
+
+    Ok(())
+}
+
+fn prepare_root(root: &Path, force: bool) -> Result<(), String> {
+    if !root.exists() {
+        fs::create_dir_all(root)
+            .map_err(|e| format!("creating {} failed: {e}", root.display()))?;
+        return Ok(());
+    }
+    let is_empty = fs::read_dir(root)
+        .map_err(|e| format!("reading {} failed: {e}", root.display()))?
+        .next()
+        .is_none();
+    if is_empty {
+        return Ok(());
+    }
+    if !force {
+        return Err(format!(
+            "manifest root is non-empty; pass --force to overwrite: {}",
+            root.display()
+        ));
+    }
+    fs::remove_dir_all(root)
+        .map_err(|e| format!("clearing {} failed: {e}", root.display()))?;
+    fs::create_dir_all(root)
+        .map_err(|e| format!("creating {} failed: {e}", root.display()))?;
+    Ok(())
+}
+
+fn write_per_doc_collection<T>(
+    root: &Path,
+    collection: Collection,
+    docs: &[T],
+    mut spill: impl FnMut(&Path, &mut Value) -> Result<(), String>,
+) -> Result<(), String>
+where
+    T: serde::Serialize + HasUniqueId,
+{
+    if docs.is_empty() {
+        return Ok(());
+    }
+    let dir_name = collection
+        .dir_name()
+        .expect("write_per_doc_collection called with non-dir collection");
+    let collection_dir = root.join(dir_name);
+    fs::create_dir_all(&collection_dir)
+        .map_err(|e| format!("creating {} failed: {e}", collection_dir.display()))?;
+
+    for doc in docs {
+        let handle = doc.unique_id();
+        check_filesystem_safe_id(handle)?;
+        let doc_dir = collection_dir.join(handle);
+        fs::create_dir_all(&doc_dir)
+            .map_err(|e| format!("creating {} failed: {e}", doc_dir.display()))?;
+
+        let mut body = serde_json::to_value(doc)
+            .map_err(|e| format!("serializing {} '{handle}' failed: {e}", collection))?;
+        spill(&doc_dir, &mut body)?;
+        write_json_file(&doc_dir.join("object.json"), &body)?;
+    }
+    Ok(())
+}
+
+fn no_sidecar(_dir: &Path, _value: &mut Value) -> Result<(), String> {
+    Ok(())
+}
+
+fn spill_behavior_sidecar(doc_dir: &Path, body: &mut Value) -> Result<(), String> {
+    spill_string_field(doc_dir, body, "system_prompt", "system_prompt.md")
+}
+
+fn spill_task_sidecar(doc_dir: &Path, body: &mut Value) -> Result<(), String> {
+    spill_string_field(doc_dir, body, "prompt_template", "prompt.md")
+}
+
+fn spill_string_field(
+    doc_dir: &Path,
+    body: &mut Value,
+    field: &str,
+    sidecar_name: &str,
+) -> Result<(), String> {
+    let object = body
+        .as_object_mut()
+        .ok_or_else(|| "expected object body for sidecar spill, got non-object".to_string())?;
+    // If the field is null or absent, remove it so the on-disk object.json
+    // omits the key entirely (the loader treats missing == None).
+    let raw = object.get(field).cloned();
+    match raw {
+        None => return Ok(()),
+        Some(Value::Null) => {
+            object.remove(field);
+            return Ok(());
+        }
+        _ => {}
+    }
+    let Some(current) = object.get(field).and_then(Value::as_str).map(str::to_owned) else {
+        return Ok(());
+    };
+    if current.is_empty() {
+        return Ok(());
+    }
+    fs::write(doc_dir.join(sidecar_name), &current).map_err(|e| {
+        format!(
+            "writing {} failed: {e}",
+            doc_dir.join(sidecar_name).display()
+        )
+    })?;
+    object.insert(field.to_string(), Value::String(format!("./{sidecar_name}")));
+    Ok(())
+}
+
+fn write_json_file(path: &Path, value: &Value) -> Result<(), String> {
+    let mut bytes = serde_json::to_vec_pretty(value)
+        .map_err(|e| format!("serializing {} failed: {e}", path.display()))?;
+    bytes.push(b'\n');
+    fs::write(path, &bytes).map_err(|e| format!("writing {} failed: {e}", path.display()))
 }
