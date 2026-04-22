@@ -70,6 +70,8 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     self.hook_failure_policy,
                 )
                 .await?;
+                hook.set_active_request_id(Some(request.request_id.clone()))
+                    .await;
                 let persistence_hook = hook.clone();
 
                 let agent = agent_with_request_sampling(&self.agent, &self.behavior, request);

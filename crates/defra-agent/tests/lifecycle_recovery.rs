@@ -22,7 +22,6 @@ struct ResponseStatusRow {
 #[derive(Debug, Clone, Deserialize)]
 struct ConversationRow {
     status: String,
-    latest_request_id: Option<String>,
 }
 
 #[tokio::test]

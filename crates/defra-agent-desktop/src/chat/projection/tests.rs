@@ -442,6 +442,8 @@ fn response(
         error_message: None,
         token_count: None,
         progress_seq: Some(1),
+        materialized_message_sequence: None,
+        materialized_at: None,
         created_at: Some("2026-04-14T00:04:01Z".to_string()),
         completed_at: Some("2026-04-14T00:04:02Z".to_string()),
     }

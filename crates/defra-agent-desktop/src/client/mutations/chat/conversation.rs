@@ -55,6 +55,53 @@ pub async fn create_conversation(
     })
 }
 
+pub async fn rename_conversation(
+    node: &EmbeddedNode,
+    store: &ClientStore,
+    session_id: &str,
+    title: &str,
+) -> Result<()> {
+    let session_id = normalize_required("session_id", session_id)?;
+    let title = normalize_required("title", title)?;
+    let existing = store
+        .conversations
+        .iter()
+        .find(|row| row.session_id == session_id)
+        .ok_or_else(|| anyhow::anyhow!("conversation {} not found", session_id))?;
+
+    let now = Utc::now().to_rfc3339();
+    let escaped_session_id = escape_graphql_string(session_id);
+    let escaped_behavior_id =
+        escape_graphql_string(existing.behavior_id.as_deref().unwrap_or_default());
+    let escaped_title = escape_graphql_string(title);
+    let escaped_preview =
+        escape_graphql_string(existing.preview_text.as_deref().unwrap_or_default());
+    let escaped_status = escape_graphql_string(existing.status.as_deref().unwrap_or("active"));
+    let escaped_created_at = escape_graphql_string(
+        normalize_optional_string(existing.created_at.as_deref()).unwrap_or(now.as_str()),
+    );
+    let escaped_latest_request_id =
+        escape_graphql_string(existing.latest_request_id.as_deref().unwrap_or_default());
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentConversation(
+                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                input: {{
+                    behavior_id: "{escaped_behavior_id}",
+                    title: "{escaped_title}",
+                    title_source: "user",
+                    preview_text: "{escaped_preview}",
+                    status: "{escaped_status}",
+                    created_at: "{escaped_created_at}",
+                    updated_at: "{now}",
+                    latest_request_id: "{escaped_latest_request_id}"
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    execute_mutation(node, &mutation, "rename_conversation").await
+}
+
 pub(super) async fn upsert_session(
     node: &EmbeddedNode,
     store: &ClientStore,
@@ -118,9 +165,8 @@ pub(super) async fn upsert_conversation(
 
     let title = existing
         .and_then(|row| normalize_optional_string(row.title.as_deref()))
-        .filter(|title| *title != "New Conversation")
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| derive_conversation_title(content));
+        .unwrap_or_default();
     let preview_text = if content.is_empty() {
         existing
             .and_then(|row| row.preview_text.as_deref())
@@ -178,15 +224,6 @@ pub(super) async fn upsert_conversation(
         }}"#
     );
     execute_mutation(node, &mutation, "upsert_conversation").await
-}
-
-pub(super) fn derive_conversation_title(content: &str) -> String {
-    let normalized = normalize_conversation_text(content);
-    if normalized.is_empty() {
-        "New Conversation".to_string()
-    } else {
-        truncate_chars(&normalized, 80)
-    }
 }
 
 fn derive_conversation_preview(content: &str) -> String {

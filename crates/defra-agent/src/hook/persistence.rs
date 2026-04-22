@@ -45,6 +45,9 @@ impl DefraSessionHook {
                     state.assistant_turn_saved = true;
                     (session_id, sequence, "assistant")
                 }
+                Message::System { .. } => {
+                    anyhow::bail!("system messages are not persisted in session history");
+                }
             }
         };
 
@@ -156,7 +159,8 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                 id: response.message_id.clone(),
                 content: response.choice.clone(),
             };
-            self.persist_message(&message).await?;
+            let sequence = self.persist_message(&message).await?;
+            self.mark_current_response_materialized(sequence).await?;
             Ok(())
         }
         .await;

@@ -1,9 +1,9 @@
-use eframe::egui::{self, RichText, Ui};
+use eframe::egui::{self, Ui};
 
 use crate::audit;
 use crate::client::ClientCore;
 use crate::state::{PendingChatAction, PendingShellAction, ShellState};
-use crate::theme;
+use crate::views::components;
 
 pub(super) fn render_first_conversation_nudge(
     ui: &mut Ui,
@@ -11,28 +11,12 @@ pub(super) fn render_first_conversation_nudge(
     client: Option<&ClientCore>,
     selected_agent_did: Option<&str>,
 ) {
-    let palette = theme::palette();
-
-    ui.group(|ui| {
-        ui.set_width(ui.available_width());
-        ui.label(
-            RichText::new("Create Conversation")
-                .family(theme::stencil_family())
-                .size(16.0)
-                .color(palette.text_0)
-                .strong(),
-        );
-        ui.add_space(6.0);
-        ui.label(
-            RichText::new(
-                "This agent has no observed conversations yet. Create one explicitly, then send the first request.",
-            )
-            .size(13.0)
-            .color(palette.text_1)
-            .line_height(Some(18.0)),
-        );
-        ui.add_space(10.0);
-        ui.horizontal(|ui| {
+    components::focus_panel(
+        ui,
+        Some("Chat"),
+        "Create Conversation",
+        "This agent has no observed conversations yet. Create one explicitly, then send the first request.",
+        |ui| {
             let can_create = client.is_some() && selected_agent_did.is_some();
             if audit::add_enabled(
                 ui,
@@ -46,6 +30,6 @@ pub(super) fn render_first_conversation_nudge(
                     PendingChatAction::CreateConversation,
                 ));
             }
-        });
-    });
+        },
+    );
 }

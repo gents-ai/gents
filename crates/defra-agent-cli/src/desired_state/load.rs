@@ -10,18 +10,7 @@ use super::{
     DesiredSchedule, DesiredStateCounts, DesiredStateManifest, DesiredStateValidationReport,
     DesiredTask, DesiredToolSelection, DesiredToolServiceRegistry,
 };
-
-const AGENT_PRINCIPAL_FILE: &str = "agent-principal.json";
-const AGENT_BEHAVIORS_FILE: &str = "agent-behaviors.json";
-const TOOL_SELECTIONS_FILE: &str = "tool-selections.json";
-const INFERENCE_BACKENDS_FILE: &str = "inference-backends.json";
-const INFERENCE_PROFILES_FILE: &str = "inference-profiles.json";
-const TOOL_SERVICES_FILE: &str = "tool-services.json";
-const TOOL_SERVICES_DIR: &str = "tool-services";
-const TASKS_FILE: &str = "tasks.json";
-const TASKS_DIR: &str = "tasks";
-const SCHEDULES_FILE: &str = "schedules.json";
-const SCHEDULES_DIR: &str = "schedules";
+use defra_agent::Collection;
 
 pub(crate) fn validate_manifest_root(root: &Path) -> DesiredStateValidationReport {
     load_manifest_root(root).1
@@ -80,41 +69,54 @@ pub(crate) fn load_manifest_root(
         );
     }
 
-    let principal =
-        load_required_json::<DesiredAgentPrincipal>(root, AGENT_PRINCIPAL_FILE, &mut errors);
-    let behaviors =
-        load_required_json::<Vec<DesiredAgentBehavior>>(root, AGENT_BEHAVIORS_FILE, &mut errors);
-    let tool_selections =
-        load_required_json::<Vec<DesiredToolSelection>>(root, TOOL_SELECTIONS_FILE, &mut errors);
+    let principal = load_required_json::<DesiredAgentPrincipal>(
+        root,
+        Collection::AgentPrincipal.file_name(),
+        &mut errors,
+    );
+    let behaviors = load_required_json::<Vec<DesiredAgentBehavior>>(
+        root,
+        Collection::AgentBehavior.file_name(),
+        &mut errors,
+    );
+    let tool_selections = load_required_json::<Vec<DesiredToolSelection>>(
+        root,
+        Collection::ToolSelection.file_name(),
+        &mut errors,
+    );
     let backends = load_required_json::<Vec<DesiredInferenceBackend>>(
         root,
-        INFERENCE_BACKENDS_FILE,
+        Collection::InferenceBackend.file_name(),
         &mut errors,
     );
     let inference_profiles = load_optional_json::<Vec<DesiredInferenceProfile>>(
         root,
-        INFERENCE_PROFILES_FILE,
+        Collection::InferenceProfile.file_name(),
         &mut errors,
     )
     .unwrap_or_default();
     let tool_service_registries = load_optional_json_collection::<DesiredToolServiceRegistry>(
         root,
-        TOOL_SERVICES_FILE,
-        TOOL_SERVICES_DIR,
+        Collection::ToolServiceRegistry.file_name(),
+        Collection::ToolServiceRegistry
+            .dir_name()
+            .expect("tool-services has a dir form"),
         &mut errors,
     )
     .unwrap_or_default();
     let tasks = load_optional_json_collection::<DesiredTask>(
         root,
-        TASKS_FILE,
-        TASKS_DIR,
+        Collection::Task.file_name(),
+        Collection::Task.dir_name().expect("tasks has a dir form"),
         &mut errors,
     )
     .unwrap_or_default();
     let schedules = load_optional_json_collection::<DesiredSchedule>(
         root,
-        SCHEDULES_FILE,
-        SCHEDULES_DIR,
+        Collection::Schedule.file_name(),
+        Collection::Schedule
+            .dir_name()
+            .expect("schedules has a dir form"),
         &mut errors,
     )
     .unwrap_or_default();

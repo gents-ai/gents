@@ -74,6 +74,12 @@ pub struct ConversationSnapshot {
     pub latest_request_id: String,
     pub behavior_id: String,
     pub status: String,
+    #[serde(default)]
+    pub forked_from_session_id: Option<String>,
+    #[serde(default)]
+    pub fork_at_user_turn: Option<i64>,
+    #[serde(default)]
+    pub forked_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -214,11 +220,69 @@ pub async fn fetch_conversation_snapshot(
                 latest_request_id
                 behavior_id
                 status
+                forked_from_session_id
+                fork_at_user_turn
+                forked_at
             }}
         }}"#
     );
     let resp = node.execute(&query).await;
     first_optional_row::<ConversationSnapshot>(&resp, "AgentConversation")
+}
+
+/// Full-column snapshot of an `AgentConversation` row. Use in fork-invariant tests
+/// that claim the parent is byte-identical before and after a fork — the narrower
+/// `ConversationSnapshot` omits `title`, `preview_text`, `agent_did`, `agent_name`,
+/// `created_at`, and `updated_at`, which would hide silent mutations on those fields.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct FullConversationSnapshot {
+    pub session_id: String,
+    pub agent_name: String,
+    pub agent_did: String,
+    pub behavior_id: String,
+    pub title: String,
+    pub preview_text: String,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub latest_request_id: String,
+    #[serde(default)]
+    pub forked_from_session_id: Option<String>,
+    #[serde(default)]
+    pub fork_at_user_turn: Option<i64>,
+    #[serde(default)]
+    pub forked_at: Option<String>,
+}
+
+pub async fn fetch_full_conversation_snapshot(
+    node: &EmbeddedNode,
+    session_id: &str,
+) -> Option<FullConversationSnapshot> {
+    let session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentConversation(
+                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                limit: 1
+            ) {{
+                session_id
+                agent_name
+                agent_did
+                behavior_id
+                title
+                preview_text
+                status
+                created_at
+                updated_at
+                latest_request_id
+                forked_from_session_id
+                fork_at_user_turn
+                forked_at
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    first_optional_row::<FullConversationSnapshot>(&resp, "AgentConversation")
 }
 
 pub async fn fetch_session_snapshot(
@@ -286,4 +350,158 @@ pub async fn fetch_runtime_snapshot(
     );
     let resp = node.execute(&query).await;
     first_optional_row::<RuntimeSnapshot>(&resp, "AgentRuntime")
+}
+
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+pub struct MessageSnapshot {
+    pub message_key: String,
+    pub session_id: String,
+    pub sequence: u32,
+    pub role: String,
+    pub content: String,
+    pub timestamp: String,
+}
+
+pub async fn fetch_message_snapshots_for_session(
+    node: &EmbeddedNode,
+    session_id: &str,
+) -> Vec<MessageSnapshot> {
+    let session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentMessage(
+                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                order: {{ sequence: ASC }}
+            ) {{
+                message_key
+                session_id
+                sequence
+                role
+                content
+                timestamp
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    assert!(
+        !resp.has_errors(),
+        "fetch_message_snapshots failed: {:?}",
+        resp.errors
+    );
+    let data = resp.data.expect("data");
+    serde_json::from_value(data["AgentMessage"].clone()).expect("parse MessageSnapshot")
+}
+
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+pub struct ToolCallSnapshot {
+    pub tool_call_key: String,
+    pub session_id: String,
+    pub message_sequence: u32,
+    pub tool_name: String,
+    pub tool_call_id: String,
+    pub args: String,
+    pub result: String,
+    pub status: String,
+    pub started_at: String,
+    pub completed_at: String,
+}
+
+pub async fn fetch_tool_call_snapshots_for_session(
+    node: &EmbeddedNode,
+    session_id: &str,
+) -> Vec<ToolCallSnapshot> {
+    let session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                order: {{ message_sequence: ASC }}
+            ) {{
+                tool_call_key session_id message_sequence tool_name tool_call_id
+                args result status started_at completed_at
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    assert!(
+        !resp.has_errors(),
+        "fetch_tool_call_snapshots failed: {:?}",
+        resp.errors
+    );
+    let data = resp.data.expect("data");
+    serde_json::from_value(data["AgentToolCall"].clone()).expect("parse ToolCallSnapshot")
+}
+
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+pub struct ToolResultSnapshot {
+    pub agent_did: String,
+    pub session_id: String,
+    pub tool_name: String,
+    pub tool_input: String,
+    pub output_text: String,
+    pub truncated: bool,
+    pub truncation_metadata: String,
+    pub conversation_doc_id: String,
+    pub created_at: String,
+}
+
+pub async fn fetch_tool_result_snapshots_for_session(
+    node: &EmbeddedNode,
+    session_id: &str,
+) -> Vec<ToolResultSnapshot> {
+    let session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentToolResult(
+                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                order: {{ created_at: ASC }}
+            ) {{
+                agent_did session_id tool_name tool_input output_text
+                truncated truncation_metadata conversation_doc_id created_at
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    assert!(
+        !resp.has_errors(),
+        "fetch_tool_result_snapshots failed: {:?}",
+        resp.errors
+    );
+    let data = resp.data.expect("data");
+    serde_json::from_value(data["AgentToolResult"].clone()).expect("parse ToolResultSnapshot")
+}
+
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+pub struct CompactionEntrySnapshot {
+    pub compaction_key: String,
+    pub session_id: String,
+    pub sequence: u32,
+    pub summary: String,
+    pub messages_compacted: u32,
+    pub created_at: String,
+}
+
+pub async fn fetch_compaction_entry_snapshots_for_session(
+    node: &EmbeddedNode,
+    session_id: &str,
+) -> Vec<CompactionEntrySnapshot> {
+    let session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            CompactionEntry(
+                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                order: {{ sequence: ASC }}
+            ) {{
+                compaction_key session_id sequence summary messages_compacted created_at
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    assert!(
+        !resp.has_errors(),
+        "fetch_compaction_entry_snapshots failed: {:?}",
+        resp.errors
+    );
+    let data = resp.data.expect("data");
+    serde_json::from_value(data["CompactionEntry"].clone()).expect("parse CompactionEntrySnapshot")
 }

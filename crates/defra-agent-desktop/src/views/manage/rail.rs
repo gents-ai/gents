@@ -26,8 +26,7 @@ pub(super) fn show_rail(
     egui::ScrollArea::vertical().show(ui, |ui| {
         ui.add_space(14.0);
         let (rail_title, rail_meta) = match state.manage.selected_section {
-            ManageSection::Runtime
-            | ManageSection::RequestTimeline
+            ManageSection::RequestTimeline
             | ManageSection::RecentFailures => ("Inspector", Some("read only")),
             _ => ("Diagnostics", Some("scoped context")),
         };
@@ -44,7 +43,6 @@ pub(super) fn show_rail(
         };
 
         match state.manage.selected_section {
-            ManageSection::Runtime => render_runtime_inspector(ui, store, state),
             ManageSection::Behaviors => {
                 if let Some(ManageDraft::Behavior(draft)) = state.manage.draft.as_mut() {
                     let behavior_id = draft.behavior_id.clone();

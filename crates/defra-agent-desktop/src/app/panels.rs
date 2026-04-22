@@ -8,19 +8,28 @@ use super::DesktopApp;
 
 impl DesktopApp {
     pub(super) fn show_sidebar(&mut self, ui: &mut egui::Ui, store: Option<&ClientStore>) {
-        let width = responsive_sidebar_width(self.state.activity, ui.max_rect().width());
-        Panel::left("activity_sidebar")
-            .resizable(false)
-            .exact_size(width)
-            .show_inside(ui, |ui| {
-                views::show_sidebar(
-                    ui,
-                    &mut self.state,
-                    self.client.as_deref(),
-                    store,
-                    self.runtime.as_ref(),
-                );
-            });
+        if self.state.activity == crate::state::Activity::Chat {
+            return;
+        }
+        let fallback_width = responsive_sidebar_width(self.state.activity, ui.max_rect().width());
+        let panel = Panel::left("activity_sidebar");
+        match self.state.activity {
+            crate::state::Activity::Chat => unreachable!(),
+            crate::state::Activity::Manage => {
+                panel
+                    .resizable(false)
+                    .exact_size(fallback_width)
+                    .show_inside(ui, |ui| {
+                        views::show_sidebar(
+                            ui,
+                            &mut self.state,
+                            self.client.as_deref(),
+                            store,
+                            self.runtime.as_ref(),
+                        );
+                    });
+            }
+        }
     }
 
     pub(super) fn show_rail(&mut self, ui: &mut egui::Ui, store: Option<&ClientStore>) {
@@ -55,9 +64,7 @@ impl DesktopApp {
 
                 matches!(
                     self.state.manage.selected_section,
-                    ManageSection::Runtime
-                        | ManageSection::RequestTimeline
-                        | ManageSection::RecentFailures
+                    ManageSection::RequestTimeline | ManageSection::RecentFailures
                 ) || self.state.manage.selected_entity_id.is_some()
                     || self.state.manage.draft.is_some()
             }
@@ -217,12 +224,12 @@ impl DesktopApp {
 
 fn responsive_sidebar_width(activity: crate::state::Activity, total_width: f32) -> f32 {
     let desired = match activity {
-        crate::state::Activity::Chat => total_width * 0.22,
+        crate::state::Activity::Chat => total_width * 0.18,
         crate::state::Activity::Manage => total_width * 0.20,
     };
 
     match activity {
-        crate::state::Activity::Chat => desired.clamp(272.0, 340.0),
+        crate::state::Activity::Chat => desired.clamp(224.0, 288.0),
         crate::state::Activity::Manage => desired.clamp(252.0, 320.0),
     }
 }

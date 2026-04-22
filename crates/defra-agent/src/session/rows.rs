@@ -45,6 +45,19 @@ pub(super) struct ConversationDocument {
     pub(super) latest_request_id: String,
     pub(super) behavior_id: Option<String>,
     pub(super) created_at: String,
+    #[serde(default)]
+    pub(super) agent_did: Option<String>,
+    #[serde(default)]
+    pub(super) agent_name: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub(super) forked_from_session_id: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub(super) fork_at_user_turn: Option<i64>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub(super) forked_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

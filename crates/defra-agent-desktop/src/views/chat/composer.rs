@@ -26,13 +26,44 @@ pub fn show(
 
     ui.group(|ui| {
         ui.set_width(ui.available_width());
-        let text_edit = TextEdit::multiline(&mut state.chat.editor.composer_text)
-            .id_source(audit::targets::CHAT_COMPOSER_TEXT)
-            .desired_rows(2)
-            .desired_width(ui.available_width())
-            .hint_text("Message the selected agent");
-        audit::add(ui, audit::targets::CHAT_COMPOSER_TEXT, text_edit);
-        ui.add_space(8.0);
+        let footer_reserve = 52.0;
+        let min_text_height = if state.chat.editor.composer_expanded {
+            144.0
+        } else {
+            76.0
+        };
+        let text_height = (ui.available_height() - footer_reserve).max(min_text_height);
+        let desired_rows = state
+            .chat
+            .editor
+            .composer_text
+            .lines()
+            .count()
+            .max(if state.chat.editor.composer_expanded {
+                7
+            } else {
+                2
+            })
+            .min(24);
+        let edit_width = ui.available_width();
+        let response = egui::ScrollArea::vertical()
+            .max_height(text_height)
+            .show(ui, |ui| {
+                ui.add_sized(
+                    [
+                        edit_width - 6.0,
+                        text_height.max(desired_rows as f32 * 20.0),
+                    ],
+                    TextEdit::multiline(&mut state.chat.editor.composer_text)
+                        .id_source(audit::targets::CHAT_COMPOSER_TEXT)
+                        .desired_rows(desired_rows)
+                        .desired_width(ui.available_width())
+                        .hint_text("Message the selected agent"),
+                )
+            })
+            .inner;
+        audit::record(ui, audit::targets::CHAT_COMPOSER_TEXT, &response);
+        ui.add_space(6.0);
 
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
@@ -54,6 +85,33 @@ pub fn show(
                         }),
                 );
             });
+            ui.add_space(8.0);
+            let composer_label = if state.chat.editor.composer_expanded {
+                "Compact"
+            } else {
+                "Expand"
+            };
+            if audit::add(
+                ui,
+                "chat.composer.toggle_size",
+                egui::Button::new(
+                    RichText::new(composer_label)
+                        .monospace()
+                        .size(10.5)
+                        .color(palette.text_1),
+                )
+                .min_size(egui::vec2(64.0, 24.0)),
+            )
+            .clicked()
+            {
+                state.chat.editor.composer_expanded = !state.chat.editor.composer_expanded;
+                state.chat.editor.composer_panel_height =
+                    Some(if state.chat.editor.composer_expanded {
+                        236.0
+                    } else {
+                        148.0
+                    });
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().button_padding = egui::vec2(12.0, 8.0);
                 let clicked = audit::add_enabled(

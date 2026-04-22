@@ -17,48 +17,6 @@ pub(crate) fn build_driver_with_client(
     AuditDriver::new(app, ctx)
 }
 
-pub(crate) fn assert_manage_filter_round_trip(
-    driver: &mut AuditDriver,
-    section: ManageSection,
-    query: &str,
-    target_id: &str,
-    missing_query: &str,
-) -> Result<()> {
-    driver.click_target(&audit::targets::manage_section(section));
-    driver.wait_for_target(
-        "manage filter input",
-        Duration::from_secs(10),
-        audit::targets::MANAGE_ENTITY_FILTER,
-    )?;
-    driver.replace_text_in_target(audit::targets::MANAGE_ENTITY_FILTER, query);
-    let filtered_texts = driver.render();
-    assert_eq!(driver.app.state.manage.entity_filter, query);
-    assert!(
-        !filtered_texts
-            .iter()
-            .any(|text| text.contains("No Matches")),
-        "manage filter unexpectedly hid {target_id} in {section:?}"
-    );
-    assert!(driver.has_target(&audit::targets::manage_entity(target_id)));
-
-    driver.replace_text_in_target(audit::targets::MANAGE_ENTITY_FILTER, missing_query);
-    let no_match_texts = driver.render();
-    assert!(
-        no_match_texts
-            .iter()
-            .any(|text| text.contains("No Matches")),
-        "manage filter did not render No Matches for {missing_query}"
-    );
-
-    driver.replace_text_in_target(audit::targets::MANAGE_ENTITY_FILTER, "");
-    driver.wait_for_target(
-        "manage filtered row after clearing filter",
-        Duration::from_secs(10),
-        &audit::targets::manage_entity(target_id),
-    )?;
-    Ok(())
-}
-
 pub(crate) fn render_once(app: &mut DesktopApp, ctx: &egui::Context) -> Vec<String> {
     render_frame(app, ctx, 0.0, Vec::new())
         .into_iter()
@@ -100,7 +58,6 @@ pub(crate) fn is_manage_editor_target(target: &str) -> bool {
 
 fn manage_section_from_target(target: &str) -> Option<ManageSection> {
     [
-        ManageSection::Runtime,
         ManageSection::Behaviors,
         ManageSection::Backends,
         ManageSection::ToolSelections,

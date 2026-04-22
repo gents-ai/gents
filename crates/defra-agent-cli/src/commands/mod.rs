@@ -8,5 +8,6 @@ pub(crate) mod request;
 pub(crate) mod reset;
 pub(crate) mod response;
 pub(crate) mod serve;
+pub(crate) mod session;
 pub(crate) mod show;
 pub(crate) mod status;

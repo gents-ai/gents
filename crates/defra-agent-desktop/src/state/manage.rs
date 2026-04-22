@@ -1,6 +1,5 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManageSection {
-    Runtime,
     Behaviors,
     Backends,
     ToolSelections,
@@ -12,8 +11,7 @@ pub enum ManageSection {
 }
 
 impl ManageSection {
-    pub const MANAGE: [Self; 7] = [
-        Self::Runtime,
+    pub const MANAGE: [Self; 6] = [
         Self::Behaviors,
         Self::Backends,
         Self::ToolSelections,
@@ -26,7 +24,6 @@ impl ManageSection {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Runtime => "Runtime",
             Self::Behaviors => "Behaviors",
             Self::Backends => "Backends",
             Self::ToolSelections => "Tool Selections",
@@ -192,7 +189,6 @@ pub struct ManageState {
     pub selected_section: ManageSection,
     pub selected_entity_id: Option<String>,
     pub draft_origin: Option<ManageDraftOrigin>,
-    pub entity_filter: String,
     pub draft: Option<ManageDraft>,
     pub last_apply_error: Option<String>,
 }
@@ -205,7 +201,6 @@ impl Default for ManageState {
             selected_section: ManageSection::Behaviors,
             selected_entity_id: None,
             draft_origin: None,
-            entity_filter: String::new(),
             draft: None,
             last_apply_error: None,
         }

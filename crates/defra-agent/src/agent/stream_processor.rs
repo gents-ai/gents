@@ -124,12 +124,12 @@ impl<'a> StreamProcessor<'a> {
                 let _ = self.stream_writer.flush_pending(self.doc_id).await?;
                 self.lifecycle.advance().await?;
                 if let Some(message) = self.assistant_turn.take_message() {
+                    let sequence = self.persistence_hook.persist_message(&message).await?;
                     self.persistence_hook.apply_persistence_policy(
                         self.persistence_hook
-                            .persist_message(&message)
-                            .await
-                            .map(|_| ()),
-                        "persist final assistant turn",
+                            .mark_current_response_materialized(sequence)
+                            .await,
+                        "mark final assistant turn materialized",
                     )?;
                 }
                 self.final_text = Some(response.response().to_string());

@@ -4,7 +4,7 @@ use crate::audit;
 use crate::client::ClientStore;
 use crate::state::{Activity, PendingChatAction, PendingShellAction, ShellState};
 use crate::theme::Palette;
-use crate::views;
+use crate::views::components;
 
 use super::super::view_model::{behavior_selection_entries, effective_behavior_id};
 
@@ -17,20 +17,24 @@ pub(super) fn show(
     selected_session_id: Option<&str>,
 ) {
     let Some(agent_did) = selected_agent_did else {
-        views::card(
+        components::focus_panel(
             ui,
-            "Select Agent",
-            "Choose a deployment above to pick a behavior.",
+            Some("Behavior"),
+            "Select a Deployment",
+            "Choose a deployment from the left before picking a behavior override.",
+            |_| {},
         );
         return;
     };
 
     let entries = behavior_selection_entries(store, agent_did);
     if entries.is_empty() {
-        views::card(
+        components::focus_panel(
             ui,
+            Some("Behavior"),
             "No Behaviors",
             "This deployment has no named behaviors yet. Manage the deployment before starting a conversation.",
+            |_| {},
         );
         return;
     }
@@ -38,7 +42,7 @@ pub(super) fn show(
     let selected_behavior_id = effective_behavior_id(state, store, selected_agent_did);
     for entry in entries {
         let selected = selected_behavior_id.as_deref() == entry.represented_behavior_id.as_deref();
-        let response = views::side_row(
+        let response = components::inset_list_item(
             ui,
             &entry.label,
             &entry.meta,

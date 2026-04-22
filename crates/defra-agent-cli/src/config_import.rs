@@ -2,11 +2,13 @@ use std::io::Read;
 
 use anyhow::{Context, Result};
 use defra_agent::graphql::escape_graphql_string;
+use defra_agent::Collection;
 use serde_json::Value;
 
 use crate::config_bundle::{sanitize_import_document, select_apply_collection_docs};
 use crate::config_writes::{write_schedule_document, write_task_document, ConfigAccess};
 use crate::desired_state;
+use crate::desired_state::DesiredApplyBundle;
 use crate::shared::{ConfigApplyCounts, ConfigExportBundle};
 use crate::{
     extract_mutation_doc_id, graphql_input_literal, CONFIG_EXPORT_FORMAT, CONFIG_EXPORT_FORMAT_V1,
@@ -207,49 +209,50 @@ pub(crate) fn select_apply_principal_docs(
 
 pub(crate) async fn apply_desired_state_changes(
     access: &ConfigAccess,
-    desired_bundle: &ConfigExportBundle,
+    desired_bundle: &DesiredApplyBundle,
     planned: &desired_state::DesiredStateDiffReport,
 ) -> Result<ConfigApplyCounts> {
+    let desired_bundle = desired_bundle.as_bundle();
     let backend_docs = select_apply_collection_docs(
         &desired_bundle.inference_backends,
-        "backend_id",
-        "InferenceBackend",
+        Collection::InferenceBackend.unique_field(),
+        Collection::InferenceBackend.graphql_type(),
         &planned.collections.inference_backends,
     )?;
     let profile_docs = select_apply_collection_docs(
         &desired_bundle.inference_profiles,
-        "profile_id",
-        "InferenceProfile",
+        Collection::InferenceProfile.unique_field(),
+        Collection::InferenceProfile.graphql_type(),
         &planned.collections.inference_profiles,
     )?;
     let tool_selection_docs = select_apply_collection_docs(
         &desired_bundle.tool_selections,
-        "selection_id",
-        "ToolSelection",
+        Collection::ToolSelection.unique_field(),
+        Collection::ToolSelection.graphql_type(),
         &planned.collections.tool_selections,
     )?;
     let tool_service_registry_docs = select_apply_collection_docs(
         &desired_bundle.tool_service_registries,
-        "service_id",
-        "ToolServiceRegistry",
+        Collection::ToolServiceRegistry.unique_field(),
+        Collection::ToolServiceRegistry.graphql_type(),
         &planned.collections.tool_service_registries,
     )?;
     let behavior_docs = select_apply_collection_docs(
         &desired_bundle.agent_behaviors,
-        "behavior_id",
-        "AgentBehavior",
+        Collection::AgentBehavior.unique_field(),
+        Collection::AgentBehavior.graphql_type(),
         &planned.collections.agent_behaviors,
     )?;
     let task_docs = select_apply_collection_docs(
         &desired_bundle.tasks,
-        "task_id",
-        "Task",
+        Collection::Task.unique_field(),
+        Collection::Task.graphql_type(),
         &planned.collections.tasks,
     )?;
     let schedule_docs = select_apply_collection_docs(
         &desired_bundle.schedules,
-        "schedule_id",
-        "Schedule",
+        Collection::Schedule.unique_field(),
+        Collection::Schedule.graphql_type(),
         &planned.collections.schedules,
     )?;
     let principal_docs = select_apply_principal_docs(
@@ -260,64 +263,64 @@ pub(crate) async fn apply_desired_state_changes(
     Ok(ConfigApplyCounts {
         inference_backends: apply_import_collection(
             access,
-            "InferenceBackend",
-            "backend_id",
+            Collection::InferenceBackend.graphql_type(),
+            Collection::InferenceBackend.unique_field(),
             &backend_docs,
             true,
         )
         .await?,
         inference_profiles: apply_import_collection(
             access,
-            "InferenceProfile",
-            "profile_id",
+            Collection::InferenceProfile.graphql_type(),
+            Collection::InferenceProfile.unique_field(),
             &profile_docs,
             true,
         )
         .await?,
         tool_service_registries: apply_import_collection(
             access,
-            "ToolServiceRegistry",
-            "service_id",
+            Collection::ToolServiceRegistry.graphql_type(),
+            Collection::ToolServiceRegistry.unique_field(),
             &tool_service_registry_docs,
             true,
         )
         .await?,
         tool_selections: apply_import_collection(
             access,
-            "ToolSelection",
-            "selection_id",
+            Collection::ToolSelection.graphql_type(),
+            Collection::ToolSelection.unique_field(),
             &tool_selection_docs,
             true,
         )
         .await?,
         agent_behaviors: apply_import_collection(
             access,
-            "AgentBehavior",
-            "behavior_id",
+            Collection::AgentBehavior.graphql_type(),
+            Collection::AgentBehavior.unique_field(),
             &behavior_docs,
             true,
         )
         .await?,
         tasks: apply_import_collection(
             access,
-            "Task",
-            "task_id",
+            Collection::Task.graphql_type(),
+            Collection::Task.unique_field(),
             &task_docs,
             true,
         )
         .await?,
         schedules: apply_import_collection(
             access,
-            "Schedule",
-            "schedule_id",
+            Collection::Schedule.graphql_type(),
+            Collection::Schedule.unique_field(),
             &schedule_docs,
             true,
         )
         .await?,
         agent_principal: apply_import_collection(
             access,
-            "AgentPrincipal",
-            "agent_did",
+            Collection::AgentPrincipal.graphql_type(),
+            Collection::AgentPrincipal.unique_field(),
             &principal_docs,
             true,
         )

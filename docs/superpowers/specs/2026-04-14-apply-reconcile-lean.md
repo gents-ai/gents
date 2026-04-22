@@ -97,9 +97,9 @@ This is called out explicitly here so that no one later reads T-Conv as a guaran
 
 ## Follow-on Issues
 
-- **I-1 (from code review):** Consolidate desired-state collection handling in `desired_state.rs`. The seven near-identical `Desired*` structs, the seven near-identical diff fields, and the seven parallel apply branches could share a trait, a macro, or a shared enum. Not blocking; flagged for when a second motivating refactor appears.
-- **I-2 (from apply-atomicity discussion):** Make apply transactional — on partial failure, roll back to the pre-apply state. This is the natural next-step UX work once T-Conv lands.
-- **I-3 (optional, tracking):** Model delete semantics when live-only removal is added. Stub for the future T-Delete-safety theorem.
+- **I-1 (#55, from code review):** Consolidate desired-state collection handling in `desired_state.rs`. The seven near-identical `Desired*` structs, the seven near-identical diff fields, and the seven parallel apply branches could share a trait, a macro, or a shared enum. Not blocking; flagged for when a second motivating refactor appears.
+- **I-2 (#56, from apply-atomicity discussion):** Make apply transactional — on partial failure, roll back to the pre-apply state. This is the natural next-step UX work once T-Conv lands.
+- **I-3 (#57, optional, tracking):** Model delete semantics when live-only removal is added. Stub for the future T-Delete-safety theorem.
 
 ## Out of Scope
 
@@ -109,14 +109,32 @@ This is called out explicitly here so that no one later reads T-Conv as a guaran
 - Apply atomicity implementation (I-2).
 - Delete semantics (I-3).
 
+## Post-Landing Work (2026-04-21)
+
+After the initial implementation landed, a critical review found that:
+
+- T-Conv proved only a desired-projection claim (`(applyAll L (diff M L)).desired d = some f`), not the spec's ResolvedSnapshot-form claim.
+- `referencesOf` was globally empty, making `apply_preserves_wellFormed` and the corresponding property test vacuous.
+- Production `apply_desired_state_changes` wrote `AgentPrincipal` last, disagreeing with its `apply_order` rank of 1.
+- `Collection` was defined in three places (CLI crate, apply_model, Lean) with no drift guard.
+
+A follow-up plan (`docs/superpowers/plans/2026-04-21-apply-reconcile-finish-promised-work.md`) addressed all four gaps plus a handful of smaller issues. The final state:
+
+- T-Conv now proves `snapshot.runnable ∪ snapshot.unavailable = M.behaviorIds` (ResolvedSnapshot form) and `active.runnable ∪ active.unavailable = M.behaviorIds` (ActiveRuntimeSnapshot form, via `ResolvedSnapshot.activate`).
+- `Manifest.WellFormed` gained a second conjunct requiring references to go to strictly-lower-rank collections. `apply_preserves_wellFormed` uses this non-vacuously.
+- `DesiredFields` carries explicit `refs : Finset DocRef` (Lean) / `Vec<DocRef>` (Rust). The property test `apply_ordering_preserves_real_references` exercises the non-vacuous closure property under a referential generator.
+- `Collection` is defined once in `defra_agent::collection`; consumer crates (CLI, apply_model) use the shared type. Lean inductive parity is enforced by an exhaustive pattern-match example + a rank-parity theorem.
+- Production apply order now matches `Collection::apply_order()`; an anchor test in `cli_config_apply_order.rs` pins this.
+- `DesiredApplyBundle::from_trusted_bundle` is `pub(super)` to `desired_state`, making intra-crate bypass impossible.
+
 ## Deliverables Checklist
 
-- [ ] `crates/defra-agent/proofs/Proofs/ApplyReconcile.lean` — new module with `Collection`, `DocRef`, `Manifest`, `LiveState`, `ApplyStep`, `diff`, `applyOne`, and T-Conv.
-- [ ] `crates/defra-agent/proofs/Proofs.lean` — register the new module.
-- [ ] `defra-agent-cli` — introduce `enum Collection` and thread it through `desired_state.rs`, `main.rs` dispatch, file naming.
-- [ ] `defra-agent-cli` (or shared crate) — typed `DesiredFields` / `LiveFields` at the apply-write boundary.
-- [ ] `crates/defra-agent/tests/apply_property.rs` — `proptest` properties listed above.
-- [ ] `crates/defra-agent/tests/apply_conformance.rs` — table-driven conformance cases.
-- [ ] `crates/defra-agent-cli/tests/cli_e2e.rs` — audit pass to remove tests subsumed by the new coverage.
-- [ ] Apply-atomicity known-limitation note in `crates/defra-agent/proofs/README.md`.
-- [ ] Issues I-1, I-2, I-3 filed.
+- [x] `crates/defra-agent/proofs/Proofs/ApplyReconcile.lean` — new module with `Collection`, `DocRef`, `Manifest`, `LiveState`, `ApplyStep`, `diff`, `applyOne`, and T-Conv.
+- [x] `crates/defra-agent/proofs/Proofs.lean` — register the new module.
+- [x] `defra-agent-cli` — introduce `enum Collection` and thread it through `desired_state.rs`, `main.rs` dispatch, file naming.
+- [x] `defra-agent-cli` (or shared crate) — typed `DesiredFields` / `LiveFields` at the apply-write boundary.
+- [x] `crates/defra-agent/tests/apply_property.rs` — `proptest` properties listed above.
+- [x] `crates/defra-agent/tests/apply_conformance.rs` — table-driven conformance cases.
+- [x] `crates/defra-agent-cli/tests/cli_e2e.rs` — audit pass to remove tests subsumed by the new coverage.
+- [x] Apply-atomicity known-limitation note in `crates/defra-agent/proofs/README.md`.
+- [x] Issues I-1, I-2, I-3 filed.

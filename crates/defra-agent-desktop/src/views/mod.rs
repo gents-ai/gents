@@ -1,4 +1,5 @@
 pub mod chat;
+mod components;
 pub mod manage;
 pub mod setup;
 

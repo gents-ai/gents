@@ -106,12 +106,13 @@ async fn run_oneshot_with_completion_client<C>(
 ) -> Result<OneshotRunResult>
 where
     C: CompletionClient,
+    C::CompletionModel: 'static,
 {
     let agent = build_agent(&client, behavior, &preamble, tools);
     run_oneshot_with_agent(node, behavior, &prompt_builder, &agent, prompt).await
 }
 
-async fn run_oneshot_with_agent<M: CompletionModel>(
+async fn run_oneshot_with_agent<M: CompletionModel + 'static>(
     node: Arc<EmbeddedNode>,
     behavior: &BehaviorConfig,
     prompt_builder: &LayeredPromptBuilder,
@@ -124,11 +125,11 @@ async fn run_oneshot_with_agent<M: CompletionModel>(
         behavior.did(),
         FailurePolicy::default(),
     );
-    let mut history = prompt_builder.build(&[], &[]).await?.messages;
+    let history = prompt_builder.build(&[], &[]).await?.messages;
 
     let response = agent
         .prompt(prompt)
-        .with_history(&mut history)
+        .with_history(&history)
         .with_hook(hook.clone())
         .await
         .map_err(|error| anyhow!("agent prompt failed: {error}"));

@@ -32,6 +32,7 @@ struct HookCounters {
 
 struct SessionState {
     session_id: Option<String>,
+    current_request_id: Option<String>,
     agent_name: String,
     sequence: u32,
     assistant_turn_sequence: Option<u32>,
@@ -72,6 +73,7 @@ impl DefraSessionHook {
             }),
             state: Arc::new(Mutex::new(SessionState {
                 session_id: None,
+                current_request_id: None,
                 agent_name: agent_name.to_string(),
                 sequence: 0,
                 assistant_turn_sequence: None,
@@ -102,6 +104,7 @@ impl DefraSessionHook {
             }),
             state: Arc::new(Mutex::new(SessionState {
                 session_id: Some(session_id.to_string()),
+                current_request_id: None,
                 agent_name: agent_name.to_string(),
                 sequence: max_seq,
                 assistant_turn_sequence: None,
@@ -167,6 +170,18 @@ impl DefraSessionHook {
 
     pub async fn session_id(&self) -> Option<String> {
         self.state.lock().await.session_id.clone()
+    }
+
+    pub async fn set_active_request_id(&self, request_id: Option<String>) {
+        self.state.lock().await.current_request_id = request_id;
+    }
+
+    pub async fn mark_current_response_materialized(&self, sequence: u32) -> anyhow::Result<()> {
+        let request_id = self.state.lock().await.current_request_id.clone();
+        let Some(request_id) = request_id.as_deref() else {
+            return Ok(());
+        };
+        session::mark_response_materialized(&self.node, request_id, sequence).await
     }
 
     pub async fn close(&self) -> anyhow::Result<()> {

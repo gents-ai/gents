@@ -19,12 +19,11 @@ fn desktop_app_live_manage_schedule_and_failures() -> Result<()> {
     {
         let driver = &mut fixture.driver;
         driver.open_activity(Activity::Manage);
-        assert_manage_filter_round_trip(
-            driver,
-            ManageSection::Schedules,
-            &docs.task_id,
-            &docs.schedule_id,
-            "definitely-missing-live-schedule",
+        driver.click_target(&audit::targets::manage_section(ManageSection::Schedules));
+        driver.wait_for_target(
+            "live schedule entity",
+            Duration::from_secs(10),
+            &audit::targets::manage_entity(&docs.schedule_id),
         )?;
         driver.click_target(&audit::targets::manage_entity(&docs.schedule_id));
 

@@ -1,3 +1,4 @@
+pub(crate) mod apply_bundle;
 pub(crate) mod convert;
 pub(crate) mod diff;
 pub(crate) mod load;
@@ -6,6 +7,7 @@ pub(crate) mod normalize;
 mod tests;
 pub(crate) mod validate;
 
+pub(crate) use apply_bundle::DesiredApplyBundle;
 pub(crate) use convert::{
     export_bundle_from_manifest, manifest_from_export_bundle,
     normalize_tool_service_registry_storage_fields,
@@ -304,5 +306,65 @@ pub(crate) struct DesiredStateValidationReport {
 impl DesiredStateValidationReport {
     pub(crate) fn is_ok(&self) -> bool {
         self.ok
+    }
+}
+
+use defra_agent::DesiredFields;
+
+impl DesiredFields for DesiredAgentPrincipal {
+    fn collection_tag(&self) -> &'static str {
+        "agent_principal"
+    }
+}
+impl DesiredFields for DesiredAgentBehavior {
+    fn collection_tag(&self) -> &'static str {
+        "agent_behaviors"
+    }
+}
+impl DesiredFields for DesiredToolSelection {
+    fn collection_tag(&self) -> &'static str {
+        "tool_selections"
+    }
+}
+impl DesiredFields for DesiredInferenceBackend {
+    fn collection_tag(&self) -> &'static str {
+        "inference_backends"
+    }
+}
+impl DesiredFields for DesiredInferenceProfile {
+    fn collection_tag(&self) -> &'static str {
+        "inference_profiles"
+    }
+}
+impl DesiredFields for DesiredToolServiceRegistry {
+    fn collection_tag(&self) -> &'static str {
+        "tool_service_registries"
+    }
+}
+impl DesiredFields for DesiredTask {
+    fn collection_tag(&self) -> &'static str {
+        "tasks"
+    }
+}
+impl DesiredFields for DesiredSchedule {
+    fn collection_tag(&self) -> &'static str {
+        "schedules"
+    }
+}
+
+#[cfg(test)]
+mod desired_fields_tests {
+    use super::*;
+    use defra_agent::DesiredFields;
+
+    #[test]
+    fn desired_structs_report_their_collection_tags() {
+        let p = DesiredAgentPrincipal {
+            agent_did: "did:x".into(),
+            display_name: None,
+            default_behavior_id: None,
+            enabled: true,
+        };
+        assert_eq!(p.collection_tag(), "agent_principal");
     }
 }

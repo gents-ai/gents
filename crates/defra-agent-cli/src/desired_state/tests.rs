@@ -713,11 +713,11 @@ fn export_bundle_round_trip_preserves_tasks_and_schedules() {
 
     let bundle = export_bundle_from_manifest(&manifest, "local")
         .expect("export bundle should be produced");
-    assert_eq!(bundle.tasks.len(), 2);
-    assert_eq!(bundle.schedules.len(), 2);
+    assert_eq!(bundle.as_bundle().tasks.len(), 2);
+    assert_eq!(bundle.as_bundle().schedules.len(), 2);
 
-    let round_tripped =
-        manifest_from_export_bundle(&bundle).expect("manifest should parse back from bundle");
+    let round_tripped = manifest_from_export_bundle(bundle.as_bundle())
+        .expect("manifest should parse back from bundle");
 
     // `manifest_from_export_bundle` normalizes (sorts by id).
     let task_ids: Vec<_> = round_tripped
