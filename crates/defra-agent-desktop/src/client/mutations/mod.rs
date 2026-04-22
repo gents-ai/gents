@@ -8,7 +8,7 @@ pub use chat::{
     SubmittedRequest,
 };
 pub use manage::{
-    fire_schedule_now, upsert_agent_behavior, upsert_inference_backend,
+    fire_schedule_now, upsert_agent_behavior, upsert_event_trigger, upsert_inference_backend,
     upsert_inference_profile, upsert_schedule, upsert_task, upsert_tool_selection,
 };
 pub use setup::PeerMutationResult;

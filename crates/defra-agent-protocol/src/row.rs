@@ -405,6 +405,46 @@ pub struct ScheduleRow {
     pub updated_at: Option<String>,
 }
 
+/// Serde mirror of the `EventTrigger` replicated document.
+///
+/// Mirrors `crates/defra-agent-protocol/schemas/agent/event_trigger.graphql`.
+/// EventTriggers bind a `Task` to a document-created event on a source
+/// collection. The apply path owns the description of the trigger
+/// (`trigger_id`, `task_id`, `source_collection`, `event_kind`, `filter`,
+/// `enabled`, `concurrency`, `created_at`, `updated_at`); the trigger
+/// engine owns the fire bookkeeping (`last_attempt_at`,
+/// `last_fired_source_doc_id`, `last_status`, `last_error`, `fire_count`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EventTriggerRow {
+    pub trigger_id: String,
+    #[serde(default)]
+    pub task_id: Option<String>,
+    #[serde(default)]
+    pub source_collection: Option<String>,
+    #[serde(default)]
+    pub event_kind: Option<String>,
+    #[serde(default)]
+    pub filter: Option<String>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub concurrency: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    #[serde(default)]
+    pub last_attempt_at: Option<String>,
+    #[serde(default)]
+    pub last_fired_source_doc_id: Option<String>,
+    #[serde(default)]
+    pub last_status: Option<String>,
+    #[serde(default)]
+    pub last_error: Option<String>,
+    #[serde(default)]
+    pub fire_count: Option<i64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolSelectionRow {
     pub selection_id: String,

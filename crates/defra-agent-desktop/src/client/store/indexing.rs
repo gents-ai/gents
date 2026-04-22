@@ -123,6 +123,7 @@ impl ClientStore {
             compaction_entries: rows.compaction_entries,
             tasks: rows.tasks,
             schedules: rows.schedules,
+            event_triggers: rows.event_triggers,
             tool_selections: rows.tool_selections,
             inference_backends: rows.inference_backends,
             inference_profiles: rows.inference_profiles,

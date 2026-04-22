@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use defra_agent_protocol::row::{
-    AgentBehaviorRow, AgentRequestRow, InferenceBackendRow, InferenceProfileRow, ScheduleRow,
-    TaskRow, ToolSelectionRow,
+    AgentBehaviorRow, AgentRequestRow, EventTriggerRow, InferenceBackendRow, InferenceProfileRow,
+    ScheduleRow, TaskRow, ToolSelectionRow,
 };
 
 use super::super::mutations::{self, CreatedConversation, PeerMutationResult, SubmittedRequest};
@@ -355,6 +355,27 @@ impl ClientCore {
                 Ok(())
             }
             Err(error) => Err(self.record_mutation_error("save schedule", error)),
+        }
+    }
+
+    /// Persist an `EventTrigger` document. Writes ONLY apply-owned
+    /// fields; runtime-owned bookkeeping (`last_attempt_at`,
+    /// `last_fired_source_doc_id`, `last_status`, `last_error`,
+    /// `fire_count`) is never projected into the mutation input.
+    pub async fn save_event_trigger(&self, row: &EventTriggerRow) -> Result<()> {
+        match mutations::upsert_event_trigger(self.node.as_ref(), row).await {
+            Ok(()) => {
+                self.refresh_store().await?;
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "defra_agent_desktop::writes",
+                    doc_type = "event_trigger",
+                    row_id = %row.trigger_id,
+                    "desktop write saved"
+                );
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("save event trigger", error)),
         }
     }
 
