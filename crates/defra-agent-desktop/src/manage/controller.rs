@@ -129,10 +129,13 @@ pub fn run_selected_task_now(
         .as_ref()
         .context("no manage draft is selected")?;
 
+    // `fire_schedule_now` returns the new `AgentRequest`'s `_docID`;
+    // this controller only needs success-vs-failure for the reducer,
+    // so the id is discarded here.
     let result = match draft {
-        ManageDraft::Schedule(draft) => {
-            runtime.block_on(client.fire_schedule_now(&schedule_row(draft)?))
-        }
+        ManageDraft::Schedule(draft) => runtime
+            .block_on(client.fire_schedule_now(&schedule_row(draft)?))
+            .map(|_doc_id| ()),
         _ => Err(anyhow!("run now is only available for schedules")),
     };
 

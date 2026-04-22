@@ -285,14 +285,72 @@ pub async fn fire_task_now(
     .await
 }
 
-/// Manual "Run Now" path for a Schedule.
+/// Fire a schedule's task immediately.
 ///
-/// The scheduler's manual-run surface lands in PR 3; for PR 1 we
-/// surface the gap explicitly so the desktop button reports a
-/// meaningful error instead of silently reaching into runtime-owned
-/// fields.
-pub async fn fire_schedule_now(_node: &EmbeddedNode, _row: &ScheduleRow) -> Result<()> {
-    bail!("manual Schedule fire lands in PR 3; this path writes no runtime-owned fields")
+/// Operator override = manual run of the schedule's task with empty
+/// args. The resulting `AgentRequest` carries `caused_by_trigger_kind =
+/// "manual"`, NOT `"schedule"` — this is an explicit operator override,
+/// not a cron fire, so observers can cleanly separate "the scheduler
+/// decided to fire" from "a human pressed Run Now on the Schedule row."
+///
+/// We load the `TaskRow` from GraphQL directly rather than from the
+/// desktop store, so this path stays correct even if the store is
+/// stale (e.g., the schedule was just created and the watcher has not
+/// caught up yet). The `SELECT` mirrors every field on
+/// `defra_agent_protocol::row::TaskRow` so `serde_json::from_value`
+/// does not fail on a missing column.
+pub async fn fire_schedule_now(
+    node: &EmbeddedNode,
+    schedule_row: &ScheduleRow,
+) -> Result<String> {
+    let task_id = schedule_row
+        .task_id
+        .as_deref()
+        .and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then_some(trimmed)
+        })
+        .ok_or_else(|| {
+            anyhow!(
+                "schedule {} has no task_id",
+                schedule_row.schedule_id
+            )
+        })?;
+    let task_query = format!(
+        r#"query {{
+            Task(filter: {{ task_id: {{ _eq: "{id}" }} }}, limit: 1) {{
+                task_id
+                name
+                description
+                behavior_id
+                prompt_template
+                enabled
+                output_schema_ref
+                created_at
+                updated_at
+            }}
+        }}"#,
+        id = escape_graphql_string(task_id),
+    );
+    let task_response = node.execute(&task_query).await;
+    if task_response.has_errors() {
+        bail!(
+            "fetch task for schedule {schedule_id} failed: {:?}",
+            task_response.errors,
+            schedule_id = schedule_row.schedule_id,
+        );
+    }
+    let task_row_json = task_response
+        .data
+        .as_ref()
+        .and_then(|d| d.get("Task"))
+        .and_then(|arr| arr.as_array())
+        .and_then(|arr| arr.first())
+        .ok_or_else(|| anyhow!("task {task_id} not found"))?;
+    let task_row: TaskRow = serde_json::from_value(task_row_json.clone())
+        .map_err(|e| anyhow!("deserialize TaskRow: {e}"))?;
+
+    fire_task_now(node, &task_row, serde_json::json!({})).await
 }
 
 /// Apply-path upsert for an `EventTrigger` document.
