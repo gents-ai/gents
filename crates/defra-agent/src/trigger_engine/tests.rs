@@ -1302,3 +1302,121 @@ async fn event_source_reconciles_subscriptions_on_generation_bump() {
          and only CollectionB should remain in the filter set",
     );
 }
+
+/// Drive `EventSource::next_fire` end-to-end against a real event stream.
+///
+/// The test:
+/// 1. Registers a custom `WebhookEvent` schema on the embedded node so the
+///    bus has a collection to emit events from (separate from the runtime
+///    control collections so reconciliation is forced to walk the cache).
+/// 2. Publishes a snapshot with one active `EventTrigger` on `WebhookEvent`.
+/// 3. Opens the subscription (via `reconcile_subscriptions`) BEFORE creating
+///    the document — `events::Bus` only buffers messages for already-
+///    subscribed consumers, so a pre-subscription mutation is silently
+///    dropped.
+/// 4. Creates a document in that collection via a GraphQL mutation. The
+///    node emits an `Update` event with `collection_id` set to the schema's
+///    stable CollectionID (not the human-readable name).
+/// 5. Asserts `next_fire` yields a `FireIntent` with the expected trigger
+///    id, kind, task, concurrency, and event_vars shape, all within a
+///    bounded 2s deadline.
+#[tokio::test]
+async fn event_source_next_fire_emits_intent_on_matching_real_event() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    // Register the source collection we'll trigger on. Kept intentionally
+    // minimal — the test doesn't exercise Task 21's filter/doc-var work, so
+    // the doc's fields are only read by the mutation validator.
+    let webhook_sdl = r#"
+        type WebhookEvent {
+            external_id: String
+            payload: String
+        }
+    "#;
+    node.add_schema(webhook_sdl)
+        .await
+        .expect("add_schema for WebhookEvent");
+
+    // Build a snapshot with exactly one active EventTrigger on WebhookEvent.
+    // The trigger_id is what the returned FireIntent should carry.
+    let task = ResolvedTask {
+        task_id: "task-webhook".to_string(),
+        behavior_id: "general".to_string(),
+        prompt_template: "handle webhook".to_string(),
+        output_schema_ref: None,
+    };
+    let trigger = resolved_event_trigger("trigger-webhook", "WebhookEvent", task.clone());
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([("trigger-webhook".to_string(), trigger)]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+
+    let cancel = CancellationToken::new();
+    let mut source = EventSource::new(rx, node.clone(), cancel.clone());
+
+    // Open the subscription BEFORE writing the doc. The bus only buffers
+    // messages for already-connected subscribers — a mutation that lands
+    // before subscribe() returns leaves the subscription starved.
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+    assert_eq!(
+        source.subscribed_collections(),
+        vec!["WebhookEvent".to_string()],
+        "precondition: subscription set should match the trigger's source_collection",
+    );
+
+    // Drive the mutation on a detached task so next_fire can park on its
+    // select! arm and wake when the event lands. Delaying the write by a
+    // short window lets the `recv()` future register before the message is
+    // published, which is the typical runtime ordering.
+    let node_for_mutation = node.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mutation = r#"mutation {
+            create_WebhookEvent(input: {
+                external_id: "wh-1",
+                payload: "{}"
+            }) { _docID }
+        }"#;
+        let resp = node_for_mutation.execute(mutation).await;
+        assert!(
+            !resp.has_errors(),
+            "create_WebhookEvent failed: {:?}",
+            resp.errors
+        );
+    });
+
+    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("next_fire timed out waiting for WebhookEvent")
+        .expect("next_fire returned None instead of emitting a FireIntent");
+
+    assert_eq!(intent.trigger_id.as_deref(), Some("trigger-webhook"));
+    assert_eq!(intent.trigger_kind, TriggerKind::Event);
+    assert_eq!(intent.concurrency, ConcurrencyMode::Serial);
+    assert_eq!(intent.task.task_id, "task-webhook");
+    assert_eq!(intent.task.prompt_template, "handle webhook");
+    assert!(
+        intent.doc_vars.is_none(),
+        "Task 21 owns doc-var hydration; Task 20's intent must leave doc_vars None"
+    );
+    assert!(intent.args_vars.is_none());
+
+    let ev = &intent.event_vars;
+    assert_eq!(ev["trigger_id"].as_str(), Some("trigger-webhook"));
+    assert_eq!(ev["trigger_kind"].as_str(), Some("event"));
+    assert_eq!(ev["source_collection"].as_str(), Some("WebhookEvent"));
+    assert!(
+        ev["source_doc_id"]
+            .as_str()
+            .is_some_and(|s| !s.is_empty()),
+        "source_doc_id should be a non-empty string from the persisted doc, got {:?}",
+        ev["source_doc_id"]
+    );
+    assert!(
+        ev["fired_at"].is_string(),
+        "fired_at should be a string, got {:?}",
+        ev["fired_at"]
+    );
+}
