@@ -4,7 +4,9 @@ use defra_agent_protocol::row::{
     TaskRow, ToolSelectionRow,
 };
 
-use super::super::mutations::{self, CreatedConversation, PeerMutationResult, SubmittedRequest};
+use super::super::mutations::{
+    self, CreatedConversation, PeerMutationResult, SubmitRequestOptions, SubmittedRequest,
+};
 use super::super::schema::subscribed_collection_names;
 use super::bootstrap::{
     add_replicator_with_retry_until, connect_peer_with_retry_until, normalize_required,
@@ -49,6 +51,24 @@ impl ClientCore {
         content: &str,
         behavior_id: Option<&str>,
     ) -> Result<SubmittedRequest> {
+        self.submit_request_with_options(
+            session_id,
+            agent_did,
+            content,
+            behavior_id,
+            SubmitRequestOptions::default(),
+        )
+        .await
+    }
+
+    pub async fn submit_request_with_options(
+        &self,
+        session_id: &str,
+        agent_did: &str,
+        content: &str,
+        behavior_id: Option<&str>,
+        options: SubmitRequestOptions,
+    ) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
         match mutations::submit_request(
             self.node.as_ref(),
@@ -57,6 +77,7 @@ impl ClientCore {
             agent_did,
             content,
             behavior_id,
+            options,
         )
         .await
         {
@@ -99,6 +120,45 @@ impl ClientCore {
                 Ok(())
             }
             Err(error) => Err(self.record_mutation_error("rename conversation", error)),
+        }
+    }
+
+    pub async fn resend_request(&self, stale_request_id: &str) -> Result<SubmittedRequest> {
+        let snapshot = self.store.snapshot();
+        match mutations::resend_request(self.node.as_ref(), snapshot.as_ref(), stale_request_id)
+            .await
+        {
+            Ok(result) => {
+                self.store
+                    .set_focused_request_id(Some(result.request_id.clone()));
+                self.refresh_store().await?;
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "defra_agent_desktop::writes",
+                    action = "chat_resend",
+                    row_id = %result.request_id,
+                    stale_request_id = %stale_request_id,
+                    "desktop write saved"
+                );
+                Ok(result)
+            }
+            Err(error) => Err(self.record_mutation_error("resend request", error)),
+        }
+    }
+
+    pub async fn interrupt_request(&self, request_id: &str) -> Result<()> {
+        match mutations::interrupt_request(self.node.as_ref(), request_id).await {
+            Ok(()) => {
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "defra_agent_desktop::writes",
+                    action = "chat_interrupt",
+                    row_id = %request_id,
+                    "desktop write saved"
+                );
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("interrupt request", error)),
         }
     }
 

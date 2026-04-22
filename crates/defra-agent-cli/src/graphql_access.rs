@@ -123,4 +123,3 @@ pub(crate) fn graphql_diagnostic_hint(graphql: &str) -> String {
         )
     }
 }
-

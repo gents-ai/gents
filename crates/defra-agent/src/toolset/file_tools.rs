@@ -336,6 +336,86 @@ impl Tool for WriteFileTool {
     }
 }
 
+// Cancellation opt-ins for the read-only filesystem tools.
+//
+// `ToolError` in this crate is a newtype wrapper around `anyhow::Error`
+// rather than an enum, so the cancellation error is constructed via
+// `anyhow!(...)` and converted with `Into::into`. See
+// `super::cancellable` for the dispatch-integration status — these
+// impls are infrastructure-ready but not yet wired from production
+// (rig owns tool dispatch today).
+//
+// Write/edit tools and bash tools deliberately keep the default
+// (non-cancellable) behavior.
+
+impl super::cancellable::CancellableTool for ListFilesTool {
+    fn supports_cancellation(&self) -> bool {
+        true
+    }
+
+    async fn call_cancellable(
+        &self,
+        args: Self::Args,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<Self::Output, Self::Error> {
+        tokio::select! {
+            _ = cancel.cancelled() => Err(anyhow!("tool call cancelled").into()),
+            result = self.call(args) => result,
+        }
+    }
+}
+
+impl super::cancellable::CancellableTool for ReadFileTool {
+    fn supports_cancellation(&self) -> bool {
+        true
+    }
+
+    async fn call_cancellable(
+        &self,
+        args: Self::Args,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<Self::Output, Self::Error> {
+        tokio::select! {
+            _ = cancel.cancelled() => Err(anyhow!("tool call cancelled").into()),
+            result = self.call(args) => result,
+        }
+    }
+}
+
+impl super::cancellable::CancellableTool for GlobTool {
+    fn supports_cancellation(&self) -> bool {
+        true
+    }
+
+    async fn call_cancellable(
+        &self,
+        args: Self::Args,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<Self::Output, Self::Error> {
+        tokio::select! {
+            _ = cancel.cancelled() => Err(anyhow!("tool call cancelled").into()),
+            result = self.call(args) => result,
+        }
+    }
+}
+
+impl super::cancellable::CancellableTool for GrepTool {
+    fn supports_cancellation(&self) -> bool {
+        true
+    }
+
+    async fn call_cancellable(
+        &self,
+        args: Self::Args,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<Self::Output, Self::Error> {
+        tokio::select! {
+            _ = cancel.cancelled() => Err(anyhow!("tool call cancelled").into()),
+            result = self.call(args) => result,
+        }
+    }
+}
+
 impl Tool for EditFileTool {
     const NAME: &'static str = "edit_file";
 

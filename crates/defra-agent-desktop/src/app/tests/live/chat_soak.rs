@@ -770,7 +770,9 @@ fn wait_for_soak_response_text(
                     diagnostics_dir.display()
                 );
             }
-            Some(ClientTurnState::Failed) => {
+            // TODO(ui-polish): distinguish interrupted from failed in display text/icons.
+            // For now treat identically — both mean "no complete response."
+            Some(ClientTurnState::Failed) | Some(ClientTurnState::Interrupted) => {
                 anyhow::bail!(
                     "soak request {} for {} reached failed turn state: request={:?} response={:?} (diagnostics: {})",
                     current_request_id,
@@ -1034,7 +1036,10 @@ fn wait_for_session_settled(
         (latest_request_id == effective_request_id
             && matches!(
                 turn_state,
-                ClientTurnState::Completed | ClientTurnState::Failed | ClientTurnState::Superseded
+                ClientTurnState::Completed
+                    | ClientTurnState::Failed
+                    | ClientTurnState::Superseded
+                    | ClientTurnState::Interrupted
             )
             && active_status_requests == 0)
             .then_some(())

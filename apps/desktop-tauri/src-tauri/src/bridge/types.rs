@@ -239,5 +239,6 @@ pub(crate) fn turn_state_label(state: ClientTurnState) -> &'static str {
         ClientTurnState::Completed => "completed",
         ClientTurnState::Failed => "failed",
         ClientTurnState::Superseded => "superseded",
+        ClientTurnState::Interrupted => "interrupted",
     }
 }

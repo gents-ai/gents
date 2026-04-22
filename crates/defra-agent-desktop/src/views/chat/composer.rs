@@ -136,7 +136,11 @@ fn turn_status(
     match turn_state {
         Some(ClientTurnState::WaitingForClaim) => ("turn waiting...".to_string(), palette.warning),
         Some(ClientTurnState::Streaming) => ("turn streaming...".to_string(), palette.accent),
-        Some(ClientTurnState::Failed) => ("turn failed".to_string(), palette.warning),
+        // TODO(ui-polish): distinguish interrupted from failed in display text/icons.
+        // For now treat identically — both mean "no complete response."
+        Some(ClientTurnState::Failed) | Some(ClientTurnState::Interrupted) => {
+            ("turn failed".to_string(), palette.warning)
+        }
         Some(ClientTurnState::Superseded) => ("turn superseded".to_string(), palette.text_2),
         Some(ClientTurnState::Completed) => ("turn completed".to_string(), palette.text_2),
         None => (format!("turn {}", turn_state_label(None)), palette.text_3),

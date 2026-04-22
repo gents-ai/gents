@@ -14,13 +14,14 @@ transport problem, not a turn-state problem.
 Imports `Proofs.Request` to reuse `RequestState` from the server model.
 -/
 
-/-- The 5 client-visible turn states. -/
+/-- The 6 client-visible turn states. -/
 inductive ClientTurnState where
   | waitingForClaim
   | streaming
   | completed
   | failed
   | superseded
+  | interrupted
   deriving DecidableEq, Repr
 
 namespace ClientTurnState
@@ -33,13 +34,15 @@ def rank : ClientTurnState → Nat
   | .completed       => 2
   | .failed          => 2
   | .superseded      => 2
+  | .interrupted     => 2
 
 /-- Whether a client turn state is terminal. -/
 def isTerminal : ClientTurnState → Bool
-  | .completed  => true
-  | .failed     => true
-  | .superseded => true
-  | _           => false
+  | .completed   => true
+  | .failed      => true
+  | .superseded  => true
+  | .interrupted => true
+  | _            => false
 
 instance : HasTerminal ClientTurnState where
   isTerminal s := s.isTerminal = true
@@ -94,6 +97,7 @@ def deriveAttempt : AttemptView → ClientTurnState
     | .completed     => .completed
     | .failed        => .failed
     | .dead          => .failed
+    | .interrupted   => .interrupted
     -- Non-terminal: response may be more current than request
     | .pending | .claimed | .processing | .inputRequired =>
       match resp with
@@ -203,6 +207,11 @@ def LifecycleTransition : RequestState → RequestState → Prop
   | .inputRequired,  .failed          => True  -- input_timeout
   | .failed,         .dead            => True  -- exhaust
   | .processing,     .dead            => True  -- deadline_expire
+  | .pending,        .dead            => True  -- expire (TTL)
+  | .pending,        .interrupted     => True  -- interrupt_before_claim
+  | .claimed,        .interrupted     => True  -- interrupt_claimed
+  | .processing,     .interrupted     => True  -- interrupt_processing
+  | .inputRequired,  .interrupted     => True  -- interrupt_input_required
   | _,               _                => False
 
 /-- Project RequestContext.Transition to a LifecycleTransition at the state level.
@@ -237,6 +246,16 @@ theorem transition_implies_lifecycle
   | exhaust h_state _ h_post =>
     subst h_post; simp [LifecycleTransition, h_state]
   | deadline_expire h_state _ _ h_post =>
+    subst h_post; simp [LifecycleTransition, h_state]
+  | expire h_state _ _ _ h_post =>
+    subst h_post; simp [LifecycleTransition, h_state]
+  | interrupt_before_claim h_state _ _ h_post =>
+    subst h_post; simp [LifecycleTransition, h_state]
+  | interrupt_claimed h_state _ _ h_post =>
+    subst h_post; simp [LifecycleTransition, h_state]
+  | interrupt_processing h_state _ _ h_post =>
+    subst h_post; simp [LifecycleTransition, h_state]
+  | interrupt_input_required h_state _ _ h_post =>
     subst h_post; simp [LifecycleTransition, h_state]
 
 /-- T2: A valid server lifecycle state transition never decreases the client rank
@@ -378,6 +397,46 @@ theorem lifecycle_transition_monotonic
         obtain ⟨status⟩ := r
         cases status <;> simp [deriveAttempt, ClientTurnState.rank]
     · simp [deriveAttempt, ClientTurnState.rank]
+  case pending.dead =>
+    cases isSuperseded
+    · cases resp with
+      | none => simp [deriveAttempt, ClientTurnState.rank]
+      | some r =>
+        obtain ⟨status⟩ := r
+        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
+    · simp [deriveAttempt, ClientTurnState.rank]
+  case pending.interrupted =>
+    cases isSuperseded
+    · cases resp with
+      | none => simp [deriveAttempt, ClientTurnState.rank]
+      | some r =>
+        obtain ⟨status⟩ := r
+        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
+    · simp [deriveAttempt, ClientTurnState.rank]
+  case claimed.interrupted =>
+    cases isSuperseded
+    · cases resp with
+      | none => simp [deriveAttempt, ClientTurnState.rank]
+      | some r =>
+        obtain ⟨status⟩ := r
+        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
+    · simp [deriveAttempt, ClientTurnState.rank]
+  case processing.interrupted =>
+    cases isSuperseded
+    · cases resp with
+      | none => simp [deriveAttempt, ClientTurnState.rank]
+      | some r =>
+        obtain ⟨status⟩ := r
+        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
+    · simp [deriveAttempt, ClientTurnState.rank]
+  case inputRequired.interrupted =>
+    cases isSuperseded
+    · cases resp with
+      | none => simp [deriveAttempt, ClientTurnState.rank]
+      | some r =>
+        obtain ⟨status⟩ := r
+        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
+    · simp [deriveAttempt, ClientTurnState.rank]
 
 /-- T2 (response direction): advancing the response from none to some never decreases
     rank when the request is held fixed at a non-terminal lifecycle state. -/
@@ -428,6 +487,7 @@ def effectivelyTerminal (view : AttemptView) : Prop :=
   view.request.lifecycleState = .failed ∨
   view.request.lifecycleState = .superseded ∨
   view.request.lifecycleState = .dead ∨
+  view.request.lifecycleState = .interrupted ∨
   (∃ r, view.response = some r ∧ (r.status = .complete ∨ r.status = .error))
 
 instance (view : AttemptView) : Decidable (effectivelyTerminal view) := by
@@ -458,13 +518,15 @@ theorem terminal_coherence (view : AttemptView) :
       -- duplicated across the four non-terminal arms.
       by_cases h_is_terminal_lc :
           req.lifecycleState = .completed ∨ req.lifecycleState = .failed ∨
-          req.lifecycleState = .superseded ∨ req.lifecycleState = .dead
+          req.lifecycleState = .superseded ∨ req.lifecycleState = .dead ∨
+          req.lifecycleState = .interrupted
       · -- Terminal lifecycle: effectively terminal regardless of response.
-        rcases h_is_terminal_lc with h | h | h | h
+        rcases h_is_terminal_lc with h | h | h | h | h
         · exact Or.inr (Or.inl h)
         · exact Or.inr (Or.inr (Or.inl h))
         · exact Or.inr (Or.inr (Or.inr (Or.inl h)))
         · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inl h))))
+        · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inl h)))))
       · -- Non-terminal lifecycle: derive the 4-way non-terminal disjunction
         -- from the negation of the terminal disjunction.
         have h_nonterm : req.lifecycleState = .pending ∨ req.lifecycleState = .claimed ∨
@@ -477,12 +539,13 @@ theorem terminal_coherence (view : AttemptView) :
           · exact absurd (Or.inl h_lc) h_is_terminal_lc
           · exact absurd (Or.inr (Or.inl h_lc)) h_is_terminal_lc
           · exact absurd (Or.inr (Or.inr (Or.inl h_lc))) h_is_terminal_lc
-          · exact absurd (Or.inr (Or.inr (Or.inr h_lc))) h_is_terminal_lc
+          · exact absurd (Or.inr (Or.inr (Or.inr (Or.inl h_lc)))) h_is_terminal_lc
+          · exact absurd (Or.inr (Or.inr (Or.inr (Or.inr h_lc)))) h_is_terminal_lc
         -- Rewrite to the response-driven normal form, then case-split on
         -- response and status. This happens ONCE, replacing the four
         -- duplicated arms in the original proof.
         rw [deriveAttempt_nonterminal_response_driven h_super h_nonterm] at h_client_term
-        right; right; right; right; right
+        right; right; right; right; right; right
         cases resp with
         | none => simp [ClientTurnState.isTerminal] at h_client_term
         | some r =>
@@ -502,7 +565,7 @@ theorem terminal_coherence (view : AttemptView) :
     cases h_super : req.isSuperseded
     · -- isSuperseded = false: dispatch on which disjunct of
       -- `effectivelyTerminal` holds.
-      rcases h_eff with h_super' | h_lc_comp | h_lc_fail | h_lc_super | h_lc_dead | ⟨r, h_resp, h_status⟩
+      rcases h_eff with h_super' | h_lc_comp | h_lc_fail | h_lc_super | h_lc_dead | h_lc_int | ⟨r, h_resp, h_status⟩
       · -- isSuperseded = true contradicts h_super = false
         simp only at h_super'
         rw [h_super] at h_super'
@@ -515,7 +578,9 @@ theorem terminal_coherence (view : AttemptView) :
         simp [deriveAttempt, h_super, h_lc_super, ClientTurnState.isTerminal]
       · simp only at h_lc_dead
         simp [deriveAttempt, h_super, h_lc_dead, ClientTurnState.isTerminal]
-      · -- Response terminal: enumerate the 8 lifecycle states explicitly.
+      · simp only at h_lc_int
+        simp [deriveAttempt, h_super, h_lc_int, ClientTurnState.isTerminal]
+      · -- Response terminal: enumerate the 9 lifecycle states explicitly.
         -- Terminal lifecycles: deriveAttempt is terminal regardless of response.
         -- Non-terminal lifecycles: use the helper to normalize, then consult
         -- the response (which h_status guarantees is terminal).
@@ -544,6 +609,8 @@ theorem terminal_coherence (view : AttemptView) :
         case superseded =>
           simp [deriveAttempt, h_super, h_lc, ClientTurnState.isTerminal]
         case dead =>
+          simp [deriveAttempt, h_super, h_lc, ClientTurnState.isTerminal]
+        case interrupted =>
           simp [deriveAttempt, h_super, h_lc, ClientTurnState.isTerminal]
     · -- isSuperseded = true
       simp [deriveAttempt, h_super, ClientTurnState.isTerminal]

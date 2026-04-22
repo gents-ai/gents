@@ -9,7 +9,7 @@ The core state machine. Models a single request from submission through
 terminal state, now refined with backend binding and admission state.
 -/
 
-/-- The 8 states of the request lifecycle. -/
+/-- The 9 states of the request lifecycle. -/
 inductive RequestState where
   | pending
   | claimed
@@ -19,46 +19,57 @@ inductive RequestState where
   | failed
   | superseded
   | dead
+  | interrupted
   deriving DecidableEq, Repr
 
 namespace RequestState
 
 instance : HasTerminal RequestState where
-  isTerminal s := s = .completed ∨ s = .failed ∨ s = .superseded ∨ s = .dead
+  isTerminal s :=
+    s = .completed ∨ s = .failed ∨ s = .superseded ∨ s = .dead ∨ s = .interrupted
   isTerminal_dec s :=
     match s with
     | .completed => isTrue (Or.inl rfl)
     | .failed => isTrue (Or.inr (Or.inl rfl))
     | .superseded => isTrue (Or.inr (Or.inr (Or.inl rfl)))
-    | .dead => isTrue (Or.inr (Or.inr (Or.inr rfl)))
+    | .dead => isTrue (Or.inr (Or.inr (Or.inr (Or.inl rfl))))
+    | .interrupted => isTrue (Or.inr (Or.inr (Or.inr (Or.inr rfl))))
     | .pending => isFalse (by intro h; cases h with
         | inl h => exact absurd h (by decide)
         | inr h => cases h with
           | inl h => exact absurd h (by decide)
           | inr h => cases h with
             | inl h => exact absurd h (by decide)
-            | inr h => exact absurd h (by decide))
+            | inr h => cases h with
+              | inl h => exact absurd h (by decide)
+              | inr h => exact absurd h (by decide))
     | .claimed => isFalse (by intro h; cases h with
         | inl h => exact absurd h (by decide)
         | inr h => cases h with
           | inl h => exact absurd h (by decide)
           | inr h => cases h with
             | inl h => exact absurd h (by decide)
-            | inr h => exact absurd h (by decide))
+            | inr h => cases h with
+              | inl h => exact absurd h (by decide)
+              | inr h => exact absurd h (by decide))
     | .processing => isFalse (by intro h; cases h with
         | inl h => exact absurd h (by decide)
         | inr h => cases h with
           | inl h => exact absurd h (by decide)
           | inr h => cases h with
             | inl h => exact absurd h (by decide)
-            | inr h => exact absurd h (by decide))
+            | inr h => cases h with
+              | inl h => exact absurd h (by decide)
+              | inr h => exact absurd h (by decide))
     | .inputRequired => isFalse (by intro h; cases h with
         | inl h => exact absurd h (by decide)
         | inr h => cases h with
           | inl h => exact absurd h (by decide)
           | inr h => cases h with
             | inl h => exact absurd h (by decide)
-            | inr h => exact absurd h (by decide))
+            | inr h => cases h with
+              | inl h => exact absurd h (by decide)
+              | inr h => exact absurd h (by decide))
 
 end RequestState
 
@@ -77,6 +88,10 @@ structure RequestContext where
   messageSeq   : Nat
   isLatest     : Bool
   persistence  : PersistenceState
+  /-- Submitter-set interrupt timestamp; runtime-read-only. `none` means no interrupt requested. -/
+  interruptRequestedAt : Option Time := none
+  /-- Submitter-set TTL deadline; runtime-read-only. `none` means no TTL set. -/
+  validUntil           : Option Time := none
   deriving Repr
 
 namespace RequestContext
@@ -91,6 +106,7 @@ def coherentStateAdmission : RequestState → AdmissionState → Prop
   | .failed, a => a = .released
   | .superseded, a => a = .released
   | .dead, a => a = .released
+  | .interrupted, a => a = .released
 
 instance (s : RequestState) (a : AdmissionState) : Decidable (coherentStateAdmission s a) := by
   cases s <;> unfold coherentStateAdmission <;> infer_instance
@@ -124,6 +140,7 @@ def releaseToTerminal (r : RequestContext) (terminal : RequestState) : RequestCo
   | .failed => { r with state := .failed, admission := .released }
   | .superseded => { r with state := .superseded, admission := .released }
   | .dead => { r with state := .dead, admission := .released }
+  | .interrupted => { r with state := .interrupted, admission := .released }
   | .pending => { r with admission := .released }
   | .claimed => { r with admission := .released }
   | .processing => { r with admission := .released }
@@ -141,7 +158,10 @@ theorem releaseToTerminal_state
     | inr h =>
       cases h with
       | inl h => simp [releaseToTerminal, h]
-      | inr h => simp [releaseToTerminal, h]
+      | inr h =>
+        cases h with
+        | inl h => simp [releaseToTerminal, h]
+        | inr h => simp [releaseToTerminal, h]
 
 theorem releaseToTerminal_released
     (r : RequestContext) (terminal : RequestState) :
@@ -218,6 +238,37 @@ inductive Transition : RequestContext → RequestContext → Prop where
       pre.deadlineExceeded →
       post = { pre with state := .dead, admission := .released } →
       Transition pre post
+  | expire {pre post : RequestContext} {t : Time} :
+      pre.state = .pending →
+      pre.admission = .released →
+      pre.validUntil = some t →
+      pre.currentTime > t →
+      post = { pre with state := .dead, admission := .released } →
+      Transition pre post
+  | interrupt_before_claim {pre post : RequestContext} :
+      pre.state = .pending →
+      pre.admission = .released →
+      pre.interruptRequestedAt.isSome →
+      post = { pre with state := .interrupted, admission := .released } →
+      Transition pre post
+  | interrupt_claimed {pre post : RequestContext} :
+      pre.state = .claimed →
+      (pre.admission = .waiting ∨ pre.admission = .acquired) →
+      pre.interruptRequestedAt.isSome →
+      post = { pre with state := .interrupted, admission := .released } →
+      Transition pre post
+  | interrupt_processing {pre post : RequestContext} :
+      pre.state = .processing →
+      pre.admission = .executing →
+      pre.interruptRequestedAt.isSome →
+      post = { pre with state := .interrupted, admission := .released } →
+      Transition pre post
+  | interrupt_input_required {pre post : RequestContext} :
+      pre.state = .inputRequired →
+      pre.admission = .executing →
+      pre.interruptRequestedAt.isSome →
+      post = { pre with state := .interrupted, admission := .released } →
+      Transition pre post
 
 /-- Executable request actions mirroring `Transition`. -/
 inductive Action where
@@ -233,6 +284,11 @@ inductive Action where
   | inputTimeout
   | exhaust
   | deadlineExpire
+  | expire
+  | interruptBeforeClaim
+  | interruptClaimed
+  | interruptProcessing
+  | interruptInputRequired
   deriving DecidableEq, Repr
 
 /-- Executable transition function for the request layer. -/
@@ -295,6 +351,37 @@ def step? (pre : RequestContext) : Action → Option RequestContext
   | .deadlineExpire =>
       if pre.state = .processing ∧ pre.admission = .executing ∧ pre.deadlineExceeded then
         some { pre with state := .dead, admission := .released }
+      else
+        none
+  | .expire =>
+      match pre.validUntil with
+      | some t =>
+          if pre.state = .pending ∧ pre.admission = .released ∧ pre.currentTime > t then
+            some { pre with state := .dead, admission := .released }
+          else
+            none
+      | none => none
+  | .interruptBeforeClaim =>
+      if pre.state = .pending ∧ pre.admission = .released ∧ pre.interruptRequestedAt.isSome then
+        some { pre with state := .interrupted, admission := .released }
+      else
+        none
+  | .interruptClaimed =>
+      if pre.state = .claimed ∧ (pre.admission = .waiting ∨ pre.admission = .acquired)
+         ∧ pre.interruptRequestedAt.isSome then
+        some { pre with state := .interrupted, admission := .released }
+      else
+        none
+  | .interruptProcessing =>
+      if pre.state = .processing ∧ pre.admission = .executing
+         ∧ pre.interruptRequestedAt.isSome then
+        some { pre with state := .interrupted, admission := .released }
+      else
+        none
+  | .interruptInputRequired =>
+      if pre.state = .inputRequired ∧ pre.admission = .executing
+         ∧ pre.interruptRequestedAt.isSome then
+        some { pre with state := .interrupted, admission := .released }
       else
         none
 
@@ -378,6 +465,35 @@ theorem step_sound
       rcases h_step with ⟨h_dead, h_post⟩
       rcases h_dead with ⟨h_state, h_admission, h_deadline⟩
       exact Transition.deadline_expire h_state h_admission h_deadline h_post.symm
+  | expire =>
+      simp only [step?] at h_step
+      match h_valid : pre.validUntil with
+      | none =>
+          rw [h_valid] at h_step
+          simp at h_step
+      | some t =>
+          rw [h_valid] at h_step
+          simp at h_step
+          rcases h_step with ⟨⟨h_state, h_admission, h_time⟩, h_post⟩
+          -- Rewrite `some t` back to `pre.validUntil` so the struct literal matches.
+          rw [← h_valid] at h_post
+          exact Transition.expire h_state h_admission h_valid h_time h_post.symm
+  | interruptBeforeClaim =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨h_state, h_admission, h_int⟩, h_post⟩
+      exact Transition.interrupt_before_claim h_state h_admission h_int h_post.symm
+  | interruptClaimed =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨h_state, h_admission, h_int⟩, h_post⟩
+      exact Transition.interrupt_claimed h_state h_admission h_int h_post.symm
+  | interruptProcessing =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨h_state, h_admission, h_int⟩, h_post⟩
+      exact Transition.interrupt_processing h_state h_admission h_int h_post.symm
+  | interruptInputRequired =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨h_state, h_admission, h_int⟩, h_post⟩
+      exact Transition.interrupt_input_required h_state h_admission h_int h_post.symm
 
 theorem transition_complete
     {pre post : RequestContext}
@@ -408,6 +524,19 @@ theorem transition_complete
       exact ⟨.exhaust, by simp [step?, h_state, h_reason, h_post]⟩
   | deadline_expire h_state h_admission h_deadline h_post =>
       exact ⟨.deadlineExpire, by simp [step?, h_state, h_admission, h_deadline, h_post]⟩
+  | expire h_state h_admission h_valid h_time h_post =>
+      refine ⟨.expire, ?_⟩
+      simp only [step?]
+      rw [h_valid]
+      simp [h_state, h_admission, h_time, h_post, h_valid]
+  | interrupt_before_claim h_state h_admission h_int h_post =>
+      exact ⟨.interruptBeforeClaim, by simp [step?, h_state, h_admission, h_int, h_post]⟩
+  | interrupt_claimed h_state h_admission h_int h_post =>
+      exact ⟨.interruptClaimed, by simp [step?, h_state, h_admission, h_int, h_post]⟩
+  | interrupt_processing h_state h_admission h_int h_post =>
+      exact ⟨.interruptProcessing, by simp [step?, h_state, h_admission, h_int, h_post]⟩
+  | interrupt_input_required h_state h_admission h_int h_post =>
+      exact ⟨.interruptInputRequired, by simp [step?, h_state, h_admission, h_int, h_post]⟩
 
 theorem replay_sound
     {pre post : RequestContext}
@@ -446,7 +575,7 @@ theorem terminal_implies_released_local
     (h_term : isTerminal r.state) :
     r.admission = .released := by
   cases r with
-  | mk state origin backend admission deadline claimTime currentTime retryCount maxRetries progressSeq messageSeq isLatest persistence =>
+  | mk state origin backend admission deadline claimTime currentTime retryCount maxRetries progressSeq messageSeq isLatest persistence interruptRequestedAt validUntil =>
     cases h_term with
     | inl h =>
       cases h
@@ -465,9 +594,15 @@ theorem terminal_implies_released_local
           cases admission <;> simp [coherent, coherentStateAdmission] at h_coherent
           rfl
         | inr h =>
-          cases h
-          cases admission <;> simp [coherent, coherentStateAdmission] at h_coherent
-          rfl
+          cases h with
+          | inl h =>
+            cases h
+            cases admission <;> simp [coherent, coherentStateAdmission] at h_coherent
+            rfl
+          | inr h =>
+            cases h
+            cases admission <;> simp [coherent, coherentStateAdmission] at h_coherent
+            rfl
 
 theorem backend_binding_preserved
     {pre post : RequestContext}
@@ -486,6 +621,11 @@ theorem backend_binding_preserved
   | input_timeout _ _ _ h_post => rw [h_post]
   | exhaust _ _ h_post => rw [h_post]
   | deadline_expire _ _ _ h_post => rw [h_post]
+  | expire _ _ _ _ h_post => rw [h_post]
+  | interrupt_before_claim _ _ _ h_post => rw [h_post]
+  | interrupt_claimed _ _ _ h_post => rw [h_post]
+  | interrupt_processing _ _ _ h_post => rw [h_post]
+  | interrupt_input_required _ _ _ h_post => rw [h_post]
 
 theorem origin_preserved
     {pre post : RequestContext}
@@ -504,6 +644,11 @@ theorem origin_preserved
   | input_timeout _ _ _ h_post => rw [h_post]
   | exhaust _ _ h_post => rw [h_post]
   | deadline_expire _ _ _ h_post => rw [h_post]
+  | expire _ _ _ _ h_post => rw [h_post]
+  | interrupt_before_claim _ _ _ h_post => rw [h_post]
+  | interrupt_claimed _ _ _ h_post => rw [h_post]
+  | interrupt_processing _ _ _ h_post => rw [h_post]
+  | interrupt_input_required _ _ _ h_post => rw [h_post]
 
 theorem transition_produces_coherent
     {pre post : RequestContext}
@@ -546,6 +691,21 @@ theorem transition_produces_coherent
   | deadline_expire _ _ _ h_post =>
     rw [coherent, h_post]
     simp [coherentStateAdmission]
+  | expire _ _ _ _ h_post =>
+    rw [coherent, h_post]
+    simp [coherentStateAdmission]
+  | interrupt_before_claim _ _ _ h_post =>
+    rw [coherent, h_post]
+    simp [coherentStateAdmission]
+  | interrupt_claimed _ _ _ h_post =>
+    rw [coherent, h_post]
+    simp [coherentStateAdmission]
+  | interrupt_processing _ _ _ h_post =>
+    rw [coherent, h_post]
+    simp [coherentStateAdmission]
+  | interrupt_input_required _ _ _ h_post =>
+    rw [coherent, h_post]
+    simp [coherentStateAdmission]
 
 theorem claimed_coherent_cases
     {r : RequestContext}
@@ -553,7 +713,7 @@ theorem claimed_coherent_cases
     (h_coherent : r.coherent) :
     r.admission = .waiting ∨ r.admission = .acquired := by
   cases r with
-  | mk state origin backend admission deadline claimTime currentTime retryCount maxRetries progressSeq messageSeq isLatest persistence =>
+  | mk state origin backend admission deadline claimTime currentTime retryCount maxRetries progressSeq messageSeq isLatest persistence interruptRequestedAt validUntil =>
     cases h_state
     cases admission <;> simp [coherent, coherentStateAdmission] at h_coherent ⊢
 

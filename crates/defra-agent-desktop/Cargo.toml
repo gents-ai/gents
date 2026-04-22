@@ -11,6 +11,7 @@ anyhow.workspace = true
 chrono.workspace = true
 clap.workspace = true
 crypto.workspace = true
+defra-agent = { path = "../defra-agent" }
 defra-agent-protocol.workspace = true
 defra-node = { workspace = true, features = ["p2p", "rocksdb"] }
 defra-p2p-adapter.workspace = true
@@ -32,7 +33,6 @@ uuid.workspace = true
 
 [dev-dependencies]
 async-trait = "0.1"
-defra-agent = { path = "../defra-agent" }
 pprof = { version = "0.14", features = ["flamegraph", "prost-codec"] }
 rig-core.workspace = true
 tempfile = "3"

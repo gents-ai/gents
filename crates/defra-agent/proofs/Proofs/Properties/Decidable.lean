@@ -15,7 +15,7 @@ open RequestState ProcessState PersistenceState ExecutionOrigin AdmissionState
 instance : Fintype RequestState :=
   Fintype.ofList
     [.pending, .claimed, .processing, .inputRequired,
-     .completed, .failed, .superseded, .dead]
+     .completed, .failed, .superseded, .dead, .interrupted]
     (fun s => by cases s <;> simp)
 
 instance : Fintype ProcessState :=
@@ -48,7 +48,8 @@ theorem request_no_deadlocks (s : RequestState) (h : ¬isTerminal s) :
   | completed => exact absurd (Or.inl rfl) h
   | failed => exact absurd (Or.inr (Or.inl rfl)) h
   | superseded => exact absurd (Or.inr (Or.inr (Or.inl rfl))) h
-  | dead => exact absurd (Or.inr (Or.inr (Or.inr rfl))) h
+  | dead => exact absurd (Or.inr (Or.inr (Or.inr (Or.inl rfl)))) h
+  | interrupted => exact absurd (Or.inr (Or.inr (Or.inr (Or.inr rfl)))) h
 
 theorem process_no_deadlocks (s : ProcessState) (h : ¬isTerminal s) :
     ∃ s' : ProcessState, s ≠ s' := by
@@ -97,8 +98,13 @@ theorem terminal_requires_released (s : RequestState) (a : AdmissionState)
         subst h
         cases a <;> simp [RequestContext.coherentStateAdmission]
       | inr h =>
-        subst h
-        cases a <;> simp [RequestContext.coherentStateAdmission]
+        cases h with
+        | inl h =>
+          subst h
+          cases a <;> simp [RequestContext.coherentStateAdmission]
+        | inr h =>
+          subst h
+          cases a <;> simp [RequestContext.coherentStateAdmission]
 
 #eval Fintype.card RequestState
 #eval Fintype.card ProcessState

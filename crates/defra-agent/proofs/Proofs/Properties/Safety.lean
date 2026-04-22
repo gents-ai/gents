@@ -18,7 +18,10 @@ private theorem pending_not_terminal : ¬ isTerminal RequestState.pending := by
     | inr h =>
       cases h with
       | inl h => cases h
-      | inr h => cases h
+      | inr h =>
+        cases h with
+        | inl h => cases h
+        | inr h => cases h
 
 private theorem claimed_not_terminal : ¬ isTerminal RequestState.claimed := by
   intro h
@@ -30,7 +33,10 @@ private theorem claimed_not_terminal : ¬ isTerminal RequestState.claimed := by
     | inr h =>
       cases h with
       | inl h => cases h
-      | inr h => cases h
+      | inr h =>
+        cases h with
+        | inl h => cases h
+        | inr h => cases h
 
 private theorem processing_not_terminal : ¬ isTerminal RequestState.processing := by
   intro h
@@ -42,7 +48,10 @@ private theorem processing_not_terminal : ¬ isTerminal RequestState.processing 
     | inr h =>
       cases h with
       | inl h => cases h
-      | inr h => cases h
+      | inr h =>
+        cases h with
+        | inl h => cases h
+        | inr h => cases h
 
 private theorem inputRequired_not_terminal : ¬ isTerminal RequestState.inputRequired := by
   intro h
@@ -54,7 +63,10 @@ private theorem inputRequired_not_terminal : ¬ isTerminal RequestState.inputReq
     | inr h =>
       cases h with
       | inl h => cases h
-      | inr h => cases h
+      | inr h =>
+        cases h with
+        | inl h => cases h
+        | inr h => cases h
 
 theorem terminal_irreversibility
     {pre post : RequestContext}
@@ -94,10 +106,25 @@ theorem terminal_irreversibility
     exact (inputRequired_not_terminal h_terminal).elim
   | exhaust h_pre _ h_post =>
     rw [h_post]
-    exact Or.inr (Or.inr (Or.inr rfl))
+    exact Or.inr (Or.inr (Or.inr (Or.inl rfl)))
   | deadline_expire h_pre _ _ h_post =>
     rw [h_pre] at h_terminal
     exact (processing_not_terminal h_terminal).elim
+  | expire h_pre _ _ _ h_post =>
+    rw [h_pre] at h_terminal
+    exact (pending_not_terminal h_terminal).elim
+  | interrupt_before_claim h_pre _ _ _ =>
+    rw [h_pre] at h_terminal
+    exact (pending_not_terminal h_terminal).elim
+  | interrupt_claimed h_pre _ _ _ =>
+    rw [h_pre] at h_terminal
+    exact (claimed_not_terminal h_terminal).elim
+  | interrupt_processing h_pre _ _ _ =>
+    rw [h_pre] at h_terminal
+    exact (processing_not_terminal h_terminal).elim
+  | interrupt_input_required h_pre _ _ _ =>
+    rw [h_pre] at h_terminal
+    exact (inputRequired_not_terminal h_terminal).elim
 
 theorem progress_monotonic
     {pre post : RequestContext}
@@ -127,6 +154,16 @@ theorem progress_monotonic
   | exhaust _ _ h_post =>
     simp [h_post]
   | deadline_expire _ _ _ h_post =>
+    simp [h_post]
+  | expire _ _ _ _ h_post =>
+    simp [h_post]
+  | interrupt_before_claim _ _ _ h_post =>
+    simp [h_post]
+  | interrupt_claimed _ _ _ h_post =>
+    simp [h_post]
+  | interrupt_processing _ _ _ h_post =>
+    simp [h_post]
+  | interrupt_input_required _ _ _ h_post =>
     simp [h_post]
 
 theorem completed_not_deadline_expired
@@ -158,6 +195,16 @@ theorem completed_not_deadline_expired
   | exhaust _ _ h_post =>
     simp [h_post] at h_completed
   | deadline_expire _ _ _ h_post =>
+    simp [h_post] at h_completed
+  | expire _ _ _ _ h_post =>
+    simp [h_post] at h_completed
+  | interrupt_before_claim _ _ _ h_post =>
+    simp [h_post] at h_completed
+  | interrupt_claimed _ _ _ h_post =>
+    simp [h_post] at h_completed
+  | interrupt_processing _ _ _ h_post =>
+    simp [h_post] at h_completed
+  | interrupt_input_required _ _ _ h_post =>
     simp [h_post] at h_completed
 
 theorem recovery_blocks_claims
@@ -214,6 +261,16 @@ theorem persistence_before_completion
     simp [h_post] at h_completed
   | deadline_expire _ _ _ h_post =>
     simp [h_post] at h_completed
+  | expire _ _ _ _ h_post =>
+    simp [h_post] at h_completed
+  | interrupt_before_claim _ _ _ h_post =>
+    simp [h_post] at h_completed
+  | interrupt_claimed _ _ _ h_post =>
+    simp [h_post] at h_completed
+  | interrupt_processing _ _ _ h_post =>
+    simp [h_post] at h_completed
+  | interrupt_input_required _ _ _ h_post =>
+    simp [h_post] at h_completed
 
 theorem deadline_structural_bound
     {pre post : RequestContext}
@@ -221,3 +278,25 @@ theorem deadline_structural_bound
     (h_completed : post.state = .completed) :
     ¬post.deadlineExceeded ∨ post.persistence = .committed := by
   exact Or.inr (persistence_before_completion h_trans h_completed)
+
+/-- S7: Interrupt field monotonicity — once `interruptRequestedAt` is set on
+    a request, no subsequent transition may clear or change it. The runtime
+    treats this field as read-only; it is submitter-owned.
+
+    The stronger unconditional form (no `h_set` hypothesis) holds because no
+    transition ever rewrites `interruptRequestedAt`; `h_set` is retained in
+    the signature to document the operational invariant consumers care about. -/
+theorem interrupt_monotonicity
+    {pre post : RequestContext}
+    (_h_set : pre.interruptRequestedAt.isSome)
+    (h_trans : RequestContext.Transition pre post) :
+    post.interruptRequestedAt = pre.interruptRequestedAt := by
+  cases h_trans <;> simp_all
+
+/-- S8: TTL field monotonicity — `validUntil` is submitter-owned and never
+    rewritten by any runtime transition, regardless of whether it was set. -/
+theorem valid_until_monotonicity
+    {pre post : RequestContext}
+    (h_trans : RequestContext.Transition pre post) :
+    post.validUntil = pre.validUntil := by
+  cases h_trans <;> simp_all

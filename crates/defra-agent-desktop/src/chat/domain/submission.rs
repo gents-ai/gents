@@ -91,7 +91,10 @@ impl ChatBlockedReason {
             }
             Self::AwaitingTurnTerminality(ClientTurnState::Completed)
             | Self::AwaitingTurnTerminality(ClientTurnState::Failed)
-            | Self::AwaitingTurnTerminality(ClientTurnState::Superseded) => {
+            | Self::AwaitingTurnTerminality(ClientTurnState::Superseded)
+            | Self::AwaitingTurnTerminality(ClientTurnState::Interrupted) => {
+                // TODO(ui-polish): distinguish interrupted from failed in display text/icons.
+                // For now treat identically — both mean "no complete response."
                 "Waiting for terminal turn reconciliation".to_string()
             }
             Self::InconsistentTurnObservation => {

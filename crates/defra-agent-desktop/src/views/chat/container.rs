@@ -381,7 +381,9 @@ pub fn turn_state_label(turn_state: Option<ClientTurnState>) -> &'static str {
         Some(ClientTurnState::WaitingForClaim) => "waiting for claim",
         Some(ClientTurnState::Streaming) => "streaming",
         Some(ClientTurnState::Completed) => "completed",
-        Some(ClientTurnState::Failed) => "failed",
+        // TODO(ui-polish): distinguish interrupted from failed in display text/icons.
+        // For now treat identically — both mean "no complete response."
+        Some(ClientTurnState::Failed) | Some(ClientTurnState::Interrupted) => "failed",
         Some(ClientTurnState::Superseded) => "superseded",
         None => "idle",
     }

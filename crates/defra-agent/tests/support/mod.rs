@@ -103,6 +103,66 @@ pub async fn create_request(
     first_row::<DocIdRow>(&resp, "AgentRequest").doc_id
 }
 
+/// Create an `AgentRequest` row that chains from a previous request via
+/// `retry_parent_request` / `retry_root_request`. Used to simulate what the
+/// `resend_request` helper produces without pulling that crate in as a
+/// dev-dep. The new row is created in `pending` state with the caller-supplied
+/// `content` and `created_at`.
+pub async fn create_retry_request(
+    node: &EmbeddedNode,
+    request_id: &str,
+    session_id: &str,
+    retry_parent_request: &str,
+    retry_root_request: &str,
+    content: &str,
+    created_at: &str,
+) -> String {
+    let request_id_escaped = escape_graphql_string(request_id);
+    let session_id_escaped = escape_graphql_string(session_id);
+    let retry_parent_escaped = escape_graphql_string(retry_parent_request);
+    let retry_root_escaped = escape_graphql_string(retry_root_request);
+    let content_escaped = escape_graphql_string(content);
+    let created_at_escaped = escape_graphql_string(created_at);
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{request_id_escaped}",
+                agent_did: "{AGENT_DID}",
+                behavior_id: "{AGENT_NAME}",
+                session_id: "{session_id_escaped}",
+                retry_parent_request: "{retry_parent_escaped}",
+                retry_root_request: "{retry_root_escaped}",
+                superseded_by_request: "",
+                content: "{content_escaped}",
+                status: "pending",
+                lifecycle_state: "pending",
+                backend_id: "",
+                execution_origin: "interactive",
+                created_at: "{created_at_escaped}",
+                retry_count: 0,
+                max_retries: {max_retries}
+            }}) {{ _docID }}
+        }}"#,
+        max_retries = defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "create retry request failed: {:?}",
+        resp.errors
+    );
+
+    let query = format!(
+        r#"{{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{request_id_escaped}" }} }}) {{
+                _docID
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    first_row::<DocIdRow>(&resp, "AgentRequest").doc_id
+}
+
 pub async fn create_response_with_status(
     node: &EmbeddedNode,
     response_key: &str,
@@ -216,6 +276,63 @@ pub async fn upsert_conversation(
     assert!(
         !resp.has_errors(),
         "upsert conversation failed: {:?}",
+        resp.errors
+    );
+}
+
+pub async fn set_interrupt_requested_at(node: &EmbeddedNode, doc_id: &str, at: &str) {
+    let doc_id = escape_graphql_string(doc_id);
+    let at = escape_graphql_string(at);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                input: {{ interrupt_requested_at: "{at}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "set_interrupt_requested_at failed: {:?}",
+        resp.errors
+    );
+}
+
+pub async fn set_request_lifecycle_state(node: &EmbeddedNode, doc_id: &str, lifecycle_state: &str) {
+    let doc_id = escape_graphql_string(doc_id);
+    let lifecycle_state = escape_graphql_string(lifecycle_state);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                input: {{ lifecycle_state: "{lifecycle_state}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "set_request_lifecycle_state failed: {:?}",
+        resp.errors
+    );
+}
+
+pub async fn set_valid_until(node: &EmbeddedNode, doc_id: &str, at: &str) {
+    let doc_id = escape_graphql_string(doc_id);
+    let at = escape_graphql_string(at);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                input: {{ valid_until: "{at}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "set_valid_until failed: {:?}",
         resp.errors
     );
 }

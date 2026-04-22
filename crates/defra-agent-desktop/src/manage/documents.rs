@@ -5,8 +5,8 @@ use crate::state::{
 };
 
 use super::{
-    abbreviate_identifier, bool_word, compact_timestamp, normalize_optional_owned,
-    schedule_is_due, schedule_next_run_label, summarize_request_content, truncate_line,
+    abbreviate_identifier, bool_word, compact_timestamp, normalize_optional_owned, schedule_is_due,
+    schedule_next_run_label, summarize_request_content, truncate_line,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,23 +127,25 @@ pub fn draft_for_selection(
                         .unwrap_or_default(),
                 })
             }),
-        ManageSection::Tasks => store
-            .tasks
-            .iter()
-            .find(|row| row.task_id == entity_id)
-            .map(|row| {
-                ManageDraft::Task(TaskDraft {
-                    task_id: row.task_id.clone(),
-                    name: row.name.clone().unwrap_or_default(),
-                    description: row.description.clone().unwrap_or_default(),
-                    behavior_id: row.behavior_id.clone().unwrap_or_default(),
-                    prompt_template: row.prompt_template.clone().unwrap_or_default(),
-                    enabled: row.enabled.unwrap_or(true),
-                    output_schema_ref: row.output_schema_ref.clone().unwrap_or_default(),
-                    created_at: row.created_at.clone().unwrap_or_default(),
-                    updated_at: row.updated_at.clone().unwrap_or_default(),
+        ManageSection::Tasks => {
+            store
+                .tasks
+                .iter()
+                .find(|row| row.task_id == entity_id)
+                .map(|row| {
+                    ManageDraft::Task(TaskDraft {
+                        task_id: row.task_id.clone(),
+                        name: row.name.clone().unwrap_or_default(),
+                        description: row.description.clone().unwrap_or_default(),
+                        behavior_id: row.behavior_id.clone().unwrap_or_default(),
+                        prompt_template: row.prompt_template.clone().unwrap_or_default(),
+                        enabled: row.enabled.unwrap_or(true),
+                        output_schema_ref: row.output_schema_ref.clone().unwrap_or_default(),
+                        created_at: row.created_at.clone().unwrap_or_default(),
+                        updated_at: row.updated_at.clone().unwrap_or_default(),
+                    })
                 })
-            }),
+        }
         ManageSection::Schedules => store
             .schedules
             .iter()
@@ -299,8 +301,10 @@ pub fn entity_summaries(
                         selected_agent_did.unwrap_or_default(),
                         &row.behavior_id,
                     );
-                    let task_ids: Vec<&str> =
-                        behavior_tasks.iter().map(|task| task.task_id.as_str()).collect();
+                    let task_ids: Vec<&str> = behavior_tasks
+                        .iter()
+                        .map(|task| task.task_id.as_str())
+                        .collect();
                     let schedules = store.schedules_for_tasks(&task_ids);
                     EntitySummary {
                         id: row.behavior_id.clone(),
@@ -402,13 +406,15 @@ pub fn entity_summaries(
             let mut rows: Vec<_> = store
                 .tasks
                 .iter()
-                .filter(|row| match (selected_agent_did, row.behavior_id.as_deref()) {
-                    (Some(agent_did), Some(behavior_id)) => store
-                        .behavior_row(agent_did, behavior_id)
-                        .is_some(),
-                    (Some(_), None) => false,
-                    (None, _) => true,
-                })
+                .filter(
+                    |row| match (selected_agent_did, row.behavior_id.as_deref()) {
+                        (Some(agent_did), Some(behavior_id)) => {
+                            store.behavior_row(agent_did, behavior_id).is_some()
+                        }
+                        (Some(_), None) => false,
+                        (None, _) => true,
+                    },
+                )
                 .collect();
             rows.sort_by(|left, right| left.task_id.cmp(&right.task_id));
             rows.into_iter()
@@ -443,15 +449,17 @@ pub fn entity_summaries(
                     .tasks
                     .iter()
                     .filter(|task| {
-                        task.behavior_id
-                            .as_deref()
-                            .is_some_and(|behavior_id| {
-                                store.behavior_row(agent_did, behavior_id).is_some()
-                            })
+                        task.behavior_id.as_deref().is_some_and(|behavior_id| {
+                            store.behavior_row(agent_did, behavior_id).is_some()
+                        })
                     })
                     .map(|task| task.task_id.clone())
                     .collect(),
-                None => store.tasks.iter().map(|task| task.task_id.clone()).collect(),
+                None => store
+                    .tasks
+                    .iter()
+                    .map(|task| task.task_id.clone())
+                    .collect(),
             };
 
             let mut rows: Vec<_> = store
@@ -597,21 +605,26 @@ pub fn recent_failure_summaries(
             .filter(|task| {
                 task.behavior_id
                     .as_deref()
-                    .is_some_and(|behavior_id| {
-                        store.behavior_row(agent_did, behavior_id).is_some()
-                    })
+                    .is_some_and(|behavior_id| store.behavior_row(agent_did, behavior_id).is_some())
             })
             .map(|task| task.task_id.clone())
             .collect(),
-        None => store.tasks.iter().map(|task| task.task_id.clone()).collect(),
+        None => store
+            .tasks
+            .iter()
+            .map(|task| task.task_id.clone())
+            .collect(),
     };
 
-    for schedule in store.schedules.iter().filter(|row| match row.task_id.as_deref() {
-        Some(task_id) => task_ids_for_agent.contains(task_id),
-        None => selected_agent_did.is_none(),
-    }) {
-        let Some(error) =
-            normalize_optional_owned(schedule.last_error.as_deref().unwrap_or(""))
+    for schedule in store
+        .schedules
+        .iter()
+        .filter(|row| match row.task_id.as_deref() {
+            Some(task_id) => task_ids_for_agent.contains(task_id),
+            None => selected_agent_did.is_none(),
+        })
+    {
+        let Some(error) = normalize_optional_owned(schedule.last_error.as_deref().unwrap_or(""))
         else {
             continue;
         };

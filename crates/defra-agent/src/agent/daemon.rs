@@ -36,6 +36,7 @@ pub(super) struct BehaviorDaemon<M: CompletionModel> {
 enum HandleRequestOutcome {
     Completed,
     FailedAfterResponse(anyhow::Error),
+    Interrupted,
 }
 
 impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
@@ -170,6 +171,26 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 );
                 return;
             }
+            Ok(ClaimOutcome::Interrupted) => {
+                tracing::info!(
+                    behavior_id = %self.behavior.name,
+                    request_id = %request.request_id,
+                    session_id = %request.session_id,
+                    cancellation_source = "pre_claim",
+                    "request interrupted before claim"
+                );
+                return;
+            }
+            Ok(ClaimOutcome::Expired) => {
+                tracing::info!(
+                    behavior_id = %self.behavior.name,
+                    request_id = %request.request_id,
+                    session_id = %request.session_id,
+                    cancellation_source = "stale_ttl",
+                    "request expired (valid_until passed) before claim; marked dead"
+                );
+                return;
+            }
             Err(error) => {
                 tracing::warn!(
                     behavior_id = %self.behavior.name,
@@ -254,9 +275,33 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             return;
         }
 
-        match self.handle_request(&mut lifecycle, shutdown).await {
+        let (interrupt_tx, interrupt_rx) =
+            tokio::sync::watch::channel::<Option<crate::interrupt::InterruptIntent>>(None);
+        let observer = crate::interrupt::spawn_request_interrupt_observer(
+            self.node.clone(),
+            request.doc_id.clone(),
+            interrupt_tx,
+            shutdown.clone(),
+        );
+
+        let result = self
+            .handle_request(&mut lifecycle, shutdown, interrupt_rx)
+            .await;
+        observer.abort();
+
+        match result {
             Ok(HandleRequestOutcome::Completed) => {
                 let _ = lifecycle.complete().await;
+            }
+            Ok(HandleRequestOutcome::Interrupted) => {
+                tracing::info!(
+                    behavior_id = %self.behavior.name,
+                    request_id = %request.request_id,
+                    session_id = %request.session_id,
+                    cancellation_source = "mid_flight",
+                    "request interrupted mid-flight"
+                );
+                // Do NOT call lifecycle.complete() or fail() — transition_to_interrupted already ran.
             }
             Ok(HandleRequestOutcome::FailedAfterResponse(error)) => {
                 tracing::error!(

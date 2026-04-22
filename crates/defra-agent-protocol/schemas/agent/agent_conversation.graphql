@@ -4,6 +4,7 @@ type AgentConversation @branchable {
     agent_did: String @index
     behavior_id: String @index
     title: String
+    title_source: String
     preview_text: String
     status: String @index
     created_at: DateTime @index(direction: DESC)

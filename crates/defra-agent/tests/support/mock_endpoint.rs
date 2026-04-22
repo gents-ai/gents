@@ -42,19 +42,11 @@ impl MockModelEndpoint {
                         let (status, body) = if request.method == "GET"
                             && (request.path == "/v1/models" || request.path == "/models")
                         {
-                            (
-                                "200 OK",
-                                format!(r#"{{"data":[{{"id":"{model_name}"}}]}}"#),
-                            )
+                            ("200 OK", format!(r#"{{"data":[{{"id":"{model_name}"}}]}}"#))
                         } else {
                             ("404 Not Found", r#"{"error":"not found"}"#.to_string())
                         };
-                        let _ = write_http_response(
-                            &mut stream,
-                            status,
-                            "application/json",
-                            &body,
-                        );
+                        let _ = write_http_response(&mut stream, status, "application/json", &body);
                         let _ = stream.shutdown(Shutdown::Both);
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {

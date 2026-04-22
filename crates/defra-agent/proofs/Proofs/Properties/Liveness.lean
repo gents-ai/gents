@@ -15,6 +15,7 @@ def terminationMeasure (r : RequestContext) : Nat :=
   | .failed => (r.maxRetries - r.retryCount) + 1
   | .superseded => 0
   | .dead => 0
+  | .interrupted => 0
   | .pending => r.maxRetries + 4
   | .claimed => r.maxRetries + 3
   | .processing => (r.maxRetries - r.retryCount) + 2
@@ -62,6 +63,21 @@ theorem phase_change_decreases_measure
     rw [h_post]
     simp [terminationMeasure, h_pre]
   | deadline_expire h_pre _ _ h_post =>
+    rw [h_post]
+    simp [terminationMeasure, h_pre]
+  | expire h_pre _ _ _ h_post =>
+    rw [h_post]
+    simp [terminationMeasure, h_pre]
+  | interrupt_before_claim h_pre _ _ h_post =>
+    rw [h_post]
+    simp [terminationMeasure, h_pre]
+  | interrupt_claimed h_pre _ _ h_post =>
+    rw [h_post]
+    simp [terminationMeasure, h_pre]
+  | interrupt_processing h_pre _ _ h_post =>
+    rw [h_post]
+    simp [terminationMeasure, h_pre]
+  | interrupt_input_required h_pre _ _ h_post =>
     rw [h_post]
     simp [terminationMeasure, h_pre]
 

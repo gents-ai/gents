@@ -176,14 +176,14 @@ fn resolve_schedules(
         let schedule = &schedule_record.value;
         let schedule_id = schedule.schedule_id.clone();
 
-        let concurrency = match ConcurrencyMode::parse(schedule.concurrency.as_deref().unwrap_or(""))
-        {
-            Some(mode) => mode,
-            None => {
-                unavailable_schedules.insert(schedule_id);
-                continue;
-            }
-        };
+        let concurrency =
+            match ConcurrencyMode::parse(schedule.concurrency.as_deref().unwrap_or("")) {
+                Some(mode) => mode,
+                None => {
+                    unavailable_schedules.insert(schedule_id);
+                    continue;
+                }
+            };
 
         if !schedule.enabled {
             unavailable_schedules.insert(schedule_id);

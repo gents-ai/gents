@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 mod args;
 mod bash_tools;
+mod cancellable;
 mod cli_tool;
 mod delegate;
 mod file_tools;

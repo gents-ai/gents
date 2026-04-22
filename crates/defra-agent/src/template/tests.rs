@@ -110,11 +110,7 @@ fn parse_template_for_validation_skips_suffix_event_in_attr_access() {
     assert_eq!(
         refs,
         vec![VariableRef {
-            path: vec![
-                "doc".to_string(),
-                "event".to_string(),
-                "name".to_string(),
-            ],
+            path: vec!["doc".to_string(), "event".to_string(), "name".to_string(),],
         }]
     );
 }

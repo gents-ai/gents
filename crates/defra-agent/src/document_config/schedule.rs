@@ -149,28 +149,16 @@ pub(crate) async fn update_schedule_runtime_fields(
     // fields are never overwritten.
     let mut entries: Vec<String> = Vec::new();
     if let Some(v) = updates.next_run_at.as_ref() {
-        entries.push(format!(
-            "next_run_at: \"{}\"",
-            escape_graphql_string(v)
-        ));
+        entries.push(format!("next_run_at: \"{}\"", escape_graphql_string(v)));
     }
     if let Some(v) = updates.last_attempt_at.as_ref() {
-        entries.push(format!(
-            "last_attempt_at: \"{}\"",
-            escape_graphql_string(v)
-        ));
+        entries.push(format!("last_attempt_at: \"{}\"", escape_graphql_string(v)));
     }
     if let Some(v) = updates.last_status.as_ref() {
-        entries.push(format!(
-            "last_status: \"{}\"",
-            escape_graphql_string(v)
-        ));
+        entries.push(format!("last_status: \"{}\"", escape_graphql_string(v)));
     }
     if let Some(v) = updates.last_error.as_ref() {
-        entries.push(format!(
-            "last_error: \"{}\"",
-            escape_graphql_string(v)
-        ));
+        entries.push(format!("last_error: \"{}\"", escape_graphql_string(v)));
     }
     if let Some(delta) = updates.fire_count_delta {
         let new_fire_count = current_fire_count.saturating_add(delta);
@@ -231,9 +219,7 @@ pub struct Schedule {
 ///
 /// Schedules are addressed by a globally unique `schedule_id` (see
 /// `schedule.graphql`), so this helper is not scoped by `agent_did`.
-pub(crate) async fn list_schedule_records(
-    node: &EmbeddedNode,
-) -> Result<Vec<(String, Schedule)>> {
+pub(crate) async fn list_schedule_records(node: &EmbeddedNode) -> Result<Vec<(String, Schedule)>> {
     let query = r#"{
             Schedule(order: { schedule_id: ASC }) {
                 _docID

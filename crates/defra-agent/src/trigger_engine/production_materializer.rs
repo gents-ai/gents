@@ -50,18 +50,13 @@ impl ProductionMaterializer {
     /// loaded (e.g. unavailable at the time of fire) so the caller can surface
     /// a deterministic `materialize:` failure instead of silently dropping the
     /// fire.
-    fn resolve_behavior(
-        &self,
-        task: &ResolvedTask,
-    ) -> Result<(String, String, u64, String)> {
+    fn resolve_behavior(&self, task: &ResolvedTask) -> Result<(String, String, u64, String)> {
         let snapshot = self.snapshot_rx.borrow().clone();
         let behavior = snapshot.behavior(&task.behavior_id).ok_or_else(|| {
             let reason = snapshot
                 .unavailable_reason(&task.behavior_id)
                 .map(ToOwned::to_owned)
-                .unwrap_or_else(|| {
-                    format!("behavior {} is not loaded", task.behavior_id)
-                });
+                .unwrap_or_else(|| format!("behavior {} is not loaded", task.behavior_id));
             anyhow!("resolving behavior for task {}: {reason}", task.task_id)
         })?;
         let backend_id = behavior

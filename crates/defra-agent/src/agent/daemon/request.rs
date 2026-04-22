@@ -8,12 +8,19 @@ use crate::prompt::PromptBuilder;
 use crate::session;
 use crate::streaming::{StreamStatus, StreamWriter};
 
+/// Grace period after cancellation before force-aborting children, so in-flight
+/// cancellable work can observe the cancel and return cleanly. Codex-aligned:
+/// long enough for HTTP futures to observe, short enough that Esc feels instant.
+const CANCELLATION_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_millis(100);
+
 impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     pub(super) async fn handle_request(
         &mut self,
         lifecycle: &mut crate::lifecycle::RequestLifecycle,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
+        mut interrupt_rx: tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
     ) -> Result<HandleRequestOutcome> {
+        let request_token = tokio_util::sync::CancellationToken::new();
         let request = lifecycle.request().clone();
         let behavior_name = self.behavior.name.clone();
         let admission_context = AdmissionCallContext::for_request(
@@ -120,7 +127,15 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             let inference_behavior_id = lifecycle.behavior_id().to_string();
             let inference_backend_id = lifecycle.backend_id().to_string();
             let result = self
-                .run_inference(&request, &doc_id, &built.messages, lifecycle, &mut shutdown)
+                .run_inference(
+                    &request,
+                    &doc_id,
+                    &built.messages,
+                    lifecycle,
+                    &mut shutdown,
+                    &mut interrupt_rx,
+                    &request_token,
+                )
                 .instrument(tracing::info_span!(
                     "request.run_inference",
                     request_id = %request.request_id,
@@ -129,6 +144,57 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     backend_id = %inference_backend_id,
                 ))
                 .await;
+
+            if request_token.is_cancelled() {
+                // Interrupt detected inside run_inference — execute the 6-step flow.
+                // Graceful fallback: if the token was cancelled by a path that did not
+                // also publish an InterruptIntent on the watch channel (e.g. a future
+                // tool-child cancellation from Task 8), treat it as a failure rather
+                // than panicking. This preserves safety as the cancellation hierarchy
+                // expands.
+                let Some(intent) = interrupt_rx.borrow().clone() else {
+                    tracing::warn!(
+                        request_id = %lifecycle.request().request_id,
+                        "request_token was cancelled without an interrupt intent on the channel; \
+                         treating as failure rather than interrupt"
+                    );
+                    return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow::anyhow!(
+                        "request_token cancelled without interrupt intent"
+                    )));
+                };
+
+                let interrupt_at = intent.at.to_rfc3339();
+                let flow_span = tracing::info_span!(
+                    "interrupt.flow",
+                    request_id = %lifecycle.request().request_id,
+                    interrupt_at = %interrupt_at,
+                );
+                async {
+                    // 1. request_token is already cancelled (the inference arm fired it).
+                    // 2. Grace wait so any in-flight work can observe cancellation.
+                    tokio::time::sleep(CANCELLATION_GRACE_PERIOD).await;
+                    // 3. Force-abort: no child tasks currently (Task 8 adds tool children).
+                    // 4. Flip AgentResponse.interrupted_at (sequenced BEFORE step 5).
+                    if let Err(error) = self
+                        .stream_writer
+                        .write_interrupted_at(&doc_id, &interrupt_at)
+                        .await
+                    {
+                        tracing::warn!(
+                            behavior_id = %self.behavior.name,
+                            doc_id = %doc_id,
+                            error = %error,
+                            "failed to stamp interrupted_at on response; continuing to terminal transition"
+                        );
+                    }
+                    // 5. Write terminal lifecycle_state = interrupted.
+                    lifecycle.transition_to_interrupted().await?;
+                    Ok::<_, anyhow::Error>(())
+                }
+                .instrument(flow_span)
+                .await?;
+                return Ok(HandleRequestOutcome::Interrupted);
+            }
 
             match result {
                 Ok(outcome) => Ok(outcome),

@@ -144,13 +144,12 @@ pub(in crate::agent) async fn run_agent(
                 trigger_engine_materializer_snapshot_rx,
             ),
         );
-        let source: Box<dyn crate::trigger_engine::TriggerSource> = Box::new(
-            crate::trigger_engine::schedule_source::ScheduleSource::new(
+        let source: Box<dyn crate::trigger_engine::TriggerSource> =
+            Box::new(crate::trigger_engine::schedule_source::ScheduleSource::new(
                 trigger_engine_source_snapshot_rx,
                 trigger_engine_node,
                 trigger_engine_cancel.clone(),
-            ),
-        );
+            ));
         let engine = crate::trigger_engine::TriggerEngine::new(
             trigger_engine_engine_snapshot_rx,
             materializer,

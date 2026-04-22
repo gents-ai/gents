@@ -162,12 +162,14 @@ impl AdmissionRegistry {
             call_kind,
             attempt: 1,
             call_seq: Arc::new(AtomicU64::new(0)),
+            inference_token: None,
         };
         scope_request(context, async { self.acquire_current_call().await }).await
     }
 
     pub(super) async fn acquire_current_call(&self) -> Result<AdmissionPermit, CompletionError> {
         let context = current_context()?;
+        let cancel_observer = context.inference_token.clone();
         let pending = context.next_call(&self.inner.runtime_instance_id);
         if pending.backend_id.trim().is_empty() {
             return Err(CompletionError::ProviderError(format!(
@@ -186,7 +188,11 @@ impl AdmissionRegistry {
         };
 
         match controller {
-            Some(controller) => controller.acquire(self.inner.node.clone(), pending).await,
+            Some(controller) => {
+                controller
+                    .acquire(self.inner.node.clone(), pending, cancel_observer)
+                    .await
+            }
             None => {
                 let call = InferenceCallRecord::without_controller(pending);
                 if let Err(error) = persist_terminal_call(

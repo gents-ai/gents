@@ -3,6 +3,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use defra_agent::graphql::escape_graphql_string;
 use serde_json::Value;
 
@@ -28,6 +29,9 @@ pub(crate) struct RequestSubmitOptions {
     pub(crate) top_k: Option<i64>,
     pub(crate) max_tokens: Option<i64>,
     pub(crate) metadata: Option<String>,
+    pub(crate) valid_until: Option<DateTime<Utc>>,
+    pub(crate) retry_parent_request: Option<String>,
+    pub(crate) retry_root_request: Option<String>,
 }
 
 pub(crate) fn response_query(request_id: &str) -> String {
@@ -48,9 +52,43 @@ pub(crate) fn response_query(request_id: &str) -> String {
                 token_count
                 progress_seq
                 completed_at
+                interrupted_at
             }}
         }}"#,
         request_id = escape_graphql_string(request_id),
+    )
+}
+
+/// Query that yields the subset of `AgentRequest` fields the waiter uses to
+/// decide when a request has reached a terminal lifecycle state (even if no
+/// `AgentResponse` row ever materializes).
+pub(crate) fn request_terminal_query(request_id: &str) -> String {
+    format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                order: {{ created_at: DESC }},
+                limit: 1
+            ) {{
+                request_id
+                lifecycle_state
+                failure_reason
+                interrupt_requested_at
+                valid_until
+            }}
+        }}"#,
+        request_id = escape_graphql_string(request_id),
+    )
+}
+
+/// Returns `true` when a request's lifecycle_state is one of the terminal
+/// states that the waiter should stop polling on. `interrupted` counts even
+/// though the response row may stay `status="streaming"` with partial content
+/// and a stamped `interrupted_at`.
+pub(crate) fn is_terminal_lifecycle_state(state: &str) -> bool {
+    matches!(
+        state,
+        "completed" | "failed" | "superseded" | "dead" | "interrupted"
     )
 }
 
@@ -78,6 +116,12 @@ pub(crate) async fn create_agent_request(
             )
         })
         .unwrap_or_default();
+    let valid_until_literal = options.valid_until.map(|at| {
+        format!(
+            r#"valid_until: "{}""#,
+            escape_graphql_string(&at.to_rfc3339())
+        )
+    });
     let request_override_fields = vec![
         optional_f64_field("temperature", options.temperature),
         optional_f64_field("top_p", options.top_p),
@@ -87,6 +131,7 @@ pub(crate) async fn create_agent_request(
             .metadata
             .as_ref()
             .map(|metadata| format!(r#"metadata: "{}""#, escape_graphql_string(metadata))),
+        valid_until_literal,
     ]
     .into_iter()
     .flatten()
@@ -97,6 +142,19 @@ pub(crate) async fn create_agent_request(
     } else {
         format!("{request_override_fields},\n                ")
     };
+    let retry_parent_value = options.retry_parent_request.as_deref().unwrap_or_default();
+    let retry_root_value = options
+        .retry_root_request
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| {
+            if retry_parent_value.is_empty() {
+                request_id.clone()
+            } else {
+                retry_parent_value.to_string()
+            }
+        });
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -104,8 +162,8 @@ pub(crate) async fn create_agent_request(
                 agent_did: "{agent_did}",
                 {behavior_field}
                 session_id: "{session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{request_id}",
+                retry_parent_request: "{retry_parent}",
+                retry_root_request: "{retry_root}",
                 superseded_by_request: "",
                 content: "{content}",
                 {request_override_fields}status: "pending",
@@ -122,6 +180,8 @@ pub(crate) async fn create_agent_request(
         agent_did = escape_graphql_string(agent_did),
         behavior_field = behavior_field,
         session_id = escape_graphql_string(&session_id),
+        retry_parent = escape_graphql_string(retry_parent_value),
+        retry_root = escape_graphql_string(&retry_root_value),
         content = escape_graphql_string(content),
         request_override_fields = request_override_fields,
     );
@@ -143,6 +203,24 @@ pub(crate) async fn create_agent_request(
     })
 }
 
+/// Poll both `AgentRequest.lifecycle_state` and the latest `AgentResponse`
+/// row until either:
+///   - the request reaches a terminal lifecycle state (`completed`, `failed`,
+///     `superseded`, `dead`, `interrupted`), or
+///   - the response reaches a historical terminal status (`complete`,
+///     `error`).
+///
+/// Returning is intentionally lenient on partial data:
+///   - `interrupted` requests stamp `interrupted_at` on the response but leave
+///     response `status = "streaming"`; the returned JSON still carries that
+///     partial content so callers can render it.
+///   - `dead`/`Stale` requests (TTL'd before ever claiming) may have no
+///     `AgentResponse` row at all; in that case we synthesize one and rely on
+///     the top-level `request` field for the terminal info.
+///
+/// The returned JSON is backward-compatible with the old response-only shape:
+/// all previous `AgentResponse` fields remain at the top level, and a new
+/// `request` field carries the lifecycle view for callers that want it.
 pub(crate) async fn wait_for_terminal_response(
     graphql: &str,
     request_id: &str,
@@ -154,28 +232,74 @@ pub(crate) async fn wait_for_terminal_response(
     let mut last_progress_signature: Option<String> = None;
 
     loop {
-        let query = response_query(request_id);
-        let response = post_graphql(graphql, &query).await?;
-        let rows = response
-            .pointer("/data/AgentResponse")
-            .and_then(|value| value.as_array())
-            .cloned()
-            .unwrap_or_default();
-        if let Some(row) = rows.first() {
-            let signature = serde_json::to_string(row)
-                .context("serializing AgentResponse progress row for timeout tracking")?;
-            if last_progress_signature.as_deref() != Some(signature.as_str()) {
-                last_progress_signature = Some(signature);
-                last_progress_at = tokio::time::Instant::now();
-            }
+        // Fetch request + response in sequence (cheap on the embedded node;
+        // also keeps the "no GraphQL batching" contract simple for the
+        // HTTP path).
+        let request_row = {
+            let query = request_terminal_query(request_id);
+            let response = post_graphql(graphql, &query).await?;
+            response
+                .pointer("/data/AgentRequest")
+                .and_then(|v| v.as_array())
+                .and_then(|rows| rows.first())
+                .cloned()
+        };
+        let response_row = {
+            let query = response_query(request_id);
+            let response = post_graphql(graphql, &query).await?;
+            response
+                .pointer("/data/AgentResponse")
+                .and_then(|v| v.as_array())
+                .and_then(|rows| rows.first())
+                .cloned()
+        };
 
-            let status = row
-                .get("status")
-                .and_then(|value| value.as_str())
-                .unwrap_or("");
-            if matches!(status, "complete" | "error") {
-                return Ok(row.clone());
+        // Track "something observable changed" for the idle-timeout budget.
+        // Combine both rows so mutations on just the request (e.g. interrupt
+        // latch, transition to dead) count as progress.
+        let signature = serde_json::to_string(&serde_json::json!({
+            "request": request_row,
+            "response": response_row,
+        }))
+        .context("serializing AgentRequest + AgentResponse progress rows for timeout tracking")?;
+        if last_progress_signature.as_deref() != Some(signature.as_str()) {
+            last_progress_signature = Some(signature);
+            last_progress_at = tokio::time::Instant::now();
+        }
+
+        let lifecycle_state = request_row
+            .as_ref()
+            .and_then(|row| row.get("lifecycle_state"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let response_status = response_row
+            .as_ref()
+            .and_then(|row| row.get("status"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let terminal_by_request = is_terminal_lifecycle_state(lifecycle_state);
+        let terminal_by_response = matches!(response_status, "complete" | "error");
+        if terminal_by_request || terminal_by_response {
+            // Build the return value: prefer the real response row when present
+            // (interrupted / streaming-with-partial-content / complete / error).
+            // If no row ever materialized (dead/Stale pre-claim), synthesize a
+            // minimal one so older consumers that read top-level fields don't
+            // explode.
+            let mut envelope = response_row.unwrap_or_else(|| {
+                serde_json::json!({
+                    "request_id": request_id,
+                    "status": null,
+                    "content": null,
+                })
+            });
+            if let Some(object) = envelope.as_object_mut() {
+                object.insert(
+                    "request".to_string(),
+                    request_row.unwrap_or(serde_json::Value::Null),
+                );
             }
+            return Ok(envelope);
         }
 
         if last_progress_at.elapsed() >= idle_timeout {
@@ -249,4 +373,124 @@ pub(crate) fn write_json_output_file(path: &Path, value: &Value) -> Result<()> {
 pub(crate) fn print_json(value: &Value) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
+}
+
+/// Parse a short human duration (e.g. `30s`, `5m`, `2h`, `1d`). Bare numbers
+/// are treated as seconds for convenience.
+fn parse_duration_suffix(raw: &str) -> Result<Duration> {
+    let s = raw.trim();
+    if s.is_empty() {
+        anyhow::bail!("duration must not be empty");
+    }
+    let split = s.find(|c: char| c.is_alphabetic()).unwrap_or(s.len());
+    let (num_part, suffix) = s.split_at(split);
+    let n: u64 = num_part
+        .parse()
+        .with_context(|| format!("invalid duration number in {raw}"))?;
+    let secs = match suffix {
+        "" | "s" => n,
+        "m" => n.checked_mul(60).context("duration overflow")?,
+        "h" => n.checked_mul(3600).context("duration overflow")?,
+        "d" => n.checked_mul(86400).context("duration overflow")?,
+        other => anyhow::bail!("unknown duration suffix {other:?} (use s, m, h, d)"),
+    };
+    Ok(Duration::from_secs(secs))
+}
+
+/// Resolve the `--valid-until` flag to an absolute deadline. `None` on the
+/// CLI defaults to `now + 5m` — the standard TTL for interactive requests.
+/// Pass `"none"` or `"0"` to explicitly disable the TTL for this submission.
+pub(crate) fn parse_valid_until_flag(raw: Option<&str>) -> Result<Option<DateTime<Utc>>> {
+    match raw.map(str::trim) {
+        None => Ok(Some(Utc::now() + chrono::Duration::minutes(5))),
+        Some("") | Some("none") | Some("0") => Ok(None),
+        Some(value) => {
+            let dur = parse_duration_suffix(value)?;
+            let secs = i64::try_from(dur.as_secs()).context("duration too large")?;
+            Ok(Some(Utc::now() + chrono::Duration::seconds(secs)))
+        }
+    }
+}
+
+/// Minimal projection of an AgentRequest used by `resend` to copy over
+/// submission inputs. Queried via the HTTP GraphQL endpoint. Carries the
+/// sampling overrides and `metadata` so resend preserves submitter intent —
+/// dropping them would silently change model behavior on retry.
+#[derive(Debug, Clone)]
+pub(crate) struct StaleRequestView {
+    pub(crate) session_id: String,
+    pub(crate) agent_did: String,
+    pub(crate) behavior_id: Option<String>,
+    pub(crate) content: String,
+    pub(crate) lifecycle_state: String,
+    pub(crate) failure_reason: String,
+    pub(crate) retry_root_request: Option<String>,
+    pub(crate) temperature: Option<f64>,
+    pub(crate) top_p: Option<f64>,
+    pub(crate) top_k: Option<i64>,
+    pub(crate) max_tokens: Option<i64>,
+    pub(crate) metadata: Option<String>,
+}
+
+pub(crate) async fn fetch_request_view(
+    graphql: &str,
+    request_id: &str,
+) -> Result<StaleRequestView> {
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                limit: 1
+            ) {{
+                session_id
+                agent_did
+                behavior_id
+                content
+                lifecycle_state
+                failure_reason
+                retry_root_request
+                temperature
+                top_p
+                top_k
+                max_tokens
+                metadata
+            }}
+        }}"#,
+        request_id = escape_graphql_string(request_id),
+    );
+    let response = post_graphql(graphql, &query).await?;
+    let row = response
+        .pointer("/data/AgentRequest")
+        .and_then(|v| v.as_array())
+        .and_then(|rows| rows.first())
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))?;
+    let as_string = |key: &str| {
+        row.get(key)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let as_optional = |key: &str| {
+        row.get(key)
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+    };
+    let as_optional_f64 = |key: &str| row.get(key).and_then(|v| v.as_f64());
+    let as_optional_i64 = |key: &str| row.get(key).and_then(|v| v.as_i64());
+    Ok(StaleRequestView {
+        session_id: as_string("session_id"),
+        agent_did: as_string("agent_did"),
+        behavior_id: as_optional("behavior_id"),
+        content: as_string("content"),
+        lifecycle_state: as_string("lifecycle_state"),
+        failure_reason: as_string("failure_reason"),
+        retry_root_request: as_optional("retry_root_request"),
+        temperature: as_optional_f64("temperature"),
+        top_p: as_optional_f64("top_p"),
+        top_k: as_optional_i64("top_k"),
+        max_tokens: as_optional_i64("max_tokens"),
+        metadata: as_optional("metadata"),
+    })
 }

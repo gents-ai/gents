@@ -68,7 +68,7 @@ pub(crate) struct DesiredSchedule {
     pub(crate) task_id: String,
     pub(crate) interval_secs: i64,
     pub(crate) enabled: bool,
-    pub(crate) concurrency: String,  // "parallel" | "serial" | "latest_only"
+    pub(crate) concurrency: String, // "parallel" | "serial" | "latest_only"
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

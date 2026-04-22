@@ -338,6 +338,8 @@ mod tests {
                 max_retries: Some(3),
                 caused_by_trigger_id: None,
                 caused_by_trigger_kind: None,
+                interrupt_requested_at: None,
+                valid_until: None,
             }],
             responses: vec![AgentResponseRow {
                 response_key: "resp-1".to_string(),
@@ -355,6 +357,7 @@ mod tests {
                 materialized_at: None,
                 created_at: Some("2026-04-14T00:00:02Z".to_string()),
                 completed_at: None,
+                interrupted_at: None,
             }],
             ..ClientStoreRows::default()
         });

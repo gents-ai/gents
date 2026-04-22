@@ -59,6 +59,7 @@ impl RequestLifecycle {
             progress_seq: 0,
             deadline_duration_secs,
             state: LocalLifecycleState::Pending,
+            valid_until_at_claim: None,
         }
     }
 
@@ -262,6 +263,7 @@ impl RequestLifecycle {
             progress_seq: 0,
             deadline_duration_secs,
             state: LocalLifecycleState::Claimed,
+            valid_until_at_claim: None,
         })
     }
 

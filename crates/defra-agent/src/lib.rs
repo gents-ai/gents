@@ -19,6 +19,7 @@ pub mod graphql;
 pub mod health_checker;
 pub mod hook;
 pub mod identity;
+pub mod interrupt;
 pub mod lifecycle;
 pub mod mcp_pool;
 pub mod meta_tools;
@@ -60,6 +61,7 @@ pub use document_config::{
 pub use health_checker::{spawn_health_checker, HealthStatus, ServiceHealth, ServiceHealthMap};
 pub use hook::{DefraSessionHook, FailurePolicy, HookStats};
 pub use identity::{AgentIdentity, ServiceAccount, SimpleIdentity};
+pub use interrupt::{fetch_interrupt_requested_at, interrupt_request};
 pub use lifecycle::{RecoveryReport, RequestLifecycle};
 pub use mcp_pool::McpPool;
 pub use meta_tools::build_meta_tools;
