@@ -71,6 +71,24 @@ pub(crate) struct DesiredSchedule {
     pub(crate) concurrency: String,  // "parallel" | "serial" | "latest_only"
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DesiredEventTrigger {
+    pub(crate) trigger_id: String,
+    pub(crate) task_id: String,
+    pub(crate) source_collection: String,
+    #[serde(default = "default_event_kind")]
+    pub(crate) event_kind: String,
+    #[serde(default)]
+    pub(crate) filter: Option<String>,
+    pub(crate) enabled: bool,
+    pub(crate) concurrency: String, // "parallel" | "serial" | "latest_only"
+}
+
+fn default_event_kind() -> String {
+    "created".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DesiredToolSelection {
@@ -217,6 +235,7 @@ pub(crate) struct DesiredStateManifest {
     pub(crate) tool_service_registries: Vec<DesiredToolServiceRegistry>,
     pub(crate) tasks: Vec<DesiredTask>,
     pub(crate) schedules: Vec<DesiredSchedule>,
+    pub(crate) event_triggers: Vec<DesiredEventTrigger>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -291,6 +310,7 @@ pub(crate) struct DesiredStateCounts {
     pub(crate) tool_service_registries: usize,
     pub(crate) tasks: usize,
     pub(crate) schedules: usize,
+    pub(crate) event_triggers: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
