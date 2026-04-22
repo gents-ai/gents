@@ -20,6 +20,7 @@ use defra_agent::template::{render_template, TemplateScope};
 use serde_json::Value;
 
 use crate::cli::ConfigTaskRunArgs;
+use crate::config_writes::ConfigAccess;
 use crate::{print_json, resolve_config_access};
 
 /// Must match `lifecycle::DEFAULT_REQUEST_MAX_RETRIES` and the value written by
@@ -154,9 +155,24 @@ pub(super) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
             anyhow::bail!("create manual AgentRequest failed: {errs:?}");
         }
     }
-    let doc_id = extract_doc_id(&response).ok_or_else(|| {
-        anyhow!("manual AgentRequest create returned no _docID: {response}")
-    })?;
+    // The mutation succeeded (no `errors` array). `create_AgentRequest` may
+    // return the `_docID` inline, or it may omit it entirely — mirroring the
+    // quirk documented in `defra_agent::lifecycle::manual`. When inline
+    // extraction yields nothing, fall back to a follow-up query filtered by
+    // the just-written `request_id`. The row exists either way; treating the
+    // missing-inline shape as a hard failure would make the operator retry
+    // and double-fire the task.
+    let doc_id = match extract_doc_id(&response) {
+        Some(doc_id) => doc_id,
+        None => lookup_doc_id_by_request_id(&access, &request_id)
+            .await?
+            .ok_or_else(|| {
+                anyhow!(
+                    "manual AgentRequest for task {} persisted but _docID lookup by request_id returned nothing",
+                    args.task_id
+                )
+            })?,
+    };
 
     // 7. Print the structured result.
     print_json(&serde_json::json!({
@@ -213,6 +229,40 @@ fn build_create_manual_request_mutation(input: CreateManualRequestInput<'_>) -> 
         created_at = escape_graphql_string(input.created_at),
         max_retries = DEFAULT_REQUEST_MAX_RETRIES,
     )
+}
+
+/// Fallback for when `create_AgentRequest` succeeded (no `errors` array) but
+/// the response did not echo the `_docID` inline. The row exists; fetch it
+/// by `request_id` so we can report a stable `request_doc_id` without
+/// resorting to a retry that would double-fire the task.
+async fn lookup_doc_id_by_request_id(
+    access: &ConfigAccess,
+    request_id: &str,
+) -> Result<Option<String>> {
+    let query = format!(
+        r#"query {{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{id}" }} }}, limit: 1) {{
+                _docID
+            }}
+        }}"#,
+        id = escape_graphql_string(request_id),
+    );
+    let response = access.execute(&query).await?;
+    if let Some(errs) = response.get("errors").and_then(|v| v.as_array()) {
+        if !errs.is_empty() {
+            anyhow::bail!(
+                "lookup AgentRequest by request_id {request_id} failed: {errs:?}"
+            );
+        }
+    }
+    Ok(response
+        .get("data")
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|arr| arr.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string()))
 }
 
 /// Pull the `_docID` out of a create-AgentRequest response.
@@ -285,6 +335,26 @@ mod tests {
             "data": { "create_AgentRequest": [] }
         });
         assert_eq!(extract_doc_id(&empty), None);
+    }
+
+    #[test]
+    fn extract_doc_id_returns_none_when_response_omits_doc_id_entirely() {
+        // Pins the quirk: a `create_AgentRequest` mutation can succeed (no
+        // `errors` array) while its inline payload carries no `_docID`.
+        // The caller must treat this as "fall back to a request_id lookup",
+        // not as "mutation failed"; a retry would double-fire the task.
+        let object_without_doc_id = serde_json::json!({
+            "data": { "create_AgentRequest": {} }
+        });
+        assert_eq!(extract_doc_id(&object_without_doc_id), None);
+
+        let array_without_doc_id = serde_json::json!({
+            "data": { "create_AgentRequest": [ {} ] }
+        });
+        assert_eq!(extract_doc_id(&array_without_doc_id), None);
+
+        let missing_field = serde_json::json!({ "data": {} });
+        assert_eq!(extract_doc_id(&missing_field), None);
     }
 
     #[test]
