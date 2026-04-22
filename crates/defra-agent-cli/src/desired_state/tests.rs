@@ -177,6 +177,29 @@ fn deprecated_backend_capability_fields_are_ignored_for_diff_equality() {
     );
 }
 
+#[test]
+fn round_trip_load_write_load_is_identity() {
+    use crate::desired_state::{load::load_manifest_root, write_manifest_root};
+    use tempfile::tempdir;
+
+    let tmp = tempdir().unwrap();
+    let original = self::write_manifest_root::minimal_manifest();
+
+    write_manifest_root(tmp.path(), &original, false).unwrap();
+    let (loaded, report) = load_manifest_root(tmp.path());
+    assert!(report.ok, "errors: {:?}", report.errors);
+    let loaded = loaded.unwrap();
+
+    assert_eq!(loaded.agent_principal, original.agent_principal);
+    assert_eq!(loaded.agent_behaviors, original.agent_behaviors);
+    assert_eq!(loaded.tool_selections, original.tool_selections);
+    assert_eq!(loaded.inference_backends, original.inference_backends);
+    assert_eq!(loaded.inference_profiles, original.inference_profiles);
+    assert_eq!(loaded.tool_service_registries, original.tool_service_registries);
+    assert_eq!(loaded.tasks, original.tasks);
+    assert_eq!(loaded.schedules, original.schedules);
+}
+
 mod load_manifest_root {
     use std::fs;
     use tempfile::tempdir;
