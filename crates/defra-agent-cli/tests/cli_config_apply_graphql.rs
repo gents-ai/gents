@@ -42,16 +42,19 @@ async fn config_apply_updates_backend_from_fresh_init_home_over_graphql() -> Res
         .is_none_or(Value::is_null));
     write_manifest_root_from_export(&root, &exported)?;
 
-    let backends_path = root.join("inference-backends.json");
-    let mut backends = read_json_file(&backends_path)?;
-    let updated_endpoint = "http://127.0.0.1:9200/v1";
-    let backend_id = backends[0]
-        .get("backend_id")
+    let backend_id = exported
+        .pointer("/inference_backends/0/backend_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("manifest backend is missing backend_id"))?
+        .ok_or_else(|| anyhow!("exported bundle missing inference_backends[0].backend_id"))?
         .to_string();
-    backends[0]["endpoint"] = Value::String(updated_endpoint.to_string());
-    write_json_file(&backends_path, &backends)?;
+    let backends_path = root
+        .join("inference-backends")
+        .join(&backend_id)
+        .join("object.json");
+    let mut backend = read_json_file(&backends_path)?;
+    let updated_endpoint = "http://127.0.0.1:9200/v1";
+    backend["endpoint"] = Value::String(updated_endpoint.to_string());
+    write_json_file(&backends_path, &backend)?;
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;

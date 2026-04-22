@@ -40,11 +40,19 @@ async fn config_apply_reconciles_running_runtime_without_restart() -> Result<()>
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
-    let behaviors_path = root.join("agent-behaviors.json");
-    let mut behaviors = read_json_file(&behaviors_path)?;
+    let behavior_id = exported
+        .pointer("/agent_behaviors/0/behavior_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("exported bundle missing agent_behaviors[0].behavior_id"))?
+        .to_string();
+    let behaviors_path = root
+        .join("agent-behaviors")
+        .join(&behavior_id)
+        .join("object.json");
+    let mut behavior = read_json_file(&behaviors_path)?;
     let updated_prompt = "Keep responses terse. Mention that desired state was applied.";
-    behaviors[0]["system_prompt"] = Value::String(updated_prompt.to_string());
-    write_json_file(&behaviors_path, &behaviors)?;
+    behavior["system_prompt"] = Value::String(updated_prompt.to_string());
+    write_json_file(&behaviors_path, &behavior)?;
 
     let root_str = root
         .to_str()

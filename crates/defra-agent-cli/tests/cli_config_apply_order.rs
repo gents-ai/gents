@@ -14,7 +14,7 @@ fn apply_desired_state_changes_order_matches_collection_apply_order() {
 
     // Extract assignment keys in source order.
     let re = regex::Regex::new(
-        r"(?m)^\s*(agent_principal|agent_behaviors|tool_selections|inference_backends|inference_profiles|tool_service_registries|scheduled_tasks):\s*apply_import_collection",
+        r"(?m)^\s*(agent_principal|agent_behaviors|tool_selections|inference_backends|inference_profiles|tool_service_registries|tasks|schedules):\s*apply_import_collection",
     )
     .unwrap();
     let found: Vec<&str> = re
@@ -25,7 +25,7 @@ fn apply_desired_state_changes_order_matches_collection_apply_order() {
     // Expected order = Collection::ALL sorted by (apply_order, graphql_type):
     //   rank 0: InferenceBackend, InferenceProfile, ToolServiceRegistry, ToolSelection
     //   rank 1: AgentBehavior
-    //   rank 2: ScheduledTask
+    //   rank 2: Schedule, Task
     //   rank 3: AgentPrincipal
     let expected = vec![
         "inference_backends",
@@ -33,7 +33,8 @@ fn apply_desired_state_changes_order_matches_collection_apply_order() {
         "tool_service_registries",
         "tool_selections",
         "agent_behaviors",
-        "scheduled_tasks",
+        "tasks",
+        "schedules",
         "agent_principal",
     ];
     assert_eq!(

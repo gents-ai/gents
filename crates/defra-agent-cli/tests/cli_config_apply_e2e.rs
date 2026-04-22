@@ -52,9 +52,15 @@ async fn config_apply_reconciles_tool_services_tasks_and_schedules_end_to_end() 
     let service_id = format!("ops-mcp-{}", Uuid::new_v4().simple());
     let task_id = format!("nightly-audit-{}", Uuid::new_v4().simple());
     let schedule_id = format!("nightly-audit-schedule-{}", Uuid::new_v4().simple());
-    let service_path = root.join("tool-services").join("ops-mcp.json");
-    let task_path = root.join("tasks").join("nightly-audit.json");
-    let schedule_path = root.join("schedules").join("nightly-audit.json");
+    let service_path = root
+        .join("tool-services")
+        .join(&service_id)
+        .join("object.json");
+    let task_path = root.join("tasks").join(&task_id).join("object.json");
+    let schedule_path = root
+        .join("schedules")
+        .join(&schedule_id)
+        .join("object.json");
 
     write_json_file(
         &service_path,

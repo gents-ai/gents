@@ -108,10 +108,18 @@ async fn config_diff_reports_updates_for_changed_backend_manifest() -> Result<()
     let exported = run_cli_json(&home_dir, &["config", "export"])?;
     write_manifest_root_from_export(&root, &exported)?;
 
-    let backends_path = root.join("inference-backends.json");
-    let mut backends = read_json_file(&backends_path)?;
-    backends[0]["endpoint"] = Value::String("http://127.0.0.1:9000/v1".to_string());
-    write_json_file(&backends_path, &backends)?;
+    let backend_id = exported
+        .pointer("/inference_backends/0/backend_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("exported bundle missing inference_backends[0].backend_id"))?
+        .to_string();
+    let backends_path = root
+        .join("inference-backends")
+        .join(&backend_id)
+        .join("object.json");
+    let mut backend = read_json_file(&backends_path)?;
+    backend["endpoint"] = Value::String("http://127.0.0.1:9000/v1".to_string());
+    write_json_file(&backends_path, &backend)?;
 
     let backend_id = exported
         .pointer("/inference_backends/0/backend_id")
