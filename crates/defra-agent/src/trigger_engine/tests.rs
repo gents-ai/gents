@@ -2104,3 +2104,83 @@ async fn manual_source_next_fire_returns_none_after_cancel() {
     .expect("timed out waiting for cancelled next_fire");
     assert!(result.is_none());
 }
+
+/// Task 5 pinning: `ProductionMaterializer::materialize` must accept a
+/// `TriggerKind::Manual` intent and persist an `AgentRequest` whose lineage
+/// tuple is `(caused_by_trigger_id = null, caused_by_trigger_kind =
+/// "manual")` with `execution_origin = "interactive"` (operator-initiated).
+///
+/// This protects two spec invariants at the materialization boundary:
+///   * `TriggerKind::as_str()` is the authoritative source for the persisted
+///     `caused_by_trigger_kind` field — no hard-coded "schedule"/"event".
+///   * Manual fires map to `ExecutionOrigin::Interactive`, not `Scheduled`;
+///     schedule and event fires keep `Scheduled`.
+#[tokio::test]
+async fn production_materializer_accepts_manual_lineage_end_to_end() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    // Snapshot: behavior "general" loaded (with backend_id), no active
+    // schedules (Manual doesn't consult them).
+    let behavior = integration_test_behavior("general");
+    let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+
+    let materializer = ProductionMaterializer::new(node.clone(), rx);
+    let task = resolved_task_for_test("task-manual", "general", "manual body");
+
+    let request_id = materializer
+        .materialize(&task, None, TriggerKind::Manual, "manual body")
+        .await
+        .expect("Manual materialize should succeed");
+
+    let escaped_request_id = escape_graphql_string(&request_id);
+    let query = format!(
+        r#"query {{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                limit: 1
+            ) {{
+                caused_by_trigger_id
+                caused_by_trigger_kind
+                execution_origin
+                content
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    assert!(
+        !resp.has_errors(),
+        "AgentRequest read-back errored: {:?}",
+        resp.errors
+    );
+    let row = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|arr| arr.as_array())
+        .and_then(|arr| arr.first())
+        .expect("expected one AgentRequest row for the materialized Manual fire");
+    assert!(
+        row.get("caused_by_trigger_id")
+            .and_then(|v| v.as_str())
+            .is_none(),
+        "Manual fires carry no trigger id; expected null caused_by_trigger_id: {row}"
+    );
+    assert_eq!(
+        row.get("caused_by_trigger_kind").and_then(|v| v.as_str()),
+        Some("manual"),
+        "Manual lineage must serialize via TriggerKind::as_str() = \"manual\": {row}"
+    );
+    assert_eq!(
+        row.get("execution_origin").and_then(|v| v.as_str()),
+        Some("interactive"),
+        "Manual fires map to ExecutionOrigin::Interactive per spec: {row}"
+    );
+    assert_eq!(
+        row.get("content").and_then(|v| v.as_str()),
+        Some("manual body"),
+        "rendered prompt should land verbatim in AgentRequest.content: {row}"
+    );
+}
+

@@ -97,6 +97,16 @@ impl MaterializerHandle for ProductionMaterializer {
         let trigger_id = trigger_id.map(str::to_owned);
         let trigger_kind_str = trigger_kind.as_str().to_owned();
 
+        // `Manual` fires are operator-initiated (e.g. CLI/API), so they map
+        // to `ExecutionOrigin::Interactive` per the spec. Schedule and Event
+        // fires keep `Scheduled`. Keep the mapping local to the trait impl so
+        // callers (who already decided the `TriggerKind`) don't need to know
+        // the lifecycle-layer vocabulary.
+        let execution_origin = match trigger_kind {
+            TriggerKind::Manual => ExecutionOrigin::Interactive,
+            TriggerKind::Schedule | TriggerKind::Event => ExecutionOrigin::Scheduled,
+        };
+
         Box::pin(async move {
             let (behavior_name, behavior_did, deadline_secs, backend_id) = resolved?;
             let lineage = TriggerLineage {
@@ -109,7 +119,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 &behavior_did,
                 &rendered_prompt,
                 deadline_secs,
-                ExecutionOrigin::Scheduled,
+                execution_origin,
                 backend_id,
                 lineage,
             )
