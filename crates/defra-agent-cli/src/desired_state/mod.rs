@@ -6,6 +6,7 @@ pub(crate) mod normalize;
 #[cfg(test)]
 mod tests;
 pub(crate) mod validate;
+pub(crate) mod write;
 
 pub(crate) use apply_bundle::DesiredApplyBundle;
 pub(crate) use convert::{
@@ -15,6 +16,7 @@ pub(crate) use convert::{
 pub(crate) use diff::diff_manifests;
 pub(crate) use load::{load_manifest_root, validate_manifest_root};
 pub(crate) use normalize::strip_deprecated_inference_backend_fields;
+pub(crate) use write::write_manifest_root;
 
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};

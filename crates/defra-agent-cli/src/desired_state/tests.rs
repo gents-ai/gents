@@ -871,3 +871,38 @@ mod load_per_doc_collection {
         );
     }
 }
+
+mod write_manifest_root_safe_id {
+    use crate::desired_state::write::check_filesystem_safe_id;
+
+    #[test]
+    fn accepts_ordinary_ids() {
+        assert!(check_filesystem_safe_id("default").is_ok());
+        assert!(check_filesystem_safe_id("workstation-1").is_ok());
+        assert!(check_filesystem_safe_id("seed_fleet_health").is_ok());
+    }
+
+    #[test]
+    fn rejects_forward_slash() {
+        let err = check_filesystem_safe_id("foo/bar").unwrap_err();
+        assert!(err.contains("filesystem-unsafe"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_backslash_colon_and_null() {
+        for bad in ["a\\b", "a:b", "a\0b"] {
+            assert!(check_filesystem_safe_id(bad).is_err(), "should reject '{bad}'");
+        }
+    }
+
+    #[test]
+    fn rejects_dot_and_dotdot() {
+        assert!(check_filesystem_safe_id(".").is_err());
+        assert!(check_filesystem_safe_id("..").is_err());
+    }
+
+    #[test]
+    fn rejects_empty() {
+        assert!(check_filesystem_safe_id("").is_err());
+    }
+}
