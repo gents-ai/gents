@@ -15,6 +15,21 @@ pub(super) async fn config_apply(args: ConfigApplyArgs) -> Result<()> {
     let desired_manifest = load_desired_manifest_or_bail(&args.root)?;
     let (access, _) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+
+    // Apply-time live validation complements the pure static validation in
+    // `validate_manifest_root`. It probes the live node's GraphQL schema for
+    // EventTrigger filter syntax and `doc.*` field resolution. We only run
+    // it from the apply path (where we already hold a live `ConfigAccess`);
+    // pure `validate` and `diff` paths remain DB-free.
+    let live_errs =
+        desired_state::validate::validate_manifest_against_live(&desired_manifest, &access).await?;
+    if !live_errs.is_empty() {
+        for e in &live_errs {
+            eprintln!("error: {e}");
+        }
+        anyhow::bail!("{} live validation error(s)", live_errs.len());
+    }
+
     let desired_bundle =
         desired_state::export_bundle_from_manifest(&desired_manifest, access.mode())?;
 

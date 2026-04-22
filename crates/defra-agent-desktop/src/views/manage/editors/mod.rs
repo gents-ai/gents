@@ -4,7 +4,7 @@ use eframe::egui::{self, RichText, TextEdit, Ui};
 
 use crate::audit;
 use crate::state::{
-    BackendDraft, BehaviorDraft, InferenceProfileDraft, ScheduleDraft, TaskDraft,
+    BackendDraft, BehaviorDraft, EventTriggerDraft, InferenceProfileDraft, ScheduleDraft, TaskDraft,
     ToolSelectionDraft,
 };
 use crate::theme;
@@ -31,6 +31,10 @@ pub(super) fn render_task_editor(ui: &mut Ui, draft: &mut TaskDraft) {
 
 pub(super) fn render_schedule_editor(ui: &mut Ui, draft: &mut ScheduleDraft) {
     render::render_schedule_editor(ui, draft);
+}
+
+pub(super) fn render_event_trigger_editor(ui: &mut Ui, draft: &mut EventTriggerDraft) {
+    render::render_event_trigger_editor(ui, draft);
 }
 
 pub(super) fn editor_heading(ui: &mut Ui, title: &str) {

@@ -81,6 +81,7 @@ async fn runtime_status_persists_process_and_reconcile_state() {
             active_schedules: HashMap::new(),
             unavailable_schedules: HashSet::new(),
             active_event_triggers: HashMap::new(),
+            unavailable_event_triggers: HashSet::new(),
             dispatchers: HashMap::new(),
         })
         .await;
@@ -115,6 +116,7 @@ async fn runtime_status_serializes_persisted_generation_updates() {
         active_schedules: HashMap::new(),
         unavailable_schedules: HashSet::new(),
         active_event_triggers: HashMap::new(),
+        unavailable_event_triggers: HashSet::new(),
         dispatchers: HashMap::new(),
     };
     let applied = ActiveRuntimeSnapshot {
@@ -127,6 +129,7 @@ async fn runtime_status_serializes_persisted_generation_updates() {
         active_schedules: HashMap::new(),
         unavailable_schedules: HashSet::new(),
         active_event_triggers: HashMap::new(),
+        unavailable_event_triggers: HashSet::new(),
         dispatchers: HashMap::new(),
     };
 

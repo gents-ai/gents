@@ -95,6 +95,17 @@ pub(crate) fn diff_manifests(
             .map(|value| (value.schedule_id.clone(), value))
             .collect(),
     );
+    let event_triggers = diff_collection(
+        desired
+            .event_triggers
+            .iter()
+            .map(|value| (value.trigger_id.clone(), value))
+            .collect(),
+        live.event_triggers
+            .iter()
+            .map(|value| (value.trigger_id.clone(), value))
+            .collect(),
+    );
 
     let counts = DesiredStateDiffCollectionsCounts {
         agent_principal: agent_principal.counts(),
@@ -105,6 +116,7 @@ pub(crate) fn diff_manifests(
         tool_service_registries: tool_service_registries.counts(),
         tasks: tasks.counts(),
         schedules: schedules.counts(),
+        event_triggers: event_triggers.counts(),
     };
     let ok = [
         &counts.agent_principal,
@@ -115,6 +127,7 @@ pub(crate) fn diff_manifests(
         &counts.tool_service_registries,
         &counts.tasks,
         &counts.schedules,
+        &counts.event_triggers,
     ]
     .iter()
     .all(|count| count.create == 0 && count.update == 0 && count.live_only == 0);
@@ -135,6 +148,7 @@ pub(crate) fn diff_manifests(
             tool_service_registries,
             tasks,
             schedules,
+            event_triggers,
         },
     }
 }

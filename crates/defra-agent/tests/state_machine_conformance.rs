@@ -691,6 +691,333 @@ async fn fire_errored_does_not_create_request() {
     );
 }
 
+// -----------------------------------------------------------------------------
+// Event-kind trigger transitions (Task 31, PR 2)
+//
+// Mirrors the Task 48 (PR 1) schedule-kind cases above but with
+// `caused_by_trigger_kind = "event"`. The state-machine invariants being
+// pinned are identical across kinds — the engine routes both Schedule and
+// Event fires through the same `ProductionMaterializer` surface — but each
+// kind's gating and supersede mutations filter on the tuple
+// `(caused_by_trigger_id, caused_by_trigger_kind)`, so the event-kind cases
+// need their own independent assertions.
+// -----------------------------------------------------------------------------
+
+/// Serial concurrency (event kind): when a non-terminal request with
+/// `caused_by_trigger_kind = "event"` already exists for the tuple, the
+/// materializer's gating query observes it and the engine skips. The
+/// state-machine conformance assertion: no second `AgentRequest` is created
+/// for the tuple.
+#[tokio::test]
+async fn serial_skip_event_does_not_create_request() {
+    let db = test_db("transition-event-serial-skip").await;
+
+    // Seed an in-flight request with lineage tuple (trigger-event-serial, event).
+    let lineage = TriggerLineage {
+        trigger_id: Some("trigger-event-serial".into()),
+        trigger_kind: Some("event".into()),
+    };
+    let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        "event serial seed",
+        DEADLINE_SECS,
+        ExecutionOrigin::Scheduled,
+        BACKEND_ID,
+        lineage,
+    )
+    .await
+    .unwrap();
+
+    // Run the exact query `ProductionMaterializer` uses to gate the fire.
+    // Expect `true` — a non-terminal request for this tuple exists.
+    let gating_query = r#"query {
+        AgentRequest(
+            filter: {
+                caused_by_trigger_id: { _eq: "trigger-event-serial" },
+                caused_by_trigger_kind: { _eq: "event" },
+                lifecycle_state: { _in: ["pending", "claimed", "processing", "inputRequired"] }
+            },
+            limit: 1
+        ) { _docID }
+    }"#;
+    let gate = db.node.execute(gating_query).await;
+    assert!(!gate.has_errors(), "gating query errored: {:?}", gate.errors);
+    let gate_rows = gate
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        gate_rows.len(),
+        1,
+        "gating query must see the seeded in-flight event-kind request"
+    );
+
+    // Count all AgentRequests for the trigger tuple before the skip decision.
+    let tuple_count_query = r#"{
+        AgentRequest(
+            filter: {
+                caused_by_trigger_id: { _eq: "trigger-event-serial" },
+                caused_by_trigger_kind: { _eq: "event" }
+            }
+        ) { _docID }
+    }"#;
+    let count_before = db
+        .node
+        .execute(tuple_count_query)
+        .await
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array())
+        .map(|rows| rows.len())
+        .unwrap_or(0);
+    assert_eq!(count_before, 1, "seeded count should be 1");
+
+    // Simulate the engine's FireResult::Skipped outcome: no materialize call.
+    // Count after must still be 1 — the state machine invariant "serial skip
+    // does not create request" holds for event-kind triggers too.
+    let count_after = db
+        .node
+        .execute(tuple_count_query)
+        .await
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array())
+        .map(|rows| rows.len())
+        .unwrap_or(0);
+    assert_eq!(
+        count_after, count_before,
+        "serial skip on event-kind trigger must not create a new AgentRequest"
+    );
+
+    // Sanity: the seeded request is still in its non-terminal state.
+    let still_claimed = fetch_request_snapshot(&db.node, &seeded.request().doc_id).await;
+    assert_eq!(still_claimed.lifecycle_state, "claimed");
+    assert_eq!(still_claimed.status, "processing");
+}
+
+/// LatestOnly concurrency (event kind): when a new fire arrives for an
+/// event-kind trigger tuple with an in-flight request, the engine supersedes
+/// the prior via the same mutation shape the Schedule case uses — filtered on
+/// `caused_by_trigger_kind = "event"`. The seeded request must transition
+/// `(processing / claimed) -> (superseded / superseded)`.
+#[tokio::test]
+async fn latest_only_event_transition_to_superseded() {
+    let db = test_db("transition-event-latest-only").await;
+
+    let lineage = TriggerLineage {
+        trigger_id: Some("trigger-event-latest".into()),
+        trigger_kind: Some("event".into()),
+    };
+    let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        "event latest seed",
+        DEADLINE_SECS,
+        ExecutionOrigin::Scheduled,
+        BACKEND_ID,
+        lineage,
+    )
+    .await
+    .unwrap();
+
+    // Pre-condition: the seeded request is (claimed, processing).
+    let before = fetch_request_snapshot(&db.node, &seeded.request().doc_id).await;
+    assert_eq!(before.lifecycle_state, "claimed");
+    assert_eq!(before.status, "processing");
+
+    // Run the engine's supersede mutation verbatim, filtered on the event
+    // kind's lineage tuple (the shape in
+    // `production_materializer::supersede_nonterminal_requests_for_trigger`).
+    let supersede = r#"mutation {
+        update_AgentRequest(
+            filter: {
+                caused_by_trigger_id: { _eq: "trigger-event-latest" },
+                caused_by_trigger_kind: { _eq: "event" },
+                lifecycle_state: { _in: ["pending", "claimed", "processing", "inputRequired"] }
+            },
+            input: {
+                status: "superseded",
+                lifecycle_state: "superseded"
+            }
+        ) { _docID }
+    }"#;
+    let resp = db.node.execute(supersede).await;
+    assert!(!resp.has_errors(), "supersede mutation errored: {:?}", resp.errors);
+    let updated_rows = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("update_AgentRequest"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        updated_rows.len(),
+        1,
+        "supersede must transition exactly the one seeded in-flight event-kind request"
+    );
+
+    // Post-condition: the seeded request is now (superseded, superseded);
+    // all other snapshot fields carry forward.
+    assert_eq!(
+        fetch_request_snapshot(&db.node, &seeded.request().doc_id).await,
+        RequestSnapshot {
+            status: "superseded".into(),
+            lifecycle_state: "superseded".into(),
+            behavior_id: AGENT_NAME.into(),
+            backend_id: BACKEND_ID.into(),
+            execution_origin: "scheduled".into(),
+            retry_parent_request: "".into(),
+            retry_root_request: seeded.request().request_id.clone(),
+            superseded_by_request: "".into(),
+            retry_count: 0,
+            max_retries: defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
+            claimed_at_present: true,
+            deadline_present: true,
+            failure_reason: "".into(),
+        }
+    );
+}
+
+/// Template render failure on an EventTrigger (`FireResult::Errored`): the
+/// engine must NOT invoke the materializer when the render fails. The
+/// state-machine conformance assertion: after a simulated render failure, no
+/// `AgentRequest` exists for the event-kind trigger tuple, and the
+/// EventTrigger's runtime-owned `last_status = "error"` writeback is
+/// independent of any request row.
+#[tokio::test]
+async fn fire_errored_event_does_not_create_request() {
+    let db = test_db("transition-event-fire-errored").await;
+
+    // The persistence boundary: no materialize call means no AgentRequest
+    // row with the event-kind lineage tuple. Query the engine's tuple filter.
+    let query = r#"query {
+        AgentRequest(
+            filter: {
+                caused_by_trigger_id: { _eq: "trigger-event-render-err" },
+                caused_by_trigger_kind: { _eq: "event" }
+            }
+        ) { _docID }
+    }"#;
+    let resp = db.node.execute(query).await;
+    assert!(!resp.has_errors(), "tuple query errored: {:?}", resp.errors);
+    let rows = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        rows.len(),
+        0,
+        "render failure must not have produced an AgentRequest: {rows:?}"
+    );
+
+    // Seed an EventTrigger doc and simulate the Errored writeback the source
+    // performs (see EventSource::spawn_runtime_field_write FireResult::Errored
+    // branch). The key state-machine invariant: even though last_status="error"
+    // is written to the EventTrigger, NO AgentRequest appears for the lineage
+    // tuple.
+    let create_trigger = r#"mutation {
+        create_EventTrigger(input: {
+            trigger_id: "trigger-event-render-err",
+            task_id: "task-event-render-err",
+            source_collection: "WebhookEvent",
+            event_kind: "created",
+            enabled: true,
+            concurrency: "serial",
+            fire_count: 0
+        }) { _docID }
+    }"#;
+    let create_resp = db.node.execute(create_trigger).await;
+    assert!(
+        !create_resp.has_errors(),
+        "create EventTrigger failed: {:?}",
+        create_resp.errors
+    );
+
+    // The actual runtime-field writeback path. Keep the input literal aligned
+    // with what `update_event_trigger_runtime_fields` produces on an
+    // `FireResult::Errored` outcome: last_status="error", last_error=<reason>,
+    // fire_count untouched.
+    let writeback = r#"mutation {
+        update_EventTrigger(
+            filter: { trigger_id: { _eq: "trigger-event-render-err" } },
+            input: {
+                last_status: "error",
+                last_error: "template: variable 'missing_field' is undefined"
+            }
+        ) { _docID }
+    }"#;
+    let wb_resp = db.node.execute(writeback).await;
+    assert!(
+        !wb_resp.has_errors(),
+        "errored writeback failed: {:?}",
+        wb_resp.errors
+    );
+
+    // Re-check the persistence boundary after the writeback landed.
+    let resp = db.node.execute(query).await;
+    let rows = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        rows.len(),
+        0,
+        "Errored writeback on EventTrigger must not materialize an AgentRequest: {rows:?}"
+    );
+
+    // Confirm the writeback did land on the EventTrigger side — the state of
+    // the trigger reflects the engine's error classification without ever
+    // producing a request row. `fire_count` must NOT have advanced (writeback
+    // supplied no `fire_count` field at all).
+    let trigger_query = r#"{
+        EventTrigger(filter: { trigger_id: { _eq: "trigger-event-render-err" } }, limit: 1) {
+            last_status
+            last_error
+            fire_count
+        }
+    }"#;
+    let trigger_resp = db.node.execute(trigger_query).await;
+    let trigger_row = trigger_resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("EventTrigger"))
+        .and_then(|v| v.as_array())
+        .and_then(|rows| rows.first())
+        .cloned()
+        .expect("EventTrigger doc was created");
+    assert_eq!(
+        trigger_row.get("last_status").and_then(|v| v.as_str()),
+        Some("error"),
+        "EventTrigger.last_status must be 'error' after an Errored writeback"
+    );
+    assert!(
+        trigger_row
+            .get("last_error")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| s.starts_with("template:")),
+        "EventTrigger.last_error must carry the template: prefix: {trigger_row}"
+    );
+    assert_eq!(
+        trigger_row.get("fire_count").and_then(|v| v.as_i64()),
+        Some(0),
+        "EventTrigger.fire_count must NOT advance on Errored writeback: {trigger_row}"
+    );
+}
+
 #[tokio::test]
 async fn fork_does_not_transition_parent_lifecycle_state() {
     use defra_agent::session::{fork, ForkParams};

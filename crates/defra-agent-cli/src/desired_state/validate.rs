@@ -1,8 +1,11 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
+use anyhow::Result;
 use defra_agent::{parse_template_for_validation, VariableRef};
 
 use super::DesiredStateManifest;
+
+use crate::config_writes::ConfigAccess;
 
 pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Vec<String>) {
     let principal_agent_did = manifest.agent_principal.agent_did.trim();
@@ -290,6 +293,228 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             }
         }
     }
+
+    let mut event_trigger_ids = BTreeSet::new();
+    for trig in &manifest.event_triggers {
+        let trigger_id = trig.trigger_id.trim();
+        if trigger_id.is_empty() {
+            errors.push(
+                "event-triggers manifest contains a trigger with an empty trigger_id".to_string(),
+            );
+            continue;
+        }
+        if !event_trigger_ids.insert(trigger_id.to_string()) {
+            errors.push(format!(
+                "duplicate trigger_id in event-triggers manifest: {trigger_id}"
+            ));
+        }
+
+        let task_id = trig.task_id.trim();
+        if task_id.is_empty() {
+            errors.push(format!(
+                "event_trigger {} in event-triggers manifest must contain a non-empty task_id",
+                trig.trigger_id
+            ));
+        }
+
+        if trig.source_collection.trim().is_empty() {
+            errors.push(format!(
+                "event_trigger {} in event-triggers manifest must contain a non-empty source_collection",
+                trig.trigger_id
+            ));
+        }
+
+        // v1 only supports "created"
+        if trig.event_kind != "created" {
+            errors.push(format!(
+                "event_trigger {} uses unsupported event_kind {:?} (v1 supports only \"created\")",
+                trig.trigger_id, trig.event_kind
+            ));
+        }
+
+        match trig.concurrency.trim() {
+            "parallel" | "serial" | "latest_only" => {}
+            other => errors.push(format!(
+                "event_trigger {} in event-triggers manifest has unknown concurrency {}; expected parallel|serial|latest_only",
+                trig.trigger_id, other
+            )),
+        }
+
+        // Cross-ref: task_id must exist in manifest.tasks
+        if !task_id.is_empty() && !manifest.tasks.iter().any(|t| t.task_id == task_id) {
+            errors.push(format!(
+                "event_trigger {} references unknown task_id {}",
+                trig.trigger_id, trig.task_id
+            ));
+        }
+
+        // Template scope validation: doc.* IS allowed for event triggers; args.* is NOT.
+        if !task_id.is_empty() {
+            if let Some(task) = manifest.tasks.iter().find(|t| t.task_id == task_id) {
+                match parse_template_for_validation(&task.prompt_template) {
+                    Ok(refs) => {
+                        let mut reported: BTreeSet<&str> = BTreeSet::new();
+                        for vref in &refs {
+                            if let Some(root) = vref.root() {
+                                if root == "args" && reported.insert("args") {
+                                    errors.push(format!(
+                                        "event_trigger {} prompt template references forbidden scope: args; event scope only permits event.* and doc.*",
+                                        trig.trigger_id
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    Err(err) => errors.push(format!(
+                        "event_trigger {} prompt template failed to parse: {}",
+                        trig.trigger_id, err
+                    )),
+                }
+            }
+        }
+    }
+}
+
+/// Live-DB validation that complements the pure `validate_manifest`.
+///
+/// Unlike `validate_manifest`, this probes the live database schema and
+/// filter syntax for every `EventTrigger`. It is only invoked from code
+/// paths that already hold a live `ConfigAccess` (i.e. `config apply`).
+///
+/// Two checks per trigger:
+///
+/// 1. **Filter syntax probe.** Run `{collection}(filter: <trigger.filter>,
+///    limit: 1) { _docID }` — DefraDB surfaces parse errors as GraphQL
+///    errors, which `ConfigAccess::execute` turns into an `Err`. We catch
+///    it and report the underlying message. An empty / absent filter is a
+///    no-op (engine substitutes an always-match filter).
+///
+/// 2. **Template `doc.*` field resolution.** Parse the referenced Task's
+///    `prompt_template`, extract every `doc.<field>` root, and introspect
+///    the source collection's GraphQL type. Reject when any top-level
+///    `doc.X` field does not exist on the source. Deep-path (`doc.a.b`)
+///    resolution is explicitly out of scope for v1 — top-level existence
+///    is the guarantee we offer.
+pub(crate) async fn validate_manifest_against_live(
+    manifest: &DesiredStateManifest,
+    access: &ConfigAccess,
+) -> Result<Vec<String>> {
+    let mut errors = Vec::new();
+    for trig in &manifest.event_triggers {
+        // Skip triggers that failed basic structural validation; the pure
+        // validator already reported those and live probes on empty
+        // source_collection / trigger_id would only add noise.
+        let source_collection = trig.source_collection.trim();
+        let trigger_id = trig.trigger_id.trim();
+        if source_collection.is_empty() || trigger_id.is_empty() {
+            continue;
+        }
+
+        // 1. Filter syntax probe.
+        if let Some(filter) = trig.filter.as_deref().map(str::trim) {
+            if !filter.is_empty() {
+                let probe = format!(
+                    r#"query {{ {collection}(filter: {filter}, limit: 1) {{ _docID }} }}"#,
+                    collection = source_collection,
+                    filter = filter,
+                );
+                match access.execute(&probe).await {
+                    Ok(_) => {}
+                    Err(err) => {
+                        errors.push(format!(
+                            "event_trigger {} filter syntax error: {}",
+                            trigger_id, err
+                        ));
+                    }
+                }
+            }
+        }
+
+        // 2. Template doc.* path resolution.
+        //
+        // Locate the referenced Task. If it is missing the pure validator
+        // already reported the broken cross-ref; skip the live probe here.
+        let task_id = trig.task_id.trim();
+        if task_id.is_empty() {
+            continue;
+        }
+        let Some(task) = manifest.tasks.iter().find(|t| t.task_id.trim() == task_id) else {
+            continue;
+        };
+        let refs = match parse_template_for_validation(&task.prompt_template) {
+            Ok(refs) => refs,
+            Err(_) => {
+                // parse_template_for_validation failure is already
+                // reported by the pure validator; don't duplicate.
+                continue;
+            }
+        };
+        let doc_paths: Vec<Vec<String>> = refs
+            .into_iter()
+            .filter(|v| v.root() == Some("doc"))
+            .map(|v| v.path.clone())
+            .collect();
+        if doc_paths.is_empty() {
+            continue;
+        }
+
+        // Introspect the source collection.
+        let introspect = format!(
+            r#"query {{ __type(name: "{name}") {{ fields {{ name }} }} }}"#,
+            name = source_collection,
+        );
+        let response = match access.execute(&introspect).await {
+            Ok(response) => response,
+            Err(err) => {
+                errors.push(format!(
+                    "event_trigger {} introspection of source_collection {} failed: {}",
+                    trigger_id, source_collection, err
+                ));
+                continue;
+            }
+        };
+        // `__type(name: "Missing")` returns `{ "data": { "__type": null } }`
+        // — not a GraphQL error. Detect it explicitly so we can produce a
+        // friendly message instead of silently passing.
+        let type_node = response
+            .get("data")
+            .and_then(|d| d.get("__type"));
+        let fields = type_node
+            .filter(|v| !v.is_null())
+            .and_then(|t| t.get("fields"))
+            .and_then(serde_json::Value::as_array);
+        let Some(fields) = fields else {
+            errors.push(format!(
+                "event_trigger {} references unknown source_collection {}",
+                trigger_id, source_collection
+            ));
+            continue;
+        };
+        let top_level: HashSet<&str> = fields
+            .iter()
+            .filter_map(|f| f.get("name").and_then(|n| n.as_str()))
+            .collect();
+        let mut reported: BTreeSet<String> = BTreeSet::new();
+        for path in &doc_paths {
+            // path is ["doc", field1, field2, ...]. Skip the "doc" root;
+            // a bare `{{ doc }}` (path == ["doc"]) has no sub-field to
+            // verify — nothing to do.
+            let Some(first) = path.get(1).map(String::as_str) else {
+                continue;
+            };
+            if top_level.contains(first) {
+                continue;
+            }
+            if !reported.insert(first.to_string()) {
+                continue;
+            }
+            errors.push(format!(
+                "event_trigger {} template references doc.{} but {} has no such field",
+                trigger_id, first, source_collection
+            ));
+        }
+    }
+    Ok(errors)
 }
 
 fn format_variable_ref(var: &VariableRef) -> String {

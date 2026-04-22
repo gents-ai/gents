@@ -2,8 +2,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use defra_agent_protocol::row::{
     AgentBehaviorRow, AgentConversationRow, AgentMessageRow, AgentPrincipalRow, AgentRequestRow,
     AgentResponseRow, AgentRuntimeRow, AgentSessionRow, AgentToolCallRow, AgentToolResultRow,
-    CompactionEntryRow, InferenceBackendRow, InferenceProfileRow, ScheduleRow, TaskRow,
-    ToolSelectionRow, ToolServiceRegistryRow,
+    CompactionEntryRow, EventTriggerRow, InferenceBackendRow, InferenceProfileRow, ScheduleRow,
+    TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
 };
 use defra_node::EmbeddedNode;
 use serde::de::DeserializeOwned;
@@ -26,6 +26,7 @@ pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
         compaction_entries: load_compaction_entries(node).await?,
         tasks: load_tasks(node).await?,
         schedules: load_schedules(node).await?,
+        event_triggers: load_event_triggers(node).await?,
         tool_selections: load_tool_selections(node).await?,
         inference_backends: load_inference_backends(node).await?,
         inference_profiles: load_inference_profiles(node).await?,
@@ -146,6 +147,15 @@ pub async fn load_schedules(node: &EmbeddedNode) -> Result<Vec<ScheduleRow>> {
         node,
         "Schedule",
         "query { Schedule { schedule_id task_id interval_secs enabled concurrency next_run_at last_attempt_at last_status last_error fire_count created_at updated_at } }",
+    )
+    .await
+}
+
+pub async fn load_event_triggers(node: &EmbeddedNode) -> Result<Vec<EventTriggerRow>> {
+    load_rows(
+        node,
+        "EventTrigger",
+        "query { EventTrigger { trigger_id task_id source_collection event_kind filter enabled concurrency created_at updated_at last_attempt_at last_fired_source_doc_id last_status last_error fire_count } }",
     )
     .await
 }

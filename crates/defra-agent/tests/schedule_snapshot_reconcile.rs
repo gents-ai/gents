@@ -279,6 +279,38 @@ async fn create_schedule(
     );
 }
 
+async fn create_event_trigger(
+    node: &defra_agent::defra_node::EmbeddedNode,
+    trigger_id: &str,
+    task_id: &str,
+    source_collection: &str,
+    event_kind: &str,
+) {
+    let escaped_trigger_id = escape_graphql_string(trigger_id);
+    let escaped_task_id = escape_graphql_string(task_id);
+    let escaped_source_collection = escape_graphql_string(source_collection);
+    let escaped_event_kind = escape_graphql_string(event_kind);
+    let mutation = format!(
+        r#"mutation {{
+            create_EventTrigger(input: {{
+                trigger_id: "{escaped_trigger_id}",
+                task_id: "{escaped_task_id}",
+                source_collection: "{escaped_source_collection}",
+                event_kind: "{escaped_event_kind}",
+                enabled: true,
+                concurrency: "serial",
+                fire_count: 0
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create EventTrigger failed: {:?}",
+        response.errors
+    );
+}
+
 async fn wait_for_runtime_snapshot<F>(
     node: &defra_agent::defra_node::EmbeddedNode,
     agent_did: &str,
@@ -389,6 +421,103 @@ async fn schedule_insert_bumps_active_generation() {
         reconciled.active_generation > initial_generation,
         "active_generation should bump after Task+Schedule insert (initial={initial_generation}, observed={})",
         reconciled.active_generation
+    );
+
+    let _ = shutdown_tx.send(true);
+    handle.await.unwrap().unwrap();
+}
+
+// This test exercises the control_watcher -> apply_control_update ->
+// generation_bump pipeline for EventTrigger documents. Expected to pass
+// after Task 16 landed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn event_trigger_insert_bumps_active_generation() {
+    let db = test_db("event-trigger-snapshot-reconcile").await;
+    let identity = Arc::new(test_identity("event-trigger-snapshot-reconcile"));
+    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
+    bind_default_behavior_backend(
+        db.node.as_ref(),
+        identity.did(),
+        "backend-event-trigger-snapshot-reconcile",
+        mock_endpoint.endpoint(),
+    )
+    .await;
+    let agent = DefraAgent::from_default_behavior_documents(
+        db.node.clone(),
+        identity,
+        DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let agent_did = agent.agent_did().to_string();
+    let default_behavior_id = agent.default_behavior_id().to_string();
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let handle = tokio::spawn(agent.run(shutdown_rx));
+
+    // Capture the baseline snapshot generation after startup. This is the
+    // `generation` value that a post-startup EventTrigger insert must exceed
+    // if the event-driven reload is wired.
+    let startup = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
+        snapshot.process_state == "ready"
+            && snapshot.reconcile_phase == "idle"
+            && snapshot.active_generation >= 1
+            && snapshot.last_reconcile_result == "startup"
+    })
+    .await;
+    let initial_generation = startup.active_generation;
+    assert!(
+        startup.last_reconcile_error.is_empty(),
+        "startup reconcile should be clean, got error={:?}",
+        startup.last_reconcile_error
+    );
+
+    // Insert one Task + one EventTrigger post-startup. The Task binds to the
+    // default behavior so the EventTrigger resolves as *active* once the
+    // control watcher triggers a reload.
+    create_task(
+        db.node.as_ref(),
+        "task-event-trigger-alpha",
+        &default_behavior_id,
+        "alpha prompt",
+    )
+    .await;
+    create_event_trigger(
+        db.node.as_ref(),
+        "event-trigger-alpha",
+        "task-event-trigger-alpha",
+        "AgentMessage",
+        "create",
+    )
+    .await;
+
+    // After Task 16 wires `apply_control_update` to dispatch on EventTrigger
+    // doc IDs, the post-insert reload bumps `active_generation` beyond the
+    // startup baseline and marks the reconcile as "applied".
+    let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
+        snapshot.process_state == "ready"
+            && snapshot.reconcile_phase == "idle"
+            && snapshot.active_generation > initial_generation
+            && snapshot.last_reconcile_result == "applied"
+    })
+    .await;
+    assert_eq!(reconciled.default_behavior_id, default_behavior_id);
+    assert!(
+        reconciled.last_reconcile_error.is_empty(),
+        "post-insert reconcile should be clean, got error={:?}",
+        reconciled.last_reconcile_error
+    );
+    assert!(
+        reconciled.active_generation > initial_generation,
+        "active_generation should bump after Task+EventTrigger insert (initial={initial_generation}, observed={})",
+        reconciled.active_generation
+    );
+    assert_eq!(
+        reconciled.last_reconcile_result, "applied",
+        "last_reconcile_result should be 'applied' after EventTrigger insert"
     );
 
     let _ = shutdown_tx.send(true);

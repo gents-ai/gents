@@ -23,7 +23,7 @@
 
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
-use defra_agent_protocol::row::{ScheduleRow, TaskRow};
+use defra_agent_protocol::row::{EventTriggerRow, ScheduleRow, TaskRow};
 use defra_node::EmbeddedNode;
 
 use super::super::graphql::{
@@ -205,4 +205,109 @@ pub async fn upsert_schedule(node: &EmbeddedNode, row: &ScheduleRow) -> Result<(
 /// fields.
 pub async fn fire_schedule_now(_node: &EmbeddedNode, _row: &ScheduleRow) -> Result<()> {
     bail!("manual Schedule fire lands in PR 3; this path writes no runtime-owned fields")
+}
+
+/// Apply-path upsert for an `EventTrigger` document.
+///
+/// CRITICAL: only apply-owned fields may appear in the mutation input.
+/// Runtime-owned fields (`last_attempt_at`, `last_fired_source_doc_id`,
+/// `last_status`, `last_error`, `fire_count`) are written exclusively by
+/// the trigger engine. Projecting them here would let a desktop edit
+/// clobber the engine's bookkeeping on every re-apply. The CLI's
+/// `config_writes/event_trigger.rs` enforces the same contract for
+/// manifest-apply; this desktop path mirrors it for in-app edits.
+pub async fn upsert_event_trigger(node: &EmbeddedNode, row: &EventTriggerRow) -> Result<()> {
+    let trigger_id = normalize_required("trigger_id", &row.trigger_id)?;
+    let task_id = normalize_required(
+        "task_id",
+        row.task_id
+            .as_deref()
+            .context("task_id is required for EventTrigger")?,
+    )?;
+    let now = Utc::now().to_rfc3339();
+    let created_at = row
+        .created_at
+        .as_deref()
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| now.clone());
+    let updated_at = row
+        .updated_at
+        .as_deref()
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| now.clone());
+
+    let add_fields = [
+        Some(format!(
+            r#"trigger_id: "{}""#,
+            escape_graphql_string(trigger_id)
+        )),
+        Some(format!(
+            r#"task_id: "{}""#,
+            escape_graphql_string(task_id)
+        )),
+        Some(graphql_string_field(
+            "source_collection",
+            row.source_collection.as_deref(),
+        )),
+        Some(graphql_string_field(
+            "event_kind",
+            row.event_kind.as_deref(),
+        )),
+        Some(graphql_string_field("filter", row.filter.as_deref())),
+        Some(graphql_optional_bool_field("enabled", row.enabled)),
+        Some(graphql_string_field(
+            "concurrency",
+            row.concurrency.as_deref(),
+        )),
+        Some(format!(
+            r#"created_at: "{}""#,
+            escape_graphql_string(&created_at)
+        )),
+        Some(format!(
+            r#"updated_at: "{}""#,
+            escape_graphql_string(&updated_at)
+        )),
+    ];
+    let update_fields = [
+        Some(format!(
+            r#"task_id: "{}""#,
+            escape_graphql_string(task_id)
+        )),
+        Some(graphql_string_field(
+            "source_collection",
+            row.source_collection.as_deref(),
+        )),
+        Some(graphql_string_field(
+            "event_kind",
+            row.event_kind.as_deref(),
+        )),
+        Some(graphql_string_field("filter", row.filter.as_deref())),
+        Some(graphql_optional_bool_field("enabled", row.enabled)),
+        Some(graphql_string_field(
+            "concurrency",
+            row.concurrency.as_deref(),
+        )),
+        Some(format!(
+            r#"updated_at: "{}""#,
+            escape_graphql_string(&now)
+        )),
+    ];
+
+    let mutation = format!(
+        r#"mutation {{
+            upsert_EventTrigger(
+                filter: {{ trigger_id: {{ _eq: "{trigger_id}" }} }},
+                add: {{
+                    {add_fields}
+                }},
+                update: {{
+                    {update_fields}
+                }}
+            ) {{ _docID }}
+        }}"#,
+        trigger_id = escape_graphql_string(trigger_id),
+        add_fields = join_fields(&add_fields),
+        update_fields = join_fields(&update_fields),
+    );
+    execute_mutation(node, &mutation, "upsert_event_trigger").await
 }

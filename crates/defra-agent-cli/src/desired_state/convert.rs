@@ -192,6 +192,24 @@ pub(crate) fn manifest_from_export_bundle(
                 )
             })
             .collect::<Result<Vec<_>>>()?,
+        event_triggers: bundle
+            .event_triggers
+            .iter()
+            .map(|value| {
+                desired_from_value(
+                    value,
+                    &[
+                        "trigger_id",
+                        "task_id",
+                        "source_collection",
+                        "event_kind",
+                        "filter",
+                        "enabled",
+                        "concurrency",
+                    ],
+                )
+            })
+            .collect::<Result<Vec<_>>>()?,
     };
     normalize_manifest(&mut manifest);
     Ok(manifest)
@@ -239,6 +257,11 @@ pub(crate) fn export_bundle_from_manifest(
             .collect::<serde_json::Result<Vec<_>>>()?,
         schedules: manifest
             .schedules
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<serde_json::Result<Vec<_>>>()?,
+        event_triggers: manifest
+            .event_triggers
             .iter()
             .map(serde_json::to_value)
             .collect::<serde_json::Result<Vec<_>>>()?,
