@@ -152,7 +152,6 @@ pub(crate) async fn build_config_export_bundle(
         ),
     )
     .await?;
-    sort_document_rows(&mut task_rows, "task_id");
     let mut schedule_rows = graphql_rows_or_empty_if_collection_missing(
         access,
         "Schedule",
@@ -166,10 +165,18 @@ pub(crate) async fn build_config_export_bundle(
         ),
     )
     .await?;
+    // Task and Schedule rows are fetched globally (neither collection is
+    // keyed by agent_did), then filtered client-side down to just the
+    // rows reachable from this agent's behaviors. Without this scope, a
+    // multi-agent node would leak every other agent's Task/Schedule docs
+    // into this export and produce false drift in `config diff`.
+    filter_tasks_and_schedules_by_agent_reachability(
+        &behavior_rows,
+        &mut task_rows,
+        &mut schedule_rows,
+    );
+    sort_document_rows(&mut task_rows, "task_id");
     sort_document_rows(&mut schedule_rows, "schedule_id");
-    // Task and Schedule are not keyed by agent_did in the schema, so they
-    // are fetched without an agent-scoped filter — scoping is the caller's
-    // responsibility via the manifest.
 
     Ok(ConfigExportBundle {
         format: CONFIG_EXPORT_FORMAT.to_string(),
@@ -368,7 +375,6 @@ pub(crate) async fn build_desired_state_live_bundle(
         ),
     )
     .await?;
-    sort_document_rows(&mut task_rows, "task_id");
     let mut schedule_rows = graphql_rows_or_empty_if_collection_missing(
         access,
         "Schedule",
@@ -382,10 +388,18 @@ pub(crate) async fn build_desired_state_live_bundle(
         ),
     )
     .await?;
+    // Filter the globally-fetched Task/Schedule rows down to just the
+    // ones reachable from this agent's behaviors. On a multi-agent node,
+    // without this scoping, `config diff` would see every other agent's
+    // Task/Schedule docs as drift and try to "reconcile" them into the
+    // current agent's manifest.
+    filter_tasks_and_schedules_by_agent_reachability(
+        &behavior_rows,
+        &mut task_rows,
+        &mut schedule_rows,
+    );
+    sort_document_rows(&mut task_rows, "task_id");
     sort_document_rows(&mut schedule_rows, "schedule_id");
-    // Task and Schedule are not keyed by agent_did in the schema, so they
-    // are fetched without an agent-scoped filter — scoping is the caller's
-    // responsibility via the manifest.
 
     Ok(ConfigExportBundle {
         format: CONFIG_EXPORT_FORMAT.to_string(),
@@ -428,6 +442,49 @@ pub(crate) fn live_manifest_from_bundle(
             },
         ))
     }
+}
+
+/// Scope globally-fetched `Task` and `Schedule` rows to just those
+/// reachable from the given agent's behaviors.
+///
+/// `Task.behavior_id` must be one of the agent's `AgentBehavior.behavior_id`
+/// values; schedules are kept only if their `task_id` is in the set of
+/// reachable tasks. On a multi-agent node, failing to filter here would
+/// (a) leak other agents' Task/Schedule docs into `config export`, and
+/// (b) make `config diff` surface other agents' docs as drift against the
+/// current agent's manifest.
+///
+/// Rows with a missing or non-string key field (`behavior_id` on Task,
+/// `task_id` on Schedule) are dropped: they aren't reachable from any
+/// agent's behavior set, so they can't belong to this agent either.
+pub(crate) fn filter_tasks_and_schedules_by_agent_reachability(
+    behavior_rows: &[Value],
+    task_rows: &mut Vec<Value>,
+    schedule_rows: &mut Vec<Value>,
+) {
+    let behavior_ids: BTreeSet<String> = behavior_rows
+        .iter()
+        .filter_map(|row| row.get("behavior_id").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect();
+
+    task_rows.retain(|row| {
+        row.get("behavior_id")
+            .and_then(Value::as_str)
+            .is_some_and(|behavior_id| behavior_ids.contains(behavior_id))
+    });
+
+    let reachable_task_ids: BTreeSet<String> = task_rows
+        .iter()
+        .filter_map(|row| row.get("task_id").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect();
+
+    schedule_rows.retain(|row| {
+        row.get("task_id")
+            .and_then(Value::as_str)
+            .is_some_and(|task_id| reachable_task_ids.contains(task_id))
+    });
 }
 
 pub(crate) fn sort_document_rows(rows: &mut [Value], key: &str) {
@@ -581,4 +638,148 @@ pub(crate) fn select_apply_collection_docs(
     }
 
     Ok(selected)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Regression for Finding 3 (multi-agent scoping): when two agents
+    /// live on the same node, `config export` / `config diff` must only
+    /// surface Task/Schedule docs reachable from the SELECTED agent's
+    /// behaviors. Before the fix, Task and Schedule were fetched globally
+    /// and handed back unfiltered, leaking cross-agent documents.
+    ///
+    /// Scenario:
+    /// - Agent A owns behavior `general-a` and `code-a`.
+    /// - Agent B owns behavior `general-b`.
+    /// - Tasks: `task-a1` (behavior=general-a), `task-a2` (behavior=code-a),
+    ///   `task-b1` (behavior=general-b), `task-orphan` (behavior=nonexistent).
+    /// - Schedules: one per task plus `sched-dangling` (task_id=missing).
+    ///
+    /// Filtering with Agent A's behaviors must retain tasks a1/a2 and
+    /// their matching schedules, and drop every B task/schedule plus the
+    /// orphan/dangling rows.
+    #[test]
+    fn filter_retains_only_rows_reachable_from_selected_agent_behaviors() {
+        let behaviors_a = vec![
+            json!({ "behavior_id": "general-a" }),
+            json!({ "behavior_id": "code-a" }),
+        ];
+        let mut tasks = vec![
+            json!({ "task_id": "task-a1", "behavior_id": "general-a" }),
+            json!({ "task_id": "task-a2", "behavior_id": "code-a" }),
+            json!({ "task_id": "task-b1", "behavior_id": "general-b" }),
+            json!({ "task_id": "task-orphan", "behavior_id": "nonexistent" }),
+            // Missing behavior_id — can't be reachable from any agent.
+            json!({ "task_id": "task-missing-behavior" }),
+        ];
+        let mut schedules = vec![
+            json!({ "schedule_id": "sched-a1", "task_id": "task-a1" }),
+            json!({ "schedule_id": "sched-a2", "task_id": "task-a2" }),
+            json!({ "schedule_id": "sched-b1", "task_id": "task-b1" }),
+            json!({ "schedule_id": "sched-dangling", "task_id": "task-missing" }),
+            // Missing task_id — can't be reachable.
+            json!({ "schedule_id": "sched-missing-task" }),
+        ];
+
+        filter_tasks_and_schedules_by_agent_reachability(&behaviors_a, &mut tasks, &mut schedules);
+
+        let task_ids: Vec<&str> = tasks
+            .iter()
+            .map(|t| t.get("task_id").and_then(Value::as_str).unwrap())
+            .collect();
+        assert_eq!(
+            task_ids,
+            vec!["task-a1", "task-a2"],
+            "only agent A's tasks should survive reachability filtering"
+        );
+
+        let schedule_ids: Vec<&str> = schedules
+            .iter()
+            .map(|s| s.get("schedule_id").and_then(Value::as_str).unwrap())
+            .collect();
+        assert_eq!(
+            schedule_ids,
+            vec!["sched-a1", "sched-a2"],
+            "only schedules whose task_id is in agent A's reachable task set should survive"
+        );
+    }
+
+    /// Inverse angle on the same bug: filtering with the OTHER agent's
+    /// behaviors must return a disjoint set. Running both branches of
+    /// this test in one file proves exports really are agent-scoped, not
+    /// just "arbitrarily pruned."
+    #[test]
+    fn filter_is_disjoint_across_agents_on_same_node() {
+        let mut tasks_for_a = vec![
+            json!({ "task_id": "task-a1", "behavior_id": "general-a" }),
+            json!({ "task_id": "task-b1", "behavior_id": "general-b" }),
+        ];
+        let mut schedules_for_a = vec![
+            json!({ "schedule_id": "sched-a1", "task_id": "task-a1" }),
+            json!({ "schedule_id": "sched-b1", "task_id": "task-b1" }),
+        ];
+        let mut tasks_for_b = tasks_for_a.clone();
+        let mut schedules_for_b = schedules_for_a.clone();
+
+        let behaviors_a = vec![json!({ "behavior_id": "general-a" })];
+        let behaviors_b = vec![json!({ "behavior_id": "general-b" })];
+
+        filter_tasks_and_schedules_by_agent_reachability(
+            &behaviors_a,
+            &mut tasks_for_a,
+            &mut schedules_for_a,
+        );
+        filter_tasks_and_schedules_by_agent_reachability(
+            &behaviors_b,
+            &mut tasks_for_b,
+            &mut schedules_for_b,
+        );
+
+        let a_task_ids: Vec<&str> = tasks_for_a
+            .iter()
+            .map(|t| t.get("task_id").and_then(Value::as_str).unwrap())
+            .collect();
+        let b_task_ids: Vec<&str> = tasks_for_b
+            .iter()
+            .map(|t| t.get("task_id").and_then(Value::as_str).unwrap())
+            .collect();
+        assert_eq!(a_task_ids, vec!["task-a1"]);
+        assert_eq!(b_task_ids, vec!["task-b1"]);
+
+        let a_sched_ids: Vec<&str> = schedules_for_a
+            .iter()
+            .map(|s| s.get("schedule_id").and_then(Value::as_str).unwrap())
+            .collect();
+        let b_sched_ids: Vec<&str> = schedules_for_b
+            .iter()
+            .map(|s| s.get("schedule_id").and_then(Value::as_str).unwrap())
+            .collect();
+        assert_eq!(a_sched_ids, vec!["sched-a1"]);
+        assert_eq!(b_sched_ids, vec!["sched-b1"]);
+    }
+
+    /// An empty behavior set — e.g. because `AgentBehavior` has no rows
+    /// yet for this agent — must drop every Task and Schedule, not "fail
+    /// open" by returning everything. Otherwise an agent that hasn't
+    /// finished onboarding would still import other agents' tasks.
+    #[test]
+    fn filter_with_no_behaviors_drops_all_tasks_and_schedules() {
+        let behaviors: Vec<Value> = Vec::new();
+        let mut tasks = vec![json!({ "task_id": "task-x", "behavior_id": "some" })];
+        let mut schedules = vec![json!({ "schedule_id": "sched-x", "task_id": "task-x" })];
+
+        filter_tasks_and_schedules_by_agent_reachability(&behaviors, &mut tasks, &mut schedules);
+
+        assert!(
+            tasks.is_empty(),
+            "no behaviors means no reachable tasks; got {tasks:?}"
+        );
+        assert!(
+            schedules.is_empty(),
+            "no reachable tasks means no reachable schedules; got {schedules:?}"
+        );
+    }
 }
