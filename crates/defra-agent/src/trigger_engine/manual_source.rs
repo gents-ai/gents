@@ -25,7 +25,6 @@ const MANUAL_CHANNEL_CAPACITY: usize = 32;
 /// Unlike `ScheduleSource` and `EventSource`, `ManualSource` has no
 /// DB-watching loop — it sits on an mpsc and yields whatever intents
 /// show up.
-#[allow(dead_code)]
 pub(crate) struct ManualSource {
     rx: mpsc::Receiver<FireIntent>,
     cancel: CancellationToken,
@@ -36,15 +35,10 @@ pub(crate) struct ManualSource {
 /// receiver that resolves when the engine's `on_result` callback fires.
 #[derive(Clone)]
 pub(crate) struct ManualTriggerHandle {
-    // `#[allow(dead_code)]`: the field is exercised by `run_task_now`
-    // (and by tests on it), but the handle itself is not yet constructed
-    // outside tests — Task 4 wires `ManualSource::new` into startup.
-    #[allow(dead_code)]
     tx: mpsc::Sender<FireIntent>,
 }
 
 impl ManualSource {
-    #[allow(dead_code)]
     pub(crate) fn new(cancel: CancellationToken) -> (Self, ManualTriggerHandle) {
         let (tx, rx) = mpsc::channel(MANUAL_CHANNEL_CAPACITY);
         (

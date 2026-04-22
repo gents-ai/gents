@@ -135,6 +135,18 @@ pub(in crate::agent) async fn run_agent(
     let trigger_engine_materializer_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_cancel = cancel.child_token();
     let trigger_engine_startup_barrier = startup_barrier.clone();
+    // Construct the `ManualSource` up-front so the `ManualTriggerHandle` can
+    // be published to in-process callers (via the `OnceCell` on
+    // `DefraAgent`) before `run()` awaits shutdown. Deferring construction
+    // into the spawned task would race the callers that cloned `DefraAgent`
+    // and are polling for the handle.
+    let (manual_source, manual_trigger_handle) =
+        crate::trigger_engine::manual_source::ManualSource::new(trigger_engine_cancel.clone());
+    // Publish the handle; `set` returns `Err` only if another path already
+    // populated the cell, which is not expected here but is harmless to
+    // ignore — the handle is `Clone` and all copies route to the same
+    // channel sender.
+    let _ = agent.manual_trigger_handle.set(manual_trigger_handle);
     let trigger_engine_handle = tokio::spawn(async move {
         tokio::select! {
             _ = trigger_engine_cancel.cancelled() => return,
@@ -160,8 +172,10 @@ pub(in crate::agent) async fn run_agent(
                 trigger_engine_cancel.clone(),
             ),
         );
+        let manual_source_box: Box<dyn crate::trigger_engine::TriggerSource> =
+            Box::new(manual_source);
         let sources: Vec<Box<dyn crate::trigger_engine::TriggerSource>> =
-            vec![schedule_source, event_source];
+            vec![schedule_source, event_source, manual_source_box];
         let engine = crate::trigger_engine::TriggerEngine::new(
             trigger_engine_engine_snapshot_rx,
             materializer,
