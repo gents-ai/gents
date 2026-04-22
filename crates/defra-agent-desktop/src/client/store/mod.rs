@@ -74,6 +74,25 @@ pub struct TranscriptView<'a> {
     pub tool_results: Vec<&'a AgentToolResultRow>,
 }
 
+/// Aggregated recent-run bookkeeping for a task, rolled up across all
+/// triggers (Schedule + EventTrigger) that reference it.
+///
+/// The apply path owns the `Task` description while the trigger engine
+/// owns per-trigger fire bookkeeping on `Schedule` and `EventTrigger`.
+/// Operators looking at a single task need to see "how often has this
+/// task actually been fired, and what happened last time?" without
+/// having to click into every trigger individually -- this struct rolls
+/// those numbers up for the Task detail view.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct TaskRecentRuns {
+    pub total_fires: u64,
+    pub last_attempt_at: Option<String>,
+    pub last_status: Option<String>,
+    pub last_error: Option<String>,
+    pub schedule_count: usize,
+    pub event_trigger_count: usize,
+}
+
 impl Default for ClientStore {
     fn default() -> Self {
         Self::from_rows(ClientStoreRows::default())
@@ -198,6 +217,85 @@ impl ClientStore {
             .collect()
     }
 
+    /// Roll up the trigger-engine bookkeeping for a `Task` across every
+    /// `Schedule` and `EventTrigger` that references it.
+    ///
+    /// Both trigger kinds carry their own independent `fire_count`,
+    /// `last_attempt_at`, `last_status`, and `last_error` fields. This
+    /// helper sums the fires and picks the most recent `last_attempt_at`
+    /// (lexicographic max on the ISO-8601 timestamp strings -- the
+    /// trigger engine always writes RFC3339/Z-suffixed stamps, so
+    /// lexical order matches chronological order), then surfaces the
+    /// status/error from the trigger that produced that most-recent
+    /// attempt. Used by the Task detail view to show operators a single
+    /// rolled-up "Recent Runs" summary instead of forcing them to click
+    /// into each individual trigger.
+    pub fn recent_runs_for_task(&self, task_id: &str) -> TaskRecentRuns {
+        let schedules: Vec<&ScheduleRow> = self
+            .schedules
+            .iter()
+            .filter(|s| s.task_id.as_deref() == Some(task_id))
+            .collect();
+        let events: Vec<&EventTriggerRow> = self
+            .event_triggers
+            .iter()
+            .filter(|t| t.task_id.as_deref() == Some(task_id))
+            .collect();
+
+        let total_fires = schedules
+            .iter()
+            .map(|s| s.fire_count.unwrap_or(0).max(0) as u64)
+            .sum::<u64>()
+            + events
+                .iter()
+                .map(|t| t.fire_count.unwrap_or(0).max(0) as u64)
+                .sum::<u64>();
+
+        // Find the most recent attempt_at across all triggers.
+        let all_attempts: Vec<&str> = schedules
+            .iter()
+            .filter_map(|s| s.last_attempt_at.as_deref())
+            .chain(events.iter().filter_map(|t| t.last_attempt_at.as_deref()))
+            .collect();
+        let last_attempt_at = all_attempts.iter().max().map(ToString::to_string);
+
+        // Resolve status + error from the trigger whose timestamp
+        // equals the max. Ties (two triggers firing in the same second
+        // on the same task) resolve in favor of the first schedule
+        // found, then the first event trigger found -- rare in
+        // practice, and the operator still sees the aggregate
+        // fire-count.
+        let (last_status, last_error) = if let Some(ref target_ts) = last_attempt_at {
+            let mut pair = None;
+            for s in &schedules {
+                if s.last_attempt_at.as_deref() == Some(target_ts.as_str()) {
+                    pair = Some((s.last_status.clone(), s.last_error.clone()));
+                    break;
+                }
+            }
+            if pair.is_none() {
+                for t in &events {
+                    if t.last_attempt_at.as_deref() == Some(target_ts.as_str()) {
+                        pair = Some((t.last_status.clone(), t.last_error.clone()));
+                        break;
+                    }
+                }
+            }
+            pair.unwrap_or((None, None))
+        } else {
+            (None, None)
+        };
+
+        TaskRecentRuns {
+            total_fires,
+            last_attempt_at,
+            last_status,
+            last_error,
+            schedule_count: schedules.len(),
+            event_trigger_count: events.len(),
+        }
+    }
+
     pub fn conversation_rows(&self, agent_did: &str) -> Vec<&AgentConversationRow> {
         self.conversations_by_agent_did
             .get(agent_did)
@@ -306,3 +404,97 @@ impl ClientStore {
 }
 
 pub type SharedClientStore = Arc<ClientStore>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn schedule_row(
+        schedule_id: &str,
+        task_id: &str,
+        fire_count: Option<i64>,
+        last_attempt_at: Option<&str>,
+        last_status: Option<&str>,
+        last_error: Option<&str>,
+    ) -> ScheduleRow {
+        ScheduleRow {
+            schedule_id: schedule_id.to_string(),
+            task_id: Some(task_id.to_string()),
+            interval_secs: None,
+            enabled: None,
+            concurrency: None,
+            next_run_at: None,
+            last_attempt_at: last_attempt_at.map(str::to_string),
+            last_status: last_status.map(str::to_string),
+            last_error: last_error.map(str::to_string),
+            fire_count,
+            created_at: None,
+            updated_at: None,
+        }
+    }
+
+    fn event_trigger_row(
+        trigger_id: &str,
+        task_id: &str,
+        fire_count: Option<i64>,
+        last_attempt_at: Option<&str>,
+        last_status: Option<&str>,
+        last_error: Option<&str>,
+    ) -> EventTriggerRow {
+        EventTriggerRow {
+            trigger_id: trigger_id.to_string(),
+            task_id: Some(task_id.to_string()),
+            source_collection: None,
+            event_kind: None,
+            filter: None,
+            enabled: None,
+            concurrency: None,
+            created_at: None,
+            updated_at: None,
+            last_attempt_at: last_attempt_at.map(str::to_string),
+            last_fired_source_doc_id: None,
+            last_status: last_status.map(str::to_string),
+            last_error: last_error.map(str::to_string),
+            fire_count,
+        }
+    }
+
+    #[test]
+    fn recent_runs_aggregates_across_schedules_and_event_triggers() {
+        let mut store = ClientStore::default();
+        store.schedules.push(schedule_row(
+            "s1",
+            "task-1",
+            Some(3),
+            Some("2026-04-22T10:00:00Z"),
+            Some("fired"),
+            None,
+        ));
+        store.event_triggers.push(event_trigger_row(
+            "t1",
+            "task-1",
+            Some(5),
+            Some("2026-04-22T11:00:00Z"),
+            Some("skipped"),
+            Some("in-flight"),
+        ));
+
+        let runs = store.recent_runs_for_task("task-1");
+        assert_eq!(runs.total_fires, 8);
+        assert_eq!(
+            runs.last_attempt_at.as_deref(),
+            Some("2026-04-22T11:00:00Z")
+        );
+        assert_eq!(runs.last_status.as_deref(), Some("skipped"));
+        assert_eq!(runs.last_error.as_deref(), Some("in-flight"));
+        assert_eq!(runs.schedule_count, 1);
+        assert_eq!(runs.event_trigger_count, 1);
+    }
+
+    #[test]
+    fn recent_runs_empty_when_no_triggers() {
+        let store = ClientStore::default();
+        let runs = store.recent_runs_for_task("task-missing");
+        assert_eq!(runs, TaskRecentRuns::default());
+    }
+}
