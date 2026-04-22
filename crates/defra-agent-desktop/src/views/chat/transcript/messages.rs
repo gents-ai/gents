@@ -1,3 +1,4 @@
+use defra_agent_protocol::row::AgentRequestRow;
 use defra_agent_protocol::transcript::PresentedMessageRole;
 use eframe::egui::{self, RichText, Ui};
 use egui_commonmark::CommonMarkCache;
@@ -14,6 +15,36 @@ pub(super) fn message_label_color(role: PresentedMessageRole) -> egui::Color32 {
     }
 }
 
+/// Short lineage descriptor for a request, used to render a small chip next to
+/// the USER label so trigger-originated turns are visually distinct from
+/// interactive chat.
+pub(super) struct LineageBadge<'a> {
+    pub label: &'a str,
+    pub color: egui::Color32,
+    pub tooltip: Option<String>,
+}
+
+pub(super) fn lineage_badge_for_request(request: &AgentRequestRow) -> Option<LineageBadge<'_>> {
+    let kind = request.caused_by_trigger_kind.as_deref()?;
+    let (label, color) = match kind {
+        "schedule" => ("Schedule", egui::Color32::LIGHT_BLUE),
+        "event" => ("Event", egui::Color32::LIGHT_YELLOW),
+        "manual" => ("Manual", egui::Color32::LIGHT_GREEN),
+        // Unknown kinds still surface so operators notice the lineage.
+        _ => (kind, egui::Color32::LIGHT_GRAY),
+    };
+    let tooltip = request
+        .caused_by_trigger_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("trigger_id: {value}"));
+    Some(LineageBadge {
+        label,
+        color,
+        tooltip,
+    })
+}
+
 pub(super) fn message_block(
     ui: &mut Ui,
     markdown_cache: &mut CommonMarkCache,
@@ -22,12 +53,32 @@ pub(super) fn message_block(
     label_color: egui::Color32,
     body: &str,
 ) {
-    turn_block(ui, label, label_color, |ui| {
+    turn_block(ui, label, label_color, None, |ui| {
         render_markdown(ui, markdown_cache, markdown_id, body);
     });
 }
 
-fn turn_block(ui: &mut Ui, label: &str, label_color: egui::Color32, body: impl FnOnce(&mut Ui)) {
+pub(super) fn message_block_with_badge(
+    ui: &mut Ui,
+    markdown_cache: &mut CommonMarkCache,
+    markdown_id: impl std::hash::Hash,
+    label: &str,
+    label_color: egui::Color32,
+    body: &str,
+    badge: Option<LineageBadge<'_>>,
+) {
+    turn_block(ui, label, label_color, badge, |ui| {
+        render_markdown(ui, markdown_cache, markdown_id, body);
+    });
+}
+
+fn turn_block(
+    ui: &mut Ui,
+    label: &str,
+    label_color: egui::Color32,
+    badge: Option<LineageBadge<'_>>,
+    body: impl FnOnce(&mut Ui),
+) {
     let palette = theme::palette();
     let label_width = (ui.available_width() * 0.08).clamp(46.0, 64.0);
 
@@ -51,10 +102,23 @@ fn turn_block(ui: &mut Ui, label: &str, label_color: egui::Color32, body: impl F
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.vertical(|ui| {
+                    if let Some(badge) = badge {
+                        render_lineage_badge(ui, badge);
+                        ui.add_space(4.0);
+                    }
                     body(ui);
                 });
             });
     });
+}
+
+fn render_lineage_badge(ui: &mut Ui, badge: LineageBadge<'_>) {
+    let response = ui.add(egui::Label::new(
+        RichText::new(badge.label).monospace().small().color(badge.color),
+    ));
+    if let Some(tooltip) = badge.tooltip {
+        response.on_hover_text(tooltip);
+    }
 }
 
 pub(super) fn transcript_surface(ui: &mut Ui, body: impl FnOnce(&mut Ui)) {

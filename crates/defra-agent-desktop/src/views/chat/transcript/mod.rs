@@ -14,7 +14,10 @@ use crate::client::ClientStore;
 use crate::state::ShellState;
 use crate::views::components;
 
-use self::messages::{message_block, message_label_color, transcript_surface};
+use self::messages::{
+    lineage_badge_for_request, message_block, message_block_with_badge, message_label_color,
+    transcript_surface,
+};
 use self::modal::show_tool_detail_modal;
 use self::reasoning_cards::{
     latest_reasoning_response, reasoning_block, response_fallback_content,
@@ -76,7 +79,8 @@ pub fn show(
                             .as_deref()
                             .filter(|content| !content.trim().is_empty())
                         {
-                            message_block(
+                            let badge = lineage_badge_for_request(chain.first_visible_request);
+                            message_block_with_badge(
                                 ui,
                                 markdown_cache,
                                 format!(
@@ -86,6 +90,7 @@ pub fn show(
                                 "USER",
                                 palette.text_1,
                                 content,
+                                badge,
                             );
                             ui.add_space(10.0);
                         }
@@ -119,6 +124,11 @@ pub fn show(
                         }
                     }
                 } else {
+                    // Derive a session-level lineage from the earliest request
+                    // for this session so the first USER turn in the persisted
+                    // transcript shows how the conversation was initiated.
+                    let session_lineage_source = requests.first().copied();
+                    let mut lineage_rendered = false;
                     for message in &transcript.messages {
                         let presentation = present_persisted_message(
                             message.role.as_deref().unwrap_or("user"),
@@ -135,7 +145,19 @@ pub fn show(
                                 || !transcript.tool_results.is_empty());
 
                         if presentation.has_visible_body() && !suppress_tool_message {
-                            message_block(
+                            let badge = if !lineage_rendered
+                                && presentation.role == PresentedMessageRole::User
+                            {
+                                let candidate =
+                                    session_lineage_source.and_then(lineage_badge_for_request);
+                                if candidate.is_some() {
+                                    lineage_rendered = true;
+                                }
+                                candidate
+                            } else {
+                                None
+                            };
+                            message_block_with_badge(
                                 ui,
                                 markdown_cache,
                                 format!(
@@ -146,6 +168,7 @@ pub fn show(
                                 presentation.role.label(),
                                 message_label_color(presentation.role),
                                 &presentation.body_markdown,
+                                badge,
                             );
                             ui.add_space(6.0);
                         }

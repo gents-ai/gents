@@ -59,6 +59,16 @@ pub(super) fn render_request_detail(ui: &mut Ui, store: &ClientStore, request: &
     );
     read_only_field(
         ui,
+        "Trigger Kind",
+        request.caused_by_trigger_kind.as_deref().unwrap_or("none"),
+    );
+    read_only_field(
+        ui,
+        "Trigger ID",
+        request.caused_by_trigger_id.as_deref().unwrap_or("none"),
+    );
+    read_only_field(
+        ui,
         "Retry Count",
         &format!(
             "{}/{}",

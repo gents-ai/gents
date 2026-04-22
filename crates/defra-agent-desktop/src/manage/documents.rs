@@ -632,6 +632,12 @@ pub fn request_timeline_summaries(
             let response_state = latest_response
                 .and_then(|response| response.status.as_deref())
                 .unwrap_or("waiting");
+            let lineage = row
+                .caused_by_trigger_kind
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .map(|kind| format!("  via {kind}"))
+                .unwrap_or_default();
             EntitySummary {
                 id: row.request_id.clone(),
                 title: summarize_request_content(
@@ -639,7 +645,7 @@ pub fn request_timeline_summaries(
                     &row.request_id,
                 ),
                 meta: format!(
-                    "{}  rsp {}  session {}  {}",
+                    "{}  rsp {}  session {}  {}{}",
                     row.lifecycle_state.as_deref().unwrap_or("pending"),
                     response_state,
                     abbreviate_identifier(row.session_id.as_deref().unwrap_or("none")),
@@ -649,6 +655,7 @@ pub fn request_timeline_summaries(
                             .or(row.created_at.as_deref())
                             .unwrap_or(""),
                     ),
+                    lineage,
                 ),
             }
         })
