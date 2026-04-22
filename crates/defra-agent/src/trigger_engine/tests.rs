@@ -24,6 +24,7 @@ use crate::runtime_snapshot::{
 };
 use crate::tool_surface::BehaviorToolConfig;
 use crate::trigger_engine::event_source::EventSource;
+use crate::trigger_engine::manual_source::ManualSource;
 use crate::trigger_engine::production_materializer::ProductionMaterializer;
 use crate::trigger_engine::schedule_source::ScheduleSource;
 use crate::BackendProviderKind;
@@ -2000,4 +2001,89 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
     assert_eq!(errored.concurrency.as_deref(), Some("serial"));
 
     cancel.cancel();
+}
+
+/// Build a `ResolvedTask` for unit tests that exercise the manual-fire path.
+/// Mirrors `resolved_task` but takes an explicit `task_id` / `behavior_id`
+/// so callers can assert the `task_id` round-tripped through the intent.
+fn resolved_task_for_test(
+    task_id: &str,
+    behavior_id: &str,
+    prompt_template: &str,
+) -> ResolvedTask {
+    ResolvedTask {
+        task_id: task_id.to_string(),
+        behavior_id: behavior_id.to_string(),
+        prompt_template: prompt_template.to_string(),
+        output_schema_ref: None,
+    }
+}
+
+/// Build an `ActiveRuntimeSnapshot` with a single active task and no other
+/// live state. Mirrors `snapshot_with_schedules`. Used by the manual-fire
+/// tests that need `snapshot.active_tasks()` to resolve the intent's task.
+fn snapshot_with_active_task(task: ResolvedTask) -> Arc<ActiveRuntimeSnapshot> {
+    let mut tasks = HashMap::new();
+    tasks.insert(task.task_id.clone(), task);
+    let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
+        "general".to_string(),
+        Vec::new(),
+        HashMap::new(),
+        HashMap::new(),
+        HashMap::new(),
+    )
+    .with_tasks(tasks);
+    Arc::new(resolved.activate(1, HashMap::new()))
+}
+
+#[tokio::test]
+async fn manual_source_run_task_now_yields_intent_with_args_vars() {
+    let snapshot = snapshot_with_active_task(resolved_task_for_test(
+        "greet-user",
+        "behavior-1",
+        "hello {{ args.name }}",
+    ));
+    let cancel = CancellationToken::new();
+    let (mut source, handle) = ManualSource::new(cancel.clone());
+
+    let pull = tokio::spawn(async move { source.next_fire().await });
+
+    let _result_rx = handle
+        .run_task_now(
+            snapshot.as_ref(),
+            "greet-user",
+            serde_json::json!({"name": "Amy"}),
+        )
+        .await
+        .unwrap();
+
+    let intent = pull.await.unwrap().expect("next_fire returned None");
+    assert_eq!(intent.trigger_kind, TriggerKind::Manual);
+    assert_eq!(intent.trigger_id, None);
+    assert_eq!(intent.concurrency, ConcurrencyMode::Parallel);
+    assert_eq!(
+        intent.args_vars.as_ref().and_then(|v| v["name"].as_str()),
+        Some("Amy"),
+    );
+    assert_eq!(intent.task.task_id, "greet-user");
+    assert_eq!(intent.event_vars["trigger_kind"].as_str(), Some("manual"));
+    assert!(intent.doc_vars.is_none());
+}
+
+#[tokio::test]
+async fn manual_source_run_task_now_rejects_unknown_task() {
+    let snapshot = snapshot_with_active_task(resolved_task_for_test(
+        "other-task",
+        "behavior-1",
+        "x",
+    ));
+    let (_source, handle) = ManualSource::new(CancellationToken::new());
+    let err = handle
+        .run_task_now(snapshot.as_ref(), "missing", serde_json::json!({}))
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("not in the active snapshot"),
+        "expected 'not in the active snapshot' in error, got: {err}"
+    );
 }

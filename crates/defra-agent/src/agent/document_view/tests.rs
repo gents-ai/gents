@@ -712,3 +712,91 @@ async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
         snapshot.unavailable_schedules
     );
 }
+
+#[tokio::test]
+async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-resolve-active-tasks"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-resolve-active-tasks",
+        "http://127.0.0.1:8129/v1",
+    )
+    .await;
+
+    let default_behavior_id = format!("{}:default", identity.did());
+    // Enabled task bound to the ready default behavior — should land in
+    // active_tasks.
+    create_task_bound(
+        node.as_ref(),
+        "task-active",
+        &default_behavior_id,
+        "hello",
+        true,
+    )
+    .await;
+    // Disabled task — should NOT land in active_tasks even though its
+    // behavior is ready.
+    create_task_bound(
+        node.as_ref(),
+        "task-disabled",
+        &default_behavior_id,
+        "disabled",
+        false,
+    )
+    .await;
+    // Task bound to a behavior_id that does not resolve to any behavior
+    // document — should NOT land in active_tasks.
+    create_task_bound(
+        node.as_ref(),
+        "task-missing-behavior",
+        "behavior-that-never-existed",
+        "orphan",
+        true,
+    )
+    .await;
+
+    let resolve_context = DocumentResolveContext {
+        identity: identity.clone(),
+        tool_ceiling: ToolCeiling::readonly(),
+    };
+    let view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("document view should load");
+
+    let snapshot =
+        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
+            .await
+            .expect("resolve should succeed");
+
+    assert_eq!(
+        snapshot.active_tasks.len(),
+        1,
+        "expected exactly one active task, got {:?}",
+        snapshot.active_tasks.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        snapshot.active_tasks.contains_key("task-active"),
+        "task-active should be in active_tasks: {:?}",
+        snapshot.active_tasks.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        !snapshot.active_tasks.contains_key("task-disabled"),
+        "disabled task must NOT be in active_tasks"
+    );
+    assert!(
+        !snapshot.active_tasks.contains_key("task-missing-behavior"),
+        "task with unavailable behavior must NOT be in active_tasks"
+    );
+
+    let resolved = snapshot
+        .active_tasks
+        .get("task-active")
+        .expect("task-active present");
+    assert_eq!(resolved.task_id, "task-active");
+    assert_eq!(resolved.behavior_id, default_behavior_id);
+    assert_eq!(resolved.prompt_template, "hello");
+    assert!(resolved.output_schema_ref.is_none());
+}
