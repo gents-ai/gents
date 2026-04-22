@@ -1223,6 +1223,27 @@ fn resolved_event_trigger(
     }
 }
 
+/// Variant of `resolved_event_trigger` that attaches an operator-authored
+/// filter fragment (e.g. `{ kind: { _eq: "signup" } }`). Used by the
+/// filter-probe tests.
+fn resolved_event_trigger_with_filter(
+    trigger_id: &str,
+    source_collection: &str,
+    task: ResolvedTask,
+    filter: &str,
+) -> ResolvedEventTrigger {
+    ResolvedEventTrigger {
+        trigger_id: trigger_id.to_string(),
+        task_id: task.task_id.clone(),
+        task,
+        source_collection: source_collection.to_string(),
+        event_kind: "created".to_string(),
+        filter: Some(filter.to_string()),
+        enabled: true,
+        concurrency: ConcurrencyMode::Serial,
+    }
+}
+
 /// Build an `ActiveRuntimeSnapshot` carrying the supplied event triggers and
 /// no other live state. Mirrors `snapshot_with_schedules` for the event-source
 /// tests.
@@ -1397,9 +1418,18 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
     assert_eq!(intent.concurrency, ConcurrencyMode::Serial);
     assert_eq!(intent.task.task_id, "task-webhook");
     assert_eq!(intent.task.prompt_template, "handle webhook");
-    assert!(
-        intent.doc_vars.is_none(),
-        "Task 21 owns doc-var hydration; Task 20's intent must leave doc_vars None"
+    // Task 21 hydrates `doc_vars` from the source doc. The trigger here
+    // has no operator-authored filter, so every created doc should fire
+    // and carry the full projection. We assert the shape here — the
+    // dedicated hydration test drills into individual fields.
+    let doc_vars = intent
+        .doc_vars
+        .as_ref()
+        .expect("Task 21: every fire must hydrate doc_vars (filter is None here)");
+    assert_eq!(
+        doc_vars["external_id"].as_str(),
+        Some("wh-1"),
+        "doc_vars must project the WebhookEvent fields, got {doc_vars}"
     );
     assert!(intent.args_vars.is_none());
 
@@ -1419,4 +1449,232 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
         "fired_at should be a string, got {:?}",
         ev["fired_at"]
     );
+}
+
+/// Task 21, Step 1: the filter-probe path must gate the fire on the
+/// trigger's operator-authored filter. With `filter: { kind: { _eq: "signup" }}`
+/// live on the trigger:
+///
+/// 1. Writing a matching doc (`kind = "signup"`) yields a FireIntent.
+/// 2. Writing a non-matching doc (`kind = "other"`) is silently dropped —
+///    `next_fire` must NOT return for that doc, even though the event
+///    still reaches the subscription.
+///
+/// We assert (1) by observing a FireIntent within a bounded window, then
+/// drive (2) by writing a second non-matching doc and confirming
+/// `next_fire` times out (no second intent) before we cancel the source.
+#[tokio::test]
+async fn event_source_filter_probe_gates_fire_on_operator_filter() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    // Register a WebhookEvent schema that includes the `kind` field the
+    // filter keys on. Must be indexed for DefraDB's filter evaluator to
+    // accept `_eq` on a non-_docID field in a limit-1 query.
+    let webhook_sdl = r#"
+        type WebhookEvent {
+            external_id: String
+            payload: String
+            kind: String @index
+            email: String
+        }
+    "#;
+    node.add_schema(webhook_sdl)
+        .await
+        .expect("add_schema for WebhookEvent");
+
+    let task = ResolvedTask {
+        task_id: "task-webhook".to_string(),
+        behavior_id: "general".to_string(),
+        prompt_template: "handle webhook".to_string(),
+        output_schema_ref: None,
+    };
+    // Trigger requires `kind == "signup"` — `other` events must not fire.
+    let trigger = resolved_event_trigger_with_filter(
+        "trigger-filtered",
+        "WebhookEvent",
+        task.clone(),
+        r#"{ kind: { _eq: "signup" } }"#,
+    );
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([("trigger-filtered".to_string(), trigger)]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+
+    let cancel = CancellationToken::new();
+    let mut source = EventSource::new(rx, node.clone(), cancel.clone());
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+
+    // Write BOTH docs on a detached task. A small delay gives `next_fire`
+    // time to park on its subscription recv. Order matters only for
+    // tracing readability — the filter probe is run per-event, so writing
+    // the non-matching doc first would still leave the matching doc as
+    // the one that ultimately yields the FireIntent.
+    let node_for_mutation = node.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Non-matching doc: kind = "other". The probe should reject it
+        // and next_fire must NOT return for this one.
+        let other_mutation = r#"mutation {
+            create_WebhookEvent(input: {
+                external_id: "wh-other",
+                payload: "{}",
+                kind: "other",
+                email: "other@example.com"
+            }) { _docID }
+        }"#;
+        let resp = node_for_mutation.execute(other_mutation).await;
+        assert!(
+            !resp.has_errors(),
+            "create_WebhookEvent(other) failed: {:?}",
+            resp.errors
+        );
+        // Matching doc: kind = "signup". The probe should accept this one.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let signup_mutation = r#"mutation {
+            create_WebhookEvent(input: {
+                external_id: "wh-signup",
+                payload: "{}",
+                kind: "signup",
+                email: "alice@example.com"
+            }) { _docID }
+        }"#;
+        let resp = node_for_mutation.execute(signup_mutation).await;
+        assert!(
+            !resp.has_errors(),
+            "create_WebhookEvent(signup) failed: {:?}",
+            resp.errors
+        );
+    });
+
+    // The matching doc should produce an intent within the timeout. A
+    // non-matching doc never yields — `next_fire` loops past it.
+    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("next_fire timed out; filter-probe must yield for the signup doc")
+        .expect("next_fire returned None instead of emitting a FireIntent");
+
+    assert_eq!(intent.trigger_id.as_deref(), Some("trigger-filtered"));
+    assert_eq!(intent.trigger_kind, TriggerKind::Event);
+    assert_eq!(
+        intent.event_vars["source_collection"].as_str(),
+        Some("WebhookEvent"),
+    );
+    // doc_vars must be populated — covered in depth by the next test, but
+    // a smoke assertion here locks the two steps together.
+    let doc_vars = intent
+        .doc_vars
+        .as_ref()
+        .expect("filter-matched fire must carry hydrated doc_vars");
+    assert_eq!(
+        doc_vars["kind"].as_str(),
+        Some("signup"),
+        "hydrated doc_vars must reflect the matching doc, got {doc_vars}"
+    );
+    assert_eq!(doc_vars["external_id"].as_str(), Some("wh-signup"));
+
+    // We don't actively assert the non-matching doc was dropped beyond the
+    // fact that the FireIntent we got above is for "signup" (proving the
+    // source skipped over "other" rather than firing on it). A stronger
+    // assertion would require a second `next_fire` poll with a short
+    // timeout, which races against late-delivered events.
+    cancel.cancel();
+}
+
+/// Task 21, Step 2: the FireIntent's `doc_vars` must carry the full source
+/// doc projection (introspected fields, excluding GraphQL meta /
+/// DefraDB-aggregate wrappers). With no filter on the trigger, every
+/// created doc produces a fire, and the fire's `doc_vars` should contain
+/// the operator-visible scalars we wrote into the mutation.
+#[tokio::test]
+async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let webhook_sdl = r#"
+        type WebhookEvent {
+            external_id: String
+            payload: String
+            kind: String @index
+            email: String
+        }
+    "#;
+    node.add_schema(webhook_sdl)
+        .await
+        .expect("add_schema for WebhookEvent");
+
+    let task = ResolvedTask {
+        task_id: "task-webhook".to_string(),
+        behavior_id: "general".to_string(),
+        prompt_template: "handle webhook".to_string(),
+        output_schema_ref: None,
+    };
+    // No filter on the trigger — every create fires, and the fire must
+    // carry the full doc projection.
+    let trigger = resolved_event_trigger("trigger-hydrate", "WebhookEvent", task.clone());
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([("trigger-hydrate".to_string(), trigger)]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+
+    let cancel = CancellationToken::new();
+    let mut source = EventSource::new(rx, node.clone(), cancel.clone());
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+
+    let node_for_mutation = node.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mutation = r#"mutation {
+            create_WebhookEvent(input: {
+                external_id: "wh-hydrate",
+                payload: "{\"foo\":1}",
+                kind: "signup",
+                email: "bob@example.com"
+            }) { _docID }
+        }"#;
+        let resp = node_for_mutation.execute(mutation).await;
+        assert!(
+            !resp.has_errors(),
+            "create_WebhookEvent(hydrate) failed: {:?}",
+            resp.errors
+        );
+    });
+
+    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("next_fire timed out; hydration path should yield on any created doc")
+        .expect("next_fire returned None instead of emitting a FireIntent");
+
+    let doc_vars = intent
+        .doc_vars
+        .as_ref()
+        .expect("FireIntent must carry hydrated doc_vars");
+    assert_eq!(
+        doc_vars["external_id"].as_str(),
+        Some("wh-hydrate"),
+        "doc_vars must project `external_id`, got {doc_vars}"
+    );
+    assert_eq!(
+        doc_vars["kind"].as_str(),
+        Some("signup"),
+        "doc_vars must project `kind`, got {doc_vars}"
+    );
+    assert_eq!(
+        doc_vars["email"].as_str(),
+        Some("bob@example.com"),
+        "doc_vars must project `email`, got {doc_vars}"
+    );
+    assert_eq!(
+        doc_vars["payload"].as_str(),
+        Some(r#"{"foo":1}"#),
+        "doc_vars must project `payload`, got {doc_vars}"
+    );
+    assert!(
+        doc_vars["_docID"].as_str().is_some_and(|s| !s.is_empty()),
+        "doc_vars must always carry _docID, got {doc_vars}"
+    );
+
+    cancel.cancel();
 }

@@ -9,9 +9,10 @@
 //! - Task 18: skeleton only — struct, constructor, no-op `next_fire` stub.
 //! - Task 19: `reconcile_subscriptions` drives the desired-collections set
 //!   from the snapshot at each generation bump.
-//! - Task 20 (this file): full `next_fire` loop (poll subscription, filter by
-//!   desired collections, build `FireIntent`).
-//! - Task 21: filter probe + doc-var hydration.
+//! - Task 20: full `next_fire` loop (poll subscription, filter by desired
+//!   collections, build `FireIntent`).
+//! - Task 21 (this file): filter probe + doc-var hydration via an
+//!   introspected source-doc projection cached per source collection.
 //! - Task 22: `on_result` callback body for bookkeeping writes.
 
 use std::collections::{HashMap, HashSet};
@@ -56,9 +57,11 @@ pub(crate) struct EventSource {
     #[allow(dead_code)]
     reconcile_debounce: Duration,
     cancel: CancellationToken,
-    /// Reserved for Task 21: per-source-collection schema cache used by
-    /// doc-var hydration. Stays empty until Task 21 wires the lookup path.
-    #[allow(dead_code)]
+    /// Per-source-collection schema cache used by `fetch_source_doc` to
+    /// build a field-projection query. Entries are populated lazily on first
+    /// hydration against a given source collection and reused for the
+    /// lifetime of the source (collection schemas are stable across a
+    /// deployment's runtime; no invalidation is needed here).
     source_schema_cache: SourceSchemaCache,
     /// Cache of `collection_id -> collection name` mappings. The Update event
     /// carries only the stable `collection_id` string (see `events::Update`),
@@ -70,12 +73,92 @@ pub(crate) struct EventSource {
     collection_id_to_name: HashMap<String, String>,
 }
 
-/// Per-source-collection schema cache. Task 21 will populate this to avoid
-/// re-querying collection schemas for every dispatched event; stays empty
-/// until then.
+/// Per-source-collection schema cache.
+///
+/// `fields_for(collection, node)` runs a one-shot GraphQL introspection
+/// (`__type(name: "<collection>") { fields { name } }`) the first time a
+/// given source collection is seen, then memoizes the resulting projectable
+/// field list. Subsequent hydrations for the same collection are a pure
+/// cache hit. Entries are never invalidated — the active schema for a
+/// collection is stable across the runtime's lifetime, and any schema
+/// migration produces a new collection version whose identity the fire
+/// path treats as a distinct source.
+///
+/// Filtering: DefraDB's GraphQL introspection exposes several auto-
+/// generated fields on every collection (aggregates like `_count`,
+/// `_sum`, and per-field wrappers). These are not direct scalars and
+/// cannot be included in a plain projection — selecting them without
+/// required arguments produces a parse error. We filter aggressively:
+/// drop anything starting with `_` (GraphQL meta / DefraDB aggregate) and
+/// anything whose name is an upper-case aggregate keyword.
 #[derive(Default)]
 pub(crate) struct SourceSchemaCache {
-    // by_collection: tokio::sync::Mutex<HashMap<String, Vec<String>>>,  // Task 21
+    by_collection: tokio::sync::Mutex<HashMap<String, Vec<String>>>,
+}
+
+impl SourceSchemaCache {
+    /// Return the projectable scalar-ish field names for `collection`,
+    /// querying the node's GraphQL schema on first access and caching the
+    /// result. Errors from the introspection query (or a missing
+    /// `__type.fields` array) bubble up so the caller can skip the fire
+    /// rather than materialize against a half-populated doc.
+    async fn fields_for(
+        &self,
+        collection: &str,
+        node: &EmbeddedNode,
+    ) -> anyhow::Result<Vec<String>> {
+        let mut guard = self.by_collection.lock().await;
+        if let Some(fields) = guard.get(collection) {
+            return Ok(fields.clone());
+        }
+        let query = format!(
+            r#"query {{
+                __type(name: "{name}") {{
+                    fields {{ name }}
+                }}
+            }}"#,
+            name = collection,
+        );
+        let response = node.execute(&query).await;
+        if response.has_errors() {
+            anyhow::bail!("introspect {} failed: {:?}", collection, response.errors);
+        }
+        let Some(fields_arr) = response
+            .data
+            .as_ref()
+            .and_then(|d| d.get("__type"))
+            .and_then(|t| t.get("fields"))
+            .and_then(serde_json::Value::as_array)
+        else {
+            anyhow::bail!("introspection returned no fields for {}", collection);
+        };
+        let fields: Vec<String> = fields_arr
+            .iter()
+            .filter_map(|f| f.get("name").and_then(|n| n.as_str()).map(str::to_string))
+            // Skip GraphQL meta fields and DefraDB's `_count`-style
+            // aggregate wrappers — they can't be projected as plain
+            // scalars.
+            .filter(|name| !name.starts_with('_'))
+            // Skip DefraDB's upper-case aggregate/search verbs — they take
+            // required arguments and can't appear in a bare projection.
+            .filter(|name| !is_defradb_aggregate_field(name))
+            .collect();
+        guard.insert(collection.to_string(), fields.clone());
+        Ok(fields)
+    }
+}
+
+/// DefraDB generates per-collection GraphQL fields for aggregates and
+/// full-text search that share the collection's scalar namespace but
+/// require arguments to project. Include them in the `__type.fields`
+/// response; reject them here so `fetch_source_doc`'s projection stays
+/// syntactically valid. Mirrors the CLI's `is_aggregate_field` list in
+/// `defradb.rs`'s `cli/src/commands/client/collection/introspection.rs`.
+fn is_defradb_aggregate_field(name: &str) -> bool {
+    matches!(
+        name,
+        "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "GROUP" | "SIMILARITY" | "BM25"
+    )
 }
 
 impl EventSource {
@@ -234,6 +317,119 @@ impl EventSource {
         }
 
         self.collection_id_to_name.get(collection_id).cloned()
+    }
+
+    /// Run the trigger's `filter` against the source doc, narrowed by
+    /// `_docID`, via a `limit: 1` probe. Returns `Ok(true)` when the doc
+    /// matches (so the fire should proceed), `Ok(false)` when it doesn't
+    /// (so the dispatch loop should skip), and `Err` when the probe query
+    /// itself errored — the caller treats errors as "skip this fire" so a
+    /// transient GraphQL failure doesn't brick the source.
+    ///
+    /// Trust boundary: `trigger.filter` is operator-authored and validated
+    /// at apply time (the apply path rejects ill-formed filter objects
+    /// before the trigger ever lands in `active_event_triggers`). It's
+    /// interpolated directly as a filter-object fragment — we do NOT run
+    /// it through `escape_graphql_string`, because that helper escapes
+    /// scalar string literals and would break the object syntax. The
+    /// `_docID` value, which comes from the event payload (external
+    /// input), IS escaped.
+    async fn probe_filter(
+        &self,
+        source_doc_id: &str,
+        trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
+    ) -> anyhow::Result<bool> {
+        let user_filter = trigger
+            .filter
+            .as_deref()
+            .map(str::trim)
+            .filter(|f| !f.is_empty());
+        let filter_literal = match user_filter {
+            Some(f) => format!(
+                r#"{{ _docID: {{ _eq: "{id}" }}, _and: [ {user_filter} ] }}"#,
+                id = crate::graphql::escape_graphql_string(source_doc_id),
+                user_filter = f,
+            ),
+            None => format!(
+                r#"{{ _docID: {{ _eq: "{id}" }} }}"#,
+                id = crate::graphql::escape_graphql_string(source_doc_id),
+            ),
+        };
+        let query = format!(
+            r#"query {{
+                {collection}(filter: {filter_literal}, limit: 1) {{
+                    _docID
+                }}
+            }}"#,
+            collection = trigger.source_collection,
+            filter_literal = filter_literal,
+        );
+        let response = self.node.execute(&query).await;
+        if response.has_errors() {
+            anyhow::bail!("filter probe errors: {:?}", response.errors);
+        }
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|d| d.get(&trigger.source_collection))
+            .and_then(serde_json::Value::as_array);
+        Ok(rows.is_some_and(|rs| !rs.is_empty()))
+    }
+
+    /// Project the source doc's scalar-ish fields into a JSON object that
+    /// populates the FireIntent's `doc_vars`. Looks up (and caches) the
+    /// collection's projectable field list via introspection, then runs a
+    /// `{collection}(filter: { _docID: _eq }, limit: 1) { _docID <fields> }`
+    /// query. Returns an error if the doc can't be found or the query
+    /// itself fails — the caller treats errors as "skip this fire".
+    async fn fetch_source_doc(
+        &self,
+        collection: &str,
+        source_doc_id: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        let fields = self
+            .source_schema_cache
+            .fields_for(collection, &self.node)
+            .await?;
+        // Even an empty `fields` list is valid: `_docID` alone still
+        // round-trips the doc's identity so downstream render scopes can
+        // reference `doc._docID`.
+        let projection = fields.join("\n                    ");
+        let query = format!(
+            r#"query {{
+                {collection}(filter: {{ _docID: {{ _eq: "{id}" }} }}, limit: 1) {{
+                    _docID
+                    {projection}
+                }}
+            }}"#,
+            collection = collection,
+            id = crate::graphql::escape_graphql_string(source_doc_id),
+            projection = projection,
+        );
+        let response = self.node.execute(&query).await;
+        if response.has_errors() {
+            anyhow::bail!("fetch source doc errors: {:?}", response.errors);
+        }
+        let Some(rows) = response
+            .data
+            .as_ref()
+            .and_then(|d| d.get(collection))
+            .and_then(serde_json::Value::as_array)
+        else {
+            anyhow::bail!(
+                "source doc {} not found in {} (no rows in response)",
+                source_doc_id,
+                collection
+            );
+        };
+        let Some(row) = rows.first() else {
+            anyhow::bail!(
+                "source doc {} not found in {} (empty rows)",
+                source_doc_id,
+                collection
+            );
+        };
+        Ok(row.clone())
     }
 
     /// Find the first active event trigger whose `source_collection` matches
@@ -403,12 +599,61 @@ impl TriggerSource for EventSource {
                     continue;
                 };
 
-                // Step 8: build the FireIntent. Task 21 will hydrate
-                // `doc_vars` via a per-collection schema read + filter probe;
-                // for now we leave `doc_vars = None` and populate `event_vars`
-                // with the source identity so the dispatcher / materializer
-                // still have a minimally-useful scope. Task 22 fills in the
-                // `on_result` body; for now it's a no-op.
+                // Step 8: probe the trigger's operator-authored `filter`
+                // against the source doc (narrowed by `_docID`). A filter
+                // miss quietly drops the event — other collections may still
+                // match this tick. A probe error is logged and dropped for
+                // the same reason: a transient GraphQL failure shouldn't
+                // kill the source.
+                match self.probe_filter(&doc_id, &trigger).await {
+                    Ok(true) => { /* filter matched; fall through to hydrate */ }
+                    Ok(false) => {
+                        tracing::trace!(
+                            trigger_id = %trigger.trigger_id,
+                            source_collection = %collection_name,
+                            source_doc_id = %doc_id,
+                            "event source: filter miss, skipping event",
+                        );
+                        continue;
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            trigger_id = %trigger.trigger_id,
+                            source_collection = %collection_name,
+                            source_doc_id = %doc_id,
+                            %err,
+                            "event source: filter probe failed; skipping event",
+                        );
+                        continue;
+                    }
+                }
+
+                // Step 9: hydrate `doc_vars` from the source doc so the
+                // dispatcher / prompt render has the full document scope.
+                // Unlike the probe, a hydration failure means we can't
+                // safely fire at all — we drop this event rather than
+                // materialize with a partial scope.
+                let doc_vars = match self
+                    .fetch_source_doc(&trigger.source_collection, &doc_id)
+                    .await
+                {
+                    Ok(value) => Some(value),
+                    Err(err) => {
+                        tracing::warn!(
+                            trigger_id = %trigger.trigger_id,
+                            source_collection = %collection_name,
+                            source_doc_id = %doc_id,
+                            %err,
+                            "event source: source-doc fetch failed; skipping fire",
+                        );
+                        continue;
+                    }
+                };
+
+                // Step 10: build the FireIntent. `event_vars` carries the
+                // trigger identity; `doc_vars` carries the hydrated source
+                // doc. Task 22 fills in the `on_result` body; for now it's
+                // a no-op.
                 let fired_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
                 let event_vars = serde_json::json!({
                     "fired_at": fired_at,
@@ -431,10 +676,10 @@ impl TriggerSource for EventSource {
                     task: trigger.task.clone(),
                     concurrency: trigger.concurrency,
                     event_vars,
-                    // Task 21 owns doc-var hydration (filter probe + field
-                    // projection). Task 22 owns the on_result callback body.
-                    doc_vars: None,
+                    doc_vars,
                     args_vars: None,
+                    // Task 22 owns the on_result callback body (bookkeeping
+                    // writebacks on fire/skip/supersede/error).
                     on_result: Box::new(move |_result| {}),
                 });
             }
