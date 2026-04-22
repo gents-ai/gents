@@ -900,7 +900,11 @@ mod load_per_doc_collection {
         let _: Vec<DesiredAgentBehavior> =
             load_per_doc_collection(tmp.path(), Collection::AgentBehavior, &mut errors);
         assert!(
-            errors.iter().any(|e| e.contains("duplicate behavior_id 'shared'")),
+            errors.iter().any(|e| {
+                e.contains("duplicate behavior_id 'shared'")
+                    && e.contains("alpha")
+                    && e.contains("beta")
+            }),
             "got: {:?}",
             errors
         );
