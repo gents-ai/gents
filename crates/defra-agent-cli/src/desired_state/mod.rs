@@ -275,6 +275,7 @@ pub(crate) struct DesiredStateDiffCollections {
     pub(crate) tool_service_registries: DesiredStateCollectionDiff,
     pub(crate) tasks: DesiredStateCollectionDiff,
     pub(crate) schedules: DesiredStateCollectionDiff,
+    pub(crate) event_triggers: DesiredStateCollectionDiff,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -287,6 +288,7 @@ pub(crate) struct DesiredStateDiffCollectionsCounts {
     pub(crate) tool_service_registries: DesiredStateDiffCounts,
     pub(crate) tasks: DesiredStateDiffCounts,
     pub(crate) schedules: DesiredStateDiffCounts,
+    pub(crate) event_triggers: DesiredStateDiffCounts,
 }
 
 #[derive(Debug, Clone, Serialize)]

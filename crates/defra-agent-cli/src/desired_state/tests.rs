@@ -71,6 +71,24 @@ fn sample_schedule(schedule_id: &str, task_id: &str) -> DesiredSchedule {
     }
 }
 
+fn sample_event_trigger() -> DesiredEventTrigger {
+    DesiredEventTrigger {
+        trigger_id: "new-customer-greet".into(),
+        task_id: "summarize-inbox".into(),
+        source_collection: "CustomerSignup".into(),
+        event_kind: "created".into(),
+        filter: None,
+        enabled: true,
+        concurrency: "serial".into(),
+    }
+}
+
+fn empty_manifest_with_event_trigger(t: DesiredEventTrigger) -> DesiredStateManifest {
+    let mut m = empty_manifest("did:defra-agent:test");
+    m.event_triggers.push(t);
+    m
+}
+
 #[test]
 fn desired_tool_service_registry_normalizes_address_storage_fields() {
     let service: DesiredToolServiceRegistry = serde_json::from_value(json!({
@@ -582,6 +600,53 @@ fn diff_manifests_marks_schedule_update_when_interval_changes() {
     assert!(report.collections.schedules.create.is_empty());
     assert!(report.collections.schedules.unchanged.is_empty());
     assert_eq!(report.counts.schedules.update, 1);
+}
+
+#[test]
+fn diff_manifests_creates_event_trigger_when_live_is_empty() {
+    let manifest = empty_manifest_with_event_trigger(sample_event_trigger());
+    let live = empty_manifest("did:defra-agent:test");
+
+    let report = diff_manifests(
+        &PathBuf::from("/tmp/fake-root"),
+        "local",
+        &manifest,
+        Some(&live.agent_principal),
+        &live,
+    );
+
+    assert_eq!(
+        report.collections.event_triggers.create,
+        vec!["new-customer-greet"]
+    );
+    assert!(report.collections.event_triggers.update.is_empty());
+    assert!(report.collections.event_triggers.unchanged.is_empty());
+    assert!(report.collections.event_triggers.live_only.is_empty());
+    assert_eq!(report.counts.event_triggers.create, 1);
+}
+
+#[test]
+fn diff_manifests_marks_event_trigger_update_when_filter_changes() {
+    let mut desired = sample_event_trigger();
+    desired.filter = Some(r#"{ plan: { _eq: "paid" } }"#.to_string());
+    let live = sample_event_trigger();
+    let manifest = empty_manifest_with_event_trigger(desired);
+    let live_manifest = empty_manifest_with_event_trigger(live);
+
+    let report = diff_manifests(
+        &PathBuf::from("/tmp/fake-root"),
+        "local",
+        &manifest,
+        Some(&live_manifest.agent_principal),
+        &live_manifest,
+    );
+
+    assert_eq!(
+        report.collections.event_triggers.update,
+        vec!["new-customer-greet"]
+    );
+    assert!(report.collections.event_triggers.create.is_empty());
+    assert!(report.collections.event_triggers.unchanged.is_empty());
 }
 
 fn validation_errors(manifest: &DesiredStateManifest) -> Vec<String> {
