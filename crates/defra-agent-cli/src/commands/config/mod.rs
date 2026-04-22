@@ -9,6 +9,7 @@ pub(crate) mod diff;
 pub(crate) mod export;
 pub(crate) mod import;
 pub(crate) mod profile;
+pub(crate) mod task_run;
 pub(crate) mod tools;
 pub(crate) mod validate;
 
@@ -29,6 +30,9 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
         },
         ConfigCommand::Profile { command } => match command {
             InferenceProfileCommand::Set(args) => profile::inference_profile_set(args).await,
+        },
+        ConfigCommand::Task { command } => match command {
+            ConfigTaskCommand::Run(args) => task_run::config_task_run(args).await,
         },
         ConfigCommand::Export(args) => export::config_export(args).await,
         ConfigCommand::Import(args) => import::config_import(args).await,

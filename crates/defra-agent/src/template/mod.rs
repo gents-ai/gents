@@ -11,10 +11,10 @@ mod tests;
 
 use minijinja::{AutoEscape, Environment, UndefinedBehavior};
 
-pub(crate) struct TemplateScope {
-    pub(crate) event: serde_json::Value,
-    pub(crate) doc: Option<serde_json::Value>,
-    pub(crate) args: Option<serde_json::Value>,
+pub struct TemplateScope {
+    pub event: serde_json::Value,
+    pub doc: Option<serde_json::Value>,
+    pub args: Option<serde_json::Value>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -51,7 +51,7 @@ impl VariableRef {
 /// The input template is rejected if it exceeds [`MAX_TEMPLATE_BYTES`]; the
 /// rendered output is rejected if it exceeds [`MAX_RENDERED_BYTES`]. Both
 /// caps keep trigger evaluation bounded regardless of event payload size.
-pub(crate) fn render_template(
+pub fn render_template(
     template: &str,
     scope: &TemplateScope,
 ) -> Result<String, TemplateError> {
