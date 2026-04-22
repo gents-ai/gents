@@ -161,7 +161,16 @@ not gated by a trigger document.
 
 This theorem locks the invariant that a disabled schedule or event
 trigger cannot admit new work, even if a stale scheduler tick races
-the reconcile publish. -/
+the reconcile publish.
+
+The event branch is stated over the now-concrete `ActiveEventTrigger`
+structure (see PR 2 Task 27): the existential witness `trig` has the
+full shape `{triggerId, taskId, sourceCollection, eventKind, enabled,
+concurrency}`, matching the Rust `ResolvedEventTrigger`. The projection
+`trig.triggerId` / `trig.enabled` is what the gate checks, while the
+remaining fields become load-bearing for the yet-to-be-filled
+`dispatch` operational definition (e.g. joining on `sourceCollection`
+and `eventKind` to decide which subscription's buffer to drain). -/
 theorem T1_enabled_gate
     (snap : TriggerSnapshot) (intent : FireIntent) (seed : RequestSeed) :
     dispatch snap intent = some seed →
@@ -176,8 +185,11 @@ theorem T1_enabled_gate
   -- Proof deferred: `dispatch` is itself a `sorry` placeholder at this
   -- layer of the spec. Once a concrete operational definition is
   -- supplied in a later PR, this proof reduces to an unfold + case on
-  -- `intent.triggerKind` + the `enabled` check.
+  -- `intent.triggerKind` + the `enabled` check. The event branch now
+  -- discharges directly against `ActiveEventTrigger`'s concrete fields;
+  -- previously it would have needed an opaque existential.
   sorry
+
 
 /-- **Theorem T2 (serial at-most-one).**
 
