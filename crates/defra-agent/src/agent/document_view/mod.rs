@@ -72,6 +72,12 @@ impl DocumentRuntimeView {
             .any(|record| record.doc_id == doc_id)
     }
 
+    fn has_event_trigger_doc_id(&self, doc_id: &str) -> bool {
+        self.event_triggers
+            .values()
+            .any(|record| record.doc_id == doc_id)
+    }
+
     fn remove_behavior_by_doc_id(&mut self, doc_id: &str) -> bool {
         let key = self.behaviors.iter().find_map(|(behavior_id, record)| {
             (record.doc_id == doc_id).then_some(behavior_id.clone())
@@ -119,6 +125,13 @@ impl DocumentRuntimeView {
             (record.doc_id == doc_id).then_some(schedule_id.clone())
         });
         key.is_some_and(|schedule_id| self.schedules.remove(&schedule_id).is_some())
+    }
+
+    fn remove_event_trigger_by_doc_id(&mut self, doc_id: &str) -> bool {
+        let key = self.event_triggers.iter().find_map(|(trigger_id, record)| {
+            (record.doc_id == doc_id).then_some(trigger_id.clone())
+        });
+        key.is_some_and(|trigger_id| self.event_triggers.remove(&trigger_id).is_some())
     }
 
     fn references_profile(&self, profile_id: &str) -> bool {
