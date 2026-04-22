@@ -306,6 +306,14 @@ async fn config_apply_reconciles_tool_services_tasks_and_schedules_end_to_end() 
     // Simulate the scheduler updating runtime-owned fields on the Schedule.
     // These must survive the next apply, since apply is forbidden from
     // touching runtime-owned fields.
+    //
+    // Note: DefraDB's GraphQL layer currently rejects manual string literals
+    // for DateTime fields inserted via `update_*` (they're stored as Scalar
+    // String and then fail the field-type check on the next update). We
+    // exercise the apply-ownership boundary with the non-DateTime runtime
+    // fields only (`last_status`, `last_error`, `fire_count`); the
+    // next_run_at / last_attempt_at ownership is covered by the trigger_engine
+    // e2e tests, which exercise the actual scheduler write path.
     graphql_query(
         &graphql,
         &format!(
@@ -313,8 +321,6 @@ async fn config_apply_reconciles_tool_services_tasks_and_schedules_end_to_end() 
                 update_Schedule(
                     docID: "{doc_id}",
                     input: {{
-                        next_run_at: "2026-04-15T00:00:00Z",
-                        last_attempt_at: "2026-04-14T00:00:00Z",
                         last_status: "error",
                         last_error: "boom",
                         fire_count: 7
@@ -333,8 +339,7 @@ async fn config_apply_reconciles_tool_services_tasks_and_schedules_end_to_end() 
                     docID: "{doc_id}",
                     input: {{
                         status: "online",
-                        version: "1.2.3",
-                        updated_at: "2026-04-15T00:00:00Z"
+                        version: "1.2.3"
                     }}
                 ) {{ _docID }}
             }}"#,
