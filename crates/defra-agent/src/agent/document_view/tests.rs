@@ -268,6 +268,39 @@ async fn create_task_bound(
     );
 }
 
+async fn create_event_trigger(
+    node: &defra_node::EmbeddedNode,
+    trigger_id: &str,
+    task_id: &str,
+    source_collection: &str,
+    event_kind: &str,
+    concurrency: &str,
+) {
+    let escaped_trigger_id = escape_graphql_string(trigger_id);
+    let escaped_task_id = escape_graphql_string(task_id);
+    let escaped_source_collection = escape_graphql_string(source_collection);
+    let escaped_event_kind = escape_graphql_string(event_kind);
+    let escaped_concurrency = escape_graphql_string(concurrency);
+    let mutation = format!(
+        r#"mutation {{
+            create_EventTrigger(input: {{
+                trigger_id: "{escaped_trigger_id}",
+                task_id: "{escaped_task_id}",
+                source_collection: "{escaped_source_collection}",
+                event_kind: "{escaped_event_kind}",
+                enabled: true,
+                concurrency: "{escaped_concurrency}"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create EventTrigger failed: {:?}",
+        response.errors
+    );
+}
+
 async fn create_schedule(node: &defra_node::EmbeddedNode, schedule_id: &str, task_id: &str) {
     let escaped_schedule_id = escape_graphql_string(schedule_id);
     let escaped_task_id = escape_graphql_string(task_id);
@@ -353,6 +386,47 @@ async fn load_document_runtime_view_populates_tasks_and_schedules() {
         Some("task-alpha"),
         "schedule references task-alpha"
     );
+}
+
+#[tokio::test]
+async fn load_document_runtime_view_populates_event_triggers() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-event-triggers"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-document-view-event-triggers",
+        "http://127.0.0.1:8126/v1",
+    )
+    .await;
+
+    create_task(node.as_ref(), "task-1", "Task One").await;
+    create_event_trigger(
+        node.as_ref(),
+        "trig-1",
+        "task-1",
+        "CustomerSignup",
+        "created",
+        "serial",
+    )
+    .await;
+
+    let view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("document view should load");
+
+    assert_eq!(view.event_triggers.len(), 1);
+    let record = view
+        .event_triggers
+        .get("trig-1")
+        .expect("trig-1 present in event_triggers");
+    assert_eq!(
+        record.value.source_collection.as_deref(),
+        Some("CustomerSignup")
+    );
+    assert_eq!(record.value.event_kind.as_deref(), Some("created"));
+    assert_eq!(record.value.task_id.as_deref(), Some("task-1"));
 }
 
 #[tokio::test]

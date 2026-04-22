@@ -29,9 +29,6 @@ pub(crate) struct DocumentRuntimeView {
     pub(crate) backends: HashMap<String, DocumentRecord<InferenceBackend>>,
     pub(crate) tasks: HashMap<String, DocumentRecord<Task>>,
     pub(crate) schedules: HashMap<String, DocumentRecord<Schedule>>,
-    /// Stub populated in PR 2 of the event-driven-tasks series. Declared here
-    /// so PR 2 can fill it without a breaking-change diff on this struct.
-    #[allow(dead_code)]
     pub(crate) event_triggers: HashMap<String, DocumentRecord<EventTrigger>>,
 }
 
