@@ -40,6 +40,7 @@ pub(crate) fn load_manifest_root(
                     tool_service_registries: 0,
                     tasks: 0,
                     schedules: 0,
+                    event_triggers: 0,
                 },
                 errors,
             },
@@ -63,6 +64,7 @@ pub(crate) fn load_manifest_root(
                     tool_service_registries: 0,
                     tasks: 0,
                     schedules: 0,
+                    event_triggers: 0,
                 },
                 errors,
             },
@@ -130,6 +132,7 @@ pub(crate) fn load_manifest_root(
         tool_service_registries: tool_service_registries.len(),
         tasks: tasks.len(),
         schedules: schedules.len(),
+        event_triggers: 0,
     };
 
     let agent_did = principal.as_ref().map(|value| value.agent_did.clone());
@@ -147,6 +150,7 @@ pub(crate) fn load_manifest_root(
                 tool_service_registries,
                 tasks,
                 schedules,
+                event_triggers: Vec::new(),
             };
             normalize_manifest(&mut manifest);
             validate_manifest(&manifest, &mut errors);

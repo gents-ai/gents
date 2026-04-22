@@ -191,6 +191,7 @@ pub(crate) async fn build_config_export_bundle(
         tool_service_registries: tool_service_registry_rows,
         tasks: task_rows,
         schedules: schedule_rows,
+        event_triggers: Vec::new(),
     })
 }
 
@@ -414,6 +415,7 @@ pub(crate) async fn build_desired_state_live_bundle(
         tool_service_registries: tool_service_registry_rows,
         tasks: task_rows,
         schedules: schedule_rows,
+        event_triggers: Vec::new(),
     })
 }
 
@@ -439,6 +441,7 @@ pub(crate) fn live_manifest_from_bundle(
                 tool_service_registries: Vec::new(),
                 tasks: Vec::new(),
                 schedules: Vec::new(),
+                event_triggers: Vec::new(),
             },
         ))
     }

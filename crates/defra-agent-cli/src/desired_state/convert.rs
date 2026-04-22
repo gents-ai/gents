@@ -192,6 +192,7 @@ pub(crate) fn manifest_from_export_bundle(
                 )
             })
             .collect::<Result<Vec<_>>>()?,
+        event_triggers: Vec::new(),
     };
     normalize_manifest(&mut manifest);
     Ok(manifest)
@@ -242,6 +243,7 @@ pub(crate) fn export_bundle_from_manifest(
             .iter()
             .map(serde_json::to_value)
             .collect::<serde_json::Result<Vec<_>>>()?,
+        event_triggers: Vec::new(),
     };
     Ok(super::DesiredApplyBundle::from_trusted_bundle(bundle))
 }

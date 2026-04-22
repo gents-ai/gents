@@ -25,6 +25,7 @@ fn empty_manifest(agent_did: &str) -> DesiredStateManifest {
         tool_service_registries: Vec::new(),
         tasks: Vec::new(),
         schedules: Vec::new(),
+        event_triggers: Vec::new(),
     }
 }
 

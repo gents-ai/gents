@@ -230,6 +230,7 @@ mod tests {
             tool_service_registries: Vec::new(),
             tasks: Vec::new(),
             schedules: Vec::new(),
+            event_triggers: Vec::new(),
         }
     }
 

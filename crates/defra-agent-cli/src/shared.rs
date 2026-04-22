@@ -164,6 +164,8 @@ pub(crate) struct ConfigExportBundle {
     pub(crate) tasks: Vec<Value>,
     #[serde(default)]
     pub(crate) schedules: Vec<Value>,
+    #[serde(default)]
+    pub(crate) event_triggers: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
