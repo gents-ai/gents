@@ -1007,3 +1007,58 @@ async fn trigger_engine_materializes_agent_request_for_due_schedule_e2e() {
         "rendered prompt template should land in AgentRequest.content: {row}"
     );
 }
+
+/// Regression for Finding 1: `ScheduleSource::next_fire` must NOT return
+/// `None` on an idle tick. The engine's outer loop interprets `None` as
+/// source exhaustion and breaks out — a premature `None` here (e.g. from
+/// "no schedules are due right now") kills the schedule driver forever.
+///
+/// We drive the source with an empty active-schedule set and a short
+/// tick, poll `next_fire` for >200ms (4+ ticks of 50ms), then cancel and
+/// confirm that (a) we didn't get a spurious `Some(intent)` in that
+/// window, and (b) after cancel the future completes with `None` within
+/// a bounded wait. Before the fix, this test would observe `None`
+/// arriving long before the cancel and fail the timeout-before-cancel
+/// check.
+#[tokio::test]
+async fn schedule_source_next_fire_survives_idle_ticks_until_cancelled() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    // No active schedules: every tick will be an "idle" tick where the
+    // snapshot scan finds nothing to fire. Before Finding 1 was fixed,
+    // the first such tick would fall off the end of the function and
+    // return `None`, ending the source.
+    let snapshot = snapshot_with_schedules(HashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+    let cancel = CancellationToken::new();
+    let mut source = ScheduleSource::new(rx, node.clone(), cancel.clone())
+        .with_tick_every(Duration::from_millis(50));
+
+    // Race next_fire against a 250ms sleep followed by cancel. next_fire
+    // must NOT finish before the cancel — if it does, the source
+    // prematurely exited its internal loop. After cancel, it must finish
+    // promptly with None.
+    let cancel_clone = cancel.clone();
+    let canceller = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        cancel_clone.cancel();
+    });
+
+    let started = Instant::now();
+    let result = tokio::time::timeout(Duration::from_secs(3), source.next_fire())
+        .await
+        .expect("next_fire did not return within 3s after cancel");
+    let elapsed_until_return = started.elapsed();
+    let _ = canceller.await;
+
+    assert!(
+        result.is_none(),
+        "idle source should only return None after cancel, got Some(intent)",
+    );
+    assert!(
+        elapsed_until_return >= Duration::from_millis(240),
+        "next_fire returned before cancel fired at ~250ms (elapsed={elapsed_until_return:?}); \
+         this means the source treated an idle tick as exhaustion and returned None early"
+    );
+}
