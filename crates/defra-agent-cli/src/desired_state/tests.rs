@@ -177,197 +177,123 @@ fn deprecated_backend_capability_fields_are_ignored_for_diff_equality() {
     );
 }
 
-#[test]
-fn load_manifest_root_loads_tasks_and_schedules() {
-    let tempdir = tempfile::tempdir().expect("tempdir");
-    let root = tempdir.path();
+mod load_manifest_root {
+    use std::fs;
+    use tempfile::tempdir;
+    use crate::desired_state::load::load_manifest_root;
 
-    fs::write(
-        root.join("agent-principal.json"),
-        r#"{
-            "agent_did": "did:defra-agent:test",
-            "display_name": "Test",
-            "default_behavior_id": "did:defra-agent:test:default",
-            "enabled": true
-        }"#,
-    )
-    .unwrap();
-    fs::write(
-        root.join("agent-behaviors.json"),
-        r#"[{
-            "behavior_id": "did:defra-agent:test:default",
-            "agent_did": "did:defra-agent:test",
-            "display_name": "Default",
-            "system_prompt": null,
-            "backend_id": "local",
-            "model_name": "test-model",
-            "tool_selection_id": "tools",
-            "inference_profile_id": null,
-            "compaction_strategy": null,
-            "compaction_threshold": null,
-            "enabled": true
-        }]"#,
-    )
-    .unwrap();
-    fs::write(
-        root.join("tool-selections.json"),
-        r#"[{
-            "selection_id": "tools",
-            "agent_did": "did:defra-agent:test",
-            "display_name": "Tools",
-            "enable_file_tools": false,
-            "file_tools_mode": "ReadOnly",
-            "file_tool_root": null,
-            "enable_bash": false,
-            "bash_mode": "Off",
-            "cli_tool_names": [],
-            "enable_meta_tools": true,
-            "delegate_to": []
-        }]"#,
-    )
-    .unwrap();
-    fs::write(
-        root.join("inference-backends.json"),
-        r#"[{
-            "backend_id": "local",
-            "name": "Local",
-            "provider_kind": "OpenAiCompatible",
-            "endpoint": "http://127.0.0.1:11434/v1",
-            "api_key": null,
-            "api_key_env_var": null,
-            "max_concurrent": 1,
-            "max_queue_depth": 100,
-            "enabled": true,
-            "models": ["test-model"]
-        }]"#,
-    )
-    .unwrap();
-    fs::write(
-        root.join("tasks.json"),
-        r#"[{
-            "task_id": "summarize-inbox",
-            "name": "Summarize inbox",
-            "description": "Produce a short summary of unread mail.",
-            "behavior_id": "did:defra-agent:test:default",
-            "prompt_template": "Summarize the unread emails.",
-            "enabled": true,
-            "output_schema_ref": null
-        }]"#,
-    )
-    .unwrap();
-    fs::write(
-        root.join("schedules.json"),
-        r#"[{
-            "schedule_id": "summarize-inbox-hourly",
-            "task_id": "summarize-inbox",
-            "interval_secs": 3600,
-            "enabled": true,
-            "concurrency": "serial"
-        }]"#,
-    )
-    .unwrap();
+    /// Write a minimal but fully valid manifest root: one principal with a
+    /// `default_behavior_id` pointing to the single behavior in `agent-behaviors/default/`.
+    fn write_minimal_root(root: &std::path::Path) {
+        fs::write(
+            root.join("agent-principal.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "agent_did": "did:key:example",
+                "default_behavior_id": "default",
+                "enabled": true,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
 
-    let (manifest, report) = load_manifest_root(root);
-    assert!(
-        report.ok,
-        "expected valid manifest, got {:?}",
-        report.errors
-    );
-    let manifest = manifest.expect("manifest should load");
+        let behavior_dir = root.join("agent-behaviors").join("default");
+        fs::create_dir_all(&behavior_dir).unwrap();
+        fs::write(
+            behavior_dir.join("object.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "behavior_id": "default",
+                "agent_did": "did:key:example",
+                "enabled": true,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
 
-    assert_eq!(manifest.tasks.len(), 1);
-    assert_eq!(manifest.tasks[0].task_id, "summarize-inbox");
-    assert_eq!(
-        manifest.tasks[0].behavior_id,
-        "did:defra-agent:test:default"
-    );
+    #[test]
+    fn loads_minimal_root_with_only_principal() {
+        let tmp = tempdir().unwrap();
+        write_minimal_root(tmp.path());
 
-    assert_eq!(manifest.schedules.len(), 1);
-    assert_eq!(manifest.schedules[0].schedule_id, "summarize-inbox-hourly");
-    assert_eq!(manifest.schedules[0].task_id, "summarize-inbox");
-    assert_eq!(manifest.schedules[0].interval_secs, 3600);
-    assert_eq!(manifest.schedules[0].concurrency, "serial");
+        let (manifest, report) = load_manifest_root(tmp.path());
+        assert!(report.ok, "expected ok, got errors: {:?}", report.errors);
+        let manifest = manifest.unwrap();
+        assert_eq!(manifest.agent_principal.agent_did, "did:key:example");
+        assert_eq!(manifest.agent_behaviors.len(), 1);
+        assert!(manifest.tasks.is_empty());
+    }
 
-    assert_eq!(report.counts.tasks, 1);
-    assert_eq!(report.counts.schedules, 1);
-}
+    #[test]
+    fn missing_principal_file_is_error() {
+        let tmp = tempdir().unwrap();
+        let (_, report) = load_manifest_root(tmp.path());
+        assert!(!report.ok);
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("agent-principal.json")),
+            "got: {:?}",
+            report.errors
+        );
+    }
 
-#[test]
-fn validate_manifest_accepts_deprecated_backend_capability_fields() {
-    let tempdir = tempfile::tempdir().expect("tempdir");
-    let root = tempdir.path();
+    #[test]
+    fn loads_behavior_with_sidecar_hydration() {
+        let tmp = tempdir().unwrap();
+        write_minimal_root(tmp.path());
 
-    fs::write(
-        root.join("agent-principal.json"),
-        r#"{
-            "agent_did": "did:defra-agent:test",
-            "display_name": "Test",
-            "default_behavior_id": "did:defra-agent:test:default",
-            "enabled": true
-        }"#,
-    )
-    .unwrap();
-    fs::write(
-        root.join("agent-behaviors.json"),
-        r#"[{
-            "behavior_id": "did:defra-agent:test:default",
-            "agent_did": "did:defra-agent:test",
-            "display_name": "Default",
-            "system_prompt": null,
-            "backend_id": "local",
-            "model_name": "test-model",
-            "tool_selection_id": "tools",
-            "inference_profile_id": null,
-            "compaction_strategy": null,
-            "compaction_threshold": null,
-            "enabled": true
-        }]"#,
-    )
-    .unwrap();
-    fs::write(
-        root.join("tool-selections.json"),
-        r#"[{
-            "selection_id": "tools",
-            "agent_did": "did:defra-agent:test",
-            "display_name": "Tools",
-            "enable_file_tools": false,
-            "file_tools_mode": "ReadOnly",
-            "file_tool_root": null,
-            "enable_bash": false,
-            "bash_mode": "Off",
-            "cli_tool_names": [],
-            "enable_meta_tools": true,
-            "delegate_to": []
-        }]"#,
-    )
-    .unwrap();
-    fs::write(
-        root.join("inference-backends.json"),
-        r#"[{
-            "backend_id": "local",
-            "name": "Local",
-            "provider_kind": "OpenAiCompatible",
-            "endpoint": "http://127.0.0.1:11434/v1",
-            "api_key": null,
-            "api_key_env_var": null,
-            "max_concurrent": 1,
-            "max_queue_depth": 100,
-            "enabled": true,
-            "supports_tool_calls": true,
-            "supports_streaming": true,
-            "supports_structured_outputs": false,
-            "supports_json_schema": false,
-            "models": ["test-model"]
-        }]"#,
-    )
-    .unwrap();
+        // Overwrite the default behavior with one that references a sidecar.
+        let behavior_dir = tmp.path().join("agent-behaviors").join("default");
+        fs::write(
+            behavior_dir.join("object.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "behavior_id": "default",
+                "agent_did": "did:key:example",
+                "system_prompt": "./system_prompt.md",
+                "enabled": true,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(behavior_dir.join("system_prompt.md"), "You are helpful.").unwrap();
 
-    let report = validate_manifest_root(root);
-    assert!(
-        report.ok,
-        "expected valid manifest, got {:?}",
-        report.errors
-    );
+        let (manifest, report) = load_manifest_root(tmp.path());
+        assert!(report.ok, "errors: {:?}", report.errors);
+        let behavior = &manifest.unwrap().agent_behaviors[0];
+        assert_eq!(behavior.system_prompt.as_deref(), Some("You are helpful."));
+    }
+
+    #[test]
+    fn missing_sidecar_surfaces_error() {
+        let tmp = tempdir().unwrap();
+        write_minimal_root(tmp.path());
+
+        // Overwrite the default behavior to reference a missing sidecar file.
+        let behavior_dir = tmp.path().join("agent-behaviors").join("default");
+        fs::write(
+            behavior_dir.join("object.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "behavior_id": "default",
+                "agent_did": "did:key:example",
+                "system_prompt": "./system_prompt.md",
+                "enabled": true,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let (_, report) = load_manifest_root(tmp.path());
+        assert!(!report.ok);
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("sidecar path does not resolve")),
+            "got: {:?}",
+            report.errors
+        );
+    }
 }
 
 #[test]

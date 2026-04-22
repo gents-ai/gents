@@ -8,7 +8,7 @@ use super::validate::validate_manifest;
 use super::{
     DesiredAgentBehavior, DesiredAgentPrincipal, DesiredInferenceBackend, DesiredInferenceProfile,
     DesiredSchedule, DesiredStateCounts, DesiredStateManifest, DesiredStateValidationReport,
-    DesiredTask, DesiredToolSelection, DesiredToolServiceRegistry,
+    DesiredTask, DesiredToolSelection, DesiredToolServiceRegistry, HasUniqueId,
 };
 use defra_agent::Collection;
 
@@ -24,161 +24,79 @@ pub(crate) fn load_manifest_root(
 
     if !root.exists() {
         errors.push(format!("manifest root does not exist: {root_display}"));
-        return (
-            None,
-            DesiredStateValidationReport {
-                status: "invalid",
-                ok: false,
-                root: root_display,
-                agent_did: None,
-                counts: DesiredStateCounts {
-                    agent_principal: 0,
-                    agent_behaviors: 0,
-                    tool_selections: 0,
-                    inference_backends: 0,
-                    inference_profiles: 0,
-                    tool_service_registries: 0,
-                    tasks: 0,
-                    schedules: 0,
-                },
-                errors,
-            },
-        );
+        return (None, empty_report(root_display, errors));
     }
     if !root.is_dir() {
         errors.push(format!("manifest root is not a directory: {root_display}"));
-        return (
-            None,
-            DesiredStateValidationReport {
-                status: "invalid",
-                ok: false,
-                root: root_display,
-                agent_did: None,
-                counts: DesiredStateCounts {
-                    agent_principal: 0,
-                    agent_behaviors: 0,
-                    tool_selections: 0,
-                    inference_backends: 0,
-                    inference_profiles: 0,
-                    tool_service_registries: 0,
-                    tasks: 0,
-                    schedules: 0,
-                },
-                errors,
-            },
-        );
+        return (None, empty_report(root_display, errors));
     }
 
-    let principal = load_required_json::<DesiredAgentPrincipal>(
-        root,
-        Collection::AgentPrincipal
-            .file_name()
-            .expect("shimmed in Task 1, rewritten in Task 4"),
-        &mut errors,
-    );
-    let behaviors = load_required_json::<Vec<DesiredAgentBehavior>>(
-        root,
-        Collection::AgentBehavior
-            .file_name()
-            .expect("shimmed in Task 1, rewritten in Task 4"),
-        &mut errors,
-    );
-    let tool_selections = load_required_json::<Vec<DesiredToolSelection>>(
-        root,
-        Collection::ToolSelection
-            .file_name()
-            .expect("shimmed in Task 1, rewritten in Task 4"),
-        &mut errors,
-    );
-    let backends = load_required_json::<Vec<DesiredInferenceBackend>>(
-        root,
-        Collection::InferenceBackend
-            .file_name()
-            .expect("shimmed in Task 1, rewritten in Task 4"),
-        &mut errors,
-    );
-    let inference_profiles = load_optional_json::<Vec<DesiredInferenceProfile>>(
-        root,
-        Collection::InferenceProfile
-            .file_name()
-            .expect("shimmed in Task 1, rewritten in Task 4"),
-        &mut errors,
-    )
-    .unwrap_or_default();
-    let tool_service_registries = load_optional_json_collection::<DesiredToolServiceRegistry>(
-        root,
-        Collection::ToolServiceRegistry
-            .file_name()
-            .expect("shimmed in Task 1, rewritten in Task 4"),
-        Collection::ToolServiceRegistry
-            .dir_name()
-            .expect("tool-services has a dir form"),
-        &mut errors,
-    )
-    .unwrap_or_default();
-    let tasks = load_optional_json_collection::<DesiredTask>(
-        root,
-        Collection::Task
-            .file_name()
-            .expect("shimmed in Task 1, rewritten in Task 4"),
-        Collection::Task.dir_name().expect("tasks has a dir form"),
-        &mut errors,
-    )
-    .unwrap_or_default();
-    let schedules = load_optional_json_collection::<DesiredSchedule>(
-        root,
-        Collection::Schedule
-            .file_name()
-            .expect("shimmed in Task 1, rewritten in Task 4"),
-        Collection::Schedule
-            .dir_name()
-            .expect("schedules has a dir form"),
-        &mut errors,
-    )
-    .unwrap_or_default();
+    let principal = load_agent_principal(root, &mut errors);
+
+    let mut agent_behaviors: Vec<DesiredAgentBehavior> =
+        load_per_doc_collection(root, Collection::AgentBehavior, &mut errors);
+    let tool_selections: Vec<DesiredToolSelection> =
+        load_per_doc_collection(root, Collection::ToolSelection, &mut errors);
+    let inference_backends: Vec<DesiredInferenceBackend> =
+        load_per_doc_collection(root, Collection::InferenceBackend, &mut errors);
+    let inference_profiles: Vec<DesiredInferenceProfile> =
+        load_per_doc_collection(root, Collection::InferenceProfile, &mut errors);
+    let tool_service_registries: Vec<DesiredToolServiceRegistry> =
+        load_per_doc_collection(root, Collection::ToolServiceRegistry, &mut errors);
+    let mut tasks: Vec<DesiredTask> =
+        load_per_doc_collection(root, Collection::Task, &mut errors);
+    let schedules: Vec<DesiredSchedule> =
+        load_per_doc_collection(root, Collection::Schedule, &mut errors);
+
+    // Hydrate sidecars AFTER collection parse but BEFORE normalize/validate.
+    for behavior in &mut agent_behaviors {
+        let dir = per_doc_dir(root, Collection::AgentBehavior, behavior.unique_id());
+        if let Err(error) = hydrate_sidecar(&mut behavior.system_prompt, &dir) {
+            errors.push(error);
+        }
+    }
+    for task in &mut tasks {
+        let dir = per_doc_dir(root, Collection::Task, task.unique_id());
+        let mut wrapped = Some(std::mem::take(&mut task.prompt_template));
+        if let Err(error) = hydrate_sidecar(&mut wrapped, &dir) {
+            errors.push(error);
+        }
+        task.prompt_template = wrapped.unwrap_or_default();
+    }
 
     let counts = DesiredStateCounts {
         agent_principal: usize::from(principal.is_some()),
-        agent_behaviors: behaviors.as_ref().map_or(0, Vec::len),
-        tool_selections: tool_selections.as_ref().map_or(0, Vec::len),
-        inference_backends: backends.as_ref().map_or(0, Vec::len),
+        agent_behaviors: agent_behaviors.len(),
+        tool_selections: tool_selections.len(),
+        inference_backends: inference_backends.len(),
         inference_profiles: inference_profiles.len(),
         tool_service_registries: tool_service_registries.len(),
         tasks: tasks.len(),
         schedules: schedules.len(),
     };
 
-    let agent_did = principal.as_ref().map(|value| value.agent_did.clone());
+    let agent_did = principal.as_ref().map(|p| p.agent_did.clone());
 
-    let manifest =
-        if let (Some(principal), Some(behaviors), Some(tool_selections), Some(backends)) =
-            (principal, behaviors, tool_selections, backends)
-        {
-            let mut manifest = DesiredStateManifest {
-                agent_principal: principal,
-                agent_behaviors: behaviors,
-                tool_selections,
-                inference_backends: backends,
-                inference_profiles,
-                tool_service_registries,
-                tasks,
-                schedules,
-            };
-            normalize_manifest(&mut manifest);
-            validate_manifest(&manifest, &mut errors);
-            Some(manifest)
-        } else {
-            None
+    let manifest = principal.map(|principal| {
+        let mut manifest = DesiredStateManifest {
+            agent_principal: principal,
+            agent_behaviors,
+            tool_selections,
+            inference_backends,
+            inference_profiles,
+            tool_service_registries,
+            tasks,
+            schedules,
         };
+        normalize_manifest(&mut manifest);
+        validate_manifest(&manifest, &mut errors);
+        manifest
+    });
 
     (
         manifest,
         DesiredStateValidationReport {
-            status: if errors.is_empty() {
-                "validated"
-            } else {
-                "invalid"
-            },
+            status: if errors.is_empty() { "validated" } else { "invalid" },
             ok: errors.is_empty(),
             root: root_display,
             agent_did,
@@ -188,152 +106,72 @@ pub(crate) fn load_manifest_root(
     )
 }
 
-pub(super) fn load_required_json<T>(
-    root: &Path,
-    file_name: &str,
-    errors: &mut Vec<String>,
-) -> Option<T>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    match load_json_file(root, file_name) {
-        Ok(Some(value)) => Some(value),
-        Ok(None) => {
-            errors.push(format!(
-                "required manifest file is missing: {}",
-                root.join(file_name).display()
-            ));
-            None
-        }
-        Err(error) => {
-            errors.push(error);
-            None
-        }
+fn empty_report(
+    root_display: String,
+    errors: Vec<String>,
+) -> DesiredStateValidationReport {
+    DesiredStateValidationReport {
+        status: "invalid",
+        ok: false,
+        root: root_display,
+        agent_did: None,
+        counts: DesiredStateCounts {
+            agent_principal: 0,
+            agent_behaviors: 0,
+            tool_selections: 0,
+            inference_backends: 0,
+            inference_profiles: 0,
+            tool_service_registries: 0,
+            tasks: 0,
+            schedules: 0,
+        },
+        errors,
     }
 }
 
-pub(super) fn load_optional_json<T>(
+fn load_agent_principal(
     root: &Path,
-    file_name: &str,
     errors: &mut Vec<String>,
-) -> Option<T>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    match load_json_file(root, file_name) {
-        Ok(value) => value,
-        Err(error) => {
-            errors.push(error);
-            None
-        }
-    }
-}
-
-pub(super) fn load_optional_json_collection<T>(
-    root: &Path,
-    file_name: &str,
-    dir_name: &str,
-    errors: &mut Vec<String>,
-) -> Option<Vec<T>>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    match load_json_collection(root, file_name, dir_name) {
-        Ok(value) => value,
-        Err(error) => {
-            errors.push(error);
-            None
-        }
-    }
-}
-
-pub(super) fn load_json_file<T>(root: &Path, file_name: &str) -> Result<Option<T>, String>
-where
-    T: for<'de> Deserialize<'de>,
-{
+) -> Option<DesiredAgentPrincipal> {
+    let file_name = Collection::AgentPrincipal
+        .file_name()
+        .expect("AgentPrincipal has a top-level file");
     let path = root.join(file_name);
     if !path.exists() {
-        return Ok(None);
+        errors.push(format!(
+            "required manifest file is missing: {}",
+            path.display()
+        ));
+        return None;
     }
-
-    let bytes =
-        fs::read(&path).map_err(|error| format!("reading {} failed: {error}", path.display()))?;
-    serde_json::from_slice::<T>(&bytes)
-        .map(Some)
-        .map_err(|error| format!("invalid {}: {error}", path.display()))
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            errors.push(format!("reading {} failed: {error}", path.display()));
+            return None;
+        }
+    };
+    match serde_json::from_slice(&bytes) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            errors.push(format!("invalid {}: {error}", path.display()));
+            None
+        }
+    }
 }
 
-pub(super) fn load_json_collection<T>(
-    root: &Path,
-    file_name: &str,
-    dir_name: &str,
-) -> Result<Option<Vec<T>>, String>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    let file_path = root.join(file_name);
-    let dir_path = root.join(dir_name);
-
-    if file_path.exists() && dir_path.exists() {
-        return Err(format!(
-            "manifest root must not contain both {} and {}",
-            file_path.display(),
-            dir_path.display()
-        ));
-    }
-
-    if file_path.exists() {
-        return load_json_file(root, file_name);
-    }
-
-    if !dir_path.exists() {
-        return Ok(None);
-    }
-    if !dir_path.is_dir() {
-        return Err(format!(
-            "manifest collection path is not a directory: {}",
-            dir_path.display()
-        ));
-    }
-
-    let mut entry_paths = fs::read_dir(&dir_path)
-        .map_err(|error| format!("reading {} failed: {error}", dir_path.display()))?
-        .map(|entry| {
-            entry
-                .map(|entry| entry.path())
-                .map_err(|error| format!("reading {} failed: {error}", dir_path.display()))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    entry_paths.sort();
-
-    let mut values = Vec::new();
-    for path in entry_paths {
-        if !path.is_file() {
-            continue;
-        }
-        if path.extension().and_then(|value| value.to_str()) != Some("json") {
-            continue;
-        }
-        let bytes = fs::read(&path)
-            .map_err(|error| format!("reading {} failed: {error}", path.display()))?;
-        let value = serde_json::from_slice::<T>(&bytes)
-            .map_err(|error| format!("invalid {}: {error}", path.display()))?;
-        values.push(value);
-    }
-
-    Ok(Some(values))
+fn per_doc_dir(root: &Path, collection: Collection, handle: &str) -> std::path::PathBuf {
+    let dir_name = collection
+        .dir_name()
+        .expect("per_doc_dir called with non-directory collection");
+    root.join(dir_name).join(handle)
 }
-
-use super::HasUniqueId;
 
 /// Scan `<root>/<collection.dir_name()>/` for per-document subdirectories
 /// of the form `<handle>/object.json` and parse each into `T`.
 ///
 /// Errors are accumulated into `errors`; the function always returns a
 /// `Vec<T>` containing every document it could successfully parse.
-// Wired into load_manifest_root by Task 4 (per-agent manifest roots, #67);
-// #[allow(dead_code)] suppresses the unused-function warning until then.
-#[allow(dead_code)]
 pub(crate) fn load_per_doc_collection<T>(
     root: &Path,
     collection: Collection,
@@ -461,9 +299,6 @@ where
 /// read the file as UTF-8, and replace `*value` with the file contents.
 /// Any other case (None, absolute path, `../` prefix, literal string) is
 /// a no-op.
-// Wired into load_manifest_root by Task 4 (per-agent manifest roots, #67);
-// #[allow(dead_code)] suppresses the unused-function warning until then.
-#[allow(dead_code)]
 pub(crate) fn hydrate_sidecar(
     value: &mut Option<String>,
     json_dir: &Path,
