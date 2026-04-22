@@ -6,7 +6,9 @@ use defra_agent::Collection;
 use serde_json::Value;
 
 use crate::config_bundle::{sanitize_import_document, select_apply_collection_docs};
-use crate::config_writes::{write_schedule_document, write_task_document, ConfigAccess};
+use crate::config_writes::{
+    write_event_trigger_document, write_schedule_document, write_task_document, ConfigAccess,
+};
 use crate::desired_state;
 use crate::desired_state::DesiredApplyBundle;
 use crate::shared::{ConfigApplyCounts, ConfigExportBundle};
@@ -120,6 +122,24 @@ pub(crate) async fn apply_import_collection(
             }
             continue;
         }
+        if override_existing && collection_name == "EventTrigger" {
+            let update_doc = sanitize_import_document(collection_name, doc, true)?;
+            let doc_id = write_event_trigger_document(access, unique_value, &add_doc, &update_doc)
+                .await
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "importing {collection_name} {} failed: {error}",
+                        unique_value
+                    )
+                })?;
+            if doc_id.trim().is_empty() {
+                anyhow::bail!(
+                    "importing {collection_name} {} returned an empty _docID",
+                    unique_value
+                );
+            }
+            continue;
+        }
 
         let add_literal = graphql_input_literal(&add_doc)?;
         let mutation = if override_existing {
@@ -179,6 +199,7 @@ pub(crate) fn diff_has_pending_apply(
         &counts.tool_service_registries,
         &counts.tasks,
         &counts.schedules,
+        &counts.event_triggers,
     ]
     .iter()
     .any(|count| count.create > 0 || count.update > 0)
@@ -193,6 +214,7 @@ pub(crate) fn config_apply_counts_changed(counts: &ConfigApplyCounts) -> bool {
         || counts.tool_service_registries > 0
         || counts.tasks > 0
         || counts.schedules > 0
+        || counts.event_triggers > 0
 }
 
 pub(crate) fn select_apply_principal_docs(
@@ -255,6 +277,12 @@ pub(crate) async fn apply_desired_state_changes(
         Collection::Schedule.graphql_type(),
         &planned.collections.schedules,
     )?;
+    let event_trigger_docs = select_apply_collection_docs(
+        &desired_bundle.event_triggers,
+        Collection::EventTrigger.unique_field(),
+        Collection::EventTrigger.graphql_type(),
+        &planned.collections.event_triggers,
+    )?;
     let principal_docs = select_apply_principal_docs(
         desired_bundle.agent_principal.as_ref(),
         &planned.collections.agent_principal,
@@ -314,6 +342,14 @@ pub(crate) async fn apply_desired_state_changes(
             Collection::Schedule.graphql_type(),
             Collection::Schedule.unique_field(),
             &schedule_docs,
+            true,
+        )
+        .await?,
+        event_triggers: apply_import_collection(
+            access,
+            Collection::EventTrigger.graphql_type(),
+            Collection::EventTrigger.unique_field(),
+            &event_trigger_docs,
             true,
         )
         .await?,

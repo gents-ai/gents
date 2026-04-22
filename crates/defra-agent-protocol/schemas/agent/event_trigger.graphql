@@ -1,5 +1,4 @@
 type EventTrigger @branchable {
-    # apply-owned:
     trigger_id: String @index(unique: true)
     task_id: String @index
     source_collection: String @index
@@ -9,7 +8,6 @@ type EventTrigger @branchable {
     concurrency: String @index
     created_at: DateTime @index(direction: DESC)
     updated_at: DateTime @index(direction: DESC)
-    # runtime-owned (written by EventSource callbacks):
     last_attempt_at: DateTime @index(direction: DESC)
     last_fired_source_doc_id: String
     last_status: String @index

@@ -1,11 +1,13 @@
 mod agent_behavior;
 mod common;
+mod event_trigger;
 mod inference_backend;
 mod schedule;
 mod task;
 mod tool_selection;
 
 pub(crate) use agent_behavior::write_agent_behavior_document;
+pub(crate) use event_trigger::write_event_trigger_document;
 pub(crate) use inference_backend::{
     write_inference_backend_document, InferenceBackendUpsertDocument,
 };

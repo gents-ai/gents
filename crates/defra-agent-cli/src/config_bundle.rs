@@ -11,8 +11,9 @@ use crate::shared::ConfigExportBundle;
 use crate::{
     graphql_rows, graphql_rows_or_empty_if_collection_missing, graphql_string_list_literal,
     CONFIG_EXPORT_FORMAT, EXPORT_AGENT_BEHAVIOR_FIELDS, EXPORT_AGENT_PRINCIPAL_FIELDS,
-    EXPORT_INFERENCE_BACKEND_FIELDS, EXPORT_INFERENCE_PROFILE_FIELDS, EXPORT_SCHEDULE_FIELDS,
-    EXPORT_TASK_FIELDS, EXPORT_TOOL_SELECTION_FIELDS, EXPORT_TOOL_SERVICE_REGISTRY_FIELDS,
+    EXPORT_EVENT_TRIGGER_FIELDS, EXPORT_INFERENCE_BACKEND_FIELDS, EXPORT_INFERENCE_PROFILE_FIELDS,
+    EXPORT_SCHEDULE_FIELDS, EXPORT_TASK_FIELDS, EXPORT_TOOL_SELECTION_FIELDS,
+    EXPORT_TOOL_SERVICE_REGISTRY_FIELDS,
 };
 
 pub(crate) async fn build_config_export_bundle(
@@ -165,18 +166,34 @@ pub(crate) async fn build_config_export_bundle(
         ),
     )
     .await?;
-    // Task and Schedule rows are fetched globally (neither collection is
-    // keyed by agent_did), then filtered client-side down to just the
-    // rows reachable from this agent's behaviors. Without this scope, a
-    // multi-agent node would leak every other agent's Task/Schedule docs
-    // into this export and produce false drift in `config diff`.
+    let mut event_trigger_rows = graphql_rows_or_empty_if_collection_missing(
+        access,
+        "EventTrigger",
+        &format!(
+            r#"{{
+                EventTrigger {{
+                    {fields}
+                }}
+            }}"#,
+            fields = EXPORT_EVENT_TRIGGER_FIELDS,
+        ),
+    )
+    .await?;
+    // Task, Schedule, and EventTrigger rows are fetched globally (none of
+    // these collections is keyed by agent_did), then filtered client-side
+    // down to just the rows reachable from this agent's behaviors. Without
+    // this scope, a multi-agent node would leak every other agent's
+    // Task/Schedule/EventTrigger docs into this export and produce false
+    // drift in `config diff`.
     filter_tasks_and_schedules_by_agent_reachability(
         &behavior_rows,
         &mut task_rows,
         &mut schedule_rows,
+        &mut event_trigger_rows,
     );
     sort_document_rows(&mut task_rows, "task_id");
     sort_document_rows(&mut schedule_rows, "schedule_id");
+    sort_document_rows(&mut event_trigger_rows, "trigger_id");
 
     Ok(ConfigExportBundle {
         format: CONFIG_EXPORT_FORMAT.to_string(),
@@ -191,7 +208,7 @@ pub(crate) async fn build_config_export_bundle(
         tool_service_registries: tool_service_registry_rows,
         tasks: task_rows,
         schedules: schedule_rows,
-        event_triggers: Vec::new(),
+        event_triggers: event_trigger_rows,
     })
 }
 
@@ -389,18 +406,33 @@ pub(crate) async fn build_desired_state_live_bundle(
         ),
     )
     .await?;
-    // Filter the globally-fetched Task/Schedule rows down to just the
-    // ones reachable from this agent's behaviors. On a multi-agent node,
-    // without this scoping, `config diff` would see every other agent's
-    // Task/Schedule docs as drift and try to "reconcile" them into the
-    // current agent's manifest.
+    let mut event_trigger_rows = graphql_rows_or_empty_if_collection_missing(
+        access,
+        "EventTrigger",
+        &format!(
+            r#"{{
+                EventTrigger {{
+                    {fields}
+                }}
+            }}"#,
+            fields = EXPORT_EVENT_TRIGGER_FIELDS,
+        ),
+    )
+    .await?;
+    // Filter the globally-fetched Task/Schedule/EventTrigger rows down to
+    // just the ones reachable from this agent's behaviors. On a multi-agent
+    // node, without this scoping, `config diff` would see every other
+    // agent's docs as drift and try to "reconcile" them into the current
+    // agent's manifest.
     filter_tasks_and_schedules_by_agent_reachability(
         &behavior_rows,
         &mut task_rows,
         &mut schedule_rows,
+        &mut event_trigger_rows,
     );
     sort_document_rows(&mut task_rows, "task_id");
     sort_document_rows(&mut schedule_rows, "schedule_id");
+    sort_document_rows(&mut event_trigger_rows, "trigger_id");
 
     Ok(ConfigExportBundle {
         format: CONFIG_EXPORT_FORMAT.to_string(),
@@ -415,7 +447,7 @@ pub(crate) async fn build_desired_state_live_bundle(
         tool_service_registries: tool_service_registry_rows,
         tasks: task_rows,
         schedules: schedule_rows,
-        event_triggers: Vec::new(),
+        event_triggers: event_trigger_rows,
     })
 }
 
@@ -447,23 +479,24 @@ pub(crate) fn live_manifest_from_bundle(
     }
 }
 
-/// Scope globally-fetched `Task` and `Schedule` rows to just those
-/// reachable from the given agent's behaviors.
+/// Scope globally-fetched `Task`, `Schedule`, and `EventTrigger` rows to
+/// just those reachable from the given agent's behaviors.
 ///
 /// `Task.behavior_id` must be one of the agent's `AgentBehavior.behavior_id`
-/// values; schedules are kept only if their `task_id` is in the set of
-/// reachable tasks. On a multi-agent node, failing to filter here would
-/// (a) leak other agents' Task/Schedule docs into `config export`, and
-/// (b) make `config diff` surface other agents' docs as drift against the
-/// current agent's manifest.
+/// values; schedules and event triggers are kept only if their `task_id` is
+/// in the set of reachable tasks. On a multi-agent node, failing to filter
+/// here would (a) leak other agents' Task/Schedule/EventTrigger docs into
+/// `config export`, and (b) make `config diff` surface other agents' docs as
+/// drift against the current agent's manifest.
 ///
 /// Rows with a missing or non-string key field (`behavior_id` on Task,
-/// `task_id` on Schedule) are dropped: they aren't reachable from any
-/// agent's behavior set, so they can't belong to this agent either.
+/// `task_id` on Schedule/EventTrigger) are dropped: they aren't reachable
+/// from any agent's behavior set, so they can't belong to this agent either.
 pub(crate) fn filter_tasks_and_schedules_by_agent_reachability(
     behavior_rows: &[Value],
     task_rows: &mut Vec<Value>,
     schedule_rows: &mut Vec<Value>,
+    event_trigger_rows: &mut Vec<Value>,
 ) {
     let behavior_ids: BTreeSet<String> = behavior_rows
         .iter()
@@ -484,6 +517,12 @@ pub(crate) fn filter_tasks_and_schedules_by_agent_reachability(
         .collect();
 
     schedule_rows.retain(|row| {
+        row.get("task_id")
+            .and_then(Value::as_str)
+            .is_some_and(|task_id| reachable_task_ids.contains(task_id))
+    });
+
+    event_trigger_rows.retain(|row| {
         row.get("task_id")
             .and_then(Value::as_str)
             .is_some_and(|task_id| reachable_task_ids.contains(task_id))
@@ -527,7 +566,7 @@ pub(crate) fn sanitize_import_document(
     for_update: bool,
 ) -> Result<Value> {
     let mut object = match collection_name {
-        "InferenceBackend" | "Task" | "Schedule" | "ToolServiceRegistry" => {
+        "InferenceBackend" | "Task" | "Schedule" | "EventTrigger" | "ToolServiceRegistry" => {
             doc.as_object().cloned().ok_or_else(|| {
                 anyhow::anyhow!("{collection_name} import document must be an object")
             })?
@@ -563,6 +602,29 @@ pub(crate) fn sanitize_import_document(
             for field in [
                 "next_run_at",
                 "last_attempt_at",
+                "last_status",
+                "last_error",
+                "fire_count",
+                "created_at",
+                "updated_at",
+            ] {
+                object.remove(field);
+            }
+            if for_update {
+                object.insert("created_at".to_string(), Value::Null);
+                object.insert("updated_at".to_string(), Value::Null);
+            }
+        }
+        "EventTrigger" => {
+            // Strip BOTH runtime-owned fields (never written by apply) and
+            // apply-owned timestamps. Runtime-owned fields
+            // (last_attempt_at, last_fired_source_doc_id, last_status,
+            // last_error, fire_count) are owned by the trigger engine — if
+            // we re-inserted them as Null on update, apply would clobber
+            // live trigger state. Only timestamps are nulled for update.
+            for field in [
+                "last_attempt_at",
+                "last_fired_source_doc_id",
                 "last_status",
                 "last_error",
                 "fire_count",
@@ -686,8 +748,21 @@ mod tests {
             // Missing task_id — can't be reachable.
             json!({ "schedule_id": "sched-missing-task" }),
         ];
+        let mut event_triggers = vec![
+            json!({ "trigger_id": "trig-a1", "task_id": "task-a1" }),
+            json!({ "trigger_id": "trig-a2", "task_id": "task-a2" }),
+            json!({ "trigger_id": "trig-b1", "task_id": "task-b1" }),
+            json!({ "trigger_id": "trig-dangling", "task_id": "task-missing" }),
+            // Missing task_id — can't be reachable.
+            json!({ "trigger_id": "trig-missing-task" }),
+        ];
 
-        filter_tasks_and_schedules_by_agent_reachability(&behaviors_a, &mut tasks, &mut schedules);
+        filter_tasks_and_schedules_by_agent_reachability(
+            &behaviors_a,
+            &mut tasks,
+            &mut schedules,
+            &mut event_triggers,
+        );
 
         let task_ids: Vec<&str> = tasks
             .iter()
@@ -708,6 +783,16 @@ mod tests {
             vec!["sched-a1", "sched-a2"],
             "only schedules whose task_id is in agent A's reachable task set should survive"
         );
+
+        let trigger_ids: Vec<&str> = event_triggers
+            .iter()
+            .map(|t| t.get("trigger_id").and_then(Value::as_str).unwrap())
+            .collect();
+        assert_eq!(
+            trigger_ids,
+            vec!["trig-a1", "trig-a2"],
+            "only event triggers whose task_id is in agent A's reachable task set should survive"
+        );
     }
 
     /// Inverse angle on the same bug: filtering with the OTHER agent's
@@ -724,8 +809,13 @@ mod tests {
             json!({ "schedule_id": "sched-a1", "task_id": "task-a1" }),
             json!({ "schedule_id": "sched-b1", "task_id": "task-b1" }),
         ];
+        let mut triggers_for_a = vec![
+            json!({ "trigger_id": "trig-a1", "task_id": "task-a1" }),
+            json!({ "trigger_id": "trig-b1", "task_id": "task-b1" }),
+        ];
         let mut tasks_for_b = tasks_for_a.clone();
         let mut schedules_for_b = schedules_for_a.clone();
+        let mut triggers_for_b = triggers_for_a.clone();
 
         let behaviors_a = vec![json!({ "behavior_id": "general-a" })];
         let behaviors_b = vec![json!({ "behavior_id": "general-b" })];
@@ -734,11 +824,13 @@ mod tests {
             &behaviors_a,
             &mut tasks_for_a,
             &mut schedules_for_a,
+            &mut triggers_for_a,
         );
         filter_tasks_and_schedules_by_agent_reachability(
             &behaviors_b,
             &mut tasks_for_b,
             &mut schedules_for_b,
+            &mut triggers_for_b,
         );
 
         let a_task_ids: Vec<&str> = tasks_for_a
@@ -762,6 +854,17 @@ mod tests {
             .collect();
         assert_eq!(a_sched_ids, vec!["sched-a1"]);
         assert_eq!(b_sched_ids, vec!["sched-b1"]);
+
+        let a_trigger_ids: Vec<&str> = triggers_for_a
+            .iter()
+            .map(|t| t.get("trigger_id").and_then(Value::as_str).unwrap())
+            .collect();
+        let b_trigger_ids: Vec<&str> = triggers_for_b
+            .iter()
+            .map(|t| t.get("trigger_id").and_then(Value::as_str).unwrap())
+            .collect();
+        assert_eq!(a_trigger_ids, vec!["trig-a1"]);
+        assert_eq!(b_trigger_ids, vec!["trig-b1"]);
     }
 
     /// An empty behavior set — e.g. because `AgentBehavior` has no rows
@@ -773,8 +876,14 @@ mod tests {
         let behaviors: Vec<Value> = Vec::new();
         let mut tasks = vec![json!({ "task_id": "task-x", "behavior_id": "some" })];
         let mut schedules = vec![json!({ "schedule_id": "sched-x", "task_id": "task-x" })];
+        let mut triggers = vec![json!({ "trigger_id": "trig-x", "task_id": "task-x" })];
 
-        filter_tasks_and_schedules_by_agent_reachability(&behaviors, &mut tasks, &mut schedules);
+        filter_tasks_and_schedules_by_agent_reachability(
+            &behaviors,
+            &mut tasks,
+            &mut schedules,
+            &mut triggers,
+        );
 
         assert!(
             tasks.is_empty(),
@@ -783,6 +892,10 @@ mod tests {
         assert!(
             schedules.is_empty(),
             "no reachable tasks means no reachable schedules; got {schedules:?}"
+        );
+        assert!(
+            triggers.is_empty(),
+            "no reachable tasks means no reachable event triggers; got {triggers:?}"
         );
     }
 }
