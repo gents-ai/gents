@@ -214,6 +214,31 @@ pub enum ManageDraftOrigin {
     NewDocument,
 }
 
+/// In-progress manual-run args editor state.
+///
+/// Populated when the operator clicks "Run Now" on a Task; cleared on
+/// successful submit or Cancel. `args_text` is the multi-line JSON the
+/// user is typing; it is parsed only at submit time so the operator can
+/// land an invalid draft temporarily without losing their keystrokes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FireTaskDraft {
+    pub task_id: String,
+    /// Multi-line JSON text the user is editing.
+    pub args_text: String,
+    /// Last submit error, if any (parsing or mutation failure).
+    pub error: Option<String>,
+}
+
+impl FireTaskDraft {
+    pub fn new(task_id: impl Into<String>) -> Self {
+        Self {
+            task_id: task_id.into(),
+            args_text: "{}".to_string(),
+            error: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ManageState {
     pub selected_peer_id: Option<String>,
@@ -223,6 +248,9 @@ pub struct ManageState {
     pub draft_origin: Option<ManageDraftOrigin>,
     pub draft: Option<ManageDraft>,
     pub last_apply_error: Option<String>,
+    /// Populated while the operator is editing manual-run args in the
+    /// Task editor's "Run Now" modal. `None` means the modal is closed.
+    pub fire_task_draft: Option<FireTaskDraft>,
 }
 
 impl Default for ManageState {
@@ -235,6 +263,7 @@ impl Default for ManageState {
             draft_origin: None,
             draft: None,
             last_apply_error: None,
+            fire_task_draft: None,
         }
     }
 }

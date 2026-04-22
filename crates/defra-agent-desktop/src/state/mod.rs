@@ -8,8 +8,9 @@ mod status;
 pub use self::activity::{Activity, PendingChatAction, PendingManageAction, PendingShellAction};
 pub use self::chat::{ChatEditorState, ChatShellState, ChatState, ToolDetailModalState};
 pub use self::manage::{
-    BackendDraft, BehaviorDraft, EventTriggerDraft, InferenceProfileDraft, ManageDraft,
-    ManageDraftOrigin, ManageSection, ManageState, ScheduleDraft, TaskDraft, ToolSelectionDraft,
+    BackendDraft, BehaviorDraft, EventTriggerDraft, FireTaskDraft, InferenceProfileDraft,
+    ManageDraft, ManageDraftOrigin, ManageSection, ManageState, ScheduleDraft, TaskDraft,
+    ToolSelectionDraft,
 };
 pub use self::setup::SetupState;
 pub use self::shell::ShellState;
