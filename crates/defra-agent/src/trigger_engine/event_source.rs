@@ -18,7 +18,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use defra_node::EmbeddedNode;
+use defra_node::{EmbeddedNode, EventName};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
@@ -106,6 +106,79 @@ impl EventSource {
     pub(crate) fn with_reconcile_debounce(mut self, debounce: Duration) -> Self {
         self.reconcile_debounce = debounce;
         self
+    }
+
+    /// Snapshot of the source-collection names the event source is currently
+    /// filtering on. Test-only accessor.
+    #[cfg(test)]
+    pub(crate) fn subscribed_collections(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.desired_collections.iter().cloned().collect();
+        v.sort();
+        v
+    }
+
+    /// Refresh `desired_collections` from the supplied snapshot's
+    /// `active_event_triggers` and ensure the global `events::Subscription`
+    /// exists.
+    ///
+    /// `defra-node` only exposes `subscribe(&[EventName])` — a single
+    /// process-wide stream of `Update` events, with the collection carried
+    /// in the event payload. So "reconciliation" here is twofold:
+    ///
+    /// 1. Recompute the filter set (`desired_collections`) that Task 20's
+    ///    `next_fire` will consult before dispatching an event to matching
+    ///    triggers. Collections whose last `active_event_trigger` was
+    ///    removed drop out; newly referenced collections appear.
+    /// 2. Lazily open the global subscription the first time we have at
+    ///    least one desired collection. If the desired set later shrinks to
+    ///    empty we keep the subscription open — reopening is cheap only in
+    ///    principle, and events.Bus has no "pause" API; Task 20 short-
+    ///    circuits on an empty filter set instead.
+    ///
+    /// Finally, stamp `reconciled_generation = snapshot.generation` so the
+    /// `next_fire` tick loop can detect further snapshot bumps.
+    #[allow(dead_code)]
+    pub(crate) async fn reconcile_subscriptions(&mut self, snapshot: &ActiveRuntimeSnapshot) {
+        let desired: HashSet<String> = snapshot
+            .active_event_triggers()
+            .values()
+            .map(|t| t.source_collection.clone())
+            .collect();
+
+        // Trace added / removed collections so operators can correlate a
+        // config change with the subscription-set delta. Keeping this at
+        // `info!` matches `ScheduleSource::next_fire`'s first-seen logs.
+        for added in desired.difference(&self.desired_collections) {
+            tracing::info!(
+                source_collection = %added,
+                generation = snapshot.generation,
+                "event source now observing source collection",
+            );
+        }
+        for removed in self.desired_collections.difference(&desired) {
+            tracing::info!(
+                source_collection = %removed,
+                generation = snapshot.generation,
+                "event source no longer observing source collection",
+            );
+        }
+
+        self.desired_collections = desired;
+
+        // Lazily open the global subscription. We defer opening until the
+        // first non-empty desired set so a runtime with no event triggers
+        // never materializes an unused subscription.
+        if self.subscription.is_none() && !self.desired_collections.is_empty() {
+            let subscription = self.node.subscribe(&[EventName::Update]);
+            tracing::info!(
+                collections = self.desired_collections.len(),
+                generation = snapshot.generation,
+                "event source opened global Update subscription",
+            );
+            self.subscription = Some(subscription);
+        }
+
+        self.reconciled_generation = snapshot.generation;
     }
 }
 

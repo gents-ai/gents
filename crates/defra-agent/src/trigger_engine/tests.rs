@@ -17,10 +17,11 @@ use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
 use crate::identity::SimpleIdentity;
 use crate::runtime_snapshot::{
-    ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedRuntimeSnapshot, ResolvedSchedule,
-    ResolvedTask,
+    ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot,
+    ResolvedSchedule, ResolvedTask,
 };
 use crate::tool_surface::BehaviorToolConfig;
+use crate::trigger_engine::event_source::EventSource;
 use crate::trigger_engine::production_materializer::ProductionMaterializer;
 use crate::trigger_engine::schedule_source::ScheduleSource;
 use crate::BackendProviderKind;
@@ -1200,5 +1201,104 @@ async fn schedule_source_next_fire_survives_idle_ticks_until_cancelled() {
         elapsed_until_return >= Duration::from_millis(240),
         "next_fire returned before cancel fired at ~250ms (elapsed={elapsed_until_return:?}); \
          this means the source treated an idle tick as exhaustion and returned None early"
+    );
+}
+
+/// Build a `ResolvedEventTrigger` pointing at the named source collection.
+/// Matches the empty-defaults pattern used by `resolved_schedule`.
+fn resolved_event_trigger(
+    trigger_id: &str,
+    source_collection: &str,
+    task: ResolvedTask,
+) -> ResolvedEventTrigger {
+    ResolvedEventTrigger {
+        trigger_id: trigger_id.to_string(),
+        task_id: task.task_id.clone(),
+        task,
+        source_collection: source_collection.to_string(),
+        event_kind: "created".to_string(),
+        filter: None,
+        enabled: true,
+        concurrency: ConcurrencyMode::Serial,
+    }
+}
+
+/// Build an `ActiveRuntimeSnapshot` carrying the supplied event triggers and
+/// no other live state. Mirrors `snapshot_with_schedules` for the event-source
+/// tests.
+fn snapshot_with_event_triggers(
+    generation: u64,
+    triggers: HashMap<String, ResolvedEventTrigger>,
+) -> Arc<ActiveRuntimeSnapshot> {
+    let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
+        "general".to_string(),
+        Vec::new(),
+        HashMap::new(),
+        HashMap::new(),
+        HashMap::new(),
+    )
+    .with_event_triggers(triggers, HashSet::new());
+    Arc::new(resolved.activate(generation, HashMap::new()))
+}
+
+/// Reconciling against a fresh snapshot whose `active_event_triggers`
+/// reference a single source collection should populate that collection in
+/// the filter set. Publishing a replacement snapshot that swaps the source
+/// collection for a different one should drop the first and pick up the
+/// second on the next reconciliation, proving the filter tracks the live
+/// snapshot rather than accumulating history.
+#[tokio::test]
+async fn event_source_reconciles_subscriptions_on_generation_bump() {
+    // A real embedded node is required because `reconcile_subscriptions`
+    // opens the global `node.subscribe(&[EventName::Update])` subscription
+    // on the first non-empty desired set.
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    // Snapshot generation 1: one trigger on CollectionA.
+    let task = resolved_task("ignored");
+    let snap1 = snapshot_with_event_triggers(
+        1,
+        HashMap::from([(
+            "trigger-a".to_string(),
+            resolved_event_trigger("trigger-a", "CollectionA", task.clone()),
+        )]),
+    );
+    let (snapshot_tx, snapshot_rx) = watch::channel(snap1.clone());
+
+    let cancel = CancellationToken::new();
+    let mut source = EventSource::new(snapshot_rx, node.clone(), cancel.clone());
+
+    // Drive reconciliation against snapshot 1. `reconcile_subscriptions` is
+    // called directly here — Task 19 tests the method; the `next_fire`
+    // tick-boundary integration is the subject of Task 20.
+    source.reconcile_subscriptions(snap1.as_ref()).await;
+
+    assert_eq!(
+        source.subscribed_collections(),
+        vec!["CollectionA".to_string()],
+        "after reconciling against snapshot 1 the filter set should exactly \
+         match the snapshot's active_event_triggers source_collection",
+    );
+
+    // Snapshot generation 2: the old trigger is gone and a new one targets
+    // CollectionB. Publish it through the watch channel to mimic how the
+    // runtime reconcile loop hands snapshots to the engine.
+    let snap2 = snapshot_with_event_triggers(
+        2,
+        HashMap::from([(
+            "trigger-b".to_string(),
+            resolved_event_trigger("trigger-b", "CollectionB", task),
+        )]),
+    );
+    snapshot_tx.send(snap2.clone()).expect("snapshot_rx alive");
+
+    source.reconcile_subscriptions(snap2.as_ref()).await;
+
+    assert_eq!(
+        source.subscribed_collections(),
+        vec!["CollectionB".to_string()],
+        "after reconciling against snapshot 2 CollectionA should be dropped \
+         and only CollectionB should remain in the filter set",
     );
 }
