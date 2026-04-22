@@ -23,6 +23,28 @@ fn strict_undefined_errors_on_missing_var() {
 }
 
 #[test]
+fn renders_args_var_when_scope_has_args() {
+    let scope = TemplateScope {
+        event: serde_json::json!({"trigger_kind": "manual"}),
+        doc: None,
+        args: Some(serde_json::json!({"name": "Amy", "count": 3})),
+    };
+    let out = render_template("hi {{ args.name }}, n={{ args.count }}", &scope).unwrap();
+    assert_eq!(out, "hi Amy, n=3");
+}
+
+#[test]
+fn errors_on_missing_args_key() {
+    let scope = TemplateScope {
+        event: serde_json::json!({}),
+        doc: None,
+        args: Some(serde_json::json!({})), // args present but empty
+    };
+    let err = render_template("{{ args.missing }}", &scope).unwrap_err();
+    assert!(matches!(err, TemplateError::Render(_)));
+}
+
+#[test]
 fn enforces_rendered_size_cap() {
     // construct a template whose output exceeds MAX_RENDERED_BYTES
     let big = "x".repeat(2_000_000);
