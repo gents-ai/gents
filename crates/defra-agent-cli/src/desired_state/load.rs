@@ -329,6 +329,9 @@ where
 /// read the file as UTF-8, and replace `*value` with the file contents.
 /// Any other case (None, absolute path, `../` prefix, literal string) is
 /// a no-op.
+// Wired into load_manifest_root by Task 4 (per-agent manifest roots, #67);
+// #[allow(dead_code)] suppresses the unused-function warning until then.
+#[allow(dead_code)]
 pub(crate) fn hydrate_sidecar(
     value: &mut Option<String>,
     json_dir: &Path,
