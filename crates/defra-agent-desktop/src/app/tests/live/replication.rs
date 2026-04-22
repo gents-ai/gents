@@ -171,7 +171,13 @@ fn seed_desktop_origin_config_docs(
     let backend_id = format!("{label}-desktop-origin-backend");
     let tool_selection_id = format!("{behavior_id}:tools");
     let inference_profile_id = format!("{behavior_id}:profile");
-    let scheduled_task_id = format!("{behavior_id}:scheduled-task");
+    // `seed_desktop_origin_config_docs` only seeds the config documents
+    // that the replication probe waits for (backend/profile/tools/
+    // behavior); it does not write Task or Schedule rows. We still
+    // produce stable Task/Schedule identifiers so callers depending on
+    // `LiveAgentDocs` have the complete shape.
+    let task_id = format!("{behavior_id}:task");
+    let schedule_id = format!("{behavior_id}:schedule");
 
     runtime.block_on(async {
         core.save_backend(&InferenceBackendRow {
@@ -236,7 +242,8 @@ fn seed_desktop_origin_config_docs(
         backend_id,
         tool_selection_id,
         inference_profile_id,
-        scheduled_task_id,
+        task_id,
+        schedule_id,
     })
 }
 

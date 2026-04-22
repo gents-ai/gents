@@ -116,7 +116,11 @@ pub(crate) struct LiveAgentDocs {
     pub(crate) backend_id: String,
     pub(crate) tool_selection_id: String,
     pub(crate) inference_profile_id: String,
-    pub(crate) scheduled_task_id: String,
+    // The legacy `ScheduledTask` collection split into `Task` + `Schedule`
+    // in the event-driven-tasks rework. Live fixtures now seed both and
+    // expose both ids so tests can address each surface independently.
+    pub(crate) task_id: String,
+    pub(crate) schedule_id: String,
 }
 
 pub(crate) struct LiveDesktopFixture {

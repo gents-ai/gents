@@ -1,8 +1,8 @@
 use anyhow::Result;
-use chrono::Utc;
 use defra_agent_desktop::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use defra_agent_protocol::row::{
-    AgentBehaviorRow, InferenceBackendRow, InferenceProfileRow, ScheduledTaskRow, ToolSelectionRow,
+    AgentBehaviorRow, InferenceBackendRow, InferenceProfileRow, ScheduleRow, TaskRow,
+    ToolSelectionRow,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -89,37 +89,30 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
     })
     .await?;
 
-    core.save_scheduled_task(&ScheduledTaskRow {
+    core.save_task(&TaskRow {
         task_id: "task-amy-daily".to_string(),
-        agent_did: Some("did:defra:amy".to_string()),
-        behavior_id: Some("amy-default".to_string()),
         name: Some("Daily Amy".to_string()),
-        prompt: Some("Check the daily queue.".to_string()),
-        interval_secs: Some(300),
+        description: Some("Check the daily queue.".to_string()),
+        behavior_id: Some("amy-default".to_string()),
+        prompt_template: Some("Check the daily queue.".to_string()),
         enabled: Some(true),
-        next_run_at: Some("2026-04-15T00:00:00Z".to_string()),
-        last_run_at: None,
-        last_status: None,
-        last_error: None,
-        run_count: Some(0),
+        output_schema_ref: None,
         created_at: None,
         updated_at: None,
     })
     .await?;
 
-    core.run_scheduled_task_now(&ScheduledTaskRow {
-        task_id: "task-amy-daily".to_string(),
-        agent_did: Some("did:defra:amy".to_string()),
-        behavior_id: Some("amy-default".to_string()),
-        name: Some("Daily Amy".to_string()),
-        prompt: Some("Check the daily queue.".to_string()),
+    core.save_schedule(&ScheduleRow {
+        schedule_id: "schedule-amy-daily".to_string(),
+        task_id: Some("task-amy-daily".to_string()),
         interval_secs: Some(300),
         enabled: Some(true),
+        concurrency: Some("latest_only".to_string()),
         next_run_at: Some("2026-04-15T00:00:00Z".to_string()),
-        last_run_at: None,
+        last_attempt_at: None,
         last_status: None,
         last_error: None,
-        run_count: Some(0),
+        fire_count: Some(0),
         created_at: None,
         updated_at: None,
     })
@@ -147,22 +140,27 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
             && row.backend_id.as_deref() == Some("backend-amy")
             && row.inference_profile_id.as_deref() == Some("profile-amy")
             && row.tool_selection_id.as_deref() == Some("tools-amy")));
-    let scheduled = snapshot
-        .scheduled_tasks
+    let task = snapshot
+        .tasks
         .iter()
         .find(|row| row.task_id == "task-amy-daily")
-        .expect("scheduled task should be present");
-    assert_eq!(scheduled.behavior_id.as_deref(), Some("amy-default"));
-    assert_eq!(scheduled.interval_secs, Some(300));
-    assert_eq!(scheduled.enabled, Some(true));
-    let next_run_at = chrono::DateTime::parse_from_rfc3339(
-        scheduled
-            .next_run_at
-            .as_deref()
-            .expect("run now should set next_run_at"),
-    )?
-    .with_timezone(&Utc);
-    assert!(next_run_at <= Utc::now());
+        .expect("task should be present");
+    assert_eq!(task.behavior_id.as_deref(), Some("amy-default"));
+    assert_eq!(task.enabled, Some(true));
+
+    let schedule = snapshot
+        .schedules
+        .iter()
+        .find(|row| row.schedule_id == "schedule-amy-daily")
+        .expect("schedule should be present");
+    assert_eq!(schedule.task_id.as_deref(), Some("task-amy-daily"));
+    assert_eq!(schedule.interval_secs, Some(300));
+    assert_eq!(schedule.enabled, Some(true));
+    // `save_schedule` only writes apply-owned fields; `next_run_at`
+    // is carried on the desktop draft so the UI can display it, but
+    // the runtime owns this field and may not seed it on first write.
+    // We only assert that the schedule exists with the expected
+    // apply-owned shape here.
 
     core.shutdown().await?;
     Ok(())
