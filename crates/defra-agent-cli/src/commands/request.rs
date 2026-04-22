@@ -129,6 +129,9 @@ async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let request_id =
         resolve_request_id(args.request_id.as_deref(), args.request_id_flag.as_deref())?;
+    // Combined existence + latch-status check. We distinguish "no row" from
+    // "row with empty field" so that interrupting a bogus request id reports
+    // an error instead of silently succeeding with a no-op mutation.
     // Idempotent: if the field is already set, leave the original latch in place
     // so the runtime observes a single canonical interrupt timestamp.
     let existing_query = format!(
@@ -137,14 +140,19 @@ async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
                 filter: {{ request_id: {{ _eq: "{request_id}" }} }},
                 limit: 1
             ) {{
+                request_id
                 interrupt_requested_at
             }}
         }}"#,
         request_id = escape_graphql_string(&request_id),
     );
     let existing = post_graphql(&graphql, &existing_query).await?;
-    let already = existing
-        .pointer("/data/AgentRequest/0/interrupt_requested_at")
+    let existing_row = existing.pointer("/data/AgentRequest/0");
+    let Some(existing_row) = existing_row else {
+        anyhow::bail!("request {request_id} not found");
+    };
+    let already = existing_row
+        .get("interrupt_requested_at")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(ToOwned::to_owned);
@@ -199,11 +207,13 @@ async fn request_resend(args: RequestResendArgs) -> Result<()> {
         Some(stale.session_id.as_str()),
         stale.behavior_id.as_deref(),
         RequestSubmitOptions {
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            max_tokens: None,
-            metadata: None,
+            // Preserve sampling overrides + metadata from the original row.
+            // Dropping these would silently change model behavior on retry.
+            temperature: stale.temperature,
+            top_p: stale.top_p,
+            top_k: stale.top_k,
+            max_tokens: stale.max_tokens,
+            metadata: stale.metadata.clone(),
             valid_until,
             retry_parent_request: Some(stale_id.clone()),
             retry_root_request: stale.retry_root_request.clone(),

@@ -35,18 +35,55 @@ use crate::graphql::escape_graphql_string;
 /// higher by DefraDB's LWW rules. Same conclusion: audit meaning is
 /// preserved; microsecond-exact ordering is not.
 pub async fn interrupt_request(node: &EmbeddedNode, request_id: &str) -> Result<()> {
-    // Pre-check is an optimization: the submitter latches on first write, and
-    // subsequent writers must not clobber the timestamp. DefraDB's update
+    // Combined existence + latch-status check. We distinguish "no row" from
+    // "row with empty field" so that interrupting a bogus request id reports
+    // an error instead of silently succeeding with a no-op mutation.
+    //
+    // Pre-check is also an optimization: the submitter latches on first write,
+    // and subsequent writers must not clobber the timestamp. DefraDB's update
     // mutation does not have an atomic "set-if-null" so we read-then-write.
-    if fetch_interrupt_requested_at(node, request_id)
-        .await?
-        .is_some()
-    {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let lookup_query = format!(
+        r#"query {{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                limit: 1
+            ) {{
+                request_id
+                interrupt_requested_at
+            }}
+        }}"#
+    );
+    let lookup = node.execute(&lookup_query).await;
+    if lookup.has_errors() {
+        bail!(
+            "interrupt_request({request_id}) lookup failed: {}",
+            lookup
+                .errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+    let row = lookup
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first());
+    let Some(row) = row else {
+        bail!("interrupt_request: request {request_id} not found");
+    };
+    let already_latched = row
+        .get("interrupt_requested_at")
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| !s.is_empty());
+    if already_latched {
         return Ok(());
     }
 
     let now = Utc::now().to_rfc3339();
-    let escaped_request_id = escape_graphql_string(request_id);
     let escaped_now = escape_graphql_string(&now);
     let mutation = format!(
         r#"mutation {{
@@ -65,6 +102,22 @@ pub async fn interrupt_request(node: &EmbeddedNode, request_id: &str) -> Result<
                 .map(|error| error.message.as_str())
                 .collect::<Vec<_>>()
                 .join("; ")
+        );
+    }
+    // Defensive: confirm at least one row was updated. Zero rows would mean
+    // either the row was deleted between lookup and mutation, or another
+    // writer raced us (idempotent). Treat as success, log for observability.
+    let updated = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("update_AgentRequest"))
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.len())
+        .unwrap_or(0);
+    if updated == 0 {
+        tracing::info!(
+            request_id = %request_id,
+            "interrupt_request mutation updated 0 rows; treating as idempotent (racy delete or concurrent latch)"
         );
     }
     Ok(())
@@ -142,8 +195,12 @@ pub fn spawn_request_interrupt_observer(
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(OBSERVER_POLL_INTERVAL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        // Skip the immediate first tick; wait a full interval before the first poll.
-        ticker.tick().await;
+        // NOTE: `tokio::time::interval` fires the first tick immediately. We
+        // rely on that so the observer polls right after spawn and catches an
+        // interrupt that was latched before the daemon even saw the request —
+        // without this the first ~`OBSERVER_POLL_INTERVAL` of a request is a
+        // blind spot (short requests could finish inside that window and never
+        // observe the interrupt at all).
         loop {
             tokio::select! {
                 _ = shutdown.changed() => return,

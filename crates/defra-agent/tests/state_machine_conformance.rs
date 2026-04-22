@@ -1131,6 +1131,27 @@ async fn interrupt_request_is_idempotent() {
 }
 
 #[tokio::test]
+async fn interrupt_request_errors_on_unknown_request_id() {
+    // Interrupting a request id that doesn't exist must surface as an error
+    // (not a silent no-op). Previously, `fetch_interrupt_requested_at`
+    // returned `Ok(None)` for both "field is empty" and "row does not exist",
+    // so `interrupt_request` would fall through to a filter-update that
+    // matched zero rows and return `Ok(())`, tricking the caller into
+    // thinking a bogus id had been successfully latched.
+    let db = test_db("interrupt-unknown").await;
+    let err = defra_agent::interrupt_request(&db.node, "bogus-id-that-does-not-exist").await;
+    assert!(
+        err.is_err(),
+        "interrupting unknown request_id must error, got Ok"
+    );
+    let message = err.unwrap_err().to_string();
+    assert!(
+        message.contains("not found"),
+        "error must mention not found; got: {message}"
+    );
+}
+
+#[tokio::test]
 async fn interrupt_on_already_terminal_is_noop() {
     // A completed request that later gets an interrupt_requested_at write must not
     // regress. `transition_to_interrupted` filters on `status._nin` of terminal

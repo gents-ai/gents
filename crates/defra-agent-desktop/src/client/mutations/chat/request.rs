@@ -34,6 +34,16 @@ pub struct SubmitRequestOptions {
     /// request), the parent request id is threaded into `retry_parent_request`
     /// and the parent's retry root is carried forward into `retry_root_request`.
     pub retry_parent_request: Option<String>,
+    /// Sampling override: if set, written to the request's `temperature` field.
+    pub temperature: Option<f64>,
+    /// Sampling override: if set, written to the request's `top_p` field.
+    pub top_p: Option<f64>,
+    /// Sampling override: if set, written to the request's `top_k` field.
+    pub top_k: Option<i64>,
+    /// Sampling override: if set, written to the request's `max_tokens` field.
+    pub max_tokens: Option<i64>,
+    /// Free-form metadata attached to the request (submitter-defined JSON/string).
+    pub metadata: Option<String>,
 }
 
 pub async fn submit_request(
@@ -93,6 +103,38 @@ pub async fn submit_request(
         None => String::new(),
     };
 
+    // Only emit sampling override + metadata fields when the caller actually
+    // set them. Omitting a field leaves the schema default (null) in place;
+    // emitting `null` explicitly also works but leaving the field out keeps
+    // the mutation shape identical to what previously-submitted rows used
+    // before the override plumbing landed.
+    let override_fields = {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(temperature) = options.temperature {
+            parts.push(format!("temperature: {temperature}"));
+        }
+        if let Some(top_p) = options.top_p {
+            parts.push(format!("top_p: {top_p}"));
+        }
+        if let Some(top_k) = options.top_k {
+            parts.push(format!("top_k: {top_k}"));
+        }
+        if let Some(max_tokens) = options.max_tokens {
+            parts.push(format!("max_tokens: {max_tokens}"));
+        }
+        if let Some(metadata) = options.metadata.as_deref() {
+            parts.push(format!(
+                r#"metadata: "{}""#,
+                escape_graphql_string(metadata)
+            ));
+        }
+        if parts.is_empty() {
+            String::new()
+        } else {
+            format!(",\n                {}", parts.join(",\n                "))
+        }
+    };
+
     let mutation = format!(
         r#"mutation {{
             add_AgentRequest(input: {{
@@ -111,7 +153,7 @@ pub async fn submit_request(
                 failure_reason: "",
                 created_at: "{escaped_created_at}",
                 retry_count: 0,
-                max_retries: {max_retries}{valid_until_field}
+                max_retries: {max_retries}{valid_until_field}{override_fields}
             }}) {{ _docID }}
         }}"#,
         max_retries = DEFAULT_REQUEST_MAX_RETRIES,
@@ -267,12 +309,20 @@ pub async fn resend_request(
         SubmitRequestOptions {
             valid_until: Some(Utc::now() + chrono::Duration::minutes(5)),
             retry_parent_request: Some(stale_request_id.to_string()),
+            // Preserve sampling overrides + metadata from the stale row.
+            // Dropping them would silently change model behavior on retry.
+            temperature: stale.temperature,
+            top_p: stale.top_p,
+            top_k: stale.top_k,
+            max_tokens: stale.max_tokens,
+            metadata: stale.metadata.clone(),
         },
     )
     .await
 }
 
 /// Minimal projection of an AgentRequest used by resend to copy over inputs.
+/// Carries sampling overrides + metadata so resend preserves submitter intent.
 struct StaleRequestView {
     session_id: String,
     agent_did: String,
@@ -280,6 +330,11 @@ struct StaleRequestView {
     content: String,
     lifecycle_state: String,
     failure_reason: String,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    top_k: Option<i64>,
+    max_tokens: Option<i64>,
+    metadata: Option<String>,
 }
 
 async fn fetch_request_view(node: &EmbeddedNode, request_id: &str) -> Result<StaleRequestView> {
@@ -296,6 +351,11 @@ async fn fetch_request_view(node: &EmbeddedNode, request_id: &str) -> Result<Sta
                 content
                 lifecycle_state
                 failure_reason
+                temperature
+                top_p
+                top_k
+                max_tokens
+                metadata
             }}
         }}"#
     );
@@ -341,6 +401,15 @@ async fn fetch_request_view(node: &EmbeddedNode, request_id: &str) -> Result<Sta
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
+        temperature: row.get("temperature").and_then(|v| v.as_f64()),
+        top_p: row.get("top_p").and_then(|v| v.as_f64()),
+        top_k: row.get("top_k").and_then(|v| v.as_i64()),
+        max_tokens: row.get("max_tokens").and_then(|v| v.as_i64()),
+        metadata: row
+            .get("metadata")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from),
     })
 }
 
