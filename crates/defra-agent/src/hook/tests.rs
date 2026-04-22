@@ -5,7 +5,9 @@ use rig::completion::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
     ToolResultContent, UserContent,
 };
-use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse, Usage};
+use rig::completion::{
+    CompletionError, CompletionModel, CompletionRequest, CompletionResponse, Usage,
+};
 use rig::one_or_many::OneOrMany;
 use rig::streaming::StreamingCompletionResponse;
 use serde_json::json;
@@ -335,11 +337,10 @@ async fn completion_response_marks_agent_response_as_materialized() {
             .and_then(|value| value.as_u64()),
         Some(2)
     );
-    assert!(
-        row.get("materialized_at")
-            .and_then(|value| value.as_str())
-            .is_some()
-    );
+    assert!(row
+        .get("materialized_at")
+        .and_then(|value| value.as_str())
+        .is_some());
 
     let _ = std::fs::remove_dir_all(&data_path);
 }

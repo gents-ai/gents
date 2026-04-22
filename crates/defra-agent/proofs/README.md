@@ -262,6 +262,21 @@ Examples:
 That file should stay honest. If the implementation diverges from the model,
 the deviation should be named there instead of silently tolerated.
 
+## Known Limitations
+
+### Apply atomicity
+
+`defra-agent-cli config apply` today is best-effort: if a write fails
+partway through the ordered apply sequence, the database is left in a
+partially-updated state and there is no rollback. The `T-Conv` theorem in
+`Proofs/ApplyReconcile.lean` assumes apply runs to completion — it does
+not cover crash-mid-apply. Operators must retry `apply` after a failure
+and should treat a partial-apply state as manually inconsistent until
+resolved.
+
+Tracking issue: I-2 (make apply transactional); see
+`docs/superpowers/specs/2026-04-14-apply-reconcile-lean.md`.
+
 ## What Is Not Proven
 
 These proofs do not establish:

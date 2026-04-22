@@ -5,11 +5,14 @@
 
 pub(crate) mod admission;
 pub mod agent;
+pub mod apply_model;
 pub mod backend_provider;
 pub mod backend_registry;
+pub mod collection;
 pub mod compaction;
 pub(crate) mod completion_factory;
 pub mod config;
+pub mod desired_fields;
 pub mod document_config;
 pub mod error;
 pub mod graphql;
@@ -34,6 +37,8 @@ pub mod toolset;
 pub mod truncation;
 pub mod watcher;
 
+pub use collection::Collection;
+
 pub use agent::{
     BehaviorBuilder, DefraAgent, DefraAgentBuilder, DocumentRuntimeOptions,
     ProcessLifecycleObserver, ProcessLifecycleState,
@@ -44,6 +49,7 @@ pub use compaction::CompactionStrategy;
 pub use config::BehaviorConfig;
 pub use defra_agent_protocol::client_protocol;
 pub use defra_node;
+pub use desired_fields::{DesiredFields, LiveFields};
 pub use document_config::{
     default_behavior_id_for_agent, ensure_agent_principal, list_agent_behaviors,
     load_agent_behavior, load_agent_principal, load_inference_profile, load_tool_selection,

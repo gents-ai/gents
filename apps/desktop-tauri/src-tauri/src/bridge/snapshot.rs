@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use defra_agent_desktop::client::{ClientCore, ClientPeerStatus, DesktopPaths, PeerDirectory, P2PHealth};
-use defra_agent_protocol::transcript::present_persisted_message;
+use defra_agent_desktop::client::{
+    ClientCore, ClientPeerStatus, DesktopPaths, P2PHealth, PeerDirectory,
+};
 use defra_agent_desktop::local_runtime::default_agent_home;
+use defra_agent_protocol::transcript::present_persisted_message;
 
 use super::types::{
     normalize_optional, turn_state_label, BehaviorView, ConversationSummary, DeploymentView,
@@ -65,15 +67,18 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
         .into_iter()
         .map(|peer| {
             let status = peer_statuses.get(&peer.agent_did);
-            let default_behavior_id =
-                store.default_behavior_id_for_agent(&peer.agent_did).map(str::to_owned);
-            let runtime = store.latest_runtime(&peer.agent_did).map(|row| RuntimeView {
-                process_state: normalize_optional(row.process_state.as_deref()),
-                reconcile_phase: normalize_optional(row.reconcile_phase.as_deref()),
-                last_reconcile_result: normalize_optional(row.last_reconcile_result.as_deref()),
-                last_reconcile_error: normalize_optional(row.last_reconcile_error.as_deref()),
-                updated_at: normalize_optional(row.updated_at.as_deref()),
-            });
+            let default_behavior_id = store
+                .default_behavior_id_for_agent(&peer.agent_did)
+                .map(str::to_owned);
+            let runtime = store
+                .latest_runtime(&peer.agent_did)
+                .map(|row| RuntimeView {
+                    process_state: normalize_optional(row.process_state.as_deref()),
+                    reconcile_phase: normalize_optional(row.reconcile_phase.as_deref()),
+                    last_reconcile_result: normalize_optional(row.last_reconcile_result.as_deref()),
+                    last_reconcile_error: normalize_optional(row.last_reconcile_error.as_deref()),
+                    updated_at: normalize_optional(row.updated_at.as_deref()),
+                });
 
             let mut behaviors = store
                 .behavior_rows(&peer.agent_did)
@@ -101,9 +106,11 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     let transcript = store.transcript(&row.session_id);
                     ConversationSummary {
                         session_id: row.session_id.clone(),
-                        title: normalize_optional(row.title.as_deref())
-                            .or_else(|| normalize_optional(row.preview_text.as_deref()))
-                            .unwrap_or_else(|| "New Conversation".to_string()),
+                        title: Some(
+                            normalize_optional(row.title.as_deref())
+                                .or_else(|| normalize_optional(row.preview_text.as_deref()))
+                                .unwrap_or_else(|| "New Conversation".to_string()),
+                        ),
                         preview_text: normalize_optional(row.preview_text.as_deref()),
                         status: normalize_optional(row.status.as_deref()),
                         behavior_id: normalize_optional(row.behavior_id.as_deref()),
@@ -186,7 +193,10 @@ pub(crate) fn build_session_snapshot_from_store(
         });
     let active_response_overlay = latest_response.clone().filter(|response| {
         response.materialized_message_sequence.is_none()
-            && (response.content.as_deref().is_some_and(|value| !value.trim().is_empty())
+            && (response
+                .content
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
                 || response
                     .reasoning
                     .as_deref()
