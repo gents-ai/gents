@@ -21,8 +21,9 @@
 //! defensive create/update split for manifest-apply flows; the desktop
 //! only needs the upsert path today.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
+use defra_agent::write_manual_agent_request;
 use defra_agent_protocol::row::{EventTriggerRow, ScheduleRow, TaskRow};
 use defra_node::EmbeddedNode;
 
@@ -195,6 +196,93 @@ pub async fn upsert_schedule(node: &EmbeddedNode, row: &ScheduleRow) -> Result<(
         update_fields = join_fields(&update_fields),
     );
     execute_mutation(node, &mutation, "upsert_schedule").await
+}
+
+/// Fire a task immediately using the shared manual-run helper.
+///
+/// Unlike the CLI path (which writes the mutation directly because it may
+/// be talking to a remote GraphQL endpoint), desktop is in-process with
+/// DefraDB and can call the shared helper directly. Both paths produce
+/// the same `(caused_by_trigger_kind = "manual", caused_by_trigger_id =
+/// null)` lineage and the same `execution_origin = "interactive"`, so
+/// observers can treat them as one origin.
+///
+/// Returns the new `AgentRequest`'s `_docID` on success.
+pub async fn fire_task_now(
+    node: &EmbeddedNode,
+    task_row: &TaskRow,
+    args: serde_json::Value,
+) -> Result<String> {
+    let task_id = normalize_required("task_id", &task_row.task_id)?;
+    let behavior_id = task_row
+        .behavior_id
+        .as_deref()
+        .and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then_some(trimmed)
+        })
+        .ok_or_else(|| anyhow!("task {task_id} has no behavior_id"))?;
+    let prompt_template = task_row
+        .prompt_template
+        .as_deref()
+        .ok_or_else(|| anyhow!("task {task_id} has no prompt_template"))?;
+    if !task_row.enabled.unwrap_or(false) {
+        bail!("task {task_id} is disabled");
+    }
+
+    // Resolve `agent_did` via GraphQL. The desktop `ClientStore` has
+    // behavior rows cached, but a fresh lookup keeps this writer correct
+    // even if the store is stale, and mirrors the CLI path's shape.
+    let behavior_query = format!(
+        r#"query {{
+            AgentBehavior(filter: {{ behavior_id: {{ _eq: "{id}" }} }}, limit: 1) {{
+                agent_did
+                enabled
+            }}
+        }}"#,
+        id = escape_graphql_string(behavior_id),
+    );
+    let behavior_response = node.execute(&behavior_query).await;
+    if behavior_response.has_errors() {
+        bail!(
+            "fetch behavior for task {task_id} failed: {:?}",
+            behavior_response.errors
+        );
+    }
+    let behavior_row = behavior_response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentBehavior"))
+        .and_then(|arr| arr.as_array())
+        .and_then(|arr| arr.first())
+        .ok_or_else(|| {
+            anyhow!(
+                "no AgentBehavior with behavior_id = {} (referenced by task {task_id})",
+                behavior_id
+            )
+        })?;
+    let agent_did = behavior_row
+        .get("agent_did")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("AgentBehavior {behavior_id} has no agent_did"))?;
+    if !behavior_row
+        .get("enabled")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+    {
+        bail!("AgentBehavior {behavior_id} is disabled");
+    }
+
+    write_manual_agent_request(
+        node,
+        agent_did,
+        behavior_id,
+        task_id,
+        prompt_template,
+        args,
+    )
+    .await
 }
 
 /// Manual "Run Now" path for a Schedule.
