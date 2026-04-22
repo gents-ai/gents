@@ -7,10 +7,11 @@ use defra_agent::Collection;
 
 use super::{DesiredStateManifest, HasUniqueId};
 
-/// Verify that `id` is a valid per-document directory handle. Rejects any
-/// character that would break filesystem semantics or produce ambiguous
-/// paths (`/`, `\`, `:`, null byte), the traversal specials `.` and
-/// `..`, and the empty string.
+/// Verify that `id` is a valid per-document directory handle on a POSIX
+/// filesystem. Rejects path-separator and null bytes (`/`, `\0`), the
+/// traversal specials `.` and `..`, and the empty string. Allows `:`,
+/// which is legal on Unix/Linux/macOS filesystems and appears in DIDs
+/// and init-generated IDs.
 pub(crate) fn check_filesystem_safe_id(id: &str) -> Result<(), String> {
     if id.is_empty() {
         return Err(
@@ -23,7 +24,7 @@ pub(crate) fn check_filesystem_safe_id(id: &str) -> Result<(), String> {
         ));
     }
     for ch in id.chars() {
-        if matches!(ch, '/' | '\\' | ':' | '\0') {
+        if matches!(ch, '/' | '\0') {
             return Err(format!(
                 "unique id '{id}' contains filesystem-unsafe character(s); choose a filesystem-safe id"
             ));

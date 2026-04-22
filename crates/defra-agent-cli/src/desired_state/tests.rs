@@ -1066,10 +1066,19 @@ mod write_manifest_root_safe_id {
     }
 
     #[test]
-    fn rejects_backslash_colon_and_null() {
-        for bad in ["a\\b", "a:b", "a\0b"] {
-            assert!(check_filesystem_safe_id(bad).is_err(), "should reject '{bad}'");
-        }
+    fn rejects_null_byte() {
+        assert!(check_filesystem_safe_id("a\0b").is_err(), "should reject null byte");
+    }
+
+    #[test]
+    fn accepts_colon_in_did_style_ids() {
+        assert!(
+            check_filesystem_safe_id("did:defra-agent:example:default").is_ok(),
+            "colons are legal on POSIX"
+        );
+        assert!(
+            check_filesystem_safe_id("did:key:abc:default:tools").is_ok()
+        );
     }
 
     #[test]

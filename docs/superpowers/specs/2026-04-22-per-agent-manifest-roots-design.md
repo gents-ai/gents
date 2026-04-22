@@ -244,10 +244,11 @@ pub(crate) fn write_manifest_root(
 
 Per-document directory name = value of the collection's unique field on that
 document. Before writing, validate the id against filesystem-unsafe values:
-`/`, `\`, `:`, null byte, `.`, `..`, or empty string. Unsafe → error `"unique
-id '<value>' contains filesystem-unsafe character(s); choose a filesystem-safe
-id"`. This guarantees that any root produced by the writer is loadable by the
-loader.
+`/`, null byte, `.`, `..`, or empty string. Allows `:`, which is legal on
+POSIX (Unix/Linux/macOS) filesystems and appears in DIDs and init-generated
+IDs. Unsafe → error `"unique id '<value>' contains filesystem-unsafe
+character(s); choose a filesystem-safe id"`. This guarantees that any root
+produced by the writer is loadable by the loader.
 
 ### Write order
 
