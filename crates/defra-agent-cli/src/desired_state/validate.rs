@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
 
+use defra_agent::{parse_template_for_validation, VariableRef};
+
 use super::DesiredStateManifest;
 
 pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Vec<String>) {
@@ -13,7 +15,6 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
     let mut tool_selection_ids = BTreeSet::new();
     let mut profile_ids = BTreeSet::new();
     let mut service_ids = BTreeSet::new();
-    let mut task_ids = BTreeSet::new();
 
     for backend in &manifest.inference_backends {
         let backend_id = backend.backend_id.trim();
@@ -190,51 +191,112 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             .push("agent-principal.json must contain a non-empty default_behavior_id".to_string()),
     }
 
-    for task in &manifest.scheduled_tasks {
+    let mut task_ids = BTreeSet::new();
+    for task in &manifest.tasks {
         let task_id = task.task_id.trim();
         if task_id.is_empty() {
-            errors
-                .push("scheduled-tasks manifest contains a task with an empty task_id".to_string());
+            errors.push("tasks manifest contains a task with an empty task_id".to_string());
         } else if !task_ids.insert(task_id.to_string()) {
-            errors.push(format!(
-                "duplicate task_id in scheduled-tasks manifest: {task_id}"
-            ));
-        }
-
-        if !principal_agent_did.is_empty() && task.agent_did.trim() != principal_agent_did {
-            errors.push(format!(
-                "scheduled task {} belongs to {} not {}",
-                task.task_id, task.agent_did, manifest.agent_principal.agent_did
-            ));
+            errors.push(format!("duplicate task_id in tasks manifest: {task_id}"));
         }
 
         if task.name.trim().is_empty() {
             errors.push(format!(
-                "scheduled task {} in scheduled-tasks manifest must contain a non-empty name",
+                "task {} in tasks manifest must contain a non-empty name",
                 task.task_id
             ));
         }
 
-        if task.prompt.trim().is_empty() {
+        let behavior_id = task.behavior_id.trim();
+        if behavior_id.is_empty() {
             errors.push(format!(
-                "scheduled task {} in scheduled-tasks manifest must contain a non-empty prompt",
+                "task {} in tasks manifest must contain a non-empty behavior_id",
                 task.task_id
+            ));
+        } else if !behavior_ids.contains(behavior_id) {
+            errors.push(format!(
+                "task {} references missing behavior_id {}",
+                task.task_id, behavior_id
+            ));
+        }
+    }
+
+    let mut schedule_ids = BTreeSet::new();
+    for schedule in &manifest.schedules {
+        let schedule_id = schedule.schedule_id.trim();
+        if schedule_id.is_empty() {
+            errors.push(
+                "schedules manifest contains a schedule with an empty schedule_id".to_string(),
+            );
+        } else if !schedule_ids.insert(schedule_id.to_string()) {
+            errors.push(format!(
+                "duplicate schedule_id in schedules manifest: {schedule_id}"
             ));
         }
 
-        if task.interval_secs <= 0 {
+        let task_id = schedule.task_id.trim();
+        if task_id.is_empty() {
             errors.push(format!(
-                "scheduled task {} in scheduled-tasks manifest must contain interval_secs > 0",
-                task.task_id
+                "schedule {} in schedules manifest must contain a non-empty task_id",
+                schedule.schedule_id
+            ));
+        } else if !task_ids.contains(task_id) {
+            errors.push(format!(
+                "schedule {} references missing task_id {}",
+                schedule.schedule_id, task_id
             ));
         }
 
-        if !behavior_ids.contains(task.behavior_id.trim()) {
+        if schedule.interval_secs < 1 {
             errors.push(format!(
-                "scheduled task {} references missing behavior_id {}",
-                task.task_id, task.behavior_id
+                "schedule {} in schedules manifest must contain an interval_secs >= 1",
+                schedule.schedule_id
             ));
         }
+
+        match schedule.concurrency.trim() {
+            "parallel" | "serial" | "latest_only" => {}
+            other => errors.push(format!(
+                "schedule {} in schedules manifest has unknown concurrency {}",
+                schedule.schedule_id, other
+            )),
+        }
+
+        // Schedule scope only supplies `event.*` — reject any `doc.*` or
+        // `args.*` references in the linked task's prompt template so the
+        // trigger cannot fail at render time with a missing scope.
+        if !task_id.is_empty() {
+            if let Some(task) = manifest.tasks.iter().find(|task| task.task_id == task_id) {
+                match parse_template_for_validation(&task.prompt_template) {
+                    Ok(refs) => {
+                        let mut reported: BTreeSet<&str> = BTreeSet::new();
+                        for var in &refs {
+                            if let Some(root) = var.root() {
+                                if (root == "doc" || root == "args") && reported.insert(root) {
+                                    errors.push(format!(
+                                        "schedule {} prompt template references forbidden scope: {}; schedule scope only permits event.*",
+                                        schedule.schedule_id,
+                                        format_variable_ref(var),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    Err(err) => errors.push(format!(
+                        "schedule {} prompt template failed to parse: {}",
+                        schedule.schedule_id, err
+                    )),
+                }
+            }
+        }
+    }
+}
+
+fn format_variable_ref(var: &VariableRef) -> String {
+    if var.path.is_empty() {
+        String::new()
+    } else {
+        var.path.join(".")
     }
 }
 

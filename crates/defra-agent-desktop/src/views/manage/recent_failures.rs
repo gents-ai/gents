@@ -1,4 +1,4 @@
-use defra_agent_protocol::row::ScheduledTaskRow;
+use defra_agent_protocol::row::ScheduleRow;
 use eframe::egui::Ui;
 
 use crate::client::ClientStore;
@@ -29,13 +29,18 @@ pub(super) fn render_recent_failure_detail(ui: &mut Ui, state: &ShellState, stor
         }
     }
 
-    if let Some(task_id) = selected_id.strip_prefix("task:") {
-        if let Some(task) = store
-            .scheduled_tasks
+    // `schedule:` failures are surfaced by the Recent Failures list
+    // once a `Schedule` records a non-empty `last_error`. `task:`
+    // failures are no longer emitted because the legacy
+    // `ScheduledTask` collection is gone; `Task` documents do not
+    // carry run bookkeeping (see Task 53 for the schedule view).
+    if let Some(schedule_id) = selected_id.strip_prefix("schedule:") {
+        if let Some(schedule) = store
+            .schedules
             .iter()
-            .find(|row| row.task_id == task_id)
+            .find(|row| row.schedule_id == schedule_id)
         {
-            render_scheduled_task_failure_detail(ui, task);
+            render_schedule_failure_detail(ui, store, schedule);
             return;
         }
     }
@@ -47,34 +52,55 @@ pub(super) fn render_recent_failure_detail(ui: &mut Ui, state: &ShellState, stor
     );
 }
 
-fn render_scheduled_task_failure_detail(ui: &mut Ui, task: &ScheduledTaskRow) {
-    read_only_field(ui, "Task ID", &task.task_id);
-    read_only_field(ui, "Name", task.name.as_deref().unwrap_or("unset"));
+fn render_schedule_failure_detail(ui: &mut Ui, store: &ClientStore, schedule: &ScheduleRow) {
+    read_only_field(ui, "Schedule ID", &schedule.schedule_id);
+    read_only_field(
+        ui,
+        "Task ID",
+        schedule.task_id.as_deref().unwrap_or("unset"),
+    );
+
+    let task = schedule
+        .task_id
+        .as_deref()
+        .and_then(|task_id| store.tasks.iter().find(|row| row.task_id == task_id));
+    read_only_field(
+        ui,
+        "Task Name",
+        task.and_then(|task| task.name.as_deref()).unwrap_or("unset"),
+    );
     read_only_field(
         ui,
         "Behavior ID",
-        task.behavior_id.as_deref().unwrap_or("unset"),
+        task.and_then(|task| task.behavior_id.as_deref())
+            .unwrap_or("unset"),
     );
     read_only_field(
         ui,
         "Last Status",
-        task.last_status.as_deref().unwrap_or("unset"),
+        schedule.last_status.as_deref().unwrap_or("unset"),
     );
     read_only_field(
         ui,
-        "Last Run At",
-        task.last_run_at.as_deref().unwrap_or("unset"),
+        "Last Attempt At",
+        schedule.last_attempt_at.as_deref().unwrap_or("unset"),
     );
     read_only_field(
         ui,
         "Next Run At",
-        task.next_run_at.as_deref().unwrap_or("unset"),
+        schedule.next_run_at.as_deref().unwrap_or("unset"),
     );
     read_only_multiline(
         ui,
         "Last Error",
-        task.last_error.as_deref().unwrap_or(""),
+        schedule.last_error.as_deref().unwrap_or(""),
         4,
     );
-    read_only_multiline(ui, "Prompt", task.prompt.as_deref().unwrap_or(""), 6);
+    read_only_multiline(
+        ui,
+        "Prompt Template",
+        task.and_then(|task| task.prompt_template.as_deref())
+            .unwrap_or(""),
+        6,
+    );
 }

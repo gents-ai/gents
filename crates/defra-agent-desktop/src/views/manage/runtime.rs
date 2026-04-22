@@ -79,14 +79,26 @@ pub(super) fn render_runtime_inspector(ui: &mut Ui, store: &ClientStore, state: 
             );
             read_only_field(
                 ui,
-                "Scheduled Tasks",
-                &store
-                    .scheduled_tasks
-                    .iter()
-                    .filter(|row| row.agent_did.as_deref() == Some(agent_did))
-                    .count()
-                    .to_string(),
+                "Tasks",
+                &{
+                    let behavior_ids: Vec<&str> = store
+                        .behavior_rows(agent_did)
+                        .iter()
+                        .map(|b| b.behavior_id.as_str())
+                        .collect();
+                    store
+                        .tasks
+                        .iter()
+                        .filter(|row| {
+                            row.behavior_id
+                                .as_deref()
+                                .is_some_and(|bid| behavior_ids.contains(&bid))
+                        })
+                        .count()
+                        .to_string()
+                },
             );
+            read_only_field(ui, "Schedules", &store.schedules.len().to_string());
         } else {
             views::card(
                 ui,

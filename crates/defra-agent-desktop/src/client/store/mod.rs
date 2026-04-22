@@ -8,7 +8,7 @@ use defra_agent_protocol::client_protocol::ClientTurnState;
 use defra_agent_protocol::row::{
     AgentBehaviorRow, AgentConversationRow, AgentMessageRow, AgentPrincipalRow, AgentRequestRow,
     AgentResponseRow, AgentRuntimeRow, AgentSessionRow, AgentToolCallRow, AgentToolResultRow,
-    CompactionEntryRow, InferenceBackendRow, InferenceProfileRow, ScheduledTaskRow,
+    CompactionEntryRow, InferenceBackendRow, InferenceProfileRow, ScheduleRow, TaskRow,
     ToolSelectionRow, ToolServiceRegistryRow,
 };
 use serde::Serialize;
@@ -28,7 +28,8 @@ pub struct ClientStoreRows {
     pub tool_calls: Vec<AgentToolCallRow>,
     pub tool_results: Vec<AgentToolResultRow>,
     pub compaction_entries: Vec<CompactionEntryRow>,
-    pub scheduled_tasks: Vec<ScheduledTaskRow>,
+    pub tasks: Vec<TaskRow>,
+    pub schedules: Vec<ScheduleRow>,
     pub tool_selections: Vec<ToolSelectionRow>,
     pub inference_backends: Vec<InferenceBackendRow>,
     pub inference_profiles: Vec<InferenceProfileRow>,
@@ -48,7 +49,8 @@ pub struct ClientStore {
     pub tool_calls: Vec<AgentToolCallRow>,
     pub tool_results: Vec<AgentToolResultRow>,
     pub compaction_entries: Vec<CompactionEntryRow>,
-    pub scheduled_tasks: Vec<ScheduledTaskRow>,
+    pub tasks: Vec<TaskRow>,
+    pub schedules: Vec<ScheduleRow>,
     pub tool_selections: Vec<ToolSelectionRow>,
     pub inference_backends: Vec<InferenceBackendRow>,
     pub inference_profiles: Vec<InferenceProfileRow>,
@@ -145,16 +147,37 @@ impl ClientStore {
             .collect()
     }
 
-    pub fn scheduled_tasks_for_behavior(
+    /// Return every `Task` bound to the given behavior.
+    ///
+    /// `Task` rows are not scoped by `agent_did` — they carry a single
+    /// `behavior_id` and are addressed globally by `task_id`. The
+    /// `_agent_did` parameter is kept so call sites that pass an agent scope
+    /// (today's behavior-diagnostics view, for example) stay ergonomic; the
+    /// filter is intentionally behavior-scoped only.
+    pub fn tasks_for_behavior(
         &self,
-        agent_did: &str,
+        _agent_did: &str,
         behavior_id: &str,
-    ) -> Vec<&ScheduledTaskRow> {
-        self.scheduled_tasks
+    ) -> Vec<&TaskRow> {
+        self.tasks
+            .iter()
+            .filter(|row| clean_string(row.behavior_id.as_deref()).as_deref() == Some(behavior_id))
+            .collect()
+    }
+
+    /// Return every `Schedule` whose `task_id` matches one of the provided
+    /// tasks. Useful for listing the schedules attached to a behavior
+    /// indirectly (via its tasks).
+    pub fn schedules_for_tasks(&self, task_ids: &[&str]) -> Vec<&ScheduleRow> {
+        if task_ids.is_empty() {
+            return Vec::new();
+        }
+        self.schedules
             .iter()
             .filter(|row| {
-                row.agent_did.as_deref() == Some(agent_did)
-                    && clean_string(row.behavior_id.as_deref()).as_deref() == Some(behavior_id)
+                row.task_id
+                    .as_deref()
+                    .is_some_and(|task_id| task_ids.iter().any(|candidate| *candidate == task_id))
             })
             .collect()
     }
@@ -223,7 +246,8 @@ impl ClientStore {
             + self.tool_calls.len()
             + self.tool_results.len()
             + self.compaction_entries.len()
-            + self.scheduled_tasks.len()
+            + self.tasks.len()
+            + self.schedules.len()
             + self.tool_selections.len()
             + self.inference_backends.len()
             + self.inference_profiles.len()
@@ -243,7 +267,8 @@ impl ClientStore {
             tool_calls: self.tool_calls.clone(),
             tool_results: self.tool_results.clone(),
             compaction_entries: self.compaction_entries.clone(),
-            scheduled_tasks: self.scheduled_tasks.clone(),
+            tasks: self.tasks.clone(),
+            schedules: self.schedules.clone(),
             tool_selections: self.tool_selections.clone(),
             inference_backends: self.inference_backends.clone(),
             inference_profiles: self.inference_profiles.clone(),

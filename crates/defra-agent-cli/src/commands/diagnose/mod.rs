@@ -47,7 +47,8 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         inference_backends: Vec::new(),
         inference_profiles: Vec::new(),
         tool_service_registries: Vec::new(),
-        scheduled_tasks: Vec::new(),
+        tasks: Vec::new(),
+        schedules: Vec::new(),
     });
     let runtime_row = match load_runtime_row(&access, &agent_did).await {
         Ok(Some(row)) => row,
@@ -184,7 +185,8 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "inference_backends": bundle.inference_backends.len(),
             "inference_profiles": bundle.inference_profiles.len(),
             "tool_service_registries": bundle.tool_service_registries.len(),
-            "scheduled_tasks": bundle.scheduled_tasks.len(),
+            "tasks": bundle.tasks.len(),
+            "schedules": bundle.schedules.len(),
         },
     });
     if let Some(map) = output.as_object_mut() {

@@ -35,7 +35,8 @@ const P2P_DESKTOP_CONFIG_COLLECTIONS: &[&str] = &[
     "InferenceBackend",
     "InferenceProfile",
     "ToolServiceRegistry",
-    "ScheduledTask",
+    "Task",
+    "Schedule",
 ];
 
 const P2P_CHAT_REQUEST_COLLECTIONS: &[&str] = &[

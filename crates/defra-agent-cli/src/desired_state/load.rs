@@ -7,8 +7,8 @@ use super::normalize::normalize_manifest;
 use super::validate::validate_manifest;
 use super::{
     DesiredAgentBehavior, DesiredAgentPrincipal, DesiredInferenceBackend, DesiredInferenceProfile,
-    DesiredScheduledTask, DesiredStateCounts, DesiredStateManifest, DesiredStateValidationReport,
-    DesiredToolSelection, DesiredToolServiceRegistry,
+    DesiredSchedule, DesiredStateCounts, DesiredStateManifest, DesiredStateValidationReport,
+    DesiredTask, DesiredToolSelection, DesiredToolServiceRegistry,
 };
 use defra_agent::Collection;
 
@@ -38,7 +38,8 @@ pub(crate) fn load_manifest_root(
                     inference_backends: 0,
                     inference_profiles: 0,
                     tool_service_registries: 0,
-                    scheduled_tasks: 0,
+                    tasks: 0,
+                    schedules: 0,
                 },
                 errors,
             },
@@ -60,7 +61,8 @@ pub(crate) fn load_manifest_root(
                     inference_backends: 0,
                     inference_profiles: 0,
                     tool_service_registries: 0,
-                    scheduled_tasks: 0,
+                    tasks: 0,
+                    schedules: 0,
                 },
                 errors,
             },
@@ -102,12 +104,19 @@ pub(crate) fn load_manifest_root(
         &mut errors,
     )
     .unwrap_or_default();
-    let scheduled_tasks = load_optional_json_collection::<DesiredScheduledTask>(
+    let tasks = load_optional_json_collection::<DesiredTask>(
         root,
-        Collection::ScheduledTask.file_name(),
-        Collection::ScheduledTask
+        Collection::Task.file_name(),
+        Collection::Task.dir_name().expect("tasks has a dir form"),
+        &mut errors,
+    )
+    .unwrap_or_default();
+    let schedules = load_optional_json_collection::<DesiredSchedule>(
+        root,
+        Collection::Schedule.file_name(),
+        Collection::Schedule
             .dir_name()
-            .expect("scheduled-tasks has a dir form"),
+            .expect("schedules has a dir form"),
         &mut errors,
     )
     .unwrap_or_default();
@@ -119,7 +128,8 @@ pub(crate) fn load_manifest_root(
         inference_backends: backends.as_ref().map_or(0, Vec::len),
         inference_profiles: inference_profiles.len(),
         tool_service_registries: tool_service_registries.len(),
-        scheduled_tasks: scheduled_tasks.len(),
+        tasks: tasks.len(),
+        schedules: schedules.len(),
     };
 
     let agent_did = principal.as_ref().map(|value| value.agent_did.clone());
@@ -135,7 +145,8 @@ pub(crate) fn load_manifest_root(
                 inference_backends: backends,
                 inference_profiles,
                 tool_service_registries,
-                scheduled_tasks,
+                tasks,
+                schedules,
             };
             normalize_manifest(&mut manifest);
             validate_manifest(&manifest, &mut errors);

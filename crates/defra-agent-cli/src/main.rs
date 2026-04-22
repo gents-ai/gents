@@ -51,7 +51,7 @@ const DEFAULT_LOG_FILTER: &str = concat!(
     "defra_agent::hook=info,",
     "defra_agent::session::sessions=info,",
     "defra_agent::streaming=info,",
-    "defra_agent::scheduler::loop_impl=info"
+    "defra_agent::trigger_engine=info"
 );
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
 const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
@@ -191,7 +191,8 @@ pub(crate) const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
     ("AgentMessage", "message_key"),
     ("AgentToolCall", "tool_call_key"),
     ("CompactionEntry", "compaction_key"),
-    ("ScheduledTask", "task_id"),
+    ("Task", "task_id"),
+    ("Schedule", "schedule_id"),
     ("ToolServiceRegistry", "service_id"),
 ];
 const CONFIG_SCHEMA_COLLECTIONS: &[&str] = &[
@@ -210,8 +211,10 @@ pub(crate) const EXPORT_INFERENCE_PROFILE_FIELDS: &str =
     "profile_id display_name context_window max_output_tokens max_turns temperature stream_batch_ms deadline_duration_secs";
 pub(crate) const EXPORT_TOOL_SERVICE_REGISTRY_FIELDS: &str =
     "service_id display_name description hostname tailscale_ip lan_ip mcp_port mcp_path";
-pub(crate) const EXPORT_SCHEDULED_TASK_FIELDS: &str =
-    "task_id agent_did behavior_id name prompt interval_secs enabled";
+pub(crate) const EXPORT_TASK_FIELDS: &str =
+    "task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at";
+pub(crate) const EXPORT_SCHEDULE_FIELDS: &str =
+    "schedule_id task_id interval_secs enabled concurrency created_at updated_at";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -475,8 +478,7 @@ mod tests {
                     "probe_status": "healthy"
                 }],
                 "inference_profiles": [],
-                "tool_service_registries": [],
-                "scheduled_tasks": []
+                "tool_service_registries": []
             }))
             .unwrap(),
         )

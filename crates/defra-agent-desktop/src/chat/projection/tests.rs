@@ -418,6 +418,8 @@ fn request(
         deadline: None,
         retry_count: Some(0),
         max_retries: Some(3),
+        caused_by_trigger_id: None,
+        caused_by_trigger_kind: None,
     }
 }
 

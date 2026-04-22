@@ -198,6 +198,10 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub execution_origin: Option<String>,
     #[serde(default)]
+    pub caused_by_trigger_id: Option<String>,
+    #[serde(default)]
+    pub caused_by_trigger_kind: Option<String>,
+    #[serde(default)]
     pub failure_reason: Option<String>,
     #[serde(default)]
     pub created_at: Option<String>,
@@ -342,31 +346,59 @@ pub struct CompactionEntryRow {
     pub created_at: Option<String>,
 }
 
+/// Serde mirror of the `Task` replicated document.
+///
+/// Mirrors `crates/defra-agent-protocol/schemas/agent/task.graphql`.
+/// Tasks are apply-owned descriptions of a prompt template bound to a
+/// behavior. They are globally addressed by `task_id`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ScheduledTaskRow {
+pub struct TaskRow {
     pub task_id: String,
-    #[serde(default)]
-    pub agent_did: Option<String>,
-    #[serde(default)]
-    pub behavior_id: Option<String>,
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
-    pub prompt: Option<String>,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub behavior_id: Option<String>,
+    #[serde(default)]
+    pub prompt_template: Option<String>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub output_schema_ref: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+/// Serde mirror of the `Schedule` replicated document.
+///
+/// Mirrors `crates/defra-agent-protocol/schemas/agent/schedule.graphql`.
+/// Schedules bind a `Task` to a recurring trigger. The runtime owns the
+/// fire bookkeeping fields (`next_run_at`, `last_attempt_at`, `last_status`,
+/// `last_error`, `fire_count`); apply owns everything else.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScheduleRow {
+    pub schedule_id: String,
+    #[serde(default)]
+    pub task_id: Option<String>,
     #[serde(default)]
     pub interval_secs: Option<i64>,
     #[serde(default)]
     pub enabled: Option<bool>,
     #[serde(default)]
+    pub concurrency: Option<String>,
+    #[serde(default)]
     pub next_run_at: Option<String>,
     #[serde(default)]
-    pub last_run_at: Option<String>,
+    pub last_attempt_at: Option<String>,
     #[serde(default)]
     pub last_status: Option<String>,
     #[serde(default)]
     pub last_error: Option<String>,
     #[serde(default)]
-    pub run_count: Option<i64>,
+    pub fire_count: Option<i64>,
     #[serde(default)]
     pub created_at: Option<String>,
     #[serde(default)]

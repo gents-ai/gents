@@ -496,7 +496,8 @@ impl ParallelDeploymentCase {
                 backend_id: deployment.docs.backend_id.clone(),
                 tool_selection_id: deployment.docs.tool_selection_id.clone(),
                 inference_profile_id: deployment.docs.inference_profile_id.clone(),
-                scheduled_task_id: deployment.docs.scheduled_task_id.clone(),
+                task_id: deployment.docs.task_id.clone(),
+                schedule_id: deployment.docs.schedule_id.clone(),
             },
             remote_core: Arc::clone(&deployment.core),
         }
@@ -512,7 +513,8 @@ impl ParallelDeploymentCase {
                 backend_id: self.docs.backend_id.clone(),
                 tool_selection_id: self.docs.tool_selection_id.clone(),
                 inference_profile_id: self.docs.inference_profile_id.clone(),
-                scheduled_task_id: self.docs.scheduled_task_id.clone(),
+                task_id: self.docs.task_id.clone(),
+                schedule_id: self.docs.schedule_id.clone(),
             },
             remote_core: self.remote_core.as_ref(),
         }

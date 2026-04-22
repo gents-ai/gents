@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
@@ -7,7 +7,9 @@ use defra_node::EmbeddedNode;
 use crate::admission::backend_admission_configs_from_backends;
 use crate::config::BehaviorConfig;
 use crate::document_config::{default_behavior_id_for_agent, AgentBehavior};
-use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
+use crate::runtime_snapshot::{
+    ConcurrencyMode, ResolvedRuntimeSnapshot, ResolvedSchedule, ResolvedTask,
+};
 use crate::tool_surface::ToolSelection;
 
 use super::DocumentRuntimeView;
@@ -146,13 +148,98 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         view.backends.values().map(|record| &record.value),
     )?;
 
+    let (active_schedules, unavailable_schedules) = resolve_schedules(view, &unavailable_behaviors);
+
     Ok(ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         default_behavior_id,
         behaviors,
         tool_surfaces,
         backend_admission_configs,
         unavailable_behaviors,
-    ))
+    )
+    .with_schedules(active_schedules, unavailable_schedules))
+}
+
+/// Classify every `Schedule` in `view` into either `active_schedules`
+/// (resolvable with its task and behavior) or `unavailable_schedules`
+/// (anything that fails one of the resolution gates). Mirrors the
+/// behavior-resolution pattern above: we never fail the whole snapshot for a
+/// single unresolvable schedule; we mark it unavailable instead.
+fn resolve_schedules(
+    view: &DocumentRuntimeView,
+    unavailable_behaviors: &HashMap<String, String>,
+) -> (HashMap<String, ResolvedSchedule>, HashSet<String>) {
+    let mut active_schedules = HashMap::new();
+    let mut unavailable_schedules = HashSet::new();
+
+    for schedule_record in view.schedules.values() {
+        let schedule = &schedule_record.value;
+        let schedule_id = schedule.schedule_id.clone();
+
+        let concurrency = match ConcurrencyMode::parse(schedule.concurrency.as_deref().unwrap_or(""))
+        {
+            Some(mode) => mode,
+            None => {
+                unavailable_schedules.insert(schedule_id);
+                continue;
+            }
+        };
+
+        if !schedule.enabled {
+            unavailable_schedules.insert(schedule_id);
+            continue;
+        }
+
+        let task_id = schedule.task_id.as_deref().unwrap_or("");
+        let task_record = match view.tasks.get(task_id) {
+            Some(record) => record,
+            None => {
+                unavailable_schedules.insert(schedule_id);
+                continue;
+            }
+        };
+        let task = &task_record.value;
+
+        if !task.enabled {
+            unavailable_schedules.insert(schedule_id);
+            continue;
+        }
+
+        let behavior_id = task.behavior_id.as_deref().unwrap_or("");
+        let behavior_record = match view.behaviors.get(behavior_id) {
+            Some(record) => record,
+            None => {
+                unavailable_schedules.insert(schedule_id);
+                continue;
+            }
+        };
+        if !behavior_record.value.enabled {
+            unavailable_schedules.insert(schedule_id);
+            continue;
+        }
+        if unavailable_behaviors.contains_key(behavior_id) {
+            unavailable_schedules.insert(schedule_id);
+            continue;
+        }
+
+        let resolved_task = ResolvedTask {
+            task_id: task.task_id.clone(),
+            behavior_id: task.behavior_id.clone().unwrap_or_default(),
+            prompt_template: task.prompt_template.clone().unwrap_or_default(),
+            output_schema_ref: task.output_schema_ref.clone(),
+        };
+        let resolved_schedule = ResolvedSchedule {
+            schedule_id: schedule.schedule_id.clone(),
+            task_id: schedule.task_id.clone().unwrap_or_default(),
+            task: resolved_task,
+            interval_secs: schedule.interval_secs.unwrap_or(0),
+            enabled: schedule.enabled,
+            concurrency,
+        };
+        active_schedules.insert(resolved_schedule.schedule_id.clone(), resolved_schedule);
+    }
+
+    (active_schedules, unavailable_schedules)
 }
 
 pub(super) fn collect_unresolved_behavior_references(

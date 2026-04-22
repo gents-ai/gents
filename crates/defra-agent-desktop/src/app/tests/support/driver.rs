@@ -62,7 +62,8 @@ fn manage_section_from_target(target: &str) -> Option<ManageSection> {
         ManageSection::Backends,
         ManageSection::ToolSelections,
         ManageSection::InferenceProfiles,
-        ManageSection::ScheduledTasks,
+        ManageSection::Tasks,
+        ManageSection::Schedules,
         ManageSection::RequestTimeline,
         ManageSection::RecentFailures,
     ]

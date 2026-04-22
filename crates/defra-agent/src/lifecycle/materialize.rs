@@ -71,6 +71,7 @@ impl RequestLifecycle {
         deadline_duration_secs: u64,
         execution_origin: ExecutionOrigin,
         backend_id: impl Into<String>,
+        trigger_lineage: TriggerLineage,
     ) -> Result<Self> {
         let backend_id = backend_id.into();
         let behavior_id = agent_name.to_string();
@@ -101,6 +102,32 @@ impl RequestLifecycle {
         let escaped_claimed_at = escape_graphql_string(&claimed_at);
         let escaped_deadline = escape_graphql_string(&deadline);
         let execution_origin_str = execution_origin.as_str();
+        let caused_by_trigger_id_field = trigger_lineage
+            .trigger_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                format!(
+                    r#"
+                    caused_by_trigger_id: "{}","#,
+                    escape_graphql_string(value)
+                )
+            })
+            .unwrap_or_default();
+        let caused_by_trigger_kind_field = trigger_lineage
+            .trigger_kind
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                format!(
+                    r#"
+                    caused_by_trigger_kind: "{}","#,
+                    escape_graphql_string(value)
+                )
+            })
+            .unwrap_or_default();
 
         let mutation = format!(
             r#"mutation {{
@@ -116,7 +143,7 @@ impl RequestLifecycle {
                     status: "processing",
                     lifecycle_state: "{lifecycle_state}",
                     backend_id: "{escaped_backend_id}",
-                    execution_origin: "{execution_origin_str}",
+                    execution_origin: "{execution_origin_str}",{caused_by_trigger_id_field}{caused_by_trigger_kind_field}
                     failure_reason: "",
                     created_at: "{escaped_created_at}",
                     claimed_at: "{escaped_claimed_at}",

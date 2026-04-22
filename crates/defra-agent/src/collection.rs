@@ -17,20 +17,22 @@ pub enum Collection {
     InferenceBackend,
     InferenceProfile,
     ToolServiceRegistry,
-    ScheduledTask,
+    Task,
+    Schedule,
 }
 
 impl Collection {
     /// All variants in declaration order. Not sorted by `apply_order()` —
     /// callers that need apply-ordered iteration must sort explicitly.
-    pub const ALL: [Collection; 7] = [
+    pub const ALL: [Collection; 8] = [
         Collection::AgentPrincipal,
         Collection::AgentBehavior,
         Collection::ToolSelection,
         Collection::InferenceBackend,
         Collection::InferenceProfile,
         Collection::ToolServiceRegistry,
-        Collection::ScheduledTask,
+        Collection::Task,
+        Collection::Schedule,
     ];
 
     /// Manifest file name on disk for the single-file form.
@@ -42,7 +44,8 @@ impl Collection {
             Collection::InferenceBackend => "inference-backends.json",
             Collection::InferenceProfile => "inference-profiles.json",
             Collection::ToolServiceRegistry => "tool-services.json",
-            Collection::ScheduledTask => "scheduled-tasks.json",
+            Collection::Task => "tasks.json",
+            Collection::Schedule => "schedules.json",
         }
     }
 
@@ -50,7 +53,8 @@ impl Collection {
     pub fn dir_name(self) -> Option<&'static str> {
         match self {
             Collection::ToolServiceRegistry => Some("tool-services"),
-            Collection::ScheduledTask => Some("scheduled-tasks"),
+            Collection::Task => Some("tasks"),
+            Collection::Schedule => Some("schedules"),
             _ => None,
         }
     }
@@ -64,7 +68,8 @@ impl Collection {
             Collection::InferenceBackend => "InferenceBackend",
             Collection::InferenceProfile => "InferenceProfile",
             Collection::ToolServiceRegistry => "ToolServiceRegistry",
-            Collection::ScheduledTask => "ScheduledTask",
+            Collection::Task => "Task",
+            Collection::Schedule => "Schedule",
         }
     }
 
@@ -77,7 +82,8 @@ impl Collection {
             Collection::InferenceBackend => "backend_id",
             Collection::InferenceProfile => "profile_id",
             Collection::ToolServiceRegistry => "service_id",
-            Collection::ScheduledTask => "task_id",
+            Collection::Task => "task_id",
+            Collection::Schedule => "schedule_id",
         }
     }
 
@@ -91,7 +97,8 @@ impl Collection {
             | Collection::InferenceProfile
             | Collection::ToolServiceRegistry => 0,
             Collection::AgentBehavior => 1,
-            Collection::ScheduledTask => 2,
+            Collection::Task => 2,
+            Collection::Schedule => 2,
             Collection::AgentPrincipal => 3,
         }
     }
@@ -110,7 +117,8 @@ impl fmt::Display for Collection {
             Collection::InferenceBackend => "inference_backends",
             Collection::InferenceProfile => "inference_profiles",
             Collection::ToolServiceRegistry => "tool_service_registries",
-            Collection::ScheduledTask => "scheduled_tasks",
+            Collection::Task => "tasks",
+            Collection::Schedule => "schedules",
         };
         f.write_str(name)
     }
@@ -161,7 +169,8 @@ mod tests {
             (Collection::InferenceBackend, 0, "InferenceBackend"),
             (Collection::InferenceProfile, 0, "InferenceProfile"),
             (Collection::ToolServiceRegistry, 0, "ToolServiceRegistry"),
-            (Collection::ScheduledTask, 2, "ScheduledTask"),
+            (Collection::Task, 2, "Task"),
+            (Collection::Schedule, 2, "Schedule"),
         ];
 
         // ALL must list every canonical variant exactly once.
@@ -198,7 +207,8 @@ mod tests {
         assert!(
             Collection::InferenceProfile.apply_order() < Collection::AgentBehavior.apply_order()
         );
-        assert!(Collection::AgentBehavior.apply_order() < Collection::ScheduledTask.apply_order());
+        assert!(Collection::AgentBehavior.apply_order() < Collection::Task.apply_order());
+        assert!(Collection::AgentBehavior.apply_order() < Collection::Schedule.apply_order());
         // Rank-0 members must all agree on rank 0.
         assert_eq!(
             Collection::InferenceBackend.apply_order(),

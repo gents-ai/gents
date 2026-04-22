@@ -29,10 +29,12 @@ pub const AGENT_TOOL_RESULT_NAME: &str = "AgentToolResult";
 pub const AGENT_TOOL_RESULT: &str = include_str!("../schemas/agent/agent_tool_result.graphql");
 pub const COMPACTION_ENTRY_NAME: &str = "CompactionEntry";
 pub const COMPACTION_ENTRY: &str = include_str!("../schemas/agent/compaction_entry.graphql");
-pub const SCHEDULED_TASK_NAME: &str = "ScheduledTask";
-pub const SCHEDULED_TASK: &str = include_str!("../schemas/agent/scheduled_task.graphql");
 pub const TOOL_SELECTION_NAME: &str = "ToolSelection";
 pub const TOOL_SELECTION: &str = include_str!("../schemas/agent/tool_selection.graphql");
+pub const TASK_NAME: &str = "Task";
+pub const TASK: &str = include_str!("../schemas/agent/task.graphql");
+pub const SCHEDULE_NAME: &str = "Schedule";
+pub const SCHEDULE: &str = include_str!("../schemas/agent/schedule.graphql");
 
 // inference domain
 pub const INFERENCE_BACKEND_NAME: &str = "InferenceBackend";
@@ -69,7 +71,8 @@ pub const ALL: &[&str] = &[
     AGENT_MESSAGE,
     AGENT_TOOL_CALL,
     COMPACTION_ENTRY,
-    SCHEDULED_TASK,
+    TASK,
+    SCHEDULE,
     TOOL_SERVICE_REGISTRY,
 ];
 pub const ALL_COLLECTION_NAMES: &[&str] = &[
@@ -87,7 +90,8 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_MESSAGE_NAME,
     AGENT_TOOL_CALL_NAME,
     COMPACTION_ENTRY_NAME,
-    SCHEDULED_TASK_NAME,
+    TASK_NAME,
+    SCHEDULE_NAME,
     TOOL_SERVICE_REGISTRY_NAME,
 ];
 
@@ -101,7 +105,7 @@ mod tests {
     fn all_contains_every_schema() {
         assert_eq!(
             ALL.len(),
-            16,
+            17,
             "ALL should enumerate every non-runtime schema"
         );
     }

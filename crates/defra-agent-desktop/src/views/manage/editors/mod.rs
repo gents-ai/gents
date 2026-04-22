@@ -4,7 +4,8 @@ use eframe::egui::{self, RichText, TextEdit, Ui};
 
 use crate::audit;
 use crate::state::{
-    BackendDraft, BehaviorDraft, InferenceProfileDraft, ScheduledTaskDraft, ToolSelectionDraft,
+    BackendDraft, BehaviorDraft, InferenceProfileDraft, ScheduleDraft, TaskDraft,
+    ToolSelectionDraft,
 };
 use crate::theme;
 
@@ -24,8 +25,12 @@ pub(super) fn render_inference_profile_editor(ui: &mut Ui, draft: &mut Inference
     render::render_inference_profile_editor(ui, draft);
 }
 
-pub(super) fn render_scheduled_task_editor(ui: &mut Ui, draft: &mut ScheduledTaskDraft) {
-    render::render_scheduled_task_editor(ui, draft);
+pub(super) fn render_task_editor(ui: &mut Ui, draft: &mut TaskDraft) {
+    render::render_task_editor(ui, draft);
+}
+
+pub(super) fn render_schedule_editor(ui: &mut Ui, draft: &mut ScheduleDraft) {
+    render::render_schedule_editor(ui, draft);
 }
 
 pub(super) fn editor_heading(ui: &mut Ui, title: &str) {

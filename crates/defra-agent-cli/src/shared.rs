@@ -161,7 +161,9 @@ pub(crate) struct ConfigExportBundle {
     #[serde(default)]
     pub(crate) tool_service_registries: Vec<Value>,
     #[serde(default)]
-    pub(crate) scheduled_tasks: Vec<Value>,
+    pub(crate) tasks: Vec<Value>,
+    #[serde(default)]
+    pub(crate) schedules: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -172,7 +174,8 @@ pub(crate) struct ConfigApplyCounts {
     pub(crate) inference_backends: usize,
     pub(crate) inference_profiles: usize,
     pub(crate) tool_service_registries: usize,
-    pub(crate) scheduled_tasks: usize,
+    pub(crate) tasks: usize,
+    pub(crate) schedules: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]

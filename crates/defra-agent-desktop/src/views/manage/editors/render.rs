@@ -1,7 +1,8 @@
 use eframe::egui::Ui;
 
 use crate::state::{
-    BackendDraft, BehaviorDraft, InferenceProfileDraft, ScheduledTaskDraft, ToolSelectionDraft,
+    BackendDraft, BehaviorDraft, InferenceProfileDraft, ScheduleDraft, TaskDraft,
+    ToolSelectionDraft,
 };
 
 use super::{
@@ -68,20 +69,57 @@ pub(super) fn render_inference_profile_editor(ui: &mut Ui, draft: &mut Inference
     );
 }
 
-pub(super) fn render_scheduled_task_editor(ui: &mut Ui, draft: &mut ScheduledTaskDraft) {
-    editor_heading(ui, "Scheduled Task");
+/// Task 51 renders a minimal read-only detail view for tasks. Task 52
+/// will replace this with the real editor (description,
+/// prompt_template, output_schema_ref wired into mutations).
+pub(super) fn render_task_editor(ui: &mut Ui, draft: &mut TaskDraft) {
+    editor_heading(ui, "Task");
     text_field(ui, "Task ID", &mut draft.task_id);
-    text_field(ui, "Agent DID", &mut draft.agent_did);
-    text_field(ui, "Behavior ID", &mut draft.behavior_id);
     text_field(ui, "Name", &mut draft.name);
-    multiline_field(ui, "Prompt", &mut draft.prompt, 8);
-    text_field(ui, "Interval Secs", &mut draft.interval_secs);
+    multiline_field(ui, "Description", &mut draft.description, 3);
+    text_field(ui, "Behavior ID", &mut draft.behavior_id);
+    multiline_field(ui, "Prompt Template", &mut draft.prompt_template, 8);
     toggle_field(ui, "Enabled", &mut draft.enabled);
-    text_field(ui, "Next Run At", &mut draft.next_run_at);
-    read_only_field(ui, "Last Run At", draft.last_run_at.as_str());
-    read_only_field(ui, "Last Status", draft.last_status.as_str());
-    read_only_multiline(ui, "Last Error", draft.last_error.as_str(), 4);
-    read_only_field(ui, "Run Count", draft.run_count.as_str());
+    text_field(ui, "Output Schema Ref", &mut draft.output_schema_ref);
     read_only_field(ui, "Created At", draft.created_at.as_str());
     read_only_field(ui, "Updated At", draft.updated_at.as_str());
+}
+
+/// Schedule detail editor.
+///
+/// The Schedule collection straddles the apply/runtime boundary: the
+/// apply path owns the description of the schedule (`schedule_id`,
+/// `task_id`, `interval_secs`, `enabled`, `concurrency`,
+/// `created_at`, `updated_at`) while the trigger engine owns the fire
+/// bookkeeping (`next_run_at`, `last_attempt_at`, `last_status`,
+/// `last_error`, `fire_count`).
+///
+/// Task 53 groups those halves visually so operators can tell at a
+/// glance which fields they can change and which reflect what the
+/// scheduler has actually done. The apply-path mutation writer in
+/// `client/mutations/manage/task.rs` projects only the apply-owned
+/// fields, so the runtime bookkeeping shown here is never clobbered by
+/// a desktop save.
+pub(super) fn render_schedule_editor(ui: &mut Ui, draft: &mut ScheduleDraft) {
+    editor_heading(ui, "Schedule");
+    text_field(ui, "Schedule ID", &mut draft.schedule_id);
+    text_field(ui, "Task ID", &mut draft.task_id);
+    text_field(ui, "Interval Secs", &mut draft.interval_secs);
+    toggle_field(ui, "Enabled", &mut draft.enabled);
+    text_field(ui, "Concurrency", &mut draft.concurrency);
+    read_only_field(ui, "Created At", draft.created_at.as_str());
+    read_only_field(ui, "Updated At", draft.updated_at.as_str());
+
+    ui.add_space(8.0);
+    editor_heading(ui, "Runtime State");
+    // These five fields are owned by the trigger engine. They are
+    // shown read-only so the desktop cannot accidentally reset the
+    // scheduler's bookkeeping by re-applying a Schedule edit. The
+    // mutation writer enforces the same contract at the GraphQL layer
+    // by omitting these fields from upsert input.
+    read_only_field(ui, "Next Run At", draft.next_run_at.as_str());
+    read_only_field(ui, "Last Attempt At", draft.last_attempt_at.as_str());
+    read_only_field(ui, "Last Status", draft.last_status.as_str());
+    read_only_multiline(ui, "Last Error", draft.last_error.as_str(), 4);
+    read_only_field(ui, "Fire Count", draft.fire_count.as_str());
 }

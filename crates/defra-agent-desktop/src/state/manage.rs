@@ -4,18 +4,20 @@ pub enum ManageSection {
     Backends,
     ToolSelections,
     InferenceProfiles,
-    ScheduledTasks,
+    Tasks,
+    Schedules,
     RequestTimeline,
     RecentFailures,
 }
 
 impl ManageSection {
-    pub const MANAGE: [Self; 5] = [
+    pub const MANAGE: [Self; 6] = [
         Self::Behaviors,
         Self::Backends,
         Self::ToolSelections,
         Self::InferenceProfiles,
-        Self::ScheduledTasks,
+        Self::Tasks,
+        Self::Schedules,
     ];
 
     pub const INSPECT: [Self; 2] = [Self::RequestTimeline, Self::RecentFailures];
@@ -26,7 +28,8 @@ impl ManageSection {
             Self::Backends => "Backends",
             Self::ToolSelections => "Tool Selections",
             Self::InferenceProfiles => "Inference Profiles",
-            Self::ScheduledTasks => "Scheduled Tasks",
+            Self::Tasks => "Tasks",
+            Self::Schedules => "Schedules",
             Self::RequestTimeline => "Request Timeline",
             Self::RecentFailures => "Recent Failures",
         }
@@ -39,7 +42,8 @@ impl ManageSection {
                 | Self::Backends
                 | Self::ToolSelections
                 | Self::InferenceProfiles
-                | Self::ScheduledTasks
+                | Self::Tasks
+                | Self::Schedules
         )
     }
 }
@@ -101,20 +105,39 @@ pub struct InferenceProfileDraft {
     pub deadline_duration_secs: String,
 }
 
+/// Read-only draft shown in the Task manage section.
+///
+/// Task 51 renders the task list; Task 52 will replace this draft with a
+/// full editor (description, prompt_template, output_schema_ref, etc).
 #[derive(Debug, Clone, PartialEq)]
-pub struct ScheduledTaskDraft {
+pub struct TaskDraft {
     pub task_id: String,
-    pub agent_did: String,
-    pub behavior_id: String,
     pub name: String,
-    pub prompt: String,
+    pub description: String,
+    pub behavior_id: String,
+    pub prompt_template: String,
+    pub enabled: bool,
+    pub output_schema_ref: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Read-only draft shown in the Schedule manage section.
+///
+/// Task 51 renders the schedule list; Task 52 will wire up a real editor
+/// with mutations, and Task 53 will surface the fire-bookkeeping fields.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScheduleDraft {
+    pub schedule_id: String,
+    pub task_id: String,
     pub interval_secs: String,
     pub enabled: bool,
+    pub concurrency: String,
     pub next_run_at: String,
-    pub last_run_at: String,
+    pub last_attempt_at: String,
     pub last_status: String,
     pub last_error: String,
-    pub run_count: String,
+    pub fire_count: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -125,7 +148,8 @@ pub enum ManageDraft {
     Backend(BackendDraft),
     ToolSelection(ToolSelectionDraft),
     InferenceProfile(InferenceProfileDraft),
-    ScheduledTask(ScheduledTaskDraft),
+    Task(TaskDraft),
+    Schedule(ScheduleDraft),
 }
 
 impl ManageDraft {
@@ -135,7 +159,8 @@ impl ManageDraft {
             Self::Backend(draft) => &draft.backend_id,
             Self::ToolSelection(draft) => &draft.selection_id,
             Self::InferenceProfile(draft) => &draft.profile_id,
-            Self::ScheduledTask(draft) => &draft.task_id,
+            Self::Task(draft) => &draft.task_id,
+            Self::Schedule(draft) => &draft.schedule_id,
         }
     }
 
@@ -145,7 +170,8 @@ impl ManageDraft {
             Self::Backend(_) => ManageSection::Backends,
             Self::ToolSelection(_) => ManageSection::ToolSelections,
             Self::InferenceProfile(_) => ManageSection::InferenceProfiles,
-            Self::ScheduledTask(_) => ManageSection::ScheduledTasks,
+            Self::Task(_) => ManageSection::Tasks,
+            Self::Schedule(_) => ManageSection::Schedules,
         }
     }
 }

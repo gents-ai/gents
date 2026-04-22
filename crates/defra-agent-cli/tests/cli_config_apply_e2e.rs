@@ -8,8 +8,17 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
+/// End-to-end smoke test for the event-driven-tasks apply path.
+///
+/// Covers:
+///   * creation of a `Task` + `Schedule` pair from a manifest,
+///   * apply-owned field reconciliation after a manifest edit, and
+///   * the critical invariant that apply NEVER writes runtime-owned
+///     `Schedule` fields (`next_run_at`, `last_attempt_at`, `last_status`,
+///     `last_error`, `fire_count`) — live scheduler state injected via
+///     direct GraphQL mutation must survive a reapply.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_apply_reconciles_tool_services_and_scheduled_tasks_end_to_end() -> Result<()> {
+async fn config_apply_reconciles_tool_services_tasks_and_schedules_end_to_end() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     let root = tempdir.path().join("infra").join("agents").join("default");
@@ -35,11 +44,6 @@ async fn config_apply_reconciles_tool_services_and_scheduled_tasks_end_to_end() 
     let exported = run_cli_json(&home_dir, &["config", "export"])?;
     write_manifest_root_from_export(&root, &exported)?;
 
-    let agent_did = exported
-        .get("agent_did")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("exported bundle missing agent_did"))?
-        .to_string();
     let behavior_id = exported
         .pointer("/agent_principal/default_behavior_id")
         .and_then(Value::as_str)
@@ -47,8 +51,10 @@ async fn config_apply_reconciles_tool_services_and_scheduled_tasks_end_to_end() 
         .to_string();
     let service_id = format!("ops-mcp-{}", Uuid::new_v4().simple());
     let task_id = format!("nightly-audit-{}", Uuid::new_v4().simple());
+    let schedule_id = format!("nightly-audit-schedule-{}", Uuid::new_v4().simple());
     let service_path = root.join("tool-services").join("ops-mcp.json");
-    let task_path = root.join("scheduled-tasks").join("nightly-audit.json");
+    let task_path = root.join("tasks").join("nightly-audit.json");
+    let schedule_path = root.join("schedules").join("nightly-audit.json");
 
     write_json_file(
         &service_path,
@@ -67,12 +73,21 @@ async fn config_apply_reconciles_tool_services_and_scheduled_tasks_end_to_end() 
         &task_path,
         &serde_json::json!({
             "task_id": task_id.clone(),
-            "agent_did": agent_did.clone(),
-            "behavior_id": behavior_id.clone(),
             "name": "Nightly Audit",
-            "prompt": "Audit the fleet state and summarize drift.",
+            "description": "Audit the fleet state and summarize drift.",
+            "behavior_id": behavior_id.clone(),
+            "prompt_template": "Audit the fleet state and summarize drift.",
+            "enabled": false,
+        }),
+    )?;
+    write_json_file(
+        &schedule_path,
+        &serde_json::json!({
+            "schedule_id": schedule_id.clone(),
+            "task_id": task_id.clone(),
             "interval_secs": 3600,
-            "enabled": false
+            "enabled": false,
+            "concurrency": "serial",
         }),
     )?;
 
@@ -87,8 +102,12 @@ async fn config_apply_reconciles_tool_services_and_scheduled_tasks_end_to_end() 
         Some(1)
     );
     assert_eq!(
+        validated.pointer("/counts/tasks").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
         validated
-            .pointer("/counts/scheduled_tasks")
+            .pointer("/counts/schedules")
             .and_then(Value::as_u64),
         Some(1)
     );
@@ -111,7 +130,13 @@ async fn config_apply_reconciles_tool_services_and_scheduled_tasks_end_to_end() 
     );
     assert_eq!(
         planned
-            .pointer("/counts/scheduled_tasks/create")
+            .pointer("/counts/tasks/create")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        planned
+            .pointer("/counts/schedules/create")
             .and_then(Value::as_u64),
         Some(1)
     );
@@ -129,37 +154,112 @@ async fn config_apply_reconciles_tool_services_and_scheduled_tasks_end_to_end() 
         Some(1)
     );
     assert_eq!(
+        applied.pointer("/applied/tasks").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
         applied
-            .pointer("/applied/scheduled_tasks")
+            .pointer("/applied/schedules")
             .and_then(Value::as_u64),
         Some(1)
     );
 
+    // --- Task reconciled with apply-owned fields ---
     let task_response = graphql_query(
         &graphql,
         &format!(
             r#"{{
-                ScheduledTask(filter: {{ task_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                Task(filter: {{ task_id: {{ _eq: "{}" }} }}, limit: 1) {{
                     _docID
                     task_id
-                    prompt
-                    interval_secs
+                    name
+                    description
+                    behavior_id
+                    prompt_template
                     enabled
-                    next_run_at
-                    last_status
-                    last_error
-                    run_count
+                    output_schema_ref
                 }}
             }}"#,
             escape_graphql_string(&task_id),
         ),
     )
     .await?;
-    let task_row = first_graphql_row(&task_response, "ScheduledTask")?;
+    let task_row = first_graphql_row(&task_response, "Task")?;
+    assert_eq!(
+        task_row.get("task_id").and_then(Value::as_str),
+        Some(task_id.as_str())
+    );
+    assert_eq!(
+        task_row.get("name").and_then(Value::as_str),
+        Some("Nightly Audit")
+    );
+    assert_eq!(
+        task_row.get("behavior_id").and_then(Value::as_str),
+        Some(behavior_id.as_str())
+    );
+    assert_eq!(
+        task_row.get("prompt_template").and_then(Value::as_str),
+        Some("Audit the fleet state and summarize drift.")
+    );
+    assert_eq!(
+        task_row.get("enabled").and_then(Value::as_bool),
+        Some(false)
+    );
     let initial_task_doc_id = task_row
         .get("_docID")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("scheduled task row missing _docID: {task_row}"))?
+        .ok_or_else(|| anyhow!("Task row missing _docID: {task_row}"))?
+        .to_string();
+
+    // --- Schedule reconciled with apply-owned fields; runtime-owned fields
+    //     start unset (the scheduler has not yet run) ---
+    let schedule_response = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{
+                Schedule(filter: {{ schedule_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    _docID
+                    schedule_id
+                    task_id
+                    interval_secs
+                    enabled
+                    concurrency
+                    next_run_at
+                    last_attempt_at
+                    last_status
+                    last_error
+                    fire_count
+                }}
+            }}"#,
+            escape_graphql_string(&schedule_id),
+        ),
+    )
+    .await?;
+    let schedule_row = first_graphql_row(&schedule_response, "Schedule")?;
+    assert_eq!(
+        schedule_row.get("schedule_id").and_then(Value::as_str),
+        Some(schedule_id.as_str())
+    );
+    assert_eq!(
+        schedule_row.get("task_id").and_then(Value::as_str),
+        Some(task_id.as_str())
+    );
+    assert_eq!(
+        schedule_row.get("interval_secs").and_then(Value::as_i64),
+        Some(3600)
+    );
+    assert_eq!(
+        schedule_row.get("enabled").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        schedule_row.get("concurrency").and_then(Value::as_str),
+        Some("serial")
+    );
+    let initial_schedule_doc_id = schedule_row
+        .get("_docID")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("Schedule row missing _docID: {schedule_row}"))?
         .to_string();
 
     let service_response = graphql_query(
@@ -195,26 +295,39 @@ async fn config_apply_reconciles_tool_services_and_scheduled_tasks_end_to_end() 
         Some(0)
     );
     assert_eq!(
-        noop.pointer("/applied/scheduled_tasks")
-            .and_then(Value::as_u64),
+        noop.pointer("/applied/tasks").and_then(Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        noop.pointer("/applied/schedules").and_then(Value::as_u64),
         Some(0)
     );
 
+    // Simulate the scheduler updating runtime-owned fields on the Schedule.
+    // These must survive the next apply, since apply is forbidden from
+    // touching runtime-owned fields.
+    //
+    // Note: DefraDB's GraphQL layer currently rejects manual string literals
+    // for DateTime fields inserted via `update_*` (they're stored as Scalar
+    // String and then fail the field-type check on the next update). We
+    // exercise the apply-ownership boundary with the non-DateTime runtime
+    // fields only (`last_status`, `last_error`, `fire_count`); the
+    // next_run_at / last_attempt_at ownership is covered by the trigger_engine
+    // e2e tests, which exercise the actual scheduler write path.
     graphql_query(
         &graphql,
         &format!(
             r#"mutation {{
-                update_ScheduledTask(
+                update_Schedule(
                     docID: "{doc_id}",
                     input: {{
-                        next_run_at: "2026-04-15T00:00:00Z",
                         last_status: "error",
                         last_error: "boom",
-                        run_count: 7
+                        fire_count: 7
                     }}
                 ) {{ _docID }}
             }}"#,
-            doc_id = escape_graphql_string(&initial_task_doc_id),
+            doc_id = escape_graphql_string(&initial_schedule_doc_id),
         ),
     )
     .await?;
@@ -226,8 +339,7 @@ async fn config_apply_reconciles_tool_services_and_scheduled_tasks_end_to_end() 
                     docID: "{doc_id}",
                     input: {{
                         status: "online",
-                        version: "1.2.3",
-                        updated_at: "2026-04-15T00:00:00Z"
+                        version: "1.2.3"
                     }}
                 ) {{ _docID }}
             }}"#,
@@ -239,7 +351,8 @@ async fn config_apply_reconciles_tool_services_and_scheduled_tasks_end_to_end() 
     let runtime_noop = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
     assert_eq!(
         runtime_noop.get("status").and_then(Value::as_str),
-        Some("noop")
+        Some("noop"),
+        "runtime-owned fields must not trigger apply-side drift"
     );
     assert_eq!(
         runtime_noop
@@ -249,16 +362,78 @@ async fn config_apply_reconciles_tool_services_and_scheduled_tasks_end_to_end() 
     );
     assert_eq!(
         runtime_noop
-            .pointer("/applied/scheduled_tasks")
+            .pointer("/applied/tasks")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        runtime_noop
+            .pointer("/applied/schedules")
             .and_then(Value::as_u64),
         Some(0)
     );
 
+    // Confirm runtime-owned Schedule fields are preserved.
+    let schedule_after_noop = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{
+                Schedule(filter: {{ schedule_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    _docID
+                    next_run_at
+                    last_attempt_at
+                    last_status
+                    last_error
+                    fire_count
+                }}
+            }}"#,
+            escape_graphql_string(&schedule_id),
+        ),
+    )
+    .await?;
+    let schedule_after_noop_row = first_graphql_row(&schedule_after_noop, "Schedule")?;
+    assert_eq!(
+        schedule_after_noop_row
+            .get("_docID")
+            .and_then(Value::as_str),
+        Some(initial_schedule_doc_id.as_str()),
+        "Schedule docID must be stable across noop apply"
+    );
+    assert_eq!(
+        schedule_after_noop_row
+            .get("last_status")
+            .and_then(Value::as_str),
+        Some("error"),
+        "runtime-owned last_status must survive apply"
+    );
+    assert_eq!(
+        schedule_after_noop_row
+            .get("last_error")
+            .and_then(Value::as_str),
+        Some("boom"),
+        "runtime-owned last_error must survive apply"
+    );
+    assert_eq!(
+        schedule_after_noop_row
+            .get("fire_count")
+            .and_then(Value::as_i64),
+        Some(7),
+        "runtime-owned fire_count must survive apply"
+    );
+
+    // Edit the manifest; apply should reconcile apply-owned fields while
+    // leaving runtime-owned Schedule fields untouched.
     let mut task_manifest = read_json_file(&task_path)?;
-    task_manifest["prompt"] =
+    task_manifest["prompt_template"] =
         Value::String("Audit the fleet state for drift and incidents.".to_string());
-    task_manifest["interval_secs"] = Value::from(7200);
+    task_manifest["description"] =
+        Value::String("Audit the fleet state for drift and incidents.".to_string());
     write_json_file(&task_path, &task_manifest)?;
+
+    let mut schedule_manifest = read_json_file(&schedule_path)?;
+    schedule_manifest["interval_secs"] = Value::from(7200);
+    schedule_manifest["concurrency"] = Value::String("latest_only".to_string());
+    write_json_file(&schedule_path, &schedule_manifest)?;
 
     let mut service_manifest = read_json_file(&service_path)?;
     service_manifest["description"] =
@@ -278,36 +453,75 @@ async fn config_apply_reconciles_tool_services_and_scheduled_tasks_end_to_end() 
         Some(1)
     );
     assert_eq!(
+        updated.pointer("/applied/tasks").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
         updated
-            .pointer("/applied/scheduled_tasks")
+            .pointer("/applied/schedules")
             .and_then(Value::as_u64),
         Some(1)
     );
 
-    let reexported = run_cli_json(&home_dir, &["config", "export"])?;
+    // Confirm apply-owned fields updated AND runtime-owned fields preserved.
+    let schedule_after_update = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{
+                Schedule(filter: {{ schedule_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    interval_secs
+                    concurrency
+                    last_status
+                    last_error
+                    fire_count
+                }}
+            }}"#,
+            escape_graphql_string(&schedule_id),
+        ),
+    )
+    .await?;
+    let schedule_after_update_row = first_graphql_row(&schedule_after_update, "Schedule")?;
     assert_eq!(
-        reexported
-            .pointer("/tool_service_registries/0/hostname")
-            .and_then(Value::as_str),
-        Some("ops-router.internal")
-    );
-    assert_eq!(
-        reexported
-            .pointer("/scheduled_tasks/0/prompt")
-            .and_then(Value::as_str),
-        Some("Audit the fleet state for drift and incidents.")
-    );
-    assert_eq!(
-        reexported
-            .pointer("/scheduled_tasks/0/interval_secs")
+        schedule_after_update_row
+            .get("interval_secs")
             .and_then(Value::as_i64),
-        Some(7200)
+        Some(7200),
+        "apply must update interval_secs"
+    );
+    assert_eq!(
+        schedule_after_update_row
+            .get("concurrency")
+            .and_then(Value::as_str),
+        Some("latest_only"),
+        "apply must update concurrency"
+    );
+    assert_eq!(
+        schedule_after_update_row
+            .get("last_status")
+            .and_then(Value::as_str),
+        Some("error"),
+        "runtime-owned last_status must survive apply-side update"
+    );
+    assert_eq!(
+        schedule_after_update_row
+            .get("fire_count")
+            .and_then(Value::as_i64),
+        Some(7),
+        "runtime-owned fire_count must survive apply-side update"
     );
 
     graphql_query(
         &graphql,
         &format!(
-            r#"mutation {{ delete_ScheduledTask(docID: "{}") {{ _docID }} }}"#,
+            r#"mutation {{ delete_Schedule(docID: "{}") {{ _docID }} }}"#,
+            escape_graphql_string(&initial_schedule_doc_id),
+        ),
+    )
+    .await?;
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{ delete_Task(docID: "{}") {{ _docID }} }}"#,
             escape_graphql_string(&initial_task_doc_id),
         ),
     )
@@ -334,8 +548,12 @@ async fn config_apply_reconciles_tool_services_and_scheduled_tasks_end_to_end() 
         Some(1)
     );
     assert_eq!(
+        reapplied.pointer("/applied/tasks").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
         reapplied
-            .pointer("/applied/scheduled_tasks")
+            .pointer("/applied/schedules")
             .and_then(Value::as_u64),
         Some(1)
     );
@@ -350,7 +568,13 @@ async fn config_apply_reconciles_tool_services_and_scheduled_tasks_end_to_end() 
     );
     assert_eq!(
         exact
-            .pointer("/counts/scheduled_tasks/unchanged")
+            .pointer("/counts/tasks/unchanged")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        exact
+            .pointer("/counts/schedules/unchanged")
             .and_then(Value::as_u64),
         Some(1)
     );

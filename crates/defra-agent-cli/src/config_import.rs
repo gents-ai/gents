@@ -6,7 +6,7 @@ use defra_agent::Collection;
 use serde_json::Value;
 
 use crate::config_bundle::{sanitize_import_document, select_apply_collection_docs};
-use crate::config_writes::{write_scheduled_task_document, ConfigAccess};
+use crate::config_writes::{write_schedule_document, write_task_document, ConfigAccess};
 use crate::desired_state;
 use crate::desired_state::DesiredApplyBundle;
 use crate::shared::{ConfigApplyCounts, ConfigExportBundle};
@@ -84,9 +84,27 @@ pub(crate) async fn apply_import_collection(
                 )
             })?;
         let add_doc = sanitize_import_document(collection_name, doc, false)?;
-        if override_existing && collection_name == "ScheduledTask" {
+        if override_existing && collection_name == "Task" {
             let update_doc = sanitize_import_document(collection_name, doc, true)?;
-            let doc_id = write_scheduled_task_document(access, unique_value, &add_doc, &update_doc)
+            let doc_id = write_task_document(access, unique_value, &add_doc, &update_doc)
+                .await
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "importing {collection_name} {} failed: {error}",
+                        unique_value
+                    )
+                })?;
+            if doc_id.trim().is_empty() {
+                anyhow::bail!(
+                    "importing {collection_name} {} returned an empty _docID",
+                    unique_value
+                );
+            }
+            continue;
+        }
+        if override_existing && collection_name == "Schedule" {
+            let update_doc = sanitize_import_document(collection_name, doc, true)?;
+            let doc_id = write_schedule_document(access, unique_value, &add_doc, &update_doc)
                 .await
                 .map_err(|error| {
                     anyhow::anyhow!(
@@ -159,7 +177,8 @@ pub(crate) fn diff_has_pending_apply(
         &counts.inference_backends,
         &counts.inference_profiles,
         &counts.tool_service_registries,
-        &counts.scheduled_tasks,
+        &counts.tasks,
+        &counts.schedules,
     ]
     .iter()
     .any(|count| count.create > 0 || count.update > 0)
@@ -172,7 +191,8 @@ pub(crate) fn config_apply_counts_changed(counts: &ConfigApplyCounts) -> bool {
         || counts.inference_backends > 0
         || counts.inference_profiles > 0
         || counts.tool_service_registries > 0
-        || counts.scheduled_tasks > 0
+        || counts.tasks > 0
+        || counts.schedules > 0
 }
 
 pub(crate) fn select_apply_principal_docs(
@@ -223,11 +243,17 @@ pub(crate) async fn apply_desired_state_changes(
         Collection::AgentBehavior.graphql_type(),
         &planned.collections.agent_behaviors,
     )?;
-    let scheduled_task_docs = select_apply_collection_docs(
-        &desired_bundle.scheduled_tasks,
-        Collection::ScheduledTask.unique_field(),
-        Collection::ScheduledTask.graphql_type(),
-        &planned.collections.scheduled_tasks,
+    let task_docs = select_apply_collection_docs(
+        &desired_bundle.tasks,
+        Collection::Task.unique_field(),
+        Collection::Task.graphql_type(),
+        &planned.collections.tasks,
+    )?;
+    let schedule_docs = select_apply_collection_docs(
+        &desired_bundle.schedules,
+        Collection::Schedule.unique_field(),
+        Collection::Schedule.graphql_type(),
+        &planned.collections.schedules,
     )?;
     let principal_docs = select_apply_principal_docs(
         desired_bundle.agent_principal.as_ref(),
@@ -275,11 +301,19 @@ pub(crate) async fn apply_desired_state_changes(
             true,
         )
         .await?,
-        scheduled_tasks: apply_import_collection(
+        tasks: apply_import_collection(
             access,
-            Collection::ScheduledTask.graphql_type(),
-            Collection::ScheduledTask.unique_field(),
-            &scheduled_task_docs,
+            Collection::Task.graphql_type(),
+            Collection::Task.unique_field(),
+            &task_docs,
+            true,
+        )
+        .await?,
+        schedules: apply_import_collection(
+            access,
+            Collection::Schedule.graphql_type(),
+            Collection::Schedule.unique_field(),
+            &schedule_docs,
             true,
         )
         .await?,

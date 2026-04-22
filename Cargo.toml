@@ -29,6 +29,7 @@ egui_commonmark = { version = "0.23.0", features = ["better_syntax_highlighting"
 events = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "044b4432" }
 hostname = "0.4"
 identity = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "044b4432" }
+minijinja = { version = "2", default-features = false, features = ["builtins", "serde"] }
 opentelemetry = { version = "0.31", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"] }

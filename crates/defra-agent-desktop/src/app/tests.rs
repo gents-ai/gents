@@ -17,7 +17,8 @@ use defra_agent::{
     SimpleIdentity, ToolCeiling,
 };
 use defra_agent_protocol::row::{
-    AgentBehaviorRow, InferenceBackendRow, InferenceProfileRow, ScheduledTaskRow, ToolSelectionRow,
+    AgentBehaviorRow, InferenceBackendRow, InferenceProfileRow, ScheduleRow, TaskRow,
+    ToolSelectionRow,
 };
 use eframe::App as _;
 use rig::completion::message::{

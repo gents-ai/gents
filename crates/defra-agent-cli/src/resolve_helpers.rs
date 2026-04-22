@@ -1,17 +1,11 @@
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use anyhow::{Context, Result};
-use defra_agent::{
-    cli_tool, graphql::escape_graphql_string, BackendProviderKind, BashMode, FileToolMode,
-};
+use anyhow::Result;
+use defra_agent::{cli_tool, BackendProviderKind, BashMode, FileToolMode};
 
 use crate::cli::args::{BackendPresetArg, ToolCeilingArg};
 use crate::shared::ResolvedBackendConfig;
-use crate::{
-    first_graphql_row, normalize_optional_string, post_graphql, require_non_empty,
-    DEFAULT_INIT_ENDPOINT,
-};
+use crate::{normalize_optional_string, DEFAULT_INIT_ENDPOINT};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BackendResolutionMode {
@@ -104,103 +98,6 @@ fn resolve_backend_api_key_env_var(
             .flatten()
             .map(ToOwned::to_owned)
     })
-}
-
-pub(crate) fn resolve_task_prompt(
-    prompt: Option<&str>,
-    prompt_file: Option<&Path>,
-) -> Result<String> {
-    match (prompt, prompt_file) {
-        (Some(_), Some(path)) => anyhow::bail!(
-            "provide either --prompt or --prompt-file, not both ({})",
-            path.display()
-        ),
-        (Some(prompt), None) => Ok(require_non_empty("prompt", prompt)?.to_string()),
-        (None, Some(path)) => {
-            let prompt = fs::read_to_string(path)
-                .with_context(|| format!("reading task prompt from {}", path.display()))?;
-            Ok(require_non_empty("prompt-file", &prompt)?.to_string())
-        }
-        (None, None) => anyhow::bail!("a task prompt is required; pass --prompt or --prompt-file"),
-    }
-}
-
-pub(crate) async fn resolve_scheduled_task_behavior_id(
-    graphql: &str,
-    agent_did: &str,
-    explicit_behavior_id: Option<&str>,
-) -> Result<String> {
-    let behavior_id = match explicit_behavior_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        Some(behavior_id) => behavior_id.to_string(),
-        None => load_default_behavior_id_for_agent(graphql, agent_did).await?,
-    };
-
-    ensure_behavior_belongs_to_agent(graphql, agent_did, &behavior_id).await?;
-    Ok(behavior_id)
-}
-
-async fn load_default_behavior_id_for_agent(graphql: &str, agent_did: &str) -> Result<String> {
-    let query = format!(
-        r#"{{
-            AgentPrincipal(
-                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
-                limit: 1
-            ) {{
-                default_behavior_id
-            }}
-        }}"#,
-        agent_did = escape_graphql_string(agent_did),
-    );
-    let response = post_graphql(graphql, &query).await?;
-    let principal = first_graphql_row(&response, "AgentPrincipal")
-        .with_context(|| format!("loading AgentPrincipal for {agent_did}"))?;
-    principal
-        .get("default_behavior_id")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| anyhow::anyhow!("AgentPrincipal {agent_did} has no default_behavior_id"))
-}
-
-async fn ensure_behavior_belongs_to_agent(
-    graphql: &str,
-    agent_did: &str,
-    behavior_id: &str,
-) -> Result<()> {
-    let query = format!(
-        r#"{{
-            AgentBehavior(
-                filter: {{ behavior_id: {{ _eq: "{behavior_id}" }} }},
-                limit: 1
-            ) {{
-                behavior_id
-                agent_did
-            }}
-        }}"#,
-        behavior_id = escape_graphql_string(behavior_id),
-    );
-    let response = post_graphql(graphql, &query).await?;
-    let behavior = first_graphql_row(&response, "AgentBehavior")
-        .with_context(|| format!("loading AgentBehavior {behavior_id}"))?;
-    let owner = behavior
-        .get("agent_did")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("AgentBehavior {behavior_id} is missing agent_did"))?;
-    if owner != agent_did {
-        anyhow::bail!(
-            "AgentBehavior {} belongs to {} not {}",
-            behavior_id,
-            owner,
-            agent_did
-        );
-    }
-    Ok(())
 }
 
 pub(crate) fn parse_cli_tool_arg(value: &str) -> Result<defra_agent::CliToolConfig> {

@@ -10,7 +10,8 @@ use std::collections::HashMap;
 
 use crate::backend_registry::InferenceBackend;
 use crate::document_config::{
-    AgentBehavior, AgentPrincipal, InferenceProfile, ToolSelectionDocument,
+    AgentBehavior, AgentPrincipal, EventTrigger, InferenceProfile, Schedule, Task,
+    ToolSelectionDocument,
 };
 
 #[derive(Debug, Clone)]
@@ -26,6 +27,12 @@ pub(crate) struct DocumentRuntimeView {
     pub(crate) tool_selections: HashMap<String, DocumentRecord<ToolSelectionDocument>>,
     pub(crate) inference_profiles: HashMap<String, DocumentRecord<InferenceProfile>>,
     pub(crate) backends: HashMap<String, DocumentRecord<InferenceBackend>>,
+    pub(crate) tasks: HashMap<String, DocumentRecord<Task>>,
+    pub(crate) schedules: HashMap<String, DocumentRecord<Schedule>>,
+    /// Stub populated in PR 2 of the event-driven-tasks series. Declared here
+    /// so PR 2 can fill it without a breaking-change diff on this struct.
+    #[allow(dead_code)]
+    pub(crate) event_triggers: HashMap<String, DocumentRecord<EventTrigger>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +63,16 @@ impl DocumentRuntimeView {
 
     fn has_backend_doc_id(&self, doc_id: &str) -> bool {
         self.backends.values().any(|record| record.doc_id == doc_id)
+    }
+
+    fn has_task_doc_id(&self, doc_id: &str) -> bool {
+        self.tasks.values().any(|record| record.doc_id == doc_id)
+    }
+
+    fn has_schedule_doc_id(&self, doc_id: &str) -> bool {
+        self.schedules
+            .values()
+            .any(|record| record.doc_id == doc_id)
     }
 
     fn remove_behavior_by_doc_id(&mut self, doc_id: &str) -> bool {
@@ -90,6 +107,21 @@ impl DocumentRuntimeView {
             (record.doc_id == doc_id).then_some(backend_id.clone())
         });
         key.is_some_and(|backend_id| self.backends.remove(&backend_id).is_some())
+    }
+
+    fn remove_task_by_doc_id(&mut self, doc_id: &str) -> bool {
+        let key = self
+            .tasks
+            .iter()
+            .find_map(|(task_id, record)| (record.doc_id == doc_id).then_some(task_id.clone()));
+        key.is_some_and(|task_id| self.tasks.remove(&task_id).is_some())
+    }
+
+    fn remove_schedule_by_doc_id(&mut self, doc_id: &str) -> bool {
+        let key = self.schedules.iter().find_map(|(schedule_id, record)| {
+            (record.doc_id == doc_id).then_some(schedule_id.clone())
+        });
+        key.is_some_and(|schedule_id| self.schedules.remove(&schedule_id).is_some())
     }
 
     fn references_profile(&self, profile_id: &str) -> bool {

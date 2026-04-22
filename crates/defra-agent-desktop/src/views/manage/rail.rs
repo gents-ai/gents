@@ -96,14 +96,25 @@ pub(super) fn show_rail(
                     );
                 }
             }
-            ManageSection::ScheduledTasks => {
+            ManageSection::Tasks => {
                 if state.manage.draft.is_some() {
                     render_runtime_inspector(ui, store, state);
                 } else {
                     views::card(
                         ui,
                         "Diagnostics",
-                        "Select a scheduled task to inspect the current runtime state for the selected deployment.",
+                        "Select a task to inspect the current runtime state for the selected deployment.",
+                    );
+                }
+            }
+            ManageSection::Schedules => {
+                if state.manage.draft.is_some() {
+                    render_runtime_inspector(ui, store, state);
+                } else {
+                    views::card(
+                        ui,
+                        "Diagnostics",
+                        "Select a schedule to inspect the current runtime state for the selected deployment.",
                     );
                 }
             }
@@ -137,7 +148,7 @@ pub(super) fn render_editor_footer(
         let can_run_now = client.is_some()
             && matches!(
                 state.manage.draft,
-                Some(ManageDraft::ScheduledTask(ref draft)) if draft.enabled
+                Some(ManageDraft::Schedule(ref draft)) if draft.enabled
             );
 
         if audit::button(ui, audit::targets::MANAGE_DISCARD, "Discard").clicked() {
@@ -158,7 +169,7 @@ pub(super) fn render_editor_footer(
             state.queue_shell_action(PendingShellAction::Manage(PendingManageAction::ApplyDraft));
         }
 
-        if matches!(state.manage.selected_section, ManageSection::ScheduledTasks)
+        if matches!(state.manage.selected_section, ManageSection::Schedules)
             && audit::add_enabled(
                 ui,
                 audit::targets::MANAGE_RUN_NOW,

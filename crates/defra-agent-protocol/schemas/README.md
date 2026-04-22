@@ -33,8 +33,9 @@ Interactive execution:
                -> AgentToolResult
                -> CompactionEntry
 
-Scheduled execution:
-  ScheduledTask -> behavior_id -> AgentBehavior
+Scheduled and event-driven execution:
+  Task     -> behavior_id -> AgentBehavior
+  Schedule -> task_id     -> Task
 
 Remote tool discovery:
   ToolServiceRegistry
@@ -78,14 +79,16 @@ These documents record user requests, assistant output, and conversation history
 | `AgentToolResult` | `agent_did`, `session_id`, `tool_name`, `tool_input`, `output_text`, `truncated` | normalized tool result persistence | tool persistence hook | compaction and later inspection |
 | `CompactionEntry` | `compaction_key`, `session_id`, `summary`, `messages_compacted`, token counts | persisted compaction summaries | compaction layer | session reconstruction and debugging |
 
-### Scheduled Execution
+### Tasks and Schedules
 
 | Collection | Key fields | References | Written by | Read by |
 |------------|------------|------------|------------|---------|
-| `ScheduledTask` | `task_id`, `agent_did`, `behavior_id`, `prompt`, `interval_secs`, `next_run_at`, `last_status` | `behavior_id -> AgentBehavior.behavior_id` | `config task set`, scheduler status updates | scheduler loop |
+| `Task` | `task_id`, `name`, `behavior_id`, `prompt_template`, `enabled`, `output_schema_ref` | `behavior_id -> AgentBehavior.behavior_id` | desired-state apply | trigger engine |
+| `Schedule` | `schedule_id`, `task_id`, `interval_secs`, `enabled`, `concurrency`, `next_run_at`, `last_attempt_at`, `last_status`, `fire_count` | `task_id -> Task.task_id` | desired-state apply, trigger engine status updates | trigger engine |
 
-`ScheduledTask.behavior_id` is concrete and mandatory. The scheduler does not do
-legacy name fallback anymore.
+`Task.behavior_id` is concrete and mandatory. A `Schedule` references the `Task`
+it fires; the trigger engine materializes `AgentRequest` rows from due
+`Schedule`s.
 
 ### Tool Service Discovery
 
@@ -157,7 +160,8 @@ Several operational collections are marked `@branchable`:
 - `AgentToolCall`
 - `AgentToolResult`
 - `CompactionEntry`
-- `ScheduledTask`
+- `Task`
+- `Schedule`
 
 These are the documents where preserving observable history matters most.
 

@@ -402,11 +402,6 @@ pub(crate) enum ConfigCommand {
         #[command(subcommand)]
         command: InferenceProfileCommand,
     },
-    #[command(about = "Write a ScheduledTask document")]
-    Task {
-        #[command(subcommand)]
-        command: ScheduledTaskCommand,
-    },
     #[command(about = "Export desired configuration documents", after_help = CONFIG_EXPORT_AFTER_HELP)]
     Export(ConfigExportArgs),
     #[command(about = "Import desired configuration documents", after_help = CONFIG_IMPORT_AFTER_HELP)]
@@ -505,12 +500,6 @@ pub(crate) enum InferenceProfileCommand {
     Set(InferenceProfileUpsertArgs),
 }
 
-#[derive(Subcommand)]
-pub(crate) enum ScheduledTaskCommand {
-    #[command(name = "set")]
-    Set(ScheduledTaskSetArgs),
-}
-
 #[derive(clap::Args)]
 pub(crate) struct InferenceProfileUpsertArgs {
     #[arg(long)]
@@ -531,32 +520,6 @@ pub(crate) struct InferenceProfileUpsertArgs {
     pub(crate) stream_batch_ms: Option<i64>,
     #[arg(long)]
     pub(crate) deadline_duration_secs: Option<i64>,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct ScheduledTaskSetArgs {
-    #[arg(long)]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) graphql: Option<String>,
-    #[arg(long)]
-    pub(crate) agent_did: Option<String>,
-    #[arg(long)]
-    pub(crate) task_id: String,
-    #[arg(long)]
-    pub(crate) name: String,
-    #[arg(long)]
-    pub(crate) prompt: Option<String>,
-    #[arg(long)]
-    pub(crate) prompt_file: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) behavior_id: Option<String>,
-    #[arg(long)]
-    pub(crate) interval_secs: i64,
-    #[arg(long, default_value_t = true)]
-    pub(crate) enabled: bool,
-    #[arg(long)]
-    pub(crate) next_run_at: Option<String>,
 }
 
 #[derive(clap::Args)]

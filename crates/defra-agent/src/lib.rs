@@ -28,12 +28,13 @@ pub(crate) mod registry;
 pub mod retry;
 pub(crate) mod runtime_snapshot;
 pub(crate) mod runtime_status;
-pub mod scheduler;
 pub mod schema;
 pub mod session;
 pub mod streaming;
+pub(crate) mod template;
 pub mod tool_surface;
 pub mod toolset;
+pub(crate) mod trigger_engine;
 pub mod truncation;
 pub mod watcher;
 
@@ -69,12 +70,13 @@ pub use schema::{
     AGENT_CONVERSATION_SCHEMA, AGENT_MESSAGE_SCHEMA, AGENT_PRINCIPAL_SCHEMA, AGENT_REQUEST_SCHEMA,
     AGENT_RESPONSE_SCHEMA, AGENT_RUNTIME_SCHEMA, AGENT_SESSION_SCHEMA, AGENT_TOOL_CALL_SCHEMA,
     AGENT_TOOL_RESULT_SCHEMA, COMPACTION_ENTRY_SCHEMA, INFERENCE_BACKEND_SCHEMA,
-    INFERENCE_CALL_SCHEMA, INFERENCE_PROFILE_SCHEMA, SCHEDULED_TASK_SCHEMA, TOOL_SELECTION_SCHEMA,
-    TOOL_SERVICE_REGISTRY_SCHEMA,
+    INFERENCE_CALL_SCHEMA, INFERENCE_PROFILE_SCHEMA, SCHEDULE_SCHEMA, TASK_SCHEMA,
+    TOOL_SELECTION_SCHEMA, TOOL_SERVICE_REGISTRY_SCHEMA,
 };
 pub use session::load_history;
 pub use session::{fork, ForkError, ForkOutcome, ForkParams};
 pub use streaming::{DefraStreamWriter, StreamWriter};
+pub use template::{parse_template_for_validation, TemplateError, VariableRef};
 pub use tool_surface::{
     cli_tool, BashMode, BehaviorToolConfig, CustomToolFactory, FileToolMode, ToolCeiling,
     ToolRuntimeContext, ToolSelection, ToolSurface,

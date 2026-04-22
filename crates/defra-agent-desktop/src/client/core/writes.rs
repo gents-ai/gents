@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use defra_agent_protocol::row::{
-    AgentBehaviorRow, AgentRequestRow, InferenceBackendRow, InferenceProfileRow, ScheduledTaskRow,
-    ToolSelectionRow,
+    AgentBehaviorRow, AgentRequestRow, InferenceBackendRow, InferenceProfileRow, ScheduleRow,
+    TaskRow, ToolSelectionRow,
 };
 
 use super::super::mutations::{self, CreatedConversation, PeerMutationResult, SubmittedRequest};
@@ -318,38 +318,63 @@ impl ClientCore {
         }
     }
 
-    pub async fn save_scheduled_task(&self, row: &ScheduledTaskRow) -> Result<()> {
-        match mutations::upsert_scheduled_task(self.node.as_ref(), row).await {
+    /// Persist a `Task` document.
+    ///
+    /// Task 51 leaves the mutation body stubbed out (Task 52 wires the
+    /// actual upsert); the method is kept on `ClientCore` so call sites
+    /// stay linkable.
+    pub async fn save_task(&self, row: &TaskRow) -> Result<()> {
+        match mutations::upsert_task(self.node.as_ref(), row).await {
             Ok(()) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "defra_agent_desktop::writes",
-                    doc_type = "scheduled_task",
+                    doc_type = "task",
                     row_id = %row.task_id,
                     "desktop write saved"
                 );
                 Ok(())
             }
-            Err(error) => Err(self.record_mutation_error("save scheduled task", error)),
+            Err(error) => Err(self.record_mutation_error("save task", error)),
         }
     }
 
-    pub async fn run_scheduled_task_now(&self, row: &ScheduledTaskRow) -> Result<()> {
-        match mutations::run_scheduled_task_now(self.node.as_ref(), row).await {
+    /// Persist a `Schedule` document. See `save_task` for current limits.
+    pub async fn save_schedule(&self, row: &ScheduleRow) -> Result<()> {
+        match mutations::upsert_schedule(self.node.as_ref(), row).await {
             Ok(()) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "defra_agent_desktop::writes",
-                    doc_type = "scheduled_task",
-                    row_id = %row.task_id,
+                    doc_type = "schedule",
+                    row_id = %row.schedule_id,
+                    "desktop write saved"
+                );
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("save schedule", error)),
+        }
+    }
+
+    /// Force a `Schedule` to fire now. Stubbed in Task 51; Task 52 wires
+    /// the real mutation.
+    pub async fn fire_schedule_now(&self, row: &ScheduleRow) -> Result<()> {
+        match mutations::fire_schedule_now(self.node.as_ref(), row).await {
+            Ok(()) => {
+                self.refresh_store().await?;
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "defra_agent_desktop::writes",
+                    doc_type = "schedule",
+                    row_id = %row.schedule_id,
                     action = "run_now",
                     "desktop write saved"
                 );
                 Ok(())
             }
-            Err(error) => Err(self.record_mutation_error("run scheduled task now", error)),
+            Err(error) => Err(self.record_mutation_error("fire schedule now", error)),
         }
     }
 

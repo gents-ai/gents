@@ -9,7 +9,7 @@ pub use self::activity::{Activity, PendingChatAction, PendingManageAction, Pendi
 pub use self::chat::{ChatEditorState, ChatShellState, ChatState, ToolDetailModalState};
 pub use self::manage::{
     BackendDraft, BehaviorDraft, InferenceProfileDraft, ManageDraft, ManageDraftOrigin,
-    ManageSection, ManageState, ScheduledTaskDraft, ToolSelectionDraft,
+    ManageSection, ManageState, ScheduleDraft, TaskDraft, ToolSelectionDraft,
 };
 pub use self::setup::SetupState;
 pub use self::shell::ShellState;

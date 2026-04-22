@@ -136,19 +136,31 @@ pub(crate) async fn seed_manage_documents(core: &ClientCore) -> Result<()> {
         created_at: Some("2026-04-14T00:00:00Z".to_string()),
     })
     .await?;
-    core.save_scheduled_task(&ScheduledTaskRow {
+    core.save_task(&TaskRow {
         task_id: "task-amy-daily".to_string(),
-        agent_did: Some("did:defra:amy".to_string()),
-        behavior_id: Some("amy-default".to_string()),
         name: Some("Daily Amy".to_string()),
-        prompt: Some("Check the daily queue.".to_string()),
+        description: Some("Daily Amy summary task.".to_string()),
+        behavior_id: Some("amy-default".to_string()),
+        prompt_template: Some("Check the daily queue.".to_string()),
+        enabled: Some(true),
+        output_schema_ref: None,
+        created_at: None,
+        updated_at: None,
+    })
+    .await?;
+    core.save_schedule(&ScheduleRow {
+        schedule_id: "schedule-amy-daily".to_string(),
+        task_id: Some("task-amy-daily".to_string()),
         interval_secs: Some(300),
         enabled: Some(true),
+        concurrency: Some("latest_only".to_string()),
+        // Runtime-owned fields are left as None here; the runtime owns
+        // them and the save_schedule path ignores them on write.
         next_run_at: Some("2026-04-15T00:00:00Z".to_string()),
-        last_run_at: None,
-        last_status: Some("ok".to_string()),
+        last_attempt_at: None,
+        last_status: Some("fired".to_string()),
         last_error: None,
-        run_count: Some(4),
+        fire_count: Some(4),
         created_at: None,
         updated_at: None,
     })
@@ -171,7 +183,8 @@ pub(crate) async fn seed_live_manage_documents(
     let backend_id = format!("{agent_name}-backend");
     let tool_selection_id = format!("{behavior_id}:tools");
     let inference_profile_id = format!("{behavior_id}:profile");
-    let scheduled_task_id = format!("{behavior_id}:scheduled-task");
+    let task_id = format!("{behavior_id}:task");
+    let schedule_id = format!("{behavior_id}:schedule");
 
     core.save_tool_selection(&ToolSelectionRow {
         selection_id: tool_selection_id.clone(),
@@ -215,19 +228,29 @@ pub(crate) async fn seed_live_manage_documents(
         created_at: Some(chrono::Utc::now().to_rfc3339()),
     })
     .await?;
-    core.save_scheduled_task(&ScheduledTaskRow {
-        task_id: scheduled_task_id.clone(),
-        agent_did: Some(agent_did.to_string()),
-        behavior_id: Some(behavior_id.clone()),
+    core.save_task(&TaskRow {
+        task_id: task_id.clone(),
         name: Some("Live Audit Scheduled Task".to_string()),
-        prompt: Some("Summarize the live audit queue.".to_string()),
+        description: Some("Summarize the live audit queue.".to_string()),
+        behavior_id: Some(behavior_id.clone()),
+        prompt_template: Some("Summarize the live audit queue.".to_string()),
+        enabled: Some(true),
+        output_schema_ref: None,
+        created_at: Some(chrono::Utc::now().to_rfc3339()),
+        updated_at: None,
+    })
+    .await?;
+    core.save_schedule(&ScheduleRow {
+        schedule_id: schedule_id.clone(),
+        task_id: Some(task_id.clone()),
         interval_secs: Some(3600),
         enabled: Some(true),
+        concurrency: Some("latest_only".to_string()),
         next_run_at: Some("2035-01-01T00:00:00Z".to_string()),
-        last_run_at: None,
-        last_status: Some("ok".to_string()),
+        last_attempt_at: None,
+        last_status: Some("fired".to_string()),
         last_error: None,
-        run_count: Some(0),
+        fire_count: Some(0),
         created_at: Some(chrono::Utc::now().to_rfc3339()),
         updated_at: None,
     })
@@ -239,6 +262,7 @@ pub(crate) async fn seed_live_manage_documents(
         backend_id,
         tool_selection_id,
         inference_profile_id,
-        scheduled_task_id,
+        task_id,
+        schedule_id,
     })
 }

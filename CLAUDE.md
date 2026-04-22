@@ -48,6 +48,10 @@ All state lives in DefraDB as GraphQL collections (schemas in `crates/defra-agen
 
 Field ownership matters: the apply path owns desired-state fields (config, prompts, backend references), while the runtime owns live-state fields (probe_status, run counts, lifecycle state). Neither clobbers the other.
 
+### Event-Driven Tasks
+
+Automated work is split into two collections: `Task` (a reusable unit of work — prompt template, target behavior, output schema) and `Schedule` (a cron-style trigger that references a Task). These replace the legacy `ScheduledTask` collection. The `TriggerEngine` runtime subsystem dispatches fires produced by pluggable `TriggerSource` implementations; `ScheduleSource` is the only source in PR 1 (future PRs add `EventSource` and manual runs). Every materialized `AgentRequest` carries `caused_by_trigger_id` + `caused_by_trigger_kind` so lineage and concurrency queries can tuple-match against the originating trigger. See the spec at `docs/superpowers/specs/2026-04-21-event-driven-tasks-design.md` (PR 2 adds EventTrigger, PR 3 adds manual runs).
+
 ## Key External Dependencies
 
 - **defradb.rs** (`sourcenetwork/defradb.rs`, private, via SSH git): The core database. Provides `defra-node` (embedded node), `crypto`, `identity`, and `events` crates. Pinned by git rev in workspace `Cargo.toml`. When working on features that touch the node, schema behavior, or identity, look at this repo for context.

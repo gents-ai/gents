@@ -4,7 +4,8 @@ use defra_node::EmbeddedNode;
 use crate::backend_registry::lookup_backend_by_doc_id;
 use crate::document_config::{
     load_agent_behavior_by_doc_id, load_agent_principal_by_doc_id,
-    load_inference_profile_by_doc_id, load_tool_selection_by_doc_id,
+    load_inference_profile_by_doc_id, load_schedule_by_doc_id, load_task_by_doc_id,
+    load_tool_selection_by_doc_id,
 };
 
 use super::snapshot::behavior_references_ready;
@@ -116,6 +117,56 @@ pub(crate) async fn apply_control_update(
     if view.has_backend_doc_id(doc_id) {
         return Ok(ControlUpdateOutcome::PendingVisibility);
     }
+
+    // Task documents are globally addressed (no `agent_did` on the schema);
+    // scheduling uses the document's `task_id` to find the hosting behavior,
+    // so any Task create/update is potentially relevant to this agent.
+    if let Some((loaded_doc_id, task)) = load_task_by_doc_id(node, doc_id).await? {
+        if task.task_id.trim().is_empty() {
+            return Ok(ControlUpdateOutcome::Irrelevant);
+        }
+        view.remove_task_by_doc_id(doc_id);
+        view.tasks.insert(
+            task.task_id.clone(),
+            DocumentRecord {
+                doc_id: loaded_doc_id,
+                value: task,
+            },
+        );
+        return Ok(ControlUpdateOutcome::Applied);
+    }
+    if view.has_task_doc_id(doc_id) {
+        // Task was deleted -- drop it from the view so the next resolve sees
+        // the reduced set and bumps the snapshot generation accordingly.
+        view.remove_task_by_doc_id(doc_id);
+        return Ok(ControlUpdateOutcome::Applied);
+    }
+
+    // Schedules, like tasks, are globally addressed; any Schedule create/update
+    // needs to drive a snapshot reload so the runtime's `active_schedules` can
+    // pick up the change.
+    if let Some((loaded_doc_id, schedule)) = load_schedule_by_doc_id(node, doc_id).await? {
+        if schedule.schedule_id.trim().is_empty() {
+            return Ok(ControlUpdateOutcome::Irrelevant);
+        }
+        view.remove_schedule_by_doc_id(doc_id);
+        view.schedules.insert(
+            schedule.schedule_id.clone(),
+            DocumentRecord {
+                doc_id: loaded_doc_id,
+                value: schedule,
+            },
+        );
+        return Ok(ControlUpdateOutcome::Applied);
+    }
+    if view.has_schedule_doc_id(doc_id) {
+        view.remove_schedule_by_doc_id(doc_id);
+        return Ok(ControlUpdateOutcome::Applied);
+    }
+
+    // EventTrigger subscription is deferred to PR 2 of the event-driven-tasks
+    // series; the stub `event_triggers` map on `DocumentRuntimeView` stays
+    // empty for now, so we intentionally do not dispatch on it here.
 
     Ok(ControlUpdateOutcome::Irrelevant)
 }

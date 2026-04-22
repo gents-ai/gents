@@ -5,8 +5,8 @@ use crate::client::{ClientCore, ClientPeerStatus, ClientStore};
 use crate::manage::actions::{reduce, ManageAction};
 use crate::manage::projection::{project_manage, ManageProjection};
 use crate::manage::{
-    backend_row, behavior_row, inference_profile_row, new_draft_for_section, scheduled_task_row,
-    tool_selection_row,
+    backend_row, behavior_row, inference_profile_row, new_draft_for_section, schedule_row,
+    task_row, tool_selection_row,
 };
 use crate::state::{ManageDraft, ManageSection, ManageState};
 
@@ -84,8 +84,9 @@ pub fn apply_draft(
         ManageDraft::InferenceProfile(draft) => {
             runtime.block_on(client.save_inference_profile(&inference_profile_row(draft)?))
         }
-        ManageDraft::ScheduledTask(draft) => {
-            runtime.block_on(client.save_scheduled_task(&scheduled_task_row(draft)?))
+        ManageDraft::Task(draft) => runtime.block_on(client.save_task(&task_row(draft)?)),
+        ManageDraft::Schedule(draft) => {
+            runtime.block_on(client.save_schedule(&schedule_row(draft)?))
         }
     };
 
@@ -109,6 +110,11 @@ pub fn apply_draft(
     }
 }
 
+/// Trigger the selected schedule to fire now.
+///
+/// Kept as `run_selected_task_now` for call-site stability; the body
+/// now targets a `Schedule` document rather than the legacy
+/// `ScheduledTask` collection.
 pub fn run_selected_task_now(
     manage: &mut ManageState,
     client: Option<&ClientCore>,
@@ -121,10 +127,10 @@ pub fn run_selected_task_now(
         .context("no manage draft is selected")?;
 
     let result = match draft {
-        ManageDraft::ScheduledTask(draft) => {
-            runtime.block_on(client.run_scheduled_task_now(&scheduled_task_row(draft)?))
+        ManageDraft::Schedule(draft) => {
+            runtime.block_on(client.fire_schedule_now(&schedule_row(draft)?))
         }
-        _ => Err(anyhow!("run now is only available for scheduled tasks")),
+        _ => Err(anyhow!("run now is only available for schedules")),
     };
 
     match result {
