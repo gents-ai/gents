@@ -355,6 +355,9 @@ impl DesiredFields for DesiredSchedule {
 /// Trait implemented by `Desired*` structs that live in a per-document
 /// directory form. Used by the loader to cross-check directory names
 /// against the unique-id field inside `object.json`.
+// Consumed by the loader rewrite in Task 4 (per-agent manifest roots, #67);
+// #[allow(dead_code)] suppresses the unused-trait warning until then.
+#[allow(dead_code)]
 pub(crate) trait HasUniqueId {
     fn unique_id(&self) -> &str;
 }
