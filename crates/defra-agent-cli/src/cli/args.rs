@@ -593,6 +593,14 @@ pub(crate) struct BackendDiscoverModelsArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct ConfigExportArgs {
+    #[arg(
+        long,
+        value_name = "ROOT",
+        help = "Directory to write the manifest root into (author format for `config validate`, `diff`, and `apply`)"
+    )]
+    pub(crate) root: PathBuf,
+    #[arg(long, default_value_t = false, help = "Overwrite the root dir if it is non-empty")]
+    pub(crate) force: bool,
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
@@ -615,7 +623,7 @@ pub(crate) struct ConfigImportArgs {
     pub(crate) override_existing: bool,
     #[arg(
         value_name = "PATH",
-        help = "JSON export file to import. Reads stdin when omitted"
+        help = "Legacy JSON bundle file to import (separate from `config export --root` manifest-dir output; use `config apply --root <dir>` to apply manifest roots). Reads stdin when omitted"
     )]
     pub(crate) path: Option<PathBuf>,
 }

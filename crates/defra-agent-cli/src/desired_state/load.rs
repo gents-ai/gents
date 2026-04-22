@@ -9,6 +9,7 @@ use super::{
     DesiredAgentBehavior, DesiredAgentPrincipal, DesiredEventTrigger, DesiredInferenceBackend,
     DesiredInferenceProfile, DesiredSchedule, DesiredStateCounts, DesiredStateManifest,
     DesiredStateValidationReport, DesiredTask, DesiredToolSelection, DesiredToolServiceRegistry,
+    HasUniqueId,
 };
 use defra_agent::Collection;
 
@@ -24,119 +25,53 @@ pub(crate) fn load_manifest_root(
 
     if !root.exists() {
         errors.push(format!("manifest root does not exist: {root_display}"));
-        return (
-            None,
-            DesiredStateValidationReport {
-                status: "invalid",
-                ok: false,
-                root: root_display,
-                agent_did: None,
-                counts: DesiredStateCounts {
-                    agent_principal: 0,
-                    agent_behaviors: 0,
-                    tool_selections: 0,
-                    inference_backends: 0,
-                    inference_profiles: 0,
-                    tool_service_registries: 0,
-                    tasks: 0,
-                    schedules: 0,
-                    event_triggers: 0,
-                },
-                errors,
-            },
-        );
+        return (None, empty_report(root_display, errors));
     }
     if !root.is_dir() {
         errors.push(format!("manifest root is not a directory: {root_display}"));
-        return (
-            None,
-            DesiredStateValidationReport {
-                status: "invalid",
-                ok: false,
-                root: root_display,
-                agent_did: None,
-                counts: DesiredStateCounts {
-                    agent_principal: 0,
-                    agent_behaviors: 0,
-                    tool_selections: 0,
-                    inference_backends: 0,
-                    inference_profiles: 0,
-                    tool_service_registries: 0,
-                    tasks: 0,
-                    schedules: 0,
-                    event_triggers: 0,
-                },
-                errors,
-            },
-        );
+        return (None, empty_report(root_display, errors));
     }
 
-    let principal = load_required_json::<DesiredAgentPrincipal>(
-        root,
-        Collection::AgentPrincipal.file_name(),
-        &mut errors,
-    );
-    let behaviors = load_required_json::<Vec<DesiredAgentBehavior>>(
-        root,
-        Collection::AgentBehavior.file_name(),
-        &mut errors,
-    );
-    let tool_selections = load_required_json::<Vec<DesiredToolSelection>>(
-        root,
-        Collection::ToolSelection.file_name(),
-        &mut errors,
-    );
-    let backends = load_required_json::<Vec<DesiredInferenceBackend>>(
-        root,
-        Collection::InferenceBackend.file_name(),
-        &mut errors,
-    );
-    let inference_profiles = load_optional_json::<Vec<DesiredInferenceProfile>>(
-        root,
-        Collection::InferenceProfile.file_name(),
-        &mut errors,
-    )
-    .unwrap_or_default();
-    let tool_service_registries = load_optional_json_collection::<DesiredToolServiceRegistry>(
-        root,
-        Collection::ToolServiceRegistry.file_name(),
-        Collection::ToolServiceRegistry
-            .dir_name()
-            .expect("tool-services has a dir form"),
-        &mut errors,
-    )
-    .unwrap_or_default();
-    let tasks = load_optional_json_collection::<DesiredTask>(
-        root,
-        Collection::Task.file_name(),
-        Collection::Task.dir_name().expect("tasks has a dir form"),
-        &mut errors,
-    )
-    .unwrap_or_default();
-    let schedules = load_optional_json_collection::<DesiredSchedule>(
-        root,
-        Collection::Schedule.file_name(),
-        Collection::Schedule
-            .dir_name()
-            .expect("schedules has a dir form"),
-        &mut errors,
-    )
-    .unwrap_or_default();
-    let event_triggers = load_optional_json_collection::<DesiredEventTrigger>(
-        root,
-        Collection::EventTrigger.file_name(),
-        Collection::EventTrigger
-            .dir_name()
-            .expect("event_triggers has a dir form"),
-        &mut errors,
-    )
-    .unwrap_or_default();
+    let principal = load_agent_principal(root, &mut errors);
+
+    let mut agent_behaviors: Vec<DesiredAgentBehavior> =
+        load_per_doc_collection(root, Collection::AgentBehavior, &mut errors);
+    let tool_selections: Vec<DesiredToolSelection> =
+        load_per_doc_collection(root, Collection::ToolSelection, &mut errors);
+    let inference_backends: Vec<DesiredInferenceBackend> =
+        load_per_doc_collection(root, Collection::InferenceBackend, &mut errors);
+    let inference_profiles: Vec<DesiredInferenceProfile> =
+        load_per_doc_collection(root, Collection::InferenceProfile, &mut errors);
+    let tool_service_registries: Vec<DesiredToolServiceRegistry> =
+        load_per_doc_collection(root, Collection::ToolServiceRegistry, &mut errors);
+    let mut tasks: Vec<DesiredTask> =
+        load_per_doc_collection(root, Collection::Task, &mut errors);
+    let schedules: Vec<DesiredSchedule> =
+        load_per_doc_collection(root, Collection::Schedule, &mut errors);
+    let event_triggers: Vec<DesiredEventTrigger> =
+        load_per_doc_collection(root, Collection::EventTrigger, &mut errors);
+
+    // Hydrate sidecars AFTER collection parse but BEFORE normalize/validate.
+    for behavior in &mut agent_behaviors {
+        let dir = per_doc_dir(root, Collection::AgentBehavior, behavior.unique_id());
+        if let Err(error) = hydrate_sidecar(&mut behavior.system_prompt, &dir) {
+            errors.push(error);
+        }
+    }
+    for task in &mut tasks {
+        let dir = per_doc_dir(root, Collection::Task, task.unique_id());
+        let mut wrapped = Some(std::mem::take(&mut task.prompt_template));
+        if let Err(error) = hydrate_sidecar(&mut wrapped, &dir) {
+            errors.push(error);
+        }
+        task.prompt_template = wrapped.unwrap_or_default();
+    }
 
     let counts = DesiredStateCounts {
         agent_principal: usize::from(principal.is_some()),
-        agent_behaviors: behaviors.as_ref().map_or(0, Vec::len),
-        tool_selections: tool_selections.as_ref().map_or(0, Vec::len),
-        inference_backends: backends.as_ref().map_or(0, Vec::len),
+        agent_behaviors: agent_behaviors.len(),
+        tool_selections: tool_selections.len(),
+        inference_backends: inference_backends.len(),
         inference_profiles: inference_profiles.len(),
         tool_service_registries: tool_service_registries.len(),
         tasks: tasks.len(),
@@ -144,38 +79,29 @@ pub(crate) fn load_manifest_root(
         event_triggers: event_triggers.len(),
     };
 
-    let agent_did = principal.as_ref().map(|value| value.agent_did.clone());
+    let agent_did = principal.as_ref().map(|p| p.agent_did.clone());
 
-    let manifest =
-        if let (Some(principal), Some(behaviors), Some(tool_selections), Some(backends)) =
-            (principal, behaviors, tool_selections, backends)
-        {
-            let mut manifest = DesiredStateManifest {
-                agent_principal: principal,
-                agent_behaviors: behaviors,
-                tool_selections,
-                inference_backends: backends,
-                inference_profiles,
-                tool_service_registries,
-                tasks,
-                schedules,
-                event_triggers,
-            };
-            normalize_manifest(&mut manifest);
-            validate_manifest(&manifest, &mut errors);
-            Some(manifest)
-        } else {
-            None
+    let manifest = principal.map(|principal| {
+        let mut manifest = DesiredStateManifest {
+            agent_principal: principal,
+            agent_behaviors,
+            tool_selections,
+            inference_backends,
+            inference_profiles,
+            tool_service_registries,
+            tasks,
+            schedules,
+            event_triggers,
         };
+        normalize_manifest(&mut manifest);
+        validate_manifest(&manifest, &mut errors);
+        manifest
+    });
 
     (
         manifest,
         DesiredStateValidationReport {
-            status: if errors.is_empty() {
-                "validated"
-            } else {
-                "invalid"
-            },
+            status: if errors.is_empty() { "validated" } else { "invalid" },
             ok: errors.is_empty(),
             root: root_display,
             agent_did,
@@ -185,138 +111,252 @@ pub(crate) fn load_manifest_root(
     )
 }
 
-pub(super) fn load_required_json<T>(
-    root: &Path,
-    file_name: &str,
-    errors: &mut Vec<String>,
-) -> Option<T>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    match load_json_file(root, file_name) {
-        Ok(Some(value)) => Some(value),
-        Ok(None) => {
-            errors.push(format!(
-                "required manifest file is missing: {}",
-                root.join(file_name).display()
-            ));
-            None
-        }
-        Err(error) => {
-            errors.push(error);
-            None
-        }
+fn empty_report(
+    root_display: String,
+    errors: Vec<String>,
+) -> DesiredStateValidationReport {
+    DesiredStateValidationReport {
+        status: "invalid",
+        ok: false,
+        root: root_display,
+        agent_did: None,
+        counts: DesiredStateCounts {
+            agent_principal: 0,
+            agent_behaviors: 0,
+            tool_selections: 0,
+            inference_backends: 0,
+            inference_profiles: 0,
+            tool_service_registries: 0,
+            tasks: 0,
+            schedules: 0,
+            event_triggers: 0,
+        },
+        errors,
     }
 }
 
-pub(super) fn load_optional_json<T>(
+fn load_agent_principal(
     root: &Path,
-    file_name: &str,
     errors: &mut Vec<String>,
-) -> Option<T>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    match load_json_file(root, file_name) {
-        Ok(value) => value,
-        Err(error) => {
-            errors.push(error);
-            None
-        }
-    }
-}
-
-pub(super) fn load_optional_json_collection<T>(
-    root: &Path,
-    file_name: &str,
-    dir_name: &str,
-    errors: &mut Vec<String>,
-) -> Option<Vec<T>>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    match load_json_collection(root, file_name, dir_name) {
-        Ok(value) => value,
-        Err(error) => {
-            errors.push(error);
-            None
-        }
-    }
-}
-
-pub(super) fn load_json_file<T>(root: &Path, file_name: &str) -> Result<Option<T>, String>
-where
-    T: for<'de> Deserialize<'de>,
-{
+) -> Option<DesiredAgentPrincipal> {
+    let file_name = Collection::AgentPrincipal
+        .file_name()
+        .expect("AgentPrincipal has a top-level file");
     let path = root.join(file_name);
     if !path.exists() {
-        return Ok(None);
+        errors.push(format!(
+            "required manifest file is missing: {}",
+            path.display()
+        ));
+        return None;
     }
-
-    let bytes =
-        fs::read(&path).map_err(|error| format!("reading {} failed: {error}", path.display()))?;
-    serde_json::from_slice::<T>(&bytes)
-        .map(Some)
-        .map_err(|error| format!("invalid {}: {error}", path.display()))
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            errors.push(format!("reading {} failed: {error}", path.display()));
+            return None;
+        }
+    };
+    match serde_json::from_slice(&bytes) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            errors.push(format!("invalid {}: {error}", path.display()));
+            None
+        }
+    }
 }
 
-pub(super) fn load_json_collection<T>(
+fn per_doc_dir(root: &Path, collection: Collection, handle: &str) -> std::path::PathBuf {
+    let dir_name = collection
+        .dir_name()
+        .expect("per_doc_dir called with non-directory collection");
+    root.join(dir_name).join(handle)
+}
+
+/// Scan `<root>/<collection.dir_name()>/` for per-document subdirectories
+/// of the form `<handle>/object.json` and parse each into `T`.
+///
+/// Errors are accumulated into `errors`; the function always returns a
+/// `Vec<T>` containing every document it could successfully parse.
+pub(crate) fn load_per_doc_collection<T>(
     root: &Path,
-    file_name: &str,
-    dir_name: &str,
-) -> Result<Option<Vec<T>>, String>
+    collection: Collection,
+    errors: &mut Vec<String>,
+) -> Vec<T>
 where
-    T: for<'de> Deserialize<'de>,
+    T: for<'de> Deserialize<'de> + HasUniqueId,
 {
-    let file_path = root.join(file_name);
-    let dir_path = root.join(dir_name);
-
-    if file_path.exists() && dir_path.exists() {
-        return Err(format!(
-            "manifest root must not contain both {} and {}",
-            file_path.display(),
-            dir_path.display()
-        ));
+    let dir_name = collection
+        .dir_name()
+        .expect("load_per_doc_collection called with a non-directory collection");
+    let collection_path = root.join(dir_name);
+    if !collection_path.exists() {
+        return Vec::new();
     }
-
-    if file_path.exists() {
-        return load_json_file(root, file_name);
-    }
-
-    if !dir_path.exists() {
-        return Ok(None);
-    }
-    if !dir_path.is_dir() {
-        return Err(format!(
+    if !collection_path.is_dir() {
+        errors.push(format!(
             "manifest collection path is not a directory: {}",
-            dir_path.display()
+            collection_path.display()
         ));
+        return Vec::new();
     }
 
-    let mut entry_paths = fs::read_dir(&dir_path)
-        .map_err(|error| format!("reading {} failed: {error}", dir_path.display()))?
-        .map(|entry| {
-            entry
-                .map(|entry| entry.path())
-                .map_err(|error| format!("reading {} failed: {error}", dir_path.display()))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    entry_paths.sort();
+    let entries = match fs::read_dir(&collection_path) {
+        Ok(iter) => iter,
+        Err(error) => {
+            errors.push(format!(
+                "reading {} failed: {error}",
+                collection_path.display()
+            ));
+            return Vec::new();
+        }
+    };
 
-    let mut values = Vec::new();
-    for path in entry_paths {
-        if !path.is_file() {
+    let mut subdirs: Vec<(String, std::path::PathBuf)> = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                errors.push(format!(
+                    "reading {} failed: {error}",
+                    collection_path.display()
+                ));
+                continue;
+            }
+        };
+        let path = entry.path();
+        if !path.is_dir() {
             continue;
         }
-        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if name.starts_with('.') {
             continue;
         }
-        let bytes = fs::read(&path)
-            .map_err(|error| format!("reading {} failed: {error}", path.display()))?;
-        let value = serde_json::from_slice::<T>(&bytes)
-            .map_err(|error| format!("invalid {}: {error}", path.display()))?;
-        values.push(value);
+        subdirs.push((name.to_string(), path));
+    }
+    subdirs.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut docs: Vec<T> = Vec::with_capacity(subdirs.len());
+    // Maps unique_id (from JSON body) -> first handle that produced it, for
+    // duplicate detection. Populated regardless of whether the handle matched,
+    // so that two mismatched dirs with the same inner id still produce a
+    // duplicate error.
+    let mut id_to_handle: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+
+    for (handle, subdir_path) in subdirs {
+        let object_path = subdir_path.join("object.json");
+        if !object_path.exists() {
+            errors.push(format!(
+                "per-doc dir is missing object.json: {}",
+                subdir_path.display()
+            ));
+            continue;
+        }
+        let bytes = match fs::read(&object_path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                errors.push(format!("reading {} failed: {error}", object_path.display()));
+                continue;
+            }
+        };
+        let parsed: T = match serde_json::from_slice(&bytes) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                errors.push(format!("invalid {}: {error}", object_path.display()));
+                continue;
+            }
+        };
+
+        // Check for duplicate unique IDs across all successfully-parsed docs,
+        // regardless of whether the handle matches. This ensures two different
+        // handle dirs that both embed the same unique_id both produce errors.
+        if let Some(prior) = id_to_handle.get(parsed.unique_id()) {
+            errors.push(format!(
+                "duplicate {} '{}' across {}/ and {}/",
+                collection.unique_field(),
+                parsed.unique_id(),
+                prior,
+                handle
+            ));
+            continue;
+        }
+        id_to_handle.insert(parsed.unique_id().to_string(), handle.clone());
+
+        if parsed.unique_id() != handle {
+            errors.push(format!(
+                "directory name '{handle}' does not match {} '{}' in {}",
+                collection.unique_field(),
+                parsed.unique_id(),
+                object_path.display()
+            ));
+            continue;
+        }
+
+        docs.push(parsed);
+    }
+    docs
+}
+
+/// Hydrate a sidecar-eligible string field. If `value` is `Some(s)` where
+/// `s` starts with `./`, treat the rest as a path relative to `json_dir`,
+/// read the file as UTF-8, and replace `*value` with the file contents.
+/// Any other case (None, absolute path, `../` prefix, literal string) is
+/// a no-op.
+///
+/// The relative portion is validated against path escape: any component that
+/// is `..` (ParentDir), a root separator, or an absolute prefix is rejected
+/// with an error. This prevents `./../secret.md` and similar tricks from
+/// reading files outside the document directory.
+pub(crate) fn hydrate_sidecar(
+    value: &mut Option<String>,
+    json_dir: &Path,
+) -> Result<(), String> {
+    use std::path::Component;
+
+    let Some(current) = value.as_deref() else { return Ok(()) };
+    if !current.starts_with("./") {
+        return Ok(());
+    }
+    let rel = &current[2..];
+
+    // Reject any component that would escape the document directory.
+    let rel_path = std::path::Path::new(rel);
+    for comp in rel_path.components() {
+        match comp {
+            Component::ParentDir => {
+                return Err(format!(
+                    "sidecar path escapes document directory: {current} (referenced from {})",
+                    json_dir.display()
+                ));
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(format!(
+                    "sidecar path must be relative: {current} (referenced from {})",
+                    json_dir.display()
+                ));
+            }
+            _ => {}
+        }
     }
 
-    Ok(Some(values))
+    let sidecar_path = json_dir.join(rel);
+    let bytes = fs::read(&sidecar_path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            format!(
+                "sidecar path does not resolve: {} (referenced from {})",
+                sidecar_path.display(),
+                json_dir.display()
+            )
+        } else {
+            format!("reading {} failed: {error}", sidecar_path.display())
+        }
+    })?;
+    let body = String::from_utf8(bytes).map_err(|_| {
+        format!("sidecar is not valid UTF-8: {}", sidecar_path.display())
+    })?;
+    *value = Some(body);
+    Ok(())
 }

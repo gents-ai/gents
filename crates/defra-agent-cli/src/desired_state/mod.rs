@@ -6,6 +6,7 @@ pub(crate) mod normalize;
 #[cfg(test)]
 mod tests;
 pub(crate) mod validate;
+pub(crate) mod write;
 
 pub(crate) use apply_bundle::DesiredApplyBundle;
 pub(crate) use convert::{
@@ -15,6 +16,7 @@ pub(crate) use convert::{
 pub(crate) use diff::diff_manifests;
 pub(crate) use load::{load_manifest_root, validate_manifest_root};
 pub(crate) use normalize::strip_deprecated_inference_backend_fields;
+pub(crate) use write::write_manifest_root;
 
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -377,6 +379,41 @@ impl DesiredFields for DesiredEventTrigger {
     fn collection_tag(&self) -> &'static str {
         "event_triggers"
     }
+}
+
+/// Trait implemented by `Desired*` structs that live in a per-document
+/// directory form. Used by the loader to cross-check directory names
+/// against the unique-id field inside `object.json`.
+// Consumed by the loader rewrite in Task 4 (per-agent manifest roots, #67);
+// #[allow(dead_code)] suppresses the unused-trait warning until then.
+#[allow(dead_code)]
+pub(crate) trait HasUniqueId {
+    fn unique_id(&self) -> &str;
+}
+
+impl HasUniqueId for DesiredAgentBehavior {
+    fn unique_id(&self) -> &str { &self.behavior_id }
+}
+impl HasUniqueId for DesiredToolSelection {
+    fn unique_id(&self) -> &str { &self.selection_id }
+}
+impl HasUniqueId for DesiredInferenceBackend {
+    fn unique_id(&self) -> &str { &self.backend_id }
+}
+impl HasUniqueId for DesiredInferenceProfile {
+    fn unique_id(&self) -> &str { &self.profile_id }
+}
+impl HasUniqueId for DesiredToolServiceRegistry {
+    fn unique_id(&self) -> &str { &self.service_id }
+}
+impl HasUniqueId for DesiredTask {
+    fn unique_id(&self) -> &str { &self.task_id }
+}
+impl HasUniqueId for DesiredSchedule {
+    fn unique_id(&self) -> &str { &self.schedule_id }
+}
+impl HasUniqueId for DesiredEventTrigger {
+    fn unique_id(&self) -> &str { &self.trigger_id }
 }
 
 #[cfg(test)]

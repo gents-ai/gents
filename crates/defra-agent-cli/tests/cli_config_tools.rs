@@ -173,19 +173,24 @@ async fn tool_selection_upsert_persists_file_tool_root() -> Result<()> {
         Some(scoped_root.to_str().expect("utf-8 scoped root"))
     );
 
-    let exported = run_cli_json(&home_dir, &["config", "export"])?;
-    let selections = exported
-        .get("tool_selections")
-        .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("config export missing tool_selections: {exported}"))?;
-    let selection = selections
-        .iter()
-        .find(|value| {
-            value.get("selection_id").and_then(Value::as_str) == Some(selection_id.as_str())
-        })
-        .ok_or_else(|| anyhow!("config export missing selection {selection_id}: {exported}"))?;
+    let export_root = tempdir.path().join("export");
+    run_cli_text(
+        &home_dir,
+        &[
+            "config",
+            "export",
+            "--root",
+            export_root.to_str().expect("utf-8 export root"),
+        ],
+    )?;
+    let selection_doc = read_json_file(
+        &export_root
+            .join("tool-selections")
+            .join(&selection_id)
+            .join("object.json"),
+    )?;
     assert_eq!(
-        selection.get("file_tool_root").and_then(Value::as_str),
+        selection_doc.get("file_tool_root").and_then(Value::as_str),
         Some(scoped_root.to_str().expect("utf-8 scoped root"))
     );
 

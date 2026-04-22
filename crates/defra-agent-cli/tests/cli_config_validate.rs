@@ -29,10 +29,12 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
             "enabled": true
         }),
     )?;
-    write_json_file(
-        &root.join("agent-behaviors.json"),
-        &serde_json::json!([
-            {
+    {
+        let dir = root.join("agent-behaviors").join(default_behavior_id.as_str());
+        fs::create_dir_all(&dir)?;
+        write_json_file(
+            &dir.join("object.json"),
+            &serde_json::json!({
                 "behavior_id": default_behavior_id.clone(),
                 "agent_did": agent_did.clone(),
                 "display_name": "Default",
@@ -44,13 +46,15 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
                 "compaction_strategy": null,
                 "compaction_threshold": null,
                 "enabled": true
-            }
-        ]),
-    )?;
-    write_json_file(
-        &root.join("tool-selections.json"),
-        &serde_json::json!([
-            {
+            }),
+        )?;
+    }
+    {
+        let dir = root.join("tool-selections").join(tool_selection_id.as_str());
+        fs::create_dir_all(&dir)?;
+        write_json_file(
+            &dir.join("object.json"),
+            &serde_json::json!({
                 "selection_id": tool_selection_id.clone(),
                 "agent_did": agent_did.clone(),
                 "display_name": "Standard",
@@ -61,13 +65,15 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
                 "cli_tool_names": [],
                 "enable_meta_tools": true,
                 "delegate_to": []
-            }
-        ]),
-    )?;
-    write_json_file(
-        &root.join("inference-backends.json"),
-        &serde_json::json!([
-            {
+            }),
+        )?;
+    }
+    {
+        let dir = root.join("inference-backends").join("default-backend");
+        fs::create_dir_all(&dir)?;
+        write_json_file(
+            &dir.join("object.json"),
+            &serde_json::json!({
                 "backend_id": "default-backend",
                 "name": "default-backend",
                 "endpoint": "http://127.0.0.1:8000/v1",
@@ -76,9 +82,9 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
                 "max_queue_depth": 100,
                 "enabled": true,
                 "models": ["mock-model"]
-            }
-        ]),
-    )?;
+            }),
+        )?;
+    }
 
     let output = run_cli_json(
         &home_dir,
@@ -156,10 +162,12 @@ async fn config_validate_reports_reference_errors_and_fails_nonzero() -> Result<
             "enabled": true
         }),
     )?;
-    write_json_file(
-        &root.join("agent-behaviors.json"),
-        &serde_json::json!([
-            {
+    {
+        let dir = root.join("agent-behaviors").join("other-behavior");
+        fs::create_dir_all(&dir)?;
+        write_json_file(
+            &dir.join("object.json"),
+            &serde_json::json!({
                 "behavior_id": "other-behavior",
                 "agent_did": agent_did.clone(),
                 "display_name": "Other",
@@ -171,14 +179,10 @@ async fn config_validate_reports_reference_errors_and_fails_nonzero() -> Result<
                 "compaction_strategy": null,
                 "compaction_threshold": null,
                 "enabled": true
-            }
-        ]),
-    )?;
-    write_json_file(&root.join("tool-selections.json"), &serde_json::json!([]))?;
-    write_json_file(
-        &root.join("inference-backends.json"),
-        &serde_json::json!([]),
-    )?;
+            }),
+        )?;
+    }
+    // Empty collections: no subdirectories needed (missing dir = zero docs)
 
     let output = run_cli_failure_stdout_json(
         &home_dir,
@@ -231,9 +235,6 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
     let root = tempdir.path().join("infra").join("agents").join("fleet");
     fs::create_dir_all(&home_dir)?;
     fs::create_dir_all(&root)?;
-    fs::create_dir_all(root.join("tool-services"))?;
-    fs::create_dir_all(root.join("tasks"))?;
-    fs::create_dir_all(root.join("schedules"))?;
 
     let agent_did = format!("did:defra-agent:{}", Uuid::new_v4().simple());
     let default_behavior_id = format!("{agent_did}:default");
@@ -248,10 +249,12 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
             "enabled": true
         }),
     )?;
-    write_json_file(
-        &root.join("agent-behaviors.json"),
-        &serde_json::json!([
-            {
+    {
+        let dir = root.join("agent-behaviors").join(default_behavior_id.as_str());
+        fs::create_dir_all(&dir)?;
+        write_json_file(
+            &dir.join("object.json"),
+            &serde_json::json!({
                 "behavior_id": default_behavior_id.clone(),
                 "agent_did": agent_did.clone(),
                 "display_name": "Default",
@@ -263,13 +266,15 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
                 "compaction_strategy": null,
                 "compaction_threshold": null,
                 "enabled": true
-            }
-        ]),
-    )?;
-    write_json_file(
-        &root.join("tool-selections.json"),
-        &serde_json::json!([
-            {
+            }),
+        )?;
+    }
+    {
+        let dir = root.join("tool-selections").join(tool_selection_id.as_str());
+        fs::create_dir_all(&dir)?;
+        write_json_file(
+            &dir.join("object.json"),
+            &serde_json::json!({
                 "selection_id": tool_selection_id.clone(),
                 "agent_did": agent_did.clone(),
                 "display_name": "Standard",
@@ -280,13 +285,15 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
                 "cli_tool_names": [],
                 "enable_meta_tools": true,
                 "delegate_to": []
-            }
-        ]),
-    )?;
-    write_json_file(
-        &root.join("inference-backends.json"),
-        &serde_json::json!([
-            {
+            }),
+        )?;
+    }
+    {
+        let dir = root.join("inference-backends").join("default-backend");
+        fs::create_dir_all(&dir)?;
+        write_json_file(
+            &dir.join("object.json"),
+            &serde_json::json!({
                 "backend_id": "default-backend",
                 "name": "default-backend",
                 "endpoint": "http://127.0.0.1:8000/v1",
@@ -295,44 +302,56 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
                 "max_queue_depth": 100,
                 "enabled": true,
                 "models": ["mock-model"]
-            }
-        ]),
-    )?;
-    write_json_file(
-        &root.join("tool-services").join("ops-mcp.json"),
-        &serde_json::json!({
-            "service_id": "ops-mcp",
-            "display_name": "Ops MCP",
-            "description": "Operational tooling",
-            "hostname": "ops.internal",
-            "tailscale_ip": "100.64.0.10",
-            "lan_ip": "192.168.1.10",
-            "mcp_port": 8080,
-            "mcp_path": "/mcp"
-        }),
-    )?;
-    write_json_file(
-        &root.join("tasks").join("nightly-audit.json"),
-        &serde_json::json!({
-            "task_id": "nightly-audit",
-            "name": "Nightly Audit",
-            "description": null,
-            "behavior_id": default_behavior_id.clone(),
-            "prompt_template": "Audit the fleet state and summarize drift.",
-            "enabled": false,
-            "output_schema_ref": null
-        }),
-    )?;
-    write_json_file(
-        &root.join("schedules").join("nightly-audit-hourly.json"),
-        &serde_json::json!({
-            "schedule_id": "nightly-audit-hourly",
-            "task_id": "nightly-audit",
-            "interval_secs": 3600,
-            "enabled": false,
-            "concurrency": "serial"
-        }),
-    )?;
+            }),
+        )?;
+    }
+    {
+        let dir = root.join("tool-services").join("ops-mcp");
+        fs::create_dir_all(&dir)?;
+        write_json_file(
+            &dir.join("object.json"),
+            &serde_json::json!({
+                "service_id": "ops-mcp",
+                "display_name": "Ops MCP",
+                "description": "Operational tooling",
+                "hostname": "ops.internal",
+                "tailscale_ip": "100.64.0.10",
+                "lan_ip": "192.168.1.10",
+                "mcp_port": 8080,
+                "mcp_path": "/mcp"
+            }),
+        )?;
+    }
+    {
+        let dir = root.join("tasks").join("nightly-audit");
+        fs::create_dir_all(&dir)?;
+        write_json_file(
+            &dir.join("object.json"),
+            &serde_json::json!({
+                "task_id": "nightly-audit",
+                "name": "Nightly Audit",
+                "description": null,
+                "behavior_id": default_behavior_id.clone(),
+                "prompt_template": "Audit the fleet state and summarize drift.",
+                "enabled": false,
+                "output_schema_ref": null
+            }),
+        )?;
+    }
+    {
+        let dir = root.join("schedules").join("nightly-audit-hourly");
+        fs::create_dir_all(&dir)?;
+        write_json_file(
+            &dir.join("object.json"),
+            &serde_json::json!({
+                "schedule_id": "nightly-audit-hourly",
+                "task_id": "nightly-audit",
+                "interval_secs": 3600,
+                "enabled": false,
+                "concurrency": "serial"
+            }),
+        )?;
+    }
 
     let output = run_cli_json(
         &home_dir,

@@ -33,18 +33,30 @@ async fn config_apply_reconciles_running_runtime_without_restart() -> Result<()>
         ],
     )?;
 
-    let exported = run_cli_json(&home_dir, &["config", "export"])?;
-    write_manifest_root_from_export(&root, &exported)?;
+    run_cli_text(&home_dir, &["config", "export", "--root", root.to_str().expect("utf-8 root")])?;
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
-    let behaviors_path = root.join("agent-behaviors.json");
-    let mut behaviors = read_json_file(&behaviors_path)?;
+    let behaviors_dir = root.join("agent-behaviors");
+    let behavior_entry = fs::read_dir(&behaviors_dir)
+        .context("reading agent-behaviors dir after export")?
+        .next()
+        .ok_or_else(|| anyhow!("no agent-behavior subdirs after export"))??;
+    let behavior_id = behavior_entry
+        .file_name()
+        .to_str()
+        .ok_or_else(|| anyhow!("non-utf8 behavior dir name"))?
+        .to_string();
+    let behaviors_path = root
+        .join("agent-behaviors")
+        .join(&behavior_id)
+        .join("object.json");
+    let mut behavior = read_json_file(&behaviors_path)?;
     let updated_prompt = "Keep responses terse. Mention that desired state was applied.";
-    behaviors[0]["system_prompt"] = Value::String(updated_prompt.to_string());
-    write_json_file(&behaviors_path, &behaviors)?;
+    behavior["system_prompt"] = Value::String(updated_prompt.to_string());
+    write_json_file(&behaviors_path, &behavior)?;
 
     let root_str = root
         .to_str()

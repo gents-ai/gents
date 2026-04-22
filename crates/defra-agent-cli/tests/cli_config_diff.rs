@@ -30,8 +30,7 @@ async fn config_diff_reports_no_changes_for_matching_live_state() -> Result<()> 
         ],
     )?;
 
-    let exported = run_cli_json(&home_dir, &["config", "export"])?;
-    write_manifest_root_from_export(&root, &exported)?;
+    run_cli_text(&home_dir, &["config", "export", "--root", root.to_str().expect("utf-8 root")])?;
 
     let output = run_cli_json(
         &home_dir,
@@ -105,18 +104,25 @@ async fn config_diff_reports_updates_for_changed_backend_manifest() -> Result<()
         ],
     )?;
 
-    let exported = run_cli_json(&home_dir, &["config", "export"])?;
-    write_manifest_root_from_export(&root, &exported)?;
+    run_cli_text(&home_dir, &["config", "export", "--root", root.to_str().expect("utf-8 root")])?;
 
-    let backends_path = root.join("inference-backends.json");
-    let mut backends = read_json_file(&backends_path)?;
-    backends[0]["endpoint"] = Value::String("http://127.0.0.1:9000/v1".to_string());
-    write_json_file(&backends_path, &backends)?;
-
-    let backend_id = exported
-        .pointer("/inference_backends/0/backend_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("exported bundle missing inference_backends[0].backend_id"))?;
+    let backends_dir = root.join("inference-backends");
+    let backend_entry = fs::read_dir(&backends_dir)
+        .context("reading inference-backends dir after export")?
+        .next()
+        .ok_or_else(|| anyhow!("no inference-backend subdirs after export"))??;
+    let backend_id = backend_entry
+        .file_name()
+        .to_str()
+        .ok_or_else(|| anyhow!("non-utf8 backend dir name"))?
+        .to_string();
+    let backends_path = root
+        .join("inference-backends")
+        .join(&backend_id)
+        .join("object.json");
+    let mut backend = read_json_file(&backends_path)?;
+    backend["endpoint"] = Value::String("http://127.0.0.1:9000/v1".to_string());
+    write_json_file(&backends_path, &backend)?;
 
     let output = run_cli_json(
         &home_dir,
@@ -140,7 +146,7 @@ async fn config_diff_reports_updates_for_changed_backend_manifest() -> Result<()
         output
             .pointer("/collections/inference_backends/update/0")
             .and_then(Value::as_str),
-        Some(backend_id)
+        Some(backend_id.as_str())
     );
     assert_eq!(
         output
