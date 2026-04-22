@@ -68,12 +68,24 @@ impl ConcurrencyMode {
     }
 }
 
-/// Placeholder for a resolved event trigger. PR 2 will populate real fields;
-/// for now this exists to lock in the snapshot shape so Task 18 / downstream
-/// callers can thread `active_event_triggers` through without churn when the
-/// event trigger wiring lands.
+/// Resolved view of an `EventTrigger` document paired with its resolved
+/// `Task`. Mirrors `ResolvedSchedule`: the task is embedded so the trigger
+/// engine can "join once, fire many" without re-looking-up the task at each
+/// fire time. Only triggers with a resolvable task and an enabled, runnable
+/// behavior end up here; the rest go in `unavailable_event_triggers`.
 #[derive(Debug, Clone)]
-pub(crate) struct ResolvedEventTrigger {}
+pub(crate) struct ResolvedEventTrigger {
+    pub(crate) trigger_id: String,
+    pub(crate) task_id: String,
+    pub(crate) task: ResolvedTask,
+    pub(crate) source_collection: String,
+    /// Currently always `"created"`; future PRs may add `"updated"` /
+    /// `"deleted"` support.
+    pub(crate) event_kind: String,
+    pub(crate) filter: Option<String>,
+    pub(crate) enabled: bool,
+    pub(crate) concurrency: ConcurrencyMode,
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct ResolvedRuntimeSnapshot {
@@ -85,6 +97,7 @@ pub(crate) struct ResolvedRuntimeSnapshot {
     pub(crate) active_schedules: HashMap<String, ResolvedSchedule>,
     pub(crate) unavailable_schedules: HashSet<String>,
     pub(crate) active_event_triggers: HashMap<String, ResolvedEventTrigger>,
+    pub(crate) unavailable_event_triggers: HashSet<String>,
 }
 
 impl ResolvedRuntimeSnapshot {
@@ -123,6 +136,7 @@ impl ResolvedRuntimeSnapshot {
             active_schedules: HashMap::new(),
             unavailable_schedules: HashSet::new(),
             active_event_triggers: HashMap::new(),
+            unavailable_event_triggers: HashSet::new(),
         }
     }
 
@@ -141,13 +155,17 @@ impl ResolvedRuntimeSnapshot {
         self
     }
 
-    /// Attach resolved event triggers. Currently a stub; PR 2 populates it.
-    #[allow(dead_code)]
+    /// Attach resolved event triggers plus any trigger ids that failed
+    /// resolution. Mirrors `with_schedules`: active triggers are eligible to
+    /// fire, unavailable ids let callers report/diff misconfigured triggers
+    /// without keeping them runnable.
     pub(crate) fn with_event_triggers(
         mut self,
         active_event_triggers: HashMap<String, ResolvedEventTrigger>,
+        unavailable_event_triggers: HashSet<String>,
     ) -> Self {
         self.active_event_triggers = active_event_triggers;
+        self.unavailable_event_triggers = unavailable_event_triggers;
         self
     }
 
@@ -166,6 +184,7 @@ impl ResolvedRuntimeSnapshot {
             active_schedules: self.active_schedules,
             unavailable_schedules: self.unavailable_schedules,
             active_event_triggers: self.active_event_triggers,
+            unavailable_event_triggers: self.unavailable_event_triggers,
             dispatchers,
         }
     }
@@ -180,6 +199,7 @@ impl ResolvedRuntimeSnapshot {
             &self.active_schedules,
             &self.unavailable_schedules,
             &self.active_event_triggers,
+            &self.unavailable_event_triggers,
         )
     }
 }
@@ -195,6 +215,7 @@ pub(crate) struct ActiveRuntimeSnapshot {
     pub(crate) active_schedules: HashMap<String, ResolvedSchedule>,
     pub(crate) unavailable_schedules: HashSet<String>,
     pub(crate) active_event_triggers: HashMap<String, ResolvedEventTrigger>,
+    pub(crate) unavailable_event_triggers: HashSet<String>,
     pub(crate) dispatchers: DispatcherMap,
 }
 
@@ -231,6 +252,7 @@ impl ActiveRuntimeSnapshot {
             &self.active_schedules,
             &self.unavailable_schedules,
             &self.active_event_triggers,
+            &self.unavailable_event_triggers,
         )
     }
 }
@@ -258,6 +280,7 @@ fn configuration_fingerprint(
     active_schedules: &HashMap<String, ResolvedSchedule>,
     unavailable_schedules: &HashSet<String>,
     active_event_triggers: &HashMap<String, ResolvedEventTrigger>,
+    unavailable_event_triggers: &HashSet<String>,
 ) -> String {
     let mut fingerprint = String::new();
     fingerprint.push_str("default:");
@@ -350,6 +373,15 @@ fn configuration_fingerprint(
         fingerprint.push_str(&trigger_id);
         fingerprint.push('=');
         fingerprint.push_str(&format!("{trigger:?}"));
+        fingerprint.push('\n');
+    }
+
+    let mut unavailable_event_trigger_ids =
+        unavailable_event_triggers.iter().cloned().collect::<Vec<_>>();
+    unavailable_event_trigger_ids.sort();
+    for trigger_id in unavailable_event_trigger_ids {
+        fingerprint.push_str("unavailable_event_trigger:");
+        fingerprint.push_str(&trigger_id);
         fingerprint.push('\n');
     }
 
