@@ -46,10 +46,24 @@ structure ActiveSchedule where
   enabled : Bool
   deriving DecidableEq, Repr
 
-/-- Abstract event-trigger record visible in the active snapshot. -/
+/-- Concrete event-trigger record visible in the active snapshot.
+
+Mirrors the Rust-side `ResolvedEventTrigger`: the trigger engine needs
+more than `(triggerId, enabled)` to dispatch an event fire — it must
+know which source collection and event kind the subscription is
+watching, which task to render, and the declared concurrency mode.
+
+This parallels `ActiveSchedule` in spirit; `ActiveSchedule` has stayed
+minimal because the schedule-kind theorems so far only exercise the
+`enabled` gate, while the event path already needs the richer shape for
+the subscription join that `EventSource` performs in Rust. -/
 structure ActiveEventTrigger where
   triggerId : String
+  taskId : String
+  sourceCollection : String
+  eventKind : String
   enabled : Bool
+  concurrency : ConcurrencyMode
   deriving DecidableEq, Repr
 
 /-- Trigger-layer view of the active runtime snapshot. The reconcile
