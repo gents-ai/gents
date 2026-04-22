@@ -122,13 +122,15 @@ pub(in crate::agent) async fn run_agent(
     let _reconcile_tx_guard = reconcile_tx.clone();
 
     // The legacy scheduler module has been replaced by the event-driven
-    // `TriggerEngine`. Construct a `ScheduleSource` backed by the active
-    // runtime snapshot and a `ProductionMaterializer` that writes
-    // `AgentRequest` documents with `caused_by_trigger_{id,kind}` lineage via
-    // the lifecycle module. PR 2 will add additional sources (event triggers,
-    // manual fire inbox) alongside the schedule source.
+    // `TriggerEngine`. Construct a `ScheduleSource` and an `EventSource`
+    // backed by the active runtime snapshot, plus a `ProductionMaterializer`
+    // that writes `AgentRequest` documents with `caused_by_trigger_{id,kind}`
+    // lineage via the lifecycle module. The materializer already dispatches
+    // on `TriggerKind::{Schedule,Event}`, so wiring both sources here is the
+    // final connection for event-driven fires.
     let trigger_engine_node = agent.node.clone();
-    let trigger_engine_source_snapshot_rx = active_snapshot_rx.clone();
+    let trigger_engine_schedule_snapshot_rx = active_snapshot_rx.clone();
+    let trigger_engine_event_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_engine_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_materializer_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_cancel = cancel.child_token();
@@ -144,18 +146,27 @@ pub(in crate::agent) async fn run_agent(
                 trigger_engine_materializer_snapshot_rx,
             ),
         );
-        let source: Box<dyn crate::trigger_engine::TriggerSource> = Box::new(
+        let schedule_source: Box<dyn crate::trigger_engine::TriggerSource> = Box::new(
             crate::trigger_engine::schedule_source::ScheduleSource::new(
-                trigger_engine_source_snapshot_rx,
+                trigger_engine_schedule_snapshot_rx,
+                trigger_engine_node.clone(),
+                trigger_engine_cancel.clone(),
+            ),
+        );
+        let event_source: Box<dyn crate::trigger_engine::TriggerSource> = Box::new(
+            crate::trigger_engine::event_source::EventSource::new(
+                trigger_engine_event_snapshot_rx,
                 trigger_engine_node,
                 trigger_engine_cancel.clone(),
             ),
         );
+        let sources: Vec<Box<dyn crate::trigger_engine::TriggerSource>> =
+            vec![schedule_source, event_source];
         let engine = crate::trigger_engine::TriggerEngine::new(
             trigger_engine_engine_snapshot_rx,
             materializer,
         );
-        engine.run(vec![source], trigger_engine_cancel).await;
+        engine.run(sources, trigger_engine_cancel).await;
     });
 
     let ready_cancel = cancel.child_token();
