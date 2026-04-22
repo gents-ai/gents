@@ -120,6 +120,19 @@ fn prepare_root(root: &Path, force: bool) -> Result<(), String> {
             root.display()
         ));
     }
+    // With force=true, still refuse to delete a directory that doesn't look
+    // like a manifest root. Blind remove_dir_all on a user-provided path is a
+    // footgun: if they typo or misremember the target, we shouldn't happily
+    // wipe their home dir. The sentinel is the presence of agent-principal.json,
+    // which is the one required top-level file in every manifest root.
+    if !root.join("agent-principal.json").exists() {
+        return Err(format!(
+            "refusing to overwrite {}: directory is non-empty and does not \
+             contain agent-principal.json (not a manifest root); remove the \
+             directory manually or target an empty one",
+            root.display()
+        ));
+    }
     fs::remove_dir_all(root)
         .map_err(|e| format!("clearing {} failed: {e}", root.display()))?;
     fs::create_dir_all(root)
@@ -182,8 +195,12 @@ fn spill_string_field(
     let object = body
         .as_object_mut()
         .ok_or_else(|| "expected object body for sidecar spill, got non-object".to_string())?;
-    // If the field is null or absent, remove it so the on-disk object.json
-    // omits the key entirely (the loader treats missing == None).
+    // serde emits `Option::<String>::None` as `null` (no skip_serializing_if
+    // attribute on the struct fields), so we have to strip null explicitly.
+    // Without this, the written object.json would contain `"system_prompt": null`
+    // and the loader's round-trip would see a present-but-null key instead of a
+    // missing one. If you want to remove this step, add skip_serializing_if to
+    // every Option field on DesiredAgentBehavior / DesiredTask first.
     let raw = object.get(field).cloned();
     match raw {
         None => return Ok(()),

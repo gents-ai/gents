@@ -975,6 +975,19 @@ pub(super) mod write_manifest_root {
         let err = write_manifest_root(tmp.path(), &m, false).unwrap_err();
         assert!(err.contains("filesystem-unsafe"), "got: {err}");
     }
+
+    #[test]
+    fn force_refuses_dir_without_agent_principal() {
+        let tmp = tempdir().unwrap();
+        fs::write(tmp.path().join("random.txt"), "this is not a manifest root").unwrap();
+        let err = write_manifest_root(tmp.path(), &minimal_manifest(), true).unwrap_err();
+        assert!(
+            err.contains("does not contain agent-principal.json"),
+            "got: {err}"
+        );
+        // File was not deleted.
+        assert!(tmp.path().join("random.txt").exists());
+    }
 }
 
 mod write_manifest_root_safe_id {
