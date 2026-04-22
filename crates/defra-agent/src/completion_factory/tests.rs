@@ -1,5 +1,23 @@
 use super::*;
 use crate::config::SamplingConfig;
+use crate::watcher::AgentRequest;
+
+fn request() -> AgentRequest {
+    AgentRequest {
+        doc_id: String::new(),
+        request_id: "request-123".to_string(),
+        agent_did: String::new(),
+        behavior_id: None,
+        session_id: "session-456".to_string(),
+        content: String::new(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        max_tokens: None,
+        metadata: None,
+        created_at: String::new(),
+    }
+}
 
 #[test]
 fn openrouter_additional_params_require_parameters() {
@@ -38,8 +56,6 @@ fn sampling_additional_params_merge_with_provider_params() {
 
 #[test]
 fn request_sampling_overrides_behavior_defaults() {
-    use crate::watcher::AgentRequest;
-
     let defaults = SamplingConfig {
         temperature: Some(0.7),
         top_p: Some(0.9),
@@ -68,4 +84,21 @@ fn request_sampling_overrides_behavior_defaults() {
     assert_eq!(sampling.top_p, Some(0.9));
     assert_eq!(sampling.top_k, Some(40));
     assert_eq!(sampling.max_tokens, Some(512));
+}
+
+#[test]
+fn openai_cache_scope_prefers_session_id() {
+    let value = openai_cache_scope_params(&request()).expect("scope should be present");
+
+    assert_eq!(value["user"], "session-456");
+}
+
+#[test]
+fn openai_cache_scope_falls_back_to_request_id() {
+    let mut request = request();
+    request.session_id.clear();
+
+    let value = openai_cache_scope_params(&request).expect("fallback scope should be present");
+
+    assert_eq!(value["user"], "request-123");
 }
