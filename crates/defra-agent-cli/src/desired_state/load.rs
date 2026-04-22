@@ -324,6 +324,138 @@ where
     Ok(Some(values))
 }
 
+use super::HasUniqueId;
+
+/// Scan `<root>/<collection.dir_name()>/` for per-document subdirectories
+/// of the form `<handle>/object.json` and parse each into `T`.
+///
+/// Errors are accumulated into `errors`; the function always returns a
+/// `Vec<T>` containing every document it could successfully parse.
+// Wired into load_manifest_root by Task 4 (per-agent manifest roots, #67);
+// #[allow(dead_code)] suppresses the unused-function warning until then.
+#[allow(dead_code)]
+pub(crate) fn load_per_doc_collection<T>(
+    root: &Path,
+    collection: Collection,
+    errors: &mut Vec<String>,
+) -> Vec<T>
+where
+    T: for<'de> Deserialize<'de> + HasUniqueId,
+{
+    let dir_name = collection
+        .dir_name()
+        .expect("load_per_doc_collection called with a non-directory collection");
+    let collection_path = root.join(dir_name);
+    if !collection_path.exists() {
+        return Vec::new();
+    }
+    if !collection_path.is_dir() {
+        errors.push(format!(
+            "manifest collection path is not a directory: {}",
+            collection_path.display()
+        ));
+        return Vec::new();
+    }
+
+    let entries = match fs::read_dir(&collection_path) {
+        Ok(iter) => iter,
+        Err(error) => {
+            errors.push(format!(
+                "reading {} failed: {error}",
+                collection_path.display()
+            ));
+            return Vec::new();
+        }
+    };
+
+    let mut subdirs: Vec<(String, std::path::PathBuf)> = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                errors.push(format!(
+                    "reading {} failed: {error}",
+                    collection_path.display()
+                ));
+                continue;
+            }
+        };
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if name.starts_with('.') {
+            continue;
+        }
+        subdirs.push((name.to_string(), path));
+    }
+    subdirs.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut docs: Vec<T> = Vec::with_capacity(subdirs.len());
+    // Maps unique_id (from JSON body) -> first handle that produced it, for
+    // duplicate detection. Populated regardless of whether the handle matched,
+    // so that two mismatched dirs with the same inner id still produce a
+    // duplicate error.
+    let mut id_to_handle: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+
+    for (handle, subdir_path) in subdirs {
+        let object_path = subdir_path.join("object.json");
+        if !object_path.exists() {
+            errors.push(format!(
+                "per-doc dir is missing object.json: {}",
+                subdir_path.display()
+            ));
+            continue;
+        }
+        let bytes = match fs::read(&object_path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                errors.push(format!("reading {} failed: {error}", object_path.display()));
+                continue;
+            }
+        };
+        let parsed: T = match serde_json::from_slice(&bytes) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                errors.push(format!("invalid {}: {error}", object_path.display()));
+                continue;
+            }
+        };
+
+        // Check for duplicate unique IDs across all successfully-parsed docs,
+        // regardless of whether the handle matches. This ensures two different
+        // handle dirs that both embed the same unique_id both produce errors.
+        if let Some(prior) = id_to_handle.get(parsed.unique_id()) {
+            errors.push(format!(
+                "duplicate {} '{}' across {}/ and {}/",
+                collection.unique_field(),
+                parsed.unique_id(),
+                prior,
+                handle
+            ));
+            continue;
+        }
+        id_to_handle.insert(parsed.unique_id().to_string(), handle.clone());
+
+        if parsed.unique_id() != handle {
+            errors.push(format!(
+                "directory name '{handle}' does not match {} '{}' in {}",
+                collection.unique_field(),
+                parsed.unique_id(),
+                object_path.display()
+            ));
+            continue;
+        }
+
+        docs.push(parsed);
+    }
+    docs
+}
+
 /// Hydrate a sidecar-eligible string field. If `value` is `Some(s)` where
 /// `s` starts with `./`, treat the rest as a path relative to `json_dir`,
 /// read the file as UTF-8, and replace `*value` with the file contents.

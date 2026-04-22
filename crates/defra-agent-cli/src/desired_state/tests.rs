@@ -823,3 +823,121 @@ fn hydrate_sidecar_is_noop_on_none() {
     hydrate_sidecar(&mut value, dir.path()).unwrap();
     assert!(value.is_none());
 }
+
+mod load_per_doc_collection {
+    use std::fs;
+    use tempfile::tempdir;
+    use crate::desired_state::load::load_per_doc_collection;
+    use crate::desired_state::{DesiredAgentBehavior, HasUniqueId};
+    use defra_agent::Collection;
+
+    fn write_behavior_dir(root: &std::path::Path, handle: &str, behavior_id: &str) {
+        let dir = root.join("agent-behaviors").join(handle);
+        fs::create_dir_all(&dir).unwrap();
+        let body = serde_json::json!({
+            "behavior_id": behavior_id,
+            "agent_did": "did:key:example",
+            "enabled": true,
+        });
+        fs::write(dir.join("object.json"), serde_json::to_vec_pretty(&body).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn loads_one_document_per_subdir() {
+        let tmp = tempdir().unwrap();
+        write_behavior_dir(tmp.path(), "default", "default");
+        write_behavior_dir(tmp.path(), "other", "other");
+
+        let mut errors = Vec::new();
+        let result: Vec<DesiredAgentBehavior> =
+            load_per_doc_collection(tmp.path(), Collection::AgentBehavior, &mut errors);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert_eq!(result.len(), 2);
+        let ids: Vec<&str> = result.iter().map(DesiredAgentBehavior::unique_id).collect();
+        assert!(ids.contains(&"default") && ids.contains(&"other"));
+    }
+
+    #[test]
+    fn missing_dir_is_empty_not_error() {
+        let tmp = tempdir().unwrap();
+        let mut errors = Vec::new();
+        let result: Vec<DesiredAgentBehavior> =
+            load_per_doc_collection(tmp.path(), Collection::AgentBehavior, &mut errors);
+        assert!(errors.is_empty());
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn missing_object_json_is_error() {
+        let tmp = tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("agent-behaviors").join("default")).unwrap();
+        let mut errors = Vec::new();
+        let _: Vec<DesiredAgentBehavior> =
+            load_per_doc_collection(tmp.path(), Collection::AgentBehavior, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("is missing object.json"), "got: {:?}", errors);
+    }
+
+    #[test]
+    fn handle_mismatch_is_error() {
+        let tmp = tempdir().unwrap();
+        write_behavior_dir(tmp.path(), "on-disk-name", "id-inside-json");
+        let mut errors = Vec::new();
+        let _: Vec<DesiredAgentBehavior> =
+            load_per_doc_collection(tmp.path(), Collection::AgentBehavior, &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("does not match behavior_id"), "got: {:?}", errors);
+        assert!(errors[0].contains("on-disk-name"));
+        assert!(errors[0].contains("id-inside-json"));
+    }
+
+    #[test]
+    fn duplicate_unique_id_is_error() {
+        let tmp = tempdir().unwrap();
+        write_behavior_dir(tmp.path(), "alpha", "shared");
+        write_behavior_dir(tmp.path(), "beta", "shared");
+        let mut errors = Vec::new();
+        let _: Vec<DesiredAgentBehavior> =
+            load_per_doc_collection(tmp.path(), Collection::AgentBehavior, &mut errors);
+        assert!(
+            errors.iter().any(|e| e.contains("duplicate behavior_id 'shared'")),
+            "got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn unknown_sibling_files_are_ignored() {
+        let tmp = tempdir().unwrap();
+        write_behavior_dir(tmp.path(), "default", "default");
+        fs::write(
+            tmp.path().join("agent-behaviors").join("default").join("README.md"),
+            "notes",
+        )
+        .unwrap();
+        fs::write(
+            tmp.path().join("agent-behaviors").join("default").join(".DS_Store"),
+            "",
+        )
+        .unwrap();
+        let mut errors = Vec::new();
+        let result: Vec<DesiredAgentBehavior> =
+            load_per_doc_collection(tmp.path(), Collection::AgentBehavior, &mut errors);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn non_directory_collection_path_is_error() {
+        let tmp = tempdir().unwrap();
+        fs::write(tmp.path().join("agent-behaviors"), "not a dir").unwrap();
+        let mut errors = Vec::new();
+        let _: Vec<DesiredAgentBehavior> =
+            load_per_doc_collection(tmp.path(), Collection::AgentBehavior, &mut errors);
+        assert!(
+            errors.iter().any(|e| e.contains("is not a directory")),
+            "got: {:?}",
+            errors
+        );
+    }
+}
