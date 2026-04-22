@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
@@ -721,7 +721,23 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
     let fired = fired_schedule.expect("Schedule.last_status never became \"fired\"");
     assert_eq!(fired.last_status.as_deref(), Some("fired"));
     assert_eq!(fired.fire_count, Some(1));
-    assert_eq!(fired.next_run_at.as_deref(), Some(expected_next_run_at_fired.as_str()));
+    // Compare as parsed DateTimes truncated to second precision rather
+    // than raw RFC3339 strings. Chrono's default `to_rfc3339()` emits
+    // microsecond precision with a `+00:00` offset; DefraDB persists and
+    // the runtime writeback normalizes to `Z` with second precision so
+    // the DateTime scalar round-trips cleanly. The parse+truncate dance
+    // makes the assertion robust to both axes of textual drift while
+    // still proving the instant advanced by exactly one interval.
+    let fired_next = fired
+        .next_run_at
+        .as_deref()
+        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&Utc).timestamp());
+    let expected_next_fired = DateTime::parse_from_rfc3339(&expected_next_run_at_fired)
+        .unwrap()
+        .with_timezone(&Utc)
+        .timestamp();
+    assert_eq!(fired_next, Some(expected_next_fired));
     assert!(
         fired.last_attempt_at.is_some(),
         "last_attempt_at should be set after a fire"
@@ -736,14 +752,32 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
     // Rewind next_run_at into the past again so the source will yield another
     // intent on the next tick. The new intent's on_result snapshot should
     // advance relative to the *new* next_run_at we just persisted.
-    let rewound_next_run_at = (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339();
+    //
+    // Use `Z`/second-precision form so the written value matches what the
+    // runtime writeback produced. DefraDB's update path re-validates every
+    // existing DateTime field against the schema on every partial update,
+    // and rejects the whole mutation when any existing DateTime differs
+    // from its canonical form (see `schedule_conformance.rs` for the same
+    // quirk). We restate `last_attempt_at` using its post-writeback value
+    // so this rewind mutation passes that revalidation.
+    let rewound_next_run_at =
+        (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
     let escaped_schedule_id = escape_graphql_string("sched-1");
     let escaped_rewound = escape_graphql_string(&rewound_next_run_at);
+    let preserved_last_attempt = fired
+        .last_attempt_at
+        .as_deref()
+        .expect("last_attempt_at must be set after the fired writeback")
+        .to_string();
+    let escaped_preserved_last_attempt = escape_graphql_string(&preserved_last_attempt);
     let mutation = format!(
         r#"mutation {{
             update_Schedule(
                 filter: {{ schedule_id: {{ _eq: "{escaped_schedule_id}" }} }},
-                input: {{ next_run_at: "{escaped_rewound}" }}
+                input: {{
+                    next_run_at: "{escaped_rewound}",
+                    last_attempt_at: "{escaped_preserved_last_attempt}"
+                }}
             ) {{ _docID }}
         }}"#
     );
@@ -780,10 +814,19 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
     assert_eq!(skipped.last_status.as_deref(), Some("skipped"));
     // fire_count MUST NOT advance on skip.
     assert_eq!(skipped.fire_count, Some(1));
-    assert_eq!(
-        skipped.next_run_at.as_deref(),
-        Some(expected_next_run_at_skipped.as_str())
-    );
+    // See the fired-case comment above: parse+truncate both sides so
+    // offset-suffix (`Z` vs `+00:00`) and subsecond-precision drift don't
+    // flake the test.
+    let skipped_next = skipped
+        .next_run_at
+        .as_deref()
+        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&Utc).timestamp());
+    let expected_next_skipped = DateTime::parse_from_rfc3339(&expected_next_run_at_skipped)
+        .unwrap()
+        .with_timezone(&Utc)
+        .timestamp();
+    assert_eq!(skipped_next, Some(expected_next_skipped));
     // Apply-owned fields still intact.
     assert_eq!(skipped.interval_secs, Some(60));
     assert!(skipped.enabled);

@@ -10,7 +10,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -122,7 +122,15 @@ impl TriggerSource for ScheduleSource {
                     }
 
                     // Due. Build and return a FireIntent for this schedule.
-                    let fired_at = now.to_rfc3339();
+                    // Normalize RFC3339 output to `Z`-suffix with second
+                    // precision so the strings we write back round-trip
+                    // cleanly through DefraDB's DateTime scalar. The default
+                    // `to_rfc3339()` emits microsecond precision with a
+                    // `+00:00` offset, which DefraDB's schema validator
+                    // round-trips inconsistently across subsequent updates.
+                    // This matches the `normalize_optional_rfc3339` helper
+                    // already used elsewhere in the codebase.
+                    let fired_at = now.to_rfc3339_opts(SecondsFormat::Secs, true);
                     let event_vars = serde_json::json!({
                         "fired_at": fired_at,
                         "trigger_id": schedule_id,
@@ -136,8 +144,9 @@ impl TriggerSource for ScheduleSource {
                     // below, off the engine's dispatch path.
                     let advanced_next_run_at =
                         parsed + ChronoDuration::seconds(resolved.interval_secs);
-                    let advanced_next_run_at_str = advanced_next_run_at.to_rfc3339();
-                    let last_attempt_at = now.to_rfc3339();
+                    let advanced_next_run_at_str =
+                        advanced_next_run_at.to_rfc3339_opts(SecondsFormat::Secs, true);
+                    let last_attempt_at = now.to_rfc3339_opts(SecondsFormat::Secs, true);
 
                     // Values captured for the result-writeback closure. The
                     // callback is synchronous (`FnOnce(FireResult)`), so it
