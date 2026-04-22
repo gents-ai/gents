@@ -352,6 +352,35 @@ impl DesiredFields for DesiredSchedule {
     }
 }
 
+/// Trait implemented by `Desired*` structs that live in a per-document
+/// directory form. Used by the loader to cross-check directory names
+/// against the unique-id field inside `object.json`.
+pub(crate) trait HasUniqueId {
+    fn unique_id(&self) -> &str;
+}
+
+impl HasUniqueId for DesiredAgentBehavior {
+    fn unique_id(&self) -> &str { &self.behavior_id }
+}
+impl HasUniqueId for DesiredToolSelection {
+    fn unique_id(&self) -> &str { &self.selection_id }
+}
+impl HasUniqueId for DesiredInferenceBackend {
+    fn unique_id(&self) -> &str { &self.backend_id }
+}
+impl HasUniqueId for DesiredInferenceProfile {
+    fn unique_id(&self) -> &str { &self.profile_id }
+}
+impl HasUniqueId for DesiredToolServiceRegistry {
+    fn unique_id(&self) -> &str { &self.service_id }
+}
+impl HasUniqueId for DesiredTask {
+    fn unique_id(&self) -> &str { &self.task_id }
+}
+impl HasUniqueId for DesiredSchedule {
+    fn unique_id(&self) -> &str { &self.schedule_id }
+}
+
 #[cfg(test)]
 mod desired_fields_tests {
     use super::*;

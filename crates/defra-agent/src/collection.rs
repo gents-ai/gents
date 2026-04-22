@@ -35,27 +35,25 @@ impl Collection {
         Collection::Schedule,
     ];
 
-    /// Manifest file name on disk for the single-file form.
-    pub fn file_name(self) -> &'static str {
+    /// Top-level file name, only for collections that don't use a directory form.
+    pub fn file_name(self) -> Option<&'static str> {
         match self {
-            Collection::AgentPrincipal => "agent-principal.json",
-            Collection::AgentBehavior => "agent-behaviors.json",
-            Collection::ToolSelection => "tool-selections.json",
-            Collection::InferenceBackend => "inference-backends.json",
-            Collection::InferenceProfile => "inference-profiles.json",
-            Collection::ToolServiceRegistry => "tool-services.json",
-            Collection::Task => "tasks.json",
-            Collection::Schedule => "schedules.json",
+            Collection::AgentPrincipal => Some("agent-principal.json"),
+            _ => None,
         }
     }
 
-    /// Manifest directory name (for collections that support a per-doc dir form).
+    /// Directory name for the per-doc subdirectory form.
     pub fn dir_name(self) -> Option<&'static str> {
         match self {
+            Collection::AgentPrincipal => None,
+            Collection::AgentBehavior => Some("agent-behaviors"),
+            Collection::ToolSelection => Some("tool-selections"),
+            Collection::InferenceBackend => Some("inference-backends"),
+            Collection::InferenceProfile => Some("inference-profiles"),
             Collection::ToolServiceRegistry => Some("tool-services"),
             Collection::Task => Some("tasks"),
             Collection::Schedule => Some("schedules"),
-            _ => None,
         }
     }
 
@@ -130,8 +128,11 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn all_collections_have_distinct_file_names() {
-        let names: BTreeSet<&str> = Collection::ALL.iter().map(|c| c.file_name()).collect();
+    fn all_collections_have_distinct_file_or_dir_names() {
+        let names: BTreeSet<&str> = Collection::ALL
+            .iter()
+            .map(|c| c.file_name().or(c.dir_name()).expect("every variant has one"))
+            .collect();
         assert_eq!(names.len(), Collection::ALL.len());
     }
 
@@ -194,6 +195,18 @@ mod tests {
                 variant.graphql_type(),
                 *expected_type,
                 "Collection::{variant:?}.graphql_type() drifted from Lean parity contract"
+            );
+        }
+    }
+
+    #[test]
+    fn exactly_one_of_file_or_dir_name() {
+        for variant in Collection::ALL {
+            let has_file = variant.file_name().is_some();
+            let has_dir = variant.dir_name().is_some();
+            assert!(
+                has_file ^ has_dir,
+                "Collection::{variant:?} must return Some from exactly one of file_name()/dir_name()"
             );
         }
     }

@@ -71,33 +71,45 @@ pub(crate) fn load_manifest_root(
 
     let principal = load_required_json::<DesiredAgentPrincipal>(
         root,
-        Collection::AgentPrincipal.file_name(),
+        Collection::AgentPrincipal
+            .file_name()
+            .expect("shimmed in Task 1, rewritten in Task 4"),
         &mut errors,
     );
     let behaviors = load_required_json::<Vec<DesiredAgentBehavior>>(
         root,
-        Collection::AgentBehavior.file_name(),
+        Collection::AgentBehavior
+            .file_name()
+            .expect("shimmed in Task 1, rewritten in Task 4"),
         &mut errors,
     );
     let tool_selections = load_required_json::<Vec<DesiredToolSelection>>(
         root,
-        Collection::ToolSelection.file_name(),
+        Collection::ToolSelection
+            .file_name()
+            .expect("shimmed in Task 1, rewritten in Task 4"),
         &mut errors,
     );
     let backends = load_required_json::<Vec<DesiredInferenceBackend>>(
         root,
-        Collection::InferenceBackend.file_name(),
+        Collection::InferenceBackend
+            .file_name()
+            .expect("shimmed in Task 1, rewritten in Task 4"),
         &mut errors,
     );
     let inference_profiles = load_optional_json::<Vec<DesiredInferenceProfile>>(
         root,
-        Collection::InferenceProfile.file_name(),
+        Collection::InferenceProfile
+            .file_name()
+            .expect("shimmed in Task 1, rewritten in Task 4"),
         &mut errors,
     )
     .unwrap_or_default();
     let tool_service_registries = load_optional_json_collection::<DesiredToolServiceRegistry>(
         root,
-        Collection::ToolServiceRegistry.file_name(),
+        Collection::ToolServiceRegistry
+            .file_name()
+            .expect("shimmed in Task 1, rewritten in Task 4"),
         Collection::ToolServiceRegistry
             .dir_name()
             .expect("tool-services has a dir form"),
@@ -106,14 +118,18 @@ pub(crate) fn load_manifest_root(
     .unwrap_or_default();
     let tasks = load_optional_json_collection::<DesiredTask>(
         root,
-        Collection::Task.file_name(),
+        Collection::Task
+            .file_name()
+            .expect("shimmed in Task 1, rewritten in Task 4"),
         Collection::Task.dir_name().expect("tasks has a dir form"),
         &mut errors,
     )
     .unwrap_or_default();
     let schedules = load_optional_json_collection::<DesiredSchedule>(
         root,
-        Collection::Schedule.file_name(),
+        Collection::Schedule
+            .file_name()
+            .expect("shimmed in Task 1, rewritten in Task 4"),
         Collection::Schedule
             .dir_name()
             .expect("schedules has a dir form"),
