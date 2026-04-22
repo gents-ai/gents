@@ -323,3 +323,36 @@ where
 
     Ok(Some(values))
 }
+
+/// Hydrate a sidecar-eligible string field. If `value` is `Some(s)` where
+/// `s` starts with `./`, treat the rest as a path relative to `json_dir`,
+/// read the file as UTF-8, and replace `*value` with the file contents.
+/// Any other case (None, absolute path, `../` prefix, literal string) is
+/// a no-op.
+pub(crate) fn hydrate_sidecar(
+    value: &mut Option<String>,
+    json_dir: &Path,
+) -> Result<(), String> {
+    let Some(current) = value.as_deref() else { return Ok(()) };
+    if !current.starts_with("./") {
+        return Ok(());
+    }
+    let rel = &current[2..];
+    let sidecar_path = json_dir.join(rel);
+    let bytes = fs::read(&sidecar_path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            format!(
+                "sidecar path does not resolve: {} (referenced from {})",
+                sidecar_path.display(),
+                json_dir.display()
+            )
+        } else {
+            format!("reading {} failed: {error}", sidecar_path.display())
+        }
+    })?;
+    let body = String::from_utf8(bytes).map_err(|_| {
+        format!("sidecar is not valid UTF-8: {}", sidecar_path.display())
+    })?;
+    *value = Some(body);
+    Ok(())
+}

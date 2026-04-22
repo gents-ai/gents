@@ -742,3 +742,84 @@ fn export_bundle_round_trip_preserves_tasks_and_schedules() {
     expected_schedules.sort_by(|left, right| left.schedule_id.cmp(&right.schedule_id));
     assert_eq!(round_tripped.schedules, expected_schedules);
 }
+
+#[test]
+fn hydrate_sidecar_replaces_dot_slash_path_with_file_contents() {
+    use tempfile::tempdir;
+    use super::load::hydrate_sidecar;
+
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("prompt.md"), "You are a helpful agent.").unwrap();
+
+    let mut value = Some("./prompt.md".to_string());
+    hydrate_sidecar(&mut value, dir.path()).unwrap();
+    assert_eq!(value.as_deref(), Some("You are a helpful agent."));
+}
+
+#[test]
+fn hydrate_sidecar_leaves_literal_string_untouched() {
+    use tempfile::tempdir;
+    use super::load::hydrate_sidecar;
+
+    let dir = tempdir().unwrap();
+    let mut value = Some("You are a helpful agent.".to_string());
+    hydrate_sidecar(&mut value, dir.path()).unwrap();
+    assert_eq!(value.as_deref(), Some("You are a helpful agent."));
+}
+
+#[test]
+fn hydrate_sidecar_ignores_absolute_path() {
+    use tempfile::tempdir;
+    use super::load::hydrate_sidecar;
+
+    let dir = tempdir().unwrap();
+    let mut value = Some("/etc/hosts".to_string());
+    hydrate_sidecar(&mut value, dir.path()).unwrap();
+    assert_eq!(value.as_deref(), Some("/etc/hosts"));
+}
+
+#[test]
+fn hydrate_sidecar_ignores_parent_relative_path() {
+    use tempfile::tempdir;
+    use super::load::hydrate_sidecar;
+
+    let dir = tempdir().unwrap();
+    let mut value = Some("../elsewhere.md".to_string());
+    hydrate_sidecar(&mut value, dir.path()).unwrap();
+    assert_eq!(value.as_deref(), Some("../elsewhere.md"));
+}
+
+#[test]
+fn hydrate_sidecar_errors_when_file_missing() {
+    use tempfile::tempdir;
+    use super::load::hydrate_sidecar;
+
+    let dir = tempdir().unwrap();
+    let mut value = Some("./missing.md".to_string());
+    let err = hydrate_sidecar(&mut value, dir.path()).unwrap_err();
+    assert!(err.contains("sidecar path does not resolve"), "got: {err}");
+    assert!(err.contains("missing.md"), "got: {err}");
+}
+
+#[test]
+fn hydrate_sidecar_errors_on_non_utf8() {
+    use tempfile::tempdir;
+    use super::load::hydrate_sidecar;
+
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("bad.md"), &[0xff, 0xfe, 0xfd]).unwrap();
+    let mut value = Some("./bad.md".to_string());
+    let err = hydrate_sidecar(&mut value, dir.path()).unwrap_err();
+    assert!(err.contains("not valid UTF-8"), "got: {err}");
+}
+
+#[test]
+fn hydrate_sidecar_is_noop_on_none() {
+    use tempfile::tempdir;
+    use super::load::hydrate_sidecar;
+
+    let dir = tempdir().unwrap();
+    let mut value: Option<String> = None;
+    hydrate_sidecar(&mut value, dir.path()).unwrap();
+    assert!(value.is_none());
+}
