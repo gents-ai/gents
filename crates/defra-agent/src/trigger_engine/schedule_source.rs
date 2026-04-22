@@ -78,8 +78,13 @@ impl TriggerSource for ScheduleSource {
                     _ = self.cancel.cancelled() => return None,
                 }
 
-                // Step 2: snapshot-read the active schedules and scan for
-                // the first one whose DB-resident `next_run_at` has elapsed.
+                // Step 2: snapshot-read the active schedules. For each
+                // active schedule, if `next_run_at` is null the schedule was
+                // just created — apply-path writers (CLI, desktop) only
+                // touch apply-owned fields, so the runtime owns the first
+                // write of this runtime-owned field. Seed with `now` so the
+                // schedule fires on this same tick rather than sitting inert
+                // forever.
                 let snapshot = self.snapshot_rx.borrow().clone();
                 let now = Utc::now();
 
@@ -88,11 +93,35 @@ impl TriggerSource for ScheduleSource {
                     {
                         Ok(Some(s)) => s,
                         Ok(None) => {
-                            // No persisted next_run_at: treat as
-                            // not-yet-scheduled and skip. The apply/
-                            // reconcile path will seed a next_run_at when
-                            // the schedule is first created.
-                            continue;
+                            // Seed `next_run_at = now` on first-seen. The
+                            // apply/reconcile path never writes runtime-owned
+                            // fields, so this value starts null until the
+                            // engine initializes it here. Treat as due on
+                            // this very tick so first-fire latency stays
+                            // below one full interval.
+                            let seeded = now.to_rfc3339_opts(SecondsFormat::Secs, true);
+                            if let Err(e) = update_schedule_runtime_fields(
+                                &self.node,
+                                schedule_id,
+                                ScheduleRuntimeUpdate {
+                                    next_run_at: Some(seeded.clone()),
+                                    last_attempt_at: None,
+                                    last_status: None,
+                                    last_error: None,
+                                    fire_count_delta: None,
+                                },
+                            )
+                            .await
+                            {
+                                tracing::warn!(
+                                    schedule_id = %schedule_id,
+                                    error = %e,
+                                    "failed to seed Schedule.next_run_at on first-seen; \
+                                     will retry next tick"
+                                );
+                                continue;
+                            }
+                            seeded
                         }
                         Err(e) => {
                             tracing::warn!(

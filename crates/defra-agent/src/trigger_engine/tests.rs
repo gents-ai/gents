@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use super::*;
 use crate::compaction::CompactionStrategy;
 use crate::config::{BehaviorConfig, SamplingConfig};
-use crate::document_config::list_schedule_records;
+use crate::document_config::{list_schedule_records, load_schedule_next_run_at};
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
 use crate::identity::SimpleIdentity;
@@ -1048,6 +1048,103 @@ async fn trigger_engine_materializes_agent_request_for_due_schedule_e2e() {
         row.get("content").and_then(|v| v.as_str()),
         Some("integration fire"),
         "rendered prompt template should land in AgentRequest.content: {row}"
+    );
+}
+
+/// Regression for Finding 2: Schedules created with a null `next_run_at`
+/// (the normal case for apply-path/desktop writes, which write only
+/// apply-owned fields) must still fire. Before the fix, `ScheduleSource`
+/// skipped null-`next_run_at` schedules forever, so tasks configured via
+/// the CLI or desktop never ran.
+///
+/// Expected behavior: the runtime seeds `next_run_at = now` on the
+/// first-seen tick for the schedule, treats the same tick as due, and
+/// yields a `FireIntent` within a bounded wait (a couple of ticks).
+#[tokio::test]
+async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    // Create a Schedule doc WITHOUT next_run_at — mirrors what the
+    // CLI/desktop apply writers do (they never touch runtime-owned
+    // fields). Before Finding 2 was fixed, this schedule would sit
+    // inert forever because ScheduleSource treated null next_run_at as
+    // "not due, skip."
+    let escaped_schedule_id = escape_graphql_string("sched-null");
+    let escaped_task_id = escape_graphql_string("task-null");
+    let mutation = format!(
+        r#"mutation {{
+            create_Schedule(input: {{
+                schedule_id: "{escaped_schedule_id}",
+                task_id: "{escaped_task_id}",
+                interval_secs: 60,
+                enabled: true,
+                concurrency: "serial"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create Schedule without next_run_at failed: {:?}",
+        response.errors
+    );
+
+    // Sanity check: the doc really has a null next_run_at right now.
+    let precondition = load_schedule_next_run_at(node.as_ref(), "sched-null")
+        .await
+        .unwrap();
+    assert!(
+        precondition.is_none(),
+        "precondition: created Schedule should have null next_run_at, got {precondition:?}"
+    );
+
+    let task = ResolvedTask {
+        task_id: "task-null".to_string(),
+        behavior_id: "general".to_string(),
+        prompt_template: "hi".to_string(),
+        output_schema_ref: None,
+    };
+    let snapshot = snapshot_with_schedules(HashMap::from([(
+        "sched-null".to_string(),
+        resolved_schedule("sched-null", task),
+    )]));
+    let (_tx, rx) = watch::channel(snapshot);
+    let cancel = CancellationToken::new();
+    let mut source = ScheduleSource::new(rx, node.clone(), cancel.clone())
+        .with_tick_every(Duration::from_millis(50));
+
+    // With the fix: first tick seeds next_run_at = now, treats as due,
+    // yields intent. Without the fix: null is treated as "not due" on
+    // every tick and we'd time out.
+    let started = Instant::now();
+    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect(
+            "next_fire did not yield a FireIntent within 2s for a schedule with null \
+             next_run_at; the engine must seed next_run_at on first-seen (Finding 2)",
+        )
+        .expect("next_fire returned None for a schedule with null next_run_at");
+    let elapsed = started.elapsed();
+
+    assert_eq!(intent.trigger_id.as_deref(), Some("sched-null"));
+    assert_eq!(intent.trigger_kind, TriggerKind::Schedule);
+    // Upper bound is loose: we only need "much less than the 60s
+    // interval_secs" to prove first-tick seeding, not exact latency.
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "first-tick fire should land within a couple of ticks, took {elapsed:?}"
+    );
+
+    // The DB should now carry a non-null next_run_at — either the raw
+    // seed (if on_result hasn't run) or the advanced value (if it has).
+    // Either proves seeding happened.
+    let after_seed = load_schedule_next_run_at(node.as_ref(), "sched-null")
+        .await
+        .unwrap();
+    assert!(
+        after_seed.is_some(),
+        "Schedule.next_run_at should no longer be null after first-seen seeding"
     );
 }
 
