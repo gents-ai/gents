@@ -630,14 +630,19 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
     let task_path = root.join("tasks").join("greet-signup.json");
     let trigger_path = root.join("event_triggers").join("on-signup-created.json");
 
+    // Use InferenceBackend as the source collection — it's registered on
+    // every defra-agent server, so the apply-time live validation (filter
+    // syntax probe + `doc.*` field resolution) can succeed against a
+    // known-good schema. `name` and `enabled` are real fields on
+    // InferenceBackend.
     write_json_file(
         &task_path,
         &serde_json::json!({
             "task_id": task_id.clone(),
             "name": "Greet New Signup",
-            "description": "Send a personalized welcome to a new customer.",
+            "description": "Send a personalized welcome to a new backend signup.",
             "behavior_id": behavior_id.clone(),
-            "prompt_template": "Greet new customer {{ doc.name }}.",
+            "prompt_template": "Greet new backend {{ doc.name }}.",
             "enabled": true,
         }),
     )?;
@@ -646,9 +651,9 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
         &serde_json::json!({
             "trigger_id": trigger_id.clone(),
             "task_id": task_id.clone(),
-            "source_collection": "CustomerSignup",
+            "source_collection": "InferenceBackend",
             "event_kind": "created",
-            "filter": "doc.enabled == true",
+            "filter": "{ enabled: { _eq: true } }",
             "enabled": true,
             "concurrency": "serial",
         }),
@@ -749,7 +754,7 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
         trigger_row
             .get("source_collection")
             .and_then(Value::as_str),
-        Some("CustomerSignup")
+        Some("InferenceBackend")
     );
     assert_eq!(
         trigger_row.get("event_kind").and_then(Value::as_str),
@@ -757,7 +762,7 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
     );
     assert_eq!(
         trigger_row.get("filter").and_then(Value::as_str),
-        Some("doc.enabled == true")
+        Some("{ enabled: { _eq: true } }")
     );
     assert_eq!(
         trigger_row.get("enabled").and_then(Value::as_bool),
@@ -896,7 +901,12 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
     // --- Edit the manifest; apply should reconcile apply-owned fields
     //     while leaving runtime-owned fields untouched ---
     let mut trigger_manifest = read_json_file(&trigger_path)?;
-    trigger_manifest["filter"] = Value::String("doc.enabled == true && doc.tier == \"pro\"".to_string());
+    // Stay within a valid GraphQL filter literal so the apply-time live
+    // validation still passes. `provider_kind` is a real field on
+    // InferenceBackend.
+    trigger_manifest["filter"] = Value::String(
+        "{ enabled: { _eq: true }, provider_kind: { _eq: \"openai\" } }".to_string(),
+    );
     trigger_manifest["enabled"] = Value::from(false);
     trigger_manifest["concurrency"] = Value::String("latest_only".to_string());
     write_json_file(&trigger_path, &trigger_manifest)?;
@@ -935,7 +945,7 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
     let trigger_after_update_row = first_graphql_row(&trigger_after_update, "EventTrigger")?;
     assert_eq!(
         trigger_after_update_row.get("filter").and_then(Value::as_str),
-        Some("doc.enabled == true && doc.tier == \"pro\""),
+        Some("{ enabled: { _eq: true }, provider_kind: { _eq: \"openai\" } }"),
         "apply must update filter"
     );
     assert_eq!(
@@ -974,6 +984,213 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
         "runtime-owned last_fired_source_doc_id must survive apply-side update"
     );
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Apply-time EventTrigger live-schema validation (Task 25 / PR 2).
+//
+// The three tests below cover the LIVE half of EventTrigger apply-time
+// validation, which probes the running node's GraphQL schema:
+//   * malformed `filter` syntax is caught by a `limit:1` probe query;
+//   * `{{ doc.<field> }}` references in the Task's `prompt_template` are
+//     checked against the source collection's introspected field list;
+//   * valid filter + valid `doc.*` paths apply cleanly.
+//
+// All three use `InferenceBackend` as the source collection — it is one of
+// the runtime-registered agent schemas on any defra-agent server, so the
+// probe and introspection queries hit a known-good type without requiring
+// an external schema-registration path.
+// ---------------------------------------------------------------------------
+
+/// Seed a manifest root into `home_dir` and return paths + ids for the
+/// EventTrigger + Task the live-validation tests below manipulate.
+struct LiveValidationFixture {
+    home_dir: std::path::PathBuf,
+    root: std::path::PathBuf,
+    task_id: String,
+    trigger_id: String,
+    task_path: std::path::PathBuf,
+    trigger_path: std::path::PathBuf,
+    // Keep the server process alive for the duration of the test.
+    _serve: ServeProcess,
+    // Holding the mock endpoint alive keeps the model reachable during init.
+    _mock_endpoint: MockModelEndpoint,
+    // Hold the tempdir so the filesystem root survives until drop.
+    _tempdir: tempfile::TempDir,
+}
+
+async fn prepare_live_validation_fixture(
+    suffix: &str,
+) -> Result<LiveValidationFixture> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("default");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-live-validate-model-{suffix}");
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let agent_name = format!("cli-live-validate-{suffix}");
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    let exported = run_cli_json(&home_dir, &["config", "export"])?;
+    write_manifest_root_from_export(&root, &exported)?;
+
+    let behavior_id = exported
+        .pointer("/agent_principal/default_behavior_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("exported bundle missing default behavior id"))?
+        .to_string();
+    let task_id = format!("greet-{suffix}");
+    let trigger_id = format!("on-created-{suffix}");
+    let task_path = root.join("tasks").join("greet.json");
+    let trigger_path = root.join("event_triggers").join("on-created.json");
+
+    // Seed the Task + Trigger with a VALID baseline. Individual tests
+    // overwrite fields to exercise specific failure modes.
+    write_json_file(
+        &task_path,
+        &serde_json::json!({
+            "task_id": task_id.clone(),
+            "name": "Greet",
+            "description": "Greet a new signup.",
+            "behavior_id": behavior_id.clone(),
+            "prompt_template": "Greet new backend {{ doc.name }}.",
+            "enabled": true,
+        }),
+    )?;
+    write_json_file(
+        &trigger_path,
+        &serde_json::json!({
+            "trigger_id": trigger_id.clone(),
+            "task_id": task_id.clone(),
+            "source_collection": "InferenceBackend",
+            "event_kind": "created",
+            "filter": "{ enabled: { _eq: true } }",
+            "enabled": true,
+            "concurrency": "serial",
+        }),
+    )?;
+
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(
+        &graphql,
+        &format!("did:defra-agent:{agent_name}"),
+        Duration::from_secs(30),
+    )
+    .await?;
+
+    Ok(LiveValidationFixture {
+        home_dir,
+        root,
+        task_id,
+        trigger_id,
+        task_path,
+        trigger_path,
+        _serve: serve,
+        _mock_endpoint: mock_endpoint,
+        _tempdir: tempdir,
+    })
+}
+
+/// Apply-time live validation rejects an EventTrigger whose `filter` is
+/// syntactically broken. The DefraDB filter probe returns a GraphQL error
+/// which we propagate into the apply failure.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_rejects_event_trigger_with_malformed_filter() -> Result<()> {
+    let fx = prepare_live_validation_fixture(&Uuid::new_v4().simple().to_string()).await?;
+
+    // Overwrite trigger with a malformed filter.
+    let mut trigger_manifest = read_json_file(&fx.trigger_path)?;
+    trigger_manifest["filter"] = Value::String("{ not_a_field: }".to_string());
+    write_json_file(&fx.trigger_path, &trigger_manifest)?;
+
+    let root_str = fx
+        .root
+        .to_str()
+        .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
+    let stderr = run_cli_failure_stderr(&fx.home_dir, &["config", "apply", "--root", root_str])?;
+    assert!(
+        stderr.contains(&format!("event_trigger {} filter syntax error", fx.trigger_id)),
+        "expected filter syntax error for trigger {} in stderr, got: {stderr}",
+        fx.trigger_id,
+    );
+    Ok(())
+}
+
+/// Apply-time live validation rejects a Task `prompt_template` whose
+/// `{{ doc.* }}` references a field that does not exist on the configured
+/// source collection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_rejects_event_trigger_template_referencing_unknown_doc_field() -> Result<()> {
+    let fx = prepare_live_validation_fixture(&Uuid::new_v4().simple().to_string()).await?;
+
+    // Rewrite the Task prompt to reference a doc field that does NOT exist
+    // on InferenceBackend. Keep the trigger's filter valid so the failure
+    // is unambiguously the template check.
+    let mut task_manifest = read_json_file(&fx.task_path)?;
+    task_manifest["prompt_template"] =
+        Value::String("Greet {{ doc.nonexistent }}.".to_string());
+    write_json_file(&fx.task_path, &task_manifest)?;
+
+    let root_str = fx
+        .root
+        .to_str()
+        .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
+    let stderr = run_cli_failure_stderr(&fx.home_dir, &["config", "apply", "--root", root_str])?;
+    assert!(
+        stderr.contains(&format!(
+            "event_trigger {} template references doc.nonexistent but InferenceBackend has no such field",
+            fx.trigger_id
+        )),
+        "expected doc.nonexistent rejection for trigger {} in stderr, got: {stderr}",
+        fx.trigger_id,
+    );
+    Ok(())
+}
+
+/// Apply-time live validation accepts an EventTrigger whose filter is
+/// syntactically valid GraphQL and whose `doc.*` references exist on the
+/// source collection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_accepts_event_trigger_with_valid_filter_and_doc_paths() -> Result<()> {
+    let fx = prepare_live_validation_fixture(&Uuid::new_v4().simple().to_string()).await?;
+
+    // The fixture seeds a valid filter (`{ enabled: { _eq: true } }`) and a
+    // valid doc.* reference (`doc.name` is a field on InferenceBackend).
+    let root_str = fx
+        .root
+        .to_str()
+        .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
+    let applied = run_cli_json(&fx.home_dir, &["config", "apply", "--root", root_str])?;
+    assert_eq!(
+        applied.get("status").and_then(Value::as_str),
+        Some("applied")
+    );
+    assert_eq!(applied.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        applied
+            .pointer("/applied/event_triggers")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        applied.pointer("/applied/tasks").and_then(Value::as_u64),
+        Some(1)
+    );
     Ok(())
 }
 
