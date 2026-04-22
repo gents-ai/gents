@@ -2087,3 +2087,20 @@ async fn manual_source_run_task_now_rejects_unknown_task() {
         "expected 'not in the active snapshot' in error, got: {err}"
     );
 }
+
+#[tokio::test]
+async fn manual_source_next_fire_returns_none_after_cancel() {
+    let cancel = CancellationToken::new();
+    let (mut source, _handle) = ManualSource::new(cancel.clone());
+
+    // Cancel immediately.
+    cancel.cancel();
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_millis(200),
+        source.next_fire(),
+    )
+    .await
+    .expect("timed out waiting for cancelled next_fire");
+    assert!(result.is_none());
+}
