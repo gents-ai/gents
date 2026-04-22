@@ -988,6 +988,42 @@ pub(super) mod write_manifest_root {
         // File was not deleted.
         assert!(tmp.path().join("random.txt").exists());
     }
+
+    #[test]
+    fn refuses_to_overwrite_without_force() {
+        let tmp = tempdir().unwrap();
+        fs::write(tmp.path().join("leftover.txt"), "junk").unwrap();
+        let err = write_manifest_root(tmp.path(), &minimal_manifest(), false).unwrap_err();
+        assert!(err.contains("--force"), "got: {err}");
+    }
+
+    #[test]
+    fn force_removes_stray_files_from_previous_export() {
+        let tmp = tempdir().unwrap();
+        // Simulate a previous export: agent-principal.json present (sentinel) plus a
+        // stale behavior directory from a prior run.
+        fs::write(
+            tmp.path().join("agent-principal.json"),
+            b"{\"agent_did\":\"did:key:stale\",\"enabled\":false}",
+        )
+        .unwrap();
+        fs::create_dir_all(tmp.path().join("agent-behaviors").join("old-name")).unwrap();
+        fs::write(
+            tmp.path().join("agent-behaviors/old-name/object.json"),
+            b"{}",
+        )
+        .unwrap();
+        fs::write(tmp.path().join("leftover.txt"), "junk").unwrap();
+
+        write_manifest_root(tmp.path(), &minimal_manifest(), true).unwrap();
+
+        // Leftover is gone.
+        assert!(!tmp.path().join("leftover.txt").exists());
+        // Old behavior dir is gone.
+        assert!(!tmp.path().join("agent-behaviors/old-name").exists());
+        // New content is present.
+        assert!(tmp.path().join("agent-behaviors/default/object.json").is_file());
+    }
 }
 
 mod write_manifest_root_safe_id {
