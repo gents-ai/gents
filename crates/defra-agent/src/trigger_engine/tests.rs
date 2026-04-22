@@ -2184,3 +2184,60 @@ async fn production_materializer_accepts_manual_lineage_end_to_end() {
     );
 }
 
+/// Task 6 pinning: `TriggerEngine::dispatch` must pass `TriggerKind::Manual`
+/// intents through without consulting `active_schedules()` /
+/// `active_event_triggers()` (no enabled-gate rejection for operator
+/// fires), render the prompt template against `args_vars`, and invoke the
+/// materializer exactly once with `(trigger_id = None, trigger_kind =
+/// Manual, rendered = "hello Amy")`.
+#[tokio::test]
+async fn dispatch_manual_intent_renders_with_args_and_materializes() {
+    // Snapshot carries the active task but NO active schedules / event
+    // triggers. A Schedule/Event intent would be gated off here; Manual
+    // must not be.
+    let task = resolved_task_for_test("greet-user", "general", "hello {{ args.name }}");
+    let snapshot = snapshot_with_active_task(task.clone());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = SpyMaterializer::new();
+    let engine = TriggerEngine::new(rx, materializer.clone());
+
+    let intent = FireIntent {
+        trigger_id: None,
+        trigger_kind: TriggerKind::Manual,
+        task,
+        concurrency: ConcurrencyMode::Parallel,
+        event_vars: serde_json::json!({}),
+        doc_vars: None,
+        args_vars: Some(serde_json::json!({"name": "Amy"})),
+        on_result: Box::new(|_| {}),
+    };
+
+    let result = engine.dispatch(intent).await;
+
+    match result {
+        FireResult::Fired { request_id } => assert_eq!(
+            request_id, "req-0",
+            "spy materializer hands back sequentially-numbered ids starting at req-0"
+        ),
+        other => panic!(
+            "expected Fired for Manual intent (bypasses enabled-gate), got {other:?}"
+        ),
+    }
+
+    let calls = materializer.calls();
+    assert_eq!(
+        calls.len(),
+        1,
+        "exactly one materialize call expected for Manual dispatch"
+    );
+    let (trigger_id, kind, rendered) = &calls[0];
+    assert!(
+        trigger_id.is_none(),
+        "Manual intents carry trigger_id = None; got {trigger_id:?}"
+    );
+    assert_eq!(*kind, TriggerKind::Manual);
+    assert_eq!(
+        rendered, "hello Amy",
+        "dispatch must render the `args.name` template against args_vars"
+    );
+}
