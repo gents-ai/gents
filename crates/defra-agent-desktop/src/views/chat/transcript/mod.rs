@@ -12,10 +12,9 @@ use egui_commonmark::CommonMarkCache;
 
 use crate::client::ClientStore;
 use crate::state::ShellState;
+use crate::views::components;
 
-use self::messages::{
-    centered_status_card, message_block, message_label_color, transcript_surface,
-};
+use self::messages::{message_block, message_label_color, transcript_surface};
 use self::modal::show_tool_detail_modal;
 use self::reasoning_cards::{
     latest_reasoning_response, reasoning_block, response_fallback_content,
@@ -35,13 +34,15 @@ pub fn show(
     let palette = crate::theme::palette();
 
     let Some(session_id) = selected_session_id else {
-        transcript_surface(ui, |ui| {
-            centered_status_card(
-                ui,
-                "No Conversation Selected",
-                "Pick a conversation from the sidebar or create a new one to start.",
-            );
-        });
+        ui.add_space(4.0);
+        ui.set_max_width(560.0);
+        components::focus_panel(
+            ui,
+            Some("Chat"),
+            "Start the conversation",
+            "Send a message below and the first conversation will be created automatically.",
+            |_| {},
+        );
         return;
     };
 
@@ -50,13 +51,15 @@ pub fn show(
     let latest_reasoning = latest_reasoning_response(store, session_id);
 
     if transcript.messages.is_empty() && requests.is_empty() {
-        transcript_surface(ui, |ui| {
-            centered_status_card(
-                ui,
-                "Transcript Empty",
-                "This conversation has not produced messages yet. Submitted requests will appear here as soon as they are observed.",
-            );
-        });
+        ui.add_space(4.0);
+        ui.set_max_width(560.0);
+        components::focus_panel(
+            ui,
+            Some("Chat"),
+            "Waiting for the first turn",
+            "Submitted requests and replies will appear here as soon as they are observed.",
+            |_| {},
+        );
         show_tool_detail_modal(ui.ctx(), state, markdown_cache);
         return;
     }
@@ -165,9 +168,6 @@ pub fn show(
                 }
             });
 
-        // Keep the stick-to-bottom flag in sync with where the user ended up
-        // so manual scrolling up stops the auto-jump, and returning to the
-        // bottom resumes it.
         let viewport_bottom = scroll_output.state.offset.y + scroll_output.inner_rect.height();
         let at_bottom = viewport_bottom + 2.0 >= scroll_output.content_size.y;
         state.chat.editor.transcript_stick_to_bottom = at_bottom;

@@ -4,28 +4,41 @@ use crate::audit;
 use crate::state::{Activity, PendingChatAction, PendingShellAction, ShellState};
 use crate::theme::Palette;
 use crate::views;
+use crate::views::components;
 
 use super::ConversationBucket;
 
 pub(super) fn render_select_agent(ui: &mut Ui) {
+    ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.add_space(14.0);
-        views::card(
-            ui,
-            "Select Agent",
-            "Choose a deployment above to load conversations.",
-        );
+        ui.vertical(|ui| {
+            ui.set_width(ui.available_width());
+            components::focus_panel(
+                ui,
+                Some("Chat"),
+                "Select a Deployment",
+                "Choose a deployment from the left to load its conversations and start chatting.",
+                |_| {},
+            );
+        });
     });
 }
 
 pub(super) fn render_empty(ui: &mut Ui) {
+    ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.add_space(14.0);
-        views::card(
-            ui,
-            "No Conversations",
-            "This behavior has no conversations yet. Create the first conversation from the main panel before sending a request.",
-        );
+        ui.vertical(|ui| {
+            ui.set_width(ui.available_width());
+            components::focus_panel(
+                ui,
+                Some("Chat"),
+                "No Conversations Yet",
+                "Send the first message and the conversation will appear here automatically.",
+                |_| {},
+            );
+        });
     });
 }
 
@@ -48,7 +61,7 @@ pub(super) fn render_buckets(
                         format!("{}  {}", entry.meta, entry.timestamp_label)
                     };
                     let selected = selected_session_id == Some(entry.session_id.as_str());
-                    let response = views::side_row(
+                    let response = components::inset_list_item(
                         ui,
                         &entry.title,
                         &meta,

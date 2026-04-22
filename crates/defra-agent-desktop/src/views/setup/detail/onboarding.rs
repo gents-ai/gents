@@ -6,6 +6,7 @@ use crate::client::ClientCore;
 use crate::state::ShellState;
 use crate::theme;
 use crate::views;
+use crate::views::components;
 
 use super::super::forms::{copy_did, render_add_peer_form};
 use super::super::shared::labeled_value;
@@ -31,33 +32,20 @@ pub(super) fn render_first_launch_main(
             "setup",
         );
         ui.add_space(16.0);
-        ui.group(|ui| {
-            ui.set_width(ui.available_width());
-            ui.label(
-                RichText::new(if has_existing_deployments {
-                    "Add Deployment"
-                } else {
-                    "First Launch"
-                })
-                    .family(theme::stencil_family())
-                    .size(20.0)
-                    .color(palette.text_0)
-                    .strong(),
-            );
-            ui.add_space(8.0);
-            ui.label(
-                RichText::new(
-                    if has_existing_deployments {
-                        "The desktop principal is already active. Copy the DID if you need to grant access on another agent, then add another deployment address or ticket here."
-                    } else {
-                        "The embedded node has already generated and persisted a desktop principal. Copy that DID, grant it on a remote agent, then add the first deployment address or ticket here."
-                    },
-                )
-                .size(13.0)
-                .color(palette.text_1)
-                .line_height(Some(18.0)),
-            );
-            ui.add_space(12.0);
+        components::focus_panel(
+            ui,
+            Some("Setup"),
+            if has_existing_deployments {
+                "Add Deployment"
+            } else {
+                "First Launch"
+            },
+            if has_existing_deployments {
+                "The desktop principal is already active. Copy the DID if you need to grant access on another agent, then add another deployment address or ticket here."
+            } else {
+                "The embedded node has already generated and persisted a desktop principal. Copy that DID, grant it on a remote agent, then add the first deployment address or ticket here."
+            },
+            |ui| {
             ui.columns(2, |columns| {
                 columns[0].group(|ui| {
                     ui.set_width(ui.available_width());
@@ -135,6 +123,7 @@ pub(super) fn render_first_launch_main(
                 ui.add_space(10.0);
                 views::card(ui, "Setup Update", message);
             }
-        });
+            },
+        );
     });
 }

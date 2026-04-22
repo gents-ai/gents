@@ -77,6 +77,31 @@ impl ClientCore {
         }
     }
 
+    pub async fn rename_conversation(&self, session_id: &str, title: &str) -> Result<()> {
+        let snapshot = self.store.snapshot();
+        match mutations::rename_conversation(
+            self.node.as_ref(),
+            snapshot.as_ref(),
+            session_id,
+            title,
+        )
+        .await
+        {
+            Ok(()) => {
+                self.refresh_store().await?;
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "defra_agent_desktop::writes",
+                    action = "chat_rename",
+                    row_id = %session_id,
+                    "desktop write saved"
+                );
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("rename conversation", error)),
+        }
+    }
+
     pub async fn retry_request(&self, parent: &AgentRequestRow) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
         match mutations::retry_request(self.node.as_ref(), snapshot.as_ref(), parent).await {

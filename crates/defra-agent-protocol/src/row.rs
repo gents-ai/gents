@@ -235,6 +235,10 @@ pub struct AgentResponseRow {
     #[serde(default)]
     pub progress_seq: Option<i64>,
     #[serde(default)]
+    pub materialized_message_sequence: Option<i64>,
+    #[serde(default)]
+    pub materialized_at: Option<String>,
+    #[serde(default)]
     pub created_at: Option<String>,
     #[serde(default)]
     pub completed_at: Option<String>,

@@ -1,15 +1,13 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::process::Command as ProcessCommand;
 
 use clap::{Parser, Subcommand};
-use defra_agent_desktop::app::DesktopApp;
 use defra_agent_desktop::client::DesktopPaths;
 use defra_agent_desktop::local_runtime::{
     dangerously_overwrite_desktop_home, default_agent_home, init_standard_local_runtime,
     render_human_summary, reset_desktop_runtime_state, DesktopInitOptions,
 };
 use defra_agent_desktop::telemetry::{global_log_layer, with_default_transport_noise_filters};
-use eframe::egui;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 #[derive(Debug, Parser)]
@@ -98,28 +96,62 @@ fn run_command(command: Command) -> anyhow::Result<()> {
 }
 
 fn launch_desktop() -> anyhow::Result<()> {
-    let runtime = Arc::new(
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .thread_name("desktop-client")
-            .build()
-            .map_err(|error| anyhow::anyhow!(error))?,
-    );
+    let tauri_binary = resolve_tauri_binary()?;
+    tracing::info!(path = %tauri_binary.display(), "launching tauri desktop shell");
+    ProcessCommand::new(&tauri_binary)
+        .spawn()
+        .map_err(|error| anyhow::anyhow!("failed to launch {}: {error}", tauri_binary.display()))?;
+    Ok(())
+}
 
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("defra-agent desktop")
-            .with_inner_size([1480.0, 920.0])
-            .with_min_inner_size([1180.0, 720.0]),
-        ..Default::default()
-    };
+fn resolve_tauri_binary() -> anyhow::Result<PathBuf> {
+    if let Ok(explicit) = std::env::var("DEFRA_AGENT_DESKTOP_TAURI_BIN") {
+        let explicit = PathBuf::from(explicit);
+        if explicit.is_file() {
+            return Ok(explicit);
+        }
+    }
 
-    eframe::run_native(
-        "defra-agent desktop",
-        options,
-        Box::new(move |cc| Ok(Box::new(DesktopApp::new(cc, Arc::clone(&runtime))))),
-    )
-    .map_err(|error| anyhow::anyhow!("{error}"))
+    let current_exe = std::env::current_exe()?;
+    let sibling = current_exe
+        .parent()
+        .map(|dir| dir.join(tauri_binary_name()))
+        .ok_or_else(|| anyhow::anyhow!("failed to resolve launcher directory"))?;
+    if sibling.is_file() {
+        return Ok(sibling);
+    }
+
+    let path_candidate = PathBuf::from(tauri_binary_name());
+    if which_in_path(&path_candidate).is_some() {
+        return Ok(path_candidate);
+    }
+
+    Err(anyhow::anyhow!(
+        "could not find the Tauri desktop binary `{}`. Install or build `defra-agent-desktop-tauri`, or set DEFRA_AGENT_DESKTOP_TAURI_BIN.",
+        tauri_binary_name()
+    ))
+}
+
+fn which_in_path(binary: &PathBuf) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(binary);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn tauri_binary_name() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "defra-agent-desktop-tauri.exe"
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "defra-agent-desktop-tauri"
+    }
 }
 
 fn init_tracing() {

@@ -35,7 +35,7 @@ pub(super) fn tool_turn_block(
                 .color(palette.text_3),
             );
         });
-        ui.add_space(4.0);
+        ui.add_space(2.0);
         for (index, tool_call) in tool_calls.iter().enumerate() {
             let card_id = tool_call
                 .tool_call_id
@@ -65,7 +65,7 @@ pub(super) fn tool_turn_block(
                     },
                 ))
                 .corner_radius(4)
-                .inner_margin(6)
+                .inner_margin(4)
                 .show(ui, |ui| {
                     let output = tool_results
                         .iter()
@@ -74,12 +74,12 @@ pub(super) fn tool_turn_block(
                         .or(tool_call.result.as_deref())
                         .unwrap_or("");
                     ui.horizontal(|ui| {
-                        ui.spacing_mut().button_padding = egui::vec2(6.0, 2.0);
-                        ui.label(RichText::new("●").size(10.0).color(stroke_color));
+                        ui.spacing_mut().button_padding = egui::vec2(5.0, 1.0);
+                        ui.label(RichText::new("●").size(8.5).color(stroke_color));
                         let response = ui
                             .selectable_label(
                                 expanded,
-                                RichText::new(label).size(11.5).color(palette.text_1),
+                                RichText::new(label).size(10.5).color(palette.text_1),
                             )
                             .on_hover_text("toggle tool summary");
                         audit::record(ui, &audit::targets::chat_tool_card(&card_id), &response);
@@ -93,12 +93,6 @@ pub(super) fn tool_turn_block(
                             state.chat.editor.expanded_tool_cards.remove(&card_id);
                         }
 
-                        ui.label(
-                            RichText::new(tool_call.status.as_deref().unwrap_or("pending"))
-                                .monospace()
-                                .size(9.5)
-                                .color(palette.text_2),
-                        );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let output_button = audit::add_enabled(
                                 ui,
@@ -107,10 +101,10 @@ pub(super) fn tool_turn_block(
                                 egui::Button::new(
                                     RichText::new("Output")
                                         .monospace()
-                                        .size(9.0)
+                                        .size(8.5)
                                         .color(palette.text_1),
                                 )
-                                .min_size(egui::vec2(58.0, 20.0)),
+                                .min_size(egui::vec2(52.0, 18.0)),
                             );
                             if output_button.clicked() {
                                 open_tool_detail_modal(
@@ -134,10 +128,10 @@ pub(super) fn tool_turn_block(
                                 egui::Button::new(
                                     RichText::new("Args")
                                         .monospace()
-                                        .size(9.0)
+                                        .size(8.5)
                                         .color(palette.text_1),
                                 )
-                                .min_size(egui::vec2(46.0, 20.0)),
+                                .min_size(egui::vec2(40.0, 18.0)),
                             );
                             if args_button.clicked() {
                                 open_tool_detail_modal(
@@ -155,13 +149,13 @@ pub(super) fn tool_turn_block(
                     });
 
                     if expanded {
-                        ui.add_space(4.0);
+                        ui.add_space(2.0);
                         compact_tool_metadata(ui, tool_call);
                     }
                 });
 
             if index + 1 < tool_calls.len() {
-                ui.add_space(4.0);
+                ui.add_space(2.0);
             }
         }
     });

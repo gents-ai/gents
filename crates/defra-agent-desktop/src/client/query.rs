@@ -63,7 +63,7 @@ pub async fn load_agent_conversations(node: &EmbeddedNode) -> Result<Vec<AgentCo
     load_rows(
         node,
         "AgentConversation",
-        "query { AgentConversation { session_id agent_name agent_did behavior_id title preview_text status created_at updated_at latest_request_id } }",
+        "query { AgentConversation { session_id agent_name agent_did behavior_id title title_source preview_text status created_at updated_at latest_request_id } }",
     )
     .await
 }
@@ -81,7 +81,7 @@ pub async fn load_agent_responses(node: &EmbeddedNode) -> Result<Vec<AgentRespon
     load_rows(
         node,
         "AgentResponse",
-        "query { AgentResponse { response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq created_at completed_at } }",
+        "query { AgentResponse { response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at } }",
     )
     .await
 }

@@ -1,4 +1,3 @@
-mod behavior;
 mod conversations;
 
 use eframe::egui::{self, RichText, Ui};
@@ -15,25 +14,12 @@ pub fn show(
     palette: Palette,
     state: &mut ShellState,
     client: Option<&ClientCore>,
-    store: &ClientStore,
+    _store: &ClientStore,
     conversations: &[ConversationBucket],
     selected_agent_did: Option<&str>,
     selected_session_id: Option<&str>,
 ) {
     egui::ScrollArea::vertical().show(ui, |ui| {
-        show_behaviors_header(ui, palette);
-        ui.add_space(8.0);
-        behavior::show(
-            ui,
-            palette,
-            state,
-            store,
-            selected_agent_did,
-            selected_session_id,
-        );
-
-        ui.separator();
-        ui.add_space(8.0);
         show_conversations_header(ui, palette, state, client, selected_agent_did);
         ui.add_space(8.0);
 
@@ -48,20 +34,6 @@ pub fn show(
         }
 
         conversations::render_buckets(ui, palette, state, conversations, selected_session_id);
-    });
-}
-
-fn show_behaviors_header(ui: &mut Ui, palette: Palette) {
-    ui.add_space(14.0);
-    ui.horizontal(|ui| {
-        ui.add_space(14.0);
-        ui.label(
-            RichText::new("Behaviors")
-                .family(crate::theme::stencil_family())
-                .size(13.0)
-                .color(palette.text_1)
-                .strong(),
-        );
     });
 }
 

@@ -7,6 +7,9 @@ pub struct ChatShellState {
     pub selected_peer_id: Option<String>,
     pub selected_agent_did: Option<String>,
     pub selected_session_id: Option<String>,
+    pub sidebar_collapsed: bool,
+    pub sidebar_width: Option<f32>,
+    pub sidebar_drag_origin_width: Option<f32>,
     pub workflow: ChatWorkflowState,
 }
 
@@ -21,6 +24,9 @@ pub struct ToolDetailModalState {
 #[derive(Debug, Clone, Default)]
 pub struct ChatEditorState {
     pub composer_text: String,
+    pub composer_expanded: bool,
+    pub composer_panel_height: Option<f32>,
+    pub composer_drag_origin_height: Option<f32>,
     pub selected_behavior_override: Option<String>,
     pub expanded_tool_cards: BTreeSet<String>,
     pub expanded_reasoning_cards: BTreeSet<String>,

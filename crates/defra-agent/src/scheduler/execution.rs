@@ -204,7 +204,7 @@ async fn execute_materialized_task(
     Ok(())
 }
 
-async fn prompt_scheduled_task<M: rig::completion::CompletionModel>(
+async fn prompt_scheduled_task<M: rig::completion::CompletionModel + 'static>(
     task: &ScheduledTask,
     behavior: &BehaviorConfig,
     node: &Arc<EmbeddedNode>,
@@ -214,7 +214,7 @@ async fn prompt_scheduled_task<M: rig::completion::CompletionModel>(
     full_prompt: &str,
     cancel: &CancellationToken,
 ) -> Result<String> {
-    let mut history = prompt_builder.build(&[], &[]).await?.messages;
+    let history = prompt_builder.build(&[], &[]).await?.messages;
     let hook = DefraSessionHook::resume_or_create_with_identity_policy(
         node.clone(),
         session_id,
@@ -231,7 +231,7 @@ async fn prompt_scheduled_task<M: rig::completion::CompletionModel>(
             }
             response = agent
                 .prompt(full_prompt)
-                .with_history(&mut history)
+                .with_history(&history)
                 .with_hook(hook) => response.map_err(anyhow::Error::from)
         }
     })
@@ -259,7 +259,7 @@ async fn prompt_scheduled_task<M: rig::completion::CompletionModel>(
                 FailurePolicy::FailClosed,
             )
             .await?;
-            let mut retry_history = prompt_builder.build(&[], &[]).await?.messages;
+            let retry_history = prompt_builder.build(&[], &[]).await?.messages;
 
             admission::scope_call(CallKind::Scheduled, 2, async {
                 tokio::select! {
@@ -268,7 +268,7 @@ async fn prompt_scheduled_task<M: rig::completion::CompletionModel>(
                     }
                     response = agent
                         .prompt(full_prompt)
-                        .with_history(&mut retry_history)
+                        .with_history(&retry_history)
                         .with_hook(retry_hook) => response
                         .map(|response| response.to_string())
                         .map_err(|retry_error| {

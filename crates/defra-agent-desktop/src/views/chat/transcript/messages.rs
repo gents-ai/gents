@@ -29,7 +29,7 @@ pub(super) fn message_block(
 
 fn turn_block(ui: &mut Ui, label: &str, label_color: egui::Color32, body: impl FnOnce(&mut Ui)) {
     let palette = theme::palette();
-    let label_width = (ui.available_width() * 0.09).clamp(54.0, 72.0);
+    let label_width = (ui.available_width() * 0.08).clamp(46.0, 64.0);
 
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
@@ -47,7 +47,7 @@ fn turn_block(ui: &mut Ui, label: &str, label_color: egui::Color32, body: impl F
             .fill(palette.background_1)
             .stroke(egui::Stroke::new(1.0, palette.stroke_subtle))
             .corner_radius(4)
-            .inner_margin(10)
+            .inner_margin(8)
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.vertical(|ui| {
@@ -58,39 +58,22 @@ fn turn_block(ui: &mut Ui, label: &str, label_color: egui::Color32, body: impl F
 }
 
 pub(super) fn transcript_surface(ui: &mut Ui, body: impl FnOnce(&mut Ui)) {
-    let palette = theme::palette();
     let available_height = ui.available_height();
     let expected_bounds = egui::Rect::from_min_size(ui.cursor().min, ui.available_size());
     let prev_clip = ui.clip_rect();
     ui.set_clip_rect(prev_clip.intersect(expected_bounds));
     egui::Frame::new()
-        .fill(palette.background_0)
-        .stroke(egui::Stroke::new(1.0, palette.stroke_subtle))
-        .corner_radius(6)
-        .inner_margin(14)
+        .inner_margin(egui::Margin::same(2))
         .show(ui, |ui| {
-            ui.set_min_height((available_height - 28.0).max(0.0));
+            ui.set_min_height((available_height - 4.0).max(0.0));
             body(ui);
         });
     ui.set_clip_rect(prev_clip);
 }
 
-pub(super) fn centered_status_card(ui: &mut Ui, title: &str, body: &str) {
-    let available = ui.available_size();
-    ui.allocate_ui_with_layout(
-        available,
-        egui::Layout::top_down(egui::Align::Center),
-        |ui| {
-            ui.add_space((ui.available_height() * 0.22).max(24.0));
-            ui.set_max_width(520.0);
-            crate::views::card(ui, title, body);
-        },
-    );
-}
-
 pub(super) fn supporting_block(ui: &mut Ui, body: impl FnOnce(&mut Ui)) {
     let palette = theme::palette();
-    let label_width = (ui.available_width() * 0.09).clamp(54.0, 72.0);
+    let label_width = (ui.available_width() * 0.08).clamp(46.0, 64.0);
 
     ui.horizontal(|ui| {
         ui.add_space(label_width);
@@ -98,7 +81,7 @@ pub(super) fn supporting_block(ui: &mut Ui, body: impl FnOnce(&mut Ui)) {
             .fill(palette.background_0)
             .stroke(egui::Stroke::new(1.0, palette.stroke_subtle))
             .corner_radius(4)
-            .inner_margin(8)
+            .inner_margin(6)
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.vertical(|ui| {

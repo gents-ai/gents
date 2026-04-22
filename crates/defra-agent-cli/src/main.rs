@@ -148,6 +148,10 @@ const RESPONSE_AFTER_HELP: &str = "\
 Examples:
   defra-agent response wait REQUEST_ID
   defra-agent response show REQUEST_ID";
+const SESSION_AFTER_HELP: &str = "\
+Fork a conversation into a new session seeded from a user-turn prefix \
+of the source. Child inherits principal; behavior can be swapped with \
+--behavior.";
 const DIAGNOSE_AFTER_HELP: &str = "\
 Examples:
   defra-agent diagnose
@@ -225,6 +229,7 @@ async fn main() -> Result<()> {
         Command::Config { command } => commands::config::dispatch(command).await,
         Command::Request { command } => commands::request::dispatch(command).await,
         Command::Response { command } => commands::response::dispatch(command).await,
+        Command::Session { command } => commands::session::dispatch(command).await,
     };
     telemetry.shutdown();
     result

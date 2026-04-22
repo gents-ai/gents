@@ -6,9 +6,10 @@ use crate::audit;
 use crate::client::{ClientCore, ClientStore};
 use crate::state::{PendingChatAction, PendingShellAction, ShellState};
 use crate::theme;
-use crate::views::toolbar;
+use crate::views::chat::turn_state_label;
+use crate::views::components;
 
-use super::view_model::simple_behavior_label;
+use super::view_model::{behavior_selection_entries, effective_behavior_id};
 
 pub(super) struct HeaderProps<'a> {
     pub store: &'a ClientStore,
@@ -19,11 +20,6 @@ pub(super) struct HeaderProps<'a> {
 }
 
 pub(super) fn show(ui: &mut Ui, state: &mut ShellState, props: HeaderProps<'_>) {
-    let breadcrumb = breadcrumb(
-        props.store,
-        props.selected_agent_did,
-        props.selected_session_id,
-    );
     let title = conversation_title(props.store, props.selected_session_id);
     let latest_request = props
         .selected_session_id
@@ -41,40 +37,73 @@ pub(super) fn show(ui: &mut Ui, state: &mut ShellState, props: HeaderProps<'_>) 
     let export_enabled = props
         .selected_session_id
         .is_some_and(|session_id| conversation_has_export_rows(props.store, session_id));
-    toolbar(ui, "Conversation", &breadcrumb, "");
-    ui.add_space(4.0);
-
-    ui.label(
-        RichText::new(title)
-            .size(23.0)
-            .color(theme::palette().text_0)
-            .strong(),
-    );
-    ui.add_space(8.0);
+    let palette = theme::palette();
+    let mut info_values = Vec::new();
+    if let Some(agent_did) = props.selected_agent_did {
+        info_values.push(agent_did);
+    }
+    if let Some(session_id) = props.selected_session_id {
+        info_values.push(session_id);
+    }
+    if let Some(turn_state) = props.turn_state {
+        info_values.push(turn_state_label(Some(turn_state)));
+    }
 
     ui.horizontal(|ui| {
-        if let Some(error) = state.chat.editor.last_submission_error.as_deref() {
-            ui.label(
-                RichText::new(error)
+        let sidebar_label = if state.chat.shell.sidebar_collapsed {
+            "Show List"
+        } else {
+            "Hide List"
+        };
+        if audit::add(
+            ui,
+            "chat.header.toggle_sidebar",
+            egui::Button::new(
+                RichText::new(sidebar_label)
                     .monospace()
                     .size(10.5)
-                    .color(theme::palette().warning),
-            );
-        } else if let Some(message) = state.chat.editor.last_action_message.as_deref() {
-            ui.label(
-                RichText::new(message)
-                    .monospace()
-                    .size(10.5)
-                    .color(theme::palette().text_2),
-            );
+                    .color(palette.text_1),
+            )
+            .min_size(egui::vec2(72.0, 22.0)),
+        )
+        .clicked()
+        {
+            state.chat.shell.sidebar_collapsed = !state.chat.shell.sidebar_collapsed;
         }
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new(title)
+                .size(16.5)
+                .color(palette.text_0)
+                .strong(),
+        );
+        ui.add_space(4.0);
+        render_behavior_selector(
+            ui,
+            state,
+            props.store,
+            props.selected_agent_did,
+            props.selected_session_id,
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if export_enabled {
+                if audit::add_enabled(
+                    ui,
+                    audit::targets::CHAT_EXPORT,
+                    true,
+                    egui::Button::new("Export").min_size(egui::vec2(58.0, 22.0)),
+                )
+                .clicked()
+                {
+                    export_conversation(ui, state, props.store, props.selected_session_id);
+                }
+            }
             if retry_enabled {
                 if audit::add_enabled(
                     ui,
                     audit::targets::CHAT_RETRY,
                     true,
-                    egui::Button::new("Retry"),
+                    egui::Button::new("Retry").min_size(egui::vec2(54.0, 22.0)),
                 )
                 .clicked()
                 {
@@ -83,20 +112,100 @@ pub(super) fn show(ui: &mut Ui, state: &mut ShellState, props: HeaderProps<'_>) 
                     ));
                 }
             }
-            if export_enabled {
-                if audit::add_enabled(
-                    ui,
-                    audit::targets::CHAT_EXPORT,
-                    true,
-                    egui::Button::new("Export"),
-                )
-                .clicked()
-                {
-                    export_conversation(ui, state, props.store, props.selected_session_id);
-                }
-            }
         });
     });
+    if !info_values.is_empty() {
+        ui.add_space(2.0);
+        components::info_strip(ui, &info_values);
+    }
+
+    if let Some(error) = state.chat.editor.last_submission_error.as_deref() {
+        ui.add_space(3.0);
+        ui.label(
+            RichText::new(error)
+                .monospace()
+                .size(10.5)
+                .color(palette.warning),
+        );
+    } else if let Some(message) = state.chat.editor.last_action_message.as_deref() {
+        ui.add_space(3.0);
+        ui.label(
+            RichText::new(message)
+                .monospace()
+                .size(10.5)
+                .color(palette.text_2),
+        );
+    }
+}
+
+fn render_behavior_selector(
+    ui: &mut Ui,
+    state: &mut ShellState,
+    store: &ClientStore,
+    selected_agent_did: Option<&str>,
+    selected_session_id: Option<&str>,
+) {
+    let Some(agent_did) = selected_agent_did else {
+        return;
+    };
+
+    let entries = behavior_selection_entries(store, agent_did);
+    if entries.is_empty() {
+        return;
+    }
+
+    let palette = theme::palette();
+    let selected_behavior_id = effective_behavior_id(state, store, selected_agent_did);
+
+    ui.horizontal_wrapped(|ui| {
+        for entry in entries {
+            let selected =
+                selected_behavior_id.as_deref() == entry.represented_behavior_id.as_deref();
+            let response = audit::add(
+                ui,
+                behavior_target(entry.represented_behavior_id.as_deref()),
+                egui::Button::new(RichText::new(entry.label.clone()).size(10.5).color(
+                    if selected {
+                        palette.text_0
+                    } else {
+                        palette.text_1
+                    },
+                ))
+                .fill(if selected {
+                    palette.background_2
+                } else {
+                    palette.background_0
+                })
+                .stroke(egui::Stroke::new(
+                    1.0,
+                    if selected {
+                        palette.accent_dim
+                    } else {
+                        palette.stroke_subtle
+                    },
+                ))
+                .min_size(egui::vec2(42.0, 22.0)),
+            );
+            if response.clicked() {
+                if selected_session_id.is_some() && !selected {
+                    state.queue_shell_action(PendingShellAction::Chat(
+                        PendingChatAction::StartNewConversationDraft,
+                    ));
+                }
+                state.queue_shell_action(PendingShellAction::Chat(
+                    PendingChatAction::SelectBehavior {
+                        behavior_id: entry.override_behavior_id.clone(),
+                    },
+                ));
+            }
+        }
+    });
+}
+
+fn behavior_target(behavior_id: Option<&str>) -> String {
+    behavior_id
+        .map(audit::targets::chat_behavior_option)
+        .unwrap_or_else(|| "chat.behavior.option.default".to_string())
 }
 
 fn latest_request_for_session<'a>(
@@ -169,44 +278,6 @@ fn conversation_has_export_rows(store: &ClientStore, session_id: &str) -> bool {
         .any(|row| row.session_id == session_id)
         || !store.requests_for_session(session_id).is_empty()
         || !store.transcript(session_id).messages.is_empty()
-}
-
-fn breadcrumb(
-    store: &ClientStore,
-    selected_agent_did: Option<&str>,
-    selected_session_id: Option<&str>,
-) -> String {
-    let agent = selected_agent_did
-        .map(|agent_did| {
-            store
-                .agent_principals
-                .iter()
-                .find(|row| row.agent_did == agent_did)
-                .and_then(|row| row.display_name.as_deref())
-                .unwrap_or(agent_did)
-                .to_string()
-        })
-        .unwrap_or_else(|| "no agent".to_string());
-    let behavior = selected_session_id
-        .and_then(|session_id| store.session_behavior_id(session_id, selected_agent_did))
-        .or_else(|| {
-            selected_agent_did.and_then(|agent_did| {
-                store
-                    .default_behavior_id_for_agent(agent_did)
-                    .map(ToOwned::to_owned)
-            })
-        })
-        .and_then(|behavior_id| {
-            selected_agent_did.map(|agent_did| {
-                let display_name = store
-                    .behavior_row(agent_did, &behavior_id)
-                    .and_then(|row| row.display_name.as_deref());
-                simple_behavior_label(display_name, Some(behavior_id.as_str()))
-            })
-        })
-        .unwrap_or_else(|| "Inherited default".to_string());
-
-    format!("{agent} / {behavior}")
 }
 
 fn conversation_title(store: &ClientStore, selected_session_id: Option<&str>) -> String {

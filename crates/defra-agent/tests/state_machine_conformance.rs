@@ -104,6 +104,9 @@ async fn interactive_prepare_session_pins_behavior() {
             latest_request_id: request_id,
             behavior_id: AGENT_NAME.into(),
             status: "processing".into(),
+            forked_from_session_id: None,
+            fork_at_user_turn: None,
+            forked_at: None,
         })
     );
 }
@@ -169,6 +172,9 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
             latest_request_id: request_id,
             behavior_id: AGENT_NAME.into(),
             status: "processing".into(),
+            forked_from_session_id: None,
+            fork_at_user_turn: None,
+            forked_at: None,
         })
     );
     assert_eq!(
@@ -241,6 +247,9 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
             latest_request_id: request_id,
             behavior_id: AGENT_NAME.into(),
             status: "active".into(),
+            forked_from_session_id: None,
+            fork_at_user_turn: None,
+            forked_at: None,
         })
     );
     assert_eq!(
@@ -299,6 +308,116 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
             latest_request_id: lifecycle.request().request_id.clone(),
             behavior_id: AGENT_NAME.into(),
             status: "processing".into(),
+            forked_from_session_id: None,
+            fork_at_user_turn: None,
+            forked_at: None,
         })
+    );
+}
+
+#[tokio::test]
+async fn fork_does_not_transition_parent_lifecycle_state() {
+    use defra_agent::session::{fork, ForkParams};
+    use support::{
+        create_agent_behavior, create_agent_conversation, create_agent_message,
+        create_agent_session,
+    };
+
+    let db = test_db("fork-no-lifecycle-transition").await;
+
+    let parent_session = uuid::Uuid::new_v4().to_string();
+    create_agent_session(
+        &db.node,
+        &parent_session,
+        AGENT_NAME,
+        "2026-04-21T10:00:00Z",
+    )
+    .await;
+    create_agent_conversation(
+        &db.node,
+        &parent_session,
+        AGENT_NAME,
+        "2026-04-21T10:00:00Z",
+    )
+    .await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+
+    // Parent has a completed AgentRequest + AgentResponse so the parent is idle
+    // (no non-terminal lifecycle_state) and fork is allowed.
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let request_doc_id = create_request(
+        &db.node,
+        &request_id,
+        &parent_session,
+        "completed",
+        "2026-04-21T10:00:02Z",
+    )
+    .await;
+    let response_key = format!("resp-{request_id}");
+    let response_doc_id = create_response_with_status(
+        &db.node,
+        &response_key,
+        &request_id,
+        &parent_session,
+        "complete",
+    )
+    .await;
+
+    create_agent_message(
+        &db.node,
+        &parent_session,
+        1,
+        "user",
+        "u1",
+        "2026-04-21T10:00:01Z",
+    )
+    .await;
+    create_agent_message(
+        &db.node,
+        &parent_session,
+        2,
+        "assistant",
+        "a1",
+        "2026-04-21T10:00:03Z",
+    )
+    .await;
+
+    let before_request = fetch_request_snapshot(&db.node, &request_doc_id).await;
+    let before_response = fetch_response_snapshot(&db.node, &response_doc_id).await;
+    let before_conversation = fetch_conversation_snapshot(&db.node, &parent_session).await;
+    let before_session = fetch_session_snapshot(&db.node, &parent_session).await;
+
+    let _ = fork(
+        &db.node,
+        ForkParams {
+            source_session_id: &parent_session,
+            fork_at_user_turn: 0,
+            caller_agent_did: AGENT_DID,
+            target_behavior_id: None,
+        },
+    )
+    .await
+    .expect("fork succeeds on idle parent");
+
+    let after_request = fetch_request_snapshot(&db.node, &request_doc_id).await;
+    let after_response = fetch_response_snapshot(&db.node, &response_doc_id).await;
+    let after_conversation = fetch_conversation_snapshot(&db.node, &parent_session).await;
+    let after_session = fetch_session_snapshot(&db.node, &parent_session).await;
+
+    assert_eq!(
+        before_request, after_request,
+        "parent AgentRequest unchanged"
+    );
+    assert_eq!(
+        before_response, after_response,
+        "parent AgentResponse unchanged"
+    );
+    assert_eq!(
+        before_conversation, after_conversation,
+        "parent AgentConversation unchanged"
+    );
+    assert_eq!(
+        before_session, after_session,
+        "parent AgentSession unchanged"
     );
 }

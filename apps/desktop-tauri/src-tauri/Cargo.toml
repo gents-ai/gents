@@ -1,0 +1,23 @@
+[package]
+name = "defra-agent-desktop-tauri"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Parallel Tauri desktop shell for defra-agent"
+
+[lib]
+name = "defra_agent_desktop_tauri_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+defra-agent-desktop = { path = "../../../crates/defra-agent-desktop" }
+defra-agent-protocol = { path = "../../../crates/defra-agent-protocol" }
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true

@@ -132,12 +132,12 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
         }
 
         let old_activity = extract_file_activity(&old_messages);
-        let mut prepared_history =
+        let prepared_history =
             pretruncate_tool_results(old_messages.clone(), options.tool_result_max_chars);
         let raw_summary = self
             .agent
             .prompt(compaction_prompt())
-            .with_history(&mut prepared_history)
+            .with_history(&prepared_history)
             .await?;
         let parsed_summary = parse_summary_response(&raw_summary)?;
 

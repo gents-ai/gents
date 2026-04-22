@@ -1,0 +1,254 @@
+use std::sync::Arc;
+
+use anyhow::Result;
+use defra_node::EmbeddedNode;
+use rig::completion::Prompt;
+
+use super::BehaviorDaemon;
+use crate::admission::{self, AdmissionCallContext, CallKind};
+use crate::session;
+use crate::watcher::AgentRequest;
+
+const RECENT_TITLE_LIMIT: usize = 5;
+const GENERATED_TITLE_MAX_WORDS: usize = 5;
+const GENERATED_TITLE_MAX_LEN: usize = 48;
+const TITLE_GENERATION_MAX_ATTEMPTS: i64 = 2;
+
+impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
+    pub(super) fn spawn_conversation_title_generation(
+        &self,
+        request: &AgentRequest,
+        admission_context: AdmissionCallContext,
+    ) {
+        let node = Arc::clone(&self.node);
+        let behavior_did = self.behavior.did().to_string();
+        let request = request.clone();
+        let mut title_agent = self.agent.clone();
+        title_agent.tool_choice = None;
+        title_agent.default_max_turns = Some(1);
+        title_agent.max_tokens = Some(24);
+        title_agent.temperature = Some(0.0);
+        title_agent.preamble = Some(title_generation_preamble(&self.behavior.system_prompt));
+
+        tokio::spawn(async move {
+            if let Err(error) = admission::scope_request(admission_context, async move {
+                maybe_generate_conversation_title(node, &behavior_did, request, title_agent).await
+            })
+            .await
+            {
+                tracing::warn!(
+                    error = %error,
+                    "failed to generate conversation title"
+                );
+            }
+        });
+    }
+}
+
+async fn maybe_generate_conversation_title<M: rig::completion::CompletionModel + 'static>(
+    node: Arc<EmbeddedNode>,
+    behavior_did: &str,
+    request: AgentRequest,
+    title_agent: rig::agent::Agent<M>,
+) -> Result<()> {
+    if !session::conversation_needs_generated_title(&node, &request.session_id).await? {
+        return Ok(());
+    }
+
+    let recent_titles = session::load_recent_titles_for_agent(
+        &node,
+        behavior_did,
+        &request.session_id,
+        RECENT_TITLE_LIMIT,
+    )
+    .await
+    .unwrap_or_default();
+
+    let prompt = title_generation_prompt(&request.content, &recent_titles);
+    let title = generate_title_with_fallback(&request, title_agent, prompt).await;
+
+    session::update_conversation_title_with_source(
+        &node,
+        &request.session_id,
+        &title,
+        session::CONVERSATION_TITLE_SOURCE_GENERATED,
+    )
+    .await?;
+
+    tracing::info!(
+        session_id = %request.session_id,
+        request_id = %request.request_id,
+        title = %title,
+        "generated conversation title"
+    );
+    Ok(())
+}
+
+async fn generate_title_with_fallback<M: rig::completion::CompletionModel + 'static>(
+    request: &AgentRequest,
+    title_agent: rig::agent::Agent<M>,
+    prompt: String,
+) -> String {
+    let mut last_error = None;
+
+    for attempt in 1..=TITLE_GENERATION_MAX_ATTEMPTS {
+        let prompt = prompt.clone();
+        let title_agent = title_agent.clone();
+        match admission::scope_call(CallKind::OneOff, attempt, async move {
+            title_agent
+                .prompt(prompt)
+                .await
+                .map(|response| response.to_string())
+                .map_err(anyhow::Error::from)
+        })
+        .await
+        {
+            Ok(raw_title) => return sanitize_generated_title(&raw_title, &request.content),
+            Err(error) => {
+                tracing::warn!(
+                    request_id = %request.request_id,
+                    session_id = %request.session_id,
+                    attempt,
+                    error = %error,
+                    "conversation title inference failed"
+                );
+                last_error = Some(error);
+            }
+        }
+    }
+
+    let fallback = sanitize_generated_title("", &request.content);
+    tracing::info!(
+        request_id = %request.request_id,
+        session_id = %request.session_id,
+        title = %fallback,
+        error = ?last_error.as_ref().map(|error| error.to_string()),
+        "using fallback conversation title after oneoff inference failure"
+    );
+    fallback
+}
+
+fn title_generation_preamble(system_prompt: &str) -> String {
+    let system_prompt = system_prompt.trim();
+    if system_prompt.is_empty() {
+        "Generate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain.".to_string()
+    } else {
+        format!(
+            "{system_prompt}\n\nGenerate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain."
+        )
+    }
+}
+
+fn title_generation_prompt(request_content: &str, recent_titles: &[String]) -> String {
+    let request_excerpt = truncate_for_title_prompt(request_content, 600);
+    let recent = if recent_titles.is_empty() {
+        "none".to_string()
+    } else {
+        recent_titles
+            .iter()
+            .take(RECENT_TITLE_LIMIT)
+            .map(|title| format!("- {title}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    format!(
+        "Generate a concise session title for this conversation.\n\
+Return only the title.\n\
+Constraints:\n\
+- 3-5 words\n\
+- lowercase\n\
+- hyphenated\n\
+- no punctuation except hyphens\n\
+- no quotes\n\
+- avoid repeating a recent title exactly\n\n\
+Recent session titles:\n{recent}\n\n\
+First user request:\n{request_excerpt}"
+    )
+}
+
+fn truncate_for_title_prompt(value: &str, max_chars: usize) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    normalized.chars().take(max_chars).collect()
+}
+
+fn sanitize_generated_title(raw_title: &str, fallback_source: &str) -> String {
+    let first_line = raw_title
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or_default()
+        .trim()
+        .trim_matches('`')
+        .trim_matches('"')
+        .trim_matches('\'')
+        .to_ascii_lowercase();
+
+    let mut words = first_line
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+        .flat_map(|part| part.split(['-', '_']))
+        .map(str::trim)
+        .filter(|word| !word.is_empty())
+        .take(GENERATED_TITLE_MAX_WORDS)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+    if words.is_empty() {
+        words = fallback_words(fallback_source);
+    }
+
+    let mut title = words.join("-");
+    if title.len() > GENERATED_TITLE_MAX_LEN {
+        title.truncate(GENERATED_TITLE_MAX_LEN);
+        title = title.trim_matches('-').to_string();
+    }
+
+    if title.is_empty() {
+        "conversation".to_string()
+    } else {
+        title
+    }
+}
+
+fn fallback_words(source: &str) -> Vec<String> {
+    const STOPWORDS: &[&str] = &[
+        "a", "about", "agent", "amy", "an", "and", "are", "can", "desktop", "do", "for", "give",
+        "hello", "help", "hey", "how", "i", "in", "is", "me", "model", "of", "on", "please",
+        "tell", "the", "think", "to", "what", "with", "works", "you",
+    ];
+
+    let mut words = source
+        .to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .filter(|word| !STOPWORDS.contains(word))
+        .take(GENERATED_TITLE_MAX_WORDS)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+    if words.is_empty() {
+        words.push("conversation".to_string());
+    }
+
+    words
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_generated_title;
+
+    #[test]
+    fn sanitize_generated_title_normalizes_output() {
+        assert_eq!(
+            sanitize_generated_title("\"Agent Desktop Debugging Redux\"", "fallback text"),
+            "agent-desktop-debugging-redux"
+        );
+    }
+
+    #[test]
+    fn sanitize_generated_title_falls_back_when_empty() {
+        assert_eq!(
+            sanitize_generated_title("", "please inspect p2p request model"),
+            "inspect-p2p-request"
+        );
+    }
+}

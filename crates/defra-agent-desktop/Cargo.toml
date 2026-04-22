@@ -34,5 +34,5 @@ uuid.workspace = true
 async-trait = "0.1"
 defra-agent = { path = "../defra-agent" }
 pprof = { version = "0.14", features = ["flamegraph", "prost-codec"] }
-rig-core = "0.31"
+rig-core.workspace = true
 tempfile = "3"
