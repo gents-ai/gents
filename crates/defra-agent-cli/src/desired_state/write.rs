@@ -9,9 +9,11 @@ use super::{DesiredStateManifest, HasUniqueId};
 
 /// Verify that `id` is a valid per-document directory handle on a POSIX
 /// filesystem. Rejects path-separator and null bytes (`/`, `\0`), the
-/// traversal specials `.` and `..`, and the empty string. Allows `:`,
-/// which is legal on Unix/Linux/macOS filesystems and appears in DIDs
-/// and init-generated IDs.
+/// traversal specials `.` and `..`, the empty string, and ids starting with
+/// `.` (dot-prefixed entries are silently skipped by the loader, so a
+/// dot-prefixed handle would round-trip incorrectly). Allows `:`, which is
+/// legal on Unix/Linux/macOS filesystems and appears in DIDs and
+/// init-generated IDs.
 pub(crate) fn check_filesystem_safe_id(id: &str) -> Result<(), String> {
     if id.is_empty() {
         return Err(
@@ -21,6 +23,12 @@ pub(crate) fn check_filesystem_safe_id(id: &str) -> Result<(), String> {
     if id == "." || id == ".." {
         return Err(format!(
             "unique id '{id}' contains filesystem-unsafe value; choose a filesystem-safe id"
+        ));
+    }
+    if id.starts_with('.') {
+        return Err(format!(
+            "unique id '{id}' starts with '.'; dot-prefixed handles are reserved for hidden \
+             files and are silently skipped by the loader"
         ));
     }
     for ch in id.chars() {
@@ -33,6 +41,39 @@ pub(crate) fn check_filesystem_safe_id(id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Pre-flight check: validate every handle in the manifest before touching the
+/// filesystem. Returns the first error encountered, or `Ok(())` if all handles
+/// are valid. This ensures that `prepare_root` (which may delete the old root
+/// when `force=true`) is never called on a manifest that would produce a
+/// partial write.
+fn validate_handles(manifest: &DesiredStateManifest) -> Result<(), String> {
+    fn validate_vec<T: HasUniqueId>(
+        docs: &[T],
+        collection_name: &str,
+    ) -> Result<(), String> {
+        let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for doc in docs {
+            let id = doc.unique_id();
+            check_filesystem_safe_id(id)?;
+            if !seen.insert(id) {
+                return Err(format!(
+                    "duplicate {collection_name} id '{id}' in manifest"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    validate_vec(&manifest.agent_behaviors, "behavior_id")?;
+    validate_vec(&manifest.tool_selections, "selection_id")?;
+    validate_vec(&manifest.inference_backends, "backend_id")?;
+    validate_vec(&manifest.inference_profiles, "profile_id")?;
+    validate_vec(&manifest.tool_service_registries, "service_id")?;
+    validate_vec(&manifest.tasks, "task_id")?;
+    validate_vec(&manifest.schedules, "schedule_id")?;
+    Ok(())
+}
+
 /// Write a `DesiredStateManifest` to `root` as a manifest root directory.
 /// See `docs/superpowers/specs/2026-04-22-per-agent-manifest-roots-design.md`
 /// for the on-disk layout contract.
@@ -41,6 +82,10 @@ pub(crate) fn write_manifest_root(
     manifest: &DesiredStateManifest,
     force: bool,
 ) -> Result<(), String> {
+    // Pre-flight: validate all handles before any filesystem mutation.
+    // This ensures that prepare_root (which may delete the old root when
+    // force=true) is never called when the manifest contains bad ids.
+    validate_handles(manifest)?;
     prepare_root(root, force)?;
 
     // agent-principal.json at the top level.

@@ -299,15 +299,43 @@ where
 /// read the file as UTF-8, and replace `*value` with the file contents.
 /// Any other case (None, absolute path, `../` prefix, literal string) is
 /// a no-op.
+///
+/// The relative portion is validated against path escape: any component that
+/// is `..` (ParentDir), a root separator, or an absolute prefix is rejected
+/// with an error. This prevents `./../secret.md` and similar tricks from
+/// reading files outside the document directory.
 pub(crate) fn hydrate_sidecar(
     value: &mut Option<String>,
     json_dir: &Path,
 ) -> Result<(), String> {
+    use std::path::Component;
+
     let Some(current) = value.as_deref() else { return Ok(()) };
     if !current.starts_with("./") {
         return Ok(());
     }
     let rel = &current[2..];
+
+    // Reject any component that would escape the document directory.
+    let rel_path = std::path::Path::new(rel);
+    for comp in rel_path.components() {
+        match comp {
+            Component::ParentDir => {
+                return Err(format!(
+                    "sidecar path escapes document directory: {current} (referenced from {})",
+                    json_dir.display()
+                ));
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(format!(
+                    "sidecar path must be relative: {current} (referenced from {})",
+                    json_dir.display()
+                ));
+            }
+            _ => {}
+        }
+    }
+
     let sidecar_path = json_dir.join(rel);
     let bytes = fs::read(&sidecar_path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {

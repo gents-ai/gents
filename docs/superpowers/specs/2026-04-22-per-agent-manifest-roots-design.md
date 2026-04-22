@@ -53,6 +53,9 @@ Out of scope:
 - Lean changes. The reconcile proofs in `crates/defra-agent/proofs/` do not
   reference file/dir names; this is strictly a CLI import/export surface
   change.
+- `config import` — this command reads the legacy JSON bundle format and is
+  intentionally decoupled from `config export --root`. Use `config apply
+  --root <dir>` to apply a manifest root produced by `config export`.
 
 ## On-Disk Layout
 
@@ -250,6 +253,13 @@ IDs. Unsafe → error `"unique id '<value>' contains filesystem-unsafe
 character(s); choose a filesystem-safe id"`. This guarantees that any root
 produced by the writer is loadable by the loader.
 
+Handles must not start with `.` — dot-prefixed entries are reserved for hidden
+files (e.g., `.DS_Store`, `.gitkeep`) which the loader silently skips. A
+dot-prefixed handle would produce a directory that the loader drops, causing a
+silent round-trip loss. The writer rejects such ids with the error `"unique id
+'<value>' starts with '.'; dot-prefixed handles are reserved for hidden files
+and are silently skipped by the loader"`.
+
 ### Write order
 
 1. `agent-principal.json` at the top level.
@@ -308,10 +318,16 @@ old `print_json(bundle)` behavior is removed.
   `DesiredStateValidationReport`. No new flags. Exit code unchanged.
 - `config diff --root <dir>`: unchanged on the outside. Internally calls the
   new loader and compares hydrated inline prompts against live DB state.
-- `config apply --root <dir>`: unchanged on the outside. Same loader.
+- `config apply --root <dir>`: unchanged on the outside. Same loader. This is
+  the intended way to apply a manifest root produced by `config export`.
 - `config export --root <dir> [--force]`: writes a manifest root to `<dir>`.
   Replaces the JSON-to-stdout output. Without `--force`, refuses to overwrite
   a non-empty directory.
+- `config import [PATH]`: reads a **legacy JSON bundle** file (not a manifest
+  root directory). This command is intentionally decoupled from `config export
+  --root`: exporting with `config export` and then applying with `config apply
+  --root` is the new round-trip path. `config import` remains for teams that
+  have existing JSON bundle workflows.
 
 ## Error Kinds
 

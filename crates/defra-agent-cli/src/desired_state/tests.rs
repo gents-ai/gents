@@ -739,6 +739,39 @@ fn hydrate_sidecar_ignores_parent_relative_path() {
 }
 
 #[test]
+fn hydrate_sidecar_rejects_parent_component_in_rel_path() {
+    use tempfile::tempdir;
+    use super::load::hydrate_sidecar;
+
+    // Create a sibling file OUTSIDE the doc directory.
+    let tmp = tempdir().unwrap();
+    let json_dir = tmp.path().join("doc-dir");
+    fs::create_dir_all(&json_dir).unwrap();
+    fs::write(tmp.path().join("sibling.md"), "secret contents").unwrap();
+
+    // ./../sibling.md has a ParentDir component in the relative part.
+    let mut value = Some("./../sibling.md".to_string());
+    let err = hydrate_sidecar(&mut value, &json_dir).unwrap_err();
+    assert!(err.contains("escapes document directory"), "got: {err}");
+}
+
+#[test]
+fn hydrate_sidecar_rejects_nested_parent_component() {
+    use tempfile::tempdir;
+    use super::load::hydrate_sidecar;
+
+    let tmp = tempdir().unwrap();
+    let json_dir = tmp.path().join("a").join("b");
+    fs::create_dir_all(&json_dir).unwrap();
+    fs::write(tmp.path().join("outside.md"), "not yours").unwrap();
+
+    // ./inner/../../outside.md resolves outside the doc dir.
+    let mut value = Some("./inner/../../outside.md".to_string());
+    let err = hydrate_sidecar(&mut value, &json_dir).unwrap_err();
+    assert!(err.contains("escapes document directory"), "got: {err}");
+}
+
+#[test]
 fn hydrate_sidecar_errors_when_file_missing() {
     use tempfile::tempdir;
     use super::load::hydrate_sidecar;
@@ -1021,6 +1054,55 @@ pub(super) mod write_manifest_root {
     }
 
     #[test]
+    fn preflight_unsafe_id_does_not_delete_existing_root() {
+        // Regression: if force=true and the manifest contains an unsafe id,
+        // the old root must be left intact (pre-flight runs before prepare_root).
+        let tmp = tempdir().unwrap();
+
+        // Set up a pre-existing valid manifest root.
+        fs::write(
+            tmp.path().join("agent-principal.json"),
+            b"{\"agent_did\":\"did:key:old\",\"enabled\":true}",
+        )
+        .unwrap();
+        let old_behavior_dir = tmp.path().join("agent-behaviors").join("old-safe-id");
+        fs::create_dir_all(&old_behavior_dir).unwrap();
+        fs::write(old_behavior_dir.join("object.json"), b"{}").unwrap();
+
+        // Build a manifest where the second behavior has an unsafe id.
+        let mut bad_manifest = minimal_manifest();
+        // First behavior (inherited from minimal_manifest) is fine.
+        // Add a second behavior with a path-traversal id.
+        bad_manifest.agent_behaviors.push(DesiredAgentBehavior {
+            behavior_id: "bad/id".to_string(),
+            agent_did: "did:key:example".to_string(),
+            display_name: None,
+            system_prompt: None,
+            backend_id: None,
+            model_name: None,
+            tool_selection_id: None,
+            inference_profile_id: None,
+            compaction_strategy: None,
+            compaction_threshold: None,
+            enabled: true,
+        });
+
+        let err = write_manifest_root(tmp.path(), &bad_manifest, true).unwrap_err();
+        assert!(err.contains("filesystem-unsafe"), "got: {err}");
+
+        // The old root must still be intact: pre-flight must have run before
+        // prepare_root deleted anything.
+        assert!(
+            tmp.path().join("agent-principal.json").exists(),
+            "old agent-principal.json was deleted before pre-flight finished"
+        );
+        assert!(
+            old_behavior_dir.join("object.json").exists(),
+            "old behavior dir was deleted before pre-flight finished"
+        );
+    }
+
+    #[test]
     fn force_removes_stray_files_from_previous_export() {
         let tmp = tempdir().unwrap();
         // Simulate a previous export: agent-principal.json present (sentinel) plus a
@@ -1090,5 +1172,13 @@ mod write_manifest_root_safe_id {
     #[test]
     fn rejects_empty() {
         assert!(check_filesystem_safe_id("").is_err());
+    }
+
+    #[test]
+    fn rejects_dot_prefix() {
+        let err = check_filesystem_safe_id(".foo").unwrap_err();
+        assert!(err.contains("dot-prefixed"), "got: {err}");
+        let err = check_filesystem_safe_id(".hidden").unwrap_err();
+        assert!(err.contains("dot-prefixed"), "got: {err}");
     }
 }
