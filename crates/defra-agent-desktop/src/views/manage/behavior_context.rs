@@ -6,8 +6,7 @@ use crate::views;
 
 use super::editors::editor_heading;
 use super::shared::{
-    abbreviate_identifier, compact_timestamp, scheduled_task_next_run_label,
-    summarize_request_content,
+    abbreviate_identifier, compact_timestamp, schedule_next_run_label, summarize_request_content,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,19 +26,32 @@ pub(super) fn render_behavior_context(
         return;
     }
 
-    let tasks = scheduled_task_lines(store, agent_did, behavior_id);
+    let tasks = task_lines(store, agent_did, behavior_id);
+    let schedules = schedule_lines(store, agent_did, behavior_id);
     let conversations = conversation_lines(store, agent_did, behavior_id);
     let requests = request_lines(store, agent_did, behavior_id);
 
     ui.add_space(14.0);
     editor_heading(ui, "Behavior Activity");
-    render_counts(ui, tasks.len(), conversations.len(), requests.len());
+    render_counts(
+        ui,
+        tasks.len(),
+        schedules.len(),
+        conversations.len(),
+        requests.len(),
+    );
 
     render_summary_block(
         ui,
-        "Scheduled Tasks",
+        "Tasks",
         &tasks,
-        "No scheduled tasks are bound to this behavior.",
+        "No tasks are bound to this behavior.",
+    );
+    render_summary_block(
+        ui,
+        "Schedules",
+        &schedules,
+        "No schedules reference tasks on this behavior.",
     );
     render_summary_block(
         ui,
@@ -55,11 +67,18 @@ pub(super) fn render_behavior_context(
     );
 }
 
-fn render_counts(ui: &mut Ui, task_count: usize, conversation_count: usize, request_count: usize) {
+fn render_counts(
+    ui: &mut Ui,
+    task_count: usize,
+    schedule_count: usize,
+    conversation_count: usize,
+    request_count: usize,
+) {
     let palette = theme::palette();
     ui.horizontal_wrapped(|ui| {
         for line in [
             format!("{task_count} tasks"),
+            format!("{schedule_count} schedules"),
             format!("{conversation_count} conversations"),
             format!("{request_count} requests"),
         ] {
@@ -102,12 +121,8 @@ fn render_summary_block(ui: &mut Ui, title: &str, lines: &[SummaryLine], empty_m
     ui.add_space(8.0);
 }
 
-fn scheduled_task_lines(
-    store: &ClientStore,
-    agent_did: &str,
-    behavior_id: &str,
-) -> Vec<SummaryLine> {
-    let mut rows = store.scheduled_tasks_for_behavior(agent_did, behavior_id);
+fn task_lines(store: &ClientStore, agent_did: &str, behavior_id: &str) -> Vec<SummaryLine> {
+    let mut rows = store.tasks_for_behavior(agent_did, behavior_id);
     rows.sort_by(|left, right| {
         right
             .updated_at
@@ -120,10 +135,46 @@ fn scheduled_task_lines(
         .map(|row| SummaryLine {
             title: row.name.clone().unwrap_or_else(|| row.task_id.clone()),
             meta: format!(
-                "{}  next {}  runs {}",
+                "{}  updated {}",
+                if row.enabled == Some(false) {
+                    "disabled"
+                } else {
+                    "enabled"
+                },
+                compact_timestamp(
+                    row.updated_at
+                        .as_deref()
+                        .or(row.created_at.as_deref())
+                        .unwrap_or(""),
+                ),
+            ),
+        })
+        .collect()
+}
+
+fn schedule_lines(store: &ClientStore, agent_did: &str, behavior_id: &str) -> Vec<SummaryLine> {
+    let tasks = store.tasks_for_behavior(agent_did, behavior_id);
+    let task_ids: Vec<&str> = tasks.iter().map(|task| task.task_id.as_str()).collect();
+    let mut rows = store.schedules_for_tasks(&task_ids);
+    rows.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| right.schedule_id.cmp(&left.schedule_id))
+    });
+
+    rows.into_iter()
+        .take(6)
+        .map(|row| SummaryLine {
+            title: row
+                .task_id
+                .clone()
+                .unwrap_or_else(|| row.schedule_id.clone()),
+            meta: format!(
+                "{}  next {}  fires {}",
                 row.last_status.as_deref().unwrap_or("idle"),
-                scheduled_task_next_run_label(row),
-                row.run_count
+                schedule_next_run_label(row),
+                row.fire_count
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "0".to_string()),
             ),
@@ -188,11 +239,43 @@ fn request_lines(store: &ClientStore, agent_did: &str, behavior_id: &str) -> Vec
 mod tests {
     use super::*;
     use crate::client::ClientStoreRows;
-    use defra_agent_protocol::row::{AgentConversationRow, AgentRequestRow, ScheduledTaskRow};
+    use defra_agent_protocol::row::{
+        AgentBehaviorRow, AgentConversationRow, AgentRequestRow, ScheduleRow, TaskRow,
+    };
 
     #[test]
     fn behavior_context_filters_rows_by_behavior() {
         let store = ClientStore::from_rows(ClientStoreRows {
+            behaviors: vec![
+                AgentBehaviorRow {
+                    behavior_id: "amy-default".to_string(),
+                    agent_did: Some("did:defra:amy".to_string()),
+                    display_name: Some("Amy Default".to_string()),
+                    system_prompt: None,
+                    backend_id: None,
+                    model_name: None,
+                    tool_selection_id: None,
+                    inference_profile_id: None,
+                    compaction_strategy: None,
+                    compaction_threshold: None,
+                    enabled: Some(true),
+                    created_at: None,
+                },
+                AgentBehaviorRow {
+                    behavior_id: "amy-alt".to_string(),
+                    agent_did: Some("did:defra:amy".to_string()),
+                    display_name: Some("Amy Alt".to_string()),
+                    system_prompt: None,
+                    backend_id: None,
+                    model_name: None,
+                    tool_selection_id: None,
+                    inference_profile_id: None,
+                    compaction_strategy: None,
+                    compaction_threshold: None,
+                    enabled: Some(true),
+                    created_at: None,
+                },
+            ],
             conversations: vec![
                 AgentConversationRow {
                     session_id: "session-match".to_string(),
@@ -265,36 +348,56 @@ mod tests {
                     caused_by_trigger_kind: None,
                 },
             ],
-            scheduled_tasks: vec![
-                ScheduledTaskRow {
+            tasks: vec![
+                TaskRow {
                     task_id: "task-match".to_string(),
-                    agent_did: Some("did:defra:amy".to_string()),
-                    behavior_id: Some("amy-default".to_string()),
                     name: Some("Matched Task".to_string()),
-                    prompt: Some("run".to_string()),
-                    interval_secs: Some(60),
+                    description: None,
+                    behavior_id: Some("amy-default".to_string()),
+                    prompt_template: Some("run".to_string()),
                     enabled: Some(true),
-                    next_run_at: Some("2026-04-17T00:30:00Z".to_string()),
-                    last_run_at: None,
-                    last_status: Some("armed".to_string()),
-                    last_error: None,
-                    run_count: Some(2),
+                    output_schema_ref: None,
                     created_at: None,
                     updated_at: Some("2026-04-17T00:01:00Z".to_string()),
                 },
-                ScheduledTaskRow {
+                TaskRow {
                     task_id: "task-other".to_string(),
-                    agent_did: Some("did:defra:amy".to_string()),
-                    behavior_id: Some("amy-alt".to_string()),
                     name: Some("Other Task".to_string()),
-                    prompt: Some("run".to_string()),
+                    description: None,
+                    behavior_id: Some("amy-alt".to_string()),
+                    prompt_template: Some("run".to_string()),
+                    enabled: Some(true),
+                    output_schema_ref: None,
+                    created_at: None,
+                    updated_at: Some("2026-04-17T00:01:00Z".to_string()),
+                },
+            ],
+            schedules: vec![
+                ScheduleRow {
+                    schedule_id: "sched-match".to_string(),
+                    task_id: Some("task-match".to_string()),
                     interval_secs: Some(60),
                     enabled: Some(true),
+                    concurrency: None,
                     next_run_at: Some("2026-04-17T00:30:00Z".to_string()),
-                    last_run_at: None,
+                    last_attempt_at: None,
                     last_status: Some("armed".to_string()),
                     last_error: None,
-                    run_count: Some(2),
+                    fire_count: Some(2),
+                    created_at: None,
+                    updated_at: Some("2026-04-17T00:01:00Z".to_string()),
+                },
+                ScheduleRow {
+                    schedule_id: "sched-other".to_string(),
+                    task_id: Some("task-other".to_string()),
+                    interval_secs: Some(60),
+                    enabled: Some(true),
+                    concurrency: None,
+                    next_run_at: Some("2026-04-17T00:30:00Z".to_string()),
+                    last_attempt_at: None,
+                    last_status: Some("armed".to_string()),
+                    last_error: None,
+                    fire_count: Some(2),
                     created_at: None,
                     updated_at: Some("2026-04-17T00:01:00Z".to_string()),
                 },
@@ -304,7 +407,8 @@ mod tests {
 
         let conversations = conversation_lines(&store, "did:defra:amy", "amy-default");
         let requests = request_lines(&store, "did:defra:amy", "amy-default");
-        let tasks = scheduled_task_lines(&store, "did:defra:amy", "amy-default");
+        let tasks = task_lines(&store, "did:defra:amy", "amy-default");
+        let schedules = schedule_lines(&store, "did:defra:amy", "amy-default");
 
         assert_eq!(conversations.len(), 1);
         assert_eq!(conversations[0].title, "Matched");
@@ -312,5 +416,7 @@ mod tests {
         assert!(requests[0].title.contains("hello from default"));
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].title, "Matched Task");
+        assert_eq!(schedules.len(), 1);
+        assert_eq!(schedules[0].title, "task-match");
     }
 }

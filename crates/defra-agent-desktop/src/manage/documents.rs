@@ -1,12 +1,12 @@
 use crate::client::ClientStore;
 use crate::state::{
     BackendDraft, BehaviorDraft, InferenceProfileDraft, ManageDraft, ManageDraftOrigin,
-    ManageSection, ScheduledTaskDraft, ToolSelectionDraft,
+    ManageSection, ScheduleDraft, TaskDraft, ToolSelectionDraft,
 };
 
 use super::{
     abbreviate_identifier, bool_word, compact_timestamp, normalize_optional_owned,
-    scheduled_task_is_due, scheduled_task_next_run_label, summarize_request_content, truncate_line,
+    schedule_is_due, schedule_next_run_label, summarize_request_content, truncate_line,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,35 +127,53 @@ pub fn draft_for_selection(
                         .unwrap_or_default(),
                 })
             }),
-        ManageSection::ScheduledTasks => store
-            .scheduled_tasks
+        ManageSection::Tasks => store
+            .tasks
             .iter()
-            .find(|row| row.task_id == entity_id && row.agent_did.as_deref() == selected_agent_did)
+            .find(|row| row.task_id == entity_id)
             .map(|row| {
-                ManageDraft::ScheduledTask(ScheduledTaskDraft {
+                ManageDraft::Task(TaskDraft {
                     task_id: row.task_id.clone(),
-                    agent_did: row.agent_did.clone().unwrap_or_default(),
-                    behavior_id: row.behavior_id.clone().unwrap_or_default(),
                     name: row.name.clone().unwrap_or_default(),
-                    prompt: row.prompt.clone().unwrap_or_default(),
+                    description: row.description.clone().unwrap_or_default(),
+                    behavior_id: row.behavior_id.clone().unwrap_or_default(),
+                    prompt_template: row.prompt_template.clone().unwrap_or_default(),
+                    enabled: row.enabled.unwrap_or(true),
+                    output_schema_ref: row.output_schema_ref.clone().unwrap_or_default(),
+                    created_at: row.created_at.clone().unwrap_or_default(),
+                    updated_at: row.updated_at.clone().unwrap_or_default(),
+                })
+            }),
+        ManageSection::Schedules => store
+            .schedules
+            .iter()
+            .find(|row| row.schedule_id == entity_id)
+            .map(|row| {
+                ManageDraft::Schedule(ScheduleDraft {
+                    schedule_id: row.schedule_id.clone(),
+                    task_id: row.task_id.clone().unwrap_or_default(),
                     interval_secs: row
                         .interval_secs
                         .map(|value| value.to_string())
                         .unwrap_or_default(),
                     enabled: row.enabled.unwrap_or(true),
+                    concurrency: row.concurrency.clone().unwrap_or_default(),
                     next_run_at: row.next_run_at.clone().unwrap_or_default(),
-                    last_run_at: row.last_run_at.clone().unwrap_or_default(),
+                    last_attempt_at: row.last_attempt_at.clone().unwrap_or_default(),
                     last_status: row.last_status.clone().unwrap_or_default(),
                     last_error: row.last_error.clone().unwrap_or_default(),
-                    run_count: row
-                        .run_count
+                    fire_count: row
+                        .fire_count
                         .map(|value| value.to_string())
                         .unwrap_or_default(),
                     created_at: row.created_at.clone().unwrap_or_default(),
                     updated_at: row.updated_at.clone().unwrap_or_default(),
                 })
             }),
-        _ => None,
+        _ => {
+            let _ = selected_agent_did;
+            None
+        }
     }
 }
 
@@ -215,19 +233,28 @@ pub fn new_draft_for_section(
                 deadline_duration_secs: String::new(),
             }))
         }
-        ManageSection::ScheduledTasks => Some(ManageDraft::ScheduledTask(ScheduledTaskDraft {
+        ManageSection::Tasks => Some(ManageDraft::Task(TaskDraft {
             task_id: String::new(),
-            agent_did: selected_agent_did.unwrap_or_default().to_string(),
-            behavior_id: String::new(),
             name: String::new(),
-            prompt: String::new(),
+            description: String::new(),
+            behavior_id: String::new(),
+            prompt_template: String::new(),
+            enabled: true,
+            output_schema_ref: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        })),
+        ManageSection::Schedules => Some(ManageDraft::Schedule(ScheduleDraft {
+            schedule_id: String::new(),
+            task_id: String::new(),
             interval_secs: String::new(),
             enabled: true,
+            concurrency: String::new(),
             next_run_at: String::new(),
-            last_run_at: String::new(),
+            last_attempt_at: String::new(),
             last_status: String::new(),
             last_error: String::new(),
-            run_count: String::new(),
+            fire_count: String::new(),
             created_at: String::new(),
             updated_at: String::new(),
         })),
@@ -267,34 +294,39 @@ pub fn entity_summaries(
                 .collect();
             rows.sort_by(|left, right| left.behavior_id.cmp(&right.behavior_id));
             rows.into_iter()
-                .map(|row| EntitySummary {
-                    id: row.behavior_id.clone(),
-                    title: row
-                        .display_name
-                        .clone()
-                        .unwrap_or_else(|| row.behavior_id.clone()),
-                    meta: format!(
-                        "{}  model {}  backend {}  tasks {}  convos {}",
-                        if row.enabled == Some(false) {
-                            "disabled"
-                        } else {
-                            "enabled"
-                        },
-                        row.model_name.as_deref().unwrap_or("unbound"),
-                        row.backend_id.as_deref().unwrap_or("unbound"),
-                        store
-                            .scheduled_tasks_for_behavior(
-                                selected_agent_did.unwrap_or_default(),
-                                &row.behavior_id,
-                            )
-                            .len(),
-                        store
-                            .conversations_for_behavior(
-                                selected_agent_did.unwrap_or_default(),
-                                &row.behavior_id,
-                            )
-                            .len(),
-                    ),
+                .map(|row| {
+                    let behavior_tasks = store.tasks_for_behavior(
+                        selected_agent_did.unwrap_or_default(),
+                        &row.behavior_id,
+                    );
+                    let task_ids: Vec<&str> =
+                        behavior_tasks.iter().map(|task| task.task_id.as_str()).collect();
+                    let schedules = store.schedules_for_tasks(&task_ids);
+                    EntitySummary {
+                        id: row.behavior_id.clone(),
+                        title: row
+                            .display_name
+                            .clone()
+                            .unwrap_or_else(|| row.behavior_id.clone()),
+                        meta: format!(
+                            "{}  model {}  backend {}  tasks {}  schedules {}  convos {}",
+                            if row.enabled == Some(false) {
+                                "disabled"
+                            } else {
+                                "enabled"
+                            },
+                            row.model_name.as_deref().unwrap_or("unbound"),
+                            row.backend_id.as_deref().unwrap_or("unbound"),
+                            behavior_tasks.len(),
+                            schedules.len(),
+                            store
+                                .conversations_for_behavior(
+                                    selected_agent_did.unwrap_or_default(),
+                                    &row.behavior_id,
+                                )
+                                .len(),
+                        ),
+                    }
                 })
                 .collect()
         }
@@ -362,26 +394,91 @@ pub fn entity_summaries(
                 })
                 .collect()
         }
-        ManageSection::ScheduledTasks => {
+        ManageSection::Tasks => {
+            // Tasks are globally addressed by `task_id`. When a deployment
+            // is selected we narrow to tasks whose behavior is owned by
+            // that agent; this preserves the per-deployment feel of the
+            // manage workspace.
             let mut rows: Vec<_> = store
-                .scheduled_tasks
+                .tasks
                 .iter()
-                .filter(|row| row.agent_did.as_deref() == selected_agent_did)
+                .filter(|row| match (selected_agent_did, row.behavior_id.as_deref()) {
+                    (Some(agent_did), Some(behavior_id)) => store
+                        .behavior_row(agent_did, behavior_id)
+                        .is_some(),
+                    (Some(_), None) => false,
+                    (None, _) => true,
+                })
                 .collect();
-            rows.sort_by(|left, right| {
-                left.next_run_at
-                    .cmp(&right.next_run_at)
-                    .then_with(|| left.task_id.cmp(&right.task_id))
-            });
+            rows.sort_by(|left, right| left.task_id.cmp(&right.task_id));
             rows.into_iter()
                 .map(|row| EntitySummary {
                     id: row.task_id.clone(),
                     title: row.name.clone().unwrap_or_else(|| row.task_id.clone()),
                     meta: format!(
-                        "{}  every {}s  next {}  runs {}",
+                        "{}  behavior {}  updated {}",
                         if row.enabled == Some(false) {
                             "disabled"
-                        } else if scheduled_task_is_due(row) {
+                        } else {
+                            "enabled"
+                        },
+                        row.behavior_id.as_deref().unwrap_or("unbound"),
+                        compact_timestamp(
+                            row.updated_at
+                                .as_deref()
+                                .or(row.created_at.as_deref())
+                                .unwrap_or(""),
+                        ),
+                    ),
+                })
+                .collect()
+        }
+        ManageSection::Schedules => {
+            // Schedules are globally addressed by `schedule_id`. When a
+            // deployment is selected we filter to schedules whose task is
+            // bound to a behavior owned by that agent (matching the Tasks
+            // section's filter above).
+            let task_ids_for_agent: std::collections::HashSet<String> = match selected_agent_did {
+                Some(agent_did) => store
+                    .tasks
+                    .iter()
+                    .filter(|task| {
+                        task.behavior_id
+                            .as_deref()
+                            .is_some_and(|behavior_id| {
+                                store.behavior_row(agent_did, behavior_id).is_some()
+                            })
+                    })
+                    .map(|task| task.task_id.clone())
+                    .collect(),
+                None => store.tasks.iter().map(|task| task.task_id.clone()).collect(),
+            };
+
+            let mut rows: Vec<_> = store
+                .schedules
+                .iter()
+                .filter(|row| match row.task_id.as_deref() {
+                    Some(task_id) => task_ids_for_agent.contains(task_id),
+                    None => selected_agent_did.is_none(),
+                })
+                .collect();
+            rows.sort_by(|left, right| {
+                left.next_run_at
+                    .cmp(&right.next_run_at)
+                    .then_with(|| left.schedule_id.cmp(&right.schedule_id))
+            });
+            rows.into_iter()
+                .map(|row| EntitySummary {
+                    id: row.schedule_id.clone(),
+                    title: row
+                        .task_id
+                        .clone()
+                        .unwrap_or_else(|| row.schedule_id.clone()),
+                    meta: format!(
+                        "{}  every {}s  next {}  fires {}",
+                        if row.enabled == Some(false) {
+                            "disabled"
+                        } else if schedule_is_due(row) {
                             "due"
                         } else {
                             "armed"
@@ -389,8 +486,8 @@ pub fn entity_summaries(
                         row.interval_secs
                             .map(|value| value.to_string())
                             .unwrap_or_else(|| "na".to_string()),
-                        scheduled_task_next_run_label(row),
-                        row.run_count
+                        schedule_next_run_label(row),
+                        row.fire_count
                             .map(|value| value.to_string())
                             .unwrap_or_else(|| "0".to_string()),
                     ),
@@ -507,23 +604,49 @@ pub fn recent_failure_summaries(
         ));
     }
 
-    for task in store
-        .scheduled_tasks
-        .iter()
-        .filter(|row| row.agent_did.as_deref() == selected_agent_did)
-    {
-        let Some(error) = normalize_optional_owned(task.last_error.as_deref().unwrap_or("")) else {
+    // Scope schedule failures to schedules whose task is bound to a
+    // behavior owned by the selected agent (mirroring Schedules section
+    // filtering above).
+    let task_ids_for_agent: std::collections::HashSet<String> = match selected_agent_did {
+        Some(agent_did) => store
+            .tasks
+            .iter()
+            .filter(|task| {
+                task.behavior_id
+                    .as_deref()
+                    .is_some_and(|behavior_id| {
+                        store.behavior_row(agent_did, behavior_id).is_some()
+                    })
+            })
+            .map(|task| task.task_id.clone())
+            .collect(),
+        None => store.tasks.iter().map(|task| task.task_id.clone()).collect(),
+    };
+
+    for schedule in store.schedules.iter().filter(|row| match row.task_id.as_deref() {
+        Some(task_id) => task_ids_for_agent.contains(task_id),
+        None => selected_agent_did.is_none(),
+    }) {
+        let Some(error) =
+            normalize_optional_owned(schedule.last_error.as_deref().unwrap_or(""))
+        else {
             continue;
         };
 
         rows.push((
-            task.last_run_at.clone().or_else(|| task.updated_at.clone()),
+            schedule
+                .last_attempt_at
+                .clone()
+                .or_else(|| schedule.updated_at.clone()),
             EntitySummary {
-                id: format!("task:{}", task.task_id),
-                title: task.name.clone().unwrap_or_else(|| task.task_id.clone()),
+                id: format!("schedule:{}", schedule.schedule_id),
+                title: schedule
+                    .task_id
+                    .clone()
+                    .unwrap_or_else(|| schedule.schedule_id.clone()),
                 meta: format!(
-                    "scheduled task  {}  {}",
-                    task.last_status.as_deref().unwrap_or("error"),
+                    "schedule  {}  {}",
+                    schedule.last_status.as_deref().unwrap_or("error"),
                     truncate_line(&error, 64),
                 ),
             },

@@ -1,10 +1,11 @@
 use anyhow::Result;
 use defra_agent_protocol::row::{
-    AgentBehaviorRow, InferenceBackendRow, InferenceProfileRow, ScheduledTaskRow, ToolSelectionRow,
+    AgentBehaviorRow, InferenceBackendRow, InferenceProfileRow, ScheduleRow, TaskRow,
+    ToolSelectionRow,
 };
 
 use crate::state::{
-    BackendDraft, BehaviorDraft, InferenceProfileDraft, ScheduledTaskDraft, ToolSelectionDraft,
+    BackendDraft, BehaviorDraft, InferenceProfileDraft, ScheduleDraft, TaskDraft, ToolSelectionDraft,
 };
 
 use super::{
@@ -80,23 +81,42 @@ pub fn inference_profile_row(draft: &InferenceProfileDraft) -> Result<InferenceP
     })
 }
 
-pub fn scheduled_task_row(draft: &ScheduledTaskDraft) -> Result<ScheduledTaskRow> {
-    Ok(ScheduledTaskRow {
+/// Build a `TaskRow` from the draft shown in the Task manage section.
+///
+/// Task 51 introduces this helper for future editor support (Task 52
+/// wires the real editor). The manage-list view itself does not call
+/// into this path today.
+pub fn task_row(draft: &TaskDraft) -> Result<TaskRow> {
+    Ok(TaskRow {
         task_id: normalize_required("task_id", &draft.task_id)?.to_string(),
-        agent_did: Some(normalize_required("agent_did", &draft.agent_did)?.to_string()),
-        behavior_id: Some(normalize_required("behavior_id", &draft.behavior_id)?.to_string()),
-        name: Some(normalize_required("name", &draft.name)?.to_string()),
-        prompt: Some(normalize_required("prompt", &draft.prompt)?.to_string()),
+        name: normalize_optional_owned(&draft.name),
+        description: normalize_optional_owned(&draft.description),
+        behavior_id: normalize_optional_owned(&draft.behavior_id),
+        prompt_template: normalize_optional_owned(&draft.prompt_template),
+        enabled: Some(draft.enabled),
+        output_schema_ref: normalize_optional_owned(&draft.output_schema_ref),
+        created_at: parse_optional_rfc3339("created_at", &draft.created_at)?,
+        updated_at: parse_optional_rfc3339("updated_at", &draft.updated_at)?,
+    })
+}
+
+/// Build a `ScheduleRow` from the draft shown in the Schedule manage
+/// section. See `task_row` for scope limits.
+pub fn schedule_row(draft: &ScheduleDraft) -> Result<ScheduleRow> {
+    Ok(ScheduleRow {
+        schedule_id: normalize_required("schedule_id", &draft.schedule_id)?.to_string(),
+        task_id: Some(normalize_required("task_id", &draft.task_id)?.to_string()),
         interval_secs: Some(parse_required_positive_i64(
             "interval_secs",
             &draft.interval_secs,
         )?),
         enabled: Some(draft.enabled),
+        concurrency: normalize_optional_owned(&draft.concurrency),
         next_run_at: parse_optional_rfc3339("next_run_at", &draft.next_run_at)?,
-        last_run_at: parse_optional_rfc3339("last_run_at", &draft.last_run_at)?,
+        last_attempt_at: parse_optional_rfc3339("last_attempt_at", &draft.last_attempt_at)?,
         last_status: normalize_optional_owned(&draft.last_status),
         last_error: normalize_optional_owned(&draft.last_error),
-        run_count: parse_optional_i64("run_count", &draft.run_count)?,
+        fire_count: parse_optional_i64("fire_count", &draft.fire_count)?,
         created_at: parse_optional_rfc3339("created_at", &draft.created_at)?,
         updated_at: parse_optional_rfc3339("updated_at", &draft.updated_at)?,
     })

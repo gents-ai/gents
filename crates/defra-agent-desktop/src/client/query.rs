@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use defra_agent_protocol::row::{
     AgentBehaviorRow, AgentConversationRow, AgentMessageRow, AgentPrincipalRow, AgentRequestRow,
     AgentResponseRow, AgentRuntimeRow, AgentSessionRow, AgentToolCallRow, AgentToolResultRow,
-    CompactionEntryRow, InferenceBackendRow, InferenceProfileRow, ScheduledTaskRow,
+    CompactionEntryRow, InferenceBackendRow, InferenceProfileRow, ScheduleRow, TaskRow,
     ToolSelectionRow, ToolServiceRegistryRow,
 };
 use defra_node::EmbeddedNode;
@@ -24,7 +24,8 @@ pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
         tool_calls: load_agent_tool_calls(node).await?,
         tool_results: load_agent_tool_results(node).await?,
         compaction_entries: load_compaction_entries(node).await?,
-        scheduled_tasks: load_scheduled_tasks(node).await?,
+        tasks: load_tasks(node).await?,
+        schedules: load_schedules(node).await?,
         tool_selections: load_tool_selections(node).await?,
         inference_backends: load_inference_backends(node).await?,
         inference_profiles: load_inference_profiles(node).await?,
@@ -131,11 +132,20 @@ pub async fn load_compaction_entries(node: &EmbeddedNode) -> Result<Vec<Compacti
     .await
 }
 
-pub async fn load_scheduled_tasks(node: &EmbeddedNode) -> Result<Vec<ScheduledTaskRow>> {
+pub async fn load_tasks(node: &EmbeddedNode) -> Result<Vec<TaskRow>> {
     load_rows(
         node,
-        "ScheduledTask",
-        "query { ScheduledTask { task_id agent_did behavior_id name prompt interval_secs enabled next_run_at last_run_at last_status last_error run_count created_at updated_at } }",
+        "Task",
+        "query { Task { task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at } }",
+    )
+    .await
+}
+
+pub async fn load_schedules(node: &EmbeddedNode) -> Result<Vec<ScheduleRow>> {
+    load_rows(
+        node,
+        "Schedule",
+        "query { Schedule { schedule_id task_id interval_secs enabled concurrency next_run_at last_attempt_at last_status last_error fire_count created_at updated_at } }",
     )
     .await
 }

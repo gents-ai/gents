@@ -22,7 +22,7 @@ use crate::theme;
 use crate::views;
 use editors::{
     render_backend_editor, render_behavior_editor, render_inference_profile_editor,
-    render_scheduled_task_editor, render_tool_selection_editor,
+    render_schedule_editor, render_task_editor, render_tool_selection_editor,
 };
 
 pub fn prepare_state(
@@ -78,7 +78,8 @@ pub fn show_main(
             | ManageSection::Backends
             | ManageSection::ToolSelections
             | ManageSection::InferenceProfiles
-            | ManageSection::ScheduledTasks => {
+            | ManageSection::Tasks
+            | ManageSection::Schedules => {
                 render_management_workspace(ui, state, client, store, section, entries);
             }
             ManageSection::RequestTimeline | ManageSection::RecentFailures => {
@@ -303,15 +304,27 @@ fn render_editor_workspace(
                 );
             }
         }
-        ManageSection::ScheduledTasks => {
-            if let Some(ManageDraft::ScheduledTask(draft)) = state.manage.draft.as_mut() {
-                scroll_editor_body(ui, |ui| render_scheduled_task_editor(ui, draft));
+        ManageSection::Tasks => {
+            if let Some(ManageDraft::Task(draft)) = state.manage.draft.as_mut() {
+                scroll_editor_body(ui, |ui| render_task_editor(ui, draft));
                 rail::render_editor_footer(ui, state, client);
             } else {
                 views::card(
                     ui,
-                    "Scheduled Task Editor",
-                    "Select a scheduled task from the list or create a new one to edit it here.",
+                    "Task Editor",
+                    "Select a task from the list or create a new one to edit it here.",
+                );
+            }
+        }
+        ManageSection::Schedules => {
+            if let Some(ManageDraft::Schedule(draft)) = state.manage.draft.as_mut() {
+                scroll_editor_body(ui, |ui| render_schedule_editor(ui, draft));
+                rail::render_editor_footer(ui, state, client);
+            } else {
+                views::card(
+                    ui,
+                    "Schedule Editor",
+                    "Select a schedule from the list or create a new one to edit it here.",
                 );
             }
         }

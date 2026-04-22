@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
-use defra_agent_protocol::row::ScheduledTaskRow;
+use defra_agent_protocol::row::ScheduleRow;
 
 pub fn normalize_optional_owned(value: &str) -> Option<String> {
     let trimmed = value.trim();
@@ -71,7 +71,11 @@ pub fn bool_word(value: Option<bool>) -> &'static str {
     }
 }
 
-pub fn scheduled_task_is_due(row: &ScheduledTaskRow) -> bool {
+/// Whether a `Schedule` is eligible to fire right now.
+///
+/// A disabled schedule is never due. Otherwise a schedule is due if its
+/// `next_run_at` is unset or has already elapsed.
+pub fn schedule_is_due(row: &ScheduleRow) -> bool {
     if row.enabled == Some(false) {
         return false;
     }
@@ -82,7 +86,9 @@ pub fn scheduled_task_is_due(row: &ScheduledTaskRow) -> bool {
     }
 }
 
-pub fn scheduled_task_next_run_label(row: &ScheduledTaskRow) -> String {
+/// Human-readable label for a schedule's next-run time. Returns "now"
+/// when the schedule is due or has no `next_run_at` configured.
+pub fn schedule_next_run_label(row: &ScheduleRow) -> String {
     match row.next_run_at.as_deref().and_then(parse_task_timestamp) {
         Some(next_run_at) if Utc::now() >= next_run_at => "now".to_string(),
         Some(next_run_at) => next_run_at.format("%Y-%m-%d %H:%MZ").to_string(),
@@ -158,25 +164,23 @@ mod tests {
     }
 
     #[test]
-    fn scheduled_task_due_defaults_true_without_next_run() {
-        let row = ScheduledTaskRow {
-            task_id: "task-1".to_string(),
-            agent_did: Some("did:defra:amy".to_string()),
-            behavior_id: Some("amy-default".to_string()),
-            name: Some("Task".to_string()),
-            prompt: Some("Prompt".to_string()),
+    fn schedule_due_defaults_true_without_next_run() {
+        let row = ScheduleRow {
+            schedule_id: "sched-1".to_string(),
+            task_id: Some("task-1".to_string()),
             interval_secs: Some(60),
             enabled: Some(true),
+            concurrency: None,
             next_run_at: None,
-            last_run_at: None,
+            last_attempt_at: None,
             last_status: None,
             last_error: None,
-            run_count: Some(0),
+            fire_count: Some(0),
             created_at: None,
             updated_at: None,
         };
 
-        assert!(scheduled_task_is_due(&row));
-        assert_eq!(scheduled_task_next_run_label(&row), "now");
+        assert!(schedule_is_due(&row));
+        assert_eq!(schedule_next_run_label(&row), "now");
     }
 }

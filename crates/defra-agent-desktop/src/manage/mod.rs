@@ -13,11 +13,11 @@ pub(crate) use documents::{
     new_draft_for_section, EntitySummary,
 };
 pub(crate) use rows::{
-    backend_row, behavior_row, inference_profile_row, scheduled_task_row, tool_selection_row,
+    backend_row, behavior_row, inference_profile_row, schedule_row, task_row, tool_selection_row,
 };
 pub(crate) use shared::{
     abbreviate_identifier, bool_word, compact_timestamp, normalize_optional_owned,
     normalize_required, parse_optional_f64, parse_optional_i64, parse_optional_rfc3339,
-    parse_required_positive_i64, scheduled_task_is_due, scheduled_task_next_run_label, split_csv,
+    parse_required_positive_i64, schedule_is_due, schedule_next_run_label, split_csv,
     summarize_request_content, truncate_line,
 };
