@@ -28,6 +28,16 @@ use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 
 use super::{FireIntent, TriggerKind, TriggerSource};
 
+/// Cap for the one-shot existing-docs seed query run when a collection is
+/// newly admitted to `desired_collections`. The goal of the seed is to
+/// enforce spec's forward-only semantic: pre-existing docs in the source
+/// collection must not fire as "created" when the first event arrives.
+/// Collections larger than the cap are still safe (we just log a warning
+/// and accept that docs beyond the cap may appear as "first-seen" on their
+/// next event); v1 doesn't target catalog-scale source collections, so a
+/// conservative limit is fine.
+const SEEN_DOCS_SEED_LIMIT: usize = 10_000;
+
 /// `TriggerSource` that fans DefraDB document events out to
 /// `active_event_triggers`.
 ///
@@ -71,6 +81,16 @@ pub(crate) struct EventSource {
     /// Entries are never invalidated — collection IDs are stable for the
     /// lifetime of a collection's existence.
     collection_id_to_name: HashMap<String, String>,
+    /// Tracks `(collection, doc_id)` pairs already observed by this source
+    /// this process lifetime. The DefraDB event bus fires a single
+    /// `EventName::Update` for creates, updates, and deletes, so the source
+    /// can't distinguish create from update at the event level. We enforce
+    /// the v1 `event_kind = "created"` contract structurally: only the FIRST
+    /// observation of a given `(collection, doc_id)` pair is treated as a
+    /// creation. Seeded at subscription-open via a one-shot existing-docs
+    /// query (see `seed_seen_docs_for_collection`) to enforce spec's
+    /// forward-only semantic for pre-existing docs.
+    seen_docs: HashMap<String, HashSet<String>>,
 }
 
 /// Per-source-collection schema cache.
@@ -183,6 +203,7 @@ impl EventSource {
             cancel,
             source_schema_cache: SourceSchemaCache::default(),
             collection_id_to_name: HashMap::new(),
+            seen_docs: HashMap::new(),
         }
     }
 
@@ -234,9 +255,17 @@ impl EventSource {
         // Trace added / removed collections so operators can correlate a
         // config change with the subscription-set delta. Keeping this at
         // `info!` matches `ScheduleSource::next_fire`'s first-seen logs.
-        for added in desired.difference(&self.desired_collections) {
+        // Enumerate newly-added collections so we can seed `seen_docs`
+        // BEFORE the subscription starts delivering events for them. Without
+        // seeding, any pre-existing doc whose first observation happens on
+        // an update would be (incorrectly) treated as a create.
+        let added: Vec<String> = desired
+            .difference(&self.desired_collections)
+            .cloned()
+            .collect();
+        for added_collection in &added {
             tracing::info!(
-                source_collection = %added,
+                source_collection = %added_collection,
                 generation = snapshot.generation,
                 "event source now observing source collection",
             );
@@ -247,9 +276,33 @@ impl EventSource {
                 generation = snapshot.generation,
                 "event source no longer observing source collection",
             );
+            // Intentionally DO NOT clear seen_docs for removed collections:
+            // keeping the history means that if an operator re-adds the same
+            // collection later in this process, we still know which doc_ids
+            // we'd already observed. Clearing would be defensible too but
+            // would risk a create-on-re-add storm for docs that predate the
+            // original seed.
         }
 
         self.desired_collections = desired;
+
+        // Seed seen_docs for each newly-added collection. Runs AFTER
+        // `desired_collections` is updated so a concurrently-delivered event
+        // landing mid-reconcile sees the set, but BEFORE `reconciled_generation`
+        // is stamped so we don't advance the ticker past a partial seed on
+        // error. The seed itself is best-effort — a collection that can't be
+        // introspected (e.g. transiently missing from the schema) logs and
+        // proceeds with an empty seen set.
+        for added_collection in &added {
+            if let Err(err) = self.seed_seen_docs_for_collection(added_collection).await {
+                tracing::warn!(
+                    source_collection = %added_collection,
+                    %err,
+                    "event source seed_seen_docs_for_collection failed; forward-only \
+                     semantics may be weaker for pre-existing docs in this collection",
+                );
+            }
+        }
 
         // Lazily open the global subscription. We defer opening until the
         // first non-empty desired set so a runtime with no event triggers
@@ -265,6 +318,74 @@ impl EventSource {
         }
 
         self.reconciled_generation = snapshot.generation;
+    }
+
+    /// Seed `seen_docs` for `collection` with every `_docID` currently
+    /// persisted in that collection (up to `SEEN_DOCS_SEED_LIMIT`). Called
+    /// from `reconcile_subscriptions` the first time a source collection
+    /// appears in the desired set. This enforces the spec's forward-only
+    /// semantic: pre-existing docs in the source collection do NOT fire as
+    /// "created" when their first Update event arrives.
+    ///
+    /// A missing / unintrospectable collection is recoverable — we log a
+    /// warning and proceed with an empty seen set, which is equivalent to
+    /// treating every first-observed doc_id as a create (same behavior as
+    /// the pre-fix code).
+    async fn seed_seen_docs_for_collection(&mut self, collection: &str) -> anyhow::Result<()> {
+        let query = format!(
+            r#"query {{ {collection}(limit: {limit}) {{ _docID }} }}"#,
+            collection = collection,
+            limit = SEEN_DOCS_SEED_LIMIT,
+        );
+        let response = self.node.execute(&query).await;
+        if response.has_errors() {
+            tracing::warn!(
+                source_collection = %collection,
+                errors = ?response.errors,
+                "event source could not seed seen_docs (introspection errors); \
+                 forward-only semantics may be weaker for pre-existing docs",
+            );
+            return Ok(());
+        }
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|d| d.get(collection))
+            .and_then(serde_json::Value::as_array);
+        let Some(rows) = rows else {
+            return Ok(());
+        };
+        let doc_ids: HashSet<String> = rows
+            .iter()
+            .filter_map(|r| r.get("_docID").and_then(|v| v.as_str()).map(str::to_owned))
+            .collect();
+        let count = doc_ids.len();
+        if count >= SEEN_DOCS_SEED_LIMIT {
+            tracing::warn!(
+                source_collection = %collection,
+                seed_count = %count,
+                limit = %SEEN_DOCS_SEED_LIMIT,
+                "event source seeded seen_docs at limit; older pre-existing docs \
+                 beyond the cap may fire as created on their first observed event",
+            );
+        }
+        self.seen_docs
+            .entry(collection.to_string())
+            .or_default()
+            .extend(doc_ids);
+        Ok(())
+    }
+
+    /// Record that `(collection, doc_id)` has been observed and return
+    /// whether this was the FIRST observation — i.e. whether the event
+    /// should be treated as a "created" fire under v1 semantics. Subsequent
+    /// observations (updates / deletes / replays) return `false`.
+    fn is_first_seen(&mut self, collection: &str, doc_id: &str) -> bool {
+        let set = self
+            .seen_docs
+            .entry(collection.to_string())
+            .or_default();
+        set.insert(doc_id.to_string())
     }
 
     /// Resolve an event's `collection_id` (the stable hash-like ID carried
@@ -633,6 +754,23 @@ impl TriggerSource for EventSource {
                 // This is the fast path for events in collections no trigger
                 // cares about.
                 if !self.desired_collections.contains(&collection_name) {
+                    continue;
+                }
+
+                // Step 6.5: gate on first-observation. DefraDB's event bus
+                // fires a single `EventName::Update` for creates, updates,
+                // AND deletes, so we can't distinguish them at the event
+                // layer. v1 ships `event_kind = "created"` only, so we treat
+                // the FIRST observation of a `(collection, doc_id)` pair as
+                // the create and skip every subsequent event. Combined with
+                // the existing-docs seed in `reconcile_subscriptions`, this
+                // enforces the spec's forward-only semantic end-to-end.
+                if !self.is_first_seen(&collection_name, &doc_id) {
+                    tracing::debug!(
+                        source_collection = %collection_name,
+                        source_doc_id = %doc_id,
+                        "event source treating non-first-seen event as update; skipping",
+                    );
                     continue;
                 }
 

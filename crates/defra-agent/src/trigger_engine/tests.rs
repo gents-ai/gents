@@ -2241,3 +2241,211 @@ async fn dispatch_manual_intent_renders_with_args_and_materializes() {
         "dispatch must render the `args.name` template against args_vars"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Regression tests for the duplicate-on-update correctness fix.
+// The DefraDB event bus emits a single `EventName::Update` variant for
+// creates, updates, and deletes; v1 event triggers ship `event_kind =
+// "created"` only. The event source enforces that forward-only contract via
+// a first-seen gate seeded at subscription open.
+// ---------------------------------------------------------------------------
+
+/// Finding 1: a pre-existing source doc whose first observation arrives
+/// AFTER the subscription opens must NOT fire — the seed populated by
+/// `reconcile_subscriptions` registers it as already-seen. This is the
+/// "don't fire on update" half of the forward-only semantic.
+#[tokio::test]
+async fn event_source_skips_event_for_doc_already_seen_at_subscribe() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let webhook_sdl = r#"
+        type WebhookEvent {
+            external_id: String
+            payload: String
+        }
+    "#;
+    node.add_schema(webhook_sdl)
+        .await
+        .expect("add_schema for WebhookEvent");
+
+    // Seed a doc BEFORE the trigger + subscription exist. The first-seen
+    // seed query at reconcile time will pick this doc up and mark it as
+    // already-observed so any subsequent Update for it is treated as an
+    // update (and dropped under v1 semantics).
+    let seed_mutation = r#"mutation {
+        create_WebhookEvent(input: {
+            external_id: "wh-preexisting",
+            payload: "seed"
+        }) { _docID }
+    }"#;
+    let resp = node.execute(seed_mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "seeding pre-existing doc failed: {:?}",
+        resp.errors,
+    );
+    // The returned shape varies by DefraDB version (scalar vs array); query
+    // the _docID explicitly rather than parse the mutation payload.
+    let lookup = r#"query {
+        WebhookEvent(filter: { external_id: { _eq: "wh-preexisting" } }, limit: 1) {
+            _docID
+        }
+    }"#;
+    let resp = node.execute(lookup).await;
+    assert!(
+        !resp.has_errors(),
+        "lookup of pre-existing doc failed: {:?}",
+        resp.errors,
+    );
+    let preexisting_doc_id = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("WebhookEvent"))
+        .and_then(|arr| arr.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(|v| v.as_str())
+        .expect("WebhookEvent query returned no _docID")
+        .to_string();
+
+    // Open the trigger + subscription AFTER the seed doc exists. Reconcile
+    // should run the seed query and capture `preexisting_doc_id` into
+    // seen_docs so the next Update is treated as a non-first observation.
+    let task = resolved_task("ignored");
+    let trigger = resolved_event_trigger("trigger-noupdate", "WebhookEvent", task);
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([("trigger-noupdate".to_string(), trigger)]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let cancel = CancellationToken::new();
+    let mut source = EventSource::new(rx, node.clone(), cancel.clone());
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+
+    // Now drive an UPDATE to the pre-existing doc. Events flow, but the
+    // first-seen gate should drop this one — it's a non-first observation.
+    let escaped = escape_graphql_string(&preexisting_doc_id);
+    let update_mutation = format!(
+        r#"mutation {{
+            update_WebhookEvent(
+                docID: "{escaped}",
+                input: {{ payload: "updated" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let node_for_mutation = node.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let resp = node_for_mutation.execute(&update_mutation).await;
+        assert!(
+            !resp.has_errors(),
+            "update_WebhookEvent failed: {:?}",
+            resp.errors,
+        );
+    });
+
+    // next_fire MUST time out — the update was suppressed by the first-seen
+    // gate. A short window is sufficient because the event bus round-trip
+    // is milliseconds; anything above that window would mean we got a fire.
+    let result = tokio::time::timeout(Duration::from_millis(500), source.next_fire()).await;
+    assert!(
+        result.is_err(),
+        "next_fire yielded an intent for a pre-seeded doc's update; seed seen_docs \
+         did not suppress the non-first observation",
+    );
+
+    cancel.cancel();
+}
+
+/// Finding 1: the first observation of a newly-created doc fires; the next
+/// observation (an update to the same doc) must NOT fire. Complements the
+/// pre-existing test by exercising the runtime-maintained first-seen set
+/// rather than the seed.
+#[tokio::test]
+async fn event_source_fires_for_first_seen_doc_then_skips_updates() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let webhook_sdl = r#"
+        type WebhookEvent {
+            external_id: String
+            payload: String
+        }
+    "#;
+    node.add_schema(webhook_sdl)
+        .await
+        .expect("add_schema for WebhookEvent");
+
+    let task = resolved_task("ignored");
+    let trigger = resolved_event_trigger("trigger-firstseen", "WebhookEvent", task);
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([("trigger-firstseen".to_string(), trigger)]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let cancel = CancellationToken::new();
+    let mut source = EventSource::new(rx, node.clone(), cancel.clone());
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+
+    // Create a brand-new doc; first observation should fire.
+    let node_for_create = node.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mutation = r#"mutation {
+            create_WebhookEvent(input: {
+                external_id: "wh-first",
+                payload: "{}"
+            }) { _docID }
+        }"#;
+        let resp = node_for_create.execute(mutation).await;
+        assert!(
+            !resp.has_errors(),
+            "create_WebhookEvent failed: {:?}",
+            resp.errors,
+        );
+    });
+
+    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("next_fire timed out on first observation (create should fire)")
+        .expect("next_fire returned None instead of emitting a FireIntent");
+    assert_eq!(intent.trigger_id.as_deref(), Some("trigger-firstseen"));
+    let doc_id = intent
+        .event_vars
+        .get("source_doc_id")
+        .and_then(|v| v.as_str())
+        .expect("source_doc_id must be a string")
+        .to_string();
+
+    // Update the same doc. Second observation; the first-seen set records
+    // the doc, so the update must not fire.
+    let escaped = escape_graphql_string(&doc_id);
+    let update_mutation = format!(
+        r#"mutation {{
+            update_WebhookEvent(
+                docID: "{escaped}",
+                input: {{ payload: "updated" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let node_for_update = node.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let resp = node_for_update.execute(&update_mutation).await;
+        assert!(
+            !resp.has_errors(),
+            "update_WebhookEvent failed: {:?}",
+            resp.errors,
+        );
+    });
+
+    let result = tokio::time::timeout(Duration::from_millis(500), source.next_fire()).await;
+    assert!(
+        result.is_err(),
+        "next_fire yielded an intent for a doc's update; first-seen gate failed to \
+         suppress the second observation",
+    );
+
+    cancel.cancel();
+}
