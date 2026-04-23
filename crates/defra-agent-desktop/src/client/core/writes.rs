@@ -439,11 +439,43 @@ impl ClientCore {
         }
     }
 
-    /// Force a `Schedule` to fire now. Stubbed in Task 51; Task 52 wires
-    /// the real mutation.
-    pub async fn fire_schedule_now(&self, row: &ScheduleRow) -> Result<()> {
+    /// Fire a task immediately via the shared manual-run helper.
+    ///
+    /// Returns the new `AgentRequest`'s `_docID` on success. The row lands
+    /// at `lifecycle_state = "pending"` with manual lineage so the agent's
+    /// normal intake picks it up.
+    pub async fn fire_task_now(
+        &self,
+        task_row: &TaskRow,
+        args: serde_json::Value,
+    ) -> Result<String> {
+        match mutations::fire_task_now(self.node.as_ref(), task_row, args).await {
+            Ok(doc_id) => {
+                self.refresh_store().await?;
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "defra_agent_desktop::writes",
+                    doc_type = "manual_run",
+                    task_id = %task_row.task_id,
+                    request_doc_id = %doc_id,
+                    "desktop manual task run enqueued"
+                );
+                Ok(doc_id)
+            }
+            Err(error) => Err(self.record_mutation_error("fire task", error)),
+        }
+    }
+
+    /// Force a `Schedule`'s task to fire now.
+    ///
+    /// Delegates to `fire_task_now` on the schedule's `task_id` with
+    /// empty args, so the operator override produces an
+    /// `AgentRequest` with manual lineage (`caused_by_trigger_kind =
+    /// "manual"`, not `"schedule"`). Returns the new request's
+    /// `_docID` on success.
+    pub async fn fire_schedule_now(&self, row: &ScheduleRow) -> Result<String> {
         match mutations::fire_schedule_now(self.node.as_ref(), row).await {
-            Ok(()) => {
+            Ok(doc_id) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
@@ -451,9 +483,10 @@ impl ClientCore {
                     doc_type = "schedule",
                     row_id = %row.schedule_id,
                     action = "run_now",
-                    "desktop write saved"
+                    request_doc_id = %doc_id,
+                    "desktop manual schedule run enqueued"
                 );
-                Ok(())
+                Ok(doc_id)
             }
             Err(error) => Err(self.record_mutation_error("fire schedule now", error)),
         }

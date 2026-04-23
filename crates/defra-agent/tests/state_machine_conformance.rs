@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
-use defra_agent::{DefraStreamWriter, RequestLifecycle};
+use defra_agent::{write_manual_agent_request, DefraStreamWriter, RequestLifecycle};
 
 mod support;
 
@@ -1951,4 +1951,213 @@ fn conformance_interrupted_lifecycle_maps_to_interrupted_client_turn() {
     assert_eq!(derive_attempt(&view), ClientTurnState::Interrupted);
     assert!(ClientTurnState::Interrupted.is_terminal());
     assert_eq!(ClientTurnState::Interrupted.rank(), 2);
+}
+
+// -----------------------------------------------------------------------------
+// Manual-kind request lifecycle transitions (Task 19 / PR 3)
+//
+// The trigger engine's Schedule and Event paths materialize directly at
+// `claimed`, because the scheduler spawns them. The Manual path is different:
+// the shared `write_manual_agent_request` helper (used by CLI `config task
+// run` and the desktop "Run Now" button) writes at `pending`, and the running
+// agent's normal intake watcher is the thing that claims the row. Two
+// invariants follow from this split and both need pinning:
+//
+//   * Manual helper lands the row at `(status="pending", lifecycle_state=
+//     "pending")` — NOT claimed. Regressing to a claimed landing would
+//     short-circuit intake and break the out-of-process CLI path.
+//   * The manual lineage tuple (`caused_by_trigger_kind="manual"`,
+//     `caused_by_trigger_id=null`) survives the Pending → Claimed transition
+//     untouched. The claim path must not clobber lineage.
+// -----------------------------------------------------------------------------
+
+/// Pin: the shared manual helper produces `(status="pending", lifecycle_state=
+/// "pending")`. Regression guard for the CLI's out-of-process intake path,
+/// which relies on the row being visible to the running agent's watcher.
+#[tokio::test]
+async fn manual_run_materializes_pending_request() {
+    let db = test_db("manual-run-materializes-pending").await;
+
+    let doc_id = write_manual_agent_request(
+        &db.node,
+        AGENT_DID,
+        AGENT_NAME,
+        "task-manual-pending",
+        "manual prompt body",
+        serde_json::json!({}),
+    )
+    .await
+    .expect("write_manual_agent_request should succeed on a fresh node");
+
+    // Status + lifecycle_state must both be "pending" — the CLI path does NOT
+    // land at claimed (the running agent's intake is the thing that claims).
+    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
+    assert_eq!(
+        snap.status, "pending",
+        "manual run must persist status=pending for the intake watcher to claim"
+    );
+    assert_eq!(
+        snap.lifecycle_state, "pending",
+        "manual run must persist lifecycle_state=pending (not claimed)"
+    );
+    assert!(
+        !snap.claimed_at_present,
+        "pending manual row must NOT have claimed_at set"
+    );
+    assert!(
+        !snap.deadline_present,
+        "pending manual row must NOT have a deadline — claim sets it"
+    );
+    assert_eq!(
+        snap.execution_origin, "interactive",
+        "manual runs inherit the interactive execution origin"
+    );
+    assert_eq!(snap.behavior_id, AGENT_NAME);
+
+    // Lineage tuple is already set at the helper boundary — independent of
+    // the lifecycle_state pinning above, but worth asserting here so a
+    // regression that silently conflates "pending" with default lineage
+    // fails loudly.
+    let lineage = fetch_request_lineage_snapshot(&db.node, &doc_id).await;
+    assert_eq!(
+        lineage,
+        RequestLineageSnapshot {
+            caused_by_trigger_id: None,
+            caused_by_trigger_kind: Some("manual".to_string()),
+        },
+        "manual helper must set (null, \"manual\") on the pending row"
+    );
+}
+
+/// Pin: the Pending → Claimed transition preserves the manual lineage tuple.
+///
+/// Sequence mirrors the running agent's intake path: helper writes the
+/// pending row, the watcher observes it, reconstructs the `AgentRequest`,
+/// and invokes `lifecycle.claim()`. After the transition `lifecycle_state`
+/// flips to `claimed`, `claimed_at` + `deadline` get stamped, but the
+/// lineage tuple (`caused_by_trigger_id=null`, `caused_by_trigger_kind=
+/// "manual"`) must be untouched — regressing that would break trigger-kind
+/// aggregations (recent runs, lineage badges) for manual originators.
+#[tokio::test]
+async fn manual_run_preserves_lineage_through_claim_transition() {
+    let db = test_db("manual-run-lineage-through-claim").await;
+
+    let doc_id = write_manual_agent_request(
+        &db.node,
+        AGENT_DID,
+        AGENT_NAME,
+        "task-manual-claim",
+        "manual prompt body",
+        serde_json::json!({}),
+    )
+    .await
+    .expect("write_manual_agent_request should succeed");
+
+    // Sanity: lineage is set and lifecycle is pending before we claim.
+    let pre_claim_lineage = fetch_request_lineage_snapshot(&db.node, &doc_id).await;
+    assert_eq!(
+        pre_claim_lineage,
+        RequestLineageSnapshot {
+            caused_by_trigger_id: None,
+            caused_by_trigger_kind: Some("manual".to_string()),
+        }
+    );
+    assert_eq!(
+        fetch_request_snapshot(&db.node, &doc_id).await.lifecycle_state,
+        "pending"
+    );
+
+    // Read back the persisted row to reconstruct the in-memory AgentRequest
+    // that the intake watcher would build. We need `request_id` + `session_id`
+    // + `created_at` from the actual document so the lifecycle wrapper
+    // operates on the right row.
+    let escaped_doc_id = escape_graphql_string(&doc_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                limit: 1
+            ) {{
+                request_id
+                session_id
+                created_at
+            }}
+        }}"#
+    );
+    let resp = db.node.execute(&query).await;
+    assert!(!resp.has_errors(), "AgentRequest query failed: {:?}", resp.errors);
+    let row = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array())
+        .and_then(|rows| rows.first())
+        .cloned()
+        .expect("manual AgentRequest row exists");
+    let request_id = row
+        .get("request_id")
+        .and_then(|v| v.as_str())
+        .expect("request_id present")
+        .to_string();
+    let session_id = row
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .expect("session_id present")
+        .to_string();
+    let created_at = row
+        .get("created_at")
+        .and_then(|v| v.as_str())
+        .expect("created_at present")
+        .to_string();
+
+    let request = build_request(
+        doc_id.clone(),
+        request_id.clone(),
+        session_id.clone(),
+        created_at,
+    );
+
+    // Drive the Pending → Claimed transition. `ExecutionOrigin::Interactive`
+    // matches the row the helper already wrote — the claim must not flip
+    // origin either.
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+    assert_eq!(
+        lifecycle.claim().await.unwrap(),
+        ClaimOutcome::Claimed,
+        "manual pending row must be claimable exactly once"
+    );
+
+    // Post-claim: lifecycle_state flips to claimed; claimed_at / deadline
+    // are stamped; lineage and execution origin are UNCHANGED.
+    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
+    assert_eq!(snap.lifecycle_state, "claimed");
+    assert_eq!(snap.status, "processing");
+    assert!(snap.claimed_at_present, "claim must stamp claimed_at");
+    assert!(snap.deadline_present, "claim must stamp deadline");
+    assert_eq!(
+        snap.execution_origin, "interactive",
+        "claim must not rewrite execution_origin"
+    );
+
+    let post_claim_lineage = fetch_request_lineage_snapshot(&db.node, &doc_id).await;
+    assert_eq!(
+        post_claim_lineage,
+        RequestLineageSnapshot {
+            caused_by_trigger_id: None,
+            caused_by_trigger_kind: Some("manual".to_string()),
+        },
+        "Pending → Claimed transition must preserve the (null, \"manual\") lineage tuple"
+    );
+    assert_eq!(
+        post_claim_lineage, pre_claim_lineage,
+        "lineage must be byte-identical before and after claim"
+    );
 }

@@ -151,6 +151,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     let (active_schedules, unavailable_schedules) = resolve_schedules(view, &unavailable_behaviors);
     let (active_event_triggers, unavailable_event_triggers) =
         resolve_event_triggers(view, &unavailable_behaviors);
+    let active_tasks = resolve_tasks(view, &unavailable_behaviors);
 
     Ok(ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         default_behavior_id,
@@ -160,7 +161,55 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         unavailable_behaviors,
     )
     .with_schedules(active_schedules, unavailable_schedules)
-    .with_event_triggers(active_event_triggers, unavailable_event_triggers))
+    .with_event_triggers(active_event_triggers, unavailable_event_triggers)
+    .with_tasks(active_tasks))
+}
+
+/// Classify every `Task` in `view` into `active_tasks` if it's enabled and
+/// bound to an available behavior. Unlike `resolve_schedules` /
+/// `resolve_event_triggers`, we don't keep an `unavailable_tasks` set here —
+/// tasks without a trigger aren't exposed to any runtime consumer except
+/// `ManualTriggerHandle::run_task_now`, which reports unavailability at the
+/// call site via a "not in the active snapshot" error.
+fn resolve_tasks(
+    view: &DocumentRuntimeView,
+    unavailable_behaviors: &HashMap<String, String>,
+) -> HashMap<String, ResolvedTask> {
+    let mut active_tasks = HashMap::new();
+
+    for (task_id, task_record) in &view.tasks {
+        let task = &task_record.value;
+
+        if !task.enabled {
+            continue;
+        }
+
+        let behavior_id = match task.behavior_id.as_deref().and_then(non_empty) {
+            Some(id) => id,
+            None => continue,
+        };
+
+        let behavior_record = match view.behaviors.get(behavior_id) {
+            Some(record) => record,
+            None => continue,
+        };
+        if !behavior_record.value.enabled {
+            continue;
+        }
+        if unavailable_behaviors.contains_key(behavior_id) {
+            continue;
+        }
+
+        let resolved_task = ResolvedTask {
+            task_id: task.task_id.clone(),
+            behavior_id: behavior_id.to_string(),
+            prompt_template: task.prompt_template.clone().unwrap_or_default(),
+            output_schema_ref: task.output_schema_ref.clone(),
+        };
+        active_tasks.insert(task_id.clone(), resolved_task);
+    }
+
+    active_tasks
 }
 
 /// Classify every `Schedule` in `view` into either `active_schedules`

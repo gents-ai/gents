@@ -24,6 +24,7 @@ use crate::runtime_snapshot::{
 };
 use crate::tool_surface::BehaviorToolConfig;
 use crate::trigger_engine::event_source::EventSource;
+use crate::trigger_engine::manual_source::ManualSource;
 use crate::trigger_engine::production_materializer::ProductionMaterializer;
 use crate::trigger_engine::schedule_source::ScheduleSource;
 use crate::BackendProviderKind;
@@ -1998,6 +1999,636 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
     assert_eq!(errored.task_id.as_deref(), Some("task-webhook"));
     assert_eq!(errored.enabled, Some(true));
     assert_eq!(errored.concurrency.as_deref(), Some("serial"));
+
+    cancel.cancel();
+}
+
+/// Build a `ResolvedTask` for unit tests that exercise the manual-fire path.
+/// Mirrors `resolved_task` but takes an explicit `task_id` / `behavior_id`
+/// so callers can assert the `task_id` round-tripped through the intent.
+fn resolved_task_for_test(
+    task_id: &str,
+    behavior_id: &str,
+    prompt_template: &str,
+) -> ResolvedTask {
+    ResolvedTask {
+        task_id: task_id.to_string(),
+        behavior_id: behavior_id.to_string(),
+        prompt_template: prompt_template.to_string(),
+        output_schema_ref: None,
+    }
+}
+
+/// Build an `ActiveRuntimeSnapshot` with a single active task and no other
+/// live state. Mirrors `snapshot_with_schedules`. Used by the manual-fire
+/// tests that need `snapshot.active_tasks()` to resolve the intent's task.
+fn snapshot_with_active_task(task: ResolvedTask) -> Arc<ActiveRuntimeSnapshot> {
+    let mut tasks = HashMap::new();
+    tasks.insert(task.task_id.clone(), task);
+    let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
+        "general".to_string(),
+        Vec::new(),
+        HashMap::new(),
+        HashMap::new(),
+        HashMap::new(),
+    )
+    .with_tasks(tasks);
+    Arc::new(resolved.activate(1, HashMap::new()))
+}
+
+#[tokio::test]
+async fn manual_source_run_task_now_yields_intent_with_args_vars() {
+    let snapshot = snapshot_with_active_task(resolved_task_for_test(
+        "greet-user",
+        "behavior-1",
+        "hello {{ args.name }}",
+    ));
+    let cancel = CancellationToken::new();
+    let (mut source, handle) = ManualSource::new(cancel.clone());
+
+    let pull = tokio::spawn(async move { source.next_fire().await });
+
+    let _result_rx = handle
+        .run_task_now(
+            snapshot.as_ref(),
+            "greet-user",
+            serde_json::json!({"name": "Amy"}),
+        )
+        .await
+        .unwrap();
+
+    let intent = pull.await.unwrap().expect("next_fire returned None");
+    assert_eq!(intent.trigger_kind, TriggerKind::Manual);
+    assert_eq!(intent.trigger_id, None);
+    assert_eq!(intent.concurrency, ConcurrencyMode::Parallel);
+    assert_eq!(
+        intent.args_vars.as_ref().and_then(|v| v["name"].as_str()),
+        Some("Amy"),
+    );
+    assert_eq!(intent.task.task_id, "greet-user");
+    assert_eq!(intent.event_vars["trigger_kind"].as_str(), Some("manual"));
+    assert!(intent.doc_vars.is_none());
+}
+
+#[tokio::test]
+async fn manual_source_run_task_now_rejects_unknown_task() {
+    let snapshot = snapshot_with_active_task(resolved_task_for_test(
+        "other-task",
+        "behavior-1",
+        "x",
+    ));
+    let (_source, handle) = ManualSource::new(CancellationToken::new());
+    let err = handle
+        .run_task_now(snapshot.as_ref(), "missing", serde_json::json!({}))
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("not in the active snapshot"),
+        "expected 'not in the active snapshot' in error, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn manual_source_next_fire_returns_none_after_cancel() {
+    let cancel = CancellationToken::new();
+    let (mut source, _handle) = ManualSource::new(cancel.clone());
+
+    // Cancel immediately.
+    cancel.cancel();
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_millis(200),
+        source.next_fire(),
+    )
+    .await
+    .expect("timed out waiting for cancelled next_fire");
+    assert!(result.is_none());
+}
+
+/// Task 5 pinning: `ProductionMaterializer::materialize` must accept a
+/// `TriggerKind::Manual` intent and persist an `AgentRequest` whose lineage
+/// tuple is `(caused_by_trigger_id = null, caused_by_trigger_kind =
+/// "manual")` with `execution_origin = "interactive"` (operator-initiated).
+///
+/// This protects two spec invariants at the materialization boundary:
+///   * `TriggerKind::as_str()` is the authoritative source for the persisted
+///     `caused_by_trigger_kind` field — no hard-coded "schedule"/"event".
+///   * Manual fires map to `ExecutionOrigin::Interactive`, not `Scheduled`;
+///     schedule and event fires keep `Scheduled`.
+#[tokio::test]
+async fn production_materializer_accepts_manual_lineage_end_to_end() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    // Snapshot: behavior "general" loaded (with backend_id), no active
+    // schedules (Manual doesn't consult them).
+    let behavior = integration_test_behavior("general");
+    let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+
+    let materializer = ProductionMaterializer::new(node.clone(), rx);
+    let task = resolved_task_for_test("task-manual", "general", "manual body");
+
+    let request_id = materializer
+        .materialize(&task, None, TriggerKind::Manual, "manual body")
+        .await
+        .expect("Manual materialize should succeed");
+
+    let escaped_request_id = escape_graphql_string(&request_id);
+    let query = format!(
+        r#"query {{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                limit: 1
+            ) {{
+                caused_by_trigger_id
+                caused_by_trigger_kind
+                execution_origin
+                content
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    assert!(
+        !resp.has_errors(),
+        "AgentRequest read-back errored: {:?}",
+        resp.errors
+    );
+    let row = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|arr| arr.as_array())
+        .and_then(|arr| arr.first())
+        .expect("expected one AgentRequest row for the materialized Manual fire");
+    assert!(
+        row.get("caused_by_trigger_id")
+            .and_then(|v| v.as_str())
+            .is_none(),
+        "Manual fires carry no trigger id; expected null caused_by_trigger_id: {row}"
+    );
+    assert_eq!(
+        row.get("caused_by_trigger_kind").and_then(|v| v.as_str()),
+        Some("manual"),
+        "Manual lineage must serialize via TriggerKind::as_str() = \"manual\": {row}"
+    );
+    assert_eq!(
+        row.get("execution_origin").and_then(|v| v.as_str()),
+        Some("interactive"),
+        "Manual fires map to ExecutionOrigin::Interactive per spec: {row}"
+    );
+    assert_eq!(
+        row.get("content").and_then(|v| v.as_str()),
+        Some("manual body"),
+        "rendered prompt should land verbatim in AgentRequest.content: {row}"
+    );
+}
+
+/// Task 6 pinning: `TriggerEngine::dispatch` must pass `TriggerKind::Manual`
+/// intents through without consulting `active_schedules()` /
+/// `active_event_triggers()` (no enabled-gate rejection for operator
+/// fires), render the prompt template against `args_vars`, and invoke the
+/// materializer exactly once with `(trigger_id = None, trigger_kind =
+/// Manual, rendered = "hello Amy")`.
+#[tokio::test]
+async fn dispatch_manual_intent_renders_with_args_and_materializes() {
+    // Snapshot carries the active task but NO active schedules / event
+    // triggers. A Schedule/Event intent would be gated off here; Manual
+    // must not be.
+    let task = resolved_task_for_test("greet-user", "general", "hello {{ args.name }}");
+    let snapshot = snapshot_with_active_task(task.clone());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = SpyMaterializer::new();
+    let engine = TriggerEngine::new(rx, materializer.clone());
+
+    let intent = FireIntent {
+        trigger_id: None,
+        trigger_kind: TriggerKind::Manual,
+        task,
+        concurrency: ConcurrencyMode::Parallel,
+        event_vars: serde_json::json!({}),
+        doc_vars: None,
+        args_vars: Some(serde_json::json!({"name": "Amy"})),
+        on_result: Box::new(|_| {}),
+    };
+
+    let result = engine.dispatch(intent).await;
+
+    match result {
+        FireResult::Fired { request_id } => assert_eq!(
+            request_id, "req-0",
+            "spy materializer hands back sequentially-numbered ids starting at req-0"
+        ),
+        other => panic!(
+            "expected Fired for Manual intent (bypasses enabled-gate), got {other:?}"
+        ),
+    }
+
+    let calls = materializer.calls();
+    assert_eq!(
+        calls.len(),
+        1,
+        "exactly one materialize call expected for Manual dispatch"
+    );
+    let (trigger_id, kind, rendered) = &calls[0];
+    assert!(
+        trigger_id.is_none(),
+        "Manual intents carry trigger_id = None; got {trigger_id:?}"
+    );
+    assert_eq!(*kind, TriggerKind::Manual);
+    assert_eq!(
+        rendered, "hello Amy",
+        "dispatch must render the `args.name` template against args_vars"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Regression tests for the duplicate-on-update / fan-out correctness fixes.
+// The DefraDB event bus emits a single `EventName::Update` variant for
+// creates, updates, and deletes; v1 event triggers ship `event_kind =
+// "created"` only. The event source enforces that forward-only contract via
+// a first-seen gate seeded at subscription open, and fans out a single
+// observation across every matching trigger.
+// ---------------------------------------------------------------------------
+
+/// Finding 1: a pre-existing source doc whose first observation arrives
+/// AFTER the subscription opens must NOT fire — the seed populated by
+/// `reconcile_subscriptions` registers it as already-seen. This is the
+/// "don't fire on update" half of the forward-only semantic.
+#[tokio::test]
+async fn event_source_skips_event_for_doc_already_seen_at_subscribe() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let webhook_sdl = r#"
+        type WebhookEvent {
+            external_id: String
+            payload: String
+        }
+    "#;
+    node.add_schema(webhook_sdl)
+        .await
+        .expect("add_schema for WebhookEvent");
+
+    // Seed a doc BEFORE the trigger + subscription exist. The first-seen
+    // seed query at reconcile time will pick this doc up and mark it as
+    // already-observed so any subsequent Update for it is treated as an
+    // update (and dropped under v1 semantics).
+    let seed_mutation = r#"mutation {
+        create_WebhookEvent(input: {
+            external_id: "wh-preexisting",
+            payload: "seed"
+        }) { _docID }
+    }"#;
+    let resp = node.execute(seed_mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "seeding pre-existing doc failed: {:?}",
+        resp.errors,
+    );
+    // The returned shape varies by DefraDB version (scalar vs array); query
+    // the _docID explicitly rather than parse the mutation payload.
+    let lookup = r#"query {
+        WebhookEvent(filter: { external_id: { _eq: "wh-preexisting" } }, limit: 1) {
+            _docID
+        }
+    }"#;
+    let resp = node.execute(lookup).await;
+    assert!(
+        !resp.has_errors(),
+        "lookup of pre-existing doc failed: {:?}",
+        resp.errors,
+    );
+    let preexisting_doc_id = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("WebhookEvent"))
+        .and_then(|arr| arr.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(|v| v.as_str())
+        .expect("WebhookEvent query returned no _docID")
+        .to_string();
+
+    // Open the trigger + subscription AFTER the seed doc exists. Reconcile
+    // should run the seed query and capture `preexisting_doc_id` into
+    // seen_docs so the next Update is treated as a non-first observation.
+    let task = resolved_task("ignored");
+    let trigger = resolved_event_trigger("trigger-noupdate", "WebhookEvent", task);
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([("trigger-noupdate".to_string(), trigger)]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let cancel = CancellationToken::new();
+    let mut source = EventSource::new(rx, node.clone(), cancel.clone());
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+
+    // Now drive an UPDATE to the pre-existing doc. Events flow, but the
+    // first-seen gate should drop this one — it's a non-first observation.
+    let escaped = escape_graphql_string(&preexisting_doc_id);
+    let update_mutation = format!(
+        r#"mutation {{
+            update_WebhookEvent(
+                docID: "{escaped}",
+                input: {{ payload: "updated" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let node_for_mutation = node.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let resp = node_for_mutation.execute(&update_mutation).await;
+        assert!(
+            !resp.has_errors(),
+            "update_WebhookEvent failed: {:?}",
+            resp.errors,
+        );
+    });
+
+    // next_fire MUST time out — the update was suppressed by the first-seen
+    // gate. A short window is sufficient because the event bus round-trip
+    // is milliseconds; anything above that window would mean we got a fire.
+    let result = tokio::time::timeout(Duration::from_millis(500), source.next_fire()).await;
+    assert!(
+        result.is_err(),
+        "next_fire yielded an intent for a pre-seeded doc's update; seed seen_docs \
+         did not suppress the non-first observation",
+    );
+
+    cancel.cancel();
+}
+
+/// Finding 1: the first observation of a newly-created doc fires; the next
+/// observation (an update to the same doc) must NOT fire. Complements the
+/// pre-existing test by exercising the runtime-maintained first-seen set
+/// rather than the seed.
+#[tokio::test]
+async fn event_source_fires_for_first_seen_doc_then_skips_updates() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let webhook_sdl = r#"
+        type WebhookEvent {
+            external_id: String
+            payload: String
+        }
+    "#;
+    node.add_schema(webhook_sdl)
+        .await
+        .expect("add_schema for WebhookEvent");
+
+    let task = resolved_task("ignored");
+    let trigger = resolved_event_trigger("trigger-firstseen", "WebhookEvent", task);
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([("trigger-firstseen".to_string(), trigger)]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let cancel = CancellationToken::new();
+    let mut source = EventSource::new(rx, node.clone(), cancel.clone());
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+
+    // Create a brand-new doc; first observation should fire.
+    let node_for_create = node.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mutation = r#"mutation {
+            create_WebhookEvent(input: {
+                external_id: "wh-first",
+                payload: "{}"
+            }) { _docID }
+        }"#;
+        let resp = node_for_create.execute(mutation).await;
+        assert!(
+            !resp.has_errors(),
+            "create_WebhookEvent failed: {:?}",
+            resp.errors,
+        );
+    });
+
+    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("next_fire timed out on first observation (create should fire)")
+        .expect("next_fire returned None instead of emitting a FireIntent");
+    assert_eq!(intent.trigger_id.as_deref(), Some("trigger-firstseen"));
+    let doc_id = intent
+        .event_vars
+        .get("source_doc_id")
+        .and_then(|v| v.as_str())
+        .expect("source_doc_id must be a string")
+        .to_string();
+
+    // Update the same doc. Second observation; the first-seen set records
+    // the doc, so the update must not fire.
+    let escaped = escape_graphql_string(&doc_id);
+    let update_mutation = format!(
+        r#"mutation {{
+            update_WebhookEvent(
+                docID: "{escaped}",
+                input: {{ payload: "updated" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let node_for_update = node.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let resp = node_for_update.execute(&update_mutation).await;
+        assert!(
+            !resp.has_errors(),
+            "update_WebhookEvent failed: {:?}",
+            resp.errors,
+        );
+    });
+
+    let result = tokio::time::timeout(Duration::from_millis(500), source.next_fire()).await;
+    assert!(
+        result.is_err(),
+        "next_fire yielded an intent for a doc's update; first-seen gate failed to \
+         suppress the second observation",
+    );
+
+    cancel.cancel();
+}
+
+/// Finding 2: one source event that matches N active triggers must yield N
+/// `FireIntent`s (not 1 and not 0). Registers two triggers on the same
+/// source collection with no filter, creates a single doc, and drains two
+/// intents out of the source in deterministic (lex by trigger_id) order.
+#[tokio::test]
+async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let webhook_sdl = r#"
+        type WebhookEvent {
+            external_id: String
+            payload: String
+        }
+    "#;
+    node.add_schema(webhook_sdl)
+        .await
+        .expect("add_schema for WebhookEvent");
+
+    let task = resolved_task("ignored");
+    // Two triggers on the same collection. lex order: trigger-alpha < trigger-beta.
+    let trigger_alpha =
+        resolved_event_trigger("trigger-alpha", "WebhookEvent", task.clone());
+    let trigger_beta = resolved_event_trigger("trigger-beta", "WebhookEvent", task);
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([
+            ("trigger-alpha".to_string(), trigger_alpha),
+            ("trigger-beta".to_string(), trigger_beta),
+        ]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let cancel = CancellationToken::new();
+    let mut source = EventSource::new(rx, node.clone(), cancel.clone());
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+
+    // Single doc — both triggers must fire, one intent per trigger.
+    let node_for_mutation = node.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mutation = r#"mutation {
+            create_WebhookEvent(input: {
+                external_id: "wh-fanout",
+                payload: "{}"
+            }) { _docID }
+        }"#;
+        let resp = node_for_mutation.execute(mutation).await;
+        assert!(
+            !resp.has_errors(),
+            "create_WebhookEvent failed: {:?}",
+            resp.errors,
+        );
+    });
+
+    let first = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("next_fire timed out on the first fan-out intent")
+        .expect("next_fire returned None instead of emitting the first intent");
+    let second = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("next_fire timed out on the second fan-out intent; fan-out dropped it?")
+        .expect("next_fire returned None instead of emitting the second intent");
+
+    assert_eq!(
+        first.trigger_id.as_deref(),
+        Some("trigger-alpha"),
+        "fan-out must emit intents in deterministic lex-by-trigger_id order",
+    );
+    assert_eq!(second.trigger_id.as_deref(), Some("trigger-beta"));
+    // Both intents reference the same source doc.
+    let first_doc_id = first
+        .event_vars
+        .get("source_doc_id")
+        .and_then(|v| v.as_str());
+    let second_doc_id = second
+        .event_vars
+        .get("source_doc_id")
+        .and_then(|v| v.as_str());
+    assert_eq!(
+        first_doc_id, second_doc_id,
+        "both fan-out intents must carry the same source_doc_id: {first_doc_id:?} vs {second_doc_id:?}",
+    );
+
+    cancel.cancel();
+}
+
+/// Finding 2: if the lexicographically-first trigger's filter misses, the
+/// event must still be tried against the remaining triggers. Previously
+/// `first_matching_trigger` would select the lex-first trigger unconditionally
+/// and drop the whole event if that trigger's filter missed, silently
+/// denying every other matching trigger a chance to fire.
+#[tokio::test]
+async fn event_source_tries_all_triggers_when_first_filter_misses() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let webhook_sdl = r#"
+        type WebhookEvent {
+            external_id: String
+            payload: String
+            kind: String @index
+        }
+    "#;
+    node.add_schema(webhook_sdl)
+        .await
+        .expect("add_schema for WebhookEvent");
+
+    let task = resolved_task("ignored");
+    // trigger-a sorts first by lex order; its filter rejects the test doc.
+    // trigger-b sorts second; its filter accepts the test doc. With the fix,
+    // the engine tries trigger-a, sees the filter miss, then moves on to
+    // trigger-b and fires.
+    let trigger_a = resolved_event_trigger_with_filter(
+        "trigger-a-lex-first",
+        "WebhookEvent",
+        task.clone(),
+        r#"{ kind: { _eq: "signup" } }"#,
+    );
+    let trigger_b = resolved_event_trigger_with_filter(
+        "trigger-b-matches",
+        "WebhookEvent",
+        task,
+        r#"{ kind: { _eq: "other" } }"#,
+    );
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([
+            ("trigger-a-lex-first".to_string(), trigger_a),
+            ("trigger-b-matches".to_string(), trigger_b),
+        ]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let cancel = CancellationToken::new();
+    let mut source = EventSource::new(rx, node.clone(), cancel.clone());
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+
+    // Write a doc whose kind is "other" — misses trigger-a, matches trigger-b.
+    let node_for_mutation = node.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mutation = r#"mutation {
+            create_WebhookEvent(input: {
+                external_id: "wh-missfirst",
+                payload: "{}",
+                kind: "other"
+            }) { _docID }
+        }"#;
+        let resp = node_for_mutation.execute(mutation).await;
+        assert!(
+            !resp.has_errors(),
+            "create_WebhookEvent failed: {:?}",
+            resp.errors,
+        );
+    });
+
+    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect(
+            "next_fire timed out; trigger-a's filter miss silently dropped the \
+             event for trigger-b (fan-out regression)",
+        )
+        .expect("next_fire returned None instead of emitting a FireIntent");
+    assert_eq!(
+        intent.trigger_id.as_deref(),
+        Some("trigger-b-matches"),
+        "after trigger-a filter-miss, the engine must still try trigger-b and fire \
+         for it; got trigger_id = {:?}",
+        intent.trigger_id,
+    );
+
+    // And crucially, there must be no second intent — trigger-a did NOT
+    // match the filter, so it must not have emitted.
+    let maybe_extra =
+        tokio::time::timeout(Duration::from_millis(300), source.next_fire()).await;
+    assert!(
+        maybe_extra.is_err(),
+        "trigger-a emitted a FireIntent despite its filter miss",
+    );
 
     cancel.cancel();
 }

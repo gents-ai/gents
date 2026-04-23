@@ -402,6 +402,11 @@ pub(crate) enum ConfigCommand {
         #[command(subcommand)]
         command: InferenceProfileCommand,
     },
+    #[command(about = "Inspect and fire configured Task documents")]
+    Task {
+        #[command(subcommand)]
+        command: ConfigTaskCommand,
+    },
     #[command(about = "Export desired configuration documents", after_help = CONFIG_EXPORT_AFTER_HELP)]
     Export(ConfigExportArgs),
     #[command(about = "Import desired configuration documents", after_help = CONFIG_IMPORT_AFTER_HELP)]
@@ -498,6 +503,33 @@ pub(crate) struct ToolSelectionUpsertArgs {
 pub(crate) enum InferenceProfileCommand {
     #[command(name = "set")]
     Set(InferenceProfileUpsertArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ConfigTaskCommand {
+    #[command(name = "run", about = "Run a configured Task once, now")]
+    Run(ConfigTaskRunArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct ConfigTaskRunArgs {
+    /// The task_id of the task to run.
+    #[arg(long)]
+    pub(crate) task_id: String,
+
+    /// JSON object of arguments bound as the `args.*` template scope.
+    /// Example: `--args '{"name": "Amy"}'`.
+    #[arg(long, default_value = "{}")]
+    pub(crate) args: String,
+
+    /// GraphQL endpoint of the running agent's DefraDB. Defaults to local.
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+
+    /// Path to the agent home. Used to resolve GraphQL endpoint when
+    /// `--graphql` is not set.
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]

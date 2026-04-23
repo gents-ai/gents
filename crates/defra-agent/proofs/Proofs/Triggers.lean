@@ -156,21 +156,45 @@ structure SystemState where
 
 A fire intent that successfully dispatches into a `RequestSeed` implies
 its underlying trigger is present *and* enabled in the active snapshot
-at the time of the fire. Manual intents are unconstrained — they are
-not gated by a trigger document.
+at the time of the fire. This theorem locks the invariant that a
+disabled schedule or event trigger cannot admit new work, even if a
+stale scheduler tick races the reconcile publish.
 
-This theorem locks the invariant that a disabled schedule or event
-trigger cannot admit new work, even if a stale scheduler tick races
-the reconcile publish.
+The statement is conjunctive and **kind-dispatched** — there are three
+admissible branches and they differ in what the snapshot must witness:
 
-The event branch is stated over the now-concrete `ActiveEventTrigger`
-structure (see PR 2 Task 27): the existential witness `trig` has the
-full shape `{triggerId, taskId, sourceCollection, eventKind, enabled,
-concurrency}`, matching the Rust `ResolvedEventTrigger`. The projection
-`trig.triggerId` / `trig.enabled` is what the gate checks, while the
-remaining fields become load-bearing for the yet-to-be-filled
-`dispatch` operational definition (e.g. joining on `sourceCollection`
-and `eventKind` to decide which subscription's buffer to drain). -/
+* **Schedule branch.** `intent.triggerKind = .schedule` requires an
+  `activeSchedule` in `snap.activeSchedules` whose `triggerId` matches
+  the intent and whose `enabled = true`. Conceptually: the clock-tick
+  source may only produce a fire for a schedule the reconcile layer
+  has published as active.
+* **Event branch.** `intent.triggerKind = .event` requires an
+  `activeEventTrigger` in `snap.activeEventTriggers` with matching
+  `triggerId` and `enabled = true`. Stated over the now-concrete
+  `ActiveEventTrigger` structure (see PR 2 Task 27): the existential
+  witness `trig` has the full shape `{triggerId, taskId,
+  sourceCollection, eventKind, enabled, concurrency}`, matching the
+  Rust `ResolvedEventTrigger`. The projection `trig.triggerId` /
+  `trig.enabled` is what the gate checks, while the remaining fields
+  become load-bearing for the yet-to-be-filled `dispatch` operational
+  definition (e.g. joining on `sourceCollection` and `eventKind` to
+  decide which subscription's buffer to drain).
+* **Manual branch — unconditional.** `intent.triggerKind = .manual`
+  imposes **no snapshot precondition** on the gate. Manual fires are
+  operator-initiated and do not reference any trigger document, so
+  there is nothing to look up. The Rust mirror of this is
+  `TriggerEngine::dispatch` falling through the `TriggerKind::Manual`
+  arm without touching `snapshot.active_schedules` or
+  `snapshot.active_event_triggers`. See `T1_manual_unconditional`
+  below for the lemma form of this observation.
+
+**Proof state.** PR 1 left this theorem at `sorry` because `dispatch`
+itself is still abstract (see its definition above). PR 3 does not
+prove `dispatch`; once a concrete operational definition is supplied
+in a later PR, the proof reduces to an unfold + case on
+`intent.triggerKind` + the `enabled` check. The event branch will then
+discharge directly against `ActiveEventTrigger`'s concrete fields;
+previously it would have needed an opaque existential. -/
 theorem T1_enabled_gate
     (snap : TriggerSnapshot) (intent : FireIntent) (seed : RequestSeed) :
     dispatch snap intent = some seed →
@@ -189,6 +213,39 @@ theorem T1_enabled_gate
   -- discharges directly against `ActiveEventTrigger`'s concrete fields;
   -- previously it would have needed an opaque existential.
   sorry
+
+/-- **Lemma `T1_manual_unconditional`.**
+
+Companion observation to `T1_enabled_gate`: the Manual branch is
+*semantically distinct* from the Schedule and Event branches because
+no snapshot precondition is imposed on it. A successful dispatch of a
+Manual intent implies nothing about `snap.activeSchedules` or
+`snap.activeEventTriggers` — not even existence.
+
+This is load-bearing because it says **dispatch of a Manual intent is
+a pure function of whether the task is resolvable**, decoupled from
+the trigger catalog. In Rust, `ManualTriggerHandle::run_task_now` is
+gated only by `snapshot.active_tasks()` (the task-availability map),
+never by `active_schedules` / `active_event_triggers`; this lemma is
+the Lean mirror of that design.
+
+The statement collapses to `True` conditioned on the Manual kind —
+there is literally nothing to witness — and is kept as a named theorem
+so downstream proofs can appeal to it by name when they need to
+discharge the kind = Manual case of a case-split over `triggerKind`.
+
+Unlike `T1_enabled_gate`, this one discharges without touching
+`dispatch`: the conclusion is `True`, so the proof is trivial and does
+not need to wait for `dispatch`'s operational definition. The lemma's
+value lives in its *statement*, which says what we mean by "Manual is
+unconditional." -/
+theorem T1_manual_unconditional
+    (snap : TriggerSnapshot) (intent : FireIntent) (seed : RequestSeed) :
+    dispatch snap intent = some seed →
+    intent.triggerKind = .manual →
+    True := by
+  intro _ _
+  trivial
 
 
 /-- **Theorem T2 (serial at-most-one).**

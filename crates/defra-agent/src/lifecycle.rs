@@ -9,11 +9,14 @@ use crate::watcher::AgentRequest;
 
 mod claim;
 mod lookup;
+pub mod manual;
 mod materialize;
 mod query;
 mod recovery;
 mod rows;
 mod transition;
+
+pub use manual::write_manual_agent_request;
 
 pub const DEFAULT_REQUEST_MAX_RETRIES: u32 = 3;
 

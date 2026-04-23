@@ -15,8 +15,8 @@
 //!   introspected source-doc projection cached per source collection.
 //! - Task 22: `on_result` callback body for bookkeeping writes.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{SecondsFormat, Utc};
@@ -27,6 +27,16 @@ use tokio_util::sync::CancellationToken;
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 
 use super::{FireIntent, TriggerKind, TriggerSource};
+
+/// Cap for the one-shot existing-docs seed query run when a collection is
+/// newly admitted to `desired_collections`. The goal of the seed is to
+/// enforce spec's forward-only semantic: pre-existing docs in the source
+/// collection must not fire as "created" when the first event arrives.
+/// Collections larger than the cap are still safe (we just log a warning
+/// and accept that docs beyond the cap may appear as "first-seen" on their
+/// next event); v1 doesn't target catalog-scale source collections, so a
+/// conservative limit is fine.
+const SEEN_DOCS_SEED_LIMIT: usize = 10_000;
 
 /// `TriggerSource` that fans DefraDB document events out to
 /// `active_event_triggers`.
@@ -71,6 +81,28 @@ pub(crate) struct EventSource {
     /// Entries are never invalidated — collection IDs are stable for the
     /// lifetime of a collection's existence.
     collection_id_to_name: HashMap<String, String>,
+    /// Tracks `(collection, doc_id)` pairs already observed by this source
+    /// this process lifetime. The DefraDB event bus fires a single
+    /// `EventName::Update` for creates, updates, and deletes, so the source
+    /// can't distinguish create from update at the event level. We enforce
+    /// the v1 `event_kind = "created"` contract structurally: only the FIRST
+    /// observation of a given `(collection, doc_id)` pair is treated as a
+    /// creation. Seeded at subscription-open via a one-shot existing-docs
+    /// query (see `seed_seen_docs_for_collection`) to enforce spec's
+    /// forward-only semantic for pre-existing docs.
+    seen_docs: HashMap<String, HashSet<String>>,
+    /// Queued `FireIntent`s from a single event that matched multiple
+    /// `EventTrigger`s with the same `source_collection` + `event_kind`.
+    /// `next_fire` drains the queue one intent per call before polling the
+    /// subscription again, so fan-out across N matching triggers yields N
+    /// fires (rather than silently dropping N-1 as `first_matching_trigger`
+    /// did previously). Wrapped in `std::sync::Mutex` so that
+    /// `EventSource: Sync` (the `TriggerSource` trait requires it and the
+    /// `Box<dyn FnOnce + Send>` inside each `FireIntent` is not itself
+    /// `Sync`). The mutex is held for trivially-short critical sections
+    /// (`pop_front` / `push_back`) with no `.await` inside, so it will never
+    /// actually contend.
+    pending_intents: Mutex<VecDeque<FireIntent>>,
 }
 
 /// Per-source-collection schema cache.
@@ -183,6 +215,8 @@ impl EventSource {
             cancel,
             source_schema_cache: SourceSchemaCache::default(),
             collection_id_to_name: HashMap::new(),
+            seen_docs: HashMap::new(),
+            pending_intents: Mutex::new(VecDeque::new()),
         }
     }
 
@@ -234,9 +268,17 @@ impl EventSource {
         // Trace added / removed collections so operators can correlate a
         // config change with the subscription-set delta. Keeping this at
         // `info!` matches `ScheduleSource::next_fire`'s first-seen logs.
-        for added in desired.difference(&self.desired_collections) {
+        // Enumerate newly-added collections so we can seed `seen_docs`
+        // BEFORE the subscription starts delivering events for them. Without
+        // seeding, any pre-existing doc whose first observation happens on
+        // an update would be (incorrectly) treated as a create.
+        let added: Vec<String> = desired
+            .difference(&self.desired_collections)
+            .cloned()
+            .collect();
+        for added_collection in &added {
             tracing::info!(
-                source_collection = %added,
+                source_collection = %added_collection,
                 generation = snapshot.generation,
                 "event source now observing source collection",
             );
@@ -247,9 +289,33 @@ impl EventSource {
                 generation = snapshot.generation,
                 "event source no longer observing source collection",
             );
+            // Intentionally DO NOT clear seen_docs for removed collections:
+            // keeping the history means that if an operator re-adds the same
+            // collection later in this process, we still know which doc_ids
+            // we'd already observed. Clearing would be defensible too but
+            // would risk a create-on-re-add storm for docs that predate the
+            // original seed.
         }
 
         self.desired_collections = desired;
+
+        // Seed seen_docs for each newly-added collection. Runs AFTER
+        // `desired_collections` is updated so a concurrently-delivered event
+        // landing mid-reconcile sees the set, but BEFORE `reconciled_generation`
+        // is stamped so we don't advance the ticker past a partial seed on
+        // error. The seed itself is best-effort — a collection that can't be
+        // introspected (e.g. transiently missing from the schema) logs and
+        // proceeds with an empty seen set.
+        for added_collection in &added {
+            if let Err(err) = self.seed_seen_docs_for_collection(added_collection).await {
+                tracing::warn!(
+                    source_collection = %added_collection,
+                    %err,
+                    "event source seed_seen_docs_for_collection failed; forward-only \
+                     semantics may be weaker for pre-existing docs in this collection",
+                );
+            }
+        }
 
         // Lazily open the global subscription. We defer opening until the
         // first non-empty desired set so a runtime with no event triggers
@@ -265,6 +331,74 @@ impl EventSource {
         }
 
         self.reconciled_generation = snapshot.generation;
+    }
+
+    /// Seed `seen_docs` for `collection` with every `_docID` currently
+    /// persisted in that collection (up to `SEEN_DOCS_SEED_LIMIT`). Called
+    /// from `reconcile_subscriptions` the first time a source collection
+    /// appears in the desired set. This enforces the spec's forward-only
+    /// semantic: pre-existing docs in the source collection do NOT fire as
+    /// "created" when their first Update event arrives.
+    ///
+    /// A missing / unintrospectable collection is recoverable — we log a
+    /// warning and proceed with an empty seen set, which is equivalent to
+    /// treating every first-observed doc_id as a create (same behavior as
+    /// the pre-fix code).
+    async fn seed_seen_docs_for_collection(&mut self, collection: &str) -> anyhow::Result<()> {
+        let query = format!(
+            r#"query {{ {collection}(limit: {limit}) {{ _docID }} }}"#,
+            collection = collection,
+            limit = SEEN_DOCS_SEED_LIMIT,
+        );
+        let response = self.node.execute(&query).await;
+        if response.has_errors() {
+            tracing::warn!(
+                source_collection = %collection,
+                errors = ?response.errors,
+                "event source could not seed seen_docs (introspection errors); \
+                 forward-only semantics may be weaker for pre-existing docs",
+            );
+            return Ok(());
+        }
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|d| d.get(collection))
+            .and_then(serde_json::Value::as_array);
+        let Some(rows) = rows else {
+            return Ok(());
+        };
+        let doc_ids: HashSet<String> = rows
+            .iter()
+            .filter_map(|r| r.get("_docID").and_then(|v| v.as_str()).map(str::to_owned))
+            .collect();
+        let count = doc_ids.len();
+        if count >= SEEN_DOCS_SEED_LIMIT {
+            tracing::warn!(
+                source_collection = %collection,
+                seed_count = %count,
+                limit = %SEEN_DOCS_SEED_LIMIT,
+                "event source seeded seen_docs at limit; older pre-existing docs \
+                 beyond the cap may fire as created on their first observed event",
+            );
+        }
+        self.seen_docs
+            .entry(collection.to_string())
+            .or_default()
+            .extend(doc_ids);
+        Ok(())
+    }
+
+    /// Record that `(collection, doc_id)` has been observed and return
+    /// whether this was the FIRST observation — i.e. whether the event
+    /// should be treated as a "created" fire under v1 semantics. Subsequent
+    /// observations (updates / deletes / replays) return `false`.
+    fn is_first_seen(&mut self, collection: &str, doc_id: &str) -> bool {
+        let set = self
+            .seen_docs
+            .entry(collection.to_string())
+            .or_default();
+        set.insert(doc_id.to_string())
     }
 
     /// Resolve an event's `collection_id` (the stable hash-like ID carried
@@ -492,27 +626,123 @@ impl EventSource {
         });
     }
 
-    /// Find the first active event trigger whose `source_collection` matches
-    /// `collection_name` AND whose `event_kind` matches `kind` (currently
-    /// always `"created"` per the v1 spec; `kind` is validated at resolve
-    /// time). Triggers are ordered by `trigger_id` for determinism so the
-    /// "first" match doesn't shift across ticks when multiple triggers key on
-    /// the same collection.
+    /// Build a `FireIntent` for every active `EventTrigger` whose
+    /// `source_collection` matches `collection_name` AND `event_kind` matches
+    /// `kind`. Each candidate's operator-authored filter is probed against
+    /// `source_doc_id`; candidates that miss the filter or whose probe errors
+    /// are skipped (those failures are isolated to the one candidate — they
+    /// must not prevent the other matching triggers from firing). A
+    /// successful candidate is hydrated via `fetch_source_doc` and wrapped in
+    /// a `FireIntent` with a bookkeeping `on_result` callback identical to
+    /// the single-trigger path.
     ///
-    /// Returns a clone so the caller drops its snapshot borrow before
-    /// building the `FireIntent`.
-    fn first_matching_trigger(
+    /// Candidates are ordered by `trigger_id` for determinism so tests and
+    /// dispatch order are stable across ticks.
+    ///
+    /// Replaces the former `first_matching_trigger` helper, which silently
+    /// dropped all but one matching trigger per event (and, worse, dropped
+    /// the whole event when that one trigger's filter missed).
+    async fn build_intents_for_all_matching(
+        &self,
         snapshot: &ActiveRuntimeSnapshot,
         collection_name: &str,
+        source_doc_id: &str,
         kind: &str,
-    ) -> Option<crate::runtime_snapshot::ResolvedEventTrigger> {
-        let mut matches: Vec<_> = snapshot
+    ) -> Vec<FireIntent> {
+        let mut candidates: Vec<crate::runtime_snapshot::ResolvedEventTrigger> = snapshot
             .active_event_triggers()
             .values()
             .filter(|t| t.source_collection == collection_name && t.event_kind == kind)
+            .cloned()
             .collect();
-        matches.sort_by(|a, b| a.trigger_id.cmp(&b.trigger_id));
-        matches.first().map(|t| (*t).clone())
+        candidates.sort_by(|a, b| a.trigger_id.cmp(&b.trigger_id));
+
+        let mut intents = Vec::with_capacity(candidates.len());
+        for trigger in candidates {
+            match self.probe_filter(source_doc_id, &trigger).await {
+                Ok(true) => { /* matched; fall through to hydrate */ }
+                Ok(false) => {
+                    tracing::trace!(
+                        trigger_id = %trigger.trigger_id,
+                        source_collection = %collection_name,
+                        %source_doc_id,
+                        "event source: filter miss, skipping this trigger",
+                    );
+                    continue;
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        trigger_id = %trigger.trigger_id,
+                        source_collection = %collection_name,
+                        %source_doc_id,
+                        %err,
+                        "event source: filter probe failed; skipping this trigger",
+                    );
+                    continue;
+                }
+            }
+
+            // Hydrate `doc_vars` per trigger. The projection is cached per
+            // source collection, so N-trigger fan-out for a single doc runs
+            // one introspection + N cheap filter-by-_docID queries.
+            let doc_vars = match self
+                .fetch_source_doc(&trigger.source_collection, source_doc_id)
+                .await
+            {
+                Ok(value) => Some(value),
+                Err(err) => {
+                    tracing::warn!(
+                        trigger_id = %trigger.trigger_id,
+                        source_collection = %collection_name,
+                        %source_doc_id,
+                        %err,
+                        "event source: source-doc fetch failed; skipping this trigger",
+                    );
+                    continue;
+                }
+            };
+
+            let fired_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+            let event_vars = serde_json::json!({
+                "fired_at": fired_at,
+                "trigger_id": trigger.trigger_id,
+                "trigger_kind": TriggerKind::Event.as_str(),
+                "source_collection": collection_name,
+                "source_doc_id": source_doc_id,
+            });
+
+            tracing::info!(
+                trigger_id = %trigger.trigger_id,
+                source_collection = %collection_name,
+                %source_doc_id,
+                "event source matched event to trigger; emitting fire intent",
+            );
+
+            // Values captured for the result-writeback closure (see
+            // single-trigger path for rationale).
+            let trigger_id_for_callback = trigger.trigger_id.clone();
+            let source_doc_id_for_callback = source_doc_id.to_string();
+            let node_for_callback = self.node.clone();
+
+            intents.push(FireIntent {
+                trigger_id: Some(trigger.trigger_id.clone()),
+                trigger_kind: TriggerKind::Event,
+                task: trigger.task.clone(),
+                concurrency: trigger.concurrency,
+                event_vars,
+                doc_vars,
+                args_vars: None,
+                on_result: Box::new(move |result| {
+                    EventSource::spawn_runtime_field_write(
+                        node_for_callback,
+                        trigger_id_for_callback,
+                        source_doc_id_for_callback,
+                        result,
+                    );
+                }),
+            });
+        }
+        intents
     }
 }
 
@@ -529,6 +759,20 @@ impl TriggerSource for EventSource {
             // channel closure; keep looping otherwise so the engine's outer
             // driver doesn't teardown the source on the first miss.
             loop {
+                // Step 0: drain any FireIntents queued from a prior event
+                // whose fan-out matched multiple triggers. Returning the
+                // queued intent here (without touching the subscription) is
+                // what turns a single Update event into N sequential fires
+                // across all N matching triggers.
+                if let Some(intent) = self
+                    .pending_intents
+                    .lock()
+                    .expect("pending_intents mutex poisoned")
+                    .pop_front()
+                {
+                    return Some(intent);
+                }
+
                 // Step 1: snapshot-read; reconcile if the generation moved.
                 // Reconciliation might open the subscription on first non-
                 // empty desired set.
@@ -636,127 +880,71 @@ impl TriggerSource for EventSource {
                     continue;
                 }
 
-                // Step 7: find the first matching trigger in the snapshot we
-                // read at the top of the loop. Re-borrow the snapshot so
-                // we're always checking against the latest published view,
-                // not the copy we captured for the generation-bump check
-                // (those might diverge if a snapshot published while we were
-                // awaiting `subscription.recv()`).
+                // Step 7: gate on first-observation. DefraDB's event bus
+                // fires a single `EventName::Update` for creates, updates,
+                // AND deletes, so we can't distinguish them at the event
+                // layer. v1 ships `event_kind = "created"` only, so we treat
+                // the FIRST observation of a `(collection, doc_id)` pair as
+                // the create and skip every subsequent event. Combined with
+                // the existing-docs seed in `reconcile_subscriptions`, this
+                // enforces the spec's forward-only semantic end-to-end.
+                if !self.is_first_seen(&collection_name, &doc_id) {
+                    tracing::debug!(
+                        source_collection = %collection_name,
+                        source_doc_id = %doc_id,
+                        "event source treating non-first-seen event as update; skipping",
+                    );
+                    continue;
+                }
+
+                // Step 8: fan out to every matching trigger in the latest
+                // snapshot. Re-borrow the snapshot so we're always checking
+                // against the latest published view, not the copy we
+                // captured for the generation-bump check (those might
+                // diverge if a snapshot published while we were awaiting
+                // `subscription.recv()`). `build_intents_for_all_matching`
+                // probes each candidate's filter independently so a miss on
+                // one trigger does not silently drop the event for the
+                // other matching triggers.
                 let snapshot = self.snapshot_rx.borrow().clone();
                 // v1 spec: event_kind is always "created". If that widens,
                 // map the event variant (Update carries no kind field today
                 // — all writes go through Update, distinguished only by
                 // block contents) to the right string.
                 let event_kind = "created";
-                let Some(trigger) =
-                    Self::first_matching_trigger(snapshot.as_ref(), &collection_name, event_kind)
-                else {
-                    // We filter-pass matched at the collection level but no
-                    // trigger in the snapshot keys on this collection+kind.
-                    // That can happen briefly after a reconcile removes a
-                    // trigger or after a snapshot bump raced with this event;
-                    // drop silently.
+                let mut intents = self
+                    .build_intents_for_all_matching(
+                        snapshot.as_ref(),
+                        &collection_name,
+                        &doc_id,
+                        event_kind,
+                    )
+                    .await;
+                if intents.is_empty() {
+                    // Either no triggers in the snapshot key on this
+                    // collection+kind (can happen briefly after a reconcile
+                    // removes the last matching trigger), or every
+                    // candidate's filter missed / probe errored. Drop and
+                    // park on the next event.
                     continue;
-                };
-
-                // Step 8: probe the trigger's operator-authored `filter`
-                // against the source doc (narrowed by `_docID`). A filter
-                // miss quietly drops the event — other collections may still
-                // match this tick. A probe error is logged and dropped for
-                // the same reason: a transient GraphQL failure shouldn't
-                // kill the source.
-                match self.probe_filter(&doc_id, &trigger).await {
-                    Ok(true) => { /* filter matched; fall through to hydrate */ }
-                    Ok(false) => {
-                        tracing::trace!(
-                            trigger_id = %trigger.trigger_id,
-                            source_collection = %collection_name,
-                            source_doc_id = %doc_id,
-                            "event source: filter miss, skipping event",
-                        );
-                        continue;
-                    }
-                    Err(err) => {
-                        tracing::warn!(
-                            trigger_id = %trigger.trigger_id,
-                            source_collection = %collection_name,
-                            source_doc_id = %doc_id,
-                            %err,
-                            "event source: filter probe failed; skipping event",
-                        );
-                        continue;
-                    }
                 }
 
-                // Step 9: hydrate `doc_vars` from the source doc so the
-                // dispatcher / prompt render has the full document scope.
-                // Unlike the probe, a hydration failure means we can't
-                // safely fire at all — we drop this event rather than
-                // materialize with a partial scope.
-                let doc_vars = match self
-                    .fetch_source_doc(&trigger.source_collection, &doc_id)
-                    .await
+                // Step 9: return the first intent now; queue the rest so
+                // subsequent `next_fire` calls yield them one-at-a-time
+                // before reading another event off the subscription. Order
+                // is deterministic (sorted by trigger_id in
+                // `build_intents_for_all_matching`).
+                let first = intents.remove(0);
                 {
-                    Ok(value) => Some(value),
-                    Err(err) => {
-                        tracing::warn!(
-                            trigger_id = %trigger.trigger_id,
-                            source_collection = %collection_name,
-                            source_doc_id = %doc_id,
-                            %err,
-                            "event source: source-doc fetch failed; skipping fire",
-                        );
-                        continue;
+                    let mut queue = self
+                        .pending_intents
+                        .lock()
+                        .expect("pending_intents mutex poisoned");
+                    for intent in intents {
+                        queue.push_back(intent);
                     }
-                };
-
-                // Step 10: build the FireIntent. `event_vars` carries the
-                // trigger identity; `doc_vars` carries the hydrated source
-                // doc. Task 22 fills in the `on_result` body; for now it's
-                // a no-op.
-                let fired_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-                let event_vars = serde_json::json!({
-                    "fired_at": fired_at,
-                    "trigger_id": trigger.trigger_id,
-                    "trigger_kind": TriggerKind::Event.as_str(),
-                    "source_collection": collection_name,
-                    "source_doc_id": doc_id,
-                });
-
-                tracing::info!(
-                    trigger_id = %trigger.trigger_id,
-                    source_collection = %collection_name,
-                    source_doc_id = %doc_id,
-                    "event source matched event to trigger; emitting fire intent",
-                );
-
-                // Values captured for the result-writeback closure. The
-                // callback is synchronous (`FnOnce(FireResult)`), so it
-                // spawns a background task that performs the DefraDB
-                // mutation; the engine's dispatch loop continues without
-                // waiting on bookkeeping I/O. Mirrors the pattern used by
-                // `ScheduleSource::next_fire`.
-                let trigger_id_for_callback = trigger.trigger_id.clone();
-                let source_doc_id_for_callback = doc_id.clone();
-                let node_for_callback = self.node.clone();
-
-                return Some(FireIntent {
-                    trigger_id: Some(trigger.trigger_id.clone()),
-                    trigger_kind: TriggerKind::Event,
-                    task: trigger.task.clone(),
-                    concurrency: trigger.concurrency,
-                    event_vars,
-                    doc_vars,
-                    args_vars: None,
-                    on_result: Box::new(move |result| {
-                        EventSource::spawn_runtime_field_write(
-                            node_for_callback,
-                            trigger_id_for_callback,
-                            source_doc_id_for_callback,
-                            result,
-                        );
-                    }),
-                });
+                }
+                return Some(first);
             }
         })
     }

@@ -98,6 +98,7 @@ pub(crate) struct ResolvedRuntimeSnapshot {
     pub(crate) unavailable_schedules: HashSet<String>,
     pub(crate) active_event_triggers: HashMap<String, ResolvedEventTrigger>,
     pub(crate) unavailable_event_triggers: HashSet<String>,
+    pub(crate) active_tasks: HashMap<String, ResolvedTask>,
 }
 
 impl ResolvedRuntimeSnapshot {
@@ -137,6 +138,7 @@ impl ResolvedRuntimeSnapshot {
             unavailable_schedules: HashSet::new(),
             active_event_triggers: HashMap::new(),
             unavailable_event_triggers: HashSet::new(),
+            active_tasks: HashMap::new(),
         }
     }
 
@@ -169,6 +171,15 @@ impl ResolvedRuntimeSnapshot {
         self
     }
 
+    /// Attach resolved tasks to the snapshot. Mirrors `with_schedules` /
+    /// `with_event_triggers`: active tasks are the join-target for
+    /// `ManualTriggerHandle::run_task_now`, which needs to map a caller-
+    /// supplied `task_id` to a `ResolvedTask` at fire time.
+    pub(crate) fn with_tasks(mut self, tasks: HashMap<String, ResolvedTask>) -> Self {
+        self.active_tasks = tasks;
+        self
+    }
+
     pub(crate) fn activate(
         self,
         generation: u64,
@@ -185,6 +196,7 @@ impl ResolvedRuntimeSnapshot {
             unavailable_schedules: self.unavailable_schedules,
             active_event_triggers: self.active_event_triggers,
             unavailable_event_triggers: self.unavailable_event_triggers,
+            active_tasks: self.active_tasks,
             dispatchers,
         }
     }
@@ -200,6 +212,7 @@ impl ResolvedRuntimeSnapshot {
             &self.unavailable_schedules,
             &self.active_event_triggers,
             &self.unavailable_event_triggers,
+            &self.active_tasks,
         )
     }
 }
@@ -216,6 +229,7 @@ pub(crate) struct ActiveRuntimeSnapshot {
     pub(crate) unavailable_schedules: HashSet<String>,
     pub(crate) active_event_triggers: HashMap<String, ResolvedEventTrigger>,
     pub(crate) unavailable_event_triggers: HashSet<String>,
+    pub(crate) active_tasks: HashMap<String, ResolvedTask>,
     pub(crate) dispatchers: DispatcherMap,
 }
 
@@ -230,6 +244,10 @@ impl ActiveRuntimeSnapshot {
 
     pub(crate) fn active_event_triggers(&self) -> &HashMap<String, ResolvedEventTrigger> {
         &self.active_event_triggers
+    }
+
+    pub(crate) fn active_tasks(&self) -> &HashMap<String, ResolvedTask> {
+        &self.active_tasks
     }
 
     pub(crate) fn tool_surface(&self, behavior_id: &str) -> Option<&Arc<ToolSurface>> {
@@ -253,6 +271,7 @@ impl ActiveRuntimeSnapshot {
             &self.unavailable_schedules,
             &self.active_event_triggers,
             &self.unavailable_event_triggers,
+            &self.active_tasks,
         )
     }
 }
@@ -281,6 +300,7 @@ fn configuration_fingerprint(
     unavailable_schedules: &HashSet<String>,
     active_event_triggers: &HashMap<String, ResolvedEventTrigger>,
     unavailable_event_triggers: &HashSet<String>,
+    active_tasks: &HashMap<String, ResolvedTask>,
 ) -> String {
     let mut fingerprint = String::new();
     fingerprint.push_str("default:");
@@ -382,6 +402,19 @@ fn configuration_fingerprint(
     for trigger_id in unavailable_event_trigger_ids {
         fingerprint.push_str("unavailable_event_trigger:");
         fingerprint.push_str(&trigger_id);
+        fingerprint.push('\n');
+    }
+
+    let mut task_ids = active_tasks.keys().cloned().collect::<Vec<_>>();
+    task_ids.sort();
+    for task_id in task_ids {
+        let task = active_tasks
+            .get(&task_id)
+            .expect("task id came from active tasks map");
+        fingerprint.push_str("task:");
+        fingerprint.push_str(&task_id);
+        fingerprint.push('=');
+        fingerprint.push_str(&format!("{task:?}"));
         fingerprint.push('\n');
     }
 

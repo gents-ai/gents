@@ -33,6 +33,10 @@ pub enum PendingManageAction {
     DiscardDraft,
     ApplyDraft,
     RunNowSelectedTask,
+    /// Submit the in-progress `fire_task_draft`. The controller parses
+    /// the JSON args, looks the `TaskRow` up in the store, and calls
+    /// `ClientCore::fire_task_now`. On success the modal closes.
+    SubmitFireTaskDraft,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

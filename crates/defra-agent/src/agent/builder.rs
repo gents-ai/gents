@@ -191,6 +191,7 @@ impl DefraAgentBuilder {
             retry_policy: self.retry_policy,
             hook_failure_policy: self.hook_failure_policy,
             process_state_observer: self.process_state_observer,
+            manual_trigger_handle: Arc::new(tokio::sync::OnceCell::new()),
         })
     }
 }

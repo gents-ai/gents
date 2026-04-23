@@ -32,7 +32,7 @@ pub(crate) mod runtime_status;
 pub mod schema;
 pub mod session;
 pub mod streaming;
-pub(crate) mod template;
+pub mod template;
 pub mod tool_surface;
 pub mod toolset;
 pub(crate) mod trigger_engine;
@@ -62,7 +62,7 @@ pub use health_checker::{spawn_health_checker, HealthStatus, ServiceHealth, Serv
 pub use hook::{DefraSessionHook, FailurePolicy, HookStats};
 pub use identity::{AgentIdentity, ServiceAccount, SimpleIdentity};
 pub use interrupt::{fetch_interrupt_requested_at, interrupt_request};
-pub use lifecycle::{RecoveryReport, RequestLifecycle};
+pub use lifecycle::{write_manual_agent_request, RecoveryReport, RequestLifecycle};
 pub use mcp_pool::McpPool;
 pub use meta_tools::build_meta_tools;
 pub use oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunResult};
@@ -78,7 +78,9 @@ pub use schema::{
 pub use session::load_history;
 pub use session::{fork, ForkError, ForkOutcome, ForkParams};
 pub use streaming::{DefraStreamWriter, StreamWriter};
-pub use template::{parse_template_for_validation, TemplateError, VariableRef};
+pub use template::{
+    parse_template_for_validation, render_template, TemplateError, TemplateScope, VariableRef,
+};
 pub use tool_surface::{
     cli_tool, BashMode, BehaviorToolConfig, CustomToolFactory, FileToolMode, ToolCeiling,
     ToolRuntimeContext, ToolSelection, ToolSurface,

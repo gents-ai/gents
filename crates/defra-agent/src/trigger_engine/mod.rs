@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 
 pub(crate) mod event_source;
+pub(crate) mod manual_source;
 pub(crate) mod production_materializer;
 pub(crate) mod schedule_source;
 

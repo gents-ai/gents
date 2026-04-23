@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use defra_node::EmbeddedNode;
-use tokio::sync::watch;
+use tokio::sync::{watch, OnceCell};
 
 use crate::compaction::CompactionStrategy;
 use crate::config::{
@@ -17,6 +17,7 @@ use crate::mcp_pool::McpPool;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::tool_surface::{BashMode, BehaviorToolConfig, FileToolMode, ToolCeiling, ToolSelection};
+use crate::trigger_engine::manual_source::ManualTriggerHandle;
 
 mod builder;
 mod daemon;
@@ -102,6 +103,11 @@ pub struct DefraAgent {
     retry_policy: RetryPolicy,
     hook_failure_policy: FailurePolicy,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
+    /// Populated once the runtime's `TriggerEngine` has constructed the
+    /// `ManualSource`. In-process callers that cloned this `DefraAgent`
+    /// before calling `run()` can then observe the handle via
+    /// [`Self::manual_trigger_handle`].
+    pub(crate) manual_trigger_handle: Arc<OnceCell<ManualTriggerHandle>>,
 }
 
 impl DefraAgent {
@@ -149,6 +155,7 @@ impl DefraAgent {
             retry_policy: options.retry_policy,
             hook_failure_policy: options.hook_failure_policy,
             process_state_observer: options.process_state_observer,
+            manual_trigger_handle: Arc::new(OnceCell::new()),
         })
     }
 
@@ -170,6 +177,19 @@ impl DefraAgent {
 
     pub(crate) fn document_runtime_context(&self) -> Option<&DocumentResolveContext> {
         self.document_runtime_context.as_ref()
+    }
+
+    /// Returns the `ManualTriggerHandle` once the runtime's `TriggerEngine`
+    /// has been brought up.
+    ///
+    /// `None` means the runtime is still in early bootstrap (the trigger
+    /// engine spawns after `run()` resolves the initial snapshot and passes
+    /// the startup barrier). In-process callers that need to push manual
+    /// fires should clone this `DefraAgent`, spawn `run()` on one copy, and
+    /// poll the clone until this returns `Some`.
+    #[allow(dead_code)] // consumed by CLI (Task 8) and desktop (Task 10)
+    pub(crate) fn manual_trigger_handle(&self) -> Option<&ManualTriggerHandle> {
+        self.manual_trigger_handle.get()
     }
 
     pub async fn run(self, shutdown: watch::Receiver<bool>) -> anyhow::Result<()> {

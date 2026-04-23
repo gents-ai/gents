@@ -129,10 +129,13 @@ pub fn run_selected_task_now(
         .as_ref()
         .context("no manage draft is selected")?;
 
+    // `fire_schedule_now` returns the new `AgentRequest`'s `_docID`;
+    // this controller only needs success-vs-failure for the reducer,
+    // so the id is discarded here.
     let result = match draft {
-        ManageDraft::Schedule(draft) => {
-            runtime.block_on(client.fire_schedule_now(&schedule_row(draft)?))
-        }
+        ManageDraft::Schedule(draft) => runtime
+            .block_on(client.fire_schedule_now(&schedule_row(draft)?))
+            .map(|_doc_id| ()),
         _ => Err(anyhow!("run now is only available for schedules")),
     };
 
@@ -153,5 +156,70 @@ pub fn run_selected_task_now(
             );
             Err(anyhow!(error_text))
         }
+    }
+}
+
+/// Submit the in-progress `fire_task_draft`.
+///
+/// Parses the JSON args, looks the `TaskRow` up in the store by
+/// `task_id`, and dispatches `ClientCore::fire_task_now`. On success
+/// the modal is cleared; on any failure the error is written back into
+/// the draft's `error` field so the modal stays open and the operator
+/// can correct their input.
+pub fn submit_fire_task_draft(
+    manage: &mut ManageState,
+    client: Option<&ClientCore>,
+    runtime: &Runtime,
+) -> Result<()> {
+    let draft = manage
+        .fire_task_draft
+        .as_ref()
+        .context("no fire-task draft is open")?
+        .clone();
+
+    let apply_error = |manage: &mut ManageState, message: String| {
+        if let Some(draft) = manage.fire_task_draft.as_mut() {
+            draft.error = Some(message.clone());
+        }
+        Err::<(), _>(anyhow!(message))
+    };
+
+    let Some(client) = client else {
+        return apply_error(manage, "client core is offline".to_string());
+    };
+
+    let args = match serde_json::from_str::<serde_json::Value>(&draft.args_text) {
+        Ok(value) if value.is_object() => value,
+        Ok(_) => {
+            return apply_error(manage, "args must be a JSON object".to_string());
+        }
+        Err(error) => {
+            return apply_error(manage, format!("JSON parse error: {error}"));
+        }
+    };
+
+    let snapshot = client.store().snapshot();
+    let task_row = snapshot
+        .tasks
+        .iter()
+        .find(|row| row.task_id == draft.task_id)
+        .cloned();
+    let Some(task_row) = task_row else {
+        return apply_error(
+            manage,
+            format!("task {} disappeared from store", draft.task_id),
+        );
+    };
+
+    let fire_result = runtime.block_on(client.fire_task_now(&task_row, args));
+    match fire_result {
+        Ok(_doc_id) => {
+            manage.fire_task_draft = None;
+            manage.last_apply_error = None;
+            let snapshot = client.store().snapshot();
+            sync_from_snapshot(manage, &client.peer_statuses(), snapshot.as_ref());
+            Ok(())
+        }
+        Err(error) => apply_error(manage, error.to_string()),
     }
 }

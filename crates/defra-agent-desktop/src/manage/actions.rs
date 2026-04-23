@@ -41,6 +41,7 @@ pub fn reduce(state: &mut ManageState, action: ManageAction) {
             state.draft = None;
             state.draft_origin = None;
             state.last_apply_error = None;
+            state.fire_task_draft = None;
         }
         ManageAction::SelectSection { section } => {
             state.selected_section = section;
@@ -48,12 +49,14 @@ pub fn reduce(state: &mut ManageState, action: ManageAction) {
             state.draft = None;
             state.draft_origin = None;
             state.last_apply_error = None;
+            state.fire_task_draft = None;
         }
         ManageAction::SelectEntity { entity_id } => {
             state.selected_entity_id = Some(entity_id);
             state.draft = None;
             state.draft_origin = None;
             state.last_apply_error = None;
+            state.fire_task_draft = None;
         }
         ManageAction::StartNewDocument { draft } => {
             state.selected_entity_id = None;

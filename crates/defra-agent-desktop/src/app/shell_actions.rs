@@ -144,6 +144,19 @@ impl DesktopApp {
                     self.state.manage.last_apply_error = Some(error.to_string());
                 }
             }
+            PendingManageAction::SubmitFireTaskDraft => {
+                // The controller writes submit errors back into
+                // `fire_task_draft.error` so the modal can stay open and
+                // surface a parse/mutation failure inline. We ignore the
+                // returned error here (the modal displays it) instead of
+                // leaking it into `last_apply_error`, which is reserved
+                // for editor-level save failures.
+                let _ = manage_controller::submit_fire_task_draft(
+                    &mut self.state.manage,
+                    self.client.as_deref(),
+                    self.runtime.as_ref(),
+                );
+            }
         }
     }
 }
