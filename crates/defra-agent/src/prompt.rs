@@ -28,6 +28,9 @@ use rig::one_or_many::OneOrMany;
 use crate::config::BehaviorConfig;
 use crate::tool_surface::ToolSurface;
 
+const TITLE_GENERATION_SUFFIX: &str =
+    "Generate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain.";
+
 /// Guidance appended to the preamble so the LLM knows how to discover and
 /// invoke data-service tools via the meta-tool workflow.
 const TOOL_DISCOVERY_GUIDANCE: &str = "\
@@ -188,6 +191,7 @@ fn build_preamble(
     include_meta_tool_guidance: bool,
 ) -> String {
     let mut parts = Vec::new();
+    let system_prompt = strip_title_generation_suffix(system_prompt);
 
     if !system_prompt.is_empty() {
         parts.push(system_prompt.to_string());
@@ -203,6 +207,15 @@ fn build_preamble(
     parts.push(direct_tool_guidance(tool_names));
 
     parts.join("\n\n")
+}
+
+fn strip_title_generation_suffix(system_prompt: &str) -> &str {
+    let trimmed = system_prompt.trim();
+    if let Some(stripped) = trimmed.strip_suffix(TITLE_GENERATION_SUFFIX) {
+        stripped.trim_end()
+    } else {
+        trimmed
+    }
 }
 
 fn direct_tool_guidance(tool_names: &[&str]) -> String {

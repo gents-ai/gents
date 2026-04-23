@@ -13,6 +13,8 @@ const RECENT_TITLE_LIMIT: usize = 5;
 const GENERATED_TITLE_MAX_WORDS: usize = 5;
 const GENERATED_TITLE_MAX_LEN: usize = 48;
 const TITLE_GENERATION_MAX_ATTEMPTS: i64 = 2;
+const TITLE_GENERATION_PREAMBLE: &str =
+    "Generate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain.";
 
 impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     pub(super) fn spawn_conversation_title_generation(
@@ -28,7 +30,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         title_agent.default_max_turns = Some(1);
         title_agent.max_tokens = Some(24);
         title_agent.temperature = Some(0.0);
-        title_agent.preamble = Some(title_generation_preamble(&self.behavior.system_prompt));
+        title_agent.preamble = Some(title_generation_preamble());
 
         tokio::spawn(async move {
             if let Err(error) = admission::scope_request(admission_context, async move {
@@ -128,15 +130,8 @@ async fn generate_title_with_fallback<M: rig::completion::CompletionModel + 'sta
     fallback
 }
 
-fn title_generation_preamble(system_prompt: &str) -> String {
-    let system_prompt = system_prompt.trim();
-    if system_prompt.is_empty() {
-        "Generate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain.".to_string()
-    } else {
-        format!(
-            "{system_prompt}\n\nGenerate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain."
-        )
-    }
+fn title_generation_preamble() -> String {
+    TITLE_GENERATION_PREAMBLE.to_string()
 }
 
 fn title_generation_prompt(request_content: &str, recent_titles: &[String]) -> String {

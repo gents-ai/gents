@@ -61,6 +61,19 @@ fn preamble_handles_empty_behavior_name() {
 }
 
 #[test]
+fn preamble_strips_title_generation_suffix() {
+    let preamble = build_preamble(
+        "You are a policy agent.\n\nGenerate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain.",
+        "operator",
+        &["bash"],
+        true,
+    );
+    assert!(preamble.contains("You are a policy agent."));
+    assert!(!preamble.contains("Generate concise conversation titles."));
+    assert!(!preamble.contains("Never call tools. Never explain."));
+}
+
+#[test]
 fn preamble_is_frozen() {
     let builder = test_builder("System prompt v1.", "test");
 
