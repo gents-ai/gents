@@ -42,22 +42,21 @@ async fn config_task_run_creates_manual_agent_request() -> Result<()> {
         ],
     )?;
 
-    let exported = run_cli_json(&home_dir, &["config", "export"])?;
-    write_manifest_root_from_export(&root, &exported)?;
-
-    let behavior_id = exported
-        .pointer("/agent_principal/default_behavior_id")
+    run_cli_text(&home_dir, &["config", "export", "--root", &root.to_string_lossy()])?;
+    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let behavior_id = principal
+        .get("default_behavior_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("exported bundle missing default behavior id"))?
+        .ok_or_else(|| anyhow!("exported bundle missing default_behavior_id"))?
         .to_string();
-    let agent_did = exported
-        .pointer("/agent_principal/agent_did")
+    let agent_did = principal
+        .get("agent_did")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("exported bundle missing agent_did"))?
         .to_string();
 
     let task_id = format!("greet-{}", Uuid::new_v4().simple());
-    let task_path = root.join("tasks").join("greet.json");
+    let task_path = root.join("tasks").join(&task_id).join("object.json");
     write_json_file(
         &task_path,
         &serde_json::json!({
@@ -205,22 +204,21 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
         ],
     )?;
 
-    let exported = run_cli_json(&home_dir, &["config", "export"])?;
-    write_manifest_root_from_export(&root, &exported)?;
-
-    let behavior_id = exported
-        .pointer("/agent_principal/default_behavior_id")
+    run_cli_text(&home_dir, &["config", "export", "--root", &root.to_string_lossy()])?;
+    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let behavior_id = principal
+        .get("default_behavior_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("exported bundle missing default behavior id"))?
+        .ok_or_else(|| anyhow!("exported bundle missing default_behavior_id"))?
         .to_string();
-    let agent_did = exported
-        .pointer("/agent_principal/agent_did")
+    let agent_did = principal
+        .get("agent_did")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("exported bundle missing agent_did"))?
         .to_string();
 
     let task_id = format!("disabled-{}", Uuid::new_v4().simple());
-    let task_path = root.join("tasks").join("disabled.json");
+    let task_path = root.join("tasks").join(&task_id).join("object.json");
     write_json_file(
         &task_path,
         &serde_json::json!({
