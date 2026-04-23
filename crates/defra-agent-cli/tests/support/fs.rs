@@ -45,113 +45,108 @@ pub fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<
             ],
         )?,
     )?;
-    write_json_file(
-        &root.join("agent-behaviors.json"),
-        &project_array_fields(
-            exported
-                .get("agent_behaviors")
-                .ok_or_else(|| anyhow!("exported bundle missing agent_behaviors"))?,
-            &[
-                "behavior_id",
-                "agent_did",
-                "display_name",
-                "system_prompt",
-                "backend_id",
-                "model_name",
-                "tool_selection_id",
-                "inference_profile_id",
-                "compaction_strategy",
-                "compaction_threshold",
-                "enabled",
-            ],
-        )?,
-    )?;
-    write_json_file(
-        &root.join("tool-selections.json"),
-        &project_array_fields(
-            exported
-                .get("tool_selections")
-                .ok_or_else(|| anyhow!("exported bundle missing tool_selections"))?,
-            &[
-                "selection_id",
-                "agent_did",
-                "display_name",
-                "enable_file_tools",
-                "file_tools_mode",
-                "file_tool_root",
-                "enable_bash",
-                "bash_mode",
-                "cli_tool_names",
-                "enable_meta_tools",
-                "delegate_to",
-            ],
-        )?,
-    )?;
-    write_json_file(
-        &root.join("inference-backends.json"),
-        &project_array_fields(
-            exported
-                .get("inference_backends")
-                .ok_or_else(|| anyhow!("exported bundle missing inference_backends"))?,
-            &[
-                "backend_id",
-                "name",
-                "endpoint",
-                "api_key_env_var",
-                "max_concurrent",
-                "max_queue_depth",
-                "enabled",
-                "models",
-            ],
-        )?,
-    )?;
 
-    let inference_profiles = project_array_fields(
+    write_per_doc_collection(
+        root,
+        "agent-behaviors",
+        "behavior_id",
         exported
-            .get("inference_profiles")
-            .ok_or_else(|| anyhow!("exported bundle missing inference_profiles"))?,
+            .get("agent_behaviors")
+            .ok_or_else(|| anyhow!("exported bundle missing agent_behaviors"))?,
         &[
+            "behavior_id",
+            "agent_did",
+            "display_name",
+            "system_prompt",
+            "backend_id",
+            "model_name",
+            "tool_selection_id",
+            "inference_profile_id",
+            "compaction_strategy",
+            "compaction_threshold",
+            "enabled",
+        ],
+    )?;
+    write_per_doc_collection(
+        root,
+        "tool-selections",
+        "selection_id",
+        exported
+            .get("tool_selections")
+            .ok_or_else(|| anyhow!("exported bundle missing tool_selections"))?,
+        &[
+            "selection_id",
+            "agent_did",
+            "display_name",
+            "enable_file_tools",
+            "file_tools_mode",
+            "file_tool_root",
+            "enable_bash",
+            "bash_mode",
+            "cli_tool_names",
+            "enable_meta_tools",
+            "delegate_to",
+        ],
+    )?;
+    write_per_doc_collection(
+        root,
+        "inference-backends",
+        "backend_id",
+        exported
+            .get("inference_backends")
+            .ok_or_else(|| anyhow!("exported bundle missing inference_backends"))?,
+        &[
+            "backend_id",
+            "name",
+            "endpoint",
+            "api_key_env_var",
+            "max_concurrent",
+            "max_queue_depth",
+            "enabled",
+            "models",
+        ],
+    )?;
+    if let Some(profiles) = exported.get("inference_profiles") {
+        write_per_doc_collection(
+            root,
+            "inference-profiles",
             "profile_id",
-            "display_name",
-            "context_window",
-            "max_output_tokens",
-            "max_turns",
-            "temperature",
-            "stream_batch_ms",
-            "deadline_duration_secs",
-        ],
-    )?;
-    if inference_profiles
-        .as_array()
-        .is_some_and(|rows| !rows.is_empty())
-    {
-        write_json_file(&root.join("inference-profiles.json"), &inference_profiles)?;
+            profiles,
+            &[
+                "profile_id",
+                "display_name",
+                "context_window",
+                "max_output_tokens",
+                "max_turns",
+                "temperature",
+                "stream_batch_ms",
+                "deadline_duration_secs",
+            ],
+        )?;
     }
-
-    let tool_service_registries = project_array_fields(
-        exported
-            .get("tool_service_registries")
-            .ok_or_else(|| anyhow!("exported bundle missing tool_service_registries"))?,
-        &[
+    if let Some(services) = exported.get("tool_service_registries") {
+        write_per_doc_collection(
+            root,
+            "tool-services",
             "service_id",
-            "display_name",
-            "description",
-            "hostname",
-            "tailscale_ip",
-            "lan_ip",
-            "mcp_port",
-            "mcp_path",
-        ],
-    )?;
-    if tool_service_registries
-        .as_array()
-        .is_some_and(|rows| !rows.is_empty())
-    {
-        write_json_file(&root.join("tool-services.json"), &tool_service_registries)?;
+            services,
+            &[
+                "service_id",
+                "display_name",
+                "description",
+                "hostname",
+                "tailscale_ip",
+                "lan_ip",
+                "mcp_port",
+                "mcp_path",
+            ],
+        )?;
     }
-
     if let Some(tasks) = exported.get("tasks") {
-        let tasks = project_array_fields(
+        write_per_doc_collection(
+            root,
+            "tasks",
+            "task_id",
             tasks,
             &[
                 "task_id",
@@ -163,13 +158,12 @@ pub fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<
                 "output_schema_ref",
             ],
         )?;
-        if tasks.as_array().is_some_and(|rows| !rows.is_empty()) {
-            write_json_file(&root.join("tasks.json"), &tasks)?;
-        }
     }
-
     if let Some(schedules) = exported.get("schedules") {
-        let schedules = project_array_fields(
+        write_per_doc_collection(
+            root,
+            "schedules",
+            "schedule_id",
             schedules,
             &[
                 "schedule_id",
@@ -179,23 +173,33 @@ pub fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<
                 "concurrency",
             ],
         )?;
-        if schedules.as_array().is_some_and(|rows| !rows.is_empty()) {
-            write_json_file(&root.join("schedules.json"), &schedules)?;
-        }
     }
 
     Ok(())
 }
 
-pub fn project_array_fields(value: &Value, fields: &[&str]) -> Result<Value> {
-    let rows = value
-        .as_array()
-        .ok_or_else(|| anyhow!("expected array while projecting manifest fields: {value}"))?;
-    Ok(Value::Array(
-        rows.iter()
-            .map(|row| project_object_fields(row, fields))
-            .collect::<Result<Vec<_>>>()?,
-    ))
+fn write_per_doc_collection(
+    root: &Path,
+    dir_name: &str,
+    unique_field: &str,
+    rows: &Value,
+    fields: &[&str],
+) -> Result<()> {
+    let Some(rows) = rows.as_array() else {
+        return Ok(());
+    };
+    for row in rows {
+        let object = project_object_fields(row, fields)?;
+        let handle = object
+            .get(unique_field)
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("row missing {unique_field}: {row}"))?;
+        let dir = root.join(dir_name).join(handle);
+        fs::create_dir_all(&dir)
+            .with_context(|| format!("creating {}", dir.display()))?;
+        write_json_file(&dir.join("object.json"), &object)?;
+    }
+    Ok(())
 }
 
 pub fn project_object_fields(value: &Value, fields: &[&str]) -> Result<Value> {

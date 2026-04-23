@@ -41,20 +41,25 @@ async fn config_apply_reconciles_tool_services_tasks_and_schedules_end_to_end() 
         ],
     )?;
 
-    let exported = run_cli_json(&home_dir, &["config", "export"])?;
-    write_manifest_root_from_export(&root, &exported)?;
-
-    let behavior_id = exported
-        .pointer("/agent_principal/default_behavior_id")
+    run_cli_text(&home_dir, &["config", "export", "--root", &root.to_string_lossy()])?;
+    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let behavior_id = principal
+        .get("default_behavior_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("exported bundle missing default behavior id"))?
+        .ok_or_else(|| anyhow!("missing default_behavior_id after export"))?
         .to_string();
     let service_id = format!("ops-mcp-{}", Uuid::new_v4().simple());
     let task_id = format!("nightly-audit-{}", Uuid::new_v4().simple());
     let schedule_id = format!("nightly-audit-schedule-{}", Uuid::new_v4().simple());
-    let service_path = root.join("tool-services").join("ops-mcp.json");
-    let task_path = root.join("tasks").join("nightly-audit.json");
-    let schedule_path = root.join("schedules").join("nightly-audit.json");
+    let service_path = root
+        .join("tool-services")
+        .join(&service_id)
+        .join("object.json");
+    let task_path = root.join("tasks").join(&task_id).join("object.json");
+    let schedule_path = root
+        .join("schedules")
+        .join(&schedule_id)
+        .join("object.json");
 
     write_json_file(
         &service_path,
@@ -617,18 +622,17 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
         ],
     )?;
 
-    let exported = run_cli_json(&home_dir, &["config", "export"])?;
-    write_manifest_root_from_export(&root, &exported)?;
-
-    let behavior_id = exported
-        .pointer("/agent_principal/default_behavior_id")
+    run_cli_text(&home_dir, &["config", "export", "--root", &root.to_string_lossy()])?;
+    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let behavior_id = principal
+        .get("default_behavior_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("exported bundle missing default behavior id"))?
+        .ok_or_else(|| anyhow!("missing default_behavior_id after export"))?
         .to_string();
     let task_id = format!("greet-signup-{}", Uuid::new_v4().simple());
     let trigger_id = format!("on-signup-created-{}", Uuid::new_v4().simple());
-    let task_path = root.join("tasks").join("greet-signup.json");
-    let trigger_path = root.join("event_triggers").join("on-signup-created.json");
+    let task_path = root.join("tasks").join(&task_id).join("object.json");
+    let trigger_path = root.join("event_triggers").join(&trigger_id).join("object.json");
 
     // Use InferenceBackend as the source collection — it's registered on
     // every defra-agent server, so the apply-time live validation (filter
@@ -1045,18 +1049,17 @@ async fn prepare_live_validation_fixture(
         ],
     )?;
 
-    let exported = run_cli_json(&home_dir, &["config", "export"])?;
-    write_manifest_root_from_export(&root, &exported)?;
-
-    let behavior_id = exported
-        .pointer("/agent_principal/default_behavior_id")
+    run_cli_text(&home_dir, &["config", "export", "--root", &root.to_string_lossy()])?;
+    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let behavior_id = principal
+        .get("default_behavior_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("exported bundle missing default behavior id"))?
+        .ok_or_else(|| anyhow!("missing default_behavior_id after export"))?
         .to_string();
     let task_id = format!("greet-{suffix}");
     let trigger_id = format!("on-created-{suffix}");
-    let task_path = root.join("tasks").join("greet.json");
-    let trigger_path = root.join("event_triggers").join("on-created.json");
+    let task_path = root.join("tasks").join(&task_id).join("object.json");
+    let trigger_path = root.join("event_triggers").join(&trigger_id).join("object.json");
 
     // Seed the Task + Trigger with a VALID baseline. Individual tests
     // overwrite fields to exercise specific failure modes.

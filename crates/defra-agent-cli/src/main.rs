@@ -158,13 +158,22 @@ Examples:
   defra-agent diagnose --home /path/to/home
   defra-agent diagnose --graphql http://127.0.0.1:9191/api/v0/graphql";
 const CONFIG_EXPORT_AFTER_HELP: &str = "\
-Exports the desired configuration documents for one agent principal.
+Exports the desired configuration documents for one agent principal as a
+manifest root directory (per-document subdirectories, optional prompt sidecars).
+The output is designed to be committed to version control and applied with
+`config apply --root <dir>`. This is distinct from the legacy JSON bundle
+format that `config import` consumes.
 
 Examples:
-  defra-agent config export > agent-config.json
-  defra-agent config export --agent-did did:defra-agent:default > agent-config.json";
+  defra-agent config export --root ./my-agent
+  defra-agent config export --root ./my-agent --force
+  defra-agent config export --root ./my-agent --agent-did did:defra-agent:default";
 const CONFIG_IMPORT_AFTER_HELP: &str = "\
-Imports desired configuration documents.
+Imports desired configuration documents from a legacy JSON bundle file.
+
+NOTE: `config import` reads the legacy JSON bundle format and is decoupled from
+`config export --root`. To apply a manifest root produced by `config export`,
+use `config apply --root <dir>` instead.
 
 Default behavior is insert-only and will fail if a document already exists.
 Use --override to switch to upsert mode.

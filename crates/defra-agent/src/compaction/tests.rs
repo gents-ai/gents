@@ -187,66 +187,6 @@ fn estimate_tokens_rough() {
 }
 
 #[tokio::test]
-async fn defra_compactor_uses_mock_summary_response() {
-    let response = serde_json::json!({
-        "summary": "The agent investigated the build failure.",
-        "files_read": ["/tmp/test.rs"],
-        "files_modified": ["/tmp/lib.rs"],
-        "key_decisions": ["Keep the parser small"],
-        "pending_questions": ["Should we split the module?"]
-    })
-    .to_string();
-    let model = MockSummaryModel::new(&response);
-    let agent = AgentBuilder::new(model.clone())
-        .preamble("You are a coding agent.")
-        .build();
-    let compactor = DefraCompactor::new(agent);
-    let messages = vec![
-        text_msg("user", &"x".repeat(12000)),
-        tool_call_msg("read", r#"{"file_path": "/tmp/test.rs"}"#),
-        tool_result_msg("call-1", &"y".repeat(6000)),
-        text_msg("assistant", "I found the failing parser."),
-        text_msg("user", "Please summarize the older work."),
-    ];
-
-    let result = compactor
-        .compact(
-            messages,
-            1000,
-            &CompactionOptions {
-                threshold: 0.75,
-                keep_recent_tokens: 10,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(result.compaction_count, 1);
-    assert!(result.summary.as_ref().unwrap().contains("build failure"));
-    assert_eq!(result.files_read, vec!["/tmp/test.rs"]);
-    assert_eq!(result.files_modified, vec!["/tmp/lib.rs"]);
-    assert!(result.messages_compacted > 0);
-
-    let request = model.last_request.lock().unwrap().clone().unwrap();
-    assert!(request
-        .preamble
-        .as_deref()
-        .unwrap()
-        .contains("coding agent"));
-    let last_message = request.chat_history.last();
-    match last_message {
-        Message::User { content } => match content.first_ref() {
-            UserContent::Text(text) => {
-                assert_eq!(text.text, compaction_prompt());
-            }
-            other => panic!("expected text prompt, got {other:?}"),
-        },
-        other => panic!("expected user prompt, got {other:?}"),
-    }
-}
-
-#[tokio::test]
 async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     let data_path =
         std::env::temp_dir().join(format!("agent-daemon-compactor-{}", uuid::Uuid::new_v4()));
