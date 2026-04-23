@@ -15,8 +15,8 @@
 //!   introspected source-doc projection cached per source collection.
 //! - Task 22: `on_result` callback body for bookkeeping writes.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{SecondsFormat, Utc};
@@ -91,6 +91,18 @@ pub(crate) struct EventSource {
     /// query (see `seed_seen_docs_for_collection`) to enforce spec's
     /// forward-only semantic for pre-existing docs.
     seen_docs: HashMap<String, HashSet<String>>,
+    /// Queued `FireIntent`s from a single event that matched multiple
+    /// `EventTrigger`s with the same `source_collection` + `event_kind`.
+    /// `next_fire` drains the queue one intent per call before polling the
+    /// subscription again, so fan-out across N matching triggers yields N
+    /// fires (rather than silently dropping N-1 as `first_matching_trigger`
+    /// did previously). Wrapped in `std::sync::Mutex` so that
+    /// `EventSource: Sync` (the `TriggerSource` trait requires it and the
+    /// `Box<dyn FnOnce + Send>` inside each `FireIntent` is not itself
+    /// `Sync`). The mutex is held for trivially-short critical sections
+    /// (`pop_front` / `push_back`) with no `.await` inside, so it will never
+    /// actually contend.
+    pending_intents: Mutex<VecDeque<FireIntent>>,
 }
 
 /// Per-source-collection schema cache.
@@ -204,6 +216,7 @@ impl EventSource {
             source_schema_cache: SourceSchemaCache::default(),
             collection_id_to_name: HashMap::new(),
             seen_docs: HashMap::new(),
+            pending_intents: Mutex::new(VecDeque::new()),
         }
     }
 
@@ -613,27 +626,123 @@ impl EventSource {
         });
     }
 
-    /// Find the first active event trigger whose `source_collection` matches
-    /// `collection_name` AND whose `event_kind` matches `kind` (currently
-    /// always `"created"` per the v1 spec; `kind` is validated at resolve
-    /// time). Triggers are ordered by `trigger_id` for determinism so the
-    /// "first" match doesn't shift across ticks when multiple triggers key on
-    /// the same collection.
+    /// Build a `FireIntent` for every active `EventTrigger` whose
+    /// `source_collection` matches `collection_name` AND `event_kind` matches
+    /// `kind`. Each candidate's operator-authored filter is probed against
+    /// `source_doc_id`; candidates that miss the filter or whose probe errors
+    /// are skipped (those failures are isolated to the one candidate — they
+    /// must not prevent the other matching triggers from firing). A
+    /// successful candidate is hydrated via `fetch_source_doc` and wrapped in
+    /// a `FireIntent` with a bookkeeping `on_result` callback identical to
+    /// the single-trigger path.
     ///
-    /// Returns a clone so the caller drops its snapshot borrow before
-    /// building the `FireIntent`.
-    fn first_matching_trigger(
+    /// Candidates are ordered by `trigger_id` for determinism so tests and
+    /// dispatch order are stable across ticks.
+    ///
+    /// Replaces the former `first_matching_trigger` helper, which silently
+    /// dropped all but one matching trigger per event (and, worse, dropped
+    /// the whole event when that one trigger's filter missed).
+    async fn build_intents_for_all_matching(
+        &self,
         snapshot: &ActiveRuntimeSnapshot,
         collection_name: &str,
+        source_doc_id: &str,
         kind: &str,
-    ) -> Option<crate::runtime_snapshot::ResolvedEventTrigger> {
-        let mut matches: Vec<_> = snapshot
+    ) -> Vec<FireIntent> {
+        let mut candidates: Vec<crate::runtime_snapshot::ResolvedEventTrigger> = snapshot
             .active_event_triggers()
             .values()
             .filter(|t| t.source_collection == collection_name && t.event_kind == kind)
+            .cloned()
             .collect();
-        matches.sort_by(|a, b| a.trigger_id.cmp(&b.trigger_id));
-        matches.first().map(|t| (*t).clone())
+        candidates.sort_by(|a, b| a.trigger_id.cmp(&b.trigger_id));
+
+        let mut intents = Vec::with_capacity(candidates.len());
+        for trigger in candidates {
+            match self.probe_filter(source_doc_id, &trigger).await {
+                Ok(true) => { /* matched; fall through to hydrate */ }
+                Ok(false) => {
+                    tracing::trace!(
+                        trigger_id = %trigger.trigger_id,
+                        source_collection = %collection_name,
+                        %source_doc_id,
+                        "event source: filter miss, skipping this trigger",
+                    );
+                    continue;
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        trigger_id = %trigger.trigger_id,
+                        source_collection = %collection_name,
+                        %source_doc_id,
+                        %err,
+                        "event source: filter probe failed; skipping this trigger",
+                    );
+                    continue;
+                }
+            }
+
+            // Hydrate `doc_vars` per trigger. The projection is cached per
+            // source collection, so N-trigger fan-out for a single doc runs
+            // one introspection + N cheap filter-by-_docID queries.
+            let doc_vars = match self
+                .fetch_source_doc(&trigger.source_collection, source_doc_id)
+                .await
+            {
+                Ok(value) => Some(value),
+                Err(err) => {
+                    tracing::warn!(
+                        trigger_id = %trigger.trigger_id,
+                        source_collection = %collection_name,
+                        %source_doc_id,
+                        %err,
+                        "event source: source-doc fetch failed; skipping this trigger",
+                    );
+                    continue;
+                }
+            };
+
+            let fired_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+            let event_vars = serde_json::json!({
+                "fired_at": fired_at,
+                "trigger_id": trigger.trigger_id,
+                "trigger_kind": TriggerKind::Event.as_str(),
+                "source_collection": collection_name,
+                "source_doc_id": source_doc_id,
+            });
+
+            tracing::info!(
+                trigger_id = %trigger.trigger_id,
+                source_collection = %collection_name,
+                %source_doc_id,
+                "event source matched event to trigger; emitting fire intent",
+            );
+
+            // Values captured for the result-writeback closure (see
+            // single-trigger path for rationale).
+            let trigger_id_for_callback = trigger.trigger_id.clone();
+            let source_doc_id_for_callback = source_doc_id.to_string();
+            let node_for_callback = self.node.clone();
+
+            intents.push(FireIntent {
+                trigger_id: Some(trigger.trigger_id.clone()),
+                trigger_kind: TriggerKind::Event,
+                task: trigger.task.clone(),
+                concurrency: trigger.concurrency,
+                event_vars,
+                doc_vars,
+                args_vars: None,
+                on_result: Box::new(move |result| {
+                    EventSource::spawn_runtime_field_write(
+                        node_for_callback,
+                        trigger_id_for_callback,
+                        source_doc_id_for_callback,
+                        result,
+                    );
+                }),
+            });
+        }
+        intents
     }
 }
 
@@ -650,6 +759,20 @@ impl TriggerSource for EventSource {
             // channel closure; keep looping otherwise so the engine's outer
             // driver doesn't teardown the source on the first miss.
             loop {
+                // Step 0: drain any FireIntents queued from a prior event
+                // whose fan-out matched multiple triggers. Returning the
+                // queued intent here (without touching the subscription) is
+                // what turns a single Update event into N sequential fires
+                // across all N matching triggers.
+                if let Some(intent) = self
+                    .pending_intents
+                    .lock()
+                    .expect("pending_intents mutex poisoned")
+                    .pop_front()
+                {
+                    return Some(intent);
+                }
+
                 // Step 1: snapshot-read; reconcile if the generation moved.
                 // Reconciliation might open the subscription on first non-
                 // empty desired set.
@@ -757,7 +880,7 @@ impl TriggerSource for EventSource {
                     continue;
                 }
 
-                // Step 6.5: gate on first-observation. DefraDB's event bus
+                // Step 7: gate on first-observation. DefraDB's event bus
                 // fires a single `EventName::Update` for creates, updates,
                 // AND deletes, so we can't distinguish them at the event
                 // layer. v1 ships `event_kind = "created"` only, so we treat
@@ -774,127 +897,54 @@ impl TriggerSource for EventSource {
                     continue;
                 }
 
-                // Step 7: find the first matching trigger in the snapshot we
-                // read at the top of the loop. Re-borrow the snapshot so
-                // we're always checking against the latest published view,
-                // not the copy we captured for the generation-bump check
-                // (those might diverge if a snapshot published while we were
-                // awaiting `subscription.recv()`).
+                // Step 8: fan out to every matching trigger in the latest
+                // snapshot. Re-borrow the snapshot so we're always checking
+                // against the latest published view, not the copy we
+                // captured for the generation-bump check (those might
+                // diverge if a snapshot published while we were awaiting
+                // `subscription.recv()`). `build_intents_for_all_matching`
+                // probes each candidate's filter independently so a miss on
+                // one trigger does not silently drop the event for the
+                // other matching triggers.
                 let snapshot = self.snapshot_rx.borrow().clone();
                 // v1 spec: event_kind is always "created". If that widens,
                 // map the event variant (Update carries no kind field today
                 // — all writes go through Update, distinguished only by
                 // block contents) to the right string.
                 let event_kind = "created";
-                let Some(trigger) =
-                    Self::first_matching_trigger(snapshot.as_ref(), &collection_name, event_kind)
-                else {
-                    // We filter-pass matched at the collection level but no
-                    // trigger in the snapshot keys on this collection+kind.
-                    // That can happen briefly after a reconcile removes a
-                    // trigger or after a snapshot bump raced with this event;
-                    // drop silently.
+                let mut intents = self
+                    .build_intents_for_all_matching(
+                        snapshot.as_ref(),
+                        &collection_name,
+                        &doc_id,
+                        event_kind,
+                    )
+                    .await;
+                if intents.is_empty() {
+                    // Either no triggers in the snapshot key on this
+                    // collection+kind (can happen briefly after a reconcile
+                    // removes the last matching trigger), or every
+                    // candidate's filter missed / probe errored. Drop and
+                    // park on the next event.
                     continue;
-                };
-
-                // Step 8: probe the trigger's operator-authored `filter`
-                // against the source doc (narrowed by `_docID`). A filter
-                // miss quietly drops the event — other collections may still
-                // match this tick. A probe error is logged and dropped for
-                // the same reason: a transient GraphQL failure shouldn't
-                // kill the source.
-                match self.probe_filter(&doc_id, &trigger).await {
-                    Ok(true) => { /* filter matched; fall through to hydrate */ }
-                    Ok(false) => {
-                        tracing::trace!(
-                            trigger_id = %trigger.trigger_id,
-                            source_collection = %collection_name,
-                            source_doc_id = %doc_id,
-                            "event source: filter miss, skipping event",
-                        );
-                        continue;
-                    }
-                    Err(err) => {
-                        tracing::warn!(
-                            trigger_id = %trigger.trigger_id,
-                            source_collection = %collection_name,
-                            source_doc_id = %doc_id,
-                            %err,
-                            "event source: filter probe failed; skipping event",
-                        );
-                        continue;
-                    }
                 }
 
-                // Step 9: hydrate `doc_vars` from the source doc so the
-                // dispatcher / prompt render has the full document scope.
-                // Unlike the probe, a hydration failure means we can't
-                // safely fire at all — we drop this event rather than
-                // materialize with a partial scope.
-                let doc_vars = match self
-                    .fetch_source_doc(&trigger.source_collection, &doc_id)
-                    .await
+                // Step 9: return the first intent now; queue the rest so
+                // subsequent `next_fire` calls yield them one-at-a-time
+                // before reading another event off the subscription. Order
+                // is deterministic (sorted by trigger_id in
+                // `build_intents_for_all_matching`).
+                let first = intents.remove(0);
                 {
-                    Ok(value) => Some(value),
-                    Err(err) => {
-                        tracing::warn!(
-                            trigger_id = %trigger.trigger_id,
-                            source_collection = %collection_name,
-                            source_doc_id = %doc_id,
-                            %err,
-                            "event source: source-doc fetch failed; skipping fire",
-                        );
-                        continue;
+                    let mut queue = self
+                        .pending_intents
+                        .lock()
+                        .expect("pending_intents mutex poisoned");
+                    for intent in intents {
+                        queue.push_back(intent);
                     }
-                };
-
-                // Step 10: build the FireIntent. `event_vars` carries the
-                // trigger identity; `doc_vars` carries the hydrated source
-                // doc. Task 22 fills in the `on_result` body; for now it's
-                // a no-op.
-                let fired_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-                let event_vars = serde_json::json!({
-                    "fired_at": fired_at,
-                    "trigger_id": trigger.trigger_id,
-                    "trigger_kind": TriggerKind::Event.as_str(),
-                    "source_collection": collection_name,
-                    "source_doc_id": doc_id,
-                });
-
-                tracing::info!(
-                    trigger_id = %trigger.trigger_id,
-                    source_collection = %collection_name,
-                    source_doc_id = %doc_id,
-                    "event source matched event to trigger; emitting fire intent",
-                );
-
-                // Values captured for the result-writeback closure. The
-                // callback is synchronous (`FnOnce(FireResult)`), so it
-                // spawns a background task that performs the DefraDB
-                // mutation; the engine's dispatch loop continues without
-                // waiting on bookkeeping I/O. Mirrors the pattern used by
-                // `ScheduleSource::next_fire`.
-                let trigger_id_for_callback = trigger.trigger_id.clone();
-                let source_doc_id_for_callback = doc_id.clone();
-                let node_for_callback = self.node.clone();
-
-                return Some(FireIntent {
-                    trigger_id: Some(trigger.trigger_id.clone()),
-                    trigger_kind: TriggerKind::Event,
-                    task: trigger.task.clone(),
-                    concurrency: trigger.concurrency,
-                    event_vars,
-                    doc_vars,
-                    args_vars: None,
-                    on_result: Box::new(move |result| {
-                        EventSource::spawn_runtime_field_write(
-                            node_for_callback,
-                            trigger_id_for_callback,
-                            source_doc_id_for_callback,
-                            result,
-                        );
-                    }),
-                });
+                }
+                return Some(first);
             }
         })
     }

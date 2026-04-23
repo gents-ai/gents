@@ -2243,11 +2243,12 @@ async fn dispatch_manual_intent_renders_with_args_and_materializes() {
 }
 
 // ---------------------------------------------------------------------------
-// Regression tests for the duplicate-on-update correctness fix.
+// Regression tests for the duplicate-on-update / fan-out correctness fixes.
 // The DefraDB event bus emits a single `EventName::Update` variant for
 // creates, updates, and deletes; v1 event triggers ship `event_kind =
 // "created"` only. The event source enforces that forward-only contract via
-// a first-seen gate seeded at subscription open.
+// a first-seen gate seeded at subscription open, and fans out a single
+// observation across every matching trigger.
 // ---------------------------------------------------------------------------
 
 /// Finding 1: a pre-existing source doc whose first observation arrives
@@ -2445,6 +2446,188 @@ async fn event_source_fires_for_first_seen_doc_then_skips_updates() {
         result.is_err(),
         "next_fire yielded an intent for a doc's update; first-seen gate failed to \
          suppress the second observation",
+    );
+
+    cancel.cancel();
+}
+
+/// Finding 2: one source event that matches N active triggers must yield N
+/// `FireIntent`s (not 1 and not 0). Registers two triggers on the same
+/// source collection with no filter, creates a single doc, and drains two
+/// intents out of the source in deterministic (lex by trigger_id) order.
+#[tokio::test]
+async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let webhook_sdl = r#"
+        type WebhookEvent {
+            external_id: String
+            payload: String
+        }
+    "#;
+    node.add_schema(webhook_sdl)
+        .await
+        .expect("add_schema for WebhookEvent");
+
+    let task = resolved_task("ignored");
+    // Two triggers on the same collection. lex order: trigger-alpha < trigger-beta.
+    let trigger_alpha =
+        resolved_event_trigger("trigger-alpha", "WebhookEvent", task.clone());
+    let trigger_beta = resolved_event_trigger("trigger-beta", "WebhookEvent", task);
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([
+            ("trigger-alpha".to_string(), trigger_alpha),
+            ("trigger-beta".to_string(), trigger_beta),
+        ]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let cancel = CancellationToken::new();
+    let mut source = EventSource::new(rx, node.clone(), cancel.clone());
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+
+    // Single doc — both triggers must fire, one intent per trigger.
+    let node_for_mutation = node.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mutation = r#"mutation {
+            create_WebhookEvent(input: {
+                external_id: "wh-fanout",
+                payload: "{}"
+            }) { _docID }
+        }"#;
+        let resp = node_for_mutation.execute(mutation).await;
+        assert!(
+            !resp.has_errors(),
+            "create_WebhookEvent failed: {:?}",
+            resp.errors,
+        );
+    });
+
+    let first = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("next_fire timed out on the first fan-out intent")
+        .expect("next_fire returned None instead of emitting the first intent");
+    let second = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("next_fire timed out on the second fan-out intent; fan-out dropped it?")
+        .expect("next_fire returned None instead of emitting the second intent");
+
+    assert_eq!(
+        first.trigger_id.as_deref(),
+        Some("trigger-alpha"),
+        "fan-out must emit intents in deterministic lex-by-trigger_id order",
+    );
+    assert_eq!(second.trigger_id.as_deref(), Some("trigger-beta"));
+    // Both intents reference the same source doc.
+    let first_doc_id = first
+        .event_vars
+        .get("source_doc_id")
+        .and_then(|v| v.as_str());
+    let second_doc_id = second
+        .event_vars
+        .get("source_doc_id")
+        .and_then(|v| v.as_str());
+    assert_eq!(
+        first_doc_id, second_doc_id,
+        "both fan-out intents must carry the same source_doc_id: {first_doc_id:?} vs {second_doc_id:?}",
+    );
+
+    cancel.cancel();
+}
+
+/// Finding 2: if the lexicographically-first trigger's filter misses, the
+/// event must still be tried against the remaining triggers. Previously
+/// `first_matching_trigger` would select the lex-first trigger unconditionally
+/// and drop the whole event if that trigger's filter missed, silently
+/// denying every other matching trigger a chance to fire.
+#[tokio::test]
+async fn event_source_tries_all_triggers_when_first_filter_misses() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let webhook_sdl = r#"
+        type WebhookEvent {
+            external_id: String
+            payload: String
+            kind: String @index
+        }
+    "#;
+    node.add_schema(webhook_sdl)
+        .await
+        .expect("add_schema for WebhookEvent");
+
+    let task = resolved_task("ignored");
+    // trigger-a sorts first by lex order; its filter rejects the test doc.
+    // trigger-b sorts second; its filter accepts the test doc. With the fix,
+    // the engine tries trigger-a, sees the filter miss, then moves on to
+    // trigger-b and fires.
+    let trigger_a = resolved_event_trigger_with_filter(
+        "trigger-a-lex-first",
+        "WebhookEvent",
+        task.clone(),
+        r#"{ kind: { _eq: "signup" } }"#,
+    );
+    let trigger_b = resolved_event_trigger_with_filter(
+        "trigger-b-matches",
+        "WebhookEvent",
+        task,
+        r#"{ kind: { _eq: "other" } }"#,
+    );
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([
+            ("trigger-a-lex-first".to_string(), trigger_a),
+            ("trigger-b-matches".to_string(), trigger_b),
+        ]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let cancel = CancellationToken::new();
+    let mut source = EventSource::new(rx, node.clone(), cancel.clone());
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+
+    // Write a doc whose kind is "other" — misses trigger-a, matches trigger-b.
+    let node_for_mutation = node.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mutation = r#"mutation {
+            create_WebhookEvent(input: {
+                external_id: "wh-missfirst",
+                payload: "{}",
+                kind: "other"
+            }) { _docID }
+        }"#;
+        let resp = node_for_mutation.execute(mutation).await;
+        assert!(
+            !resp.has_errors(),
+            "create_WebhookEvent failed: {:?}",
+            resp.errors,
+        );
+    });
+
+    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect(
+            "next_fire timed out; trigger-a's filter miss silently dropped the \
+             event for trigger-b (fan-out regression)",
+        )
+        .expect("next_fire returned None instead of emitting a FireIntent");
+    assert_eq!(
+        intent.trigger_id.as_deref(),
+        Some("trigger-b-matches"),
+        "after trigger-a filter-miss, the engine must still try trigger-b and fire \
+         for it; got trigger_id = {:?}",
+        intent.trigger_id,
+    );
+
+    // And crucially, there must be no second intent — trigger-a did NOT
+    // match the filter, so it must not have emitted.
+    let maybe_extra =
+        tokio::time::timeout(Duration::from_millis(300), source.next_fire()).await;
+    assert!(
+        maybe_extra.is_err(),
+        "trigger-a emitted a FireIntent despite its filter miss",
     );
 
     cancel.cancel();
