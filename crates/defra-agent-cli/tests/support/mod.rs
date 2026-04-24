@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_imports)]
+
 pub mod fs;
 pub mod graphql;
 pub mod mocks;

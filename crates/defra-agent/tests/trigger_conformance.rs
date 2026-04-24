@@ -257,8 +257,8 @@ async fn write_dynamic_event(
         .as_ref()
         .unwrap_or_else(|| panic!("add_{collection} response missing data"));
     let field = data
-        .get(&format!("add_{collection}"))
-        .or_else(|| data.get(&format!("create_{collection}")))
+        .get(format!("add_{collection}"))
+        .or_else(|| data.get(format!("create_{collection}")))
         .unwrap_or_else(|| panic!("add_/create_{collection} key missing; data={data:?}"));
     field
         .get("_docID")
@@ -1193,7 +1193,7 @@ async fn template_render_failure_records_error_status() {
     )
     .await;
     assert!(
-        errored.last_error.as_deref().unwrap_or("").len() > 0,
+        !errored.last_error.as_deref().unwrap_or("").is_empty(),
         "last_error must carry a render-failure reason: {errored:?}"
     );
     assert_eq!(

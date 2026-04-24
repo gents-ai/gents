@@ -13,7 +13,7 @@ pub(super) async fn behavior_set(args: BehaviorUpsertArgs) -> Result<()> {
         .unwrap_or_else(|| default_behavior_id_for_agent(&args.agent_did));
     let system_prompt = match args.system_prompt_file {
         Some(ref path) => Some(
-            std::fs::read_to_string(&path)
+            std::fs::read_to_string(path)
                 .with_context(|| format!("reading system prompt from {}", path.display()))?,
         ),
         None => None,

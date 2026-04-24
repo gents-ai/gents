@@ -1,12 +1,8 @@
 mod support;
 use support::*;
 
+use anyhow::{Context, Result};
 use std::fs;
-use std::time::Duration;
-
-use anyhow::{anyhow, Context, Result};
-use serde_json::Value;
-use uuid::Uuid;
 
 #[test]
 fn top_level_help_shows_quickstart_workflow() -> Result<()> {

@@ -195,13 +195,20 @@ impl TriggerSource for ScheduleSource {
                         args_vars: None,
                         on_result: Box::new(move |result| {
                             let updates = match &result {
-                                FireResult::Fired { .. } => ScheduleRuntimeUpdate {
-                                    next_run_at: Some(advanced_next_run_at_str.clone()),
-                                    last_attempt_at: Some(last_attempt_at.clone()),
-                                    last_status: Some("fired".to_string()),
-                                    last_error: None,
-                                    fire_count_delta: Some(1),
-                                },
+                                FireResult::Fired { request_id } => {
+                                    tracing::debug!(
+                                        schedule_id = %schedule_id_for_callback,
+                                        request_id = %request_id,
+                                        "schedule fire materialized request"
+                                    );
+                                    ScheduleRuntimeUpdate {
+                                        next_run_at: Some(advanced_next_run_at_str.clone()),
+                                        last_attempt_at: Some(last_attempt_at.clone()),
+                                        last_status: Some("fired".to_string()),
+                                        last_error: None,
+                                        fire_count_delta: Some(1),
+                                    }
+                                }
                                 FireResult::Skipped { .. } => ScheduleRuntimeUpdate {
                                     // Skipped still advances `next_run_at` so
                                     // a serial-gated fire doesn't hammer the

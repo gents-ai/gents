@@ -163,7 +163,7 @@ async fn set_schedule_enabled(
 /// successful fire: advances `next_run_at` by `interval_secs`, writes
 /// `last_attempt_at`, sets `last_status = "fired"`, and bumps `fire_count` by
 /// 1. Apply-owned fields (`enabled`, `interval_secs`, `task_id`,
-/// `concurrency`) must NOT be touched.
+///    `concurrency`) must NOT be touched.
 async fn schedule_writeback_fired(
     node: &defra_agent::defra_node::EmbeddedNode,
     schedule_id: &str,

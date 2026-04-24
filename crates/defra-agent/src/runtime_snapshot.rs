@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
+#[cfg(test)]
+use tokio::sync::watch;
 
 use crate::admission::BackendAdmissionConfig;
 use crate::config::BehaviorConfig;
@@ -21,6 +23,7 @@ pub(crate) struct ResolvedTask {
     pub(crate) task_id: String,
     pub(crate) behavior_id: String,
     pub(crate) prompt_template: String,
+    #[allow(dead_code)]
     pub(crate) output_schema_ref: Option<String>,
 }
 
@@ -33,9 +36,11 @@ pub(crate) struct ResolvedTask {
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedSchedule {
     pub(crate) schedule_id: String,
+    #[allow(dead_code)]
     pub(crate) task_id: String,
     pub(crate) task: ResolvedTask,
     pub(crate) interval_secs: i64,
+    #[allow(dead_code)]
     pub(crate) enabled: bool,
     pub(crate) concurrency: ConcurrencyMode,
 }
@@ -76,6 +81,7 @@ impl ConcurrencyMode {
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedEventTrigger {
     pub(crate) trigger_id: String,
+    #[allow(dead_code)]
     pub(crate) task_id: String,
     pub(crate) task: ResolvedTask,
     pub(crate) source_collection: String,
@@ -83,6 +89,7 @@ pub(crate) struct ResolvedEventTrigger {
     /// `"deleted"` support.
     pub(crate) event_kind: String,
     pub(crate) filter: Option<String>,
+    #[allow(dead_code)]
     pub(crate) enabled: bool,
     pub(crate) concurrency: ConcurrencyMode,
 }
@@ -250,6 +257,8 @@ impl ActiveRuntimeSnapshot {
         &self.active_tasks
     }
 
+    #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn tool_surface(&self, behavior_id: &str) -> Option<&Arc<ToolSurface>> {
         self.tool_surfaces.get(behavior_id)
     }
@@ -276,6 +285,7 @@ impl ActiveRuntimeSnapshot {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn refresh_active_snapshot(
     active_snapshot: &mut Arc<ActiveRuntimeSnapshot>,
     active_snapshot_rx: &mut watch::Receiver<Arc<ActiveRuntimeSnapshot>>,

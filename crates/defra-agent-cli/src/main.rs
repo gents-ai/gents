@@ -419,6 +419,7 @@ mod tests {
     use super::*;
     use serde_json::Value;
 
+    #[test]
     fn sanitize_inference_backend_drops_deprecated_capability_fields() {
         let input = serde_json::json!({
             "backend_id": "local",

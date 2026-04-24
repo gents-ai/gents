@@ -21,6 +21,10 @@ pub(crate) mod schedule_source;
 #[cfg(test)]
 mod tests;
 
+type TriggerLockKey = (String, TriggerKind);
+type TriggerLock = Arc<Mutex<()>>;
+type TriggerLockMap = HashMap<TriggerLockKey, TriggerLock>;
+
 /// Kind of trigger that produced a fire intent.
 ///
 /// Schedule and Event triggers both drive the engine from stored trigger
@@ -87,35 +91,6 @@ pub(crate) enum FireResult {
     Errored { error: String },
 }
 
-/// Persisted-status projection of a `FireResult`.
-///
-/// `FireResult` carries the per-outcome payload (request id / reason / error);
-/// `FireAttemptStatus` is the compact enum form that lands in the
-/// `last_status` field on `Schedule` and `EventTrigger` documents via the
-/// source's `on_result` callback. Keeping the two apart lets the engine stay
-/// free of persistence-layer wording.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FireAttemptStatus {
-    Fired,
-    Skipped,
-    Errored,
-}
-
-impl FireAttemptStatus {
-    /// String form matching the GraphQL-persisted `last_status` values.
-    ///
-    /// Note: `Errored` serializes to `"error"` (not `"errored"`) to match the
-    /// existing schema vocabulary on `Schedule.last_status` /
-    /// `EventTrigger.last_status`.
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            FireAttemptStatus::Fired => "fired",
-            FireAttemptStatus::Skipped => "skipped",
-            FireAttemptStatus::Errored => "error",
-        }
-    }
-}
-
 /// Stream of fire intents produced by a source (e.g. the schedule clock, an
 /// event-queue poller, a manual-fire inbox).
 ///
@@ -178,7 +153,7 @@ pub(crate) struct TriggerEngine {
     #[allow(dead_code)]
     materializer: Arc<dyn MaterializerHandle>,
     #[allow(dead_code)]
-    per_trigger_locks: Mutex<HashMap<(String, TriggerKind), Arc<Mutex<()>>>>,
+    per_trigger_locks: Mutex<TriggerLockMap>,
 }
 
 impl TriggerEngine {

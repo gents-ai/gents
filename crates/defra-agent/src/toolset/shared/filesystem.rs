@@ -280,6 +280,7 @@ fn collect_glob_matches_inner(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_grep_matches_inner(
     context: &ToolContext,
     traversal_root: &Path,

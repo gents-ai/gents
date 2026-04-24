@@ -145,6 +145,7 @@ impl AdmissionRegistry {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) async fn acquire_for_test(
         &self,
         request_id: impl Into<String>,

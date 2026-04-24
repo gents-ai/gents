@@ -151,6 +151,7 @@ where
 pub(crate) enum CallKind {
     Inference,
     Compaction,
+    #[allow(dead_code)]
     Scheduled,
 }
 

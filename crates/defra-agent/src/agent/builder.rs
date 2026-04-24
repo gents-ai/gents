@@ -30,6 +30,7 @@ use crate::tool_surface::{
 #[cfg(test)]
 const TEST_DEFAULT_BACKEND_ENDPOINT: &str = "http://localhost:8000/v1";
 
+#[derive(Default)]
 pub struct DefraAgentBuilder {
     node: Option<Arc<EmbeddedNode>>,
     identity: Option<Arc<dyn AgentIdentity>>,
@@ -42,24 +43,6 @@ pub struct DefraAgentBuilder {
     hook_failure_policy: FailurePolicy,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     behaviors: Vec<PendingBehaviorConfig>,
-}
-
-impl Default for DefraAgentBuilder {
-    fn default() -> Self {
-        Self {
-            node: None,
-            identity: None,
-            default_behavior_id: None,
-            tool_ceiling: ToolCeiling::meta_only(),
-            mcp_pool: McpPool::default(),
-            local_hostname: None,
-            local_subnet: None,
-            retry_policy: RetryPolicy::default(),
-            hook_failure_policy: FailurePolicy::default(),
-            process_state_observer: None,
-            behaviors: Vec::new(),
-        }
-    }
 }
 
 impl DefraAgentBuilder {
@@ -411,6 +394,7 @@ impl PendingBehaviorConfig {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_with_resolved_backend(
         self,
         identity: Arc<dyn AgentIdentity>,

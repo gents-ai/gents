@@ -215,7 +215,6 @@ pub(super) async fn p2p_collections_sync_versions(args: P2pSyncVersionsArgs) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::{P2pCollectionSubscriptionRow, P2pReplicatorRow};
     use std::collections::BTreeMap;
 
     #[test]

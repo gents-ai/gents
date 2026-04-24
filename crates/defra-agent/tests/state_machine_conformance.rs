@@ -405,18 +405,17 @@ async fn serial_skip_does_not_create_request() {
 
     // Run the exact query `ProductionMaterializer` uses to gate the fire.
     // Expect `true` — a non-terminal request for this tuple exists.
-    let gating_query = format!(
-        r#"query {{
+    let gating_query = r#"query {
             AgentRequest(
-                filter: {{
-                    caused_by_trigger_id: {{ _eq: "sched-serial" }},
-                    caused_by_trigger_kind: {{ _eq: "schedule" }},
-                    lifecycle_state: {{ _in: ["pending", "claimed", "processing", "inputRequired"] }}
-                }},
+                filter: {
+                    caused_by_trigger_id: { _eq: "sched-serial" },
+                    caused_by_trigger_kind: { _eq: "schedule" },
+                    lifecycle_state: { _in: ["pending", "claimed", "processing", "inputRequired"] }
+                },
                 limit: 1
-            ) {{ _docID }}
-        }}"#
-    );
+            ) { _docID }
+        }"#
+    .to_string();
     let gate = db.node.execute(&gating_query).await;
     assert!(
         !gate.has_errors(),
@@ -515,21 +514,20 @@ async fn latest_only_transition_to_superseded() {
 
     // Run the engine's supersede mutation verbatim (the shape in
     // `production_materializer::supersede_nonterminal_requests_for_trigger`).
-    let supersede = format!(
-        r#"mutation {{
+    let supersede = r#"mutation {
             update_AgentRequest(
-                filter: {{
-                    caused_by_trigger_id: {{ _eq: "sched-latest" }},
-                    caused_by_trigger_kind: {{ _eq: "schedule" }},
-                    lifecycle_state: {{ _in: ["pending", "claimed", "processing", "inputRequired"] }}
-                }},
-                input: {{
+                filter: {
+                    caused_by_trigger_id: { _eq: "sched-latest" },
+                    caused_by_trigger_kind: { _eq: "schedule" },
+                    lifecycle_state: { _in: ["pending", "claimed", "processing", "inputRequired"] }
+                },
+                input: {
                     status: "superseded",
                     lifecycle_state: "superseded"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
+                }
+            ) { _docID }
+        }"#
+    .to_string();
     let resp = db.node.execute(&supersede).await;
     assert!(
         !resp.has_errors(),
@@ -582,16 +580,15 @@ async fn fire_errored_does_not_create_request() {
 
     // The persistence boundary: no materialize call means no AgentRequest
     // row with the lineage tuple. Query the engine's tuple filter to confirm.
-    let query = format!(
-        r#"query {{
+    let query = r#"query {
             AgentRequest(
-                filter: {{
-                    caused_by_trigger_id: {{ _eq: "sched-render-err" }},
-                    caused_by_trigger_kind: {{ _eq: "schedule" }}
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
+                filter: {
+                    caused_by_trigger_id: { _eq: "sched-render-err" },
+                    caused_by_trigger_kind: { _eq: "schedule" }
+                }
+            ) { _docID }
+        }"#
+    .to_string();
     let resp = db.node.execute(&query).await;
     assert!(!resp.has_errors(), "tuple query errored: {:?}", resp.errors);
     let rows = resp

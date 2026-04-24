@@ -224,6 +224,7 @@ pub fn read_runtime_state_json(home_dir: &Path) -> Result<Value> {
     serde_json::from_slice(&bytes).with_context(|| format!("decoding {}", path.display()))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn assert_runtime_init_state(
     graphql: &str,
     agent_did: &str,

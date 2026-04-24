@@ -454,6 +454,7 @@ pub async fn create_agent_message(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create_agent_tool_call(
     node: &EmbeddedNode,
     session_id: &str,
