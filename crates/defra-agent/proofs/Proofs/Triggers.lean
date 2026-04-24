@@ -572,6 +572,148 @@ theorem dispatchStep_hypothesis_preservation
   exact h_conc ▸ h_serial'
 
 /--
+Helper: if `l.any p = false`, then `(l.filter p).length = 0`.
+
+This is the "if no element matches, filter is empty" observation, stated
+at the level of Bool predicates. Used by `dispatchStep_serial_bounds_count`
+to collapse the pre-append count when the serial skip predicate said there
+was no in-flight match.
+-/
+private theorem list_any_false_filter_length_zero
+    {α : Type} {p : α → Bool} {l : List α}
+    (h : l.any p = false) : (l.filter p).length = 0 := by
+  induction l with
+  | nil => simp
+  | cons hd tl ih =>
+    simp only [List.any_cons, Bool.or_eq_false_iff] at h
+    obtain ⟨h_hd, h_tl⟩ := h
+    -- p hd = false, so filter strips hd and recurses.
+    rw [List.filter_cons_of_neg (by rw [h_hd]; decide)]
+    exact ih h_tl
+
+/--
+Serial-arm preservation of T2's bound.
+
+When `dispatchStep` is invoked with `.serial` concurrency, the post-state
+non-terminal count for tuple `t` is bounded by 1, given the pre-state count
+is bounded by 1.
+
+Case analysis on `dispatch` / `seed.causedByTriggerId` / `t`-match / any-match:
+- `dispatch = none`: state unchanged, bound from hypothesis.
+- Serial, `key = none`: append; new request has `causedBy = none`, which
+  never matches `some t`, so the count is unchanged.
+- Serial, `key = some k` with `k ≠ t`: new request's `causedBy = some k ≠ some t`,
+  so the count is unchanged.
+- Serial, `key = some t`, any-match true: state unchanged (skip branch),
+  bound from hypothesis.
+- Serial, `key = some t`, any-match false: the old count is 0 (by
+  `list_any_false_filter_length_zero`), append one matching non-terminal,
+  new count = 1.
+-/
+theorem dispatchStep_serial_bounds_count
+    (s : SystemState) (snap : TriggerSnapshot) (intent : FireIntent) (t : TriggerKey)
+    (h_serial : intent.concurrency = .serial)
+    (h_before : s.nonTerminalCountFor t ≤ 1) :
+    (dispatchStep s snap intent).nonTerminalCountFor t ≤ 1 := by
+  unfold dispatchStep
+  cases h_disp : dispatch snap intent with
+  | none =>
+    simp only
+    exact h_before
+  | some seed =>
+    simp only
+    rw [h_serial]
+    simp only
+    -- Let p := predicate for the filter count
+    set p : AgentRequest → Bool :=
+      (fun r => (r.causedBy == some t) && !r.isTerminal) with hp_def
+    cases h_key : seed.causedByTriggerId with
+    | none =>
+      -- key = none: append newRequest with causedBy = none.
+      simp only
+      -- Post-state: s.requests ++ [newRequest], newRequest.causedBy = none.
+      -- p newRequest = ((none == some t) && ...) = false.
+      have h_pred_false : p { id := s!"dispatched-{s.requests.length}",
+                              causedBy := none,
+                              concurrency := intent.concurrency,
+                              isTerminal := false,
+                              executionOrigin :=
+                                match seed.causedByTriggerKind with
+                                | .manual => .interactive
+                                | .schedule | .event => .scheduled } = false := by
+        simp [hp_def]
+      show (List.filter p (s.requests ++ [_])).length ≤ 1
+      rw [List.filter_append, List.filter_cons_of_neg (by rw [h_pred_false]; decide),
+          List.filter_nil, List.append_nil]
+      exact h_before
+    | some k =>
+      -- key = some k. Branch on whether the full tuple (k, seed.kind) equals t.
+      simp only
+      by_cases h_eq : (k, seed.causedByTriggerKind) = t
+      · -- key = some t: any-match case analysis.
+        by_cases h_any :
+          s.requests.any (fun r => (r.causedBy == some (k, seed.causedByTriggerKind))
+                                     && !r.isTerminal) = true
+        · -- Skip branch: state unchanged.
+          rw [if_pos h_any]
+          exact h_before
+        · -- Append branch: old count = 0 (by helper), new count = 1.
+          rw [if_neg h_any]
+          -- h_any : ¬ (any = true), so any = false.
+          have h_any_false :
+              s.requests.any (fun r => (r.causedBy == some (k, seed.causedByTriggerKind))
+                                         && !r.isTerminal) = false := by
+            cases h : s.requests.any (fun r => (r.causedBy == some (k, seed.causedByTriggerKind))
+                                                 && !r.isTerminal) with
+            | false => rfl
+            | true => exact absurd h h_any
+          -- Old filter length = 0.
+          have h_old_zero : (s.requests.filter p).length = 0 := by
+            apply list_any_false_filter_length_zero
+            simp only [hp_def]
+            rw [← h_eq]
+            exact h_any_false
+          -- New request matches p because causedBy = some t.
+          have h_pred_true : p { id := s!"dispatched-{s.requests.length}",
+                                 causedBy := some (k, seed.causedByTriggerKind),
+                                 concurrency := intent.concurrency,
+                                 isTerminal := false,
+                                 executionOrigin :=
+                                   match seed.causedByTriggerKind with
+                                   | .manual => .interactive
+                                   | .schedule | .event => .scheduled } = true := by
+            simp [hp_def, h_eq]
+          show (List.filter p (s.requests ++ [_])).length ≤ 1
+          rw [List.filter_append, List.filter_cons_of_pos (by rw [h_pred_true]),
+              List.filter_nil, List.length_append, List.length_cons, List.length_nil,
+              h_old_zero]
+      · -- (k, seed.kind) ≠ t: new request's causedBy ≠ some t, count unchanged.
+        by_cases h_any :
+          s.requests.any (fun r => (r.causedBy == some (k, seed.causedByTriggerKind))
+                                     && !r.isTerminal) = true
+        · -- Skip branch: state unchanged.
+          rw [if_pos h_any]
+          exact h_before
+        · -- Append branch: state is s.requests ++ [newRequest], newRequest.causedBy ≠ some t.
+          rw [if_neg h_any]
+          -- New request does not match p.
+          have h_pred_false : p { id := s!"dispatched-{s.requests.length}",
+                                  causedBy := some (k, seed.causedByTriggerKind),
+                                  concurrency := intent.concurrency,
+                                  isTerminal := false,
+                                  executionOrigin :=
+                                    match seed.causedByTriggerKind with
+                                    | .manual => .interactive
+                                    | .schedule | .event => .scheduled } = false := by
+            simp only [hp_def]
+            have h_ne : (k, seed.causedByTriggerKind) ≠ t := h_eq
+            simp [h_ne]
+          show (List.filter p (s.requests ++ [_])).length ≤ 1
+          rw [List.filter_append, List.filter_cons_of_neg (by rw [h_pred_false]; decide),
+              List.filter_nil, List.append_nil]
+          exact h_before
+
+/--
 T2 (serial at-most-one): any reachable system state has at most one
 non-terminal request per trigger tuple, provided every request for that
 tuple in the state uses `.serial` concurrency.
