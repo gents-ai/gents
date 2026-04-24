@@ -481,6 +481,97 @@ theorem nonTerminalCountFor_empty (t : TriggerKey) :
   simp [SystemState.empty, SystemState.nonTerminalCountFor]
 
 /--
+Helper: any request in the pre-step state has a corresponding request in
+the post-step state with the same `causedBy` and `concurrency` fields.
+(The `isTerminal` field may flip under `.latestOnly` supersession.)
+
+This is the core structural fact that `dispatchStep` preserves: it either
+leaves requests alone, appends new ones, or flips `isTerminal`. It never
+changes `causedBy` or `concurrency` on existing requests.
+-/
+private theorem dispatchStep_preserves_causedBy_and_concurrency
+    (s : SystemState) (snap : TriggerSnapshot) (intent : FireIntent)
+    (r : AgentRequest) :
+    r ∈ s.requests →
+    ∃ r' ∈ (dispatchStep s snap intent).requests,
+      r'.causedBy = r.causedBy ∧ r'.concurrency = r.concurrency := by
+  intro h_mem
+  unfold dispatchStep
+  -- Case on dispatch result
+  cases h_disp : dispatch snap intent with
+  | none =>
+    -- state unchanged: r itself is the witness
+    exact ⟨r, h_mem, rfl, rfl⟩
+  | some seed =>
+    simp only
+    -- Case on concurrency
+    cases h_conc : intent.concurrency with
+    | parallel =>
+      simp only
+      refine ⟨r, ?_, rfl, rfl⟩
+      exact List.mem_append_left _ h_mem
+    | serial =>
+      simp only
+      cases h_key : seed.causedByTriggerId with
+      | none =>
+        simp only
+        refine ⟨r, ?_, rfl, rfl⟩
+        exact List.mem_append_left _ h_mem
+      | some tid =>
+        simp only
+        by_cases h_any :
+          s.requests.any (fun r => (r.causedBy == some (tid, seed.causedByTriggerKind)) && !r.isTerminal) = true
+        · rw [if_pos h_any]
+          exact ⟨r, h_mem, rfl, rfl⟩
+        · rw [if_neg h_any]
+          refine ⟨r, ?_, rfl, rfl⟩
+          exact List.mem_append_left _ h_mem
+    | latestOnly =>
+      simp only
+      cases h_key : seed.causedByTriggerId with
+      | none =>
+        simp only
+        refine ⟨r, ?_, rfl, rfl⟩
+        exact List.mem_append_left _ h_mem
+      | some tid =>
+        simp only
+        -- Post: (s.requests.map f) ++ [new] where f conditionally flips isTerminal.
+        -- f preserves causedBy and concurrency regardless of branch.
+        refine ⟨
+          if (r.causedBy == some (tid, seed.causedByTriggerKind)) && !r.isTerminal then
+            { r with isTerminal := true }
+          else r,
+          ?_, ?_, ?_⟩
+        · -- membership: f r ∈ (s.requests.map f) ++ [new]
+          apply List.mem_append_left
+          exact List.mem_map_of_mem _ h_mem
+        · -- causedBy preserved
+          split <;> rfl
+        · -- concurrency preserved
+          split <;> rfl
+
+/--
+Post-hypothesis pre-state preservation for dispatchStep.
+
+If the post-step state satisfies "every request for tuple `t` is serial",
+then the pre-step state also satisfies it.
+
+This is the bridge T2's induction uses to convert `h_hyp_post` into
+`h_hyp_pre` for the inductive hypothesis `ih`.
+-/
+theorem dispatchStep_hypothesis_preservation
+    (s : SystemState) (snap : TriggerSnapshot) (intent : FireIntent) (t : TriggerKey)
+    (h_hyp_post : ∀ r ∈ (dispatchStep s snap intent).requests,
+                  r.causedBy = some t → r.concurrency = .serial) :
+    ∀ r ∈ s.requests, r.causedBy = some t → r.concurrency = .serial := by
+  intro r h_mem h_causedBy
+  obtain ⟨r', h_mem', h_cb, h_conc⟩ :=
+    dispatchStep_preserves_causedBy_and_concurrency s snap intent r h_mem
+  have h_causedBy' : r'.causedBy = some t := h_cb.trans h_causedBy
+  have h_serial' := h_hyp_post r' h_mem' h_causedBy'
+  exact h_conc ▸ h_serial'
+
+/--
 T2 (serial at-most-one): any reachable system state has at most one
 non-terminal request per trigger tuple, provided every request for that
 tuple in the state uses `.serial` concurrency.
