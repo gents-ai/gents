@@ -5,11 +5,11 @@ import Proofs.RuntimeReconcile
 /-!
 # Layer 5: Trigger Engine
 
-Abstract model of the trigger engine (schedule / event / manual fires)
-that feeds the request lifecycle. This file introduces the shared
+Model of the trigger engine (schedule / event / manual fires) that
+feeds the request lifecycle. This file introduces the shared
 vocabulary: `TriggerKind`, `ConcurrencyMode`, `FireIntent`, `RequestSeed`
-and an abstract `dispatch` that a fire goes through before it becomes a
-materialized `AgentRequest`.
+and the operational `dispatch` / `dispatchStep` semantics a fire goes
+through before it becomes a materialized `AgentRequest`.
 
 The theorems (`T1`..`T4`) state the high-level safety properties the
 trigger engine must preserve:
@@ -352,15 +352,14 @@ admissible branches and they differ in what the snapshot must witness:
   has published as active.
 * **Event branch.** `intent.triggerKind = .event` requires an
   `activeEventTrigger` in `snap.activeEventTriggers` with matching
-  `triggerId` and `enabled = true`. Stated over the now-concrete
-  `ActiveEventTrigger` structure (see PR 2 Task 27): the existential
-  witness `trig` has the full shape `{triggerId, taskId,
-  sourceCollection, eventKind, enabled, concurrency}`, matching the
-  Rust `ResolvedEventTrigger`. The projection `trig.triggerId` /
-  `trig.enabled` is what the gate checks, while the remaining fields
-  become load-bearing for the yet-to-be-filled `dispatch` operational
-  definition (e.g. joining on `sourceCollection` and `eventKind` to
-  decide which subscription's buffer to drain).
+  `triggerId` and `enabled = true`. Stated over the concrete
+  `ActiveEventTrigger` structure: the existential witness `trig` has
+  the full shape `{triggerId, taskId, sourceCollection, eventKind,
+  enabled, concurrency}`, matching the Rust `ResolvedEventTrigger`.
+  The projection `trig.triggerId` / `trig.enabled` is what the gate
+  checks; the remaining fields are load-bearing for `dispatch`'s
+  operational definition (e.g. joining on `sourceCollection` and
+  `eventKind` to decide which subscription's buffer to drain).
 * **Manual branch — unconditional.** `intent.triggerKind = .manual`
   imposes **no snapshot precondition** on the gate. Manual fires are
   operator-initiated and do not reference any trigger document, so
@@ -370,13 +369,13 @@ admissible branches and they differ in what the snapshot must witness:
   `snapshot.active_event_triggers`. See `T1_manual_unconditional`
   below for the lemma form of this observation.
 
-**Proof state.** PR 1 left this theorem at `sorry` because `dispatch`
-itself is still abstract (see its definition above). PR 3 does not
-prove `dispatch`; once a concrete operational definition is supplied
-in a later PR, the proof reduces to an unfold + case on
-`intent.triggerKind` + the `enabled` check. The event branch will then
-discharge directly against `ActiveEventTrigger`'s concrete fields;
-previously it would have needed an opaque existential. -/
+**Proof approach.** Unfold `dispatch`, case on `intent.triggerKind`,
+then on `intent.triggerId`, then on the `dispatchEnabledForSchedule` /
+`dispatchEnabledForEvent` lookup. The `find?_some_and_mem` helper
+(below the proof block) extracts both membership in the active list
+and the `(triggerId == tid) && enabled` predicate from
+`List.find? = some active`, which combine to yield the existential
+witness demanded by the conclusion. -/
 theorem T1_enabled_gate
     (snap : TriggerSnapshot) (intent : FireIntent) (seed : RequestSeed) :
     dispatch snap intent = some seed →
