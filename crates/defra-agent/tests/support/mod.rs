@@ -355,6 +355,7 @@ pub fn build_request(
         top_k: None,
         max_tokens: None,
         metadata: None,
+        execution_origin: None,
         created_at,
     }
 }

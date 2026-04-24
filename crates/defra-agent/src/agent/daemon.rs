@@ -129,6 +129,9 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 .to_string();
             let behavior_id = self.behavior.name.clone();
             let backend_id = self.behavior.backend_id.clone().unwrap_or_default();
+            let execution_origin = crate::lifecycle::ExecutionOrigin::from_persisted(
+                request.execution_origin.as_deref(),
+            );
 
             self.process_request(request, shutdown.clone())
                 .instrument(tracing::info_span!(
@@ -139,7 +142,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     behavior_id = %behavior_id,
                     requested_behavior_id = %requested_behavior_id,
                     backend_id = %backend_id,
-                    execution_origin = "interactive",
+                    execution_origin = %execution_origin.as_str(),
                 ))
                 .await;
         }
@@ -156,7 +159,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             self.behavior.did(),
             request.clone(),
             self.behavior.deadline_duration.as_secs(),
-            crate::lifecycle::ExecutionOrigin::Interactive,
+            crate::lifecycle::ExecutionOrigin::from_persisted(request.execution_origin.as_deref()),
             self.behavior.backend_id.clone().unwrap_or_default(),
         );
 

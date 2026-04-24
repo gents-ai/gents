@@ -227,7 +227,7 @@ async fn fail_routed_request(
         agent_did,
         request.clone(),
         Duration::from_secs(30).as_secs(),
-        ExecutionOrigin::Interactive,
+        ExecutionOrigin::from_persisted(request.execution_origin.as_deref()),
         "",
     );
 

@@ -44,6 +44,7 @@ async fn complete_does_not_overwrite_conversation_for_newer_request() {
         top_k: None,
         max_tokens: None,
         metadata: None,
+        execution_origin: None,
         created_at: "2026-03-23T00:00:00Z".into(),
     };
     let mut lifecycle = RequestLifecycle::new(db.node.clone(), AGENT_NAME, first_request, 300);
@@ -96,6 +97,7 @@ async fn advance_increments_progress_seq() {
         top_k: None,
         max_tokens: None,
         metadata: None,
+        execution_origin: None,
         created_at: "2026-03-23T00:00:00Z".into(),
     };
 

@@ -58,6 +58,7 @@ fn request_sampling_overrides_behavior_defaults() {
         top_k: Some(40),
         max_tokens: Some(512),
         metadata: Some(r#"{"run_id":"foo"}"#.to_string()),
+        execution_origin: None,
         created_at: String::new(),
     };
 

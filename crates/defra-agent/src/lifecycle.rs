@@ -17,6 +17,7 @@ mod rows;
 mod transition;
 
 pub use manual::write_manual_agent_request;
+pub(crate) use materialize::write_pending_agent_request_with_lineage;
 
 pub const DEFAULT_REQUEST_MAX_RETRIES: u32 = 3;
 
@@ -51,10 +52,17 @@ pub enum ExecutionOrigin {
 }
 
 impl ExecutionOrigin {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Interactive => "interactive",
             Self::Scheduled => "scheduled",
+        }
+    }
+
+    pub(crate) fn from_persisted(value: Option<&str>) -> Self {
+        match value {
+            Some("scheduled") => Self::Scheduled,
+            _ => Self::Interactive,
         }
     }
 }
@@ -84,7 +92,19 @@ enum PersistedLifecycleState {
 }
 
 impl PersistedLifecycleState {
-    fn as_str(self) -> &'static str {
+    const ALL: [Self; 9] = [
+        Self::Pending,
+        Self::Claimed,
+        Self::Processing,
+        Self::InputRequired,
+        Self::Completed,
+        Self::Failed,
+        Self::Superseded,
+        Self::Dead,
+        Self::Interrupted,
+    ];
+
+    const fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
             Self::Claimed => "claimed",
@@ -97,6 +117,28 @@ impl PersistedLifecycleState {
             Self::Interrupted => "interrupted",
         }
     }
+
+    const fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Completed | Self::Failed | Self::Superseded | Self::Dead | Self::Interrupted
+        )
+    }
+
+    const fn is_nonterminal(self) -> bool {
+        !self.is_terminal()
+    }
+}
+
+pub(crate) fn nonterminal_lifecycle_state_graphql_list() -> String {
+    let states = PersistedLifecycleState::ALL
+        .iter()
+        .copied()
+        .filter(|state| state.is_nonterminal())
+        .map(|state| format!(r#""{}""#, state.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[{states}]")
 }
 
 pub struct RequestLifecycle {
@@ -135,4 +177,52 @@ fn resolve_behavior_id(default_behavior_id: &str, requested_behavior_id: Option<
         .filter(|value| !value.is_empty())
         .unwrap_or(default_behavior_id)
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn persisted_lifecycle_terminal_partition_matches_trigger_bridge() {
+        let nonterminal = PersistedLifecycleState::ALL
+            .iter()
+            .copied()
+            .filter(|state| state.is_nonterminal())
+            .map(|state| state.as_str())
+            .collect::<Vec<_>>();
+        let terminal = PersistedLifecycleState::ALL
+            .iter()
+            .copied()
+            .filter(|state| state.is_terminal())
+            .map(|state| state.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            nonterminal,
+            vec!["pending", "claimed", "processing", "inputRequired"]
+        );
+        assert_eq!(
+            terminal,
+            vec!["completed", "failed", "superseded", "dead", "interrupted"]
+        );
+        assert!(PersistedLifecycleState::InputRequired.is_nonterminal());
+        assert!(PersistedLifecycleState::Interrupted.is_terminal());
+        assert_eq!(
+            nonterminal_lifecycle_state_graphql_list(),
+            r#"["pending", "claimed", "processing", "inputRequired"]"#
+        );
+        assert_eq!(
+            ExecutionOrigin::from_persisted(Some("scheduled")),
+            ExecutionOrigin::Scheduled
+        );
+        assert_eq!(
+            ExecutionOrigin::from_persisted(Some("interactive")),
+            ExecutionOrigin::Interactive
+        );
+        assert_eq!(
+            ExecutionOrigin::from_persisted(None),
+            ExecutionOrigin::Interactive
+        );
+    }
 }

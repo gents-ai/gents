@@ -125,9 +125,8 @@ pub(in crate::agent) async fn run_agent(
     // `TriggerEngine`. Construct a `ScheduleSource` and an `EventSource`
     // backed by the active runtime snapshot, plus a `ProductionMaterializer`
     // that writes `AgentRequest` documents with `caused_by_trigger_{id,kind}`
-    // lineage via the lifecycle module. The materializer already dispatches
-    // on `TriggerKind::{Schedule,Event}`, so wiring both sources here is the
-    // final connection for event-driven fires.
+    // lineage via the lifecycle module. The materializer enqueues Pending
+    // requests; the normal watcher/router path claims and executes them.
     let trigger_engine_node = agent.node.clone();
     let trigger_engine_schedule_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_event_snapshot_rx = active_snapshot_rx.clone();

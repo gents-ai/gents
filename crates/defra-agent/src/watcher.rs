@@ -28,6 +28,7 @@ pub struct AgentRequest {
     pub top_k: Option<i64>,
     pub max_tokens: Option<i64>,
     pub metadata: Option<String>,
+    pub execution_origin: Option<String>,
     pub created_at: String,
 }
 
