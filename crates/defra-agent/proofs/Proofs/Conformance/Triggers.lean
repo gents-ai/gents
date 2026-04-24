@@ -158,31 +158,42 @@ theorem materializedTriggerRequest_coherent_with_claimed_context
   · simp [materializedTriggerRequest, requestStateToTriggerTerminal, h_state]
   · exact h_origin
 
+/-- Non-trigger lifecycle fields needed to embed a materialized trigger request. -/
+structure ClaimedEmbeddingInputs where
+  backend : BackendId
+  deadline : Time
+  claimTime : Time
+  currentTime : Time
+  retryCount : Nat
+  maxRetries : Nat
+  progressSeq : Nat
+  messageSeq : Nat
+  isLatest : Bool
+  persistence : PersistenceState
+  interruptRequestedAt : Option Time
+  validUntil : Option Time
+
 /-- Canonical lifecycle context witnessing a claimed embedding for a trigger request. -/
 def claimedEmbeddingContext
     (state : SystemState)
     (intent : FireIntent)
     (seed : RequestSeed)
-    (backend : BackendId)
-    (deadline claimTime currentTime retryCount maxRetries progressSeq messageSeq : Time)
-    (isLatest : Bool)
-    (persistence : PersistenceState)
-    (interruptRequestedAt validUntil : Option Time) : RequestContext :=
+    (inputs : ClaimedEmbeddingInputs) : RequestContext :=
   { state := .claimed
   , origin := (materializedTriggerRequest state intent seed).executionOrigin
-  , backend := backend
+  , backend := inputs.backend
   , admission := .waiting
-  , deadline := deadline
-  , claimTime := claimTime
-  , currentTime := currentTime
-  , retryCount := retryCount
-  , maxRetries := maxRetries
-  , progressSeq := progressSeq
-  , messageSeq := messageSeq
-  , isLatest := isLatest
-  , persistence := persistence
-  , interruptRequestedAt := interruptRequestedAt
-  , validUntil := validUntil }
+  , deadline := inputs.deadline
+  , claimTime := inputs.claimTime
+  , currentTime := inputs.currentTime
+  , retryCount := inputs.retryCount
+  , maxRetries := inputs.maxRetries
+  , progressSeq := inputs.progressSeq
+  , messageSeq := inputs.messageSeq
+  , isLatest := inputs.isLatest
+  , persistence := inputs.persistence
+  , interruptRequestedAt := inputs.interruptRequestedAt
+  , validUntil := inputs.validUntil }
 
 /--
 Every materialized trigger request has a canonical embedding into the claimed
@@ -197,16 +208,10 @@ theorem materializedTriggerRequest_has_claimed_embedding
     (state : SystemState)
     (intent : FireIntent)
     (seed : RequestSeed)
-    (backend : BackendId)
-    (deadline claimTime currentTime retryCount maxRetries progressSeq messageSeq : Time)
-    (isLatest : Bool)
-    (persistence : PersistenceState)
-    (interruptRequestedAt validUntil : Option Time) :
+    (inputs : ClaimedEmbeddingInputs) :
     TriggerLifecycleCoherent
       (materializedTriggerRequest state intent seed)
-      (claimedEmbeddingContext state intent seed backend deadline claimTime currentTime
-        retryCount maxRetries progressSeq messageSeq isLatest persistence
-        interruptRequestedAt validUntil) := by
+      (claimedEmbeddingContext state intent seed inputs) := by
   simp [TriggerLifecycleCoherent, claimedEmbeddingContext, materializedTriggerRequest,
     requestStateToTriggerTerminal]
 
@@ -219,15 +224,9 @@ theorem materializedTriggerRequest_claimed_embedding_request_coherent
     (state : SystemState)
     (intent : FireIntent)
     (seed : RequestSeed)
-    (backend : BackendId)
-    (deadline claimTime currentTime retryCount maxRetries progressSeq messageSeq : Time)
-    (isLatest : Bool)
-    (persistence : PersistenceState)
-    (interruptRequestedAt validUntil : Option Time) :
+    (inputs : ClaimedEmbeddingInputs) :
     RequestContext.coherent
-      (claimedEmbeddingContext state intent seed backend deadline claimTime currentTime
-        retryCount maxRetries progressSeq messageSeq isLatest persistence
-        interruptRequestedAt validUntil) := by
+      (claimedEmbeddingContext state intent seed inputs) := by
   simp [claimedEmbeddingContext, RequestContext.coherent, RequestContext.coherentStateAdmission]
 
 /--
@@ -281,6 +280,9 @@ theorem syncTriggerTerminal_idempotent
 /--
 Lifecycle transitions preserve the trigger/lifecycle coherence relation after
 the trigger view synchronizes its terminal bit from the post-state.
+
+This theorem is load-bearing on `RequestContext.origin_preserved`: if a future
+lifecycle transition mutates `origin`, this statement must be revisited.
 -/
 theorem triggerLifecycleCoherent_preserved_by_lifecycle_transition
     {rTrig : AgentRequest}
@@ -355,23 +357,15 @@ theorem materializedTriggerRequest_coherent_along_trace
     (state : SystemState)
     (intent : FireIntent)
     (seed : RequestSeed)
-    (backend : BackendId)
-    (deadline claimTime currentTime retryCount maxRetries progressSeq messageSeq : Time)
-    (isLatest : Bool)
-    (persistence : PersistenceState)
-    (interruptRequestedAt validUntil : Option Time)
+    (inputs : ClaimedEmbeddingInputs)
     {post : RequestContext}
     (h_trace :
       RequestContext.Trace
-        (claimedEmbeddingContext state intent seed backend deadline claimTime currentTime
-          retryCount maxRetries progressSeq messageSeq isLatest persistence
-          interruptRequestedAt validUntil)
+        (claimedEmbeddingContext state intent seed inputs)
         post) :
     TriggerLifecycleCoherent
       (syncTriggerTerminal (materializedTriggerRequest state intent seed) post)
       post := by
   apply triggerLifecycleCoherent_preserved_by_lifecycle_trace
-  · exact materializedTriggerRequest_has_claimed_embedding state intent seed backend
-      deadline claimTime currentTime retryCount maxRetries progressSeq messageSeq
-      isLatest persistence interruptRequestedAt validUntil
+  · exact materializedTriggerRequest_has_claimed_embedding state intent seed inputs
   · exact h_trace
