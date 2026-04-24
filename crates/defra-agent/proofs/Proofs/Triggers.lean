@@ -475,25 +475,24 @@ theorem T1_manual_unconditional
   trivial
 
 
-/-- **Theorem T2 (serial at-most-one).**
+/--
+T2 (serial at-most-one): any reachable system state has at most one
+non-terminal request per trigger tuple, provided every request for that
+tuple in the state uses `.serial` concurrency.
 
-For any trigger key `t`, if every request in the system that was caused
-by `t` is declared `serial`, then at most one non-terminal request
-exists for `t` at any instant.
+**Hypothesis framing**: the hypothesis is about the CURRENT state's
+requests, not the whole trace. This matches the original spec framing
+("the system state at this instant"). A future refinement may strengthen
+this to a pre-trace invariant (tracked as a follow-up).
 
-The proof relies on the in-flight lock check performed by the
-dispatcher and on S1 (terminal irreversibility) from the request
-lifecycle. Until the operational lock check is modeled explicitly here,
-the proof is deferred. -/
+Stated over `Reachable s` — a hand-crafted `SystemState` with multiple
+parallel/latestOnly fires would violate the raw bound; this theorem is
+correctly about states reachable via `dispatchStep`/`lifecycleTerminateStep`.
+-/
 theorem T2_serial_at_most_one
-    (s : SystemState) (t : TriggerKey) :
+    (s : SystemState) (t : TriggerKey) (h_reach : Reachable s) :
     (∀ r ∈ s.requests, r.causedBy = some t → r.concurrency = .serial) →
-    (s.requests.filter (fun r =>
-        decide (r.causedBy = some t) ∧ ¬ r.isTerminal)).length ≤ 1 := by
-  -- Proof deferred: requires modeling the per-trigger dispatch lock and
-  -- appealing to S1 (`terminal_implies_released_local` and friends in
-  -- `Request.lean`). The statement is the load-bearing contract for the
-  -- serial-mode Rust implementation.
+    s.nonTerminalCountFor t ≤ 1 := by
   sorry
 
 /-- Terminal predicate matching the `superseded` state. Kept as a Bool
