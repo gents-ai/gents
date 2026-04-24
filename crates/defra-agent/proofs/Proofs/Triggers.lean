@@ -196,6 +196,17 @@ structure SystemState where
   requests : List AgentRequest
   deriving Repr
 
+/-- The initial empty system state used as the base case for `Reachable`. -/
+def SystemState.empty : SystemState := { requests := [] }
+
+/--
+Count of non-terminal requests with matching `causedBy` tuple.
+This is the quantity T2 bounds.
+-/
+def SystemState.nonTerminalCountFor
+    (s : SystemState) (t : TriggerKey) : Nat :=
+  (s.requests.filter (fun r => (r.causedBy == some t) && !r.isTerminal)).length
+
 /--
 Local helper for T1: when `List.find? p l = some a`, both `a ∈ l` AND
 `p a = true`. Mathlib provides these in two separate lemmas; we combine
