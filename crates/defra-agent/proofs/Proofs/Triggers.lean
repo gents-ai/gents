@@ -271,13 +271,58 @@ theorem T1_enabled_gate
       ∃ triggerId, intent.triggerId = some triggerId ∧
         ∃ trig ∈ snap.activeEventTriggers,
           trig.triggerId = triggerId ∧ trig.enabled = true) := by
-  -- Proof deferred: `dispatch` is itself a `sorry` placeholder at this
-  -- layer of the spec. Once a concrete operational definition is
-  -- supplied in a later PR, this proof reduces to an unfold + case on
-  -- `intent.triggerKind` + the `enabled` check. The event branch now
-  -- discharges directly against `ActiveEventTrigger`'s concrete fields;
-  -- previously it would have needed an opaque existential.
-  sorry
+  intro h_dispatch
+  refine ⟨?schedule, ?event⟩
+  · -- Schedule branch
+    intro h_kind
+    unfold dispatch at h_dispatch
+    rw [h_kind] at h_dispatch
+    simp only at h_dispatch
+    -- Case on intent.triggerId
+    cases h_triggerId : intent.triggerId with
+    | none =>
+      rw [h_triggerId] at h_dispatch
+      simp at h_dispatch
+    | some tid =>
+      rw [h_triggerId] at h_dispatch
+      simp only at h_dispatch
+      -- Case on dispatchEnabledForSchedule result
+      cases h_found : dispatchEnabledForSchedule snap tid with
+      | none =>
+        rw [h_found] at h_dispatch
+        simp at h_dispatch
+      | some active =>
+        -- Witness: active ∈ snap.activeSchedules, active satisfies the predicate.
+        unfold dispatchEnabledForSchedule at h_found
+        have ⟨h_mem, h_pred⟩ := find?_some_and_mem h_found
+        -- h_pred : ((active.triggerId == tid) && active.enabled) = true
+        have ⟨h_beq, h_enabled⟩ := (Bool.and_eq_true _ _).mp h_pred
+        refine ⟨tid, rfl, active, h_mem, ?_, ?_⟩
+        · exact beq_iff_eq.mp h_beq
+        · exact h_enabled
+  · -- Event branch — identical structure with EventTrigger / dispatchEnabledForEvent.
+    intro h_kind
+    unfold dispatch at h_dispatch
+    rw [h_kind] at h_dispatch
+    simp only at h_dispatch
+    cases h_triggerId : intent.triggerId with
+    | none =>
+      rw [h_triggerId] at h_dispatch
+      simp at h_dispatch
+    | some tid =>
+      rw [h_triggerId] at h_dispatch
+      simp only at h_dispatch
+      cases h_found : dispatchEnabledForEvent snap tid with
+      | none =>
+        rw [h_found] at h_dispatch
+        simp at h_dispatch
+      | some active =>
+        unfold dispatchEnabledForEvent at h_found
+        have ⟨h_mem, h_pred⟩ := find?_some_and_mem h_found
+        have ⟨h_beq, h_enabled⟩ := (Bool.and_eq_true _ _).mp h_pred
+        refine ⟨tid, rfl, active, h_mem, ?_, ?_⟩
+        · exact beq_iff_eq.mp h_beq
+        · exact h_enabled
 
 /-- **Lemma `T1_manual_unconditional`.**
 
