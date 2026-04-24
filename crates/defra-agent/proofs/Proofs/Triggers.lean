@@ -196,6 +196,27 @@ structure SystemState where
   requests : List AgentRequest
   deriving Repr
 
+/--
+Local helper for T1: when `List.find? p l = some a`, both `a ∈ l` AND
+`p a = true`. Mathlib provides these in two separate lemmas; we combine
+them for proof convenience.
+-/
+private theorem find?_some_and_mem
+    {α : Type} {p : α → Bool} {l : List α} {a : α}
+    (h : l.find? p = some a) : a ∈ l ∧ p a = true := by
+  induction l with
+  | nil => simp [List.find?] at h
+  | cons x xs ih =>
+    simp only [List.find?] at h
+    split at h
+    · -- predicate true on x: h : some x = some a
+      rename_i h_pred
+      cases h
+      exact ⟨List.mem_cons_self _ _, h_pred⟩
+    · -- predicate false on x: recurse
+      have := ih h
+      exact ⟨List.mem_cons_of_mem _ this.1, this.2⟩
+
 /-- **Theorem T1 (enabled gate).**
 
 A fire intent that successfully dispatches into a `RequestSeed` implies
