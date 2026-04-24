@@ -16,6 +16,18 @@ use crate::{
     extract_mutation_doc_id, graphql_input_literal, CONFIG_EXPORT_FORMAT, CONFIG_EXPORT_FORMAT_V1,
 };
 
+const CONFIG_APPLY_ORDER: [Collection; 9] = [
+    Collection::InferenceBackend,
+    Collection::InferenceProfile,
+    Collection::ToolServiceRegistry,
+    Collection::ToolSelection,
+    Collection::AgentBehavior,
+    Collection::Task,
+    Collection::Schedule,
+    Collection::EventTrigger,
+    Collection::AgentPrincipal,
+];
+
 pub(crate) fn read_config_import_bundle(
     path: Option<&std::path::Path>,
 ) -> Result<ConfigExportBundle> {
@@ -190,31 +202,11 @@ pub(crate) async fn apply_import_collection(
 pub(crate) fn diff_has_pending_apply(
     counts: &desired_state::DesiredStateDiffCollectionsCounts,
 ) -> bool {
-    [
-        &counts.agent_principal,
-        &counts.agent_behaviors,
-        &counts.tool_selections,
-        &counts.inference_backends,
-        &counts.inference_profiles,
-        &counts.tool_service_registries,
-        &counts.tasks,
-        &counts.schedules,
-        &counts.event_triggers,
-    ]
-    .iter()
-    .any(|count| count.create > 0 || count.update > 0)
+    counts.has_pending_apply()
 }
 
 pub(crate) fn config_apply_counts_changed(counts: &ConfigApplyCounts) -> bool {
-    counts.agent_principal > 0
-        || counts.agent_behaviors > 0
-        || counts.tool_selections > 0
-        || counts.inference_backends > 0
-        || counts.inference_profiles > 0
-        || counts.tool_service_registries > 0
-        || counts.tasks > 0
-        || counts.schedules > 0
-        || counts.event_triggers > 0
+    counts.changed()
 }
 
 pub(crate) fn select_apply_principal_docs(
@@ -235,131 +227,41 @@ pub(crate) async fn apply_desired_state_changes(
     planned: &desired_state::DesiredStateDiffReport,
 ) -> Result<ConfigApplyCounts> {
     let desired_bundle = desired_bundle.as_bundle();
-    let backend_docs = select_apply_collection_docs(
-        &desired_bundle.inference_backends,
-        Collection::InferenceBackend.unique_field(),
-        Collection::InferenceBackend.graphql_type(),
-        &planned.collections.inference_backends,
-    )?;
-    let profile_docs = select_apply_collection_docs(
-        &desired_bundle.inference_profiles,
-        Collection::InferenceProfile.unique_field(),
-        Collection::InferenceProfile.graphql_type(),
-        &planned.collections.inference_profiles,
-    )?;
-    let tool_selection_docs = select_apply_collection_docs(
-        &desired_bundle.tool_selections,
-        Collection::ToolSelection.unique_field(),
-        Collection::ToolSelection.graphql_type(),
-        &planned.collections.tool_selections,
-    )?;
-    let tool_service_registry_docs = select_apply_collection_docs(
-        &desired_bundle.tool_service_registries,
-        Collection::ToolServiceRegistry.unique_field(),
-        Collection::ToolServiceRegistry.graphql_type(),
-        &planned.collections.tool_service_registries,
-    )?;
-    let behavior_docs = select_apply_collection_docs(
-        &desired_bundle.agent_behaviors,
-        Collection::AgentBehavior.unique_field(),
-        Collection::AgentBehavior.graphql_type(),
-        &planned.collections.agent_behaviors,
-    )?;
-    let task_docs = select_apply_collection_docs(
-        &desired_bundle.tasks,
-        Collection::Task.unique_field(),
-        Collection::Task.graphql_type(),
-        &planned.collections.tasks,
-    )?;
-    let schedule_docs = select_apply_collection_docs(
-        &desired_bundle.schedules,
-        Collection::Schedule.unique_field(),
-        Collection::Schedule.graphql_type(),
-        &planned.collections.schedules,
-    )?;
-    let event_trigger_docs = select_apply_collection_docs(
-        &desired_bundle.event_triggers,
-        Collection::EventTrigger.unique_field(),
-        Collection::EventTrigger.graphql_type(),
-        &planned.collections.event_triggers,
-    )?;
-    let principal_docs = select_apply_principal_docs(
-        desired_bundle.agent_principal.as_ref(),
-        &planned.collections.agent_principal,
-    )?;
+    let mut counts = ConfigApplyCounts::default();
 
-    Ok(ConfigApplyCounts {
-        inference_backends: apply_import_collection(
+    for collection in CONFIG_APPLY_ORDER {
+        let docs = select_apply_docs_for_collection(desired_bundle, planned, collection)?;
+        let applied = apply_import_collection(
             access,
-            Collection::InferenceBackend.graphql_type(),
-            Collection::InferenceBackend.unique_field(),
-            &backend_docs,
+            collection.graphql_type(),
+            collection.unique_field(),
+            &docs,
             true,
         )
-        .await?,
-        inference_profiles: apply_import_collection(
-            access,
-            Collection::InferenceProfile.graphql_type(),
-            Collection::InferenceProfile.unique_field(),
-            &profile_docs,
-            true,
-        )
-        .await?,
-        tool_service_registries: apply_import_collection(
-            access,
-            Collection::ToolServiceRegistry.graphql_type(),
-            Collection::ToolServiceRegistry.unique_field(),
-            &tool_service_registry_docs,
-            true,
-        )
-        .await?,
-        tool_selections: apply_import_collection(
-            access,
-            Collection::ToolSelection.graphql_type(),
-            Collection::ToolSelection.unique_field(),
-            &tool_selection_docs,
-            true,
-        )
-        .await?,
-        agent_behaviors: apply_import_collection(
-            access,
-            Collection::AgentBehavior.graphql_type(),
-            Collection::AgentBehavior.unique_field(),
-            &behavior_docs,
-            true,
-        )
-        .await?,
-        tasks: apply_import_collection(
-            access,
-            Collection::Task.graphql_type(),
-            Collection::Task.unique_field(),
-            &task_docs,
-            true,
-        )
-        .await?,
-        schedules: apply_import_collection(
-            access,
-            Collection::Schedule.graphql_type(),
-            Collection::Schedule.unique_field(),
-            &schedule_docs,
-            true,
-        )
-        .await?,
-        event_triggers: apply_import_collection(
-            access,
-            Collection::EventTrigger.graphql_type(),
-            Collection::EventTrigger.unique_field(),
-            &event_trigger_docs,
-            true,
-        )
-        .await?,
-        agent_principal: apply_import_collection(
-            access,
-            Collection::AgentPrincipal.graphql_type(),
-            Collection::AgentPrincipal.unique_field(),
-            &principal_docs,
-            true,
-        )
-        .await?,
-    })
+        .await?;
+        counts.set(collection, applied);
+    }
+
+    Ok(counts)
+}
+
+fn select_apply_docs_for_collection(
+    desired_bundle: &ConfigExportBundle,
+    planned: &desired_state::DesiredStateDiffReport,
+    collection: Collection,
+) -> Result<Vec<Value>> {
+    let diff = planned.collections.get(collection);
+    if collection == Collection::AgentPrincipal {
+        return select_apply_principal_docs(desired_bundle.agent_principal.as_ref(), diff);
+    }
+
+    let docs = desired_bundle
+        .docs_for_collection(collection)
+        .expect("non-principal desired-state collection has document slice");
+    select_apply_collection_docs(
+        docs,
+        collection.unique_field(),
+        collection.graphql_type(),
+        diff,
+    )
 }

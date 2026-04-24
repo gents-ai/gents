@@ -3,7 +3,7 @@ use std::path::Path;
 
 use super::{
     DesiredAgentPrincipal, DesiredStateCollectionDiff, DesiredStateDiffCollections,
-    DesiredStateDiffCollectionsCounts, DesiredStateDiffReport, DesiredStateManifest,
+    DesiredStateDiffReport, DesiredStateManifest, HasUniqueId,
 };
 
 pub(crate) fn diff_manifests(
@@ -18,119 +18,29 @@ pub(crate) fn diff_manifests(
         Some(&desired.agent_principal),
         live_principal,
     );
-    let agent_behaviors = diff_collection(
-        desired
-            .agent_behaviors
-            .iter()
-            .map(|value| (value.behavior_id.clone(), value))
-            .collect(),
-        live.agent_behaviors
-            .iter()
-            .map(|value| (value.behavior_id.clone(), value))
-            .collect(),
-    );
-    let tool_selections = diff_collection(
-        desired
-            .tool_selections
-            .iter()
-            .map(|value| (value.selection_id.clone(), value))
-            .collect(),
-        live.tool_selections
-            .iter()
-            .map(|value| (value.selection_id.clone(), value))
-            .collect(),
-    );
-    let inference_backends = diff_collection(
-        desired
-            .inference_backends
-            .iter()
-            .map(|value| (value.backend_id.clone(), value))
-            .collect(),
-        live.inference_backends
-            .iter()
-            .map(|value| (value.backend_id.clone(), value))
-            .collect(),
-    );
-    let inference_profiles = diff_collection(
-        desired
-            .inference_profiles
-            .iter()
-            .map(|value| (value.profile_id.clone(), value))
-            .collect(),
-        live.inference_profiles
-            .iter()
-            .map(|value| (value.profile_id.clone(), value))
-            .collect(),
-    );
-    let tool_service_registries = diff_collection(
-        desired
-            .tool_service_registries
-            .iter()
-            .map(|value| (value.service_id.clone(), value))
-            .collect(),
-        live.tool_service_registries
-            .iter()
-            .map(|value| (value.service_id.clone(), value))
-            .collect(),
-    );
-    let tasks = diff_collection(
-        desired
-            .tasks
-            .iter()
-            .map(|value| (value.task_id.clone(), value))
-            .collect(),
-        live.tasks
-            .iter()
-            .map(|value| (value.task_id.clone(), value))
-            .collect(),
-    );
-    let schedules = diff_collection(
-        desired
-            .schedules
-            .iter()
-            .map(|value| (value.schedule_id.clone(), value))
-            .collect(),
-        live.schedules
-            .iter()
-            .map(|value| (value.schedule_id.clone(), value))
-            .collect(),
-    );
-    let event_triggers = diff_collection(
-        desired
-            .event_triggers
-            .iter()
-            .map(|value| (value.trigger_id.clone(), value))
-            .collect(),
-        live.event_triggers
-            .iter()
-            .map(|value| (value.trigger_id.clone(), value))
-            .collect(),
-    );
-
-    let counts = DesiredStateDiffCollectionsCounts {
-        agent_principal: agent_principal.counts(),
-        agent_behaviors: agent_behaviors.counts(),
-        tool_selections: tool_selections.counts(),
-        inference_backends: inference_backends.counts(),
-        inference_profiles: inference_profiles.counts(),
-        tool_service_registries: tool_service_registries.counts(),
-        tasks: tasks.counts(),
-        schedules: schedules.counts(),
-        event_triggers: event_triggers.counts(),
+    let collections = DesiredStateDiffCollections {
+        agent_principal,
+        agent_behaviors: diff_manifest_collection(&desired.agent_behaviors, &live.agent_behaviors),
+        tool_selections: diff_manifest_collection(&desired.tool_selections, &live.tool_selections),
+        inference_backends: diff_manifest_collection(
+            &desired.inference_backends,
+            &live.inference_backends,
+        ),
+        inference_profiles: diff_manifest_collection(
+            &desired.inference_profiles,
+            &live.inference_profiles,
+        ),
+        tool_service_registries: diff_manifest_collection(
+            &desired.tool_service_registries,
+            &live.tool_service_registries,
+        ),
+        tasks: diff_manifest_collection(&desired.tasks, &live.tasks),
+        schedules: diff_manifest_collection(&desired.schedules, &live.schedules),
+        event_triggers: diff_manifest_collection(&desired.event_triggers, &live.event_triggers),
     };
-    let ok = [
-        &counts.agent_principal,
-        &counts.agent_behaviors,
-        &counts.tool_selections,
-        &counts.inference_backends,
-        &counts.inference_profiles,
-        &counts.tool_service_registries,
-        &counts.tasks,
-        &counts.schedules,
-        &counts.event_triggers,
-    ]
-    .iter()
-    .all(|count| count.create == 0 && count.update == 0 && count.live_only == 0);
+
+    let counts = collections.counts();
+    let ok = counts.is_exact_match();
 
     DesiredStateDiffReport {
         status: "diffed",
@@ -139,17 +49,7 @@ pub(crate) fn diff_manifests(
         access_mode: access_mode.to_string(),
         agent_did: desired.agent_principal.agent_did.clone(),
         counts,
-        collections: DesiredStateDiffCollections {
-            agent_principal,
-            agent_behaviors,
-            tool_selections,
-            inference_backends,
-            inference_profiles,
-            tool_service_registries,
-            tasks,
-            schedules,
-            event_triggers,
-        },
+        collections,
     }
 }
 
@@ -244,4 +144,19 @@ where
         unchanged,
         live_only,
     }
+}
+
+fn diff_manifest_collection<T>(desired: &[T], live: &[T]) -> DesiredStateCollectionDiff
+where
+    T: HasUniqueId + PartialEq,
+{
+    diff_collection(
+        desired
+            .iter()
+            .map(|value| (value.unique_id().to_string(), value))
+            .collect(),
+        live.iter()
+            .map(|value| (value.unique_id().to_string(), value))
+            .collect(),
+    )
 }

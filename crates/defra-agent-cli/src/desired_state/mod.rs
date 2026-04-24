@@ -21,7 +21,7 @@ pub(crate) use write::write_manifest_root;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use defra_agent::BackendProviderKind;
+use defra_agent::{BackendProviderKind, Collection};
 
 pub(crate) const DEFAULT_TOOL_SERVICE_MCP_PATH: &str = "/mcp";
 pub(crate) const TOOL_SERVICE_ADDRESS_FIELDS: &[&str] = &["hostname", "tailscale_ip", "lan_ip"];
@@ -280,6 +280,36 @@ pub(crate) struct DesiredStateDiffCollections {
     pub(crate) event_triggers: DesiredStateCollectionDiff,
 }
 
+impl DesiredStateDiffCollections {
+    pub(crate) fn get(&self, collection: Collection) -> &DesiredStateCollectionDiff {
+        match collection {
+            Collection::AgentPrincipal => &self.agent_principal,
+            Collection::AgentBehavior => &self.agent_behaviors,
+            Collection::ToolSelection => &self.tool_selections,
+            Collection::InferenceBackend => &self.inference_backends,
+            Collection::InferenceProfile => &self.inference_profiles,
+            Collection::ToolServiceRegistry => &self.tool_service_registries,
+            Collection::Task => &self.tasks,
+            Collection::Schedule => &self.schedules,
+            Collection::EventTrigger => &self.event_triggers,
+        }
+    }
+
+    pub(crate) fn counts(&self) -> DesiredStateDiffCollectionsCounts {
+        DesiredStateDiffCollectionsCounts {
+            agent_principal: self.agent_principal.counts(),
+            agent_behaviors: self.agent_behaviors.counts(),
+            tool_selections: self.tool_selections.counts(),
+            inference_backends: self.inference_backends.counts(),
+            inference_profiles: self.inference_profiles.counts(),
+            tool_service_registries: self.tool_service_registries.counts(),
+            tasks: self.tasks.counts(),
+            schedules: self.schedules.counts(),
+            event_triggers: self.event_triggers.counts(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct DesiredStateDiffCollectionsCounts {
     pub(crate) agent_principal: DesiredStateDiffCounts,
@@ -291,6 +321,39 @@ pub(crate) struct DesiredStateDiffCollectionsCounts {
     pub(crate) tasks: DesiredStateDiffCounts,
     pub(crate) schedules: DesiredStateDiffCounts,
     pub(crate) event_triggers: DesiredStateDiffCounts,
+}
+
+impl DesiredStateDiffCollectionsCounts {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &DesiredStateDiffCounts> {
+        Collection::ALL
+            .iter()
+            .copied()
+            .map(|collection| self.get(collection))
+    }
+
+    pub(crate) fn get(&self, collection: Collection) -> &DesiredStateDiffCounts {
+        match collection {
+            Collection::AgentPrincipal => &self.agent_principal,
+            Collection::AgentBehavior => &self.agent_behaviors,
+            Collection::ToolSelection => &self.tool_selections,
+            Collection::InferenceBackend => &self.inference_backends,
+            Collection::InferenceProfile => &self.inference_profiles,
+            Collection::ToolServiceRegistry => &self.tool_service_registries,
+            Collection::Task => &self.tasks,
+            Collection::Schedule => &self.schedules,
+            Collection::EventTrigger => &self.event_triggers,
+        }
+    }
+
+    pub(crate) fn is_exact_match(&self) -> bool {
+        self.iter()
+            .all(|count| count.create == 0 && count.update == 0 && count.live_only == 0)
+    }
+
+    pub(crate) fn has_pending_apply(&self) -> bool {
+        self.iter()
+            .any(|count| count.create > 0 || count.update > 0)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -315,6 +378,22 @@ pub(crate) struct DesiredStateCounts {
     pub(crate) tasks: usize,
     pub(crate) schedules: usize,
     pub(crate) event_triggers: usize,
+}
+
+impl DesiredStateCounts {
+    pub(crate) fn empty() -> Self {
+        Self {
+            agent_principal: 0,
+            agent_behaviors: 0,
+            tool_selections: 0,
+            inference_backends: 0,
+            inference_profiles: 0,
+            tool_service_registries: 0,
+            tasks: 0,
+            schedules: 0,
+            event_triggers: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

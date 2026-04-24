@@ -120,17 +120,7 @@ fn empty_report(root_display: String, errors: Vec<String>) -> DesiredStateValida
         ok: false,
         root: root_display,
         agent_did: None,
-        counts: DesiredStateCounts {
-            agent_principal: 0,
-            agent_behaviors: 0,
-            tool_selections: 0,
-            inference_backends: 0,
-            inference_profiles: 0,
-            tool_service_registries: 0,
-            tasks: 0,
-            schedules: 0,
-            event_triggers: 0,
-        },
+        counts: DesiredStateCounts::empty(),
         errors,
     }
 }

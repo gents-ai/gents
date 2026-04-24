@@ -1,4 +1,4 @@
-use defra_agent::BackendProviderKind;
+use defra_agent::{BackendProviderKind, Collection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -168,7 +168,23 @@ pub(crate) struct ConfigExportBundle {
     pub(crate) event_triggers: Vec<Value>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+impl ConfigExportBundle {
+    pub(crate) fn docs_for_collection(&self, collection: Collection) -> Option<&[Value]> {
+        match collection {
+            Collection::AgentPrincipal => None,
+            Collection::AgentBehavior => Some(&self.agent_behaviors),
+            Collection::ToolSelection => Some(&self.tool_selections),
+            Collection::InferenceBackend => Some(&self.inference_backends),
+            Collection::InferenceProfile => Some(&self.inference_profiles),
+            Collection::ToolServiceRegistry => Some(&self.tool_service_registries),
+            Collection::Task => Some(&self.tasks),
+            Collection::Schedule => Some(&self.schedules),
+            Collection::EventTrigger => Some(&self.event_triggers),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct ConfigApplyCounts {
     pub(crate) agent_principal: usize,
     pub(crate) agent_behaviors: usize,
@@ -179,6 +195,39 @@ pub(crate) struct ConfigApplyCounts {
     pub(crate) tasks: usize,
     pub(crate) schedules: usize,
     pub(crate) event_triggers: usize,
+}
+
+impl ConfigApplyCounts {
+    pub(crate) fn set(&mut self, collection: Collection, count: usize) {
+        match collection {
+            Collection::AgentPrincipal => self.agent_principal = count,
+            Collection::AgentBehavior => self.agent_behaviors = count,
+            Collection::ToolSelection => self.tool_selections = count,
+            Collection::InferenceBackend => self.inference_backends = count,
+            Collection::InferenceProfile => self.inference_profiles = count,
+            Collection::ToolServiceRegistry => self.tool_service_registries = count,
+            Collection::Task => self.tasks = count,
+            Collection::Schedule => self.schedules = count,
+            Collection::EventTrigger => self.event_triggers = count,
+        }
+    }
+
+    pub(crate) fn changed(&self) -> bool {
+        Collection::ALL.iter().copied().any(|collection| {
+            let count = match collection {
+                Collection::AgentPrincipal => self.agent_principal,
+                Collection::AgentBehavior => self.agent_behaviors,
+                Collection::ToolSelection => self.tool_selections,
+                Collection::InferenceBackend => self.inference_backends,
+                Collection::InferenceProfile => self.inference_profiles,
+                Collection::ToolServiceRegistry => self.tool_service_registries,
+                Collection::Task => self.tasks,
+                Collection::Schedule => self.schedules,
+                Collection::EventTrigger => self.event_triggers,
+            };
+            count > 0
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
