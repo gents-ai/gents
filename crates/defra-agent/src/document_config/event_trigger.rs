@@ -105,10 +105,7 @@ pub(crate) async fn update_event_trigger_runtime_fields(
     // fields are never overwritten.
     let mut entries: Vec<String> = Vec::new();
     if let Some(v) = updates.last_attempt_at.as_ref() {
-        entries.push(format!(
-            "last_attempt_at: \"{}\"",
-            escape_graphql_string(v)
-        ));
+        entries.push(format!("last_attempt_at: \"{}\"", escape_graphql_string(v)));
     }
     if let Some(v) = updates.last_fired_source_doc_id.as_ref() {
         entries.push(format!(
@@ -117,16 +114,10 @@ pub(crate) async fn update_event_trigger_runtime_fields(
         ));
     }
     if let Some(v) = updates.last_status.as_ref() {
-        entries.push(format!(
-            "last_status: \"{}\"",
-            escape_graphql_string(v)
-        ));
+        entries.push(format!("last_status: \"{}\"", escape_graphql_string(v)));
     }
     if let Some(v) = updates.last_error.as_ref() {
-        entries.push(format!(
-            "last_error: \"{}\"",
-            escape_graphql_string(v)
-        ));
+        entries.push(format!("last_error: \"{}\"", escape_graphql_string(v)));
     }
     if let Some(delta) = updates.fire_count_delta {
         let new_fire_count = current_fire_count.saturating_add(delta);

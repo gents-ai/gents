@@ -5,8 +5,8 @@ use eframe::egui::{self, RichText, TextEdit, Ui};
 use crate::audit;
 use crate::client::ClientStore;
 use crate::state::{
-    BackendDraft, BehaviorDraft, EventTriggerDraft, InferenceProfileDraft, ScheduleDraft, TaskDraft,
-    ToolSelectionDraft,
+    BackendDraft, BehaviorDraft, EventTriggerDraft, InferenceProfileDraft, ScheduleDraft,
+    TaskDraft, ToolSelectionDraft,
 };
 use crate::theme;
 

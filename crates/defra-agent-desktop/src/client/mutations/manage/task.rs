@@ -274,15 +274,7 @@ pub async fn fire_task_now(
         bail!("AgentBehavior {behavior_id} is disabled");
     }
 
-    write_manual_agent_request(
-        node,
-        agent_did,
-        behavior_id,
-        task_id,
-        prompt_template,
-        args,
-    )
-    .await
+    write_manual_agent_request(node, agent_did, behavior_id, task_id, prompt_template, args).await
 }
 
 /// Fire a schedule's task immediately.
@@ -299,10 +291,7 @@ pub async fn fire_task_now(
 /// caught up yet). The `SELECT` mirrors every field on
 /// `defra_agent_protocol::row::TaskRow` so `serde_json::from_value`
 /// does not fail on a missing column.
-pub async fn fire_schedule_now(
-    node: &EmbeddedNode,
-    schedule_row: &ScheduleRow,
-) -> Result<String> {
+pub async fn fire_schedule_now(node: &EmbeddedNode, schedule_row: &ScheduleRow) -> Result<String> {
     let task_id = schedule_row
         .task_id
         .as_deref()
@@ -310,12 +299,7 @@ pub async fn fire_schedule_now(
             let trimmed = value.trim();
             (!trimmed.is_empty()).then_some(trimmed)
         })
-        .ok_or_else(|| {
-            anyhow!(
-                "schedule {} has no task_id",
-                schedule_row.schedule_id
-            )
-        })?;
+        .ok_or_else(|| anyhow!("schedule {} has no task_id", schedule_row.schedule_id))?;
     let task_query = format!(
         r#"query {{
             Task(filter: {{ task_id: {{ _eq: "{id}" }} }}, limit: 1) {{
@@ -387,10 +371,7 @@ pub async fn upsert_event_trigger(node: &EmbeddedNode, row: &EventTriggerRow) ->
             r#"trigger_id: "{}""#,
             escape_graphql_string(trigger_id)
         )),
-        Some(format!(
-            r#"task_id: "{}""#,
-            escape_graphql_string(task_id)
-        )),
+        Some(format!(r#"task_id: "{}""#, escape_graphql_string(task_id))),
         Some(graphql_string_field(
             "source_collection",
             row.source_collection.as_deref(),
@@ -415,10 +396,7 @@ pub async fn upsert_event_trigger(node: &EmbeddedNode, row: &EventTriggerRow) ->
         )),
     ];
     let update_fields = [
-        Some(format!(
-            r#"task_id: "{}""#,
-            escape_graphql_string(task_id)
-        )),
+        Some(format!(r#"task_id: "{}""#, escape_graphql_string(task_id))),
         Some(graphql_string_field(
             "source_collection",
             row.source_collection.as_deref(),
@@ -433,10 +411,7 @@ pub async fn upsert_event_trigger(node: &EmbeddedNode, row: &EventTriggerRow) ->
             "concurrency",
             row.concurrency.as_deref(),
         )),
-        Some(format!(
-            r#"updated_at: "{}""#,
-            escape_graphql_string(&now)
-        )),
+        Some(format!(r#"updated_at: "{}""#, escape_graphql_string(&now))),
     ];
 
     let mutation = format!(

@@ -214,15 +214,18 @@ fn round_trip_load_write_load_is_identity() {
     assert_eq!(loaded.tool_selections, original.tool_selections);
     assert_eq!(loaded.inference_backends, original.inference_backends);
     assert_eq!(loaded.inference_profiles, original.inference_profiles);
-    assert_eq!(loaded.tool_service_registries, original.tool_service_registries);
+    assert_eq!(
+        loaded.tool_service_registries,
+        original.tool_service_registries
+    );
     assert_eq!(loaded.tasks, original.tasks);
     assert_eq!(loaded.schedules, original.schedules);
 }
 
 mod load_manifest_root {
+    use crate::desired_state::load::load_manifest_root;
     use std::fs;
     use tempfile::tempdir;
-    use crate::desired_state::load::load_manifest_root;
 
     /// Write a minimal but fully valid manifest root: one principal with a
     /// `default_behavior_id` pointing to the single behavior in `agent-behaviors/default/`.
@@ -378,13 +381,20 @@ mod load_manifest_root {
         .unwrap();
 
         let (manifest, report) = load_manifest_root(tmp.path());
-        assert!(report.ok, "expected valid manifest, got {:?}", report.errors);
+        assert!(
+            report.ok,
+            "expected valid manifest, got {:?}",
+            report.errors
+        );
         let manifest = manifest.expect("manifest should load");
 
         assert_eq!(report.counts.event_triggers, 1);
         assert_eq!(manifest.event_triggers.len(), 1);
         assert_eq!(manifest.event_triggers[0].trigger_id, "new-customer-greet");
-        assert_eq!(manifest.event_triggers[0].source_collection, "CustomerSignup");
+        assert_eq!(
+            manifest.event_triggers[0].source_collection,
+            "CustomerSignup"
+        );
         assert_eq!(manifest.event_triggers[0].event_kind, "created");
         assert!(manifest.event_triggers[0].enabled);
     }
@@ -423,7 +433,11 @@ mod load_manifest_root {
         .unwrap();
 
         let (_, report) = load_manifest_root(tmp.path());
-        assert!(report.ok, "expected valid manifest, got {:?}", report.errors);
+        assert!(
+            report.ok,
+            "expected valid manifest, got {:?}",
+            report.errors
+        );
     }
 }
 
@@ -818,9 +832,10 @@ fn sample_event_trigger_for(trigger_id: &str, task_id: &str) -> DesiredEventTrig
 #[test]
 fn validate_rejects_event_trigger_referencing_unknown_task() {
     let mut manifest = manifest_with_default_behavior();
-    manifest
-        .event_triggers
-        .push(sample_event_trigger_for("new-customer-greet", "missing-task"));
+    manifest.event_triggers.push(sample_event_trigger_for(
+        "new-customer-greet",
+        "missing-task",
+    ));
 
     let errors = validation_errors(&manifest);
     assert!(
@@ -856,15 +871,15 @@ fn validate_rejects_event_trigger_template_referencing_args_scope() {
     let mut task = sample_task("summarize-inbox");
     task.prompt_template = "{{ args.foo }}".to_string();
     manifest.tasks.push(task);
-    manifest
-        .event_triggers
-        .push(sample_event_trigger_for("new-customer-greet", "summarize-inbox"));
+    manifest.event_triggers.push(sample_event_trigger_for(
+        "new-customer-greet",
+        "summarize-inbox",
+    ));
 
     let errors = validation_errors(&manifest);
     assert!(
         errors.iter().any(|message| {
-            message.contains("new-customer-greet")
-                && message.contains("forbidden scope: args")
+            message.contains("new-customer-greet") && message.contains("forbidden scope: args")
         }),
         "expected event-trigger forbidden-args rejection, got {errors:?}"
     );
@@ -876,9 +891,10 @@ fn validate_accepts_event_trigger_template_using_event_and_doc_scopes() {
     let mut task = sample_task("summarize-inbox");
     task.prompt_template = "{{ event.fired_at }} {{ doc.name }}".to_string();
     manifest.tasks.push(task);
-    manifest
-        .event_triggers
-        .push(sample_event_trigger_for("new-customer-greet", "summarize-inbox"));
+    manifest.event_triggers.push(sample_event_trigger_for(
+        "new-customer-greet",
+        "summarize-inbox",
+    ));
 
     let errors = validation_errors(&manifest);
     assert!(
@@ -893,12 +909,14 @@ fn validate_accepts_event_trigger_template_using_event_and_doc_scopes() {
 fn validate_rejects_duplicate_event_trigger_id() {
     let mut manifest = manifest_with_default_behavior();
     manifest.tasks.push(sample_task("summarize-inbox"));
-    manifest
-        .event_triggers
-        .push(sample_event_trigger_for("new-customer-greet", "summarize-inbox"));
-    manifest
-        .event_triggers
-        .push(sample_event_trigger_for("new-customer-greet", "summarize-inbox"));
+    manifest.event_triggers.push(sample_event_trigger_for(
+        "new-customer-greet",
+        "summarize-inbox",
+    ));
+    manifest.event_triggers.push(sample_event_trigger_for(
+        "new-customer-greet",
+        "summarize-inbox",
+    ));
 
     let errors = validation_errors(&manifest);
     assert!(
@@ -974,8 +992,8 @@ fn export_bundle_round_trip_preserves_tasks_and_schedules() {
 
 #[test]
 fn hydrate_sidecar_replaces_dot_slash_path_with_file_contents() {
-    use tempfile::tempdir;
     use super::load::hydrate_sidecar;
+    use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("prompt.md"), "You are a helpful agent.").unwrap();
@@ -987,8 +1005,8 @@ fn hydrate_sidecar_replaces_dot_slash_path_with_file_contents() {
 
 #[test]
 fn hydrate_sidecar_leaves_literal_string_untouched() {
-    use tempfile::tempdir;
     use super::load::hydrate_sidecar;
+    use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
     let mut value = Some("You are a helpful agent.".to_string());
@@ -998,8 +1016,8 @@ fn hydrate_sidecar_leaves_literal_string_untouched() {
 
 #[test]
 fn hydrate_sidecar_ignores_absolute_path() {
-    use tempfile::tempdir;
     use super::load::hydrate_sidecar;
+    use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
     let mut value = Some("/etc/hosts".to_string());
@@ -1009,8 +1027,8 @@ fn hydrate_sidecar_ignores_absolute_path() {
 
 #[test]
 fn hydrate_sidecar_ignores_parent_relative_path() {
-    use tempfile::tempdir;
     use super::load::hydrate_sidecar;
+    use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
     let mut value = Some("../elsewhere.md".to_string());
@@ -1020,8 +1038,8 @@ fn hydrate_sidecar_ignores_parent_relative_path() {
 
 #[test]
 fn hydrate_sidecar_rejects_parent_component_in_rel_path() {
-    use tempfile::tempdir;
     use super::load::hydrate_sidecar;
+    use tempfile::tempdir;
 
     // Create a sibling file OUTSIDE the doc directory.
     let tmp = tempdir().unwrap();
@@ -1037,8 +1055,8 @@ fn hydrate_sidecar_rejects_parent_component_in_rel_path() {
 
 #[test]
 fn hydrate_sidecar_rejects_nested_parent_component() {
-    use tempfile::tempdir;
     use super::load::hydrate_sidecar;
+    use tempfile::tempdir;
 
     let tmp = tempdir().unwrap();
     let json_dir = tmp.path().join("a").join("b");
@@ -1053,8 +1071,8 @@ fn hydrate_sidecar_rejects_nested_parent_component() {
 
 #[test]
 fn hydrate_sidecar_errors_when_file_missing() {
-    use tempfile::tempdir;
     use super::load::hydrate_sidecar;
+    use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
     let mut value = Some("./missing.md".to_string());
@@ -1065,8 +1083,8 @@ fn hydrate_sidecar_errors_when_file_missing() {
 
 #[test]
 fn hydrate_sidecar_errors_on_non_utf8() {
-    use tempfile::tempdir;
     use super::load::hydrate_sidecar;
+    use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("bad.md"), [0xff, 0xfe, 0xfd]).unwrap();
@@ -1077,8 +1095,8 @@ fn hydrate_sidecar_errors_on_non_utf8() {
 
 #[test]
 fn hydrate_sidecar_is_noop_on_none() {
-    use tempfile::tempdir;
     use super::load::hydrate_sidecar;
+    use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
     let mut value: Option<String> = None;
@@ -1087,11 +1105,11 @@ fn hydrate_sidecar_is_noop_on_none() {
 }
 
 mod load_per_doc_collection {
-    use std::fs;
-    use tempfile::tempdir;
     use crate::desired_state::load::load_per_doc_collection;
     use crate::desired_state::{DesiredAgentBehavior, HasUniqueId};
     use defra_agent::Collection;
+    use std::fs;
+    use tempfile::tempdir;
 
     fn write_behavior_dir(root: &std::path::Path, handle: &str, behavior_id: &str) {
         let dir = root.join("agent-behaviors").join(handle);
@@ -1101,7 +1119,11 @@ mod load_per_doc_collection {
             "agent_did": "did:key:example",
             "enabled": true,
         });
-        fs::write(dir.join("object.json"), serde_json::to_vec_pretty(&body).unwrap()).unwrap();
+        fs::write(
+            dir.join("object.json"),
+            serde_json::to_vec_pretty(&body).unwrap(),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1137,7 +1159,11 @@ mod load_per_doc_collection {
         let _: Vec<DesiredAgentBehavior> =
             load_per_doc_collection(tmp.path(), Collection::AgentBehavior, &mut errors);
         assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("is missing object.json"), "got: {:?}", errors);
+        assert!(
+            errors[0].contains("is missing object.json"),
+            "got: {:?}",
+            errors
+        );
     }
 
     #[test]
@@ -1148,7 +1174,11 @@ mod load_per_doc_collection {
         let _: Vec<DesiredAgentBehavior> =
             load_per_doc_collection(tmp.path(), Collection::AgentBehavior, &mut errors);
         assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("does not match behavior_id"), "got: {:?}", errors);
+        assert!(
+            errors[0].contains("does not match behavior_id"),
+            "got: {:?}",
+            errors
+        );
         assert!(errors[0].contains("on-disk-name"));
         assert!(errors[0].contains("id-inside-json"));
     }
@@ -1177,12 +1207,18 @@ mod load_per_doc_collection {
         let tmp = tempdir().unwrap();
         write_behavior_dir(tmp.path(), "default", "default");
         fs::write(
-            tmp.path().join("agent-behaviors").join("default").join("README.md"),
+            tmp.path()
+                .join("agent-behaviors")
+                .join("default")
+                .join("README.md"),
             "notes",
         )
         .unwrap();
         fs::write(
-            tmp.path().join("agent-behaviors").join("default").join(".DS_Store"),
+            tmp.path()
+                .join("agent-behaviors")
+                .join("default")
+                .join(".DS_Store"),
             "",
         )
         .unwrap();
@@ -1213,8 +1249,8 @@ pub(super) mod write_manifest_root {
     use tempfile::tempdir;
 
     use crate::desired_state::{
-        write_manifest_root, DesiredAgentBehavior, DesiredAgentPrincipal,
-        DesiredStateManifest, DesiredTask,
+        write_manifest_root, DesiredAgentBehavior, DesiredAgentPrincipal, DesiredStateManifest,
+        DesiredTask,
     };
 
     pub(in crate::desired_state::tests) fn minimal_manifest() -> DesiredStateManifest {
@@ -1267,7 +1303,10 @@ pub(super) mod write_manifest_root {
         assert!(behavior_object.is_file());
         let behavior_sidecar = tmp.path().join("agent-behaviors/default/system_prompt.md");
         assert!(behavior_sidecar.is_file());
-        assert_eq!(fs::read_to_string(&behavior_sidecar).unwrap(), "You are helpful.");
+        assert_eq!(
+            fs::read_to_string(&behavior_sidecar).unwrap(),
+            "You are helpful."
+        );
         let behavior_body: serde_json::Value =
             serde_json::from_slice(&fs::read(&behavior_object).unwrap()).unwrap();
         assert_eq!(
@@ -1279,7 +1318,10 @@ pub(super) mod write_manifest_root {
         assert!(task_object.is_file());
         let task_sidecar = tmp.path().join("tasks/seed-health/prompt.md");
         assert!(task_sidecar.is_file());
-        assert_eq!(fs::read_to_string(&task_sidecar).unwrap(), "Check the fleet.");
+        assert_eq!(
+            fs::read_to_string(&task_sidecar).unwrap(),
+            "Check the fleet."
+        );
         let task_body: serde_json::Value =
             serde_json::from_slice(&fs::read(&task_object).unwrap()).unwrap();
         assert_eq!(
@@ -1408,7 +1450,10 @@ pub(super) mod write_manifest_root {
         // Old behavior dir is gone.
         assert!(!tmp.path().join("agent-behaviors/old-name").exists());
         // New content is present.
-        assert!(tmp.path().join("agent-behaviors/default/object.json").is_file());
+        assert!(tmp
+            .path()
+            .join("agent-behaviors/default/object.json")
+            .is_file());
     }
 }
 
@@ -1430,7 +1475,10 @@ mod write_manifest_root_safe_id {
 
     #[test]
     fn rejects_null_byte() {
-        assert!(check_filesystem_safe_id("a\0b").is_err(), "should reject null byte");
+        assert!(
+            check_filesystem_safe_id("a\0b").is_err(),
+            "should reject null byte"
+        );
     }
 
     #[test]
@@ -1439,9 +1487,7 @@ mod write_manifest_root_safe_id {
             check_filesystem_safe_id("did:defra-agent:example:default").is_ok(),
             "colons are legal on POSIX"
         );
-        assert!(
-            check_filesystem_safe_id("did:key:abc:default:tools").is_ok()
-        );
+        assert!(check_filesystem_safe_id("did:key:abc:default:tools").is_ok());
     }
 
     #[test]

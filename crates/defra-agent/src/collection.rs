@@ -141,7 +141,11 @@ mod tests {
     fn all_collections_have_distinct_file_or_dir_names() {
         let names: BTreeSet<&str> = Collection::ALL
             .iter()
-            .map(|c| c.file_name().or(c.dir_name()).expect("every variant has one"))
+            .map(|c| {
+                c.file_name()
+                    .or(c.dir_name())
+                    .expect("every variant has one")
+            })
             .collect();
         assert_eq!(names.len(), Collection::ALL.len());
     }

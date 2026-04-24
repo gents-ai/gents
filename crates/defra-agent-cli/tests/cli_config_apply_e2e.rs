@@ -41,7 +41,10 @@ async fn config_apply_reconciles_tool_services_tasks_and_schedules_end_to_end() 
         ],
     )?;
 
-    run_cli_text(&home_dir, &["config", "export", "--root", &root.to_string_lossy()])?;
+    run_cli_text(
+        &home_dir,
+        &["config", "export", "--root", &root.to_string_lossy()],
+    )?;
     let principal = read_json_file(&root.join("agent-principal.json"))?;
     let behavior_id = principal
         .get("default_behavior_id")
@@ -622,7 +625,10 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
         ],
     )?;
 
-    run_cli_text(&home_dir, &["config", "export", "--root", &root.to_string_lossy()])?;
+    run_cli_text(
+        &home_dir,
+        &["config", "export", "--root", &root.to_string_lossy()],
+    )?;
     let principal = read_json_file(&root.join("agent-principal.json"))?;
     let behavior_id = principal
         .get("default_behavior_id")
@@ -632,7 +638,10 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
     let task_id = format!("greet-signup-{}", Uuid::new_v4().simple());
     let trigger_id = format!("on-signup-created-{}", Uuid::new_v4().simple());
     let task_path = root.join("tasks").join(&task_id).join("object.json");
-    let trigger_path = root.join("event_triggers").join(&trigger_id).join("object.json");
+    let trigger_path = root
+        .join("event_triggers")
+        .join(&trigger_id)
+        .join("object.json");
 
     // Use InferenceBackend as the source collection — it's registered on
     // every defra-agent server, so the apply-time live validation (filter
@@ -755,9 +764,7 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
         Some(task_id.as_str())
     );
     assert_eq!(
-        trigger_row
-            .get("source_collection")
-            .and_then(Value::as_str),
+        trigger_row.get("source_collection").and_then(Value::as_str),
         Some("InferenceBackend")
     );
     assert_eq!(
@@ -874,9 +881,7 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
     .await?;
     let trigger_after_noop_row = first_graphql_row(&trigger_after_noop, "EventTrigger")?;
     assert_eq!(
-        trigger_after_noop_row
-            .get("_docID")
-            .and_then(Value::as_str),
+        trigger_after_noop_row.get("_docID").and_then(Value::as_str),
         Some(initial_trigger_doc_id.as_str()),
         "EventTrigger docID must be stable across noop apply"
     );
@@ -908,9 +913,8 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
     // Stay within a valid GraphQL filter literal so the apply-time live
     // validation still passes. `provider_kind` is a real field on
     // InferenceBackend.
-    trigger_manifest["filter"] = Value::String(
-        "{ enabled: { _eq: true }, provider_kind: { _eq: \"openai\" } }".to_string(),
-    );
+    trigger_manifest["filter"] =
+        Value::String("{ enabled: { _eq: true }, provider_kind: { _eq: \"openai\" } }".to_string());
     trigger_manifest["enabled"] = Value::from(false);
     trigger_manifest["concurrency"] = Value::String("latest_only".to_string());
     write_json_file(&trigger_path, &trigger_manifest)?;
@@ -948,7 +952,9 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
     .await?;
     let trigger_after_update_row = first_graphql_row(&trigger_after_update, "EventTrigger")?;
     assert_eq!(
-        trigger_after_update_row.get("filter").and_then(Value::as_str),
+        trigger_after_update_row
+            .get("filter")
+            .and_then(Value::as_str),
         Some("{ enabled: { _eq: true }, provider_kind: { _eq: \"openai\" } }"),
         "apply must update filter"
     );
@@ -1024,9 +1030,7 @@ struct LiveValidationFixture {
     _tempdir: tempfile::TempDir,
 }
 
-async fn prepare_live_validation_fixture(
-    suffix: &str,
-) -> Result<LiveValidationFixture> {
+async fn prepare_live_validation_fixture(suffix: &str) -> Result<LiveValidationFixture> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     let root = tempdir.path().join("infra").join("agents").join("default");
@@ -1049,7 +1053,10 @@ async fn prepare_live_validation_fixture(
         ],
     )?;
 
-    run_cli_text(&home_dir, &["config", "export", "--root", &root.to_string_lossy()])?;
+    run_cli_text(
+        &home_dir,
+        &["config", "export", "--root", &root.to_string_lossy()],
+    )?;
     let principal = read_json_file(&root.join("agent-principal.json"))?;
     let behavior_id = principal
         .get("default_behavior_id")
@@ -1059,7 +1066,10 @@ async fn prepare_live_validation_fixture(
     let task_id = format!("greet-{suffix}");
     let trigger_id = format!("on-created-{suffix}");
     let task_path = root.join("tasks").join(&task_id).join("object.json");
-    let trigger_path = root.join("event_triggers").join(&trigger_id).join("object.json");
+    let trigger_path = root
+        .join("event_triggers")
+        .join(&trigger_id)
+        .join("object.json");
 
     // Seed the Task + Trigger with a VALID baseline. Individual tests
     // overwrite fields to exercise specific failure modes.
@@ -1127,7 +1137,10 @@ async fn apply_rejects_event_trigger_with_malformed_filter() -> Result<()> {
         .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
     let stderr = run_cli_failure_stderr(&fx.home_dir, &["config", "apply", "--root", root_str])?;
     assert!(
-        stderr.contains(&format!("event_trigger {} filter syntax error", fx.trigger_id)),
+        stderr.contains(&format!(
+            "event_trigger {} filter syntax error",
+            fx.trigger_id
+        )),
         "expected filter syntax error for trigger {} in stderr, got: {stderr}",
         fx.trigger_id,
     );
@@ -1145,8 +1158,7 @@ async fn apply_rejects_event_trigger_template_referencing_unknown_doc_field() ->
     // on InferenceBackend. Keep the trigger's filter valid so the failure
     // is unambiguously the template check.
     let mut task_manifest = read_json_file(&fx.task_path)?;
-    task_manifest["prompt_template"] =
-        Value::String("Greet {{ doc.nonexistent }}.".to_string());
+    task_manifest["prompt_template"] = Value::String("Greet {{ doc.nonexistent }}.".to_string());
     write_json_file(&fx.task_path, &task_manifest)?;
 
     let root_str = fx
@@ -1196,4 +1208,3 @@ async fn apply_accepts_event_trigger_with_valid_filter_and_doc_paths() -> Result
     );
     Ok(())
 }
-

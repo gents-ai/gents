@@ -34,9 +34,7 @@ use std::time::Duration;
 
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
-use defra_agent::{
-    AgentIdentity, DefraAgent, DocumentRuntimeOptions, ToolCeiling,
-};
+use defra_agent::{AgentIdentity, DefraAgent, DocumentRuntimeOptions, ToolCeiling};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -454,7 +452,11 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
-    assert_eq!(fired.fire_count, Some(1), "fire_count must be 1 after one fire: {fired:?}");
+    assert_eq!(
+        fired.fire_count,
+        Some(1),
+        "fire_count must be 1 after one fire: {fired:?}"
+    );
     assert_eq!(
         fired.last_fired_source_doc_id.as_deref(),
         Some(source_doc_id.as_str()),

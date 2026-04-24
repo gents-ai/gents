@@ -562,9 +562,11 @@ fn render_fire_task_modal(ui: &mut Ui, state: &mut ShellState) {
         .resizable(true)
         .default_width(420.0)
         .show(ui.ctx(), |ui| {
-            let draft = state.manage.fire_task_draft.as_mut().expect(
-                "fire_task_modal invoked with a present draft; guard checked above",
-            );
+            let draft = state
+                .manage
+                .fire_task_draft
+                .as_mut()
+                .expect("fire_task_modal invoked with a present draft; guard checked above");
             ui.label("Args (JSON object):");
             ui.add(
                 egui::TextEdit::multiline(&mut draft.args_text)
@@ -649,9 +651,7 @@ mod tests {
         // state would hit `task ... disappeared from store` in the
         // controller.
         assert!(!task_run_now_enabled(
-            /* client_online */ true,
-            /* task_enabled */ true,
-            "task-new",
+            /* client_online */ true, /* task_enabled */ true, "task-new",
             /* persisted_row_exists */ false,
         ));
     }

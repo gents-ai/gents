@@ -114,7 +114,10 @@ fn turn_block(
 
 fn render_lineage_badge(ui: &mut Ui, badge: LineageBadge<'_>) {
     let response = ui.add(egui::Label::new(
-        RichText::new(badge.label).monospace().small().color(badge.color),
+        RichText::new(badge.label)
+            .monospace()
+            .small()
+            .color(badge.color),
     ));
     if let Some(tooltip) = badge.tooltip {
         response.on_hover_text(tooltip);

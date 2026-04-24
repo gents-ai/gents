@@ -47,10 +47,7 @@ use support::{test_db, AGENT_DID, AGENT_NAME};
 /// Fetch the full row shape the helper writes so tests can inspect lineage,
 /// execution origin, lifecycle state, and the rendered content without
 /// reconstructing the filter in every case.
-async fn fetch_manual_row(
-    node: &defra_agent::defra_node::EmbeddedNode,
-    doc_id: &str,
-) -> Value {
+async fn fetch_manual_row(node: &defra_agent::defra_node::EmbeddedNode, doc_id: &str) -> Value {
     let escaped = escape_graphql_string(doc_id);
     let query = format!(
         r#"{{

@@ -35,8 +35,8 @@ pub use tool_selection::{load_tool_selection, upsert_tool_selection, ToolSelecti
 
 #[allow(unused_imports)]
 pub(crate) use event_trigger::{
-    list_event_trigger_records, load_event_trigger_by_doc_id,
-    update_event_trigger_runtime_fields, EventTrigger, EventTriggerRuntimeUpdate,
+    list_event_trigger_records, load_event_trigger_by_doc_id, update_event_trigger_runtime_fields,
+    EventTrigger, EventTriggerRuntimeUpdate,
 };
 #[allow(unused_imports)]
 pub(crate) use schedule::{

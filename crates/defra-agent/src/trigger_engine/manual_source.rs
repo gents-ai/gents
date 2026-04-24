@@ -41,10 +41,7 @@ pub(crate) struct ManualTriggerHandle {
 impl ManualSource {
     pub(crate) fn new(cancel: CancellationToken) -> (Self, ManualTriggerHandle) {
         let (tx, rx) = mpsc::channel(MANUAL_CHANNEL_CAPACITY);
-        (
-            Self { rx, cancel },
-            ManualTriggerHandle { tx },
-        )
+        (Self { rx, cancel }, ManualTriggerHandle { tx })
     }
 }
 
@@ -77,8 +74,7 @@ impl ManualTriggerHandle {
             })?;
 
         let (result_tx, result_rx) = oneshot::channel();
-        let now =
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
         let intent = FireIntent {
             trigger_id: None,
@@ -108,9 +104,7 @@ impl ManualTriggerHandle {
 }
 
 impl TriggerSource for ManualSource {
-    fn next_fire(
-        &mut self,
-    ) -> Pin<Box<dyn Future<Output = Option<FireIntent>> + Send + '_>> {
+    fn next_fire(&mut self) -> Pin<Box<dyn Future<Output = Option<FireIntent>> + Send + '_>> {
         Box::pin(async move {
             tokio::select! {
                 _ = self.cancel.cancelled() => None,

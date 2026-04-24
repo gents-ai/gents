@@ -31,8 +31,8 @@ const DEFAULT_REQUEST_MAX_RETRIES: u32 = 3;
 
 pub(super) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
     // 1. Parse --args as a JSON object.
-    let args_value: Value = serde_json::from_str(&args.args)
-        .map_err(|e| anyhow!("--args is not valid JSON: {e}"))?;
+    let args_value: Value =
+        serde_json::from_str(&args.args).map_err(|e| anyhow!("--args is not valid JSON: {e}"))?;
     if !args_value.is_object() {
         anyhow::bail!("--args must be a JSON object (got: {args_value})");
     }
@@ -250,9 +250,7 @@ async fn lookup_doc_id_by_request_id(
     let response = access.execute(&query).await?;
     if let Some(errs) = response.get("errors").and_then(|v| v.as_array()) {
         if !errs.is_empty() {
-            anyhow::bail!(
-                "lookup AgentRequest by request_id {request_id} failed: {errs:?}"
-            );
+            anyhow::bail!("lookup AgentRequest by request_id {request_id} failed: {errs:?}");
         }
     }
     Ok(response

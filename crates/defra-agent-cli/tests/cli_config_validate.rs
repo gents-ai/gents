@@ -30,7 +30,9 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
         }),
     )?;
     {
-        let dir = root.join("agent-behaviors").join(default_behavior_id.as_str());
+        let dir = root
+            .join("agent-behaviors")
+            .join(default_behavior_id.as_str());
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -50,7 +52,9 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
         )?;
     }
     {
-        let dir = root.join("tool-selections").join(tool_selection_id.as_str());
+        let dir = root
+            .join("tool-selections")
+            .join(tool_selection_id.as_str());
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -250,7 +254,9 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
         }),
     )?;
     {
-        let dir = root.join("agent-behaviors").join(default_behavior_id.as_str());
+        let dir = root
+            .join("agent-behaviors")
+            .join(default_behavior_id.as_str());
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -270,7 +276,9 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
         )?;
     }
     {
-        let dir = root.join("tool-selections").join(tool_selection_id.as_str());
+        let dir = root
+            .join("tool-selections")
+            .join(tool_selection_id.as_str());
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),

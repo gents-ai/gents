@@ -1356,10 +1356,8 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
         output_schema_ref: None,
     };
     let trigger = resolved_event_trigger("trigger-webhook", "WebhookEvent", task.clone());
-    let snapshot = snapshot_with_event_triggers(
-        1,
-        HashMap::from([("trigger-webhook".to_string(), trigger)]),
-    );
+    let snapshot =
+        snapshot_with_event_triggers(1, HashMap::from([("trigger-webhook".to_string(), trigger)]));
     let (_tx, rx) = watch::channel(snapshot.clone());
 
     let cancel = CancellationToken::new();
@@ -1426,9 +1424,7 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
     assert_eq!(ev["trigger_kind"].as_str(), Some("event"));
     assert_eq!(ev["source_collection"].as_str(), Some("WebhookEvent"));
     assert!(
-        ev["source_doc_id"]
-            .as_str()
-            .is_some_and(|s| !s.is_empty()),
+        ev["source_doc_id"].as_str().is_some_and(|s| !s.is_empty()),
         "source_doc_id should be a non-empty string from the persisted doc, got {:?}",
         ev["source_doc_id"]
     );
@@ -1601,10 +1597,8 @@ async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
     // No filter on the trigger — every create fires, and the fire must
     // carry the full doc projection.
     let trigger = resolved_event_trigger("trigger-hydrate", "WebhookEvent", task.clone());
-    let snapshot = snapshot_with_event_triggers(
-        1,
-        HashMap::from([("trigger-hydrate".to_string(), trigger)]),
-    );
+    let snapshot =
+        snapshot_with_event_triggers(1, HashMap::from([("trigger-hydrate".to_string(), trigger)]));
     let (_tx, rx) = watch::channel(snapshot.clone());
 
     let cancel = CancellationToken::new();
@@ -1742,10 +1736,8 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
         output_schema_ref: None,
     };
     let trigger = resolved_event_trigger("trigger-fired", "WebhookEvent", task.clone());
-    let snapshot = snapshot_with_event_triggers(
-        1,
-        HashMap::from([("trigger-fired".to_string(), trigger)]),
-    );
+    let snapshot =
+        snapshot_with_event_triggers(1, HashMap::from([("trigger-fired".to_string(), trigger)]));
     let (_tx, rx) = watch::channel(snapshot.clone());
 
     let cancel = CancellationToken::new();
@@ -2006,11 +1998,7 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
 /// Build a `ResolvedTask` for unit tests that exercise the manual-fire path.
 /// Mirrors `resolved_task` but takes an explicit `task_id` / `behavior_id`
 /// so callers can assert the `task_id` round-tripped through the intent.
-fn resolved_task_for_test(
-    task_id: &str,
-    behavior_id: &str,
-    prompt_template: &str,
-) -> ResolvedTask {
+fn resolved_task_for_test(task_id: &str, behavior_id: &str, prompt_template: &str) -> ResolvedTask {
     ResolvedTask {
         task_id: task_id.to_string(),
         behavior_id: behavior_id.to_string(),
@@ -2072,11 +2060,8 @@ async fn manual_source_run_task_now_yields_intent_with_args_vars() {
 
 #[tokio::test]
 async fn manual_source_run_task_now_rejects_unknown_task() {
-    let snapshot = snapshot_with_active_task(resolved_task_for_test(
-        "other-task",
-        "behavior-1",
-        "x",
-    ));
+    let snapshot =
+        snapshot_with_active_task(resolved_task_for_test("other-task", "behavior-1", "x"));
     let (_source, handle) = ManualSource::new(CancellationToken::new());
     let err = handle
         .run_task_now(snapshot.as_ref(), "missing", serde_json::json!({}))
@@ -2096,12 +2081,9 @@ async fn manual_source_next_fire_returns_none_after_cancel() {
     // Cancel immediately.
     cancel.cancel();
 
-    let result = tokio::time::timeout(
-        std::time::Duration::from_millis(200),
-        source.next_fire(),
-    )
-    .await
-    .expect("timed out waiting for cancelled next_fire");
+    let result = tokio::time::timeout(std::time::Duration::from_millis(200), source.next_fire())
+        .await
+        .expect("timed out waiting for cancelled next_fire");
     assert!(result.is_none());
 }
 
@@ -2219,9 +2201,7 @@ async fn dispatch_manual_intent_renders_with_args_and_materializes() {
             request_id, "req-0",
             "spy materializer hands back sequentially-numbered ids starting at req-0"
         ),
-        other => panic!(
-            "expected Fired for Manual intent (bypasses enabled-gate), got {other:?}"
-        ),
+        other => panic!("expected Fired for Manual intent (bypasses enabled-gate), got {other:?}"),
     }
 
     let calls = materializer.calls();
@@ -2472,8 +2452,7 @@ async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
 
     let task = resolved_task("ignored");
     // Two triggers on the same collection. lex order: trigger-alpha < trigger-beta.
-    let trigger_alpha =
-        resolved_event_trigger("trigger-alpha", "WebhookEvent", task.clone());
+    let trigger_alpha = resolved_event_trigger("trigger-alpha", "WebhookEvent", task.clone());
     let trigger_beta = resolved_event_trigger("trigger-beta", "WebhookEvent", task);
     let snapshot = snapshot_with_event_triggers(
         1,
@@ -2623,8 +2602,7 @@ async fn event_source_tries_all_triggers_when_first_filter_misses() {
 
     // And crucially, there must be no second intent — trigger-a did NOT
     // match the filter, so it must not have emitted.
-    let maybe_extra =
-        tokio::time::timeout(Duration::from_millis(300), source.next_fire()).await;
+    let maybe_extra = tokio::time::timeout(Duration::from_millis(300), source.next_fire()).await;
     assert!(
         maybe_extra.is_err(),
         "trigger-a emitted a FireIntent despite its filter miss",

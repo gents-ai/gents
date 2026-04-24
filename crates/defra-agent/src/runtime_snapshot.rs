@@ -396,8 +396,10 @@ fn configuration_fingerprint(
         fingerprint.push('\n');
     }
 
-    let mut unavailable_event_trigger_ids =
-        unavailable_event_triggers.iter().cloned().collect::<Vec<_>>();
+    let mut unavailable_event_trigger_ids = unavailable_event_triggers
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
     unavailable_event_trigger_ids.sort();
     for trigger_id in unavailable_event_trigger_ids {
         fingerprint.push_str("unavailable_event_trigger:");

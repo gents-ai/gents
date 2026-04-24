@@ -44,8 +44,7 @@ pub(crate) fn load_manifest_root(
         load_per_doc_collection(root, Collection::InferenceProfile, &mut errors);
     let tool_service_registries: Vec<DesiredToolServiceRegistry> =
         load_per_doc_collection(root, Collection::ToolServiceRegistry, &mut errors);
-    let mut tasks: Vec<DesiredTask> =
-        load_per_doc_collection(root, Collection::Task, &mut errors);
+    let mut tasks: Vec<DesiredTask> = load_per_doc_collection(root, Collection::Task, &mut errors);
     let schedules: Vec<DesiredSchedule> =
         load_per_doc_collection(root, Collection::Schedule, &mut errors);
     let event_triggers: Vec<DesiredEventTrigger> =
@@ -101,7 +100,11 @@ pub(crate) fn load_manifest_root(
     (
         manifest,
         DesiredStateValidationReport {
-            status: if errors.is_empty() { "validated" } else { "invalid" },
+            status: if errors.is_empty() {
+                "validated"
+            } else {
+                "invalid"
+            },
             ok: errors.is_empty(),
             root: root_display,
             agent_did,
@@ -111,10 +114,7 @@ pub(crate) fn load_manifest_root(
     )
 }
 
-fn empty_report(
-    root_display: String,
-    errors: Vec<String>,
-) -> DesiredStateValidationReport {
+fn empty_report(root_display: String, errors: Vec<String>) -> DesiredStateValidationReport {
     DesiredStateValidationReport {
         status: "invalid",
         ok: false,
@@ -135,10 +135,7 @@ fn empty_report(
     }
 }
 
-fn load_agent_principal(
-    root: &Path,
-    errors: &mut Vec<String>,
-) -> Option<DesiredAgentPrincipal> {
+fn load_agent_principal(root: &Path, errors: &mut Vec<String>) -> Option<DesiredAgentPrincipal> {
     let file_name = Collection::AgentPrincipal
         .file_name()
         .expect("AgentPrincipal has a top-level file");
@@ -310,13 +307,12 @@ where
 /// is `..` (ParentDir), a root separator, or an absolute prefix is rejected
 /// with an error. This prevents `./../secret.md` and similar tricks from
 /// reading files outside the document directory.
-pub(crate) fn hydrate_sidecar(
-    value: &mut Option<String>,
-    json_dir: &Path,
-) -> Result<(), String> {
+pub(crate) fn hydrate_sidecar(value: &mut Option<String>, json_dir: &Path) -> Result<(), String> {
     use std::path::Component;
 
-    let Some(current) = value.as_deref() else { return Ok(()) };
+    let Some(current) = value.as_deref() else {
+        return Ok(());
+    };
     if !current.starts_with("./") {
         return Ok(());
     }
@@ -354,9 +350,8 @@ pub(crate) fn hydrate_sidecar(
             format!("reading {} failed: {error}", sidecar_path.display())
         }
     })?;
-    let body = String::from_utf8(bytes).map_err(|_| {
-        format!("sidecar is not valid UTF-8: {}", sidecar_path.display())
-    })?;
+    let body = String::from_utf8(bytes)
+        .map_err(|_| format!("sidecar is not valid UTF-8: {}", sidecar_path.display()))?;
     *value = Some(body);
     Ok(())
 }

@@ -394,10 +394,7 @@ impl EventSource {
     /// should be treated as a "created" fire under v1 semantics. Subsequent
     /// observations (updates / deletes / replays) return `false`.
     fn is_first_seen(&mut self, collection: &str, doc_id: &str) -> bool {
-        let set = self
-            .seen_docs
-            .entry(collection.to_string())
-            .or_default();
+        let set = self.seen_docs.entry(collection.to_string()).or_default();
         set.insert(doc_id.to_string())
     }
 
@@ -592,8 +589,7 @@ impl EventSource {
         result: crate::trigger_engine::FireResult,
     ) {
         tokio::spawn(async move {
-            let now = chrono::Utc::now().to_rfc3339_opts(
-                chrono::SecondsFormat::Secs, true);
+            let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
             let (status, error_value, fire_delta) = match &result {
                 crate::trigger_engine::FireResult::Fired { .. } => ("fired", None, Some(1)),
                 crate::trigger_engine::FireResult::Skipped { reason } => {
@@ -749,8 +745,7 @@ impl EventSource {
 impl TriggerSource for EventSource {
     fn next_fire(
         &mut self,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<FireIntent>> + Send + '_>>
-    {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<FireIntent>> + Send + '_>> {
         Box::pin(async move {
             // Outer loop: reconcile-on-generation-bump, then race subscription
             // vs. snapshot-change vs. cancel. `None` here means "source is

@@ -631,7 +631,11 @@ pub(crate) struct ConfigExportArgs {
         help = "Directory to write the manifest root into (author format for `config validate`, `diff`, and `apply`)"
     )]
     pub(crate) root: PathBuf,
-    #[arg(long, default_value_t = false, help = "Overwrite the root dir if it is non-empty")]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Overwrite the root dir if it is non-empty"
+    )]
     pub(crate) force: bool,
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,

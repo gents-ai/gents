@@ -16,9 +16,7 @@ use super::{DesiredStateManifest, HasUniqueId};
 /// init-generated IDs.
 pub(crate) fn check_filesystem_safe_id(id: &str) -> Result<(), String> {
     if id.is_empty() {
-        return Err(
-            "unique id is empty; choose a filesystem-safe id".to_string(),
-        );
+        return Err("unique id is empty; choose a filesystem-safe id".to_string());
     }
     if id == "." || id == ".." {
         return Err(format!(
@@ -47,18 +45,13 @@ pub(crate) fn check_filesystem_safe_id(id: &str) -> Result<(), String> {
 /// when `force=true`) is never called on a manifest that would produce a
 /// partial write.
 fn validate_handles(manifest: &DesiredStateManifest) -> Result<(), String> {
-    fn validate_vec<T: HasUniqueId>(
-        docs: &[T],
-        collection_name: &str,
-    ) -> Result<(), String> {
+    fn validate_vec<T: HasUniqueId>(docs: &[T], collection_name: &str) -> Result<(), String> {
         let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
         for doc in docs {
             let id = doc.unique_id();
             check_filesystem_safe_id(id)?;
             if !seen.insert(id) {
-                return Err(format!(
-                    "duplicate {collection_name} id '{id}' in manifest"
-                ));
+                return Err(format!("duplicate {collection_name} id '{id}' in manifest"));
             }
         }
         Ok(())
@@ -132,18 +125,8 @@ pub(crate) fn write_manifest_root(
         &manifest.tool_service_registries,
         no_sidecar,
     )?;
-    write_per_doc_collection(
-        root,
-        Collection::Task,
-        &manifest.tasks,
-        spill_task_sidecar,
-    )?;
-    write_per_doc_collection(
-        root,
-        Collection::Schedule,
-        &manifest.schedules,
-        no_sidecar,
-    )?;
+    write_per_doc_collection(root, Collection::Task, &manifest.tasks, spill_task_sidecar)?;
+    write_per_doc_collection(root, Collection::Schedule, &manifest.schedules, no_sidecar)?;
     write_per_doc_collection(
         root,
         Collection::EventTrigger,
@@ -156,8 +139,7 @@ pub(crate) fn write_manifest_root(
 
 fn prepare_root(root: &Path, force: bool) -> Result<(), String> {
     if !root.exists() {
-        fs::create_dir_all(root)
-            .map_err(|e| format!("creating {} failed: {e}", root.display()))?;
+        fs::create_dir_all(root).map_err(|e| format!("creating {} failed: {e}", root.display()))?;
         return Ok(());
     }
     let is_empty = fs::read_dir(root)
@@ -186,10 +168,8 @@ fn prepare_root(root: &Path, force: bool) -> Result<(), String> {
             root.display()
         ));
     }
-    fs::remove_dir_all(root)
-        .map_err(|e| format!("clearing {} failed: {e}", root.display()))?;
-    fs::create_dir_all(root)
-        .map_err(|e| format!("creating {} failed: {e}", root.display()))?;
+    fs::remove_dir_all(root).map_err(|e| format!("clearing {} failed: {e}", root.display()))?;
+    fs::create_dir_all(root).map_err(|e| format!("creating {} failed: {e}", root.display()))?;
     Ok(())
 }
 
@@ -275,7 +255,10 @@ fn spill_string_field(
             doc_dir.join(sidecar_name).display()
         )
     })?;
-    object.insert(field.to_string(), Value::String(format!("./{sidecar_name}")));
+    object.insert(
+        field.to_string(),
+        Value::String(format!("./{sidecar_name}")),
+    );
     Ok(())
 }
 

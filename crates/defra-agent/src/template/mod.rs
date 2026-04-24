@@ -51,10 +51,7 @@ impl VariableRef {
 /// The input template is rejected if it exceeds [`MAX_TEMPLATE_BYTES`]; the
 /// rendered output is rejected if it exceeds [`MAX_RENDERED_BYTES`]. Both
 /// caps keep trigger evaluation bounded regardless of event payload size.
-pub fn render_template(
-    template: &str,
-    scope: &TemplateScope,
-) -> Result<String, TemplateError> {
+pub fn render_template(template: &str, scope: &TemplateScope) -> Result<String, TemplateError> {
     if template.len() > MAX_TEMPLATE_BYTES {
         return Err(TemplateError::Parse(format!(
             "template exceeds {} bytes",

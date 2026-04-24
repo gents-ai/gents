@@ -42,7 +42,10 @@ async fn config_task_run_creates_manual_agent_request() -> Result<()> {
         ],
     )?;
 
-    run_cli_text(&home_dir, &["config", "export", "--root", &root.to_string_lossy()])?;
+    run_cli_text(
+        &home_dir,
+        &["config", "export", "--root", &root.to_string_lossy()],
+    )?;
     let principal = read_json_file(&root.join("agent-principal.json"))?;
     let behavior_id = principal
         .get("default_behavior_id")
@@ -105,7 +108,10 @@ async fn config_task_run_creates_manual_agent_request() -> Result<()> {
             &graphql,
         ],
     )?;
-    assert_eq!(fire.get("task_id").and_then(Value::as_str), Some(task_id.as_str()));
+    assert_eq!(
+        fire.get("task_id").and_then(Value::as_str),
+        Some(task_id.as_str())
+    );
     assert_eq!(fire.get("status").and_then(Value::as_str), Some("pending"));
     assert_eq!(
         fire.get("behavior_id").and_then(Value::as_str),
@@ -150,7 +156,10 @@ async fn config_task_run_creates_manual_agent_request() -> Result<()> {
     )
     .await?;
     let row = first_graphql_row(&response, "AgentRequest")?;
-    assert_eq!(row.get("agent_did").and_then(Value::as_str), Some(agent_did.as_str()));
+    assert_eq!(
+        row.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
     assert_eq!(
         row.get("behavior_id").and_then(Value::as_str),
         Some(behavior_id.as_str())
@@ -204,7 +213,10 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
         ],
     )?;
 
-    run_cli_text(&home_dir, &["config", "export", "--root", &root.to_string_lossy()])?;
+    run_cli_text(
+        &home_dir,
+        &["config", "export", "--root", &root.to_string_lossy()],
+    )?;
     let principal = read_json_file(&root.join("agent-principal.json"))?;
     let behavior_id = principal
         .get("default_behavior_id")
