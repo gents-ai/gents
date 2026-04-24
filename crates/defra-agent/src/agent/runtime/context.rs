@@ -138,6 +138,7 @@ impl RuntimeContext {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_behavior_with_client<C>(
         &self,
         behavior: Arc<crate::config::BehaviorConfig>,

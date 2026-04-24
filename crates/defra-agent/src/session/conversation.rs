@@ -25,6 +25,7 @@ pub(crate) async fn upsert_conversation_from_request(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn upsert_conversation_from_request_with_identity(
     node: &EmbeddedNode,
     session_id: &str,

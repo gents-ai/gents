@@ -59,6 +59,7 @@ pub trait ProcessLifecycleObserver: Send + Sync {
     fn on_process_state_change(&self, state: ProcessLifecycleState);
 }
 
+#[derive(Default)]
 pub struct DocumentRuntimeOptions {
     pub tool_ceiling: ToolCeiling,
     pub mcp_pool: McpPool,
@@ -67,20 +68,6 @@ pub struct DocumentRuntimeOptions {
     pub retry_policy: RetryPolicy,
     pub hook_failure_policy: FailurePolicy,
     pub process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
-}
-
-impl Default for DocumentRuntimeOptions {
-    fn default() -> Self {
-        Self {
-            tool_ceiling: ToolCeiling::meta_only(),
-            mcp_pool: McpPool::default(),
-            local_hostname: None,
-            local_subnet: None,
-            retry_policy: RetryPolicy::default(),
-            hook_failure_policy: FailurePolicy::default(),
-            process_state_observer: None,
-        }
-    }
 }
 
 #[derive(Clone)]

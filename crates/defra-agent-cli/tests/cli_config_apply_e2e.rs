@@ -1018,7 +1018,6 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
 struct LiveValidationFixture {
     home_dir: std::path::PathBuf,
     root: std::path::PathBuf,
-    task_id: String,
     trigger_id: String,
     task_path: std::path::PathBuf,
     trigger_path: std::path::PathBuf,
@@ -1109,7 +1108,6 @@ async fn prepare_live_validation_fixture(suffix: &str) -> Result<LiveValidationF
     Ok(LiveValidationFixture {
         home_dir,
         root,
-        task_id,
         trigger_id,
         task_path,
         trigger_path,

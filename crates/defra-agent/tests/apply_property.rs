@@ -192,7 +192,7 @@ proptest! {
         let steps = diff(&m, &l).into_steps();
         let mut acc = l.clone();
         for s in &steps {
-            acc = apply_all(&acc, &[s.clone()]);
+            acc = apply_all(&acc, std::slice::from_ref(s));
             for payload in acc.desired.values() {
                 for r in references_of(payload) {
                     prop_assert!(
@@ -248,7 +248,7 @@ proptest! {
         let steps = diff(&m, &l).into_steps();
         let mut acc = l.clone();
         for s in &steps {
-            acc = apply_all(&acc, &[s.clone()]);
+            acc = apply_all(&acc, std::slice::from_ref(s));
             for (d, payload) in &acc.desired {
                 for r in references_of(payload) {
                     prop_assert!(
@@ -277,8 +277,8 @@ proptest! {
         let steps = diff(&m, &l).into_steps();
         let mut acc = l.clone();
         for s in &steps {
-            acc = apply_all(&acc, &[s.clone()]);
-            for (_d, payload) in &acc.desired {
+            acc = apply_all(&acc, std::slice::from_ref(s));
+            for payload in acc.desired.values() {
                 for r in references_of(payload) {
                     prop_assert!(
                         acc.desired.contains_key(&r),

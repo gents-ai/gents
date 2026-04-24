@@ -148,10 +148,7 @@ pub(super) async fn stream_turn_progress(
             .and_then(Value::as_array)
             .and_then(|rows| rows.first())
             .cloned();
-        if let Some(progress) = response_row
-            .as_ref()
-            .and_then(|row| decode_chat_turn_progress(row))
-        {
+        if let Some(progress) = response_row.as_ref().and_then(decode_chat_turn_progress) {
             if progress.progress_seq > latest_progress_seq
                 || progress.content != latest_content
                 || progress.reasoning != latest_reasoning

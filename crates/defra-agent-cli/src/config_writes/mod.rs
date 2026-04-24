@@ -19,6 +19,7 @@ use anyhow::Result;
 use defra_agent::defra_node::EmbeddedNode;
 use serde_json::{json, Value};
 
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ConfigAccess {
     Graphql(String),
     Local(EmbeddedNode),

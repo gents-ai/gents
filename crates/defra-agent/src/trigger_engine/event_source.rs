@@ -591,7 +591,14 @@ impl EventSource {
         tokio::spawn(async move {
             let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
             let (status, error_value, fire_delta) = match &result {
-                crate::trigger_engine::FireResult::Fired { .. } => ("fired", None, Some(1)),
+                crate::trigger_engine::FireResult::Fired { request_id } => {
+                    tracing::debug!(
+                        trigger_id = %trigger_id,
+                        request_id = %request_id,
+                        "event trigger fire materialized request"
+                    );
+                    ("fired", None, Some(1))
+                }
                 crate::trigger_engine::FireResult::Skipped { reason } => {
                     ("skipped", Some(reason.clone()), None)
                 }

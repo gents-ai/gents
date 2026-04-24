@@ -10,7 +10,6 @@ use rig::completion::{
 use rig::one_or_many::OneOrMany;
 use rig::streaming::StreamingCompletionResponse;
 
-use super::summary::compaction_prompt;
 use super::*;
 use crate::ensure_schemas;
 use crate::prompt::{LayeredPromptBuilder, PromptBuilder};

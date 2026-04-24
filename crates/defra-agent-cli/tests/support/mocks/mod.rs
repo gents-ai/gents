@@ -45,8 +45,10 @@ pub fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequestData> {
                     break;
                 }
             }
-        } else if buffer.len() >= header_end.expect("header_end should be set") + content_length {
-            break;
+        } else if let Some(end) = header_end {
+            if buffer.len() >= end + content_length {
+                break;
+            }
         }
     }
 

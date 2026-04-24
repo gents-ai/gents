@@ -2,7 +2,6 @@ mod support;
 use support::*;
 
 use std::fs;
-use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;

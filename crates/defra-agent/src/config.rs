@@ -68,7 +68,7 @@ impl SamplingConfig {
             params.insert("max_tokens".to_string(), serde_json::json!(max_tokens));
         }
 
-        (!params.is_empty()).then(|| serde_json::Value::Object(params))
+        (!params.is_empty()).then_some(serde_json::Value::Object(params))
     }
 }
 
