@@ -133,14 +133,42 @@ def dispatchEnabledForEvent
     (snap : TriggerSnapshot) (triggerId : String) : Option ActiveEventTrigger :=
   snap.activeEventTriggers.find? (fun t => (t.triggerId == triggerId) && t.enabled)
 
-/-- Abstract dispatch function. Produces a `RequestSeed` iff the intent
-    is admissible given the snapshot. The concrete rules are filled in
-    by the theorems below; `sorry` is used as a placeholder so the
-    statements typecheck without committing to one operational
-    definition. -/
-def dispatch (snap : TriggerSnapshot) (intent : FireIntent) :
-    Option RequestSeed :=
-  sorry
+/--
+Dispatch — the enabled-gate + materialization-shape step.
+
+Does NOT perform concurrency or in-flight checks against `SystemState`;
+those live in `dispatchStep`.
+
+Returns `some seed` when:
+- Schedule kind: an enabled schedule matching `intent.triggerId` exists in the snapshot.
+- Event kind: an enabled event trigger matching `intent.triggerId` exists.
+- Manual kind: unconditional. Manual fires bypass the enabled gate; the
+  task-level gate is enforced by the caller (`run_task_now` checks
+  `snap.activeTasks` — out of scope for this proof layer).
+
+Returns `none` otherwise.
+-/
+def dispatch
+    (snap : TriggerSnapshot) (intent : FireIntent) : Option RequestSeed :=
+  match intent.triggerKind with
+  | .schedule =>
+    match intent.triggerId with
+    | none     => none
+    | some tid =>
+      match dispatchEnabledForSchedule snap tid with
+      | none   => none
+      | some _ =>
+        some { causedByTriggerId := some tid, causedByTriggerKind := .schedule }
+  | .event =>
+    match intent.triggerId with
+    | none     => none
+    | some tid =>
+      match dispatchEnabledForEvent snap tid with
+      | none   => none
+      | some _ =>
+        some { causedByTriggerId := some tid, causedByTriggerKind := .event }
+  | .manual =>
+    some { causedByTriggerId := intent.triggerId, causedByTriggerKind := .manual }
 
 /-- A trigger is identified by `(triggerId, triggerKind)`. Pairing both
     avoids collisions between, e.g., a schedule and an event trigger
