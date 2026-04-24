@@ -475,6 +475,11 @@ theorem T1_manual_unconditional
   trivial
 
 
+/-- The empty state has zero non-terminal requests for any trigger tuple. -/
+theorem nonTerminalCountFor_empty (t : TriggerKey) :
+    SystemState.empty.nonTerminalCountFor t = 0 := by
+  simp [SystemState.empty, SystemState.nonTerminalCountFor]
+
 /--
 T2 (serial at-most-one): any reachable system state has at most one
 non-terminal request per trigger tuple, provided every request for that
