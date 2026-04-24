@@ -23,6 +23,7 @@ impl DefraWatcher {
                     top_k
                     max_tokens
                     metadata
+                    execution_origin
                     created_at
                 }}
             }}"#,
@@ -54,6 +55,7 @@ impl DefraWatcher {
                 top_k: row.top_k,
                 max_tokens: row.max_tokens,
                 metadata: row.metadata,
+                execution_origin: normalize_optional_string(row.execution_origin),
                 created_at: row.created_at,
             })),
             None => Ok(None),
@@ -81,6 +83,7 @@ impl DefraWatcher {
                     top_k
                     max_tokens
                     metadata
+                    execution_origin
                     created_at
                 }}
             }}"#,
@@ -112,6 +115,7 @@ impl DefraWatcher {
                 top_k: row.top_k,
                 max_tokens: row.max_tokens,
                 metadata: row.metadata,
+                execution_origin: normalize_optional_string(row.execution_origin),
                 created_at: row.created_at,
             })
             .collect())
@@ -137,6 +141,7 @@ struct AgentRequestRow {
     top_k: Option<i64>,
     max_tokens: Option<i64>,
     metadata: Option<String>,
+    execution_origin: Option<String>,
     created_at: String,
 }
 
@@ -154,5 +159,6 @@ struct PendingAgentRequestRow {
     top_k: Option<i64>,
     max_tokens: Option<i64>,
     metadata: Option<String>,
+    execution_origin: Option<String>,
     created_at: String,
 }

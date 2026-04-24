@@ -47,6 +47,7 @@ fn request(request_id: &str) -> AgentRequest {
         top_k: None,
         max_tokens: None,
         metadata: None,
+        execution_origin: None,
         created_at: "2026-04-15T00:00:00Z".to_string(),
     }
 }

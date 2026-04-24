@@ -1,5 +1,146 @@
 use super::*;
 
+#[derive(Debug, Clone)]
+pub(crate) struct EnqueuedAgentRequest {
+    pub(crate) doc_id: String,
+    pub(crate) request_id: String,
+}
+
+fn trigger_lineage_graphql_fields(trigger_lineage: &TriggerLineage) -> String {
+    let caused_by_trigger_id_field = trigger_lineage
+        .trigger_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            format!(
+                r#"
+                    caused_by_trigger_id: "{}","#,
+                escape_graphql_string(value)
+            )
+        })
+        .unwrap_or_default();
+    let caused_by_trigger_kind_field = trigger_lineage
+        .trigger_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            format!(
+                r#"
+                    caused_by_trigger_kind: "{}","#,
+                escape_graphql_string(value)
+            )
+        })
+        .unwrap_or_default();
+    format!("{caused_by_trigger_id_field}{caused_by_trigger_kind_field}")
+}
+
+pub(crate) async fn write_pending_agent_request_with_lineage(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    behavior_id: &str,
+    content: &str,
+    execution_origin: ExecutionOrigin,
+    trigger_lineage: TriggerLineage,
+) -> Result<EnqueuedAgentRequest> {
+    if trigger_lineage.trigger_kind.as_deref() == Some("manual")
+        && trigger_lineage.trigger_id.is_some()
+    {
+        anyhow::bail!("Manual trigger enqueue must not carry trigger_id");
+    }
+
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+
+    let escaped_request_id = escape_graphql_string(&request_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_behavior_id = escape_graphql_string(behavior_id);
+    let escaped_session_id = escape_graphql_string(&session_id);
+    let escaped_content = escape_graphql_string(content);
+    let escaped_created_at = escape_graphql_string(&now);
+    let execution_origin = execution_origin.as_str();
+    let lineage_fields = trigger_lineage_graphql_fields(&trigger_lineage);
+
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{escaped_request_id}",
+                agent_did: "{escaped_agent_did}",
+                behavior_id: "{escaped_behavior_id}",
+                session_id: "{escaped_session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{escaped_request_id}",
+                superseded_by_request: "",
+                content: "{escaped_content}",
+                status: "pending",
+                lifecycle_state: "pending",
+                backend_id: "",
+                execution_origin: "{execution_origin}",{lineage_fields}
+                failure_reason: "",
+                created_at: "{escaped_created_at}",
+                retry_count: 0,
+                max_retries: {max_retries}
+            }}) {{ _docID }}
+        }}"#,
+        max_retries = DEFAULT_REQUEST_MAX_RETRIES,
+    );
+
+    let response = node.execute(&mutation).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "create pending AgentRequest with trigger lineage failed: {:?}",
+            response.errors
+        );
+    }
+
+    let inline_doc_id = response
+        .data
+        .as_ref()
+        .and_then(|d| d.get("create_AgentRequest"))
+        .and_then(|value| {
+            value
+                .get("_docID")
+                .and_then(|doc_id| doc_id.as_str())
+                .or_else(|| {
+                    value
+                        .as_array()
+                        .and_then(|rows| rows.first())
+                        .and_then(|row| row.get("_docID"))
+                        .and_then(|doc_id| doc_id.as_str())
+                })
+                .map(|s| s.to_string())
+        });
+
+    let doc_id = if let Some(doc_id) = inline_doc_id {
+        doc_id
+    } else {
+        let query = format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}) {{ _docID }} }}"#
+        );
+        let query_resp = node.execute(&query).await;
+        if query_resp.has_errors() {
+            anyhow::bail!(
+                "querying created pending AgentRequest doc id failed: {:?}",
+                query_resp.errors
+            );
+        }
+        query_resp
+            .data
+            .as_ref()
+            .and_then(|d| d.get("AgentRequest"))
+            .and_then(|v| v.as_array())
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("_docID"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("pending AgentRequest create returned no _docID"))?
+            .to_string()
+    };
+
+    Ok(EnqueuedAgentRequest { doc_id, request_id })
+}
+
 impl RequestLifecycle {
     pub fn new(
         node: Arc<EmbeddedNode>,
@@ -103,32 +244,7 @@ impl RequestLifecycle {
         let escaped_claimed_at = escape_graphql_string(&claimed_at);
         let escaped_deadline = escape_graphql_string(&deadline);
         let execution_origin_str = execution_origin.as_str();
-        let caused_by_trigger_id_field = trigger_lineage
-            .trigger_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| {
-                format!(
-                    r#"
-                    caused_by_trigger_id: "{}","#,
-                    escape_graphql_string(value)
-                )
-            })
-            .unwrap_or_default();
-        let caused_by_trigger_kind_field = trigger_lineage
-            .trigger_kind
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| {
-                format!(
-                    r#"
-                    caused_by_trigger_kind: "{}","#,
-                    escape_graphql_string(value)
-                )
-            })
-            .unwrap_or_default();
+        let lineage_fields = trigger_lineage_graphql_fields(&trigger_lineage);
 
         let mutation = format!(
             r#"mutation {{
@@ -144,7 +260,7 @@ impl RequestLifecycle {
                     status: "processing",
                     lifecycle_state: "{lifecycle_state}",
                     backend_id: "{escaped_backend_id}",
-                    execution_origin: "{execution_origin_str}",{caused_by_trigger_id_field}{caused_by_trigger_kind_field}
+                    execution_origin: "{execution_origin_str}",{lineage_fields}
                     failure_reason: "",
                     created_at: "{escaped_created_at}",
                     claimed_at: "{escaped_claimed_at}",
@@ -235,6 +351,7 @@ impl RequestLifecycle {
             top_k: None,
             max_tokens: None,
             metadata: None,
+            execution_origin: Some(execution_origin_str.to_string()),
             created_at,
         };
 

@@ -3,9 +3,10 @@
 //! Bridges the engine's trigger-neutral materialize/concurrency API to the
 //! concrete lifecycle + DefraDB surface:
 //!
-//! * `materialize` calls `RequestLifecycle::materialize_claimed_with_execution_binding`
-//!   with a populated `TriggerLineage` so the persisted `AgentRequest` records
-//!   `caused_by_trigger_id` / `caused_by_trigger_kind`.
+//! * `materialize` enqueues a pending `AgentRequest` with populated
+//!   `TriggerLineage` so the normal watcher/router/daemon path claims and
+//!   executes it while preserving `caused_by_trigger_id` /
+//!   `caused_by_trigger_kind`.
 //! * `has_nonterminal_request_for_trigger` performs a GraphQL query against
 //!   `AgentRequest`, filtering on the `(trigger_id, trigger_kind)` tuple and
 //!   the non-terminal lifecycle states (`pending`, `claimed`, `processing`,
@@ -26,7 +27,10 @@ use defra_node::EmbeddedNode;
 use tokio::sync::watch;
 
 use crate::graphql::escape_graphql_string;
-use crate::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
+use crate::lifecycle::{
+    nonterminal_lifecycle_state_graphql_list, write_pending_agent_request_with_lineage,
+    ExecutionOrigin, TriggerLineage,
+};
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ResolvedTask};
 use crate::trigger_engine::{MaterializerHandle, TriggerKind};
 
@@ -86,10 +90,18 @@ impl MaterializerHandle for ProductionMaterializer {
         trigger_kind: TriggerKind,
         rendered_prompt: &str,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>> {
+        if matches!(trigger_kind, TriggerKind::Manual) && trigger_id.is_some() {
+            return Box::pin(async {
+                Err(anyhow!(
+                    "Manual trigger materialization must not carry trigger_id"
+                ))
+            });
+        }
+
         // Resolve behavior synchronously against the current snapshot so any
         // lookup error surfaces before we start allocating owned state for the
-        // async body. `materialize_claimed_with_execution_binding` consumes
-        // owned strings, so clone anything we need across the await boundary.
+        // async body. The pending enqueue helper consumes owned strings after
+        // the await boundary, so clone anything we need here.
         let resolved = self.resolve_behavior(task);
         let node = self.node.clone();
         let task_id = task.task_id.clone();
@@ -108,30 +120,27 @@ impl MaterializerHandle for ProductionMaterializer {
         };
 
         Box::pin(async move {
-            let (behavior_name, behavior_did, deadline_secs, backend_id) = resolved?;
+            let (behavior_name, behavior_did, _deadline_secs, _backend_id) = resolved?;
             let lineage = TriggerLineage {
                 trigger_id: trigger_id.clone(),
                 trigger_kind: Some(trigger_kind_str),
             };
-            let lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
-                node,
-                &behavior_name,
+            let enqueued = write_pending_agent_request_with_lineage(
+                node.as_ref(),
                 &behavior_did,
+                &behavior_name,
                 &rendered_prompt,
-                deadline_secs,
                 execution_origin,
-                backend_id,
                 lineage,
             )
             .await?;
-            let request_id = lifecycle.request().request_id.clone();
             tracing::info!(
                 task_id = %task_id,
                 trigger_id = ?trigger_id,
-                request_id = %request_id,
-                "materialized AgentRequest for trigger fire"
+                request_id = %enqueued.request_id,
+                "enqueued AgentRequest for trigger fire"
             );
-            Ok(request_id)
+            Ok(enqueued.request_id)
         })
     }
 
@@ -143,6 +152,7 @@ impl MaterializerHandle for ProductionMaterializer {
         let node = self.node.clone();
         let escaped_trigger_id = escape_graphql_string(trigger_id);
         let trigger_kind_str = trigger_kind.as_str();
+        let nonterminal_states = nonterminal_lifecycle_state_graphql_list();
         Box::pin(async move {
             // Strict tuple match on `(caused_by_trigger_id, caused_by_trigger_kind)`
             // + non-terminal `lifecycle_state`. Limit 1 is sufficient: we only
@@ -153,7 +163,7 @@ impl MaterializerHandle for ProductionMaterializer {
                         filter: {{
                             caused_by_trigger_id: {{ _eq: "{trigger_id}" }},
                             caused_by_trigger_kind: {{ _eq: "{trigger_kind}" }},
-                            lifecycle_state: {{ _in: ["pending", "claimed", "processing", "inputRequired"] }}
+                            lifecycle_state: {{ _in: {nonterminal_states} }}
                         }},
                         limit: 1
                     ) {{ _docID }}
@@ -187,6 +197,7 @@ impl MaterializerHandle for ProductionMaterializer {
         let node = self.node.clone();
         let escaped_trigger_id = escape_graphql_string(trigger_id);
         let trigger_kind_str = trigger_kind.as_str();
+        let nonterminal_states = nonterminal_lifecycle_state_graphql_list();
         Box::pin(async move {
             // Single bulk update against the non-terminal tuple match. DefraDB
             // returns the list of updated documents in the mutation response
@@ -200,7 +211,7 @@ impl MaterializerHandle for ProductionMaterializer {
                         filter: {{
                             caused_by_trigger_id: {{ _eq: "{trigger_id}" }},
                             caused_by_trigger_kind: {{ _eq: "{trigger_kind}" }},
-                            lifecycle_state: {{ _in: ["pending", "claimed", "processing", "inputRequired"] }}
+                            lifecycle_state: {{ _in: {nonterminal_states} }}
                         }},
                         input: {{
                             status: "superseded",

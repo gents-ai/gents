@@ -17,8 +17,7 @@ use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 use serde_json::Value;
 
-use crate::graphql::escape_graphql_string;
-use crate::lifecycle::DEFAULT_REQUEST_MAX_RETRIES;
+use crate::lifecycle::{write_pending_agent_request_with_lineage, ExecutionOrigin, TriggerLineage};
 use crate::template::{render_template, TemplateScope};
 
 /// Write an `AgentRequest` row representing a manual task run, after rendering
@@ -50,106 +49,27 @@ pub async fn write_manual_agent_request(
     let content = render_template(prompt_template, &scope)
         .map_err(|e| anyhow!("render manual template for task {task_id}: {e}"))?;
 
-    // New request_id / session_id — mirror how other lifecycle paths generate
-    // them (see `materialize_claimed_with_execution_binding`).
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
-
-    let escaped_request_id = escape_graphql_string(&request_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_behavior_id = escape_graphql_string(behavior_id);
-    let escaped_session_id = escape_graphql_string(&session_id);
-    let escaped_content = escape_graphql_string(&content);
-    let escaped_created_at = escape_graphql_string(&now);
-
-    // `caused_by_trigger_id` is intentionally omitted so it stays null in the
-    // persisted document — manual runs have no trigger id to reference.
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{escaped_request_id}",
-                agent_did: "{escaped_agent_did}",
-                behavior_id: "{escaped_behavior_id}",
-                session_id: "{escaped_session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{escaped_request_id}",
-                superseded_by_request: "",
-                content: "{escaped_content}",
-                status: "pending",
-                lifecycle_state: "pending",
-                backend_id: "",
-                execution_origin: "interactive",
-                caused_by_trigger_kind: "manual",
-                failure_reason: "",
-                created_at: "{escaped_created_at}",
-                retry_count: 0,
-                max_retries: {max_retries}
-            }}) {{ _docID }}
-        }}"#,
-        max_retries = DEFAULT_REQUEST_MAX_RETRIES,
-    );
-
-    let response = node.execute(&mutation).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "create manual AgentRequest for task {task_id} failed: {:?}",
-            response.errors
-        );
-    }
-
-    // `create_AgentRequest` may return the `_docID` inline (as a single object
-    // or first array element) or may omit it entirely; fall back to a follow-up
-    // query filtered by request_id if the inline path yields nothing.
-    let inline_doc_id = response
-        .data
-        .as_ref()
-        .and_then(|d| d.get("create_AgentRequest"))
-        .and_then(|value| {
-            value
-                .get("_docID")
-                .and_then(|doc_id| doc_id.as_str())
-                .or_else(|| {
-                    value
-                        .as_array()
-                        .and_then(|rows| rows.first())
-                        .and_then(|row| row.get("_docID"))
-                        .and_then(|doc_id| doc_id.as_str())
-                })
-                .map(|s| s.to_string())
-        });
-
-    let doc_id = if let Some(doc_id) = inline_doc_id {
-        doc_id
-    } else {
-        let query = format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}) {{ _docID }} }}"#
-        );
-        let query_resp = node.execute(&query).await;
-        if query_resp.has_errors() {
-            anyhow::bail!(
-                "querying created manual AgentRequest doc id failed: {:?}",
-                query_resp.errors
-            );
-        }
-        query_resp
-            .data
-            .as_ref()
-            .and_then(|d| d.get("AgentRequest"))
-            .and_then(|v| v.as_array())
-            .and_then(|rows| rows.first())
-            .and_then(|row| row.get("_docID"))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("manual AgentRequest create returned no _docID"))?
-            .to_string()
-    };
+    let enqueued = write_pending_agent_request_with_lineage(
+        node,
+        agent_did,
+        behavior_id,
+        &content,
+        ExecutionOrigin::Interactive,
+        TriggerLineage {
+            trigger_id: None,
+            trigger_kind: Some("manual".to_string()),
+        },
+    )
+    .await
+    .map_err(|e| anyhow!("create manual AgentRequest for task {task_id}: {e}"))?;
 
     tracing::info!(
         task_id = %task_id,
-        request_id = %request_id,
-        doc_id = %doc_id,
+        request_id = %enqueued.request_id,
+        doc_id = %enqueued.doc_id,
         "manual task run enqueued as AgentRequest"
     );
-    Ok(doc_id)
+    Ok(enqueued.doc_id)
 }
 
 #[cfg(test)]

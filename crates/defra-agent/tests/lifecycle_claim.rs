@@ -109,6 +109,7 @@ async fn claim_rejects_when_another_non_terminal_request_exists() {
         top_k: None,
         max_tokens: None,
         metadata: None,
+        execution_origin: None,
         created_at: later,
     };
 
@@ -165,6 +166,7 @@ async fn claim_suppresses_later_pending_duplicates() {
         top_k: None,
         max_tokens: None,
         metadata: None,
+        execution_origin: None,
         created_at: "2026-03-23T00:00:00Z".into(),
     };
 
@@ -248,6 +250,7 @@ async fn claim_preserves_explicit_behavior_id() {
         top_k: None,
         max_tokens: None,
         metadata: None,
+        execution_origin: None,
         created_at: created_at.into(),
     };
 

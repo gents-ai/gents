@@ -62,6 +62,17 @@ pub(crate) struct FireIntent {
     pub(crate) on_result: Box<dyn FnOnce(FireResult) + Send>,
 }
 
+impl FireIntent {
+    fn well_formed_error(&self) -> Option<&'static str> {
+        match self.trigger_kind {
+            TriggerKind::Manual if self.trigger_id.is_some() => {
+                Some("Manual trigger intent must not carry trigger_id")
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Outcome of a dispatched `FireIntent`.
 ///
 /// `Fired` means the engine successfully materialized an `AgentRequest` and
@@ -236,6 +247,14 @@ impl TriggerEngine {
     /// per-trigger lock), then hand the rendered prompt to the materializer.
     #[allow(dead_code)]
     async fn dispatch(&self, intent: FireIntent) -> FireResult {
+        if let Some(error) = intent.well_formed_error() {
+            let result = FireResult::Errored {
+                error: error.to_string(),
+            };
+            (intent.on_result)(result.clone());
+            return result;
+        }
+
         let snapshot = self.snapshot_rx.borrow().clone();
 
         // 1. Enabled gate.

@@ -914,16 +914,16 @@ fn snapshot_with_behavior_and_schedules(
 
 /// Task 39 Step 1: end-to-end assertion that a due Schedule in the active
 /// snapshot drives the `TriggerEngine` + `ScheduleSource` +
-/// `ProductionMaterializer` pipeline to persist an `AgentRequest` carrying
+/// `ProductionMaterializer` pipeline to enqueue an `AgentRequest` carrying
 /// `caused_by_trigger_id = <schedule_id>` and `caused_by_trigger_kind =
 /// "schedule"` within a bounded wait.
 ///
 /// Runs against a real `EmbeddedNode` because the ProductionMaterializer
 /// writes via DefraDB — there is no in-memory shortcut. The test does not
 /// assert execution (no inference is wired here); it only asserts the
-/// materialization boundary that Task 39 is restoring under the engine.
+/// enqueue boundary that Task 39 is restoring under the engine.
 #[tokio::test]
-async fn trigger_engine_materializes_agent_request_for_due_schedule_e2e() {
+async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
@@ -1030,8 +1030,8 @@ async fn trigger_engine_materializes_agent_request_for_due_schedule_e2e() {
     );
     assert_eq!(
         row.get("lifecycle_state").and_then(|v| v.as_str()),
-        Some("claimed"),
-        "materialize_claimed_with_execution_binding should persist lifecycle_state=claimed: {row}"
+        Some("pending"),
+        "ProductionMaterializer should enqueue pending requests for watcher/router execution: {row}"
     );
     assert_eq!(
         row.get("content").and_then(|v| v.as_str()),
@@ -2126,6 +2126,8 @@ async fn production_materializer_accepts_manual_lineage_end_to_end() {
                 caused_by_trigger_id
                 caused_by_trigger_kind
                 execution_origin
+                status
+                lifecycle_state
                 content
             }}
         }}"#
@@ -2160,9 +2162,43 @@ async fn production_materializer_accepts_manual_lineage_end_to_end() {
         "Manual fires map to ExecutionOrigin::Interactive per spec: {row}"
     );
     assert_eq!(
+        row.get("status").and_then(|v| v.as_str()),
+        Some("pending"),
+        "Production materializer should enqueue Manual fires for normal intake: {row}"
+    );
+    assert_eq!(
+        row.get("lifecycle_state").and_then(|v| v.as_str()),
+        Some("pending"),
+        "Production materializer should leave Manual fires pending until daemon claim: {row}"
+    );
+    assert_eq!(
         row.get("content").and_then(|v| v.as_str()),
         Some("manual body"),
         "rendered prompt should land verbatim in AgentRequest.content: {row}"
+    );
+}
+
+#[tokio::test]
+async fn production_materializer_rejects_manual_lineage_with_trigger_id() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let snapshot = snapshot_with_schedules(HashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(node, rx);
+    let task = resolved_task_for_test("task-manual", "general", "manual body");
+
+    let err = materializer
+        .materialize(
+            &task,
+            Some("manual-must-not-have-id"),
+            TriggerKind::Manual,
+            "manual body",
+        )
+        .await
+        .expect_err("Manual materialize with trigger_id must fail before persistence");
+
+    assert!(
+        err.to_string().contains("must not carry trigger_id"),
+        "unexpected manual lineage validation error: {err}"
     );
 }
 
@@ -2219,6 +2255,51 @@ async fn dispatch_manual_intent_renders_with_args_and_materializes() {
     assert_eq!(
         rendered, "hello Amy",
         "dispatch must render the `args.name` template against args_vars"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_rejects_manual_intent_with_trigger_id() {
+    let task = resolved_task_for_test("greet-user", "general", "hello");
+    let snapshot = snapshot_with_active_task(task.clone());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = SpyMaterializer::new();
+    let engine = TriggerEngine::new(rx, materializer.clone());
+
+    let result_captured: Arc<Mutex<Option<FireResult>>> = Arc::new(Mutex::new(None));
+    let capture = result_captured.clone();
+    let intent = FireIntent {
+        trigger_id: Some("manual-must-not-have-id".to_string()),
+        trigger_kind: TriggerKind::Manual,
+        task,
+        concurrency: ConcurrencyMode::Parallel,
+        event_vars: serde_json::json!({}),
+        doc_vars: None,
+        args_vars: Some(serde_json::json!({})),
+        on_result: Box::new(move |r| {
+            *capture.lock().unwrap() = Some(r);
+        }),
+    };
+
+    let result = engine.dispatch(intent).await;
+
+    match result {
+        FireResult::Errored { error } => assert!(
+            error.contains("must not carry trigger_id"),
+            "unexpected manual well-formedness error: {error}"
+        ),
+        other => panic!("expected Errored for malformed Manual intent, got {other:?}"),
+    }
+    assert!(
+        materializer.calls().is_empty(),
+        "malformed Manual intent must not reach the materializer"
+    );
+    assert!(
+        matches!(
+            result_captured.lock().unwrap().as_ref(),
+            Some(FireResult::Errored { error }) if error.contains("must not carry trigger_id")
+        ),
+        "on_result should receive the same malformed Manual error"
     );
 }
 
