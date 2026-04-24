@@ -125,6 +125,14 @@ def dispatchEnabledForSchedule
     (snap : TriggerSnapshot) (triggerId : String) : Option ActiveSchedule :=
   snap.activeSchedules.find? (fun s => (s.triggerId == triggerId) && s.enabled)
 
+/--
+Helper: return the first enabled event trigger in `snap.activeEventTriggers`
+matching the given `triggerId`, or `none` if no such trigger exists.
+-/
+def dispatchEnabledForEvent
+    (snap : TriggerSnapshot) (triggerId : String) : Option ActiveEventTrigger :=
+  snap.activeEventTriggers.find? (fun t => (t.triggerId == triggerId) && t.enabled)
+
 /-- Abstract dispatch function. Produces a `RequestSeed` iff the intent
     is admissible given the snapshot. The concrete rules are filled in
     by the theorems below; `sorry` is used as a placeholder so the
