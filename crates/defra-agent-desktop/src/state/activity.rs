@@ -26,9 +26,16 @@ pub enum PendingChatAction {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PendingManageAction {
-    SelectDeployment { peer_id: String, agent_did: String },
-    SelectSection { section: super::ManageSection },
-    SelectEntity { entity_id: String },
+    SelectDeployment {
+        peer_id: String,
+        agent_did: String,
+    },
+    SelectSection {
+        section: super::ManageSection,
+    },
+    SelectEntity {
+        entity_id: String,
+    },
     StartNewDocument,
     DiscardDraft,
     ApplyDraft,

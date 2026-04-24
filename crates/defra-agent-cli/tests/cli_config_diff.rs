@@ -30,7 +30,15 @@ async fn config_diff_reports_no_changes_for_matching_live_state() -> Result<()> 
         ],
     )?;
 
-    run_cli_text(&home_dir, &["config", "export", "--root", root.to_str().expect("utf-8 root")])?;
+    run_cli_text(
+        &home_dir,
+        &[
+            "config",
+            "export",
+            "--root",
+            root.to_str().expect("utf-8 root"),
+        ],
+    )?;
 
     let output = run_cli_json(
         &home_dir,
@@ -104,7 +112,15 @@ async fn config_diff_reports_updates_for_changed_backend_manifest() -> Result<()
         ],
     )?;
 
-    run_cli_text(&home_dir, &["config", "export", "--root", root.to_str().expect("utf-8 root")])?;
+    run_cli_text(
+        &home_dir,
+        &[
+            "config",
+            "export",
+            "--root",
+            root.to_str().expect("utf-8 root"),
+        ],
+    )?;
 
     let backends_dir = root.join("inference-backends");
     let backend_entry = fs::read_dir(&backends_dir)

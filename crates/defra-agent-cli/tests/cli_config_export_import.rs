@@ -429,8 +429,7 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         );
     } else {
         assert_eq!(
-            prompt_template,
-            "Audit the fleet state and summarize drift.",
+            prompt_template, "Audit the fleet state and summarize drift.",
             "inline prompt_template should match original"
         );
     }

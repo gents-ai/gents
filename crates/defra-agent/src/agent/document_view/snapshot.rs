@@ -310,14 +310,14 @@ fn resolve_event_triggers(
         let trigger = &trigger_record.value;
         let trigger_id = trigger.trigger_id.clone();
 
-        let concurrency =
-            match ConcurrencyMode::parse(trigger.concurrency.as_deref().unwrap_or("")) {
-                Some(mode) => mode,
-                None => {
-                    unavailable_event_triggers.insert(trigger_id);
-                    continue;
-                }
-            };
+        let concurrency = match ConcurrencyMode::parse(trigger.concurrency.as_deref().unwrap_or(""))
+        {
+            Some(mode) => mode,
+            None => {
+                unavailable_event_triggers.insert(trigger_id);
+                continue;
+            }
+        };
 
         if trigger.enabled != Some(true) {
             unavailable_event_triggers.insert(trigger_id);

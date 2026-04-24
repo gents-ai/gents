@@ -33,7 +33,15 @@ async fn config_apply_reconciles_running_runtime_without_restart() -> Result<()>
         ],
     )?;
 
-    run_cli_text(&home_dir, &["config", "export", "--root", root.to_str().expect("utf-8 root")])?;
+    run_cli_text(
+        &home_dir,
+        &[
+            "config",
+            "export",
+            "--root",
+            root.to_str().expect("utf-8 root"),
+        ],
+    )?;
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;

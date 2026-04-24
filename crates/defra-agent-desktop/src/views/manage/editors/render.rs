@@ -2,8 +2,8 @@ use eframe::egui::Ui;
 
 use crate::client::ClientStore;
 use crate::state::{
-    BackendDraft, BehaviorDraft, EventTriggerDraft, InferenceProfileDraft, ScheduleDraft, TaskDraft,
-    ToolSelectionDraft,
+    BackendDraft, BehaviorDraft, EventTriggerDraft, InferenceProfileDraft, ScheduleDraft,
+    TaskDraft, ToolSelectionDraft,
 };
 
 use super::{
@@ -107,7 +107,12 @@ pub(super) fn render_task_editor(ui: &mut Ui, draft: &mut TaskDraft, store: &Cli
         "Last Status",
         runs.last_status.as_deref().unwrap_or("(none)"),
     );
-    read_only_multiline(ui, "Last Error", runs.last_error.as_deref().unwrap_or(""), 3);
+    read_only_multiline(
+        ui,
+        "Last Error",
+        runs.last_error.as_deref().unwrap_or(""),
+        3,
+    );
     read_only_field(
         ui,
         "Triggers Referenced",

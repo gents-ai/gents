@@ -562,15 +562,17 @@ pub fn entity_summaries(
                     .tasks
                     .iter()
                     .filter(|task| {
-                        task.behavior_id
-                            .as_deref()
-                            .is_some_and(|behavior_id| {
-                                store.behavior_row(agent_did, behavior_id).is_some()
-                            })
+                        task.behavior_id.as_deref().is_some_and(|behavior_id| {
+                            store.behavior_row(agent_did, behavior_id).is_some()
+                        })
                     })
                     .map(|task| task.task_id.clone())
                     .collect(),
-                None => store.tasks.iter().map(|task| task.task_id.clone()).collect(),
+                None => store
+                    .tasks
+                    .iter()
+                    .map(|task| task.task_id.clone())
+                    .collect(),
             };
 
             let mut rows: Vec<_> = store

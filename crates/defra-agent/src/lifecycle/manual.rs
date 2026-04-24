@@ -198,7 +198,11 @@ mod tests {
             }}"#
         );
         let response = node.execute(&query).await;
-        assert!(!response.has_errors(), "query failed: {:?}", response.errors);
+        assert!(
+            !response.has_errors(),
+            "query failed: {:?}",
+            response.errors
+        );
 
         let rows = response
             .data

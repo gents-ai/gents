@@ -743,7 +743,11 @@ async fn serial_skip_event_does_not_create_request() {
         ) { _docID }
     }"#;
     let gate = db.node.execute(gating_query).await;
-    assert!(!gate.has_errors(), "gating query errored: {:?}", gate.errors);
+    assert!(
+        !gate.has_errors(),
+        "gating query errored: {:?}",
+        gate.errors
+    );
     let gate_rows = gate
         .data
         .as_ref()
@@ -850,7 +854,11 @@ async fn latest_only_event_transition_to_superseded() {
         ) { _docID }
     }"#;
     let resp = db.node.execute(supersede).await;
-    assert!(!resp.has_errors(), "supersede mutation errored: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "supersede mutation errored: {:?}",
+        resp.errors
+    );
     let updated_rows = resp
         .data
         .as_ref()
@@ -2063,7 +2071,9 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
         }
     );
     assert_eq!(
-        fetch_request_snapshot(&db.node, &doc_id).await.lifecycle_state,
+        fetch_request_snapshot(&db.node, &doc_id)
+            .await
+            .lifecycle_state,
         "pending"
     );
 
@@ -2085,7 +2095,11 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
         }}"#
     );
     let resp = db.node.execute(&query).await;
-    assert!(!resp.has_errors(), "AgentRequest query failed: {:?}", resp.errors);
+    assert!(
+        !resp.has_errors(),
+        "AgentRequest query failed: {:?}",
+        resp.errors
+    );
     let row = resp
         .data
         .as_ref()

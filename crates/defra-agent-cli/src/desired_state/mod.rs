@@ -392,28 +392,44 @@ pub(crate) trait HasUniqueId {
 }
 
 impl HasUniqueId for DesiredAgentBehavior {
-    fn unique_id(&self) -> &str { &self.behavior_id }
+    fn unique_id(&self) -> &str {
+        &self.behavior_id
+    }
 }
 impl HasUniqueId for DesiredToolSelection {
-    fn unique_id(&self) -> &str { &self.selection_id }
+    fn unique_id(&self) -> &str {
+        &self.selection_id
+    }
 }
 impl HasUniqueId for DesiredInferenceBackend {
-    fn unique_id(&self) -> &str { &self.backend_id }
+    fn unique_id(&self) -> &str {
+        &self.backend_id
+    }
 }
 impl HasUniqueId for DesiredInferenceProfile {
-    fn unique_id(&self) -> &str { &self.profile_id }
+    fn unique_id(&self) -> &str {
+        &self.profile_id
+    }
 }
 impl HasUniqueId for DesiredToolServiceRegistry {
-    fn unique_id(&self) -> &str { &self.service_id }
+    fn unique_id(&self) -> &str {
+        &self.service_id
+    }
 }
 impl HasUniqueId for DesiredTask {
-    fn unique_id(&self) -> &str { &self.task_id }
+    fn unique_id(&self) -> &str {
+        &self.task_id
+    }
 }
 impl HasUniqueId for DesiredSchedule {
-    fn unique_id(&self) -> &str { &self.schedule_id }
+    fn unique_id(&self) -> &str {
+        &self.schedule_id
+    }
 }
 impl HasUniqueId for DesiredEventTrigger {
-    fn unique_id(&self) -> &str { &self.trigger_id }
+    fn unique_id(&self) -> &str {
+        &self.trigger_id
+    }
 }
 
 #[cfg(test)]

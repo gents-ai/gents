@@ -99,12 +99,7 @@ async fn register_audit_event_schema(node: &EmbeddedNode) {
         .expect("add_schema for AuditEvent");
 }
 
-async fn create_task(
-    node: &EmbeddedNode,
-    task_id: &str,
-    behavior_id: &str,
-    prompt_template: &str,
-) {
+async fn create_task(node: &EmbeddedNode, task_id: &str, behavior_id: &str, prompt_template: &str) {
     let escaped_task_id = escape_graphql_string(task_id);
     let escaped_behavior_id = escape_graphql_string(behavior_id);
     let escaped_prompt_template = escape_graphql_string(prompt_template);
@@ -208,10 +203,7 @@ async fn update_event_trigger_source_collection(
         .map(str::to_owned);
 
     let last_attempt_entry = match last_attempt_at.as_deref() {
-        Some(v) => format!(
-            ", last_attempt_at: \"{}\"",
-            escape_graphql_string(v)
-        ),
+        Some(v) => format!(", last_attempt_at: \"{}\"", escape_graphql_string(v)),
         None => String::new(),
     };
     let mutation = format!(
@@ -466,10 +458,7 @@ async fn supersede_nonterminal_requests_for_trigger(
         .unwrap_or(0)
 }
 
-async fn fetch_request_state(
-    node: &EmbeddedNode,
-    request_id: &str,
-) -> Option<(String, String)> {
+async fn fetch_request_state(node: &EmbeddedNode, request_id: &str) -> Option<(String, String)> {
     let escaped_request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
@@ -614,14 +603,10 @@ async fn wait_for_request_count(
             return;
         }
         if count > expected {
-            panic!(
-                "over-fire for trigger_id={trigger_id}: expected {expected}, got {count}"
-            );
+            panic!("over-fire for trigger_id={trigger_id}: expected {expected}, got {count}");
         }
         if tokio::time::Instant::now() >= deadline {
-            panic!(
-                "timed out waiting for request_count({trigger_id}) == {expected}; got {count}"
-            );
+            panic!("timed out waiting for request_count({trigger_id}) == {expected}; got {count}");
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -631,11 +616,7 @@ async fn wait_for_request_count(
 /// Used by the "does not fire" cases. This is necessarily a negative
 /// assertion with a timeout — the engine is event-driven, so we sleep long
 /// enough that if it *were* going to fire it would have done so already.
-async fn assert_no_request_within(
-    node: &EmbeddedNode,
-    trigger_id: &str,
-    settle: Duration,
-) {
+async fn assert_no_request_within(node: &EmbeddedNode, trigger_id: &str, settle: Duration) {
     tokio::time::sleep(settle).await;
     let count = count_agent_requests_for_trigger(node, trigger_id, "event").await;
     assert_eq!(
@@ -742,7 +723,12 @@ async fn does_not_fire_when_source_doc_fails_filter() {
     let db = test_db("trigger-conformance-filter-miss").await;
     register_webhook_event_schema(db.node.as_ref()).await;
 
-    let agent = boot_agent(&db, "trigger-conformance-filter-miss", "backend-filter-miss").await;
+    let agent = boot_agent(
+        &db,
+        "trigger-conformance-filter-miss",
+        "backend-filter-miss",
+    )
+    .await;
     let initial_gen = fetch_runtime_snapshot(db.node.as_ref(), &agent.agent_did)
         .await
         .unwrap()
@@ -825,12 +811,7 @@ async fn enabled_false_does_not_fire() {
     tokio::time::sleep(Duration::from_secs(7)).await;
 
     let _ = write_webhook_event(db.node.as_ref(), "ext-disabled", "any").await;
-    assert_no_request_within(
-        db.node.as_ref(),
-        "trigger-disabled",
-        Duration::from_secs(2),
-    )
-    .await;
+    assert_no_request_within(db.node.as_ref(), "trigger-disabled", Duration::from_secs(2)).await;
 
     let row = fetch_event_trigger_row(db.node.as_ref(), "trigger-disabled")
         .await
@@ -1024,20 +1005,12 @@ async fn subscription_reconciles_on_generation_bump() {
 
     // Step 4: WebhookEvent creates after the flip must NOT produce a new
     // fire — WebhookEvent is no longer in the desired collection set.
-    let before_flip = count_agent_requests_for_trigger(
-        db.node.as_ref(),
-        "trigger-reconcile",
-        "event",
-    )
-    .await;
+    let before_flip =
+        count_agent_requests_for_trigger(db.node.as_ref(), "trigger-reconcile", "event").await;
     let _ = write_webhook_event(db.node.as_ref(), "post-flip-webhook", "any").await;
     tokio::time::sleep(Duration::from_secs(2)).await;
-    let after_webhook = count_agent_requests_for_trigger(
-        db.node.as_ref(),
-        "trigger-reconcile",
-        "event",
-    )
-    .await;
+    let after_webhook =
+        count_agent_requests_for_trigger(db.node.as_ref(), "trigger-reconcile", "event").await;
     assert_eq!(
         after_webhook, before_flip,
         "post-flip WebhookEvent must not fire trigger-reconcile \
@@ -1073,33 +1046,20 @@ async fn serial_skips_when_prior_non_terminal() {
     .unwrap();
 
     assert!(
-        has_nonterminal_request_for_trigger(
-            db.node.as_ref(),
-            "trigger-event-serial",
-            "event",
-        )
-        .await,
+        has_nonterminal_request_for_trigger(db.node.as_ref(), "trigger-event-serial", "event",)
+            .await,
         "gating query must see the in-flight event-kind request"
     );
     assert_eq!(
-        count_agent_requests_for_trigger(
-            db.node.as_ref(),
-            "trigger-event-serial",
-            "event",
-        )
-        .await,
+        count_agent_requests_for_trigger(db.node.as_ref(), "trigger-event-serial", "event",).await,
         1,
         "seeded count should be 1"
     );
 
     // The engine's FireResult::Skipped decision: no materialize call, so no
     // additional AgentRequest for the lineage tuple.
-    let after = count_agent_requests_for_trigger(
-        db.node.as_ref(),
-        "trigger-event-serial",
-        "event",
-    )
-    .await;
+    let after =
+        count_agent_requests_for_trigger(db.node.as_ref(), "trigger-event-serial", "event").await;
     assert_eq!(
         after, 1,
         "serial skip must not produce a second AgentRequest for the event-kind tuple"
@@ -1173,21 +1133,12 @@ async fn latest_only_supersedes_prior_fire() {
         "new fire must have a fresh request_id"
     );
     assert_eq!(
-        count_agent_requests_for_trigger(
-            db.node.as_ref(),
-            "trigger-event-latest",
-            "event",
-        )
-        .await,
+        count_agent_requests_for_trigger(db.node.as_ref(), "trigger-event-latest", "event",).await,
         2
     );
     assert!(
-        has_nonterminal_request_for_trigger(
-            db.node.as_ref(),
-            "trigger-event-latest",
-            "event",
-        )
-        .await,
+        has_nonterminal_request_for_trigger(db.node.as_ref(), "trigger-event-latest", "event",)
+            .await,
         "after materialize, the new claimed request must be visible to the gating query"
     );
 }
@@ -1266,7 +1217,12 @@ async fn two_triggers_same_source_collection_each_evaluate_filter_independently(
     let db = test_db("trigger-conformance-two-filters").await;
     register_webhook_event_schema(db.node.as_ref()).await;
 
-    let agent = boot_agent(&db, "trigger-conformance-two-filters", "backend-two-filters").await;
+    let agent = boot_agent(
+        &db,
+        "trigger-conformance-two-filters",
+        "backend-two-filters",
+    )
+    .await;
     let initial_gen = fetch_runtime_snapshot(db.node.as_ref(), &agent.agent_did)
         .await
         .unwrap()
@@ -1325,12 +1281,7 @@ async fn two_triggers_same_source_collection_each_evaluate_filter_independently(
     )
     .await;
     // B does not fire within the settle window.
-    assert_no_request_within(
-        db.node.as_ref(),
-        "trigger-two-b",
-        Duration::from_secs(2),
-    )
-    .await;
+    assert_no_request_within(db.node.as_ref(), "trigger-two-b", Duration::from_secs(2)).await;
 
     // Runtime-writeback sanity.
     let a = wait_for_last_status(

@@ -55,8 +55,7 @@ pub(crate) async fn write_event_trigger_document(
     match crate::extract_mutation_doc_id(&response, "EventTrigger") {
         Ok(doc_id) => Ok(doc_id),
         Err(extract_error) => {
-            let current =
-                select_matching_event_trigger_row(access, trigger_id, update_doc).await?;
+            let current = select_matching_event_trigger_row(access, trigger_id, update_doc).await?;
             if let Some(row) = current {
                 let current_doc_id = row
                     .get("_docID")

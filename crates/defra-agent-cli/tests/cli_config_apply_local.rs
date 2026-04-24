@@ -29,7 +29,15 @@ async fn config_apply_updates_backend_from_fresh_init_home_locally() -> Result<(
         ],
     )?;
 
-    run_cli_text(&home_dir, &["config", "export", "--root", root.to_str().expect("utf-8 root")])?;
+    run_cli_text(
+        &home_dir,
+        &[
+            "config",
+            "export",
+            "--root",
+            root.to_str().expect("utf-8 root"),
+        ],
+    )?;
 
     let backends_dir = root.join("inference-backends");
     let backend_entry = fs::read_dir(&backends_dir)

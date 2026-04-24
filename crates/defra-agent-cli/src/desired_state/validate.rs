@@ -476,9 +476,7 @@ pub(crate) async fn validate_manifest_against_live(
         // `__type(name: "Missing")` returns `{ "data": { "__type": null } }`
         // — not a GraphQL error. Detect it explicitly so we can produce a
         // friendly message instead of silently passing.
-        let type_node = response
-            .get("data")
-            .and_then(|d| d.get("__type"));
+        let type_node = response.get("data").and_then(|d| d.get("__type"));
         let fields = type_node
             .filter(|v| !v.is_null())
             .and_then(|t| t.get("fields"))

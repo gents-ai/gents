@@ -158,20 +158,18 @@ pub(in crate::agent) async fn run_agent(
                 trigger_engine_materializer_snapshot_rx,
             ),
         );
-        let schedule_source: Box<dyn crate::trigger_engine::TriggerSource> = Box::new(
-            crate::trigger_engine::schedule_source::ScheduleSource::new(
+        let schedule_source: Box<dyn crate::trigger_engine::TriggerSource> =
+            Box::new(crate::trigger_engine::schedule_source::ScheduleSource::new(
                 trigger_engine_schedule_snapshot_rx,
                 trigger_engine_node.clone(),
                 trigger_engine_cancel.clone(),
-            ),
-        );
-        let event_source: Box<dyn crate::trigger_engine::TriggerSource> = Box::new(
-            crate::trigger_engine::event_source::EventSource::new(
+            ));
+        let event_source: Box<dyn crate::trigger_engine::TriggerSource> =
+            Box::new(crate::trigger_engine::event_source::EventSource::new(
                 trigger_engine_event_snapshot_rx,
                 trigger_engine_node,
                 trigger_engine_cancel.clone(),
-            ),
-        );
+            ));
         let manual_source_box: Box<dyn crate::trigger_engine::TriggerSource> =
             Box::new(manual_source);
         let sources: Vec<Box<dyn crate::trigger_engine::TriggerSource>> =
