@@ -168,7 +168,81 @@ def dispatch
       | some _ =>
         some { causedByTriggerId := some tid, causedByTriggerKind := .event }
   | .manual =>
-    some { causedByTriggerId := intent.triggerId, causedByTriggerKind := .manual }
+    -- Manual fires always carry a null lineage id, matching the runtime invariant
+    -- (see `trigger_engine/manual_source.rs:83` where manual_source constructs
+    -- `FireIntent { trigger_id: None, ... }`). Normalizing here rather than
+    -- requiring a FireIntent well-formedness predicate keeps `Reachable`
+    -- structurally simple; the caller's `intent.triggerId` (if any) is
+    -- deliberately discarded. Also aligns with `consistentLineage` which
+    -- maps `.manual → .interactive` without distinguishing an id.
+    some { causedByTriggerId := none, causedByTriggerKind := .manual }
+
+/--
+Invariant: `dispatch` always produces a `RequestSeed` whose `causedByTriggerId`
+is `none` for the `.manual` kind. Guaranteed by construction — the `.manual`
+arm of `dispatch` hardcodes `causedByTriggerId := none`.
+
+This rules out reachable manual requests with a non-null lineage id, matching
+the runtime invariant in `trigger_engine/manual_source.rs`.
+-/
+theorem dispatch_manual_lineage_id_is_none
+    (snap : TriggerSnapshot) (intent : FireIntent) (seed : RequestSeed) :
+    dispatch snap intent = some seed →
+    seed.causedByTriggerKind = .manual →
+    seed.causedByTriggerId = none := by
+  intro h_dispatch h_manual
+  unfold dispatch at h_dispatch
+  -- Case-split on triggerKind.
+  cases h_kind : intent.triggerKind with
+  | schedule =>
+    rw [h_kind] at h_dispatch
+    -- In the schedule arm, seed.causedByTriggerKind = .schedule, contradicting h_manual.
+    -- Need to extract the kind field from the schedule-branch seed.
+    match h_triggerId : intent.triggerId with
+    | none =>
+      rw [h_triggerId] at h_dispatch
+      simp at h_dispatch
+    | some tid =>
+      rw [h_triggerId] at h_dispatch
+      simp only at h_dispatch
+      cases h_found : dispatchEnabledForSchedule snap tid with
+      | none =>
+        rw [h_found] at h_dispatch
+        simp at h_dispatch
+      | some _ =>
+        rw [h_found] at h_dispatch
+        simp only at h_dispatch
+        -- h_dispatch : some { causedByTriggerId := some tid, causedByTriggerKind := .schedule } = some seed
+        -- Extract seed.causedByTriggerKind:
+        obtain ⟨⟩ := h_dispatch
+        -- seed.causedByTriggerKind = .schedule, contradiction with h_manual
+        simp at h_manual
+  | event =>
+    -- Symmetric to schedule.
+    rw [h_kind] at h_dispatch
+    match h_triggerId : intent.triggerId with
+    | none =>
+      rw [h_triggerId] at h_dispatch
+      simp at h_dispatch
+    | some tid =>
+      rw [h_triggerId] at h_dispatch
+      simp only at h_dispatch
+      cases h_found : dispatchEnabledForEvent snap tid with
+      | none =>
+        rw [h_found] at h_dispatch
+        simp at h_dispatch
+      | some _ =>
+        rw [h_found] at h_dispatch
+        simp only at h_dispatch
+        obtain ⟨⟩ := h_dispatch
+        simp at h_manual
+  | manual =>
+    rw [h_kind] at h_dispatch
+    simp only at h_dispatch
+    -- h_dispatch : some { causedByTriggerId := none, causedByTriggerKind := .manual } = some seed
+    obtain ⟨⟩ := h_dispatch
+    -- seed.causedByTriggerId = none directly
+    rfl
 
 /-- A trigger is identified by `(triggerId, triggerKind)`. Pairing both
     avoids collisions between, e.g., a schedule and an event trigger
