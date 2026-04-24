@@ -369,3 +369,128 @@ theorem materializedTriggerRequest_coherent_along_trace
   apply triggerLifecycleCoherent_preserved_by_lifecycle_trace
   · exact materializedTriggerRequest_has_claimed_embedding state intent seed inputs
   · exact h_trace
+
+/--
+Step-level conformance entry point over an admissibility-constrained trigger
+trace.
+
+If `state` already lies on a `ReachableUnder P` trigger trace, `intent`
+satisfies the same boundary predicate, and `dispatch` materializes a seed, then:
+
+* the next trigger state stays on the same admissible trace
+* the materialized seed/origin pair satisfies `consistentLineage`
+* the created request shape admits the canonical claimed lifecycle embedding
+-/
+theorem reachableUnder_dispatch_materializedTriggerRequest_conforms
+    (P : FireIntent → Prop)
+    (state : SystemState)
+    (snap : TriggerSnapshot)
+    (intent : FireIntent)
+    (seed : RequestSeed)
+    (inputs : ClaimedEmbeddingInputs)
+    (h_reach : ReachableUnder P state)
+    (h_intent : P intent)
+    (h_dispatch : dispatch snap intent = some seed) :
+    ReachableUnder P (dispatchStep state snap intent) ∧
+    consistentLineage seed (materializedTriggerRequest state intent seed).executionOrigin ∧
+    TriggerLifecycleCoherent
+      (materializedTriggerRequest state intent seed)
+      (claimedEmbeddingContext state intent seed inputs) := by
+  refine ⟨ReachableUnder.step state snap intent h_intent h_reach, ?_, ?_⟩
+  · exact dispatch_materializedTriggerRequest_consistentLineage state snap intent seed h_dispatch
+  · exact materializedTriggerRequest_has_claimed_embedding state intent seed inputs
+
+/--
+`WellFormedReachable` specialization of the step-level creation-side conformance
+entry point.
+-/
+theorem wellFormedReachable_dispatch_materializedTriggerRequest_conforms
+    (state : SystemState)
+    (snap : TriggerSnapshot)
+    (intent : FireIntent)
+    (seed : RequestSeed)
+    (inputs : ClaimedEmbeddingInputs)
+    (h_reach : WellFormedReachable state)
+    (h_intent : intent.WellFormed)
+    (h_dispatch : dispatch snap intent = some seed) :
+    WellFormedReachable (dispatchStep state snap intent) ∧
+    consistentLineage seed (materializedTriggerRequest state intent seed).executionOrigin ∧
+    TriggerLifecycleCoherent
+      (materializedTriggerRequest state intent seed)
+      (claimedEmbeddingContext state intent seed inputs) :=
+  reachableUnder_dispatch_materializedTriggerRequest_conforms
+    FireIntent.WellFormed
+    state
+    snap
+    intent
+    seed
+    inputs
+    h_reach
+    h_intent
+    h_dispatch
+
+/--
+Step-level conformance entry point that continues from trigger materialization
+into an arbitrary valid lifecycle trace.
+
+This is the place where the strengthened trigger trace boundary and the
+lifecycle trace theorem surface meet explicitly.
+-/
+theorem reachableUnder_dispatch_materializedTriggerRequest_coherent_along_trace
+    (P : FireIntent → Prop)
+    (state : SystemState)
+    (snap : TriggerSnapshot)
+    (intent : FireIntent)
+    (seed : RequestSeed)
+    (inputs : ClaimedEmbeddingInputs)
+    (h_reach : ReachableUnder P state)
+    (h_intent : P intent)
+    (h_dispatch : dispatch snap intent = some seed)
+    {post : RequestContext}
+    (h_trace :
+      RequestContext.Trace
+        (claimedEmbeddingContext state intent seed inputs)
+        post) :
+    ReachableUnder P (dispatchStep state snap intent) ∧
+    consistentLineage seed (materializedTriggerRequest state intent seed).executionOrigin ∧
+    TriggerLifecycleCoherent
+      (syncTriggerTerminal (materializedTriggerRequest state intent seed) post)
+      post := by
+  refine ⟨ReachableUnder.step state snap intent h_intent h_reach, ?_, ?_⟩
+  · exact dispatch_materializedTriggerRequest_consistentLineage state snap intent seed h_dispatch
+  · exact materializedTriggerRequest_coherent_along_trace state intent seed inputs h_trace
+
+/--
+`WellFormedReachable` specialization of the step-level trace conformance entry
+point.
+-/
+theorem wellFormedReachable_dispatch_materializedTriggerRequest_coherent_along_trace
+    (state : SystemState)
+    (snap : TriggerSnapshot)
+    (intent : FireIntent)
+    (seed : RequestSeed)
+    (inputs : ClaimedEmbeddingInputs)
+    (h_reach : WellFormedReachable state)
+    (h_intent : intent.WellFormed)
+    (h_dispatch : dispatch snap intent = some seed)
+    {post : RequestContext}
+    (h_trace :
+      RequestContext.Trace
+        (claimedEmbeddingContext state intent seed inputs)
+        post) :
+    WellFormedReachable (dispatchStep state snap intent) ∧
+    consistentLineage seed (materializedTriggerRequest state intent seed).executionOrigin ∧
+    TriggerLifecycleCoherent
+      (syncTriggerTerminal (materializedTriggerRequest state intent seed) post)
+      post :=
+  reachableUnder_dispatch_materializedTriggerRequest_coherent_along_trace
+    FireIntent.WellFormed
+    state
+    snap
+    intent
+    seed
+    inputs
+    h_reach
+    h_intent
+    h_dispatch
+    h_trace
