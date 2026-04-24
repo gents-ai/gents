@@ -281,6 +281,39 @@ def dispatchStep
         { state with requests := superseded ++ [newRequest] }
 
 /--
+Lifecycle terminal transition: flip a specified request's `isTerminal` from
+`false` to `true`. Models the abstract "request completed/failed/superseded/
+dead/interrupted" transition from `Request.lean::RequestState`.
+
+We don't model the full lifecycle state machine — only the property that
+any non-terminal request can transition to terminal. This is all T2 needs;
+terminal transitions only decrease `nonTerminalCountFor`.
+
+Does not create new requests, so has no id-collision risk with
+`dispatchStep`'s `dispatched-N` naming scheme.
+-/
+def lifecycleTerminateStep (s : SystemState) (reqId : String) : SystemState :=
+  { s with requests := s.requests.map (fun r =>
+      if (r.id == reqId) && !r.isTerminal then
+        { r with isTerminal := true }
+      else r) }
+
+/--
+Reachable system states: built inductively from `SystemState.empty` via
+- `step`: dispatch one fire intent against a snapshot.
+- `terminate`: any non-terminal request can transition to terminal.
+
+T2 is stated over `Reachable s` because the invariant holds over states
+the system can produce via these two transitions.
+-/
+inductive Reachable : SystemState → Prop where
+  | empty : Reachable SystemState.empty
+  | step (s : SystemState) (snap : TriggerSnapshot) (intent : FireIntent) :
+      Reachable s → Reachable (dispatchStep s snap intent)
+  | terminate (s : SystemState) (reqId : String) :
+      Reachable s → Reachable (lifecycleTerminateStep s reqId)
+
+/--
 Local helper for T1: when `List.find? p l = some a`, both `a ∈ l` AND
 `p a = true`. Mathlib provides these in two separate lemmas; we combine
 them for proof convenience.
