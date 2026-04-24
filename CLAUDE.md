@@ -56,6 +56,8 @@ PR 2 landed the `EventTrigger` collection: operator-authored triggers that fire 
 
 PR 3 landed manual runs: `ManualSource` accepts operator-initiated `FireIntent`s via an in-process `ManualTriggerHandle::run_task_now`, while the CLI's `config task run --task-id --args` command writes `AgentRequest`s directly with `caused_by_trigger_kind = "manual"`. The `args.*` template scope is active at runtime for manual fires; apply-time validation already rejects it for Schedule/EventTrigger. Desktop surfaces lineage badges on chat/history and a per-Task aggregated "recent runs" view. Closes the event-driven-tasks trilogy (see `docs/superpowers/specs/2026-04-21-event-driven-tasks-design.md`).
 
+`Triggers.lean` has zero `sorry`s as of commit `131ae11`. `dispatch` is operationally defined; T1 (enabled gate), T2 (serial at-most-one, reachability-scoped, post-state hypothesis), T3 (latest_only convergence), and T4 (lineage completeness) are all closed. Pre-trace T2 is tracked as issue #71.
+
 ## Key External Dependencies
 
 - **defradb.rs** (`sourcenetwork/defradb.rs`, private, via SSH git): The core database. Provides `defra-node` (embedded node), `crypto`, `identity`, and `events` crates. Pinned by git rev in workspace `Cargo.toml`. When working on features that touch the node, schema behavior, or identity, look at this repo for context.
