@@ -110,6 +110,33 @@ structure FireIntent where
   concurrency : ConcurrencyMode
   deriving Repr
 
+namespace FireIntent
+
+/--
+Boundary well-formedness for trigger-engine inputs.
+
+The runtime's manual source never constructs a manual fire intent with a
+non-null `triggerId`; manual fires are operator initiated, not tied to a
+trigger document. The proof model keeps raw `FireIntent` flexible, then uses
+`WellFormed` to describe the admissible trace boundary.
+-/
+def WellFormed (intent : FireIntent) : Prop :=
+  intent.triggerKind = .manual → intent.triggerId = none
+
+instance (intent : FireIntent) : Decidable (FireIntent.WellFormed intent) := by
+  unfold FireIntent.WellFormed
+  infer_instance
+
+/-- For a well-formed manual intent, the trigger id must be `none`. -/
+theorem wellFormed_manual_triggerId_none
+    {intent : FireIntent}
+    (h_wf : intent.WellFormed)
+    (h_manual : intent.triggerKind = .manual) :
+    intent.triggerId = none :=
+  h_wf h_manual
+
+end FireIntent
+
 /-- Minimal projection of a materialized `AgentRequest` carrying the
     lineage fields established by the trigger engine. -/
 structure RequestSeed where
@@ -377,8 +404,9 @@ Reachable system states: built inductively from `SystemState.empty` via
 - `step`: dispatch one fire intent against a snapshot.
 - `terminate`: any non-terminal request can transition to terminal.
 
-T2 is stated over `Reachable s` because the invariant holds over states
-the system can produce via these two transitions.
+This is the raw operational semantics. It intentionally over-approximates the
+input boundary by allowing any `FireIntent`; stronger spec-facing theorems can
+prefer `ReachableUnder` / `WellFormedReachable` below.
 -/
 inductive Reachable : SystemState → Prop where
   | empty : Reachable SystemState.empty
@@ -386,6 +414,40 @@ inductive Reachable : SystemState → Prop where
       Reachable s → Reachable (dispatchStep s snap intent)
   | terminate (s : SystemState) (reqId : String) :
       Reachable s → Reachable (lifecycleTerminateStep s reqId)
+
+/--
+Strengthened trigger-engine reachability parameterized by an admissibility
+predicate on fire intents.
+
+This lets the proofs layer keep `Reachable` as the raw operational relation
+while moving the real theorem surface onto a boundary-tightened trace relation.
+-/
+inductive ReachableUnder (P : FireIntent → Prop) : SystemState → Prop where
+  | empty : ReachableUnder P SystemState.empty
+  | step (s : SystemState) (snap : TriggerSnapshot) (intent : FireIntent) :
+      P intent →
+      ReachableUnder P s →
+      ReachableUnder P (dispatchStep s snap intent)
+  | terminate (s : SystemState) (reqId : String) :
+      ReachableUnder P s →
+      ReachableUnder P (lifecycleTerminateStep s reqId)
+
+/-- Spec-facing strengthened reachability with the manual-intent boundary enforced. -/
+abbrev WellFormedReachable : SystemState → Prop :=
+  ReachableUnder FireIntent.WellFormed
+
+/-- Any strengthened reachable state is reachable in the raw operational semantics. -/
+theorem ReachableUnder.toReachable
+    {P : FireIntent → Prop} {s : SystemState} :
+    ReachableUnder P s → Reachable s := by
+  intro h_reach
+  induction h_reach with
+  | empty =>
+      exact Reachable.empty
+  | step s snap intent _ h_prev ih =>
+      exact Reachable.step s snap intent ih
+  | terminate s reqId h_prev ih =>
+      exact Reachable.terminate s reqId ih
 
 /--
 Local helper for T1: when `List.find? p l = some a`, both `a ∈ l` AND
@@ -1079,6 +1141,31 @@ theorem T2_serial_at_most_one
     calc (lifecycleTerminateStep s' reqId).nonTerminalCountFor t
         ≤ s'.nonTerminalCountFor t := lifecycleTerminateStep_preserves_bound s' reqId t
       _ ≤ 1 := h_before
+
+/--
+T2 lifted to an admissibility-constrained trigger trace relation.
+
+This is the preferred theorem shape for downstream trigger proofs: prove the
+trace boundary once via `ReachableUnder`, then reuse the existing T2 result by
+forgetting back to the raw operational semantics.
+-/
+theorem T2_serial_at_most_one_under
+    (P : FireIntent → Prop)
+    (s : SystemState)
+    (t : TriggerKey)
+    (h_reach : ReachableUnder P s) :
+    (∀ r ∈ s.requests, r.causedBy = some t → r.concurrency = .serial) →
+    s.nonTerminalCountFor t ≤ 1 :=
+  T2_serial_at_most_one s t (ReachableUnder.toReachable h_reach)
+
+/-- T2 stated over the boundary-tightened `WellFormedReachable` relation. -/
+theorem T2_serial_at_most_one_wellFormed
+    (s : SystemState)
+    (t : TriggerKey)
+    (h_reach : WellFormedReachable s) :
+    (∀ r ∈ s.requests, r.causedBy = some t → r.concurrency = .serial) →
+    s.nonTerminalCountFor t ≤ 1 :=
+  T2_serial_at_most_one_under FireIntent.WellFormed s t h_reach
 
 /-- Terminal predicate matching the `superseded` state. Kept as a Bool
     field on `AgentRequest` so the trigger layer can reason without
