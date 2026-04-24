@@ -714,6 +714,76 @@ theorem dispatchStep_serial_bounds_count
           exact h_before
 
 /--
+Generic monotonicity helper: mapping a list with a function `f` that only
+"weakens" the predicate `p` (i.e. `p (f a) = true → p a = true`) can only
+shrink (or preserve) the length of the filtered list.
+
+Used by `lifecycleTerminateStep_preserves_bound` below: the terminate map
+only flips `isTerminal` from `false` to `true`, which can only remove
+requests from the `(causedBy == some t) && !isTerminal` filter.
+-/
+private theorem list_filter_map_length_le_filter_length
+    {α : Type} {p : α → Bool} (f : α → α) (l : List α)
+    (h_mono : ∀ a, p (f a) = true → p a = true) :
+    ((l.map f).filter p).length ≤ (l.filter p).length := by
+  induction l with
+  | nil => simp
+  | cons hd tl ih =>
+    simp only [List.map_cons, List.filter_cons]
+    by_cases h_p_f_hd : p (f hd) = true
+    · -- p (f hd) = true, so p hd = true by h_mono.
+      have h_p_hd : p hd = true := h_mono hd h_p_f_hd
+      rw [if_pos h_p_f_hd, if_pos h_p_hd]
+      simp only [List.length_cons]
+      exact Nat.succ_le_succ ih
+    · -- p (f hd) = false. Original filter may include hd or not.
+      have h_p_f_hd_false : p (f hd) = false := by
+        cases h : p (f hd) with
+        | false => rfl
+        | true => exact absurd h h_p_f_hd
+      rw [if_neg (by rw [h_p_f_hd_false]; decide)]
+      by_cases h_p_hd : p hd = true
+      · rw [if_pos h_p_hd]
+        simp only [List.length_cons]
+        exact Nat.le_succ_of_le ih
+      · have h_p_hd_false : p hd = false := by
+          cases h : p hd with
+          | false => rfl
+          | true => exact absurd h h_p_hd
+        rw [if_neg (by rw [h_p_hd_false]; decide)]
+        exact ih
+
+/--
+`lifecycleTerminateStep` can only decrease (or leave unchanged) the
+non-terminal count for any tuple. Flipping a request's `isTerminal` from
+`false` to `true` removes it from the filter; no other request's
+`isTerminal` or `causedBy` changes.
+-/
+theorem lifecycleTerminateStep_preserves_bound
+    (s : SystemState) (reqId : String) (t : TriggerKey) :
+    (lifecycleTerminateStep s reqId).nonTerminalCountFor t
+      ≤ s.nonTerminalCountFor t := by
+  simp only [SystemState.nonTerminalCountFor, lifecycleTerminateStep]
+  apply list_filter_map_length_le_filter_length
+  intro r h_p_f_r
+  -- h_p_f_r : ((f r).causedBy == some t) && !(f r).isTerminal = true
+  -- where f r = if (r.id == reqId) && !r.isTerminal
+  --             then {r with isTerminal := true} else r
+  cases h_cond : (r.id == reqId) && !r.isTerminal with
+  | true =>
+    -- if-fires branch: f r has isTerminal = true, so !isTerminal = false.
+    -- Then the && in the predicate is false, contradicting h_p_f_r.
+    rw [if_pos h_cond] at h_p_f_r
+    -- h_p_f_r : (({r with isTerminal := true}.causedBy == some t) &&
+    --           !({r with isTerminal := true}.isTerminal)) = true
+    -- But {r with isTerminal := true}.isTerminal = true, so !...=false, so && = false.
+    simp at h_p_f_r
+  | false =>
+    -- if-doesn't-fire branch: f r = r.
+    rw [if_neg (by rw [h_cond]; decide)] at h_p_f_r
+    exact h_p_f_r
+
+/--
 T2 (serial at-most-one): any reachable system state has at most one
 non-terminal request per trigger tuple, provided every request for that
 tuple in the state uses `.serial` concurrency.
