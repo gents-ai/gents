@@ -117,6 +117,14 @@ structure RequestSeed where
   causedByTriggerKind : TriggerKind
   deriving Repr
 
+/--
+Helper: return the first enabled schedule in `snap.activeSchedules` matching
+the given `triggerId`, or `none` if no such schedule exists.
+-/
+def dispatchEnabledForSchedule
+    (snap : TriggerSnapshot) (triggerId : String) : Option ActiveSchedule :=
+  snap.activeSchedules.find? (fun s => (s.triggerId == triggerId) && s.enabled)
+
 /-- Abstract dispatch function. Produces a `RequestSeed` iff the intent
     is admissible given the snapshot. The concrete rules are filled in
     by the theorems below; `sorry` is used as a placeholder so the
