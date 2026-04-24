@@ -1,6 +1,7 @@
 import Proofs.Request
 import Proofs.Process
 import Proofs.Persistence
+import Proofs.Conformance.Triggers
 
 /-!
 # Conformance Mapping: defra-agent → Ideal Model
@@ -51,7 +52,6 @@ theorem toIdeal_preserves_terminal (s : DefraLifecycleState) :
     isTerminal s.toIdeal ↔
     (s = .completed ∨ s = .failed ∨ s = .superseded ∨ s = .dead ∨ s = .interrupted) := by
   cases s <;> simp [toIdeal, HasTerminal.isTerminal, RequestState.instHasTerminal]
-  all_goals decide
 
 /-- defra-agent has no recovering process state. -/
 def defraProcessToIdeal (hasRecovered : Bool) : ProcessState :=
