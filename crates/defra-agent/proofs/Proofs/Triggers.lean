@@ -208,6 +208,79 @@ def SystemState.nonTerminalCountFor
   (s.requests.filter (fun r => (r.causedBy == some t) && !r.isTerminal)).length
 
 /--
+One engine tick: given current state, snapshot, and a fire intent, produce
+the next state.
+
+Operational semantics match `trigger_engine/mod.rs`:
+- Dispatch's enabled gate fails → state unchanged.
+- Parallel → always append a new non-terminal request.
+- Serial: skip if `key = some t` matches a non-terminal request; otherwise
+  append. Serial with `key = none` (degenerate: Manual serial, unusual in
+  practice) falls through to unconditional append — matches the Rust
+  engine's "no trigger_id → no coordination" short-circuit.
+- LatestOnly with `key = some t` → supersede all matching non-terminal
+  (set `isTerminal = true`); then append the new request.
+- LatestOnly with `key = none` → append unconditionally. Do NOT supersede
+  other `causedBy = none` requests; they are unrelated manual fires.
+
+Request IDs are derived from `state.requests.length` so every step produces
+a fresh id. Preserves T3's `r_prior.id ≠ r_new.id` invariant.
+
+Execution origin follows the spec's lineage map:
+- manual → interactive
+- schedule/event → scheduled
+-/
+def dispatchStep
+    (state  : SystemState)
+    (snap   : TriggerSnapshot)
+    (intent : FireIntent)
+    : SystemState :=
+  match dispatch snap intent with
+  | none => state
+  | some seed =>
+    let key : Option TriggerKey :=
+      match seed.causedByTriggerId with
+      | none     => none
+      | some tid => some (tid, seed.causedByTriggerKind)
+    let origin : ExecutionOrigin :=
+      match seed.causedByTriggerKind with
+      | .manual            => .interactive
+      | .schedule | .event => .scheduled
+    let newId : String := s!"dispatched-{state.requests.length}"
+    let newRequest : AgentRequest :=
+      { id := newId
+      , causedBy := key
+      , concurrency := intent.concurrency
+      , isTerminal := false
+      , executionOrigin := origin }
+    match intent.concurrency with
+    | .parallel =>
+      { state with requests := state.requests ++ [newRequest] }
+    | .serial =>
+      match key with
+      | none =>
+        -- Degenerate serial with no trigger key: no coordination, append.
+        { state with requests := state.requests ++ [newRequest] }
+      | some t =>
+        if state.requests.any (fun r => (r.causedBy == some t) && !r.isTerminal) then
+          state  -- skip: non-terminal match exists
+        else
+          { state with requests := state.requests ++ [newRequest] }
+    | .latestOnly =>
+      match key with
+      | none =>
+        -- LatestOnly with no trigger key: matches Rust's "no trigger_id → skip
+        -- lock + supersede" short-circuit at trigger_engine/mod.rs:343. Do NOT
+        -- supersede other causedBy=none requests — they're unrelated.
+        { state with requests := state.requests ++ [newRequest] }
+      | some t =>
+        let superseded := state.requests.map (fun r =>
+          if (r.causedBy == some t) && !r.isTerminal then
+            { r with isTerminal := true }
+          else r)
+        { state with requests := superseded ++ [newRequest] }
+
+/--
 Local helper for T1: when `List.find? p l = some a`, both `a ∈ l` AND
 `p a = true`. Mathlib provides these in two separate lemmas; we combine
 them for proof convenience.
