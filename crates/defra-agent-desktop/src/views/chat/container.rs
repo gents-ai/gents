@@ -6,12 +6,11 @@ use crate::chat::projection::project_chat;
 use crate::client::{ClientCore, ClientStore};
 use crate::state::ShellState;
 use crate::views;
-use crate::views::components;
 
 use super::view_model::{
     build_conversation_buckets, display_name_for_agent, effective_behavior_id,
 };
-use super::{composer, header, sidebar, transcript};
+use super::{composer, header, nudge, sidebar, transcript};
 
 pub fn prepare_state(
     state: &mut ShellState,
@@ -102,7 +101,7 @@ pub fn show_main(
         &client.map(ClientCore::peer_statuses).unwrap_or_default(),
         store,
     );
-    if deployment_entries.is_empty() || state.setup.workspace_open {
+    if state.setup.workspace_open && deployment_entries.is_empty() {
         crate::views::setup::show_embedded_main(ui, state, client, Some(store), runtime);
         return;
     }
@@ -135,6 +134,17 @@ pub fn show_main(
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
                     ui.set_width(ui.available_width());
+                    if state.setup.workspace_open {
+                        crate::views::setup::show_embedded_main(
+                            ui,
+                            state,
+                            client,
+                            Some(store),
+                            runtime,
+                        );
+                        return;
+                    }
+
                     header::show(
                         ui,
                         state,
@@ -152,6 +162,7 @@ pub fn show_main(
                         render_pre_conversation_main(
                             ui,
                             state,
+                            client,
                             store,
                             selected_agent_did.as_deref(),
                             turn_state,
@@ -258,6 +269,7 @@ fn current_composer_height(state: &ShellState, available_height: f32) -> f32 {
 fn render_pre_conversation_main(
     ui: &mut Ui,
     state: &mut ShellState,
+    client: Option<&ClientCore>,
     store: &ClientStore,
     selected_agent_did: Option<&str>,
     turn_state: Option<ClientTurnState>,
@@ -265,13 +277,7 @@ fn render_pre_conversation_main(
 ) {
     ui.set_width(ui.available_width());
     ui.set_max_width(720.0);
-    components::focus_panel(
-        ui,
-        Some("Chat"),
-        "Start the conversation",
-        "Send a message below and the first conversation will be created automatically.",
-        |_| {},
-    );
+    nudge::render_first_conversation_nudge(ui, state, client, selected_agent_did);
     ui.add_space(12.0);
 
     let composer_expanded = state.chat.editor.composer_expanded;

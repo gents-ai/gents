@@ -29,6 +29,8 @@ const apiKeyEnvVar = takeFlag(argv, "--api-key-env-var");
 
 const env = {
   ...process.env,
+  CARGO_NET_GIT_FETCH_WITH_CLI:
+    process.env.CARGO_NET_GIT_FETCH_WITH_CLI ?? "true",
   DEFRA_AGENT_TAURI_LIVE: "1",
 };
 

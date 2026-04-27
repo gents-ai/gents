@@ -348,6 +348,12 @@ impl ClientStore {
             .map(|index| &self.responses[*index])
     }
 
+    pub fn request_row(&self, request_id: &str) -> Option<&AgentRequestRow> {
+        self.request_index_by_id
+            .get(request_id)
+            .map(|index| &self.requests[*index])
+    }
+
     pub fn row_count(&self) -> usize {
         self.agent_principals.len()
             + self.behaviors.len()

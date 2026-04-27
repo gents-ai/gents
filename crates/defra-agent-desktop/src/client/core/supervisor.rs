@@ -11,7 +11,7 @@ use super::super::peer_directory::{PeerDirectory, PeerRecord};
 use super::super::schema::subscribed_collection_names;
 use super::bootstrap::{
     add_replicator_with_retry, configure_local_runtime_pairing, connect_peer_with_retry,
-    is_connected_peer,
+    force_connect_peer_with_retry, is_connected_peer,
 };
 use super::p2p_ops::{
     p2p_connected_peers, p2p_get_replicators, p2p_listen_addresses, p2p_local_peer_id,
@@ -67,6 +67,7 @@ pub(super) fn spawn_p2p_supervisor_task(
                 &peer_directory,
                 &peer_statuses,
                 install_replicators_on_bootstrap,
+                manual_repair,
             )
             .await;
 
@@ -85,6 +86,7 @@ async fn run_saved_peer_repair_cycle(
     peer_directory: &Arc<RwLock<PeerDirectory>>,
     peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
     install_replicators_on_bootstrap: bool,
+    force_repair: bool,
 ) {
     let records = peer_directory.read().await.records().to_vec();
     for record in records {
@@ -95,7 +97,7 @@ async fn run_saved_peer_repair_cycle(
             .find(|status| status.peer_id == record.peer_id)
             .cloned();
 
-        if !saved_peer_needs_repair(p2p, &record, current_status.as_ref()).await {
+        if !force_repair && !saved_peer_needs_repair(p2p, &record, current_status.as_ref()).await {
             continue;
         }
 
@@ -104,6 +106,7 @@ async fn run_saved_peer_repair_cycle(
             &record,
             current_status,
             install_replicators_on_bootstrap,
+            force_repair,
         )
         .await;
         let still_saved = peer_directory
@@ -241,6 +244,7 @@ pub(super) async fn repair_saved_peer(
     record: &PeerRecord,
     current_status: Option<ClientPeerStatus>,
     install_replicators_on_bootstrap: bool,
+    force_repair: bool,
 ) -> ClientPeerStatus {
     let mut status = current_status.unwrap_or_else(|| ClientPeerStatus {
         peer_id: record.peer_id.clone(),
@@ -259,7 +263,7 @@ pub(super) async fn repair_saved_peer(
         None => status.dial_succeeded,
     };
 
-    if !connected_now {
+    if force_repair || !connected_now {
         match p2p_notify_network_change(p2p).await {
             Ok(()) => {
                 tracing::debug!(
@@ -280,7 +284,13 @@ pub(super) async fn repair_saved_peer(
             }
         }
 
-        match connect_peer_with_retry(p2p, &record.addr, &record.label).await {
+        let connect_result = if force_repair {
+            force_connect_peer_with_retry(p2p, &record.addr, &record.label).await
+        } else {
+            connect_peer_with_retry(p2p, &record.addr, &record.label).await
+        };
+
+        match connect_result {
             Ok(()) => {
                 status.dial_succeeded = true;
                 if install_replicators_on_bootstrap {

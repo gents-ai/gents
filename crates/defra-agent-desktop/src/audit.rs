@@ -17,7 +17,6 @@ pub(crate) mod targets {
     #[cfg(test)]
     pub(crate) const ACTIVITY_MANAGE: &str = "activity.manage";
     pub(crate) const CHAT_COMPOSER_TEXT: &str = "chat.composer.text";
-    #[cfg(test)]
     pub(crate) const CHAT_CREATE_CONVERSATION: &str = "chat.create_conversation";
     pub(crate) const CHAT_NEW_CONVERSATION: &str = "chat.new_conversation";
     pub(crate) const CHAT_OPEN_SETUP: &str = "chat.open_setup";

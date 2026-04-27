@@ -1,4 +1,5 @@
 mod bootstrap;
+mod materialization;
 mod p2p_ops;
 mod supervisor;
 mod writes;
@@ -152,6 +153,7 @@ pub struct ClientCore {
     observer: Mutex<Option<ObserverHandle>>,
     peer_statuses: Arc<StdRwLock<Vec<ClientPeerStatus>>>,
     p2p_supervisor: Mutex<Option<JoinHandle<()>>>,
+    materialization_supervisor: Mutex<Option<JoinHandle<()>>>,
     p2p_health: watch::Sender<P2PHealth>,
     p2p_control: Mutex<Option<mpsc::Sender<P2PSupervisorCommand>>>,
     last_mutation_error: StdRwLock<Option<String>>,
@@ -288,6 +290,11 @@ impl ClientCore {
         self.p2p_control.lock().await.take();
         if let Some(task) = self.p2p_supervisor.lock().await.take() {
             tracing::info!("client core shutdown: stopping p2p supervisor");
+            task.abort();
+            let _ = task.await;
+        }
+        if let Some(task) = self.materialization_supervisor.lock().await.take() {
+            tracing::info!("client core shutdown: stopping materialization supervisor");
             task.abort();
             let _ = task.await;
         }

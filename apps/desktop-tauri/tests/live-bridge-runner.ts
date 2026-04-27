@@ -221,32 +221,58 @@ export function observeRemoteAheadDesktopLag({
   };
 }
 
-async function waitForLine(
+async function waitForReadyMessage(
   process: ChildProcessWithoutNullStreams,
   timeoutMs: number,
 ) {
+  let stdoutBuffer = "";
   let stdout = "";
   let stderr = "";
 
-  return await new Promise<string>((resolve, reject) => {
+  return await new Promise<{
+    message: RunnerReadyMessage;
+    stdout: string;
+    stderr: string;
+  }>((resolve, reject) => {
     const timeout = setTimeout(() => {
       cleanup();
       reject(
         new Error(
-          `bridge runner did not become ready within ${timeoutMs}ms\nstderr:\n${stderr}`,
+          `bridge runner did not become ready within ${timeoutMs}ms\nstdout:\n${stdout}\nstderr:\n${stderr}`,
         ),
       );
     }, timeoutMs);
 
-    const onStdout = (chunk: Buffer) => {
-      stdout += chunk.toString();
-      const newlineIndex = stdout.indexOf("\n");
-      if (newlineIndex === -1) {
+    const tryResolveLine = (line: string) => {
+      if (!line) {
         return;
       }
-      const line = stdout.slice(0, newlineIndex).trim();
-      cleanup();
-      resolve(line);
+      stdout += `${line}\n`;
+      try {
+        const message = JSON.parse(line) as Partial<RunnerReadyMessage>;
+        if (message.kind !== "ready") {
+          return;
+        }
+        cleanup();
+        resolve({
+          message: message as RunnerReadyMessage,
+          stdout,
+          stderr,
+        });
+      } catch {
+        // The Rust side can emit tracing/log lines before the ready JSON.
+      }
+    };
+
+    const onStdout = (chunk: Buffer) => {
+      stdoutBuffer += chunk.toString();
+      let newlineIndex = stdoutBuffer.indexOf("\n");
+      while (newlineIndex !== -1) {
+        const line = stdoutBuffer.slice(0, newlineIndex).trim();
+        stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+        tryResolveLine(line);
+        newlineIndex = stdoutBuffer.indexOf("\n");
+      }
     };
 
     const onStderr = (chunk: Buffer) => {
@@ -257,7 +283,7 @@ async function waitForLine(
       cleanup();
       reject(
         new Error(
-          `bridge runner exited before ready (code=${code ?? "null"})\nstderr:\n${stderr}`,
+          `bridge runner exited before ready (code=${code ?? "null"})\nstdout:\n${stdout}${stdoutBuffer}\nstderr:\n${stderr}`,
         ),
       );
     };
@@ -290,7 +316,11 @@ export class LiveBridgeRunner implements TauriDriverBridge {
     readonly baseUrl: string,
     readonly deploymentLabel: string,
     readonly agentDid: string,
-    ) {
+    startupStdout = "",
+    startupStderr = "",
+  ) {
+    this.pushLogChunk(this.stdoutChunks, startupStdout);
+    this.pushLogChunk(this.stderrChunks, startupStderr);
     this.process.stderr.on("data", (chunk: Buffer) => {
       this.pushLogChunk(this.stderrChunks, chunk.toString());
     });
@@ -383,21 +413,26 @@ export class LiveBridgeRunner implements TauriDriverBridge {
       runnerArgs,
       {
         cwd: REPO_ROOT,
-        env: process.env,
+        env: {
+          ...process.env,
+          CARGO_NET_GIT_FETCH_WITH_CLI:
+            process.env.CARGO_NET_GIT_FETCH_WITH_CLI ?? "true",
+        },
         stdio: ["pipe", "pipe", "pipe"],
       },
     );
 
-    const line = await waitForLine(child, RUNNER_START_TIMEOUT_MS);
-    const message = JSON.parse(line) as RunnerReadyMessage;
-    if (message.kind !== "ready") {
-      throw new Error(`unexpected bridge runner ready payload: ${line}`);
-    }
+    const { message, stdout, stderr } = await waitForReadyMessage(
+      child,
+      RUNNER_START_TIMEOUT_MS,
+    );
     return new LiveBridgeRunner(
       child,
       message.baseUrl,
       message.deploymentLabel,
       message.agentDid,
+      stdout,
+      stderr,
     );
   }
 

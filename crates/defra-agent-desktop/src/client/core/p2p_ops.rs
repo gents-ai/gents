@@ -77,3 +77,22 @@ pub(super) async fn p2p_add_replicator(
         Err(_) => anyhow::bail!("timed out adding desktop P2P replicator for {addr}"),
     }
 }
+
+pub(super) async fn p2p_sync_branchable_collection(
+    p2p: &Arc<dyn P2POps>,
+    collection_id: &str,
+) -> Result<()> {
+    match timeout(
+        P2P_OPERATION_TIMEOUT,
+        p2p.sync_branchable_collection(collection_id),
+    )
+    .await
+    {
+        Ok(result) => result
+            .map_err(anyhow::Error::msg)
+            .with_context(|| format!("syncing desktop P2P branchable collection {collection_id}")),
+        Err(_) => {
+            anyhow::bail!("timed out syncing desktop P2P branchable collection {collection_id}")
+        }
+    }
+}

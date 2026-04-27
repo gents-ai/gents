@@ -174,45 +174,6 @@ impl LiveBridgeFixture {
         self.update_version.load(Ordering::SeqCst)
     }
 
-    pub(crate) async fn repair_replication(&self) -> Result<()> {
-        let _ = self.desktop_core.request_p2p_repair().await;
-        let _ = self.remote_core.request_p2p_repair().await;
-        let desktop_addr = wait_for_connectable_iroh_addr(self.desktop_core.as_ref(), "desktop").await?;
-        let remote_addr =
-            wait_for_connectable_iroh_addr(self.remote_core.as_ref(), &self.deployment_label).await?;
-        let desktop_peer_id = self.desktop_core.local_peer_id().to_string();
-        let remote_peer_id = self.remote_core.local_peer_id().to_string();
-        connect_peer_with_retry(
-            self.desktop_core.as_ref(),
-            &remote_addr,
-            &remote_peer_id,
-            &format!("desktop -> {}", self.deployment_label),
-        )
-        .await?;
-        connect_peer_with_retry(
-            self.remote_core.as_ref(),
-            &desktop_addr,
-            &desktop_peer_id,
-            &format!("{} -> desktop", self.deployment_label),
-        )
-        .await?;
-        reset_replicator_with_retry(
-            self.remote_core.as_ref(),
-            &desktop_addr,
-            &format!("{} -> desktop replicator reset", self.deployment_label),
-            subscribed_collection_names_for_runner(),
-        )
-        .await?;
-        reset_replicator_with_retry(
-            self.desktop_core.as_ref(),
-            &remote_addr,
-            &format!("desktop -> {} replicator reset", self.deployment_label),
-            desktop_origin_collection_names_for_runner(),
-        )
-        .await?;
-        Ok(())
-    }
-
     pub(crate) async fn shutdown(&self) -> Result<()> {
         if self.shutdown_started.swap(true, Ordering::SeqCst) {
             return Ok(());
@@ -242,12 +203,10 @@ impl LiveBridgeFixture {
         let desktop_paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
         let agent_home = tempdir.path().join("agent-home");
 
-        let remote_core = Arc::new(
-            runtime.block_on(ClientCore::start_with_paths_and_options(
-                remote_paths,
-                live_core_options(),
-            ))?,
-        );
+        let remote_core = Arc::new(runtime.block_on(ClientCore::start_with_paths_and_options(
+            remote_paths,
+            live_core_options(),
+        ))?);
 
         let agent_key = tempdir.path().join("agent").join("amy.key");
         let (running_agent, docs, tool_root) = runtime.block_on(spawn_live_agent(
@@ -266,12 +225,10 @@ impl LiveBridgeFixture {
         peer_record.source = Some("bridge-runner".to_string());
         write_peer_directory_records(&desktop_paths, &[peer_record.clone()])?;
 
-        let desktop_core = Arc::new(
-            runtime.block_on(ClientCore::start_with_paths_and_options(
-                desktop_paths.clone(),
-                live_core_options(),
-            ))?,
-        );
+        let desktop_core = Arc::new(runtime.block_on(ClientCore::start_with_paths_and_options(
+            desktop_paths.clone(),
+            live_core_options(),
+        ))?);
 
         runtime.block_on(configure_live_replicators(
             desktop_core.as_ref(),
@@ -700,7 +657,11 @@ fn copy_repo_tree(src: &Path, dst: &Path) -> Result<()> {
                     .with_context(|| format!("creating {}", parent.display()))?;
             }
             std::fs::copy(&source_path, &target_path).with_context(|| {
-                format!("copying {} -> {}", source_path.display(), target_path.display())
+                format!(
+                    "copying {} -> {}",
+                    source_path.display(),
+                    target_path.display()
+                )
             })?;
         }
     }
@@ -710,14 +671,7 @@ fn copy_repo_tree(src: &Path, dst: &Path) -> Result<()> {
 fn should_skip_workspace_entry(name: &str) -> bool {
     matches!(
         name,
-        ".git"
-            | "target"
-            | "node_modules"
-            | ".next"
-            | ".turbo"
-            | "dist"
-            | "build"
-            | ".direnv"
+        ".git" | "target" | "node_modules" | ".next" | ".turbo" | "dist" | "build" | ".direnv"
     )
 }
 
@@ -815,7 +769,7 @@ async fn configure_live_replicators(
         desktop_core,
         &remote_addr,
         &format!("desktop -> {label} replicator"),
-        desktop_origin_collection_names_for_runner(),
+        subscribed_collection_names_for_runner(),
     )
     .await?;
     Ok(())
@@ -893,52 +847,12 @@ async fn set_replicator_with_retry(
     }
 }
 
-async fn reset_replicator_with_retry(
-    core: &ClientCore,
-    addr: &str,
-    label: &str,
-    collections: Vec<String>,
-) -> Result<()> {
-    match tokio::time::timeout(
-        Duration::from_secs(10),
-        core.p2p().remove_replicator(collections.clone(), Some(addr)),
-    )
-    .await
-    {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => {
-            tracing::warn!(label, error = %error, "failed removing existing replicator before reset");
-        }
-        Err(_) => {
-            tracing::warn!(label, "timed out removing existing replicator before reset");
-        }
-    }
-
-    set_replicator_with_retry(core, addr, label, collections).await
-}
-
 fn subscribed_collection_names_for_runner() -> Vec<String> {
     defra_agent_protocol::schemas::RUNTIME_COLLECTION_NAMES
         .iter()
         .chain(defra_agent_protocol::schemas::ALL_COLLECTION_NAMES.iter())
         .map(|name| (*name).to_string())
         .collect()
-}
-
-
-fn desktop_origin_collection_names_for_runner() -> Vec<String> {
-    [
-        defra_agent_protocol::schemas::INFERENCE_BACKEND_NAME,
-        defra_agent_protocol::schemas::AGENT_BEHAVIOR_NAME,
-        defra_agent_protocol::schemas::TOOL_SELECTION_NAME,
-        defra_agent_protocol::schemas::INFERENCE_PROFILE_NAME,
-        defra_agent_protocol::schemas::AGENT_CONVERSATION_NAME,
-        defra_agent_protocol::schemas::AGENT_SESSION_NAME,
-        defra_agent_protocol::schemas::AGENT_REQUEST_NAME,
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect()
 }
 
 fn write_peer_directory_records(paths: &DesktopPaths, records: &[PeerRecord]) -> Result<()> {

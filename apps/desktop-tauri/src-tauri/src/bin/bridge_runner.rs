@@ -8,7 +8,10 @@ mod bridge {
     }
     #[allow(dead_code)]
     pub mod snapshot {
-        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bridge/snapshot.rs"));
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/bridge/snapshot.rs"
+        ));
     }
 }
 
@@ -24,20 +27,13 @@ use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::Value;
 
 use bridge::snapshot::{build_runtime_snapshot, build_session_snapshot_from_store};
 use bridge::types::{
     ChatSendRequest, ChatSendResult, ConversationRenameRequest, DesktopClientSnapshot,
     DesktopSessionSnapshot,
 };
-use defra_agent::defra_node;
-use defra_agent_protocol::schemas::{
-    AGENT_CONVERSATION_NAME, AGENT_MESSAGE_NAME, AGENT_REQUEST_NAME, AGENT_RESPONSE_NAME,
-};
-use live_fixture::{
-    can_send_in_turn, turn_state_label, LiveBackendOverride, LiveBridgeFixture,
-};
+use live_fixture::{can_send_in_turn, turn_state_label, LiveBackendOverride, LiveBridgeFixture};
 
 #[derive(Debug, Parser)]
 struct RunnerArgs {
@@ -64,15 +60,6 @@ struct HttpRequestData {
 #[serde(rename_all = "camelCase")]
 struct SessionSnapshotRequest {
     session_id: String,
-    request_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ReplicationRepairRequest {
-    #[serde(default = "default_true")]
-    include_remote: bool,
-    session_id: Option<String>,
     request_id: Option<String>,
 }
 
@@ -144,15 +131,6 @@ struct RequestDiagnosticsBundle {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ReplicationRepairResponse {
-    status: &'static str,
-    desktop_error: Option<String>,
-    remote_error: Option<String>,
-    version: u64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct VersionResponse {
     version: u64,
 }
@@ -186,9 +164,9 @@ impl BridgeRunnerServer {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
                         let _ = stream.set_nonblocking(false);
-                        let response = match read_http_request(&mut stream)
-                            .and_then(|request| handle_request(&runtime, &fixture_for_thread, request))
-                        {
+                        let response = match read_http_request(&mut stream).and_then(|request| {
+                            handle_request(&runtime, &fixture_for_thread, request)
+                        }) {
                             Ok(response) => response,
                             Err(error) => HttpResponse::json_error(
                                 "500 Internal Server Error",
@@ -304,11 +282,11 @@ fn handle_request(
         ("GET", "/health") => Ok(HttpResponse::json_ok(
             serde_json::json!({ "status": "ok" }).to_string(),
         )),
-        ("GET", "/desktop/version") => Ok(HttpResponse::json_ok(
-            serde_json::to_string(&VersionResponse {
+        ("GET", "/desktop/version") => Ok(HttpResponse::json_ok(serde_json::to_string(
+            &VersionResponse {
                 version: fixture.update_version(),
-            })?,
-        )),
+            },
+        )?)),
         ("GET", "/desktop/client/snapshot") => {
             let snapshot = runtime.block_on(build_desktop_client_snapshot(fixture));
             Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
@@ -351,25 +329,6 @@ fn handle_request(
             ));
             Ok(HttpResponse::json_ok(serde_json::to_string(&diagnostics)?))
         }
-        ("POST", "/desktop/replication/repair") => {
-            let request = if request.body.trim().is_empty() {
-                ReplicationRepairRequest {
-                    include_remote: true,
-                    session_id: None,
-                    request_id: None,
-                }
-            } else {
-                serde_json::from_str::<ReplicationRepairRequest>(&request.body)
-                    .context("decoding replication repair request")?
-            };
-            let response = runtime.block_on(trigger_replication_repair(
-                fixture,
-                request.include_remote,
-                request.session_id.as_deref(),
-                request.request_id.as_deref(),
-            ));
-            Ok(HttpResponse::json_ok(serde_json::to_string(&response)?))
-        }
         ("POST", "/desktop/chat/send") => {
             let request = serde_json::from_str::<ChatSendRequest>(&request.body)
                 .context("decoding chat send request")?;
@@ -380,7 +339,9 @@ fn handle_request(
             let request = serde_json::from_str::<ConversationRenameRequest>(&request.body)
                 .context("decoding rename request")?;
             runtime.block_on(rename_conversation(fixture, request))?;
-            Ok(HttpResponse::json_ok(serde_json::json!({ "status": "ok" }).to_string()))
+            Ok(HttpResponse::json_ok(
+                serde_json::json!({ "status": "ok" }).to_string(),
+            ))
         }
         _ => Ok(HttpResponse::json_error("404 Not Found", "not found")),
     }
@@ -461,7 +422,8 @@ async fn build_request_diagnostics(
                     .is_some_and(|value| matches!(value, "completed" | "success" | "ok"))
         })
         .count();
-    let session_snapshot = build_session_snapshot_from_store(snapshot.as_ref(), session_id, Some(request_id));
+    let session_snapshot =
+        build_session_snapshot_from_store(snapshot.as_ref(), session_id, Some(request_id));
 
     RequestDiagnostics {
         source: source.to_string(),
@@ -510,7 +472,9 @@ async fn build_request_diagnostics(
         tool_calls: ToolCallDiagnostics {
             total: relevant_tool_calls.len(),
             completed: completed_tool_calls,
-            pending: relevant_tool_calls.len().saturating_sub(completed_tool_calls),
+            pending: relevant_tool_calls
+                .len()
+                .saturating_sub(completed_tool_calls),
             latest_tool_name: latest_tool_call.and_then(|row| row.tool_name.clone()),
             latest_status: latest_tool_call.and_then(|row| row.status.clone()),
             latest_completed_at: latest_tool_call.and_then(|row| row.completed_at.clone()),
@@ -543,57 +507,6 @@ async fn refresh_store_with_timeout(
     }
 }
 
-async fn trigger_replication_repair(
-    fixture: &LiveBridgeFixture,
-    include_remote: bool,
-    session_id: Option<&str>,
-    request_id: Option<&str>,
-) -> ReplicationRepairResponse {
-    let repair_result = if include_remote {
-        fixture.repair_replication().await
-    } else {
-        fixture.desktop_core().request_p2p_repair().await
-    };
-    let (desktop_error, remote_error) = match repair_result {
-        Ok(()) => (None, None),
-        Err(error) => {
-            let error = error.to_string();
-            if include_remote {
-                (Some(error.clone()), Some(error))
-            } else {
-                (Some(error), None)
-            }
-        }
-    };
-
-    if desktop_error.is_none() && remote_error.is_none() {
-        if let (Some(session_id), Some(request_id)) = (session_id, request_id) {
-            if let Err(error) =
-                targeted_sync_turn_documents(fixture, session_id, request_id).await
-            {
-                tracing::warn!(
-                    session_id,
-                    request_id,
-                    error = %error,
-                    "targeted turn sync after replication repair failed"
-                );
-            }
-        }
-    }
-
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    let _ = refresh_store_with_timeout(fixture.desktop_core().as_ref()).await;
-    let _ = refresh_store_with_timeout(fixture.remote_core().as_ref()).await;
-
-    ReplicationRepairResponse {
-        status: "ok",
-        desktop_error,
-        remote_error,
-        version: fixture.update_version(),
-    }
-}
-
 async fn send_chat_message(
     fixture: &LiveBridgeFixture,
     request: ChatSendRequest,
@@ -622,11 +535,13 @@ async fn send_chat_message(
         .filter(|value| !value.is_empty())
     {
         Some(session_id) => session_id.to_string(),
-        None => fixture
-            .desktop_core()
-            .create_conversation(&agent_did, behavior_id.as_deref())
-            .await?
-            .session_id,
+        None => {
+            fixture
+                .desktop_core()
+                .create_conversation(&agent_did, behavior_id.as_deref())
+                .await?
+                .session_id
+        }
     };
 
     let store = fixture.desktop_core().store().snapshot();
@@ -650,152 +565,6 @@ async fn send_chat_message(
         agent_did: submitted.agent_did,
         behavior_id: submitted.behavior_id,
     })
-}
-
-fn default_true() -> bool {
-    true
-}
-
-async fn targeted_sync_turn_documents(
-    fixture: &LiveBridgeFixture,
-    session_id: &str,
-    request_id: &str,
-) -> Result<()> {
-    let remote_core = fixture.remote_core().as_ref();
-    let desktop_core = fixture.desktop_core().as_ref();
-    let _ = refresh_store_with_timeout(remote_core).await;
-    let remote_snapshot = remote_core.store().snapshot();
-
-    if let Some(doc_id) =
-        fetch_doc_id_by_unique_field(remote_core.node(), AGENT_REQUEST_NAME, "request_id", request_id)
-            .await?
-    {
-        republish_and_sync_document(remote_core, desktop_core, AGENT_REQUEST_NAME, &doc_id).await?;
-    }
-    if let Some(doc_id) = fetch_doc_id_by_unique_field(
-        remote_core.node(),
-        AGENT_RESPONSE_NAME,
-        "request_id",
-        request_id,
-    )
-    .await?
-    {
-        republish_and_sync_document(remote_core, desktop_core, AGENT_RESPONSE_NAME, &doc_id).await?;
-    }
-    if let Some(doc_id) = fetch_doc_id_by_unique_field(
-        remote_core.node(),
-        AGENT_CONVERSATION_NAME,
-        "session_id",
-        session_id,
-    )
-    .await?
-    {
-        republish_and_sync_document(
-            remote_core,
-            desktop_core,
-            AGENT_CONVERSATION_NAME,
-            &doc_id,
-        )
-        .await?;
-    }
-
-    if let Some(sequence) = remote_snapshot
-        .latest_response_for_request(request_id)
-        .and_then(|row| row.materialized_message_sequence)
-    {
-        if let Some(doc_id) =
-            fetch_message_doc_id(remote_core.node(), session_id, sequence).await?
-        {
-            republish_and_sync_document(remote_core, desktop_core, AGENT_MESSAGE_NAME, &doc_id)
-                .await?;
-        }
-    }
-
-    let _ = refresh_store_with_timeout(desktop_core).await;
-    Ok(())
-}
-
-async fn republish_and_sync_document(
-    remote_core: &defra_agent_desktop::client::ClientCore,
-    desktop_core: &defra_agent_desktop::client::ClientCore,
-    collection_name: &str,
-    doc_id: &str,
-) -> Result<()> {
-    let _ = remote_core
-        .p2p()
-        .republish_document(collection_name, doc_id)
-        .await;
-    desktop_core
-        .p2p()
-        .sync_documents(collection_name, vec![doc_id.to_string()])
-        .await
-        .map_err(|error| anyhow!("sync {collection_name} {doc_id} failed: {error}"))?;
-    Ok(())
-}
-
-async fn fetch_doc_id_by_unique_field(
-    node: &defra_node::EmbeddedNode,
-    collection_name: &str,
-    field_name: &str,
-    value: &str,
-) -> Result<Option<String>> {
-    let value = serde_json::to_string(value)?;
-    let query = format!(
-        "query {{ {collection_name}(filter: {{ {field_name}: {{ _eq: {value} }} }}, limit: 1) {{ _docID }} }}"
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query for {collection_name}.{field_name} doc id failed: {}",
-            response
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
-    Ok(response
-        .data
-        .as_ref()
-        .and_then(|data| data.get(collection_name))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("_docID"))
-        .and_then(Value::as_str)
-        .map(str::to_string))
-}
-
-async fn fetch_message_doc_id(
-    node: &defra_node::EmbeddedNode,
-    session_id: &str,
-    sequence: i64,
-) -> Result<Option<String>> {
-    let session_id = serde_json::to_string(session_id)?;
-    let query = format!(
-        "query {{ AgentMessage(filter: {{ session_id: {{ _eq: {session_id} }}, sequence: {{ _eq: {sequence} }} }}, limit: 1) {{ _docID }} }}"
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query for AgentMessage doc id failed: {}",
-            response
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
-    Ok(response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentMessage"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("_docID"))
-        .and_then(Value::as_str)
-        .map(str::to_string))
 }
 
 async fn rename_conversation(
