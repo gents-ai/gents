@@ -337,6 +337,8 @@ struct LifecycleRequestRow {
     max_tokens: Option<i64>,
     #[serde(default)]
     metadata: Option<String>,
+    #[serde(default)]
+    execution_origin: Option<String>,
     created_at: String,
 }
 
@@ -741,6 +743,7 @@ async fn load_agent_request_for_lifecycle(
                 top_k
                 max_tokens
                 metadata
+                execution_origin
                 created_at
             }}
         }}"#
@@ -773,6 +776,7 @@ async fn load_agent_request_for_lifecycle(
         top_k: row.top_k,
         max_tokens: row.max_tokens,
         metadata: row.metadata,
+        execution_origin: row.execution_origin,
         created_at: row.created_at,
     })
 }
