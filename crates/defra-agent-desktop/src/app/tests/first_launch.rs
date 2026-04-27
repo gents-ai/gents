@@ -176,6 +176,8 @@ fn desktop_app_clicks_chat_open_setup_from_empty_sidebar() -> Result<()> {
     );
     app.state.onboarding.first_launch_redirect_done = true;
     app.state.activity = Activity::Chat;
+    app.state.setup.workspace_open = false;
+    app.state.setup.show_add_form = false;
     let mut driver = AuditDriver::new(app, ctx);
 
     let texts = driver.render();

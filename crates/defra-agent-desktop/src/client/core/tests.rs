@@ -24,6 +24,7 @@ struct RecordingP2P {
     connected_peers: StdRwLock<Vec<String>>,
     connected_peers_error: StdRwLock<Option<String>>,
     connect_calls: StdRwLock<Vec<String>>,
+    add_replicator_calls: StdRwLock<Vec<String>>,
     replicators: StdRwLock<Vec<ReplicatorInfo>>,
     replicators_error: StdRwLock<Option<String>>,
 }
@@ -80,6 +81,13 @@ impl RecordingP2P {
         self.connect_calls
             .read()
             .expect("connect calls lock poisoned")
+            .clone()
+    }
+
+    fn add_replicator_calls(&self) -> Vec<String> {
+        self.add_replicator_calls
+            .read()
+            .expect("add replicator calls lock poisoned")
             .clone()
     }
 
@@ -173,10 +181,16 @@ impl P2POps for RecordingP2P {
     async fn add_replicator(
         &self,
         _collections: Vec<String>,
-        _addr: Option<&str>,
+        addr: Option<&str>,
         _explicit_replay_capabilities: Vec<ExplicitReplayCapabilityInput>,
         _expected_authorizer_did: Option<&str>,
     ) -> P2PResult<()> {
+        if let Some(addr) = addr {
+            self.add_replicator_calls
+                .write()
+                .expect("add replicator calls lock poisoned")
+                .push(addr.to_string());
+        }
         Ok(())
     }
 
@@ -272,11 +286,46 @@ async fn repair_saved_peer_refreshes_network_before_redial() {
             last_error: Some("peer Workshop Bay dial failed".to_string()),
         }),
         false,
+        false,
     )
     .await;
 
     assert_eq!(recording.notify_calls(), 1);
     assert_eq!(recording.connect_calls(), vec![record.addr.clone()]);
+    assert!(repaired.dial_succeeded);
+    assert_eq!(repaired.last_error, None);
+}
+
+#[tokio::test]
+async fn repair_saved_peer_forces_reconfiguration_while_peer_is_connected() {
+    let recording = Arc::new(RecordingP2P::default());
+    let record = PeerRecord::new(
+        "Workshop Bay",
+        "127.0.0.1:56000/p2p/peer-alpha",
+        "did:defra:workshop-bay",
+    );
+    recording.set_connected_peers(vec![record.addr.clone()]);
+    let p2p: Arc<dyn P2POps> = recording.clone();
+
+    let repaired = repair_saved_peer(
+        &p2p,
+        &record,
+        Some(ClientPeerStatus {
+            peer_id: record.peer_id.clone(),
+            label: record.label.clone(),
+            agent_did: record.agent_did.clone(),
+            addr: record.addr.clone(),
+            dial_succeeded: true,
+            last_error: None,
+        }),
+        true,
+        true,
+    )
+    .await;
+
+    assert_eq!(recording.notify_calls(), 1);
+    assert_eq!(recording.connect_calls(), vec![record.addr.clone()]);
+    assert_eq!(recording.add_replicator_calls(), vec![record.addr.clone()]);
     assert!(repaired.dial_succeeded);
     assert_eq!(repaired.last_error, None);
 }
@@ -345,6 +394,8 @@ async fn probe_p2p_health_reports_healthy_transport() {
         id: Some("peer-alpha".to_string()),
         collections: vec!["AgentRequest".to_string()],
         address: Some("127.0.0.1:56000/p2p/peer-alpha".to_string()),
+        status: Some(0),
+        last_status_change: Some("0001-01-01T00:00:00Z".to_string()),
     }]);
     let p2p: Arc<dyn P2POps> = recording;
 

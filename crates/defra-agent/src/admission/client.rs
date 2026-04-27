@@ -151,8 +151,9 @@ where
 pub(crate) enum CallKind {
     Inference,
     Compaction,
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     Scheduled,
+    OneOff,
 }
 
 impl CallKind {
@@ -161,6 +162,7 @@ impl CallKind {
             Self::Inference => "inference",
             Self::Compaction => "compaction",
             Self::Scheduled => "scheduled",
+            Self::OneOff => "oneoff",
         }
     }
 }

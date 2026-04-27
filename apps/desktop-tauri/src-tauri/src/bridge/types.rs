@@ -171,6 +171,31 @@ pub(crate) struct ToolCallView {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct ToolDetailFieldView {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ToolDetailValueView {
+    pub raw_text: String,
+    pub fields: Vec<ToolDetailFieldView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RenderedToolCallView {
+    pub item_key: String,
+    pub tool_name: String,
+    pub status: Option<String>,
+    pub status_kind: String,
+    pub args: Option<ToolDetailValueView>,
+    pub result: Option<ToolDetailValueView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct ToolResultView {
     pub tool_name: Option<String>,
     pub tool_input: Option<String>,
@@ -194,6 +219,48 @@ pub(crate) struct ResponseView {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct PendingTurnView {
+    pub request_id: String,
+    pub content: String,
+    pub lifecycle_state: Option<String>,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub(crate) enum RenderedTimelineItem {
+    UserMessage {
+        item_key: String,
+        sequence: Option<i64>,
+        content: String,
+    },
+    AssistantMessage {
+        item_key: String,
+        sequence: Option<i64>,
+        content: Option<String>,
+        reasoning: Option<String>,
+    },
+    ToolGroup {
+        item_key: String,
+        message_sequence: Option<i64>,
+        tools: Vec<RenderedToolCallView>,
+    },
+    PendingUserTurn {
+        item_key: String,
+        request_id: String,
+        content: String,
+        lifecycle_state: Option<String>,
+        created_at: Option<String>,
+    },
+    LiveAssistant {
+        item_key: String,
+        content: Option<String>,
+        reasoning: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct DesktopSessionSnapshot {
     pub session_id: String,
     pub agent_did: Option<String>,
@@ -203,10 +270,20 @@ pub(crate) struct DesktopSessionSnapshot {
     pub status: Option<String>,
     pub turn_state: Option<String>,
     pub latest_request_id: Option<String>,
+    #[allow(dead_code)]
+    #[serde(skip_serializing)]
     pub latest_response: Option<ResponseView>,
     pub active_response_overlay: Option<ResponseView>,
+    pub pending_turn: Option<PendingTurnView>,
+    pub timeline_items: Vec<RenderedTimelineItem>,
+    #[allow(dead_code)]
+    #[serde(skip_serializing)]
     pub messages: Vec<MessageView>,
+    #[allow(dead_code)]
+    #[serde(skip_serializing)]
     pub tool_calls: Vec<ToolCallView>,
+    #[allow(dead_code)]
+    #[serde(skip_serializing)]
     pub tool_results: Vec<ToolResultView>,
 }
 

@@ -107,7 +107,11 @@ where
     let mut agent = agent.clone();
     agent.temperature = sampling.temperature;
     agent.max_tokens = sampling.max_tokens;
-    if let Some(additional_params) = sampling.additional_params() {
+    let request_additional_params = merge_optional_params(
+        sampling.additional_params(),
+        request_additional_params(behavior, request),
+    );
+    if let Some(additional_params) = request_additional_params {
         agent.additional_params =
             merge_optional_params(agent.additional_params.take(), Some(additional_params));
     }
@@ -162,6 +166,27 @@ fn provider_additional_params(kind: BackendProviderKind) -> Option<serde_json::V
                 .to_json(),
         ),
     }
+}
+
+fn request_additional_params(
+    behavior: &BehaviorConfig,
+    request: &AgentRequest,
+) -> Option<serde_json::Value> {
+    match behavior.backend_provider_kind {
+        BackendProviderKind::OpenAiCompatible => openai_cache_scope_params(request),
+        BackendProviderKind::OpenRouter => None,
+    }
+}
+
+fn openai_cache_scope_params(request: &AgentRequest) -> Option<serde_json::Value> {
+    let scope = normalize_cache_scope(request.session_id.as_str())
+        .or_else(|| normalize_cache_scope(request.request_id.as_str()))?;
+    Some(serde_json::json!({ "user": scope }))
+}
+
+fn normalize_cache_scope(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 #[cfg(test)]

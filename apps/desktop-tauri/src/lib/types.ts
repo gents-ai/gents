@@ -121,24 +121,23 @@ export type MessageView = {
   timestamp?: string | null;
 };
 
-export type ToolCallView = {
-  toolCallKey: string;
-  messageSequence?: number | null;
-  toolName?: string | null;
-  toolCallId?: string | null;
-  args?: string | null;
-  result?: string | null;
-  status?: string | null;
-  startedAt?: string | null;
-  completedAt?: string | null;
+export type ToolDetailFieldView = {
+  key: string;
+  value: string;
 };
 
-export type ToolResultView = {
-  toolName?: string | null;
-  toolInput?: string | null;
-  outputText?: string | null;
-  truncated?: boolean | null;
-  createdAt?: string | null;
+export type ToolDetailValueView = {
+  rawText: string;
+  fields: ToolDetailFieldView[];
+};
+
+export type RenderedToolCallView = {
+  itemKey: string;
+  toolName: string;
+  status?: string | null;
+  statusKind: string;
+  args?: ToolDetailValueView | null;
+  result?: ToolDetailValueView | null;
 };
 
 export type ResponseView = {
@@ -152,6 +151,48 @@ export type ResponseView = {
   completedAt?: string | null;
 };
 
+export type PendingTurnView = {
+  requestId: string;
+  content: string;
+  lifecycleState?: string | null;
+  createdAt?: string | null;
+};
+
+export type RenderedTimelineItem =
+  | {
+      kind: "userMessage";
+      itemKey: string;
+      sequence?: number | null;
+      content: string;
+    }
+  | {
+      kind: "assistantMessage";
+      itemKey: string;
+      sequence?: number | null;
+      content?: string | null;
+      reasoning?: string | null;
+    }
+  | {
+      kind: "toolGroup";
+      itemKey: string;
+      messageSequence?: number | null;
+      tools: RenderedToolCallView[];
+    }
+  | {
+      kind: "pendingUserTurn";
+      itemKey: string;
+      requestId: string;
+      content: string;
+      lifecycleState?: string | null;
+      createdAt?: string | null;
+    }
+  | {
+      kind: "liveAssistant";
+      itemKey: string;
+      content?: string | null;
+      reasoning?: string | null;
+    };
+
 export type DesktopSessionSnapshot = {
   sessionId: string;
   agentDid?: string | null;
@@ -163,9 +204,8 @@ export type DesktopSessionSnapshot = {
   latestRequestId?: string | null;
   latestResponse?: ResponseView | null;
   activeResponseOverlay?: ResponseView | null;
-  messages: MessageView[];
-  toolCalls: ToolCallView[];
-  toolResults: ToolResultView[];
+  pendingTurn?: PendingTurnView | null;
+  timelineItems: RenderedTimelineItem[];
 };
 
 export type ChatSendResult = {

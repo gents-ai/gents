@@ -213,32 +213,47 @@ impl MultiAgentLiveDesktopFixture {
         );
         for deployment in &self.deployments {
             let phase_started = Instant::now();
-            wait_for_client_quiescence(
+            if let Err(error) = wait_for_client_quiescence(
                 self.runtime.as_ref(),
                 deployment.core.as_ref(),
                 &format!("live remote fixture {}", deployment.label),
                 Some(&deployment.agent_did),
                 Duration::from_secs(5),
-            )?;
-            tracing::info!(
-                deployment = %deployment.label,
-                elapsed_ms = phase_started.elapsed().as_millis() as u64,
-                "multi-agent fixture shutdown: remote quiescence complete"
-            );
+            ) {
+                tracing::warn!(
+                    deployment = %deployment.label,
+                    error = %error,
+                    elapsed_ms = phase_started.elapsed().as_millis() as u64,
+                    "multi-agent fixture shutdown: remote quiescence timed out; continuing teardown"
+                );
+            } else {
+                tracing::info!(
+                    deployment = %deployment.label,
+                    elapsed_ms = phase_started.elapsed().as_millis() as u64,
+                    "multi-agent fixture shutdown: remote quiescence complete"
+                );
+            }
         }
         if let Some(desktop_core) = self.driver.app.client.as_ref() {
             let phase_started = Instant::now();
-            wait_for_client_quiescence(
+            if let Err(error) = wait_for_client_quiescence(
                 self.runtime.as_ref(),
                 desktop_core.as_ref(),
                 "live desktop fixture",
                 None,
                 Duration::from_secs(5),
-            )?;
-            tracing::info!(
-                elapsed_ms = phase_started.elapsed().as_millis() as u64,
-                "multi-agent fixture shutdown: desktop quiescence complete"
-            );
+            ) {
+                tracing::warn!(
+                    error = %error,
+                    elapsed_ms = phase_started.elapsed().as_millis() as u64,
+                    "multi-agent fixture shutdown: desktop quiescence timed out; continuing teardown"
+                );
+            } else {
+                tracing::info!(
+                    elapsed_ms = phase_started.elapsed().as_millis() as u64,
+                    "multi-agent fixture shutdown: desktop quiescence complete"
+                );
+            }
         }
         for deployment in self.deployments.drain(..) {
             let phase_started = Instant::now();

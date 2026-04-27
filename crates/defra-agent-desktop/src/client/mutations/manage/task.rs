@@ -9,6 +9,14 @@
 //! responsibility, and re-applying a desktop edit must never clobber
 //! them.
 //!
+//! `Schedule.created_at` / `updated_at` are intentionally omitted from
+//! the desktop write path for now. DefraDB currently round-trips those
+//! DateTime fields as plain strings when written through this upsert
+//! shape, and the trigger engine's later `update_Schedule` bookkeeping
+//! mutations then fail schema validation on the existing document. The
+//! runtime does not require these timestamps, so leaving them unset is
+//! safer than creating schedules the engine cannot advance.
+//!
 //! The `fire_schedule_now` path is deliberately left as an error until
 //! the manual-run surface lands in PR 3. The desktop can still show the
 //! "Run Now" button, but invoking it surfaces the intentional gap
@@ -22,8 +30,9 @@
 //! only needs the upsert path today.
 
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::Utc;
+use chrono::{SecondsFormat, Utc};
 use defra_agent::write_manual_agent_request;
+use defra_agent_protocol::graphql::normalize_optional_rfc3339;
 use defra_agent_protocol::row::{EventTriggerRow, ScheduleRow, TaskRow};
 use defra_node::EmbeddedNode;
 
@@ -34,17 +43,11 @@ use super::super::graphql::{
 
 pub async fn upsert_task(node: &EmbeddedNode, row: &TaskRow) -> Result<()> {
     let task_id = normalize_required("task_id", &row.task_id)?;
-    let now = Utc::now().to_rfc3339();
-    let created_at = row
-        .created_at
-        .as_deref()
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| now.clone());
-    let updated_at = row
-        .updated_at
-        .as_deref()
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| now.clone());
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let created_at = row.created_at.as_deref();
+    let created_at = normalize_optional_rfc3339(created_at)?.unwrap_or_else(|| now.clone());
+    let updated_at = row.updated_at.as_deref();
+    let updated_at = normalize_optional_rfc3339(updated_at)?.unwrap_or_else(|| now.clone());
 
     let add_fields = [
         Some(format!(r#"task_id: "{}""#, escape_graphql_string(task_id))),
@@ -129,18 +132,6 @@ pub async fn upsert_schedule(node: &EmbeddedNode, row: &ScheduleRow) -> Result<(
             .as_deref()
             .context("task_id is required for Schedule")?,
     )?;
-    let now = Utc::now().to_rfc3339();
-    let created_at = row
-        .created_at
-        .as_deref()
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| now.clone());
-    let updated_at = row
-        .updated_at
-        .as_deref()
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| now.clone());
-
     let add_fields = [
         Some(format!(
             r#"schedule_id: "{}""#,
@@ -156,14 +147,6 @@ pub async fn upsert_schedule(node: &EmbeddedNode, row: &ScheduleRow) -> Result<(
             "concurrency",
             row.concurrency.as_deref(),
         )),
-        Some(format!(
-            r#"created_at: "{}""#,
-            escape_graphql_string(&created_at)
-        )),
-        Some(format!(
-            r#"updated_at: "{}""#,
-            escape_graphql_string(&updated_at)
-        )),
     ];
     let update_fields = [
         Some(format!(r#"task_id: "{}""#, escape_graphql_string(task_id))),
@@ -176,7 +159,6 @@ pub async fn upsert_schedule(node: &EmbeddedNode, row: &ScheduleRow) -> Result<(
             "concurrency",
             row.concurrency.as_deref(),
         )),
-        Some(format!(r#"updated_at: "{}""#, escape_graphql_string(&now))),
     ];
 
     let mutation = format!(

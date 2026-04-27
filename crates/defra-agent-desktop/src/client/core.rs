@@ -1,4 +1,5 @@
 mod bootstrap;
+mod materialization;
 mod p2p_ops;
 mod supervisor;
 mod writes;
@@ -28,7 +29,9 @@ const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 const BOOTSTRAP_OPERATION_BACKOFF: Duration = Duration::from_millis(250);
 const P2P_SUPERVISOR_INTERVAL: Duration = Duration::from_secs(2);
-const P2P_OPERATION_TIMEOUT: Duration = Duration::from_secs(3);
+// Live tool-heavy turns can keep the embedded transport busy long enough that
+// short probe deadlines misclassify healthy peers as wedged.
+const P2P_OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
 const P2P_WEDGED_FAILURE_THRESHOLD: u32 = 3;
 const DESKTOP_P2P_MAX_CONCURRENT_PUSH_TASKS: usize = 32;
 const DESKTOP_P2P_RATE_LIMIT_BURST: u32 = 5_000;
@@ -150,6 +153,7 @@ pub struct ClientCore {
     observer: Mutex<Option<ObserverHandle>>,
     peer_statuses: Arc<StdRwLock<Vec<ClientPeerStatus>>>,
     p2p_supervisor: Mutex<Option<JoinHandle<()>>>,
+    materialization_supervisor: Mutex<Option<JoinHandle<()>>>,
     p2p_health: watch::Sender<P2PHealth>,
     p2p_control: Mutex<Option<mpsc::Sender<P2PSupervisorCommand>>>,
     last_mutation_error: StdRwLock<Option<String>>,
@@ -286,6 +290,11 @@ impl ClientCore {
         self.p2p_control.lock().await.take();
         if let Some(task) = self.p2p_supervisor.lock().await.take() {
             tracing::info!("client core shutdown: stopping p2p supervisor");
+            task.abort();
+            let _ = task.await;
+        }
+        if let Some(task) = self.materialization_supervisor.lock().await.take() {
+            tracing::info!("client core shutdown: stopping materialization supervisor");
             task.abort();
             let _ = task.await;
         }

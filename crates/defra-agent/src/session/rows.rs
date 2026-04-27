@@ -38,12 +38,21 @@ pub(super) struct SessionDocument {
 pub(super) struct ConversationDocument {
     #[serde(rename = "_docID")]
     #[allow(dead_code)]
+    #[serde(default)]
     pub(super) doc_id: String,
+    #[serde(default)]
     pub(super) title: String,
+    #[serde(default)]
+    pub(super) title_source: Option<String>,
+    #[serde(default)]
     pub(super) preview_text: String,
+    #[serde(default)]
     pub(super) status: String,
+    #[serde(default)]
     pub(super) latest_request_id: String,
+    #[serde(default)]
     pub(super) behavior_id: Option<String>,
+    #[serde(default)]
     pub(super) created_at: String,
     #[serde(default)]
     pub(super) agent_did: Option<String>,

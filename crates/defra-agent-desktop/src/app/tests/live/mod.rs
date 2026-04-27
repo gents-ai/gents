@@ -15,3 +15,4 @@ mod manage_scheduled;
 mod manage_switching;
 mod manage_tool_selection;
 mod replication;
+mod tauri_snapshot;

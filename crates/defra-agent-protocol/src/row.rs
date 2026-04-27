@@ -161,6 +161,8 @@ pub struct AgentConversationRow {
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
+    pub title_source: Option<String>,
+    #[serde(default)]
     pub preview_text: Option<String>,
     #[serde(default)]
     pub status: Option<String>,

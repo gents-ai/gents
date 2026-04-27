@@ -17,6 +17,7 @@ use super::super::query::load_full_snapshot;
 use super::super::schema::{
     ensure_runtime_schemas, subscribe_all_collections, subscribed_collection_names,
 };
+use super::materialization::spawn_materialization_supervisor_task;
 use super::p2p_ops::{
     p2p_add_replicator, p2p_connect_peer, p2p_connected_peers, p2p_listen_addresses,
     p2p_local_peer_id,
@@ -103,6 +104,11 @@ impl ClientCore {
             p2p_control_rx,
             options.install_replicators_on_bootstrap,
         );
+        let materialization_supervisor = spawn_materialization_supervisor_task(
+            Arc::clone(&node),
+            Arc::clone(&p2p),
+            Arc::clone(&store),
+        );
 
         Ok(Self {
             paths,
@@ -115,6 +121,7 @@ impl ClientCore {
             observer: tokio::sync::Mutex::new(Some(observer)),
             peer_statuses,
             p2p_supervisor: tokio::sync::Mutex::new(Some(p2p_supervisor)),
+            materialization_supervisor: tokio::sync::Mutex::new(Some(materialization_supervisor)),
             p2p_health,
             p2p_control: tokio::sync::Mutex::new(Some(p2p_control)),
             last_mutation_error: std::sync::RwLock::new(None),
@@ -219,6 +226,14 @@ pub(super) async fn connect_peer_with_retry(
     connect_peer_with_retry_until(p2p, addr, label, BOOTSTRAP_OPERATION_TIMEOUT).await
 }
 
+pub(super) async fn force_connect_peer_with_retry(
+    p2p: &Arc<dyn P2POps>,
+    addr: &str,
+    label: &str,
+) -> Result<()> {
+    force_connect_peer_with_retry_until(p2p, addr, label, BOOTSTRAP_OPERATION_TIMEOUT).await
+}
+
 pub(super) async fn connect_peer_with_retry_until(
     p2p: &Arc<dyn P2POps>,
     addr: &str,
@@ -252,6 +267,42 @@ pub(super) async fn connect_peer_with_retry_until(
                 }
                 if Instant::now() >= deadline {
                     anyhow::bail!("timed out connecting bootstrap peer {label} at {addr}: {error}");
+                }
+                sleep(BOOTSTRAP_OPERATION_BACKOFF).await;
+            }
+        }
+    }
+}
+
+pub(super) async fn force_connect_peer_with_retry_until(
+    p2p: &Arc<dyn P2POps>,
+    addr: &str,
+    label: &str,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    let expected_peer_id = parse_public_peer_addr(addr)
+        .ok()
+        .map(|(peer_id, _)| peer_id.to_string());
+
+    loop {
+        match p2p_connect_peer(p2p, addr).await {
+            Ok(()) => {
+                if let Some(peer_id) = expected_peer_id.as_deref() {
+                    wait_for_connected_peer(p2p, peer_id, deadline, label).await?;
+                }
+                return Ok(());
+            }
+            Err(error) => {
+                if let Some(peer_id) = expected_peer_id.as_deref() {
+                    if is_connected_peer(p2p, peer_id).await? {
+                        return Ok(());
+                    }
+                }
+                if Instant::now() >= deadline {
+                    anyhow::bail!(
+                        "timed out force-connecting bootstrap peer {label} at {addr}: {error}"
+                    );
                 }
                 sleep(BOOTSTRAP_OPERATION_BACKOFF).await;
             }

@@ -33,7 +33,9 @@ type TriggerLockMap = HashMap<TriggerLockKey, TriggerLock>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum TriggerKind {
     Schedule,
+    #[allow(dead_code)]
     Event,
+    #[allow(dead_code)]
     Manual,
 }
 
@@ -86,9 +88,17 @@ impl FireIntent {
 /// on a later tick.
 #[derive(Debug, Clone)]
 pub(crate) enum FireResult {
-    Fired { request_id: String },
-    Skipped { reason: String },
-    Errored { error: String },
+    #[allow(dead_code)]
+    Fired {
+        request_id: String,
+    },
+    #[allow(dead_code)]
+    Skipped {
+        reason: String,
+    },
+    Errored {
+        error: String,
+    },
 }
 
 /// Stream of fire intents produced by a source (e.g. the schedule clock, an

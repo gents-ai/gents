@@ -1,7 +1,11 @@
 use super::query::load_conversation_document;
+use super::query::load_recent_conversation_titles;
 use super::retry::execute_mutation_with_retry;
 use super::rows::ConversationDocument;
 use super::*;
+
+pub(crate) const CONVERSATION_TITLE_SOURCE_PLACEHOLDER: &str = "placeholder";
+pub(crate) const CONVERSATION_TITLE_SOURCE_GENERATED: &str = "generated";
 
 #[allow(dead_code)]
 pub(crate) async fn upsert_conversation_from_request(
@@ -46,21 +50,14 @@ pub(crate) async fn upsert_conversation_from_request_with_identity(
     let existing = load_conversation_document(node, session_id).await?;
     let resolved_behavior_id =
         resolve_behavior_id(existing.as_ref(), behavior_id, "AgentConversation")?;
-    let title = if let Some(existing) = existing.as_ref() {
-        if existing.title.trim().is_empty() || existing.title == "New Conversation" {
-            derive_conversation_title(content)
-        } else {
-            existing.title.clone()
-        }
-    } else {
-        derive_conversation_title(content)
-    };
+    let (title, title_source) = existing_title_state(existing.as_ref());
     let created_at = existing
         .as_ref()
         .map(|conversation| conversation.created_at.clone())
         .unwrap_or_else(|| now.clone());
     let escaped_behavior_id = escape_graphql_string(&resolved_behavior_id);
     let escaped_title = escape_graphql_string(&title);
+    let escaped_title_source = escape_graphql_string(&title_source);
     let escaped_created_at = escape_graphql_string(&created_at);
 
     let mutation = format!(
@@ -73,6 +70,7 @@ pub(crate) async fn upsert_conversation_from_request_with_identity(
                     agent_did: "{escaped_agent_did}",
                     behavior_id: "{escaped_behavior_id}",
                     title: "{escaped_title}",
+                    title_source: "{escaped_title_source}",
                     preview_text: "{escaped_preview}",
                     status: "{escaped_status}",
                     created_at: "{escaped_created_at}",
@@ -84,6 +82,7 @@ pub(crate) async fn upsert_conversation_from_request_with_identity(
                     agent_did: "{escaped_agent_did}",
                     behavior_id: "{escaped_behavior_id}",
                     title: "{escaped_title}",
+                    title_source: "{escaped_title_source}",
                     preview_text: "{escaped_preview}",
                     status: "{escaped_status}",
                     created_at: "{escaped_created_at}",
@@ -134,7 +133,11 @@ pub(crate) async fn update_conversation_status_with_identity(
     let title = existing
         .as_ref()
         .map(|conversation| conversation.title.clone())
-        .unwrap_or_else(|| "New Conversation".to_string());
+        .unwrap_or_default();
+    let title_source = existing
+        .as_ref()
+        .and_then(|conversation| normalize_optional_string(conversation.title_source.as_deref()))
+        .unwrap_or(CONVERSATION_TITLE_SOURCE_PLACEHOLDER);
     let preview_text = existing
         .as_ref()
         .map(|conversation| conversation.preview_text.clone())
@@ -149,6 +152,7 @@ pub(crate) async fn update_conversation_status_with_identity(
         .unwrap_or_else(|| now.clone());
     let escaped_behavior_id = escape_graphql_string(&resolved_behavior_id);
     let escaped_title = escape_graphql_string(&title);
+    let escaped_title_source = escape_graphql_string(title_source);
     let escaped_preview_text = escape_graphql_string(&preview_text);
     let escaped_latest_request_id = escape_graphql_string(&latest_request_id);
     let escaped_created_at = escape_graphql_string(&created_at);
@@ -163,6 +167,7 @@ pub(crate) async fn update_conversation_status_with_identity(
                     agent_did: "{escaped_agent_did}",
                     behavior_id: "{escaped_behavior_id}",
                     title: "{escaped_title}",
+                    title_source: "{escaped_title_source}",
                     preview_text: "{escaped_preview_text}",
                     status: "{escaped_status}",
                     created_at: "{escaped_created_at}",
@@ -174,6 +179,7 @@ pub(crate) async fn update_conversation_status_with_identity(
                     agent_did: "{escaped_agent_did}",
                     behavior_id: "{escaped_behavior_id}",
                     title: "{escaped_title}",
+                    title_source: "{escaped_title_source}",
                     preview_text: "{escaped_preview_text}",
                     status: "{escaped_status}",
                     created_at: "{escaped_created_at}",
@@ -220,6 +226,12 @@ pub(crate) async fn update_conversation_status_if_latest_with_identity(
     }
 
     let escaped_title = escape_graphql_string(&existing.title);
+    let escaped_title_source = escape_graphql_string(
+        existing
+            .title_source
+            .as_deref()
+            .unwrap_or(CONVERSATION_TITLE_SOURCE_PLACEHOLDER),
+    );
     let escaped_preview_text = escape_graphql_string(&existing.preview_text);
     let escaped_created_at = escape_graphql_string(&existing.created_at);
     let escaped_behavior_id = escape_graphql_string(&resolved_behavior_id);
@@ -235,6 +247,7 @@ pub(crate) async fn update_conversation_status_if_latest_with_identity(
                     agent_did: "{escaped_agent_did}",
                     behavior_id: "{escaped_behavior_id}",
                     title: "{escaped_title}",
+                    title_source: "{escaped_title_source}",
                     preview_text: "{escaped_preview_text}",
                     status: "{escaped_status}",
                     created_at: "{escaped_created_at}",
@@ -278,6 +291,73 @@ pub(crate) async fn update_conversation_status_if_latest_with_identity(
     }
 }
 
+pub(crate) async fn update_conversation_title_with_source(
+    node: &EmbeddedNode,
+    session_id: &str,
+    title: &str,
+    title_source: &str,
+) -> Result<()> {
+    let Some(existing) = load_conversation_document(node, session_id).await? else {
+        return Ok(());
+    };
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let escaped_session_id = escape_graphql_string(session_id);
+    let escaped_title = escape_graphql_string(title);
+    let escaped_title_source = escape_graphql_string(title_source);
+    let escaped_preview_text = escape_graphql_string(&existing.preview_text);
+    let escaped_status = escape_graphql_string(&existing.status);
+    let escaped_latest_request_id = escape_graphql_string(&existing.latest_request_id);
+    let escaped_created_at = escape_graphql_string(&existing.created_at);
+    let escaped_behavior_id =
+        escape_graphql_string(existing.behavior_id.as_deref().unwrap_or_default());
+
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentConversation(
+                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                input: {{
+                    behavior_id: "{escaped_behavior_id}",
+                    title: "{escaped_title}",
+                    title_source: "{escaped_title_source}",
+                    preview_text: "{escaped_preview_text}",
+                    status: "{escaped_status}",
+                    created_at: "{escaped_created_at}",
+                    updated_at: "{now}",
+                    latest_request_id: "{escaped_latest_request_id}"
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+
+    execute_mutation_with_retry(node, &mutation, "update_conversation_title_with_source").await?;
+    Ok(())
+}
+
+pub(crate) async fn load_recent_titles_for_agent(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    exclude_session_id: &str,
+    limit: usize,
+) -> Result<Vec<String>> {
+    load_recent_conversation_titles(node, agent_did, exclude_session_id, limit).await
+}
+
+pub(crate) async fn conversation_needs_generated_title(
+    node: &EmbeddedNode,
+    session_id: &str,
+) -> Result<bool> {
+    let Some(existing) = load_conversation_document(node, session_id).await? else {
+        return Ok(false);
+    };
+
+    let title = existing.title.trim();
+    let title_source = normalize_optional_string(existing.title_source.as_deref())
+        .unwrap_or(CONVERSATION_TITLE_SOURCE_PLACEHOLDER);
+
+    Ok(title.is_empty() || title_source == CONVERSATION_TITLE_SOURCE_PLACEHOLDER)
+}
+
 fn agent_did_for_name(agent_name: &str) -> String {
     format!("did:defra-agent:{agent_name}")
 }
@@ -308,12 +388,18 @@ fn normalize_optional_string(value: Option<&str>) -> Option<&str> {
     })
 }
 
-fn derive_conversation_title(content: &str) -> String {
-    let normalized = normalize_conversation_text(content);
-    if normalized.is_empty() {
-        "New Conversation".to_string()
-    } else {
-        truncate_chars(&normalized, 80)
+fn existing_title_state(existing: Option<&ConversationDocument>) -> (String, String) {
+    match existing {
+        Some(existing) => (
+            existing.title.clone(),
+            normalize_optional_string(existing.title_source.as_deref())
+                .unwrap_or(CONVERSATION_TITLE_SOURCE_PLACEHOLDER)
+                .to_string(),
+        ),
+        None => (
+            String::new(),
+            CONVERSATION_TITLE_SOURCE_PLACEHOLDER.to_string(),
+        ),
     }
 }
 

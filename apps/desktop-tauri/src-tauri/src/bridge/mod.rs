@@ -3,12 +3,14 @@ mod state;
 mod types;
 
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use defra_agent_desktop::client::{ClientCore, DesktopPaths};
 use defra_agent_desktop::local_runtime::{
     dangerously_overwrite_desktop_home, default_agent_home, init_standard_local_runtime,
     reset_desktop_runtime_state, DesktopInitOptions, DesktopInitSummary,
 };
+use defra_agent_protocol::client_protocol::ClientTurnState;
 use tauri::{AppHandle, Emitter, State};
 
 use self::snapshot::{
@@ -19,6 +21,29 @@ use self::types::{
     ChatSendRequest, ChatSendResult, ClientUpdateEvent, ConversationRenameRequest,
     DesktopBootstrapSummary, DesktopClientSnapshot, DesktopInitRequest, DesktopSessionSnapshot,
 };
+
+static TAURI_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+fn can_send_in_turn(state: ClientTurnState) -> bool {
+    matches!(
+        state,
+        ClientTurnState::Completed
+            | ClientTurnState::Failed
+            | ClientTurnState::Superseded
+            | ClientTurnState::Interrupted
+    )
+}
+
+fn turn_state_label(state: ClientTurnState) -> &'static str {
+    match state {
+        ClientTurnState::WaitingForClaim => "waitingForClaim",
+        ClientTurnState::Streaming => "streaming",
+        ClientTurnState::Completed => "completed",
+        ClientTurnState::Failed => "failed",
+        ClientTurnState::Superseded => "superseded",
+        ClientTurnState::Interrupted => "interrupted",
+    }
+}
 
 #[tauri::command]
 fn desktop_bootstrap_summary() -> Result<DesktopBootstrapSummary, String> {
@@ -127,6 +152,7 @@ fn desktop_client_snapshot(
 #[tauri::command]
 fn desktop_session_snapshot(
     session_id: String,
+    request_id: Option<String>,
     state: State<'_, DesktopAppState>,
 ) -> Result<Option<DesktopSessionSnapshot>, String> {
     let Some(core) = current_core(&state) else {
@@ -137,6 +163,7 @@ fn desktop_session_snapshot(
     Ok(build_session_snapshot_from_store(
         snapshot.as_ref(),
         &session_id,
+        request_id.as_deref(),
     ))
 }
 
@@ -182,6 +209,16 @@ fn desktop_chat_send(
             }
         };
 
+        let store = core.store().snapshot();
+        if let Some(turn_state) = store.derive_turn(&session_id) {
+            if !can_send_in_turn(turn_state) {
+                return Err(format!(
+                    "cannot send while current turn is {}",
+                    turn_state_label(turn_state)
+                ));
+            }
+        }
+
         let submitted = core
             .submit_request(&session_id, &agent_did, &content, behavior_id.as_deref())
             .await
@@ -224,6 +261,18 @@ fn desktop_conversation_rename(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let runtime = TAURI_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            // Merge replay can recurse deeply through collection heads. Give Tokio
+            // worker threads enough stack to reach the merge depth guard instead of
+            // aborting the whole desktop process with a native stack overflow.
+            .thread_stack_size(32 * 1024 * 1024)
+            .build()
+            .expect("failed to build Tauri Tokio runtime")
+    });
+    tauri::async_runtime::set(runtime.handle().clone());
+
     tauri::Builder::default()
         .manage(DesktopAppState::default())
         .plugin(tauri_plugin_opener::init())

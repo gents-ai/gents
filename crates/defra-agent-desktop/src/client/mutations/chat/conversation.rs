@@ -10,6 +10,8 @@ use super::super::graphql::{
 };
 use super::binding::resolve_agent_binding;
 
+const CONVERSATION_TITLE_SOURCE_PLACEHOLDER: &str = "placeholder";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreatedConversation {
     pub session_id: String,
@@ -166,7 +168,16 @@ pub(super) async fn upsert_conversation(
     let title = existing
         .and_then(|row| normalize_optional_string(row.title.as_deref()))
         .map(ToOwned::to_owned)
-        .unwrap_or_default();
+        .unwrap_or_else(|| {
+            if content.is_empty() {
+                String::new()
+            } else {
+                derive_conversation_preview(content)
+            }
+        });
+    let title_source = existing
+        .and_then(|row| normalize_optional_string(row.title_source.as_deref()))
+        .unwrap_or(CONVERSATION_TITLE_SOURCE_PLACEHOLDER);
     let preview_text = if content.is_empty() {
         existing
             .and_then(|row| row.preview_text.as_deref())
@@ -189,6 +200,7 @@ pub(super) async fn upsert_conversation(
     let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_behavior_id = escape_graphql_string(behavior_id.as_deref().unwrap_or(""));
     let escaped_title = escape_graphql_string(&title);
+    let escaped_title_source = escape_graphql_string(title_source);
     let escaped_preview = escape_graphql_string(&preview_text);
     let escaped_status = escape_graphql_string(status);
     let escaped_created_at = escape_graphql_string(created_at);
@@ -203,6 +215,7 @@ pub(super) async fn upsert_conversation(
                     agent_did: "{escaped_agent_did}",
                     behavior_id: "{escaped_behavior_id}",
                     title: "{escaped_title}",
+                    title_source: "{escaped_title_source}",
                     preview_text: "{escaped_preview}",
                     status: "{escaped_status}",
                     created_at: "{escaped_created_at}",
@@ -214,6 +227,7 @@ pub(super) async fn upsert_conversation(
                     agent_did: "{escaped_agent_did}",
                     behavior_id: "{escaped_behavior_id}",
                     title: "{escaped_title}",
+                    title_source: "{escaped_title_source}",
                     preview_text: "{escaped_preview}",
                     status: "{escaped_status}",
                     created_at: "{escaped_created_at}",

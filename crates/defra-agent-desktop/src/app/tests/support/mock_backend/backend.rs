@@ -25,13 +25,17 @@ impl AgentBackendConfig {
     }
 
     pub(crate) fn live_from_env() -> Result<Self> {
-        let endpoint = optional_env("DEFRA_AGENT_DESKTOP_LIVE_BACKEND_ENDPOINT");
-        let model_name = optional_env("DEFRA_AGENT_DESKTOP_LIVE_BACKEND_MODEL")
+        Self::live_from_env_prefix("DEFRA_AGENT_DESKTOP_LIVE_BACKEND")
+    }
+
+    pub(crate) fn live_from_env_prefix(prefix: &str) -> Result<Self> {
+        let endpoint = optional_env(&format!("{prefix}_ENDPOINT"));
+        let model_name = optional_env(&format!("{prefix}_MODEL"))
             .or_else(|| optional_env("DEFRA_AGENT_TEST_OPENROUTER_MODEL"))
             .unwrap_or_else(|| "openai/gpt-4o-mini".to_string());
-        let provider_kind = optional_env("DEFRA_AGENT_DESKTOP_LIVE_BACKEND_PROVIDER");
-        let api_key = optional_env("DEFRA_AGENT_DESKTOP_LIVE_BACKEND_API_KEY");
-        let api_key_env_var = optional_env("DEFRA_AGENT_DESKTOP_LIVE_BACKEND_API_KEY_ENV_VAR");
+        let provider_kind = optional_env(&format!("{prefix}_PROVIDER"));
+        let api_key = optional_env(&format!("{prefix}_API_KEY"));
+        let api_key_env_var = optional_env(&format!("{prefix}_API_KEY_ENV_VAR"));
 
         if endpoint.is_some()
             || provider_kind.is_some()
@@ -47,9 +51,9 @@ impl AgentBackendConfig {
             }
 
             return Ok(Self {
-                endpoint: endpoint.context(
-                    "set DEFRA_AGENT_DESKTOP_LIVE_BACKEND_ENDPOINT for the live desktop smoke test",
-                )?,
+                endpoint: endpoint.context(format!(
+                    "set {prefix}_ENDPOINT for the live desktop smoke test"
+                ))?,
                 model_name,
                 provider_kind: BackendProviderKind::parse_optional(provider_kind.as_deref())?,
                 api_key,

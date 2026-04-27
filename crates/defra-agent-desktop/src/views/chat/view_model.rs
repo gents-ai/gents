@@ -83,12 +83,7 @@ pub fn build_conversation_buckets(
             .and_then(parse_timestamp);
         let entry = ConversationEntry {
             session_id: conversation.session_id.clone(),
-            title: conversation
-                .title
-                .as_deref()
-                .filter(|title| !title.trim().is_empty())
-                .unwrap_or("New Conversation")
-                .to_string(),
+            title: conversation_title(conversation),
             meta: conversation
                 .behavior_id
                 .as_deref()
@@ -235,6 +230,23 @@ fn abbreviate_address(value: &str) -> String {
     }
 
     format!("{}..{}", &value[..10], &value[value.len() - 4..])
+}
+
+fn conversation_title(conversation: &AgentConversationRow) -> String {
+    conversation
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .or_else(|| {
+            conversation
+                .preview_text
+                .as_deref()
+                .map(str::trim)
+                .filter(|preview| !preview.is_empty())
+        })
+        .unwrap_or("New Conversation")
+        .to_string()
 }
 
 pub(super) fn simple_behavior_label(

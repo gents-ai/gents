@@ -1,6 +1,7 @@
 mod composer;
 mod container;
 mod header;
+mod nudge;
 mod sidebar;
 mod transcript;
 mod view_model;

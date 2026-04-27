@@ -8,7 +8,11 @@ function App() {
 
   return (
     <main className="app-shell">
-      {shell.error ? <div className="callout error-banner">{shell.error}</div> : null}
+      {shell.error ? (
+        <div className="callout error-banner" data-testid="error-banner">
+          {shell.error}
+        </div>
+      ) : null}
 
       <section className="workspace">
         <Sidebar
@@ -40,6 +44,7 @@ function App() {
           <ChatWorkspace
             approxSerializedBytes={shell.snapshot?.client?.approxSerializedBytes ?? 0}
             behaviorOptions={shell.behaviorOptions}
+            canSend={shell.canSendMessage}
             configuredPeerCount={shell.snapshot?.client?.configuredPeerCount ?? 0}
             dialedPeerCount={shell.snapshot?.client?.dialedPeerCount ?? 0}
             draft={shell.draft}
@@ -53,13 +58,19 @@ function App() {
             rowCount={shell.snapshot?.client?.rowCount ?? 0}
             running={Boolean(shell.snapshot?.client)}
             runtimeHealth={shell.runtimeHealth}
+            sendHint={
+              shell.sendStatus.kind === "disabled" ? shell.sendStatus.hint : null
+            }
             selectedBehaviorId={shell.selectedBehaviorId}
-            selectedConversationTitle={shell.selectedConversation?.title ?? null}
+            selectedConversationTitle={
+              shell.session
+                ? shell.session.title ?? null
+                : shell.selectedConversation?.title ?? null
+            }
             selectedDeployment={shell.selectedDeployment}
             selectedSessionId={shell.selectedSessionId}
             sending={shell.sending}
             session={shell.session}
-            sessionTools={shell.sessionTools}
             starting={shell.starting}
           />
         </section>

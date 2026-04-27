@@ -318,6 +318,45 @@ h3 {
   line-height: 1.25;
 }
 
+.conversation-list-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.conversation-list-title {
+  -webkit-line-clamp: 1;
+  min-width: 0;
+}
+
+.conversation-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.conversation-status-dot-success {
+  background: #8bd39b;
+  box-shadow: 0 0 0 1px rgba(139, 211, 155, 0.18);
+}
+
+.conversation-status-dot-error {
+  background: #d96d6d;
+  box-shadow: 0 0 0 1px rgba(217, 109, 109, 0.18);
+}
+
+.conversation-status-dot-running {
+  background: #ddb780;
+  box-shadow: 0 0 0 1px rgba(221, 183, 128, 0.18);
+}
+
+.conversation-status-dot-idle {
+  background: rgba(177, 157, 129, 0.55);
+  box-shadow: 0 0 0 1px rgba(177, 157, 129, 0.14);
+}
+
 .list-item-meta {
   color: #ddb780;
   font-size: 12px;
@@ -361,18 +400,9 @@ h3 {
   padding: 14px;
 }
 
-.response-card {
-  border-color: rgba(89, 191, 112, 0.16);
-  background: rgba(24, 30, 22, 0.72);
-  box-shadow: inset 0 1px 0 rgba(157, 216, 171, 0.04);
-}
-
-.response-card .message-role {
-  color: #9dd8ab;
-}
-
-.response-card .message-content {
-  color: #dfecd8;
+.pending-card {
+  border-color: rgba(214, 167, 103, 0.18);
+  background: rgba(30, 22, 16, 0.76);
 }
 
 .message-role {
@@ -384,8 +414,8 @@ h3 {
 }
 
 .message-content {
-  white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .markdown-content > *:first-child {
@@ -486,6 +516,38 @@ h3 {
   font-size: 13px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.reasoning-disclosure {
+  margin-top: 10px;
+}
+
+.reasoning-summary {
+  list-style: none;
+  cursor: pointer;
+  color: #b19d81;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.reasoning-summary::-webkit-details-marker {
+  display: none;
+}
+
+.reasoning-summary::before {
+  content: "▸";
+  margin-right: 8px;
+  color: #d6a767;
+}
+
+.reasoning-disclosure[open] .reasoning-summary::before {
+  content: "▾";
+}
+
+.reasoning-disclosure .message-reasoning {
+  margin-top: 8px;
+  margin-bottom: 0;
 }
 
 .tool-group {

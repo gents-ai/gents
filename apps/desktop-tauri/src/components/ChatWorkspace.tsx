@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import type { FormEvent, KeyboardEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -7,9 +7,10 @@ import type {
   BehaviorView,
   DeploymentView,
   DesktopSessionSnapshot,
-  MessageView,
   P2PHealth,
-  ToolCallView,
+  RenderedTimelineItem,
+  RenderedToolCallView,
+  ToolDetailValueView,
 } from "../lib/types";
 import {
   displayAgentIdentity,
@@ -31,74 +32,14 @@ function normalizeTranscriptText(value?: string | null) {
     return "";
   }
 
-  return value.replace(/\n{3,}/g, "\n\n").trim();
+  return value.trim();
 }
 
-function stripRepeatedAssistantPrefix(
-  previousAssistantText: string | null,
-  currentAssistantText: string,
-) {
-  if (!previousAssistantText) {
-    return currentAssistantText;
-  }
-
-  const normalizedPrevious = normalizeTranscriptText(previousAssistantText);
-  const normalizedCurrent = normalizeTranscriptText(currentAssistantText);
-
-  if (
-    normalizedPrevious &&
-    normalizedCurrent.length > normalizedPrevious.length &&
-    normalizedCurrent.startsWith(normalizedPrevious)
-  ) {
-    return normalizedCurrent.slice(normalizedPrevious.length).trimStart();
-  }
-
-  return normalizedCurrent;
-}
-
-function parseStructuredValue(value?: string | null) {
-  if (!value) {
-    return null;
-  }
-
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(trimmed) as unknown;
-  } catch {
-    return null;
-  }
-}
-
-function renderScalar(value: unknown) {
-  if (value == null) {
-    return "";
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint"
-  ) {
-    return String(value);
-  }
-  return JSON.stringify(value, null, 2);
-}
-
-function toolStatusClass(status?: string | null) {
-  switch ((status ?? "").toLowerCase()) {
-    case "completed":
-    case "complete":
+function toolStatusClass(statusKind?: string | null) {
+  switch ((statusKind ?? "").toLowerCase()) {
     case "success":
       return "tool-item-dot tool-item-dot-success";
-    case "failed":
     case "error":
-    case "cancelled":
       return "tool-item-dot tool-item-dot-error";
     default:
       return "tool-item-dot tool-item-dot-running";
@@ -113,13 +54,14 @@ type ChatWorkspaceProps = {
   selectedBehaviorId: string | null;
   selectedSessionId: string | null;
   session: DesktopSessionSnapshot | null;
-  sessionTools: ToolCallView[];
   behaviorOptions: BehaviorView[];
   runtimeHealth: P2PHealth | null;
   rowCount: number;
   approxSerializedBytes: number;
   dialedPeerCount: number;
   configuredPeerCount: number;
+  canSend: boolean;
+  sendHint: string | null;
   draft: string;
   sending: boolean;
   onStart: () => void;
@@ -129,47 +71,37 @@ type ChatWorkspaceProps = {
   onSend: (event: FormEvent) => void;
 };
 
-function toolGroupKey(messageSequence?: number | null) {
-  return messageSequence ?? -1;
-}
-
 function ToolDetailSection({
   label,
   value,
 }: {
   label: string;
-  value?: string | null;
+  value?: ToolDetailValueView | null;
 }) {
-  if (!value?.trim()) {
+  if (!value?.rawText.trim()) {
     return null;
   }
-
-  const parsed = parseStructuredValue(value);
-  const entries =
-    parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? Object.entries(parsed as Record<string, unknown>)
-      : null;
 
   return (
     <div className="tool-detail">
       <div className="tool-detail-label">{label}</div>
-      {entries ? (
+      {value.fields.length > 0 ? (
         <div className="tool-detail-grid">
-          {entries.map(([key, entryValue]) => (
-            <div className="tool-detail-row" key={key}>
-              <div className="tool-detail-key">{key}</div>
-              <div className="tool-detail-value">{renderScalar(entryValue)}</div>
+          {value.fields.map((field) => (
+            <div className="tool-detail-row" key={field.key}>
+              <div className="tool-detail-key">{field.key}</div>
+              <div className="tool-detail-value">{field.value}</div>
             </div>
           ))}
         </div>
       ) : (
-        <pre className="tool-block">{value}</pre>
+        <pre className="tool-block">{value.rawText}</pre>
       )}
     </div>
   );
 }
 
-function ToolGroups({ tools }: { tools: ToolCallView[] }) {
+function ToolGroups({ tools }: { tools: RenderedToolCallView[] }) {
   return (
     <section className="tool-group">
       <div className="tool-group-meta">
@@ -181,11 +113,11 @@ function ToolGroups({ tools }: { tools: ToolCallView[] }) {
         </span>
       </div>
       {tools.map((tool) => (
-        <details className="tool-item" key={tool.toolCallKey}>
+        <details className="tool-item" key={tool.itemKey}>
           <summary className="tool-item-summary">
             <span className="tool-item-summary-left">
-              <span aria-hidden="true" className={toolStatusClass(tool.status)} />
-              <span className="tool-item-name">{tool.toolName ?? "tool"}</span>
+              <span aria-hidden="true" className={toolStatusClass(tool.statusKind)} />
+              <span className="tool-item-name">{tool.toolName}</span>
             </span>
             <span className="tool-item-action">View</span>
           </summary>
@@ -199,107 +131,107 @@ function ToolGroups({ tools }: { tools: ToolCallView[] }) {
   );
 }
 
-function MessageList({
-  messages,
-  tools,
-  activeResponseOverlay,
+function ReasoningDisclosure({
+  value,
+  summary = "Thinking",
 }: {
-  messages: MessageView[];
-  tools: ToolCallView[];
-  activeResponseOverlay?: DesktopSessionSnapshot["activeResponseOverlay"];
+  value?: string | null;
+  summary?: string;
 }) {
-  const timelineMessages = [...messages]
-    .filter(
-      (message) =>
-        !message.hasToolResults &&
-        Boolean(
-          normalizeTranscriptText(message.displayContent) ||
-            normalizeTranscriptText(message.reasoning) ||
-            message.hasToolCalls,
-        ),
-    )
-    .sort((left, right) => (left.sequence ?? 0) - (right.sequence ?? 0));
-
-  const toolGroups = new Map<number, ToolCallView[]>();
-  for (const tool of [...tools].sort((left, right) => {
-    const seqOrder = (left.messageSequence ?? 0) - (right.messageSequence ?? 0);
-    if (seqOrder !== 0) {
-      return seqOrder;
-    }
-    return left.toolCallKey.localeCompare(right.toolCallKey);
-  })) {
-    const key = toolGroupKey(tool.messageSequence);
-    const existing = toolGroups.get(key) ?? [];
-    existing.push(tool);
-    toolGroups.set(key, existing);
+  const normalized = normalizeTranscriptText(value);
+  if (!normalized) {
+    return null;
   }
 
-  const usedToolKeys = new Set<number>();
-  let lastAssistantText: string | null = null;
+  return (
+    <details className="reasoning-disclosure">
+      <summary className="reasoning-summary">{summary}</summary>
+      <div className="message-reasoning">
+        <MarkdownContent value={normalized} />
+      </div>
+    </details>
+  );
+}
 
+function MessageList({
+  timelineItems,
+}: {
+  timelineItems: RenderedTimelineItem[];
+}) {
   return (
     <>
-      {timelineMessages.map((message) => {
-        const groupKey = toolGroupKey(message.sequence);
-        const groupedTools = toolGroups.get(groupKey) ?? [];
-        usedToolKeys.add(groupKey);
-        const normalizedReasoning = normalizeTranscriptText(message.reasoning);
-        let normalizedContent = normalizeTranscriptText(message.displayContent);
-        if ((message.displayRole ?? message.role) === "assistant") {
-          normalizedContent = stripRepeatedAssistantPrefix(
-            lastAssistantText,
-            normalizedContent,
-          );
-          if (normalizeTranscriptText(message.displayContent ?? message.content)) {
-            lastAssistantText = normalizeTranscriptText(message.displayContent);
-          }
-        }
-        const hasVisibleBody = Boolean(
-          normalizedContent || normalizedReasoning,
-        );
-
-        return (
-          <div className="turn-block" key={message.messageKey}>
-            {hasVisibleBody ? (
-              <article className="message-card">
-                <div className="message-role">
-                  {message.displayRole ?? message.role ?? "assistant"}
-                </div>
-                {normalizedReasoning ? (
-                  <div className="message-reasoning">
-                    <MarkdownContent value={normalizedReasoning} />
-                  </div>
-                ) : null}
-                {normalizedContent ? (
+      {timelineItems.map((item) => {
+        switch (item.kind) {
+          case "userMessage":
+            return (
+              <div className="turn-block" key={item.itemKey}>
+                <article className="message-card">
+                  <div className="message-role">user</div>
                   <div className="message-content">
-                    <MarkdownContent value={normalizedContent} />
+                    <MarkdownContent value={normalizeTranscriptText(item.content)} />
+                  </div>
+                </article>
+              </div>
+            );
+          case "assistantMessage": {
+            const normalizedContent = normalizeTranscriptText(item.content);
+            const normalizedReasoning = normalizeTranscriptText(item.reasoning);
+            if (!normalizedContent && !normalizedReasoning) {
+              return null;
+            }
+            return (
+              <div className="turn-block" key={item.itemKey}>
+                <article className="message-card">
+                  <div className="message-role">assistant</div>
+                  {normalizedContent ? (
+                    <div className="message-content">
+                      <MarkdownContent value={normalizedContent} />
+                    </div>
+                  ) : null}
+                  <ReasoningDisclosure value={normalizedReasoning} />
+                </article>
+              </div>
+            );
+          }
+          case "toolGroup":
+            return (
+              <div className="turn-block" key={item.itemKey}>
+                <ToolGroups tools={item.tools} />
+              </div>
+            );
+          case "pendingUserTurn":
+            return (
+              <div className="turn-block" key={item.itemKey}>
+                <article className="message-card pending-card">
+                  <div className="message-role">user</div>
+                  <div className="message-content">
+                    <MarkdownContent value={normalizeTranscriptText(item.content)} />
+                  </div>
+                </article>
+              </div>
+            );
+          case "liveAssistant": {
+            const overlayContent = normalizeTranscriptText(item.content);
+            const overlayReasoning = normalizeTranscriptText(item.reasoning);
+            if (!overlayContent && !overlayReasoning) {
+              return null;
+            }
+            return (
+              <article className="message-card" key={item.itemKey}>
+                <div className="message-role">assistant</div>
+                {overlayContent ? (
+                  <div className="message-content">
+                    <MarkdownContent value={overlayContent} />
                   </div>
                 ) : null}
+                <ReasoningDisclosure value={overlayReasoning} />
               </article>
-            ) : null}
-            {groupedTools.length ? <ToolGroups tools={groupedTools} /> : null}
-          </div>
-        );
+            );
+          }
+          default:
+            return null;
+        }
       })}
-
-      {[...toolGroups.entries()]
-        .filter(([key]) => !usedToolKeys.has(key))
-        .map(([key, groupedTools]) => (
-          <div className="turn-block" key={`tools-${key}`}>
-            <ToolGroups tools={groupedTools} />
-          </div>
-        ))}
-
-      {activeResponseOverlay?.content ? (
-        <article className="message-card response-card">
-          <div className="message-role">assistant live</div>
-          <div className="message-content">
-            <MarkdownContent
-              value={normalizeTranscriptText(activeResponseOverlay.content)}
-            />
-          </div>
-        </article>
-      ) : null}
     </>
   );
 }
@@ -312,13 +244,14 @@ export function ChatWorkspace({
   selectedBehaviorId,
   selectedSessionId,
   session,
-  sessionTools,
   behaviorOptions,
   runtimeHealth,
   rowCount,
   approxSerializedBytes,
   dialedPeerCount,
   configuredPeerCount,
+  canSend,
+  sendHint,
   draft,
   sending,
   onStart,
@@ -375,19 +308,14 @@ export function ChatWorkspace({
     () =>
       JSON.stringify({
         sessionId: selectedSessionId,
-        messageCount: session?.messages.length ?? 0,
-        toolCount: sessionTools.length,
-        overlayContent: session?.activeResponseOverlay?.content ?? "",
-        overlayReasoning: session?.activeResponseOverlay?.reasoning ?? "",
+        timelineLength: session?.timelineItems.length ?? 0,
+        timelineKinds: session?.timelineItems.map((item) => item.kind) ?? [],
         turnState: session?.turnState ?? "",
       }),
     [
       selectedSessionId,
-      session?.messages.length,
-      session?.activeResponseOverlay?.content,
-      session?.activeResponseOverlay?.reasoning,
+      session?.timelineItems,
       session?.turnState,
-      sessionTools.length,
     ],
   );
 
@@ -457,6 +385,23 @@ export function ChatWorkspace({
     }
   }
 
+  function onComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (
+      event.key !== "Enter" ||
+      event.shiftKey ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.nativeEvent.isComposing ||
+      !canSend
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    event.currentTarget.form?.requestSubmit();
+  }
+
   return (
     <>
       <header className="chat-header">
@@ -512,15 +457,14 @@ export function ChatWorkspace({
         <div className="chat-main">
           <section
             className="panel transcript-panel"
+            data-testid="transcript-panel"
             onScroll={handleTranscriptScroll}
             ref={transcriptPanelRef}
           >
             {selectedSessionId && session ? (
               <div className="message-list">
                 <MessageList
-                  messages={session.messages}
-                  activeResponseOverlay={session.activeResponseOverlay}
-                  tools={sessionTools}
+                  timelineItems={session.timelineItems}
                 />
                 <div className="transcript-end-anchor" ref={transcriptEndRef} />
               </div>
@@ -535,7 +479,11 @@ export function ChatWorkspace({
             )}
           </section>
 
-          <form className="panel composer-panel" onSubmit={onSend}>
+          <form
+            className="panel composer-panel"
+            data-testid="composer-form"
+            onSubmit={onSend}
+          >
             <div className="composer-toolbar">
               <div className="behavior-chips">
                 {behaviorOptions.map((behavior) => (
@@ -564,17 +512,20 @@ export function ChatWorkspace({
             <textarea
               className="composer-input"
               onChange={(event) => onDraftChange(event.currentTarget.value)}
+              onKeyDown={onComposerKeyDown}
               placeholder="Message the selected agent"
+              data-testid="composer-input"
               value={draft}
             />
 
             <div className="composer-footer">
               <div className="muted small">
-                {session?.turnState ?? "idle"} · peers {dialedPeerCount}/{configuredPeerCount}
+                {sendHint ?? session?.turnState ?? "idle"} · peers {dialedPeerCount}/{configuredPeerCount}
               </div>
               <button
                 className="primary-button"
-                disabled={sending || !draft.trim()}
+                data-testid="composer-send"
+                disabled={!canSend}
                 type="submit"
               >
                 {sending ? "Sending…" : "Send"}
