@@ -368,6 +368,8 @@ pub(crate) struct DiagnoseArgs {
     pub(crate) graphql: Option<String>,
     #[arg(long)]
     pub(crate) agent_did: Option<String>,
+    #[arg(long = "bind-agent-did", value_enum)]
+    pub(crate) bind_agent_did: Option<ManifestAgentDidBindingArg>,
 }
 
 #[derive(clap::Args)]
@@ -649,6 +651,8 @@ pub(crate) struct ConfigExportArgs {
     pub(crate) graphql: Option<String>,
     #[arg(long)]
     pub(crate) agent_did: Option<String>,
+    #[arg(long = "bind-agent-did", value_enum)]
+    pub(crate) bind_agent_did: Option<ManifestAgentDidBindingArg>,
 }
 
 #[derive(clap::Args)]

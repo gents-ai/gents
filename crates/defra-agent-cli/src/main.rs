@@ -170,7 +170,8 @@ format that `config import` consumes.
 Examples:
   defra-agent config export --root ./my-agent
   defra-agent config export --root ./my-agent --force
-  defra-agent config export --root ./my-agent --agent-did <AGENT_DID>";
+  defra-agent config export --root ./my-agent --agent-did <AGENT_DID>
+  defra-agent config export --root ./my-agent --home /path/to/home --bind-agent-did home";
 const CONFIG_IMPORT_AFTER_HELP: &str = "\
 Imports desired configuration documents from a legacy JSON bundle file.
 

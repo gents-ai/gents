@@ -161,6 +161,42 @@ pub(super) async fn load_bound_manifest(
     })
 }
 
+pub(super) async fn resolve_target_agent_did(
+    explicit_agent_did: Option<&str>,
+    bind_agent_did: Option<ManifestAgentDidBindingArg>,
+    home: Option<&Path>,
+    graphql: Option<&str>,
+    access: Option<&ConfigAccess>,
+) -> Result<String> {
+    if explicit_agent_did
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+        && bind_agent_did.is_some()
+    {
+        anyhow::bail!("pass either --agent-did or --bind-agent-did, not both");
+    }
+
+    if let Some(agent_did) = explicit_agent_did
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(agent_did.to_string());
+    }
+
+    let Some(bind_agent_did) = bind_agent_did else {
+        return crate::resolve_agent_did(home, None);
+    };
+
+    resolve_bound_agent_did(
+        ManifestBindMode::from_cli(Some(bind_agent_did)),
+        home,
+        graphql,
+        access,
+    )
+    .await
+}
+
 pub(super) fn write_identity_binding(root: &Path, agent_did: &str) -> Result<()> {
     let path = root.join("identity.json");
     let mut value = if path.exists() {
