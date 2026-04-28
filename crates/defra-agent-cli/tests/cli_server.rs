@@ -19,10 +19,9 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     let mock_endpoint = MockModelEndpoint::start(&model_name)?;
     let port = allocate_port()?;
     let agent_name = format!("cli-metrics-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
 
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -32,6 +31,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -157,6 +157,106 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_rejects_real_initialized_did_without_key_path() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_env = tempdir.path().join("home-env");
+    let agent_home = home_env.join(".defra-agent");
+    fs::create_dir_all(&agent_home)?;
+
+    let agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
+    write_json_file(
+        &agent_home.join("init.json"),
+        &serde_json::json!({
+            "home": agent_home.to_string_lossy(),
+            "agent_name": "mini-1-steward",
+            "agent_did": agent_did,
+            "key_path": null,
+            "tool_ceiling": "Readonly",
+            "tool_root": tempdir.path().to_string_lossy()
+        }),
+    )?;
+
+    let port = allocate_port()?;
+    let stderr = run_cli_failure_stderr(
+        &home_env,
+        &[
+            "server",
+            "--home",
+            agent_home.to_str().expect("utf-8 home"),
+            "--http-port",
+            &port.to_string(),
+        ],
+    )?;
+    assert!(
+        stderr.contains("no key_path"),
+        "expected no-key-path error, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("cannot load a non-file identity"),
+        "expected non-file identity load error, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("registers the signer in-process"),
+        "expected host-process signer hint, got:\n{stderr}"
+    );
+    assert!(
+        !agent_home.join("keys").exists(),
+        "server must not create a fallback file-key identity for a no-key initialized home"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_rejects_real_initialized_did_with_missing_key_file_without_creating_it(
+) -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_env = tempdir.path().join("home-env");
+    let agent_home = home_env.join(".defra-agent");
+    let key_path = agent_home.join("keys").join("missing.key");
+    fs::create_dir_all(&agent_home)?;
+
+    let agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
+    write_json_file(
+        &agent_home.join("init.json"),
+        &serde_json::json!({
+            "home": agent_home.to_string_lossy(),
+            "agent_name": "mini-1-steward",
+            "agent_did": agent_did,
+            "key_path": key_path.to_string_lossy(),
+            "tool_ceiling": "Readonly",
+            "tool_root": tempdir.path().to_string_lossy()
+        }),
+    )?;
+
+    let port = allocate_port()?;
+    let stderr = run_cli_failure_stderr(
+        &home_env,
+        &[
+            "server",
+            "--home",
+            agent_home.to_str().expect("utf-8 home"),
+            "--http-port",
+            &port.to_string(),
+        ],
+    )?;
+    assert!(
+        stderr.contains("requires identity key"),
+        "expected missing-key error, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("to already exist"),
+        "expected no-create hint, got:\n{stderr}"
+    );
+    assert!(
+        !key_path.exists(),
+        "server must not create a new key for a real initialized DID with missing key file"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -167,11 +267,10 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
 
     let port = allocate_port()?;
     let agent_name = format!("cli-p2p-ready-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
     let default_behavior_id = "default".to_string();
 
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -181,6 +280,7 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
             mock_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
     let (mut serve, readiness) = spawn_server_with_ready_json(
         &home_dir,
         port,
@@ -252,10 +352,9 @@ async fn server_startup_defaults_to_iroh_p2p_for_desktop_pairing() -> Result<()>
 
     let port = allocate_port()?;
     let agent_name = format!("cli-default-iroh-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
 
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -265,6 +364,7 @@ async fn server_startup_defaults_to_iroh_p2p_for_desktop_pairing() -> Result<()>
             mock_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
     let (mut serve, readiness) = spawn_server_with_ready_json(&home_dir, port, &[], &[])?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
@@ -309,7 +409,6 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
     let warm_port = allocate_port()?;
     let port = allocate_port()?;
     let agent_name = format!("cli-degraded-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
 
     let init = run_init_json(
@@ -322,6 +421,7 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
             "http://127.0.0.1:9/v1",
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
     let backend_id = init
         .pointer("/init/backend_id")
         .and_then(Value::as_str)
@@ -451,7 +551,6 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
 
     let port = allocate_port()?;
     let agent_name = format!("cli-auth-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let backend_id = format!("{agent_name}-backend");
     let graphql = graphql_url(port);
     let tool_selection_id = "default-tools".to_string();
@@ -473,6 +572,7 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
             .and_then(Value::as_str),
         Some("DEFRA_AGENT_TEST_CLI_BACKEND_KEY")
     );
+    let agent_did = agent_did_from_init(&init)?;
 
     let mut serve = spawn_server_with_env(
         &home_dir,

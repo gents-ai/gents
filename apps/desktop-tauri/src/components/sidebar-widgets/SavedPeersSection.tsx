@@ -24,8 +24,8 @@ export function SavedPeersSection({
       </div>
       {!deployments.length ? (
         <p className="muted">
-          No saved deployments yet. Run desktop init to create the local runtime
-          and save the first peer.
+          No saved deployments yet. Return to the fleet dashboard to add an
+          agent connection.
         </p>
       ) : (
         <div className="list">

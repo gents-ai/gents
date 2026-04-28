@@ -5,6 +5,7 @@ use crate::cli::*;
 pub(crate) mod apply;
 pub(crate) mod backend;
 pub(crate) mod behavior;
+pub(crate) mod binding;
 pub(crate) mod diff;
 pub(crate) mod export;
 pub(crate) mod import;

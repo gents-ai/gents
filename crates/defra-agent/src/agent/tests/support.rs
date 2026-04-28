@@ -7,15 +7,15 @@ use serde_json::json;
 
 use super::super::*;
 use crate::graphql::escape_graphql_string;
-use crate::identity::SimpleIdentity;
+use crate::identity::KeyIdentity;
 
 pub(super) async fn test_node() -> Arc<EmbeddedNode> {
     Arc::new(EmbeddedNode::builder().build().await.unwrap())
 }
 
-pub(super) fn test_identity(name: &str) -> SimpleIdentity {
+pub(super) fn test_identity(name: &str) -> KeyIdentity {
     let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
-    SimpleIdentity::new(name, path, None)
+    KeyIdentity::load_or_create(path, None).unwrap()
 }
 
 #[derive(Debug, Deserialize)]

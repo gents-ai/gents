@@ -8,8 +8,9 @@ pub mod process;
 pub mod waits;
 
 pub use fs::{
-    assert_runtime_init_state, project_object_fields, read_captured_log, read_json_file,
-    read_runtime_state_json, write_json_file, write_manifest_root_from_export,
+    assert_manifest_agent_dids, assert_runtime_init_state, manifest_contains,
+    project_object_fields, read_captured_log, read_json_file, read_runtime_state_json,
+    rewrite_manifest_agent_dids, write_json_file, write_manifest_root_from_export,
 };
 pub use graphql::{doc_id_for_selection, escape_graphql_string, first_graphql_row, graphql_query};
 pub use mocks::{
@@ -32,3 +33,15 @@ pub use waits::{
 
 pub const DEFAULT_MODEL_ENDPOINT: &str = "http://workstation-1:8000/v1";
 pub const DEFAULT_MODEL_NAME: &str = "MiniMax-M2.7-NVFP4";
+
+pub fn agent_did_from_init(init: &serde_json::Value) -> anyhow::Result<String> {
+    let agent_did = init
+        .get("agent_did")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("init output missing agent_did: {init}"))?;
+    anyhow::ensure!(
+        !agent_did.starts_with("did:defra-agent:"),
+        "init returned a name-derived DID placeholder: {agent_did}"
+    );
+    Ok(agent_did.to_string())
+}

@@ -15,7 +15,7 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
     fs::create_dir_all(&root)?;
 
-    let agent_did = format!("did:defra-agent:{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
     let default_behavior_id = "default".to_string();
     let tool_selection_id = format!("{default_behavior_id}-tools");
 
@@ -154,7 +154,7 @@ async fn config_validate_reports_reference_errors_and_fails_nonzero() -> Result<
     fs::create_dir_all(&home_dir)?;
     fs::create_dir_all(&root)?;
 
-    let agent_did = format!("did:defra-agent:{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
 
     write_json_file(
         &root.join("agent-principal.json"),
@@ -239,7 +239,7 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
     fs::create_dir_all(&home_dir)?;
     fs::create_dir_all(&root)?;
 
-    let agent_did = format!("did:defra-agent:{}", Uuid::new_v4().simple());
+    let agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
     let default_behavior_id = "default".to_string();
     let tool_selection_id = format!("{default_behavior_id}-tools");
 
@@ -389,6 +389,214 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
         output.pointer("/counts/schedules").and_then(Value::as_u64),
         Some(1)
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_validate_without_binding_keeps_manifest_agent_did_authoritative() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir
+        .path()
+        .join("infra")
+        .join("agents")
+        .join("mini-1-steward");
+    fs::create_dir_all(&home_dir)?;
+
+    let placeholder_did = "did:defra-agent:mini-1-steward";
+    write_rebindable_manifest_root(&root, placeholder_did)?;
+
+    let output = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "validate",
+            "--root",
+            root.to_str().expect("utf-8 manifest root"),
+        ],
+    )?;
+
+    assert_eq!(
+        output.get("status").and_then(Value::as_str),
+        Some("validated")
+    );
+    assert_eq!(output.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        output.get("agent_did").and_then(Value::as_str),
+        Some(placeholder_did)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_validate_bind_home_accepts_placeholder_agent_did() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir
+        .path()
+        .join("infra")
+        .join("agents")
+        .join("mini-1-steward");
+    fs::create_dir_all(&home_dir)?;
+
+    let init = run_init_json(
+        &home_dir,
+        &["--identity-only", "--agent-name", "mini-1-steward"],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let explicit_home = home_dir.join(".defra-agent");
+    write_json_file(
+        &explicit_home.join("runtime.json"),
+        &serde_json::json!({
+            "home": explicit_home.to_string_lossy(),
+            "graphql": "http://127.0.0.1:9191/api/v0/graphql",
+            "agent_name": "mini-1-steward",
+            "agent_did": "did:defra-agent:mini-1-steward",
+            "default_behavior_id": "default"
+        }),
+    )?;
+    write_rebindable_manifest_root(&root, "did:defra-agent:mini-1-steward")?;
+
+    let output = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "validate",
+            "--root",
+            root.to_str().expect("utf-8 manifest root"),
+            "--home",
+            explicit_home.to_str().expect("utf-8 home"),
+            "--bind-agent-did",
+            "home",
+        ],
+    )?;
+
+    assert_eq!(
+        output.get("status").and_then(Value::as_str),
+        Some("validated")
+    );
+    assert_eq!(output.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        output.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_validate_bind_home_rejects_concrete_manifest_did_without_force() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir
+        .path()
+        .join("infra")
+        .join("agents")
+        .join("mini-1-steward");
+    fs::create_dir_all(&home_dir)?;
+
+    run_init_json(
+        &home_dir,
+        &["--identity-only", "--agent-name", "mini-1-steward"],
+    )?;
+    let explicit_home = home_dir.join(".defra-agent");
+    write_rebindable_manifest_root(&root, &format!("did:key:z{}", Uuid::new_v4().simple()))?;
+
+    let stderr = run_cli_failure_stderr(
+        &home_dir,
+        &[
+            "config",
+            "validate",
+            "--root",
+            root.to_str().expect("utf-8 manifest root"),
+            "--home",
+            explicit_home.to_str().expect("utf-8 home"),
+            "--bind-agent-did",
+            "home",
+        ],
+    )?;
+    assert!(
+        stderr.contains("concrete agent DID"),
+        "expected concrete manifest DID mismatch, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("--force-rebind-concrete-did"),
+        "expected scoped force hint, got:\n{stderr}"
+    );
+
+    Ok(())
+}
+
+fn write_rebindable_manifest_root(root: &std::path::Path, agent_did: &str) -> Result<()> {
+    fs::create_dir_all(root)?;
+    let default_behavior_id = "default";
+    let tool_selection_id = "default-tools";
+
+    write_json_file(
+        &root.join("agent-principal.json"),
+        &serde_json::json!({
+            "agent_did": agent_did,
+            "display_name": "Mini 1 Steward",
+            "default_behavior_id": default_behavior_id,
+            "enabled": true
+        }),
+    )?;
+    write_json_file(
+        &root
+            .join("agent-behaviors")
+            .join(default_behavior_id)
+            .join("object.json"),
+        &serde_json::json!({
+            "behavior_id": default_behavior_id,
+            "agent_did": agent_did,
+            "display_name": "Default",
+            "system_prompt": "Keep responses short.",
+            "backend_id": "default-backend",
+            "model_name": "mock-model",
+            "tool_selection_id": tool_selection_id,
+            "inference_profile_id": null,
+            "compaction_strategy": null,
+            "compaction_threshold": null,
+            "enabled": true
+        }),
+    )?;
+    write_json_file(
+        &root
+            .join("tool-selections")
+            .join(tool_selection_id)
+            .join("object.json"),
+        &serde_json::json!({
+            "selection_id": tool_selection_id,
+            "agent_did": agent_did,
+            "display_name": "Standard",
+            "enable_file_tools": true,
+            "file_tools_mode": "ReadOnly",
+            "file_tool_root": null,
+            "enable_bash": true,
+            "bash_mode": "ReadOnly",
+            "cli_tool_names": [],
+            "enable_meta_tools": true,
+            "delegate_to": []
+        }),
+    )?;
+    write_json_file(
+        &root
+            .join("inference-backends")
+            .join("default-backend")
+            .join("object.json"),
+        &serde_json::json!({
+            "backend_id": "default-backend",
+            "name": "default-backend",
+            "endpoint": "http://127.0.0.1:8000/v1",
+            "api_key_env_var": "DEFRA_AGENT_TEST_MANIFEST_API_KEY",
+            "max_concurrent": 2,
+            "max_queue_depth": 100,
+            "enabled": true,
+            "models": ["mock-model"]
+        }),
+    )?;
 
     Ok(())
 }

@@ -7,8 +7,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::{
-    ensure_runtime_schemas, AgentIdentity, DefraAgent, DocumentRuntimeOptions, McpPool,
-    ProcessLifecycleObserver, ProcessLifecycleState, SimpleIdentity, ToolCeiling,
+    ensure_runtime_schemas, AgentIdentity, DefraAgent, DocumentRuntimeOptions, KeyIdentity,
+    McpPool, ProcessLifecycleObserver, ProcessLifecycleState, ToolCeiling,
 };
 use serde_json::{json, Value};
 use tokio::sync::watch;
@@ -46,21 +46,6 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         display_host(args.http_addr),
         args.http_port
     );
-    let p2p_config = resolve_server_p2p_config(&home_dir, &args)?;
-    let mut node_builder = EmbeddedNode::builder().data_path(&data_dir).with_http(
-        defra_node::HttpConfig::with_addr(http_addr)
-            .with_extra_routes(runtime_contract_router(graphql_url.clone())),
-    );
-    if let Some(config) = p2p_config {
-        node_builder = node_builder.with_p2p(config);
-    }
-    let node = Arc::new(
-        node_builder
-            .build()
-            .await
-            .context("building embedded defra node")?,
-    );
-    ensure_runtime_schemas(node.as_ref()).await?;
     let init_config = read_init_config(&home_dir)?;
     if let (Some(explicit), Some(config)) = (args.agent_name.as_deref(), init_config.as_ref()) {
         if explicit != config.agent_name {
@@ -80,19 +65,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         .clone()
         .or_else(|| init_config.as_ref().map(|config| config.agent_name.clone()))
         .unwrap_or_else(|| DEFAULT_AGENT_NAME.to_string());
-    let key_path = args
-        .key_path
-        .clone()
-        .or_else(|| {
-            init_config
-                .as_ref()
-                .and_then(|config| config.key_path.as_ref().map(PathBuf::from))
-        })
-        .unwrap_or_else(|| default_key_path(&home_dir, &agent_name));
-    if let Some(parent) = key_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating key directory {}", parent.display()))?;
-    }
+    let identity = resolve_server_identity(&args, init_config.as_ref(), &home_dir, &agent_name)?;
     let effective_tool_ceiling = args
         .tool_ceiling
         .or_else(|| init_config.as_ref().map(|config| config.tool_ceiling))
@@ -128,7 +101,22 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     for cli_tool_arg in &args.cli_tools {
         tool_ceiling = tool_ceiling.with_cli_tool(parse_cli_tool_arg(cli_tool_arg)?);
     }
-    let identity = Arc::new(SimpleIdentity::new(&agent_name, &key_path, None));
+
+    let p2p_config = resolve_server_p2p_config(&home_dir, &args)?;
+    let mut node_builder = EmbeddedNode::builder().data_path(&data_dir).with_http(
+        defra_node::HttpConfig::with_addr(http_addr)
+            .with_extra_routes(runtime_contract_router(graphql_url.clone())),
+    );
+    if let Some(config) = p2p_config {
+        node_builder = node_builder.with_p2p(config);
+    }
+    let node = Arc::new(
+        node_builder
+            .build()
+            .await
+            .context("building embedded defra node")?,
+    );
+    ensure_runtime_schemas(node.as_ref()).await?;
     let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
 
     let agent = DefraAgent::from_default_behavior_documents(
@@ -252,8 +240,109 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         .context("joining defra-agent runtime task")?
 }
 
+fn resolve_server_identity(
+    args: &ServeArgs,
+    init_config: Option<&StoredInitConfig>,
+    home_dir: &Path,
+    agent_name: &str,
+) -> Result<Arc<dyn AgentIdentity>> {
+    if let Some(config) = init_config {
+        let agent_did = config.agent_did.trim();
+        if is_real_agent_did(agent_did)
+            && args.key_path.is_none()
+            && config
+                .key_path
+                .as_deref()
+                .map(str::trim)
+                .is_none_or(str::is_empty)
+        {
+            anyhow::bail!(
+                "initialized home {} has agent DID {} but no key_path. Standalone `defra-agent server` cannot load a non-file identity from init.json yet; start this runtime from a host process that registers the signer in-process, or bootstrap a file-key identity for standalone development.",
+                home_dir.display(),
+                agent_did
+            );
+        }
+    }
+
+    let key_path = resolve_server_key_path(args, init_config, home_dir, agent_name)?;
+    ensure_key_path_exists_for_initialized_did(init_config, &key_path)?;
+    if let Some(parent) = key_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating key directory {}", parent.display()))?;
+    }
+    let identity = Arc::new(
+        KeyIdentity::load_or_create(&key_path, None)
+            .context("creating or loading agent identity key")?,
+    );
+    ensure_identity_matches_init_config(init_config, identity.did())?;
+    Ok(identity)
+}
+
 fn default_p2p_transport() -> String {
     P2pTransportArg::Iroh.as_str().to_string()
+}
+
+fn resolve_server_key_path(
+    args: &ServeArgs,
+    init_config: Option<&StoredInitConfig>,
+    home_dir: &Path,
+    agent_name: &str,
+) -> Result<PathBuf> {
+    if let Some(path) = args.key_path.clone() {
+        return Ok(path);
+    }
+
+    if let Some(config) = init_config {
+        if let Some(path) = config
+            .key_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Ok(PathBuf::from(path));
+        }
+    }
+
+    Ok(default_key_path(home_dir, agent_name))
+}
+
+fn ensure_identity_matches_init_config(
+    init_config: Option<&StoredInitConfig>,
+    resolved_did: &str,
+) -> Result<()> {
+    let Some(config) = init_config else {
+        return Ok(());
+    };
+    if is_real_agent_did(&config.agent_did) && config.agent_did.trim() != resolved_did {
+        anyhow::bail!(
+            "initialized home agent DID {} does not match loaded identity DID {}; repair init.json or use the correct --key-path",
+            config.agent_did,
+            resolved_did
+        );
+    }
+    Ok(())
+}
+
+fn ensure_key_path_exists_for_initialized_did(
+    init_config: Option<&StoredInitConfig>,
+    key_path: &Path,
+) -> Result<()> {
+    let Some(config) = init_config else {
+        return Ok(());
+    };
+    if is_real_agent_did(&config.agent_did) && !key_path.exists() {
+        anyhow::bail!(
+            "initialized home agent DID {} requires identity key {} to already exist; restore the configured key, pass --key-path for the matching key, or bootstrap the host identity backend first",
+            config.agent_did,
+            key_path.display()
+        );
+    }
+    Ok(())
+}
+
+fn is_real_agent_did(did: &str) -> bool {
+    let did = did.trim();
+    !did.is_empty() && !did.starts_with("did:defra-agent:")
 }
 
 fn default_p2p_secret_key_path(home_dir: &Path) -> PathBuf {

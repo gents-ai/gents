@@ -6,12 +6,12 @@ use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{
     ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, BackendProviderKind,
-    BehaviorConfig, BehaviorToolConfig, SimpleIdentity,
+    BehaviorConfig, BehaviorToolConfig, KeyIdentity,
 };
 
-pub fn test_identity(name: &str) -> SimpleIdentity {
+pub fn test_identity(name: &str) -> KeyIdentity {
     let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
-    SimpleIdentity::new(name, path, None)
+    KeyIdentity::load_or_create(path, None).unwrap()
 }
 
 pub fn test_behavior(

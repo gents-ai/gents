@@ -4,7 +4,6 @@ import {
   addPeer,
   fetchDesktopSnapshot,
   fetchSessionSnapshot,
-  initLocalStandardRuntime,
   renameConversation,
   repairP2P,
   runSchedule,
@@ -44,7 +43,6 @@ import type {
   DesktopSessionSnapshot,
   EventTriggerSaveRequest,
   InferenceProfileSaveRequest,
-  InitSummary,
   P2PHealth,
   PeerAddRequest,
   ScheduleRunRequest,
@@ -69,7 +67,6 @@ export function useDesktopShell() {
   const [snapshot, setSnapshot] = useState<DesktopClientSnapshot | null>(null);
   const [session, setSession] = useState<DesktopSessionSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
-  const [initializing, setInitializing] = useState(false);
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [sending, setSending] = useState(false);
@@ -79,15 +76,11 @@ export function useDesktopShell() {
   const [repairingP2P, setRepairingP2P] = useState(false);
   const [runningTask, setRunningTask] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [label, setLabel] = useState("Local Agent");
-  const [dangerouslyOverwrite, setDangerouslyOverwrite] = useState(false);
-  const [reset, setReset] = useState(false);
   const [selectedAgentDid, setSelectedAgentDid] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedBehaviorId, setSelectedBehaviorId] = useState<string | null>(null);
   const [localWorkflow, setLocalWorkflow] = useState<ChatWorkflowState>({ kind: "ready" });
   const [draft, setDraft] = useState("");
-  const [initSummary, setInitSummary] = useState<InitSummary | null>(null);
 
   const deployments = snapshot?.client?.deployments ?? [];
   const selectedDeployment =
@@ -167,7 +160,11 @@ export function useDesktopShell() {
   }, []);
 
   useEffect(() => {
-    if (!snapshot || snapshot.client || starting || initializing || sending) {
+    if (!snapshot || snapshot.client || starting || sending) {
+      return;
+    }
+
+    if (!snapshot.bootstrap.savedPeers.length) {
       return;
     }
 
@@ -177,7 +174,7 @@ export function useDesktopShell() {
 
     autostartAttempted.current = true;
     void onStartClient();
-  }, [initializing, sending, snapshot, starting]);
+  }, [sending, snapshot, starting]);
 
   useEffect(() => {
     const previousHealth = lastObservedP2PHealth.current;
@@ -196,7 +193,6 @@ export function useDesktopShell() {
       autoRestartInFlight.current ||
       starting ||
       stopping ||
-      initializing ||
       sending ||
       !shouldAutoRestartP2P(
         previousHealth,
@@ -214,7 +210,7 @@ export function useDesktopShell() {
       `auto restart requested reason="P2P transport wedged" status=${runtimeHealth.status} failures=${runtimeHealth.consecutiveFailures}`,
     );
     void restartDesktopClient("P2P transport wedged");
-  }, [initializing, runtimeHealth, sending, starting, stopping]);
+  }, [runtimeHealth, sending, starting, stopping]);
 
   useEffect(() => {
     let disposed = false;
@@ -305,27 +301,6 @@ export function useDesktopShell() {
     }
   }, [localWorkflow, sending]);
 
-  async function onInit(event: FormEvent) {
-    event.preventDefault();
-    setInitializing(true);
-    setError(null);
-    try {
-      const result = await initLocalStandardRuntime({
-        label,
-        dangerouslyOverwrite,
-        reset,
-      });
-      setInitSummary(result);
-      await refreshSnapshot();
-      autostartAttempted.current = false;
-      await onStartClient();
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setInitializing(false);
-    }
-  }
-
   async function onStartClient() {
     setStarting(true);
     setError(null);
@@ -399,26 +374,15 @@ export function useDesktopShell() {
     }
   }
 
-  async function onShutdownClient() {
-    setStopping(true);
-    setError(null);
-    try {
-      const next = await shutdownDesktopClient();
-      setSnapshot(next);
-      setSession(null);
-      setSelectedSessionId(null);
-      autostartAttempted.current = true;
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setStopping(false);
-    }
-  }
-
   async function onAddPeer(request: PeerAddRequest) {
     setAddingPeer(true);
     setError(null);
     try {
+      if (!snapshot?.client) {
+        setStarting(true);
+        const started = await startDesktopClient();
+        setSnapshot(started);
+      }
       const next = await addPeer(request);
       setSnapshot(next);
       setSelectedAgentDid(request.agentDid);
@@ -427,6 +391,7 @@ export function useDesktopShell() {
       setError(String(err));
       throw err;
     } finally {
+      setStarting(false);
       setAddingPeer(false);
     }
   }
@@ -698,7 +663,6 @@ export function useDesktopShell() {
     snapshot,
     session,
     loading,
-    initializing,
     starting,
     stopping,
     sending,
@@ -708,14 +672,10 @@ export function useDesktopShell() {
     repairingP2P,
     runningTask,
     error,
-    label,
-    dangerouslyOverwrite,
-    reset,
     selectedAgentDid,
     selectedSessionId,
     selectedBehaviorId,
     draft,
-    initSummary,
     deployments,
     selectedDeployment,
     selectedConversation,
@@ -724,17 +684,11 @@ export function useDesktopShell() {
     canSendMessage,
     chatWorkflow: shellProjection.workflow,
     sendStatus: shellProjection.sendStatus,
-    setLabel,
-    setDangerouslyOverwrite,
-    setReset,
     setSelectedAgentDid,
     setSelectedSessionId,
     setSelectedBehaviorId,
     setDraft,
     refreshSnapshot,
-    onInit,
-    onStartClient,
-    onShutdownClient,
     onAddPeer,
     onRepairP2P,
     onSendMessage,

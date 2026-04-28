@@ -303,9 +303,12 @@ async fn upsert_conversation_from_request_keeps_title_empty_until_generated() {
         .unwrap();
     ensure_schemas(&node).await.unwrap();
 
-    upsert_conversation_from_request(
+    let agent_did = "did:key:zTestGeneral";
+    upsert_conversation_from_request_with_identity(
         &node,
         "session-1",
+        "general",
+        agent_did,
         "general",
         "request-1",
         "Draft a weekly fleet report",
@@ -313,9 +316,11 @@ async fn upsert_conversation_from_request_keeps_title_empty_until_generated() {
     )
     .await
     .unwrap();
-    upsert_conversation_from_request(
+    upsert_conversation_from_request_with_identity(
         &node,
         "session-1",
+        "general",
+        agent_did,
         "general",
         "request-2",
         "Now include the overnight daemon failures too",
@@ -323,9 +328,16 @@ async fn upsert_conversation_from_request_keeps_title_empty_until_generated() {
     )
     .await
     .unwrap();
-    update_conversation_status(&node, "session-1", "general", "completed")
-        .await
-        .unwrap();
+    update_conversation_status_with_identity(
+        &node,
+        "session-1",
+        "general",
+        agent_did,
+        "general",
+        "completed",
+    )
+    .await
+    .unwrap();
 
     let resp = node
         .execute(
@@ -382,7 +394,7 @@ async fn upsert_conversation_from_request_keeps_title_empty_until_generated() {
     );
     assert_eq!(
         row.get("agent_did").and_then(|value| value.as_str()),
-        Some("did:defra-agent:general")
+        Some(agent_did)
     );
     assert_eq!(
         row.get("behavior_id").and_then(|value| value.as_str()),
@@ -405,9 +417,11 @@ async fn update_conversation_title_with_source_persists_generated_title() {
         .unwrap();
     ensure_schemas(&node).await.unwrap();
 
-    upsert_conversation_from_request(
+    upsert_conversation_from_request_with_identity(
         &node,
         "session-1",
+        "general",
+        "did:key:zTestGeneral",
         "general",
         "request-1",
         "Draft a weekly fleet report",
@@ -498,11 +512,12 @@ async fn upsert_conversation_rejects_mismatched_existing_behavior() {
         .unwrap();
     ensure_schemas(&node).await.unwrap();
 
+    let agent_did = "did:key:zTestGeneral";
     upsert_conversation_from_request_with_identity(
         &node,
         "session-1",
         "general",
-        "did:defra-agent:general",
+        agent_did,
         "general",
         "request-1",
         "Hello",
@@ -515,7 +530,7 @@ async fn upsert_conversation_rejects_mismatched_existing_behavior() {
         &node,
         "session-1",
         "general",
-        "did:defra-agent:general",
+        agent_did,
         "code",
         "request-2",
         "Hello again",

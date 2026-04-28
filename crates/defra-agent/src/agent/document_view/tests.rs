@@ -5,16 +5,16 @@ use crate::agent::DocumentResolveContext;
 use crate::document_config::ToolSelectionDocument;
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
-use crate::identity::{AgentIdentity, SimpleIdentity};
+use crate::identity::{AgentIdentity, KeyIdentity};
 use crate::tool_surface::ToolCeiling;
 
 async fn test_node() -> Arc<defra_node::EmbeddedNode> {
     Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap())
 }
 
-fn test_identity(name: &str) -> SimpleIdentity {
+fn test_identity(name: &str) -> KeyIdentity {
     let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
-    SimpleIdentity::new(name, path, None)
+    KeyIdentity::load_or_create(path, None).unwrap()
 }
 
 async fn bind_default_behavior_backend(

@@ -20,9 +20,8 @@ async fn config_apply_reconciles_running_runtime_without_restart() -> Result<()>
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-apply-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
 
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -32,6 +31,7 @@ async fn config_apply_reconciles_running_runtime_without_restart() -> Result<()>
             mock_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
 
     run_cli_text(
         &home_dir,
@@ -130,6 +130,86 @@ async fn config_apply_reconciles_running_runtime_without_restart() -> Result<()>
     )
     .await?;
     assert_eq!(generation_after_noop, generation_after_apply);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_diff_bind_live_rebinds_placeholder_manifest_to_running_runtime() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir
+        .path()
+        .join("infra")
+        .join("agents")
+        .join("mini-1-steward");
+    fs::create_dir_all(&home_dir)?;
+
+    let placeholder_did = "did:defra-agent:mini-1-steward";
+    let model_name = format!("mock-live-rebind-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            "mini-1-steward",
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    run_cli_text(
+        &home_dir,
+        &[
+            "config",
+            "export",
+            "--root",
+            root.to_str().expect("utf-8 root"),
+        ],
+    )?;
+    rewrite_manifest_agent_dids(&root, placeholder_did)?;
+
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{
+                create_AgentRuntime(input: {{
+                    agent_did: "{}",
+                    process_state: "shutdown",
+                    updated_at: "2099-01-01T00:00:00Z"
+                }}) {{ _docID }}
+            }}"#,
+            escape_graphql_string(placeholder_did),
+        ),
+    )
+    .await?;
+
+    let diff = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "diff",
+            "--root",
+            root.to_str().expect("utf-8 root"),
+            "--graphql",
+            &graphql,
+            "--bind-agent-did",
+            "live",
+        ],
+    )?;
+    assert_eq!(diff.get("status").and_then(Value::as_str), Some("diffed"));
+    assert_eq!(diff.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        diff.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
 
     Ok(())
 }

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 
 import type {
+  AgentConfigSaveRequest,
   BehaviorSaveRequest,
   BehaviorView,
   DeploymentView,
@@ -9,7 +10,7 @@ import type {
   InferenceProfileView,
   ToolSelectionView,
 } from "../../lib/types";
-import { ConfigDocumentList, ConfigEditorHeader } from "./ConfigChrome";
+import { ConfigDocumentList, PencilIcon, PlusIcon } from "./ConfigChrome";
 import {
   boolText,
   isOptionalFloat,
@@ -24,7 +25,11 @@ export type BehaviorConfigPanelProps = {
   savedStatus: string | null;
   onSavedStatusChange: (value: string) => void;
   onCreateBehavior: () => void;
+  onCreateBackend: () => void;
+  onCreateProfile: () => void;
+  onCreateToolSelection: () => void;
   onSelectBehavior: (behaviorId: string) => void;
+  onSaveAgentConfig: (request: AgentConfigSaveRequest) => Promise<unknown>;
   onSaveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<unknown>;
 };
 
@@ -35,7 +40,11 @@ export function BehaviorConfigPanel({
   savedStatus,
   onSavedStatusChange,
   onCreateBehavior,
+  onCreateBackend,
+  onCreateProfile,
+  onCreateToolSelection,
   onSelectBehavior,
+  onSaveAgentConfig,
   onSaveBehaviorConfig,
 }: BehaviorConfigPanelProps) {
   return (
@@ -44,7 +53,7 @@ export function BehaviorConfigPanel({
         eyebrow="Documents"
         items={deployment.behaviors.map((behavior) => ({
           id: behavior.behaviorId,
-          title: behavior.displayName,
+          title: behavior.behaviorId,
           meta: behavior.isDefault ? "default" : boolText(behavior.enabled),
         }))}
         selectedId={selectedBehavior?.behaviorId ?? null}
@@ -55,17 +64,30 @@ export function BehaviorConfigPanel({
       />
 
       <BehaviorConfigEditor
+        agentDisplayName={
+          deployment.agentPrincipal.displayName ?? deployment.label ?? "Agent"
+        }
         agentDid={deployment.agentDid}
+        agentEnabled={deployment.agentPrincipal.enabled ?? true}
         behavior={selectedBehavior}
+        currentDefaultBehaviorId={
+          deployment.defaultBehaviorId ??
+          deployment.agentPrincipal.defaultBehaviorId ??
+          null
+        }
         inferenceBackends={deployment.inferenceBackends}
         inferenceProfiles={deployment.inferenceProfiles}
         savedStatus={savedStatus}
         saving={saving}
         toolSelections={deployment.toolSelections}
+        onCreateBackend={onCreateBackend}
+        onCreateProfile={onCreateProfile}
+        onCreateToolSelection={onCreateToolSelection}
         onSaved={(behaviorId) => {
           onSelectBehavior(behaviorId);
           onSavedStatusChange(`behavior:${behaviorId}`);
         }}
+        onSaveAgentConfig={onSaveAgentConfig}
         onSaveBehaviorConfig={onSaveBehaviorConfig}
       />
     </section>
@@ -73,30 +95,44 @@ export function BehaviorConfigPanel({
 }
 
 export type BehaviorConfigEditorProps = {
+  agentDisplayName: string;
   agentDid: string;
+  agentEnabled: boolean;
   behavior: BehaviorView | null;
+  currentDefaultBehaviorId: string | null;
   inferenceBackends: InferenceBackendView[];
   inferenceProfiles: InferenceProfileView[];
   toolSelections: ToolSelectionView[];
   saving: boolean;
   savedStatus: string | null;
+  onCreateBackend: () => void;
+  onCreateProfile: () => void;
+  onCreateToolSelection: () => void;
   onSaved: (behaviorId: string) => void;
+  onSaveAgentConfig: (request: AgentConfigSaveRequest) => Promise<unknown>;
   onSaveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<unknown>;
 };
 
 export function BehaviorConfigEditor({
+  agentDisplayName,
   agentDid,
+  agentEnabled,
   behavior,
+  currentDefaultBehaviorId,
   inferenceBackends,
   inferenceProfiles,
   toolSelections,
   saving,
   savedStatus,
+  onCreateBackend,
+  onCreateProfile,
+  onCreateToolSelection,
   onSaved,
+  onSaveAgentConfig,
   onSaveBehaviorConfig,
 }: BehaviorConfigEditorProps) {
   const [behaviorId, setBehaviorId] = useState("");
-  const [displayName, setDisplayName] = useState("");
+  const [editingBehaviorId, setEditingBehaviorId] = useState(false);
   const [systemPrompt, setSystemPrompt] = useState("");
   const [backendId, setBackendId] = useState("");
   const [profileId, setProfileId] = useState("");
@@ -104,7 +140,9 @@ export function BehaviorConfigEditor({
   const [compactionStrategy, setCompactionStrategy] =
     useState("StripThenSummarize");
   const [compactionThreshold, setCompactionThreshold] = useState("0.95");
+  const [compactionEnabled, setCompactionEnabled] = useState(true);
   const [enabled, setEnabled] = useState(true);
+  const [defaultForAgent, setDefaultForAgent] = useState(false);
 
   useEffect(() => {
     const selectedProfileId = behavior?.inferenceProfileId ?? null;
@@ -116,7 +154,7 @@ export function BehaviorConfigEditor({
       nextProfileId = selectedProfileId;
     }
     setBehaviorId(behavior?.behaviorId ?? "");
-    setDisplayName(behavior?.displayName ?? "");
+    setEditingBehaviorId(!behavior);
     setSystemPrompt(behavior?.systemPrompt ?? "");
     setBackendId(behavior?.backendId ?? "");
     setProfileId(nextProfileId);
@@ -127,13 +165,36 @@ export function BehaviorConfigEditor({
         ? String(behavior.compactionThreshold)
         : "0.95",
     );
+    setCompactionEnabled(
+      !behavior ||
+        Boolean(behavior.compactionStrategy || behavior.compactionThreshold != null),
+    );
     setEnabled(behavior?.enabled ?? true);
+    setDefaultForAgent(behavior?.isDefault ?? false);
   }, [behavior, inferenceProfiles]);
 
-  const compactionThresholdValid = isOptionalFloat(compactionThreshold, {
-    min: 0,
-    max: 1,
-  });
+  const selectedBackend = inferenceBackends.find(
+    (backend) => backend.backendId === backendId,
+  );
+  const backendModels = selectedBackend?.models.filter(Boolean) ?? [];
+  const resolvedModel = backendModels.length
+    ? backendModels.join(", ")
+    : selectedBackend
+      ? "No models configured"
+      : "Select a backend";
+  const promptRows = Math.min(
+    28,
+    Math.max(
+      14,
+      systemPrompt.split("\n").length + Math.ceil(systemPrompt.length / 90),
+    ),
+  );
+  const compactionThresholdValid =
+    !compactionEnabled ||
+    isOptionalFloat(compactionThreshold, {
+      min: 0,
+      max: 1,
+    });
 
   async function submitBehavior(event: FormEvent) {
     event.preventDefault();
@@ -141,120 +202,152 @@ export function BehaviorConfigEditor({
     await onSaveBehaviorConfig({
       agentDid,
       behaviorId: nextId,
-      displayName,
+      displayName: nextId,
       systemPrompt,
       backendId: optionalString(backendId),
       inferenceProfileId: profileId.trim(),
       toolSelectionId: optionalString(toolSelectionId),
-      compactionStrategy: optionalString(compactionStrategy),
-      compactionThreshold: parseOptionalFloat(compactionThreshold),
+      compactionStrategy: compactionEnabled
+        ? optionalString(compactionStrategy)
+        : null,
+      compactionThreshold: compactionEnabled
+        ? parseOptionalFloat(compactionThreshold)
+        : null,
       enabled,
     });
+    if (defaultForAgent && nextId !== currentDefaultBehaviorId) {
+      await onSaveAgentConfig({
+        agentDid,
+        displayName: agentDisplayName,
+        defaultBehaviorId: nextId,
+        enabled: agentEnabled,
+      });
+    }
     onSaved(nextId);
   }
 
   return (
-    <form className="panel config-editor" onSubmit={submitBehavior}>
-      <ConfigEditorHeader
-        eyebrow="Behavior"
-        saved={savedStatus === `behavior:${behaviorId.trim()}`}
-        title={displayName || "New Behavior"}
-      />
-
-      <div className="grid-2">
-        <label className="field">
-          <span>Behavior key</span>
-          <input
-            data-testid="behavior-id"
-            onChange={(event) => setBehaviorId(event.currentTarget.value)}
-            value={behaviorId}
-          />
-        </label>
-        <label className="field">
-          <span>Display name</span>
-          <input
-            data-testid="behavior-display-name"
-            onChange={(event) => setDisplayName(event.currentTarget.value)}
-            value={displayName}
-          />
-        </label>
-      </div>
-
-      <div className="grid-3">
-        <label className="field">
-          <span>Backend</span>
-          <select
-            data-testid="behavior-backend-id"
-            onChange={(event) => setBackendId(event.currentTarget.value)}
-            value={backendId}
-          >
-            <option value="">Unset</option>
-            {inferenceBackends.map((backend) => (
-              <option key={backend.backendId} value={backend.backendId}>
-                {backend.name ?? backend.backendId}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>Profile</span>
-          <select
-            data-testid="behavior-profile-id"
-            onChange={(event) => setProfileId(event.currentTarget.value)}
-            value={profileId}
-          >
-            {!inferenceProfiles.length ? (
-              <option value="">No profiles available</option>
+    <form className="panel config-editor behavior-config-editor" onSubmit={submitBehavior}>
+      <div className="panel-header behavior-config-header">
+        <div>
+          <p className="eyebrow">Behavior</p>
+          <div className="behavior-key-row">
+            {editingBehaviorId ? (
+              <input
+                className="behavior-key-input"
+                data-testid="behavior-id"
+                onChange={(event) => setBehaviorId(event.currentTarget.value)}
+                value={behaviorId}
+              />
+            ) : (
+              <h3>{behaviorId || "New Behavior"}</h3>
+            )}
+            {!editingBehaviorId ? (
+              <button
+                aria-label="Edit behavior key"
+                className="ghost-button config-icon-button"
+                data-testid="behavior-edit-key"
+                onClick={() => setEditingBehaviorId(true)}
+                title="Edit behavior key"
+                type="button"
+              >
+                <PencilIcon />
+              </button>
             ) : null}
-            {inferenceProfiles.map((profile) => (
-              <option key={profile.profileId} value={profile.profileId}>
-                {profile.displayName ?? profile.profileId}
-              </option>
-            ))}
-          </select>
+          </div>
+        </div>
+        {savedStatus === `behavior:${behaviorId.trim()}` ? (
+          <span className="chip chip-green">Saved</span>
+        ) : null}
+      </div>
+
+      <div className="behavior-link-grid">
+        <label className="field behavior-link-field">
+          <span>Backend</span>
+          <div className="behavior-link-control">
+            <select
+              data-testid="behavior-backend-id"
+              onChange={(event) => setBackendId(event.currentTarget.value)}
+              value={backendId}
+            >
+              <option value="">Unset</option>
+              {inferenceBackends.map((backend) => (
+                <option key={backend.backendId} value={backend.backendId}>
+                  {backend.name ?? backend.backendId}
+                </option>
+              ))}
+            </select>
+            <button
+              aria-label="Create backend"
+              className="ghost-button config-icon-button"
+              data-testid="behavior-create-backend"
+              onClick={onCreateBackend}
+              title="Create backend"
+              type="button"
+            >
+              <PlusIcon />
+            </button>
+          </div>
         </label>
-        <label className="field">
+        <label className="field behavior-link-field">
+          <span>Profile</span>
+          <div className="behavior-link-control">
+            <select
+              data-testid="behavior-profile-id"
+              onChange={(event) => setProfileId(event.currentTarget.value)}
+              value={profileId}
+            >
+              {!inferenceProfiles.length ? (
+                <option value="">No profiles available</option>
+              ) : null}
+              {inferenceProfiles.map((profile) => (
+                <option key={profile.profileId} value={profile.profileId}>
+                  {profile.displayName ?? profile.profileId}
+                </option>
+              ))}
+            </select>
+            <button
+              aria-label="Create inference profile"
+              className="ghost-button config-icon-button"
+              data-testid="behavior-create-profile"
+              onClick={onCreateProfile}
+              title="Create inference profile"
+              type="button"
+            >
+              <PlusIcon />
+            </button>
+          </div>
+        </label>
+        <label className="field behavior-link-field">
           <span>Tool selection</span>
-          <select
-            data-testid="behavior-tool-selection-id"
-            onChange={(event) => setToolSelectionId(event.currentTarget.value)}
-            value={toolSelectionId}
-          >
-            <option value="">Unset</option>
-            {toolSelections.map((selection) => (
-              <option key={selection.selectionId} value={selection.selectionId}>
-                {selection.displayName ?? selection.selectionId}
-              </option>
-            ))}
-          </select>
+          <div className="behavior-link-control">
+            <select
+              data-testid="behavior-tool-selection-id"
+              onChange={(event) => setToolSelectionId(event.currentTarget.value)}
+              value={toolSelectionId}
+            >
+              <option value="">Unset</option>
+              {toolSelections.map((selection) => (
+                <option key={selection.selectionId} value={selection.selectionId}>
+                  {selection.displayName ?? selection.selectionId}
+                </option>
+              ))}
+            </select>
+            <button
+              aria-label="Create tool selection"
+              className="ghost-button config-icon-button"
+              data-testid="behavior-create-tool-selection"
+              onClick={onCreateToolSelection}
+              title="Create tool selection"
+              type="button"
+            >
+              <PlusIcon />
+            </button>
+          </div>
         </label>
       </div>
 
-      <div className="grid-3">
-        <label className="field">
-          <span>Compaction strategy</span>
-          <select
-            data-testid="behavior-compaction-strategy"
-            onChange={(event) => setCompactionStrategy(event.currentTarget.value)}
-            value={compactionStrategy}
-          >
-            <option value="StripThenSummarize">Strip then summarize</option>
-            <option value="StripToolResults">Strip tool results</option>
-            <option value="Summarize">Summarize</option>
-          </select>
-        </label>
-        <label className="field">
-          <span>Compaction threshold</span>
-          <input
-            data-testid="behavior-compaction-threshold"
-            max="1"
-            min="0"
-            onChange={(event) => setCompactionThreshold(event.currentTarget.value)}
-            step="0.01"
-            type="number"
-            value={compactionThreshold}
-          />
-        </label>
+      <div className="grid-2 behavior-state-grid">
         <label className="checkbox">
           <input
             checked={enabled}
@@ -264,21 +357,80 @@ export function BehaviorConfigEditor({
           />
           <span>Enabled</span>
         </label>
+        <label className="checkbox">
+          <input
+            checked={defaultForAgent}
+            data-testid="behavior-default-for-agent"
+            disabled={behavior?.isDefault ?? false}
+            onChange={(event) => setDefaultForAgent(event.currentTarget.checked)}
+            type="checkbox"
+          />
+          <span>Default behavior</span>
+        </label>
       </div>
+
+      <section
+        className={
+          compactionEnabled
+            ? "behavior-compaction-box"
+            : "behavior-compaction-box disabled"
+        }
+      >
+        <label className="checkbox behavior-compaction-toggle">
+          <input
+            checked={compactionEnabled}
+            data-testid="behavior-compaction-enabled"
+            onChange={(event) => setCompactionEnabled(event.currentTarget.checked)}
+            type="checkbox"
+          />
+          <span>Enable compaction</span>
+        </label>
+        <div className="grid-2">
+          <label className="field">
+            <span>Strategy</span>
+            <select
+              data-testid="behavior-compaction-strategy"
+              disabled={!compactionEnabled}
+              onChange={(event) => setCompactionStrategy(event.currentTarget.value)}
+              value={compactionStrategy}
+            >
+              <option value="StripThenSummarize">Strip then summarize</option>
+              <option value="StripToolResults">Strip tool results</option>
+              <option value="Summarize">Summarize</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Threshold</span>
+            <input
+              data-testid="behavior-compaction-threshold"
+              disabled={!compactionEnabled}
+              max="1"
+              min="0"
+              onChange={(event) =>
+                setCompactionThreshold(event.currentTarget.value)
+              }
+              step="0.01"
+              type="number"
+              value={compactionThreshold}
+            />
+          </label>
+        </div>
+      </section>
 
       <div className="facts facts-single">
         <div>
-          <dt>Resolved model</dt>
-          <dd>{behavior?.modelName ?? "not resolved"}</dd>
+          <dt>Backend model</dt>
+          <dd>{resolvedModel}</dd>
         </div>
       </div>
 
       <label className="field">
         <span>System prompt</span>
         <textarea
-          className="config-textarea"
+          className="config-textarea behavior-system-prompt"
           data-testid="behavior-system-prompt"
           onChange={(event) => setSystemPrompt(event.currentTarget.value)}
+          rows={promptRows}
           value={systemPrompt}
         />
       </label>
@@ -290,7 +442,6 @@ export function BehaviorConfigEditor({
           disabled={
             saving ||
             !behaviorId.trim() ||
-            !displayName.trim() ||
             !systemPrompt.trim() ||
             !profileId.trim() ||
             !compactionThresholdValid

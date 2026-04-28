@@ -80,11 +80,29 @@ Examples:
   defra-agent init --backend-preset openrouter --model-name MODEL
   defra-agent init --backend-preset openai --model-name MODEL
   defra-agent init --inference-url $INFERENCE_ENDPOINT --model-name MODEL --write-tools
+  defra-agent init --identity-only
 
 Next:
   ollama pull gemma4-26b-a4b
+  defra-agent config apply --root infra/agents/HOST/AGENT --bind-agent-did home
   defra-agent server
   defra-agent chat";
+const PROVISION_AFTER_HELP: &str = "\
+Provision binds a portable manifest root to this host's initialized identity,
+applies it locally, and verifies an exact post-apply diff.
+
+Examples:
+  defra-agent provision --home /path/to/home --root infra/agents/HOST/AGENT
+  defra-agent provision --root infra/agents/mini-1/mini-1-steward
+  defra-agent provision --root infra/agents/dev/dev-agent --bootstrap-file-identity
+
+Production low-level flow:
+  bootstrap the host identity backend so init.json contains the real agent DID
+  defra-agent config apply --root <root> --home <home> --bind-agent-did home
+  defra-agent config diff --root <root> --home <home> --bind-agent-did home
+
+File-key development flow:
+  defra-agent provision --root <root> --bootstrap-file-identity";
 const RESET_AFTER_HELP: &str = "\
 Examples:
   defra-agent reset
@@ -97,7 +115,11 @@ Common flow:
   defra-agent server
   defra-agent-desktop init
   defra-agent-desktop
-  defra-agent chat";
+  defra-agent chat
+
+Identity note:
+  Standalone server startup currently requires a loadable file key.
+  Homes with a real agent DID and no key_path must be started by a host identity backend that registers the signer in-process before constructing the runtime.";
 const CHAT_AFTER_HELP: &str = "\
 Examples:
   defra-agent chat
@@ -132,12 +154,13 @@ Examples:
 const CONFIG_AFTER_HELP: &str = "\
 Examples:
   defra-agent config validate --root infra/agents/default
+  defra-agent config validate --root infra/agents/default --home /path/to/home --bind-agent-did home
   defra-agent config diff --root infra/agents/default --home /path/to/home
-  defra-agent config apply --root infra/agents/default --home /path/to/home
+  defra-agent config apply --root infra/agents/default --home /path/to/home --bind-agent-did home
   defra-agent config backend set --graphql URL --backend-id default-backend --name default-backend --backend-preset openrouter --max-concurrent 2
   defra-agent config backend discover-models --backend-preset openrouter
-  defra-agent config behavior set --graphql URL --agent-did did:defra-agent:default --backend-id default-backend --model-name MODEL
-  defra-agent config tools set --graphql URL --agent-did did:defra-agent:default --selection-id default-tools --enable-file-tools";
+  defra-agent config behavior set --graphql URL --agent-did <AGENT_DID> --backend-id default-backend --model-name MODEL
+  defra-agent config tools set --graphql URL --agent-did <AGENT_DID> --selection-id default-tools --enable-file-tools";
 const REQUEST_AFTER_HELP: &str = "\
 `request` is the low-level document path. Most users should prefer `defra-agent chat`.
 
@@ -167,7 +190,8 @@ format that `config import` consumes.
 Examples:
   defra-agent config export --root ./my-agent
   defra-agent config export --root ./my-agent --force
-  defra-agent config export --root ./my-agent --agent-did did:defra-agent:default";
+  defra-agent config export --root ./my-agent --agent-did <AGENT_DID>
+  defra-agent config export --root ./my-agent --home /path/to/home --bind-agent-did home";
 const CONFIG_IMPORT_AFTER_HELP: &str = "\
 Imports desired configuration documents from a legacy JSON bundle file.
 
@@ -234,6 +258,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let result = match cli.command {
         Command::Init(args) => commands::init::init(args).await,
+        Command::Provision(args) => commands::provision::provision(args).await,
         Command::Reset(args) => commands::reset::reset(args).await,
         Command::Server(args) => commands::serve::serve(args).await,
         Command::Chat(args) => commands::chat::chat(args).await,

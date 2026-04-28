@@ -27,6 +27,7 @@ import {
   ToolSelectionConfigPanel,
   ToolServiceConfigPanel,
 } from "./config";
+import sourceLogoUrl from "../../src-tauri/icons/icon.png";
 
 type ConfigTab =
   | "agent"
@@ -258,13 +259,31 @@ export function ConfigWorkspace({
 
   return (
     <section className="config-workspace config-workspace-full">
-      <header className="chat-header config-topbar">
-        <div className="chat-title-block">
-          <p className="eyebrow">Config</p>
-          <h2>{selectedDeployment.label}</h2>
-          <p className="muted mono">{selectedDeployment.agentDid}</p>
+      <header className="config-header">
+        <div className="config-brand">
+          <img alt="" className="config-brand-logo" src={sourceLogoUrl} />
+          <div className="config-title-block">
+            <p className="eyebrow">Defra Agent Config</p>
+            <h1>{selectedDeployment.label}</h1>
+            <p className="muted mono" title={selectedDeployment.agentDid}>
+              {selectedDeployment.agentDid}
+            </p>
+          </div>
         </div>
-        <div className="chat-status">
+        <div className="config-header-actions">
+          <span
+            aria-hidden="true"
+            className={
+              selectedDeployment.dialSucceeded
+                ? "config-status-dot green"
+                : "config-status-dot yellow"
+            }
+            title={
+              selectedDeployment.dialSucceeded
+                ? "P2P connected"
+                : "P2P connection saved"
+            }
+          />
           <span className="chip">
             {selectedDeployment.dialSucceeded ? "connected" : "saved"}
           </span>
@@ -316,6 +335,22 @@ export function ConfigWorkspace({
             selectedConfigBehaviorId === NEW_DOCUMENT_ID ? null : selectedBehavior
           }
           onCreateBehavior={() => setSelectedConfigBehaviorId(NEW_DOCUMENT_ID)}
+          onCreateBackend={() => {
+            setActiveTab("backends");
+            setSelectedBackendId(NEW_DOCUMENT_ID);
+            setSavedStatus(null);
+          }}
+          onCreateProfile={() => {
+            setActiveTab("profiles");
+            setSelectedProfileId(NEW_DOCUMENT_ID);
+            setSavedStatus(null);
+          }}
+          onCreateToolSelection={() => {
+            setActiveTab("toolSelections");
+            setSelectedToolSelectionId(NEW_DOCUMENT_ID);
+            setSavedStatus(null);
+          }}
+          onSaveAgentConfig={onSaveAgentConfig}
           onSaveBehaviorConfig={onSaveBehaviorConfig}
           onSavedStatusChange={setSavedStatus}
           onSelectBehavior={setSelectedConfigBehaviorId}

@@ -38,7 +38,7 @@ use std::{
 
 use defra_agent::{
     ensure_agent_principal, graphql::escape_graphql_string, load_agent_behavior,
-    upsert_agent_behavior, AgentIdentity, DefraAgent, DocumentRuntimeOptions, SimpleIdentity,
+    upsert_agent_behavior, AgentIdentity, DefraAgent, DocumentRuntimeOptions, KeyIdentity,
     ToolCeiling,
 };
 
@@ -47,9 +47,9 @@ mod support;
 use support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
 use support::test_db;
 
-fn test_identity(name: &str) -> SimpleIdentity {
+fn test_identity(name: &str) -> KeyIdentity {
     let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
-    SimpleIdentity::new(name, path, None)
+    KeyIdentity::load_or_create(path, None).unwrap()
 }
 
 struct MockModelEndpoint {

@@ -8,7 +8,7 @@ import type {
   BootstrapSummary,
   DeploymentView,
 } from "../../lib/types";
-import { ConfigEditorHeader } from "./ConfigChrome";
+import { PencilIcon } from "./ConfigChrome";
 
 export type AgentConfigPanelProps = {
   bootstrap: BootstrapSummary | null;
@@ -62,19 +62,18 @@ export function AgentConfigEditor({
   onSaveAgentConfig,
 }: AgentConfigEditorProps) {
   const [displayName, setDisplayName] = useState("");
-  const [defaultBehaviorId, setDefaultBehaviorId] = useState("");
-  const [enabled, setEnabled] = useState(true);
+  const [editingDisplayName, setEditingDisplayName] = useState(false);
 
   useEffect(() => {
     setDisplayName(agent.displayName ?? "");
-    setDefaultBehaviorId(
-      agent.defaultBehaviorId ??
-        behaviors.find((behavior) => behavior.isDefault)?.behaviorId ??
-        behaviors[0]?.behaviorId ??
-        "",
-    );
-    setEnabled(agent.enabled ?? true);
-  }, [agent, behaviors]);
+    setEditingDisplayName(false);
+  }, [agent]);
+
+  const defaultBehaviorId =
+    agent.defaultBehaviorId ??
+    behaviors.find((behavior) => behavior.isDefault)?.behaviorId ??
+    behaviors[0]?.behaviorId ??
+    "";
 
   async function submitAgent(event: FormEvent) {
     event.preventDefault();
@@ -82,23 +81,56 @@ export function AgentConfigEditor({
       agentDid: agent.agentDid,
       displayName,
       defaultBehaviorId,
-      enabled,
+      enabled: agent.enabled ?? true,
     });
+    setEditingDisplayName(false);
     onSaved(agent.agentDid);
   }
 
   return (
-    <form className="panel config-editor" onSubmit={submitAgent}>
-      <ConfigEditorHeader
-        eyebrow="Agent"
-        saved={savedStatus === `agent:${agent.agentDid}`}
-        title={displayName || "Agent"}
-      />
+    <form
+      className="panel config-editor agent-config-editor"
+      onSubmit={submitAgent}
+    >
+      <div className="panel-header agent-config-header">
+        <div>
+          <p className="eyebrow">Agent</p>
+          <div className="agent-name-row">
+            {editingDisplayName ? (
+              <input
+                className="agent-name-input"
+                data-testid="agent-display-name"
+                onChange={(event) => setDisplayName(event.currentTarget.value)}
+                value={displayName}
+              />
+            ) : (
+              <h3>{displayName || "Agent"}</h3>
+            )}
+            {!editingDisplayName ? (
+              <button
+                aria-label="Edit agent display name"
+                className="ghost-button config-icon-button"
+                data-testid="agent-edit-display-name"
+                onClick={() => setEditingDisplayName(true)}
+                title="Edit display name"
+                type="button"
+              >
+                <PencilIcon />
+              </button>
+            ) : null}
+          </div>
+        </div>
+        {savedStatus === `agent:${agent.agentDid}` ? (
+          <span className="chip chip-green">Saved</span>
+        ) : null}
+      </div>
 
-      <div className="facts">
+      <div className="facts agent-install-facts">
         <div>
           <dt>Agent DID</dt>
-          <dd className="mono">{agent.agentDid}</dd>
+          <dd className="mono" title={agent.agentDid}>
+            {agent.agentDid}
+          </dd>
         </div>
         <div>
           <dt>Install name</dt>
@@ -110,58 +142,34 @@ export function AgentConfigEditor({
         </div>
         <div>
           <dt>Tool root</dt>
-          <dd className="mono">{bootstrap?.initToolRoot ?? "not configured"}</dd>
+          <dd className="mono" title={bootstrap?.initToolRoot ?? "not configured"}>
+            {bootstrap?.initToolRoot ?? "not configured"}
+          </dd>
         </div>
       </div>
 
-      <div className="grid-2">
-        <label className="field">
-          <span>Display name</span>
-          <input
-            data-testid="agent-display-name"
-            onChange={(event) => setDisplayName(event.currentTarget.value)}
-            value={displayName}
-          />
-        </label>
-        <label className="field">
-          <span>Default behavior</span>
-          <select
-            data-testid="agent-default-behavior-id"
-            onChange={(event) => setDefaultBehaviorId(event.currentTarget.value)}
-            value={defaultBehaviorId}
+      {editingDisplayName ? (
+        <div className="config-actions agent-config-actions">
+          <button
+            className="ghost-button"
+            onClick={() => {
+              setDisplayName(agent.displayName ?? "");
+              setEditingDisplayName(false);
+            }}
+            type="button"
           >
-            {!behaviors.length ? (
-              <option value="">No behaviors available</option>
-            ) : null}
-            {behaviors.map((behavior) => (
-              <option key={behavior.behaviorId} value={behavior.behaviorId}>
-                {behavior.displayName}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-
-      <label className="checkbox">
-        <input
-          checked={enabled}
-          data-testid="agent-enabled"
-          onChange={(event) => setEnabled(event.currentTarget.checked)}
-          type="checkbox"
-        />
-        <span>Enabled</span>
-      </label>
-
-      <div className="config-actions">
-        <button
-          className="primary-button"
-          data-testid="agent-save"
-          disabled={saving || !displayName.trim() || !defaultBehaviorId.trim()}
-          type="submit"
-        >
-          {saving ? "Saving..." : "Save Agent"}
-        </button>
-      </div>
+            Cancel
+          </button>
+          <button
+            className="primary-button"
+            data-testid="agent-save"
+            disabled={saving || !displayName.trim() || !defaultBehaviorId.trim()}
+            type="submit"
+          >
+            {saving ? "Saving..." : "Save Agent"}
+          </button>
+        </div>
+      ) : null}
     </form>
   );
 }

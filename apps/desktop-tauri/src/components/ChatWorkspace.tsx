@@ -9,8 +9,6 @@ import { displayBehaviorLabel } from "../lib/types";
 import { ChatComposer, ChatHeader, ChatTranscriptPanel } from "./chat";
 
 export type ChatWorkspaceProps = {
-  running: boolean;
-  starting: boolean;
   selectedDeployment: DeploymentView | null;
   selectedConversationTitle: string | null;
   selectedBehaviorId: string | null;
@@ -25,7 +23,6 @@ export type ChatWorkspaceProps = {
   sendHint: string | null;
   draft: string;
   sending: boolean;
-  onStart: () => void;
   onRenameConversationTitle: (sessionId: string, title: string) => void | Promise<void>;
   onDraftChange: (value: string) => void;
   onSend: (event: FormEvent) => void;
@@ -39,33 +36,15 @@ export type ActiveChatWorkspaceProps = Omit<
 };
 
 export function ChatWorkspace(props: ChatWorkspaceProps) {
-  const { running, starting, selectedDeployment, onStart } = props;
-
-  if (!running) {
-    return (
-      <article className="panel centered-panel">
-        <p className="eyebrow">Chat</p>
-        <h2>Start the desktop core</h2>
-        <p className="lede compact">
-          The Tauri shell now knows how to initialize the existing desktop
-          runtime and hold a live Rust client core. Start it to debug the
-          initial chat screen.
-        </p>
-        <button className="primary-button" disabled={starting} onClick={onStart}>
-          {starting ? "Starting…" : "Start Desktop Core"}
-        </button>
-      </article>
-    );
-  }
+  const { selectedDeployment } = props;
 
   if (!selectedDeployment) {
     return (
       <article className="panel centered-panel">
         <p className="eyebrow">Chat</p>
-        <h2>Select a deployment</h2>
+        <h2>Select an agent</h2>
         <p className="muted">
-          Pick a saved deployment from the left rail to debug the first chat
-          screen.
+          Open the fleet dashboard to choose an agent connection.
         </p>
       </article>
     );

@@ -286,6 +286,7 @@ async fn recover_stuck_conversations(node: &EmbeddedNode, agent_did: &str) -> Re
             ) {{
                 _docID
                 agent_name
+                behavior_id
                 session_id
                 latest_request_id
                 status
@@ -310,6 +311,10 @@ async fn recover_stuck_conversations(node: &EmbeddedNode, agent_did: &str) -> Re
     for row in &rows {
         let doc_id = row.get("_docID").and_then(|v| v.as_str()).unwrap_or("");
         let agent_name = row.get("agent_name").and_then(|v| v.as_str()).unwrap_or("");
+        let behavior_id = row
+            .get("behavior_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let session_id = row.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
         let latest_request_id = row
             .get("latest_request_id")
@@ -324,8 +329,15 @@ async fn recover_stuck_conversations(node: &EmbeddedNode, agent_did: &str) -> Re
             _ => "active",
         };
 
-        if let Err(error) =
-            session::update_conversation_status(node, session_id, agent_name, next_status).await
+        if let Err(error) = session::update_conversation_status_with_identity(
+            node,
+            session_id,
+            agent_name,
+            agent_did,
+            behavior_id,
+            next_status,
+        )
+        .await
         {
             tracing::warn!(
                 doc_id = %doc_id,

@@ -113,7 +113,8 @@ async fn claim_rejects_when_another_non_terminal_request_exists() {
         created_at: later,
     };
 
-    let mut lifecycle = RequestLifecycle::new(db.node.clone(), AGENT_NAME, request, 300);
+    let mut lifecycle =
+        RequestLifecycle::new_with_agent_did(db.node.clone(), AGENT_NAME, AGENT_DID, request, 300);
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Superseded);
 
     let resp = db
@@ -170,7 +171,8 @@ async fn claim_suppresses_later_pending_duplicates() {
         created_at: "2026-03-23T00:00:00Z".into(),
     };
 
-    let mut lifecycle = RequestLifecycle::new(db.node.clone(), AGENT_NAME, request, 300);
+    let mut lifecycle =
+        RequestLifecycle::new_with_agent_did(db.node.clone(), AGENT_NAME, AGENT_DID, request, 300);
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
 
     let resp = db
@@ -254,7 +256,8 @@ async fn claim_preserves_explicit_behavior_id() {
         created_at: created_at.into(),
     };
 
-    let mut lifecycle = RequestLifecycle::new(db.node.clone(), AGENT_NAME, request, 300);
+    let mut lifecycle =
+        RequestLifecycle::new_with_agent_did(db.node.clone(), AGENT_NAME, AGENT_DID, request, 300);
     assert_eq!(lifecycle.behavior_id(), "code");
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
 

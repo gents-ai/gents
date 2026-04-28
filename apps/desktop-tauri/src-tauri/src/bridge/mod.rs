@@ -503,9 +503,8 @@ fn desktop_behavior_save(
         row.backend_id = trim_optional(request.backend_id);
         row.tool_selection_id = trim_optional(request.tool_selection_id);
         row.inference_profile_id = Some(inference_profile_id);
-        row.compaction_strategy =
-            trim_optional(request.compaction_strategy).or_else(|| row.compaction_strategy.clone());
-        row.compaction_threshold = request.compaction_threshold.or(row.compaction_threshold);
+        row.compaction_strategy = trim_optional(request.compaction_strategy);
+        row.compaction_threshold = request.compaction_threshold;
         row.enabled = request.enabled.or(row.enabled).or(Some(true));
         if let Some(backend_id) = row.backend_id.as_deref() {
             if let Some(model_name) = store

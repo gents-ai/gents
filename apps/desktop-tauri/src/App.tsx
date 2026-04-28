@@ -43,13 +43,11 @@ function App() {
           loading={shell.loading}
           p2pHealth={shell.runtimeHealth}
           repairingP2P={shell.repairingP2P}
-          running={Boolean(shell.snapshot?.client)}
           starting={shell.starting}
           onAddPeer={shell.onAddPeer}
           onOpenChat={openChat}
           onOpenConfig={openConfig}
           onRepairP2P={shell.onRepairP2P}
-          onStart={() => void shell.onStartClient()}
         />
       ) : workspaceView === "chat" ? (
         <section className="workspace">
@@ -57,30 +55,14 @@ function App() {
             behaviorOptions={shell.behaviorOptions}
             conversations={shell.selectedDeployment?.conversations ?? []}
             deployments={shell.deployments}
-            dangerouslyOverwrite={shell.dangerouslyOverwrite}
-            initSummary={shell.initSummary}
-            initializing={shell.initializing}
-            label={shell.label}
             onConfigureDeployment={(agentDid) => openConfig(agentDid)}
-            onDangerouslyOverwriteChange={shell.setDangerouslyOverwrite}
-            onInit={shell.onInit}
-            onLabelChange={shell.setLabel}
-            onResetChange={shell.setReset}
-            onRefresh={() => void shell.refreshSnapshot()}
             onOpenFleet={() => setWorkspaceView("fleet")}
             onSelectBehavior={shell.setSelectedBehaviorId}
             onSelectDeployment={shell.setSelectedAgentDid}
             onSelectSession={shell.setSelectedSessionId}
-            onShutdown={() => void shell.onShutdownClient()}
-            onStart={() => void shell.onStartClient()}
-            reset={shell.reset}
-            running={Boolean(shell.snapshot?.client)}
-            runtimeHealth={shell.runtimeHealth}
             selectedAgentDid={shell.selectedAgentDid}
             selectedBehaviorId={shell.selectedBehaviorId}
             selectedSessionId={shell.selectedSessionId}
-            starting={shell.starting}
-            stopping={shell.stopping}
           />
 
           <section className="chat-column">
@@ -95,9 +77,7 @@ function App() {
                 void shell.onRenameConversationTitle(sessionId, title)
               }
               onSend={shell.onSendMessage}
-              onStart={() => void shell.onStartClient()}
               rowCount={shell.snapshot?.client?.rowCount ?? 0}
-              running={Boolean(shell.snapshot?.client)}
               runtimeHealth={shell.runtimeHealth}
               sendHint={
                 shell.sendStatus.kind === "disabled" ? shell.sendStatus.hint : null
@@ -112,7 +92,6 @@ function App() {
               selectedSessionId={shell.selectedSessionId}
               sending={shell.sending}
               session={shell.session}
-              starting={shell.starting}
             />
           </section>
         </section>

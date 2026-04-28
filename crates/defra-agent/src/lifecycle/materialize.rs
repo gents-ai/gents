@@ -142,23 +142,6 @@ pub(crate) async fn write_pending_agent_request_with_lineage(
 }
 
 impl RequestLifecycle {
-    pub fn new(
-        node: Arc<EmbeddedNode>,
-        agent_name: &str,
-        request: AgentRequest,
-        deadline_duration_secs: u64,
-    ) -> Self {
-        Self::new_with_execution_binding(
-            node,
-            agent_name,
-            &format!("did:defra-agent:{agent_name}"),
-            request,
-            deadline_duration_secs,
-            ExecutionOrigin::Interactive,
-            "",
-        )
-    }
-
     pub fn new_with_agent_did(
         node: Arc<EmbeddedNode>,
         agent_name: &str,

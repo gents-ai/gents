@@ -51,6 +51,59 @@ fn run_config_apply(home_dir: &Path, root: &Path) -> Result<Value> {
     run_cli_json(home_dir, &["config", "apply", "--root", root_str])
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_export_bind_home_ignores_stale_runtime_state_agent_did() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let export_root = tempdir.path().join("export-root");
+    fs::create_dir_all(&home_dir)?;
+
+    let agent_name = "mini-1-steward";
+    let model_name = format!("mock-export-bind-home-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let explicit_home = home_dir.join(".defra-agent");
+    write_json_file(
+        &explicit_home.join("runtime.json"),
+        &serde_json::json!({
+            "home": explicit_home.to_string_lossy(),
+            "graphql": "http://127.0.0.1:1/api/v0/graphql",
+            "agent_name": agent_name,
+            "agent_did": "did:defra-agent:mini-1-steward",
+            "default_behavior_id": "default"
+        }),
+    )?;
+
+    run_config_export(
+        &home_dir,
+        &export_root,
+        &[
+            "--home",
+            explicit_home.to_str().expect("utf-8 home"),
+            "--bind-agent-did",
+            "home",
+        ],
+    )?;
+
+    let principal = read_json_file(&export_root.join("agent-principal.json"))?;
+    assert_eq!(
+        principal.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+
+    Ok(())
+}
+
 /// Write a minimal manifest root with a single agent, behavior, tool-selection,
 /// and inference-backend, all using filesystem-safe IDs (no colons).
 /// Returns `(agent_did, behavior_id, selection_id, backend_id)`.
@@ -152,7 +205,7 @@ async fn config_import_round_trips_and_requires_override() -> Result<()> {
     fs::create_dir_all(&target_home)?;
 
     let agent_name = format!("cli-import-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
+    let agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
     let default_behavior_id = "default".to_string();
     let tool_selection_id = format!("{default_behavior_id}-tools");
     let backend_id = format!("{agent_name}-backend");

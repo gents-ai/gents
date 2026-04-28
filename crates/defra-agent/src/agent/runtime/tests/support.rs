@@ -1,6 +1,6 @@
 // Soft-cap justified: shared test harness for runtime integration tests. Splitting further would fragment fixture reuse (mock HTTP server, bind helpers, wait utilities must stay co-located with the tests that pair them).
 use super::super::*;
-use crate::identity::SimpleIdentity;
+use crate::identity::KeyIdentity;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -20,9 +20,9 @@ pub(super) async fn test_node() -> Arc<defra_node::EmbeddedNode> {
     Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap())
 }
 
-pub(super) fn test_identity(name: &str) -> SimpleIdentity {
+pub(super) fn test_identity(name: &str) -> KeyIdentity {
     let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
-    SimpleIdentity::new(name, path, None)
+    KeyIdentity::load_or_create(path, None).unwrap()
 }
 
 pub(super) fn request(behavior_id: Option<&str>, session_id: &str) -> AgentRequest {

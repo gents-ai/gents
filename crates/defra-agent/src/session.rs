@@ -22,9 +22,9 @@ mod tool_calls;
 pub use compaction_entries::{load_compaction_entries, save_compaction_entry};
 #[allow(unused_imports)]
 pub(crate) use conversation::{
-    conversation_needs_generated_title, load_recent_titles_for_agent, update_conversation_status,
-    update_conversation_status_if_latest_with_identity, update_conversation_title_with_source,
-    upsert_conversation_from_request, upsert_conversation_from_request_with_identity,
+    conversation_needs_generated_title, load_recent_titles_for_agent,
+    update_conversation_status_if_latest_with_identity, update_conversation_status_with_identity,
+    update_conversation_title_with_source, upsert_conversation_from_request_with_identity,
     CONVERSATION_TITLE_SOURCE_GENERATED, CONVERSATION_TITLE_SOURCE_PLACEHOLDER,
 };
 pub use fork::{fork, ForkError, ForkOutcome, ForkParams};

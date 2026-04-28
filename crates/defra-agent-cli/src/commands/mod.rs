@@ -4,6 +4,7 @@ pub(crate) mod config;
 pub(crate) mod diagnose;
 pub(crate) mod init;
 pub(crate) mod p2p;
+pub(crate) mod provision;
 pub(crate) mod request;
 pub(crate) mod reset;
 pub(crate) mod response;

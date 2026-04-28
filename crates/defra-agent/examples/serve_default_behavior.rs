@@ -8,7 +8,7 @@ use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{
     ensure_agent_principal, ensure_runtime_schemas, upsert_agent_behavior,
     upsert_inference_profile, upsert_tool_selection, AgentBehavior, AgentIdentity, DefraAgent,
-    DocumentRuntimeOptions, InferenceProfile, McpPool, SimpleIdentity, ToolCeiling,
+    DocumentRuntimeOptions, InferenceProfile, KeyIdentity, McpPool, ToolCeiling,
     ToolSelectionDocument,
 };
 use tokio::sync::watch;
@@ -55,7 +55,10 @@ async fn main() -> Result<()> {
             .context("building embedded defra node")?,
     );
     ensure_runtime_schemas(node.as_ref()).await?;
-    let identity = Arc::new(SimpleIdentity::new(&agent_name, key_path, None));
+    let identity = Arc::new(
+        KeyIdentity::load_or_create(key_path, None)
+            .context("creating or loading agent identity key")?,
+    );
     seed_demo_documents(
         node.as_ref(),
         identity.did(),
@@ -91,7 +94,7 @@ async fn main() -> Result<()> {
         serde_json::to_string_pretty(&serde_json::json!({
             "status": "serving",
             "agent_name": agent_name,
-            "agent_did": format!("did:defra-agent:{agent_name}"),
+            "agent_did": agent.agent_did(),
             "graphql": format!("http://127.0.0.1:{http_port}/api/v0/graphql"),
             "backend_id": backend_id,
         }))?

@@ -47,7 +47,13 @@ async fn complete_does_not_overwrite_conversation_for_newer_request() {
         execution_origin: None,
         created_at: "2026-03-23T00:00:00Z".into(),
     };
-    let mut lifecycle = RequestLifecycle::new(db.node.clone(), AGENT_NAME, first_request, 300);
+    let mut lifecycle = RequestLifecycle::new_with_agent_did(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        first_request,
+        300,
+    );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
 
     upsert_conversation(&db.node, session_id, "req-second", "second", "processing").await;
@@ -101,7 +107,8 @@ async fn advance_increments_progress_seq() {
         created_at: "2026-03-23T00:00:00Z".into(),
     };
 
-    let mut lifecycle = RequestLifecycle::new(db.node.clone(), AGENT_NAME, request, 300);
+    let mut lifecycle =
+        RequestLifecycle::new_with_agent_did(db.node.clone(), AGENT_NAME, AGENT_DID, request, 300);
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     lifecycle.set_response_doc_id(&response_doc_id);
     lifecycle.advance().await.unwrap();

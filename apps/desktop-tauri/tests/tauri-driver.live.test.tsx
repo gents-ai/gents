@@ -152,7 +152,7 @@ describeLive("Tauri app live bridge runner", () => {
       expect(behavior).toBeDefined();
       const driver = renderTauriAppDriverWithBridge(runner, deployment!.peerId);
       const suffix = Date.now().toString();
-      const displayName = `Live Config ${suffix}`;
+      const behaviorId = behavior!.behaviorId;
       const systemPrompt =
         `You are Amy, a repository analysis agent. Config sentinel ${suffix}.`;
 
@@ -160,10 +160,9 @@ describeLive("Tauri app live bridge runner", () => {
         await driver.ready();
         await driver.openConfig();
         await waitFor(() => {
-          expect(driver.behaviorDisplayName()).toBeInTheDocument();
+          expect(driver.behaviorSystemPrompt()).toBeInTheDocument();
         });
 
-        await driver.replaceBehaviorDisplayName(displayName);
         await driver.replaceBehaviorSystemPrompt(systemPrompt);
         await driver.saveBehaviorConfig();
 
@@ -172,12 +171,12 @@ describeLive("Tauri app live bridge runner", () => {
         });
         await waitForBehaviorConfig(
           runner,
-          behavior!.behaviorId,
-          displayName,
+          behaviorId,
+          behaviorId,
           systemPrompt,
         );
         logTurn(
-          `behavior config saved behaviorId=${behavior!.behaviorId} displayName="${displayName}"`,
+          `behavior config saved behaviorId=${behaviorId}`,
         );
       } finally {
         await driver.dispose();
@@ -295,14 +294,17 @@ describeLive("Tauri app live bridge runner", () => {
         });
 
         await driver.openConfigSection("behavior");
+        await driver.user.click(screen.getByTestId("behavior-new"));
+        await waitFor(() => {
+          expect(driver.behaviorKey()).toBeInTheDocument();
+        });
         expect(
           Array.from(
             (screen.getByTestId("behavior-profile-id") as HTMLSelectElement)
               .options,
           ).some((option) => option.value === ""),
         ).toBe(false);
-        await driver.replaceInput("behavior-id", behaviorId);
-        await driver.replaceBehaviorDisplayName("Config Flow Behavior");
+        await driver.replaceBehaviorKey(behaviorId);
         await driver.selectOption("behavior-backend-id", backendId);
         await driver.selectOption("behavior-profile-id", profileId);
         await driver.selectOption("behavior-tool-selection-id", toolSelectionId);

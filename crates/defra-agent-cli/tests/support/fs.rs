@@ -21,6 +21,90 @@ pub fn read_json_file(path: &Path) -> Result<Value> {
     serde_json::from_slice(&bytes).with_context(|| format!("decoding JSON file {}", path.display()))
 }
 
+pub fn rewrite_manifest_agent_dids(root: &Path, agent_did: &str) -> Result<()> {
+    let principal_path = root.join("agent-principal.json");
+    let mut principal = read_json_file(&principal_path)?;
+    principal["agent_did"] = Value::String(agent_did.to_string());
+    write_json_file(&principal_path, &principal)?;
+
+    for dir_name in ["agent-behaviors", "tool-selections"] {
+        let collection_dir = root.join(dir_name);
+        if !collection_dir.exists() {
+            continue;
+        }
+        for entry in fs::read_dir(&collection_dir)
+            .with_context(|| format!("reading {}", collection_dir.display()))?
+        {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let path = entry.path().join("object.json");
+            let mut object = read_json_file(&path)?;
+            object["agent_did"] = Value::String(agent_did.to_string());
+            write_json_file(&path, &object)?;
+        }
+    }
+
+    Ok(())
+}
+
+pub fn assert_manifest_agent_dids(root: &Path, expected_agent_did: &str) -> Result<()> {
+    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    assert_eq!(
+        principal.get("agent_did").and_then(Value::as_str),
+        Some(expected_agent_did)
+    );
+
+    for dir_name in ["agent-behaviors", "tool-selections"] {
+        let collection_dir = root.join(dir_name);
+        if !collection_dir.exists() {
+            continue;
+        }
+        for entry in fs::read_dir(&collection_dir)
+            .with_context(|| format!("reading {}", collection_dir.display()))?
+        {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let path = entry.path().join("object.json");
+            let object = read_json_file(&path)?;
+            assert_eq!(
+                object.get("agent_did").and_then(Value::as_str),
+                Some(expected_agent_did),
+                "wrong agent_did in {}",
+                path.display()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+pub fn manifest_contains(root: &Path, needle: &str) -> Result<bool> {
+    fn visit(path: &Path, needle: &str) -> Result<bool> {
+        if path.is_dir() {
+            for entry in
+                fs::read_dir(path).with_context(|| format!("reading {}", path.display()))?
+            {
+                if visit(&entry?.path(), needle)? {
+                    return Ok(true);
+                }
+            }
+            return Ok(false);
+        }
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            return Ok(false);
+        }
+        let contents =
+            fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        Ok(contents.contains(needle))
+    }
+
+    visit(root, needle)
+}
+
 pub fn read_captured_log(log: Option<&tempfile::NamedTempFile>) -> Result<String> {
     let Some(log) = log else {
         return Ok(String::new());

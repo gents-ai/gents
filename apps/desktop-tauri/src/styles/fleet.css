@@ -67,6 +67,19 @@
     align-items: end;
   }
 
+  .fleet-import-field {
+    grid-column: 1 / -1;
+  }
+
+  .fleet-import-field textarea {
+    min-height: 84px;
+    resize: vertical;
+  }
+
+  .fleet-import-status {
+    font-size: 12px;
+  }
+
   .fleet-inline-error {
     grid-column: 1 / -1;
     margin: 0;

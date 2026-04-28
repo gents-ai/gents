@@ -76,8 +76,8 @@ export function renderTauriAppDriverWithBridge(
     configSectionTab(tabId: string) {
       return screen.getByTestId(`config-tab-${tabId}`);
     },
-    behaviorDisplayName() {
-      return screen.getByTestId("behavior-display-name") as HTMLInputElement;
+    behaviorKey() {
+      return screen.getByTestId("behavior-id") as HTMLInputElement;
     },
     behaviorSystemPrompt() {
       return screen.getByTestId("behavior-system-prompt") as HTMLTextAreaElement;
@@ -86,7 +86,7 @@ export function renderTauriAppDriverWithBridge(
       return screen.getByTestId("behavior-save");
     },
     behaviorSaveStatus() {
-      return screen.getByTestId("behavior-save-status");
+      return screen.getByText("Saved", { selector: ".config-editor .chip" });
     },
     input(testId: string) {
       return screen.getByTestId(testId) as HTMLInputElement;
@@ -145,8 +145,11 @@ export function renderTauriAppDriverWithBridge(
         await user.click(checkbox);
       }
     },
-    async replaceBehaviorDisplayName(value: string) {
-      fireEvent.change(this.behaviorDisplayName(), { target: { value } });
+    async editBehaviorKey() {
+      await user.click(screen.getByTestId("behavior-edit-key"));
+    },
+    async replaceBehaviorKey(value: string) {
+      fireEvent.change(this.behaviorKey(), { target: { value } });
     },
     async replaceBehaviorSystemPrompt(value: string) {
       fireEvent.change(this.behaviorSystemPrompt(), { target: { value } });

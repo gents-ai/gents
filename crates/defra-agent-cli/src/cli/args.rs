@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     CHAT_AFTER_HELP, CLI_AFTER_HELP, CONFIG_AFTER_HELP, CONFIG_EXPORT_AFTER_HELP,
     CONFIG_IMPORT_AFTER_HELP, DEFAULT_INIT_ENDPOINT, DIAGNOSE_AFTER_HELP, INIT_AFTER_HELP,
-    P2P_AFTER_HELP, REQUEST_AFTER_HELP, RESET_AFTER_HELP, RESPONSE_AFTER_HELP, SERVER_AFTER_HELP,
-    SESSION_AFTER_HELP, SHOW_AFTER_HELP, STATUS_AFTER_HELP,
+    P2P_AFTER_HELP, PROVISION_AFTER_HELP, REQUEST_AFTER_HELP, RESET_AFTER_HELP,
+    RESPONSE_AFTER_HELP, SERVER_AFTER_HELP, SESSION_AFTER_HELP, SHOW_AFTER_HELP, STATUS_AFTER_HELP,
 };
 
 use crate::default_backend_max_queue_depth;
@@ -32,6 +32,11 @@ pub(crate) struct Cli {
 pub(crate) enum Command {
     #[command(about = "Initialize a local agent home directory", after_help = INIT_AFTER_HELP)]
     Init(InitArgs),
+    #[command(
+        about = "Provision a local agent home from a portable manifest root",
+        after_help = PROVISION_AFTER_HELP
+    )]
+    Provision(ProvisionArgs),
     #[command(about = "Clear persisted local runtime state", after_help = RESET_AFTER_HELP)]
     Reset(ResetArgs),
     #[command(
@@ -79,6 +84,29 @@ pub(crate) enum Command {
 }
 
 #[derive(clap::Args)]
+pub(crate) struct ProvisionArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        value_name = "ROOT",
+        help = "Portable manifest root to bind to this home and apply"
+    )]
+    pub(crate) root: PathBuf,
+    #[arg(
+        long,
+        help = "Local display name and default key filename when the home has not been initialized. Defaults to the manifest root directory name."
+    )]
+    pub(crate) agent_name: Option<String>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Create a local file-key identity when the home is uninitialized. Production hosts should bootstrap identity first."
+    )]
+    pub(crate) bootstrap_file_identity: bool,
+}
+
+#[derive(clap::Args)]
 pub(crate) struct InitArgs {
     #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
     pub(crate) home: Option<PathBuf>,
@@ -96,7 +124,13 @@ pub(crate) struct InitArgs {
         help = "Clear persisted local runtime state after initialization"
     )]
     pub(crate) reset: bool,
-    #[arg(long, default_value = crate::DEFAULT_AGENT_NAME, help = "Local agent name. This becomes did:defra-agent:<AGENT_NAME>")]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Create/load identity and write init.json without seeding runtime config documents"
+    )]
+    pub(crate) identity_only: bool,
+    #[arg(long, default_value = crate::DEFAULT_AGENT_NAME, help = "Local display name and default key filename. The agent DID is derived from the identity key.")]
     pub(crate) agent_name: String,
     #[arg(long)]
     pub(crate) key_path: Option<PathBuf>,
@@ -362,6 +396,8 @@ pub(crate) struct DiagnoseArgs {
     pub(crate) graphql: Option<String>,
     #[arg(long)]
     pub(crate) agent_did: Option<String>,
+    #[arg(long = "bind-agent-did", value_enum)]
+    pub(crate) bind_agent_did: Option<ManifestAgentDidBindingArg>,
 }
 
 #[derive(clap::Args)]
@@ -643,6 +679,8 @@ pub(crate) struct ConfigExportArgs {
     pub(crate) graphql: Option<String>,
     #[arg(long)]
     pub(crate) agent_did: Option<String>,
+    #[arg(long = "bind-agent-did", value_enum)]
+    pub(crate) bind_agent_did: Option<ManifestAgentDidBindingArg>,
 }
 
 #[derive(clap::Args)]
@@ -668,6 +706,14 @@ pub(crate) struct ConfigImportArgs {
 pub(crate) struct ConfigValidateArgs {
     #[arg(long, value_name = "ROOT")]
     pub(crate) root: PathBuf,
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long = "bind-agent-did", value_enum)]
+    pub(crate) bind_agent_did: Option<ManifestAgentDidBindingArg>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) force_rebind_concrete_did: bool,
 }
 
 #[derive(clap::Args)]
@@ -678,6 +724,10 @@ pub(crate) struct ConfigDiffArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
+    #[arg(long = "bind-agent-did", value_enum)]
+    pub(crate) bind_agent_did: Option<ManifestAgentDidBindingArg>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) force_rebind_concrete_did: bool,
 }
 
 #[derive(clap::Args)]
@@ -688,6 +738,16 @@ pub(crate) struct ConfigApplyArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
+    #[arg(long = "bind-agent-did", value_enum)]
+    pub(crate) bind_agent_did: Option<ManifestAgentDidBindingArg>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) force_rebind_concrete_did: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ManifestAgentDidBindingArg {
+    Home,
+    Live,
 }
 
 #[derive(Subcommand)]

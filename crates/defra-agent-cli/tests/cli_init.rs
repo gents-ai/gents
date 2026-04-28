@@ -22,7 +22,6 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
 
     let port = allocate_port()?;
     let agent_name = format!("cli-init-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let backend_id = format!("{agent_name}-backend");
     let graphql = graphql_url(port);
     let tool_selection_id = "default-tools".to_string();
@@ -45,6 +44,7 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
         init.pointer("/init/tool_ceiling").and_then(Value::as_str),
         Some("Readonly")
     );
+    let agent_did = agent_did_from_init(&init)?;
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -176,7 +176,6 @@ async fn init_supports_provider_auth_backend_fields() -> Result<()> {
 
     let port = allocate_port()?;
     let agent_name = format!("cli-openrouter-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let backend_id = format!("{agent_name}-backend");
     let graphql = graphql_url(port);
     let tool_selection_id = "default-tools".to_string();
@@ -203,6 +202,7 @@ async fn init_supports_provider_auth_backend_fields() -> Result<()> {
         init.pointer("/init/api_key").and_then(Value::as_str),
         Some("<redacted>")
     );
+    let agent_did = agent_did_from_init(&init)?;
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -308,6 +308,34 @@ async fn init_defaults_to_local_ollama_and_surfaces_identity() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn init_identity_only_writes_stable_real_did_without_runtime_config() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let agent_name = format!("cli-identity-only-{}", Uuid::new_v4().simple());
+    let first = run_init_json(&home_dir, &["--identity-only", "--agent-name", &agent_name])?;
+    let first_agent_did = agent_did_from_init(&first)?;
+    assert_eq!(
+        first.get("identity_only").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(first.get("init"), Some(&Value::Null));
+
+    let second = run_init_json(&home_dir, &["--identity-only", "--agent-name", &agent_name])?;
+    let second_agent_did = agent_did_from_init(&second)?;
+    assert_eq!(second_agent_did, first_agent_did);
+
+    let init_json = read_json_file(&home_dir.join(".defra-agent").join("init.json"))?;
+    assert_eq!(
+        init_json.get("agent_did").and_then(Value::as_str),
+        Some(first_agent_did.as_str())
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn init_rejects_setting_both_api_key_and_api_key_env_var() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -398,12 +426,11 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
 
     let port = allocate_port()?;
     let agent_name = format!("cli-explicit-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
     let backend_id = format!("{agent_name}-custom-backend");
     let tool_selection_id = "default-tools".to_string();
 
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -415,6 +442,7 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
@@ -486,7 +514,6 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
 
     let port = allocate_port()?;
     let agent_name = format!("cli-write-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
     let backend_id = format!("{agent_name}-backend");
     let tool_selection_id = "default-tools".to_string();
@@ -506,6 +533,7 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
         init.pointer("/init/tool_ceiling").and_then(Value::as_str),
         Some("Readwrite")
     );
+    let agent_did = agent_did_from_init(&init)?;
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;

@@ -19,11 +19,11 @@ async fn request_submit_waits_for_response_by_default() -> Result<()> {
     let port = allocate_port()?;
     let agent_name = format!("cli-submit-{}", Uuid::new_v4().simple());
     let graphql = graphql_url(port);
-    let request_agent_did = format!("did:defra-agent:request-wait-{}", Uuid::new_v4().simple());
+    let request_agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
     let request_content = format!("CLI wait test {}", Uuid::new_v4());
     let expected_content = format!("wait-ok-{}", Uuid::new_v4().simple());
 
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -33,14 +33,10 @@ async fn request_submit_waits_for_response_by_default() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(
-        &graphql,
-        &format!("did:defra-agent:{agent_name}"),
-        Duration::from_secs(30),
-    )
-    .await?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     let submit = spawn_cli(
         &home_dir,
@@ -112,14 +108,14 @@ async fn request_submit_supports_content_file_and_output_file() -> Result<()> {
     let port = allocate_port()?;
     let agent_name = format!("cli-submit-file-{}", Uuid::new_v4().simple());
     let graphql = graphql_url(port);
-    let request_agent_did = format!("did:defra-agent:request-file-{}", Uuid::new_v4().simple());
+    let request_agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
     let request_content = format!("CLI file request {}", Uuid::new_v4());
     let expected_content = format!("wait-file-ok-{}", Uuid::new_v4().simple());
     let content_path = tempdir.path().join("request.txt");
     let output_path = tempdir.path().join("request-output.json");
     fs::write(&content_path, &request_content)?;
 
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -129,14 +125,10 @@ async fn request_submit_supports_content_file_and_output_file() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(
-        &graphql,
-        &format!("did:defra-agent:{agent_name}"),
-        Duration::from_secs(30),
-    )
-    .await?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
     let submit = spawn_cli(
         &home_dir,
