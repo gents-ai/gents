@@ -23,8 +23,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Rewrite Git SSH dependencies to HTTPS
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          git config --global url."https://github.com/".insteadOf ssh://git@github.com/
+          git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf ssh://git@github.com/
 
       - uses: dtolnay/rust-toolchain@stable
         with:
