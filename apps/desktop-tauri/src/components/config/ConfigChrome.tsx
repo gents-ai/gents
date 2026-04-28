@@ -83,3 +83,21 @@ export function ConfigDocumentList({
     </aside>
   );
 }
+
+export function PencilIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M12 20h9" />
+      <path d="m16.5 3.5 4 4L7 21H3v-4L16.5 3.5Z" />
+    </svg>
+  );
+}
+
+export function PlusIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </svg>
+  );
+}
