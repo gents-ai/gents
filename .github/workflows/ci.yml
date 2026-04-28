@@ -24,9 +24,9 @@ jobs:
 
       - name: Rewrite Git SSH dependencies to HTTPS
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
         run: |
-          git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf ssh://git@github.com/
+          git config --global url."https://${PRIVATE_REPO_PAT}@github.com/sourcenetwork/".insteadOf "ssh://git@github.com/sourcenetwork/"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
