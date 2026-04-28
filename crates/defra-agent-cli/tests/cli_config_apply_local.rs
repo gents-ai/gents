@@ -181,15 +181,6 @@ async fn config_apply_rebinds_placeholder_manifest_to_home_identity_locally() ->
         ],
     )?;
     rewrite_manifest_agent_dids(&root, placeholder_did)?;
-    write_json_file(
-        &root.join("identity.json"),
-        &serde_json::json!({
-            "identity_status": "unprovisioned",
-            "did": null,
-            "key_backend": "macos-secure-enclave",
-            "secure_enclave_label": "amygdala/agents/mini-1/mini-1-steward"
-        }),
-    )?;
 
     let target_init = run_init_json(
         &target_home_env,
@@ -213,7 +204,6 @@ async fn config_apply_rebinds_placeholder_manifest_to_home_identity_locally() ->
             target_home_str,
             "--bind-agent-did",
             "home",
-            "--write-identity-binding",
         ],
     )?;
     assert_eq!(
@@ -242,26 +232,6 @@ async fn config_apply_rebinds_placeholder_manifest_to_home_identity_locally() ->
             .pointer("/applied/tool_selections")
             .and_then(Value::as_u64),
         Some(1)
-    );
-
-    let identity_binding = read_json_file(&root.join("identity.json"))?;
-    assert_eq!(
-        identity_binding
-            .get("identity_status")
-            .and_then(Value::as_str),
-        Some("provisioned")
-    );
-    assert_eq!(
-        identity_binding.get("did").and_then(Value::as_str),
-        Some(target_agent_did.as_str())
-    );
-    assert_eq!(
-        identity_binding.get("key_backend").and_then(Value::as_str),
-        Some("macos-secure-enclave")
-    );
-    assert!(
-        identity_binding.get("identity_backend").is_none(),
-        "write-identity-binding should not invent identity_backend metadata: {identity_binding}"
     );
 
     let reexport_root = tempdir.path().join("reexport");

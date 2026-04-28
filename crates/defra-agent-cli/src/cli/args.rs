@@ -98,6 +98,12 @@ pub(crate) struct ProvisionArgs {
         help = "Local display name and default key filename when the home has not been initialized. Defaults to the manifest root directory name."
     )]
     pub(crate) agent_name: Option<String>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Create a local file-key identity when the home is uninitialized. Production hosts should bootstrap identity first."
+    )]
+    pub(crate) bootstrap_file_identity: bool,
 }
 
 #[derive(clap::Args)]
@@ -736,8 +742,6 @@ pub(crate) struct ConfigApplyArgs {
     pub(crate) bind_agent_did: Option<ManifestAgentDidBindingArg>,
     #[arg(long, default_value_t = false)]
     pub(crate) force_rebind_concrete_did: bool,
-    #[arg(long, default_value_t = false)]
-    pub(crate) write_identity_binding: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]

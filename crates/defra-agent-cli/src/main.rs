@@ -89,15 +89,16 @@ Next:
   defra-agent chat";
 const PROVISION_AFTER_HELP: &str = "\
 Provision binds a portable manifest root to this host's initialized identity,
-applies it locally, writes identity.json, and verifies an exact post-apply diff.
+applies it locally, and verifies an exact post-apply diff.
 
 Examples:
   defra-agent provision --home /path/to/home --root infra/agents/HOST/AGENT
   defra-agent provision --root infra/agents/mini-1/mini-1-steward
+  defra-agent provision --root infra/agents/dev/dev-agent --bootstrap-file-identity
 
 Equivalent low-level flow:
   defra-agent init --identity-only --home <home>
-  defra-agent config apply --root <root> --home <home> --bind-agent-did home --write-identity-binding
+  defra-agent config apply --root <root> --home <home> --bind-agent-did home
   defra-agent config diff --root <root> --home <home> --bind-agent-did home";
 const RESET_AFTER_HELP: &str = "\
 Examples:

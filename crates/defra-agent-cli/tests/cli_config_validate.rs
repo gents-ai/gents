@@ -487,61 +487,6 @@ async fn config_validate_bind_home_accepts_placeholder_agent_did() -> Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_validate_bind_home_rejects_identity_binding_mismatch_without_force() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let home_dir = tempdir.path().join("home");
-    let root = tempdir
-        .path()
-        .join("infra")
-        .join("agents")
-        .join("mini-1-steward");
-    fs::create_dir_all(&home_dir)?;
-
-    let init = run_init_json(
-        &home_dir,
-        &["--identity-only", "--agent-name", "mini-1-steward"],
-    )?;
-    let agent_did = agent_did_from_init(&init)?;
-    let explicit_home = home_dir.join(".defra-agent");
-    write_rebindable_manifest_root(&root, "did:defra-agent:mini-1-steward")?;
-    write_json_file(
-        &root.join("identity.json"),
-        &serde_json::json!({
-            "identity_status": "provisioned",
-            "did": format!("did:key:z{}", Uuid::new_v4().simple())
-        }),
-    )?;
-
-    let stderr = run_cli_failure_stderr(
-        &home_dir,
-        &[
-            "config",
-            "validate",
-            "--root",
-            root.to_str().expect("utf-8 manifest root"),
-            "--home",
-            explicit_home.to_str().expect("utf-8 home"),
-            "--bind-agent-did",
-            "home",
-        ],
-    )?;
-    assert!(
-        stderr.contains("identity.json.did"),
-        "expected identity binding mismatch, got:\n{stderr}"
-    );
-    assert!(
-        stderr.contains(&agent_did),
-        "expected resolved runtime DID in error, got:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("--force-rebind-concrete-did"),
-        "expected scoped force hint, got:\n{stderr}"
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_validate_bind_home_rejects_concrete_manifest_did_without_force() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");

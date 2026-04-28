@@ -18,7 +18,8 @@ use crate::{
 pub(crate) async fn provision(args: ProvisionArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
     let agent_name = resolve_provision_agent_name(&args);
-    let identity = ensure_home_identity(&home_dir, &agent_name).await?;
+    let identity =
+        ensure_home_identity(&home_dir, &agent_name, args.bootstrap_file_identity).await?;
 
     let (access, _) = resolve_config_access(Some(&home_dir), None, true).await?;
     let bound = binding::load_bound_manifest(binding::ManifestBindingOptions {
@@ -32,8 +33,7 @@ pub(crate) async fn provision(args: ProvisionArgs) -> Result<()> {
     .await?
     .require_valid()?;
 
-    let apply_report =
-        apply::apply_bound_desired_manifest(&args.root, &access, &bound, true).await?;
+    let apply_report = apply::apply_bound_desired_manifest(&args.root, &access, &bound).await?;
     let diff_report = diff::diff_bound_desired_manifest(&args.root, &access, &bound).await?;
     let ok = apply_report.ok && diff_report.ok;
     let report = ProvisionReport {
@@ -98,6 +98,7 @@ fn resolve_provision_agent_name(args: &ProvisionArgs) -> String {
 async fn ensure_home_identity(
     home_dir: &Path,
     agent_name: &str,
+    bootstrap_file_identity: bool,
 ) -> Result<ProvisionIdentityReport> {
     if let Some(init_config) = read_init_config(home_dir)? {
         let agent_did = init_config.agent_did.trim().to_string();
@@ -109,6 +110,14 @@ async fn ensure_home_identity(
                 key_path: init_config.key_path,
             });
         }
+    }
+
+    if !bootstrap_file_identity {
+        anyhow::bail!(
+            "initialized home identity is required before provisioning {}; run `defra-agent init --identity-only --home {}` for file-key development, or bootstrap the host identity backend first",
+            home_dir.display(),
+            home_dir.display()
+        );
     }
 
     let key_path = default_key_path(home_dir, agent_name);

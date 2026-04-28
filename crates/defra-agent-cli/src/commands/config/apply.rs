@@ -24,9 +24,7 @@ pub(super) async fn config_apply(args: ConfigApplyArgs) -> Result<()> {
     })
     .await?
     .require_valid()?;
-    let report =
-        apply_bound_desired_manifest(&args.root, &access, &bound, args.write_identity_binding)
-            .await?;
+    let report = apply_bound_desired_manifest(&args.root, &access, &bound).await?;
     print_json(&serde_json::to_value(&report)?)?;
     if report.ok {
         Ok(())
@@ -39,7 +37,6 @@ pub(crate) async fn apply_bound_desired_manifest(
     root: &Path,
     access: &ConfigAccess,
     bound: &super::binding::BoundDesiredManifest,
-    write_identity_binding: bool,
 ) -> Result<ConfigApplyReport> {
     let desired_manifest = &bound.manifest;
 
@@ -99,8 +96,5 @@ pub(crate) async fn apply_bound_desired_manifest(
         applied,
         remaining: remaining.counts.clone(),
     };
-    if report.ok && write_identity_binding {
-        super::binding::write_identity_binding(root, &bound.context.target_agent_did)?;
-    }
     Ok(report)
 }

@@ -1,10 +1,9 @@
 use std::collections::BTreeSet;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use defra_agent::{AgentIdentity, KeyIdentity};
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::cli::ManifestAgentDidBindingArg;
 use crate::config_writes::ConfigAccess;
@@ -40,7 +39,6 @@ pub(crate) struct ManifestBindingContext {
     pub(crate) bind_mode: ManifestBindMode,
     pub(crate) target_agent_did: String,
     pub(crate) source_manifest_dids: BTreeSet<String>,
-    pub(crate) identity_json_binding: IdentityJsonBinding,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,13 +56,6 @@ impl ManifestBindMode {
             Some(ManifestAgentDidBindingArg::Live) => Self::Live,
         }
     }
-}
-
-#[derive(Debug, Clone, Default)]
-#[allow(dead_code)]
-pub(crate) struct IdentityJsonBinding {
-    pub(crate) identity_status: Option<String>,
-    pub(crate) did: Option<String>,
 }
 
 impl BoundManifestLoad {
@@ -92,22 +83,15 @@ pub(crate) async fn load_bound_manifest(
 
     let bind_mode = ManifestBindMode::from_cli(options.bind_agent_did);
     let source_manifest_dids = manifest_agent_dids(&manifest);
-    let identity_json_binding = read_identity_json_binding(options.root)?;
 
     if bind_mode == ManifestBindMode::Manifest {
         let target_agent_did = manifest.agent_principal.agent_did.clone();
-        enforce_identity_binding_safety(
-            &identity_json_binding,
-            &target_agent_did,
-            options.force_rebind_concrete_did,
-        )?;
         return Ok(BoundManifestLoad {
             bound: Some(BoundDesiredManifest {
                 context: ManifestBindingContext {
                     bind_mode,
                     target_agent_did,
                     source_manifest_dids,
-                    identity_json_binding,
                 },
                 manifest,
             }),
@@ -128,7 +112,6 @@ pub(crate) async fn load_bound_manifest(
                     bind_mode,
                     target_agent_did: agent_did,
                     source_manifest_dids,
-                    identity_json_binding,
                 },
                 manifest,
             }),
@@ -138,11 +121,6 @@ pub(crate) async fn load_bound_manifest(
 
     let target_did =
         resolve_bound_agent_did(bind_mode, options.home, options.graphql, options.access).await?;
-    enforce_identity_binding_safety(
-        &identity_json_binding,
-        &target_did,
-        options.force_rebind_concrete_did,
-    )?;
     enforce_manifest_rebind_safety(&manifest, &target_did, options.force_rebind_concrete_did)?;
     rebind_manifest_agent_did(&mut manifest, &target_did);
 
@@ -153,7 +131,6 @@ pub(crate) async fn load_bound_manifest(
                 bind_mode,
                 target_agent_did: target_did,
                 source_manifest_dids,
-                identity_json_binding,
             },
             manifest,
         }),
@@ -195,29 +172,6 @@ pub(crate) async fn resolve_target_agent_did(
         access,
     )
     .await
-}
-
-pub(crate) fn write_identity_binding(root: &Path, agent_did: &str) -> Result<()> {
-    let path = root.join("identity.json");
-    let mut value = if path.exists() {
-        let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-        serde_json::from_slice(&bytes).with_context(|| format!("decoding {}", path.display()))?
-    } else {
-        json!({})
-    };
-
-    let object = value
-        .as_object_mut()
-        .ok_or_else(|| anyhow::anyhow!("{} must contain a JSON object", path.display()))?;
-    object.insert(
-        "identity_status".to_string(),
-        Value::String("provisioned".to_string()),
-    );
-    object.insert("did".to_string(), Value::String(agent_did.to_string()));
-
-    let bytes = serde_json::to_vec_pretty(&value).context("encoding identity binding JSON")?;
-    fs::write(&path, bytes).with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
 }
 
 fn validation_report_for_manifest(
@@ -372,58 +326,6 @@ fn is_active_runtime_state(state: &str) -> bool {
         "shutdown" | "shuttingDown" => false,
         value => !value.trim().is_empty(),
     }
-}
-
-fn read_identity_json_binding(root: &Path) -> Result<IdentityJsonBinding> {
-    let path = root.join("identity.json");
-    if !path.exists() {
-        return Ok(IdentityJsonBinding::default());
-    }
-
-    let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-    let value: Value =
-        serde_json::from_slice(&bytes).with_context(|| format!("decoding {}", path.display()))?;
-    let identity_status = value
-        .get("identity_status")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let did = match value.get("did") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(value)) => {
-            let value = value.trim();
-            if value.is_empty() || value.eq_ignore_ascii_case("unprovisioned") {
-                None
-            } else {
-                Some(value.to_string())
-            }
-        }
-        Some(other) => anyhow::bail!(
-            "{}.did must be a string or null, got {other}",
-            path.display()
-        ),
-    };
-
-    Ok(IdentityJsonBinding {
-        identity_status,
-        did,
-    })
-}
-
-fn enforce_identity_binding_safety(
-    identity_json_binding: &IdentityJsonBinding,
-    target_did: &str,
-    force_rebind_concrete_did: bool,
-) -> Result<()> {
-    if let Some(did) = identity_json_binding.did.as_deref() {
-        if did != target_did && !force_rebind_concrete_did {
-            anyhow::bail!(
-                "identity.json.did is {did}, but resolved runtime DID is {target_did}; pass --force-rebind-concrete-did to rebind this provisioned manifest"
-            );
-        }
-    }
-    Ok(())
 }
 
 fn enforce_manifest_rebind_safety(

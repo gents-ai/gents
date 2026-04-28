@@ -9,7 +9,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn provision_initializes_home_binds_manifest_writes_identity_and_diff_exact() -> Result<()> {
+async fn provision_initializes_home_binds_manifest_and_diff_exact() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let target_home_env = tempdir.path().join("target-env");
     let target_home = tempdir.path().join("target-home");
@@ -32,6 +32,7 @@ async fn provision_initializes_home_binds_manifest_writes_identity_and_diff_exac
             target_home.to_str().expect("utf-8 home"),
             "--root",
             root.to_str().expect("utf-8 root"),
+            "--bootstrap-file-identity",
         ],
     )?;
     assert_eq!(
@@ -53,29 +54,6 @@ async fn provision_initializes_home_binds_manifest_writes_identity_and_diff_exac
     );
     let agent_did = agent_did_from_report(&report)?;
     assert_ne!(agent_did, placeholder_did);
-
-    let identity_binding = read_json_file(&root.join("identity.json"))?;
-    assert_eq!(
-        identity_binding
-            .get("identity_status")
-            .and_then(Value::as_str),
-        Some("provisioned")
-    );
-    assert_eq!(
-        identity_binding.get("did").and_then(Value::as_str),
-        Some(agent_did.as_str())
-    );
-    assert_eq!(
-        identity_binding.get("key_backend").and_then(Value::as_str),
-        Some("macos-secure-enclave")
-    );
-    assert_eq!(
-        identity_binding
-            .get("secure_enclave_label")
-            .and_then(Value::as_str),
-        Some("amygdala/agents/mini-1/mini-1-steward")
-    );
-    assert!(identity_binding.get("identity_backend").is_none());
 
     let reexport_root = tempdir.path().join("reexport");
     run_cli_text(
@@ -158,6 +136,47 @@ async fn provision_accepts_initialized_home_did_without_file_key_path() -> Resul
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn provision_rejects_uninitialized_home_without_bootstrap_flag() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_env = tempdir.path().join("home-env");
+    let home = tempdir.path().join("uninitialized-home");
+    let root = tempdir
+        .path()
+        .join("infra")
+        .join("agents")
+        .join("mini-3")
+        .join("mini-3-steward");
+    fs::create_dir_all(&home_env)?;
+
+    write_portable_manifest_root(tempdir.path(), &root, "did:defra-agent:mini-3-steward")?;
+
+    let stderr = run_cli_failure_stderr(
+        &home_env,
+        &[
+            "provision",
+            "--home",
+            home.to_str().expect("utf-8 home"),
+            "--root",
+            root.to_str().expect("utf-8 root"),
+        ],
+    )?;
+    assert!(
+        stderr.contains("initialized home identity is required"),
+        "expected initialized home error, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("bootstrap the host identity backend first"),
+        "expected bootstrap instruction, got:\n{stderr}"
+    );
+    assert!(
+        !home.join("init.json").exists(),
+        "provision must not create file-key init metadata for an enclave manifest"
+    );
+
+    Ok(())
+}
+
 fn write_portable_manifest_root(
     temp_root: &Path,
     root: &Path,
@@ -171,11 +190,6 @@ fn write_portable_manifest_root(
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("provision-source");
-    let host_name = root
-        .parent()
-        .and_then(Path::file_name)
-        .and_then(|value| value.to_str())
-        .unwrap_or("host");
 
     run_init_json(
         &source_home_env,
@@ -197,15 +211,6 @@ fn write_portable_manifest_root(
         ],
     )?;
     rewrite_manifest_agent_dids(root, placeholder_did)?;
-    write_json_file(
-        &root.join("identity.json"),
-        &serde_json::json!({
-            "identity_status": "unprovisioned",
-            "did": null,
-            "key_backend": "macos-secure-enclave",
-            "secure_enclave_label": format!("amygdala/agents/{}/{}", host_name, agent_name)
-        }),
-    )?;
     Ok(())
 }
 
