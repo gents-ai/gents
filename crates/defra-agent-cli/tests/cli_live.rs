@@ -37,7 +37,10 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-live-demo-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
+    let model_endpoint = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT")
+        .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
+    let model_name = std::env::var("DEFRA_AGENT_CLI_E2E_MODEL_NAME")
+        .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
 
     let init_args = vec![
         "--home".to_string(),
@@ -45,15 +48,16 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         "--agent-name".to_string(),
         agent_name.clone(),
         "--model-name".to_string(),
-        DEFAULT_MODEL_NAME.to_string(),
+        model_name,
         "--max-concurrent".to_string(),
         "2".to_string(),
         "--max-queue-depth".to_string(),
         "4".to_string(),
-        DEFAULT_MODEL_ENDPOINT.to_string(),
+        model_endpoint,
     ];
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
     let init = run_init_json(&home_dir, &init_arg_refs)?;
+    let agent_did = agent_did_from_init(&init)?;
     let backend_id = init
         .pointer("/init/backend_id")
         .and_then(Value::as_str)
@@ -83,6 +87,11 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         .pointer("/init/tool_selection_id")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("init output missing tool_selection_id: {init}"))?
+        .to_string();
+    let inference_profile_id = init
+        .pointer("/init/inference_profile_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing inference_profile_id: {init}"))?
         .to_string();
 
     let (mut serve, readiness) =
@@ -122,7 +131,7 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     assert!(
         desktop_next_steps.iter().any(|step| step
             .as_str()
-            .is_some_and(|step| step.contains("replication: subscriptions armed"))),
+            .is_some_and(|step| step.contains("replication subscriptions armed"))),
         "desktop init should tell the demo to wait for desktop bootstrap before chat replication: {desktop_init}"
     );
     let peer_directory_path = desktop_home.join("peers.json");
@@ -221,6 +230,8 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
             &model_name,
             "--tool-selection-id",
             &selection_id,
+            "--inference-profile-id",
+            &inference_profile_id,
         ],
     )?;
     wait_for_runtime_quiescence(&graphql, &agent_did, 2, Duration::from_secs(6)).await?;
@@ -319,7 +330,6 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     let files_dir = home_dir.join("live-smoke-files");
     fs::create_dir_all(&files_dir)?;
     let agent_name = format!("cli-live-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let mut request_specs = Vec::new();
     for request_index in 0..4 {
         let mut paths = Vec::new();
@@ -339,7 +349,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             paths.join(", ")
         );
         request_specs.push(LiveRequestSpec {
-            behavior_id: format!("{agent_did}:live-{request_index}"),
+            behavior_id: format!("live-{request_index}"),
             prompt,
             tokens,
         });
@@ -374,6 +384,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     init_args.push(model_endpoint.clone());
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
     let init = run_init_json(&home_dir, &init_arg_refs)?;
+    let agent_did = agent_did_from_init(&init)?;
     let backend_id = init
         .pointer("/init/backend_id")
         .and_then(Value::as_str)
@@ -383,6 +394,11 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
         .pointer("/init/tool_selection_id")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("init output missing tool_selection_id: {init}"))?
+        .to_string();
+    let inference_profile_id = init
+        .pointer("/init/inference_profile_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing inference_profile_id: {init}"))?
         .to_string();
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -414,6 +430,8 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
                 &model_name,
                 "--tool-selection-id",
                 &selection_id,
+                "--inference-profile-id",
+                &inference_profile_id,
             ],
         )?;
     }

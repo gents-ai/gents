@@ -10,6 +10,7 @@ import type {
 } from "../../lib/types";
 import { displayAgentIdentity, displayBehaviorLabel } from "../../lib/types";
 import sourceLogoUrl from "../../../src-tauri/icons/icon.png";
+import { parsePeerConnectionJson, validateAgentDid } from "./peerConnectionImport";
 
 type FleetDashboardProps = {
   addingPeer: boolean;
@@ -18,13 +19,11 @@ type FleetDashboardProps = {
   loading: boolean;
   p2pHealth: P2PHealth | null;
   repairingP2P: boolean;
-  running: boolean;
   starting: boolean;
   onAddPeer: (request: PeerAddRequest) => Promise<unknown>;
   onOpenChat: (agentDid: string) => void;
   onOpenConfig: (agentDid: string) => void;
   onRepairP2P: () => Promise<unknown>;
-  onStart: () => void;
 };
 
 type StatusTone = "green" | "yellow" | "red";
@@ -50,13 +49,11 @@ export function FleetDashboard({
   loading,
   p2pHealth,
   repairingP2P,
-  running,
   starting,
   onAddPeer,
   onOpenChat,
   onOpenConfig,
   onRepairP2P,
-  onStart,
 }: FleetDashboardProps) {
   const [showAddPeer, setShowAddPeer] = useState(false);
   const [peerForm, setPeerForm] = useState(DEFAULT_PEER_FORM);
@@ -67,7 +64,10 @@ export function FleetDashboard({
     event.preventDefault();
     setLocalError(null);
     try {
-      await onAddPeer(peerForm);
+      await onAddPeer({
+        ...peerForm,
+        agentDid: validateAgentDid(peerForm.agentDid),
+      });
       setPeerForm(DEFAULT_PEER_FORM);
       setShowAddPeer(false);
     } catch (error) {
@@ -86,24 +86,14 @@ export function FleetDashboard({
               Connect the desktop to an agent before opening chat or config.
             </p>
           </div>
-          {!running ? (
-            <button
-              className="primary-button"
-              disabled={starting || loading}
-              onClick={onStart}
-              type="button"
-            >
-              {starting || loading ? "Starting..." : "Start Connection Manager"}
-            </button>
-          ) : (
-            <AddPeerForm
-              addingPeer={addingPeer}
-              localError={localError}
-              peerForm={peerForm}
-              onPeerFormChange={setPeerForm}
-              onSubmit={submitPeer}
-            />
-          )}
+          <AddPeerForm
+            addingPeer={addingPeer}
+            disabled={starting || loading}
+            localError={localError}
+            peerForm={peerForm}
+            onPeerFormChange={setPeerForm}
+            onSubmit={submitPeer}
+          />
         </div>
       </section>
     );
@@ -128,6 +118,7 @@ export function FleetDashboard({
         <section className="panel fleet-add-panel">
           <AddPeerForm
             addingPeer={addingPeer}
+            disabled={starting || loading}
             localError={localError}
             peerForm={peerForm}
             onPeerFormChange={setPeerForm}
@@ -186,6 +177,7 @@ function BrandLockup() {
 
 type AddPeerFormProps = {
   addingPeer: boolean;
+  disabled: boolean;
   localError: string | null;
   peerForm: PeerAddRequest;
   onPeerFormChange: (value: PeerAddRequest) => void;
@@ -194,17 +186,51 @@ type AddPeerFormProps = {
 
 function AddPeerForm({
   addingPeer,
+  disabled,
   localError,
   peerForm,
   onPeerFormChange,
   onSubmit,
 }: AddPeerFormProps) {
+  const [connectionJson, setConnectionJson] = useState("");
+  const [importStatus, setImportStatus] = useState<string | null>(null);
+
+  function updateConnectionJson(value: string) {
+    setConnectionJson(value);
+    if (!value.trim()) {
+      setImportStatus(null);
+      return;
+    }
+
+    try {
+      onPeerFormChange(parsePeerConnectionJson(value));
+      setImportStatus("Imported connection JSON");
+    } catch (error) {
+      setImportStatus(String(error));
+    }
+  }
+
   return (
     <form className="fleet-add-form" onSubmit={onSubmit}>
+      <label className="field fleet-import-field">
+        <span>Connection JSON</span>
+        <textarea
+          className="mono"
+          data-testid="fleet-add-connection-json"
+          disabled={disabled || addingPeer}
+          onChange={(event) => updateConnectionJson(event.currentTarget.value)}
+          placeholder='{"label":"api-gateway","agentDid":"did:key:z6Mk...","addr":"/ip4/100.73.235.38/tcp/9161/p2p/12D3Koo..."}'
+          value={connectionJson}
+        />
+        {importStatus ? (
+          <span className="fleet-import-status muted">{importStatus}</span>
+        ) : null}
+      </label>
       <label className="field">
         <span>Agent label</span>
         <input
           data-testid="fleet-add-label"
+          disabled={disabled || addingPeer}
           onChange={(event) =>
             onPeerFormChange({ ...peerForm, label: event.currentTarget.value })
           }
@@ -217,6 +243,7 @@ function AddPeerForm({
         <input
           className="mono"
           data-testid="fleet-add-agent-did"
+          disabled={disabled || addingPeer}
           onChange={(event) =>
             onPeerFormChange({
               ...peerForm,
@@ -232,6 +259,7 @@ function AddPeerForm({
         <input
           className="mono"
           data-testid="fleet-add-addr"
+          disabled={disabled || addingPeer}
           onChange={(event) =>
             onPeerFormChange({ ...peerForm, addr: event.currentTarget.value })
           }
@@ -245,6 +273,7 @@ function AddPeerForm({
           className="primary-button"
           data-testid="fleet-add-submit"
           disabled={
+            disabled ||
             addingPeer ||
             !peerForm.label.trim() ||
             !peerForm.agentDid.trim() ||
@@ -252,7 +281,11 @@ function AddPeerForm({
           }
           type="submit"
         >
-          {addingPeer ? "Adding..." : "Add Agent Connection"}
+          {addingPeer
+            ? "Adding..."
+            : disabled
+              ? "Preparing..."
+              : "Add Agent Connection"}
         </button>
       </div>
     </form>

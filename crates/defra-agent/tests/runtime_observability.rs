@@ -10,7 +10,7 @@ use std::{
 
 use defra_agent::{
     ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, AgentIdentity, DefraAgent,
-    DocumentRuntimeOptions, SimpleIdentity, ToolCeiling,
+    DocumentRuntimeOptions, KeyIdentity, ToolCeiling,
 };
 
 mod support;
@@ -18,9 +18,9 @@ mod support;
 use support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
 use support::test_db;
 
-fn test_identity(name: &str) -> SimpleIdentity {
+fn test_identity(name: &str) -> KeyIdentity {
     let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
-    SimpleIdentity::new(name, path, None)
+    KeyIdentity::load_or_create(path, None).unwrap()
 }
 
 struct MockModelEndpoint {

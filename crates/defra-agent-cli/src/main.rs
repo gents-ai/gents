@@ -136,8 +136,8 @@ Examples:
   defra-agent config apply --root infra/agents/default --home /path/to/home
   defra-agent config backend set --graphql URL --backend-id default-backend --name default-backend --backend-preset openrouter --max-concurrent 2
   defra-agent config backend discover-models --backend-preset openrouter
-  defra-agent config behavior set --graphql URL --agent-did did:defra-agent:default --backend-id default-backend --model-name MODEL
-  defra-agent config tools set --graphql URL --agent-did did:defra-agent:default --selection-id default-tools --enable-file-tools";
+  defra-agent config behavior set --graphql URL --agent-did <AGENT_DID> --backend-id default-backend --model-name MODEL
+  defra-agent config tools set --graphql URL --agent-did <AGENT_DID> --selection-id default-tools --enable-file-tools";
 const REQUEST_AFTER_HELP: &str = "\
 `request` is the low-level document path. Most users should prefer `defra-agent chat`.
 
@@ -167,7 +167,7 @@ format that `config import` consumes.
 Examples:
   defra-agent config export --root ./my-agent
   defra-agent config export --root ./my-agent --force
-  defra-agent config export --root ./my-agent --agent-did did:defra-agent:default";
+  defra-agent config export --root ./my-agent --agent-did <AGENT_DID>";
 const CONFIG_IMPORT_AFTER_HELP: &str = "\
 Imports desired configuration documents from a legacy JSON bundle file.
 

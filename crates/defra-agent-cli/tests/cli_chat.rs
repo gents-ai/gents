@@ -22,10 +22,9 @@ async fn chat_uses_runtime_state_for_interactive_turns() -> Result<()> {
 
     let port = allocate_port()?;
     let agent_name = format!("cli-chat-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
 
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -35,6 +34,7 @@ async fn chat_uses_runtime_state_for_interactive_turns() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
@@ -115,12 +115,11 @@ async fn chat_continues_existing_session_when_session_id_is_provided() -> Result
 
     let port = allocate_port()?;
     let agent_name = format!("cli-chat-continue-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
     let first_prompt = format!("Remember the token {}.", Uuid::new_v4().simple());
     let second_prompt = "What token did I tell you to remember?";
 
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -130,6 +129,7 @@ async fn chat_continues_existing_session_when_session_id_is_provided() -> Result
             mock_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
@@ -188,14 +188,13 @@ async fn chat_supports_message_file_json_output_and_output_file() -> Result<()> 
 
     let port = allocate_port()?;
     let agent_name = format!("cli-chat-json-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
     let message = format!("Reply with exactly {}.", Uuid::new_v4().simple());
     let message_path = tempdir.path().join("chat-message.txt");
     let output_path = tempdir.path().join("chat-output.json");
     fs::write(&message_path, &message)?;
 
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -205,6 +204,7 @@ async fn chat_supports_message_file_json_output_and_output_file() -> Result<()> 
             mock_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
@@ -272,10 +272,9 @@ async fn chat_buffers_final_response_and_shows_tool_progress() -> Result<()> {
 
     let port = allocate_port()?;
     let agent_name = format!("cli-tool-chat-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
 
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -285,6 +284,7 @@ async fn chat_buffers_final_response_and_shows_tool_progress() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;

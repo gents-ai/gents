@@ -22,7 +22,6 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
 
     let port = allocate_port()?;
     let agent_name = format!("cli-init-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let backend_id = format!("{agent_name}-backend");
     let graphql = graphql_url(port);
     let tool_selection_id = "default-tools".to_string();
@@ -45,6 +44,7 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
         init.pointer("/init/tool_ceiling").and_then(Value::as_str),
         Some("Readonly")
     );
+    let agent_did = agent_did_from_init(&init)?;
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -176,7 +176,6 @@ async fn init_supports_provider_auth_backend_fields() -> Result<()> {
 
     let port = allocate_port()?;
     let agent_name = format!("cli-openrouter-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let backend_id = format!("{agent_name}-backend");
     let graphql = graphql_url(port);
     let tool_selection_id = "default-tools".to_string();
@@ -203,6 +202,7 @@ async fn init_supports_provider_auth_backend_fields() -> Result<()> {
         init.pointer("/init/api_key").and_then(Value::as_str),
         Some("<redacted>")
     );
+    let agent_did = agent_did_from_init(&init)?;
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -398,12 +398,11 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
 
     let port = allocate_port()?;
     let agent_name = format!("cli-explicit-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
     let backend_id = format!("{agent_name}-custom-backend");
     let tool_selection_id = "default-tools".to_string();
 
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -415,6 +414,7 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
@@ -486,7 +486,6 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
 
     let port = allocate_port()?;
     let agent_name = format!("cli-write-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
     let backend_id = format!("{agent_name}-backend");
     let tool_selection_id = "default-tools".to_string();
@@ -506,6 +505,7 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
         init.pointer("/init/tool_ceiling").and_then(Value::as_str),
         Some("Readwrite")
     );
+    let agent_did = agent_did_from_init(&init)?;
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;

@@ -3,14 +3,14 @@ mod streaming;
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 
 use crate::cli::args::{ChatArgs, ChatOutputFormat};
 use crate::{
     create_agent_request, print_json, require_non_empty, resolve_home_dir,
     wait_for_terminal_response, write_json_output_file, RequestSubmitOptions, SubmittedRequest,
-    DEFAULT_AGENT_NAME, DEFAULT_HTTP_PORT,
+    DEFAULT_HTTP_PORT,
 };
 
 use streaming::{load_existing_tool_call_keys, stream_turn_progress};
@@ -24,18 +24,17 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
         .clone()
         .or_else(|| runtime_state.as_ref().map(|state| state.graphql.clone()))
         .unwrap_or_else(|| format!("http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql"));
-    let agent_name = args
-        .agent_name
-        .clone()
-        .or_else(|| runtime_state.as_ref().map(|state| state.agent_name.clone()))
-        .or_else(|| init_config.as_ref().map(|config| config.agent_name.clone()))
-        .unwrap_or_else(|| DEFAULT_AGENT_NAME.to_string());
-    let agent_did = args
+    let agent_did = match args
         .agent_did
         .clone()
         .or_else(|| runtime_state.as_ref().map(|state| state.agent_did.clone()))
         .or_else(|| init_config.as_ref().map(|config| config.agent_did.clone()))
-        .unwrap_or_else(|| format!("did:defra-agent:{agent_name}"));
+    {
+        Some(agent_did) => agent_did,
+        None => bail!(
+            "agent DID is required; run `defra-agent init`, start `defra-agent server`, then retry `defra-agent chat`, or pass --agent-did explicitly"
+        ),
+    };
     let session_id = args
         .session_id
         .clone()

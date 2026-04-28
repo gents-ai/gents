@@ -7,28 +7,6 @@ use super::*;
 pub(crate) const CONVERSATION_TITLE_SOURCE_PLACEHOLDER: &str = "placeholder";
 pub(crate) const CONVERSATION_TITLE_SOURCE_GENERATED: &str = "generated";
 
-#[allow(dead_code)]
-pub(crate) async fn upsert_conversation_from_request(
-    node: &EmbeddedNode,
-    session_id: &str,
-    agent_name: &str,
-    request_id: &str,
-    content: &str,
-    status: &str,
-) -> Result<()> {
-    upsert_conversation_from_request_with_identity(
-        node,
-        session_id,
-        agent_name,
-        &agent_did_for_name(agent_name),
-        agent_name,
-        request_id,
-        content,
-        status,
-    )
-    .await
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn upsert_conversation_from_request_with_identity(
     node: &EmbeddedNode,
@@ -95,23 +73,6 @@ pub(crate) async fn upsert_conversation_from_request_with_identity(
 
     execute_mutation_with_retry(node, &mutation, "upsert_conversation_from_request").await?;
     Ok(())
-}
-
-pub(crate) async fn update_conversation_status(
-    node: &EmbeddedNode,
-    session_id: &str,
-    agent_name: &str,
-    status: &str,
-) -> Result<()> {
-    update_conversation_status_with_identity(
-        node,
-        session_id,
-        agent_name,
-        &agent_did_for_name(agent_name),
-        agent_name,
-        status,
-    )
-    .await
 }
 
 pub(crate) async fn update_conversation_status_with_identity(
@@ -356,10 +317,6 @@ pub(crate) async fn conversation_needs_generated_title(
         .unwrap_or(CONVERSATION_TITLE_SOURCE_PLACEHOLDER);
 
     Ok(title.is_empty() || title_source == CONVERSATION_TITLE_SOURCE_PLACEHOLDER)
-}
-
-fn agent_did_for_name(agent_name: &str) -> String {
-    format!("did:defra-agent:{agent_name}")
 }
 
 fn resolve_behavior_id(

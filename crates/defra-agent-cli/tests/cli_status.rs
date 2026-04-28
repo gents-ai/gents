@@ -19,10 +19,9 @@ async fn status_reads_local_runtime_context_by_default() -> Result<()> {
 
     let port = allocate_port()?;
     let agent_name = format!("cli-status-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
 
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -32,6 +31,7 @@ async fn status_reads_local_runtime_context_by_default() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
@@ -80,10 +80,9 @@ async fn status_includes_p2p_runtime_info() -> Result<()> {
 
     let port = allocate_port()?;
     let agent_name = format!("cli-p2p-status-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
 
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -93,6 +92,7 @@ async fn status_includes_p2p_runtime_info() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
     let (mut serve, _) = spawn_server_with_ready_json(
         &home_dir,
         port,

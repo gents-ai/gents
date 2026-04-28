@@ -67,10 +67,9 @@ async fn config_backend_set_preset_and_discover_models_from_backend_id() -> Resu
 
     let port = allocate_port()?;
     let agent_name = format!("cli-backend-preset-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
 
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -80,6 +79,7 @@ async fn config_backend_set_preset_and_discover_models_from_backend_id() -> Resu
             bootstrap_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;

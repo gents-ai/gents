@@ -22,6 +22,35 @@ import type {
   ToolServiceTestResult,
 } from "./types";
 
+type TauriInternalsWindow = Window & {
+  __TAURI_INTERNALS__?: {
+    invoke?: unknown;
+  };
+};
+
+function hasTauriInvokeBridge() {
+  return (
+    typeof window !== "undefined" &&
+    typeof (window as TauriInternalsWindow).__TAURI_INTERNALS__?.invoke ===
+      "function"
+  );
+}
+
+function invokeDesktop<T>(
+  command: string,
+  args?: Record<string, unknown>,
+): Promise<T> {
+  if (!hasTauriInvokeBridge()) {
+    return Promise.reject(
+      new Error(
+        "Desktop native bridge is unavailable. Open this screen in the Tauri desktop app to save agent connections.",
+      ),
+    );
+  }
+
+  return invoke<T>(command, args);
+}
+
 export type DesktopApiAdapter = {
   fetchDesktopSnapshot: () => Promise<DesktopClientSnapshot>;
   initLocalStandardRuntime: (request: {
@@ -81,82 +110,84 @@ export type DesktopApiAdapter = {
 
 const defaultDesktopApiAdapter: DesktopApiAdapter = {
   fetchDesktopSnapshot() {
-    return invoke<DesktopClientSnapshot>("desktop_client_snapshot");
+    return invokeDesktop<DesktopClientSnapshot>("desktop_client_snapshot");
   },
   initLocalStandardRuntime(request) {
-    return invoke<InitSummary>("desktop_init_local_standard", { request });
+    return invokeDesktop<InitSummary>("desktop_init_local_standard", { request });
   },
   startDesktopClient() {
-    return invoke<DesktopClientSnapshot>("desktop_client_start");
+    return invokeDesktop<DesktopClientSnapshot>("desktop_client_start");
   },
   shutdownDesktopClient() {
-    return invoke<DesktopClientSnapshot>("desktop_client_shutdown");
+    return invokeDesktop<DesktopClientSnapshot>("desktop_client_shutdown");
   },
   addPeer(request) {
-    return invoke<DesktopClientSnapshot>("desktop_peer_add", { request });
+    return invokeDesktop<DesktopClientSnapshot>("desktop_peer_add", { request });
   },
   repairP2P() {
-    return invoke<DesktopClientSnapshot>("desktop_p2p_repair");
+    return invokeDesktop<DesktopClientSnapshot>("desktop_p2p_repair");
   },
   fetchSessionSnapshot(sessionId, requestId) {
-    return invoke<DesktopSessionSnapshot | null>("desktop_session_snapshot", {
+    return invokeDesktop<DesktopSessionSnapshot | null>("desktop_session_snapshot", {
       sessionId,
       requestId,
     });
   },
   sendChatMessage(request) {
-    return invoke<ChatSendResult>("desktop_chat_send", { request });
+    return invokeDesktop<ChatSendResult>("desktop_chat_send", { request });
   },
   renameConversation(request) {
-    return invoke<void>("desktop_conversation_rename", { request });
+    return invokeDesktop<void>("desktop_conversation_rename", { request });
   },
   saveAgentConfig(request) {
-    return invoke<DesktopClientSnapshot>("desktop_agent_config_save", {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_agent_config_save", {
       request,
     });
   },
   saveBehaviorConfig(request) {
-    return invoke<DesktopClientSnapshot>("desktop_behavior_save", { request });
+    return invokeDesktop<DesktopClientSnapshot>("desktop_behavior_save", { request });
   },
   saveBackendConfig(request) {
-    return invoke<DesktopClientSnapshot>("desktop_backend_save", { request });
+    return invokeDesktop<DesktopClientSnapshot>("desktop_backend_save", { request });
   },
   saveInferenceProfileConfig(request) {
-    return invoke<DesktopClientSnapshot>("desktop_inference_profile_save", {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_inference_profile_save", {
       request,
     });
   },
   saveToolSelectionConfig(request) {
-    return invoke<DesktopClientSnapshot>("desktop_tool_selection_save", {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_tool_selection_save", {
       request,
     });
   },
   saveToolServiceConfig(request) {
-    return invoke<DesktopClientSnapshot>("desktop_tool_service_save", {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_tool_service_save", {
       request,
     });
   },
   testToolService(request) {
-    return invoke<ToolServiceTestResult>("desktop_tool_service_test", {
+    return invokeDesktop<ToolServiceTestResult>("desktop_tool_service_test", {
       request,
     });
   },
   saveTaskConfig(request) {
-    return invoke<DesktopClientSnapshot>("desktop_task_save", { request });
+    return invokeDesktop<DesktopClientSnapshot>("desktop_task_save", { request });
   },
   saveScheduleConfig(request) {
-    return invoke<DesktopClientSnapshot>("desktop_schedule_save", { request });
+    return invokeDesktop<DesktopClientSnapshot>("desktop_schedule_save", {
+      request,
+    });
   },
   runSchedule(request) {
-    return invoke<TaskRunResult>("desktop_schedule_run", { request });
+    return invokeDesktop<TaskRunResult>("desktop_schedule_run", { request });
   },
   saveEventTriggerConfig(request) {
-    return invoke<DesktopClientSnapshot>("desktop_event_trigger_save", {
+    return invokeDesktop<DesktopClientSnapshot>("desktop_event_trigger_save", {
       request,
     });
   },
   runTask(request) {
-    return invoke<TaskRunResult>("desktop_task_run", { request });
+    return invokeDesktop<TaskRunResult>("desktop_task_run", { request });
   },
 };
 

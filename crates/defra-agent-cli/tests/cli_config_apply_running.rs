@@ -20,9 +20,8 @@ async fn config_apply_reconciles_running_runtime_without_restart() -> Result<()>
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-apply-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
 
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -32,6 +31,7 @@ async fn config_apply_reconciles_running_runtime_without_restart() -> Result<()>
             mock_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
 
     run_cli_text(
         &home_dir,

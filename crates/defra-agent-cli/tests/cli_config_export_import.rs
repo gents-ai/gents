@@ -152,7 +152,7 @@ async fn config_import_round_trips_and_requires_override() -> Result<()> {
     fs::create_dir_all(&target_home)?;
 
     let agent_name = format!("cli-import-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
+    let agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
     let default_behavior_id = "default".to_string();
     let tool_selection_id = format!("{default_behavior_id}-tools");
     let backend_id = format!("{agent_name}-backend");

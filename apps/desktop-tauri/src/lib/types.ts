@@ -505,21 +505,15 @@ export type TaskRunResult = {
   lifecycleState?: string | null;
 };
 
-const PLACEHOLDER_AGENT_DID_PREFIX = "did:defra-agent:default";
-
 export function displayAgentIdentity(value?: string | null) {
-  if (!value || value.startsWith(PLACEHOLDER_AGENT_DID_PREFIX)) {
+  if (!value) {
     return null;
   }
   return value;
 }
 
 export function displayBehaviorLabel(value?: string | null) {
-  if (
-    !value ||
-    value === "default" ||
-    value.startsWith(PLACEHOLDER_AGENT_DID_PREFIX)
-  ) {
+  if (!value || value === "default") {
     return null;
   }
   return value;

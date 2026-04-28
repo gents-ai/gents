@@ -96,7 +96,7 @@ pub(crate) struct InitArgs {
         help = "Clear persisted local runtime state after initialization"
     )]
     pub(crate) reset: bool,
-    #[arg(long, default_value = crate::DEFAULT_AGENT_NAME, help = "Local agent name. This becomes did:defra-agent:<AGENT_NAME>")]
+    #[arg(long, default_value = crate::DEFAULT_AGENT_NAME, help = "Local display name and default key filename. The agent DID is derived from the identity key.")]
     pub(crate) agent_name: String,
     #[arg(long)]
     pub(crate) key_path: Option<PathBuf>,

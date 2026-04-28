@@ -19,10 +19,9 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     let mock_endpoint = MockModelEndpoint::start(&model_name)?;
     let port = allocate_port()?;
     let agent_name = format!("cli-metrics-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
 
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -32,6 +31,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -167,11 +167,10 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
 
     let port = allocate_port()?;
     let agent_name = format!("cli-p2p-ready-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
     let default_behavior_id = "default".to_string();
 
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -181,6 +180,7 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
             mock_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
     let (mut serve, readiness) = spawn_server_with_ready_json(
         &home_dir,
         port,
@@ -252,10 +252,9 @@ async fn server_startup_defaults_to_iroh_p2p_for_desktop_pairing() -> Result<()>
 
     let port = allocate_port()?;
     let agent_name = format!("cli-default-iroh-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
 
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -265,6 +264,7 @@ async fn server_startup_defaults_to_iroh_p2p_for_desktop_pairing() -> Result<()>
             mock_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
     let (mut serve, readiness) = spawn_server_with_ready_json(&home_dir, port, &[], &[])?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
@@ -309,7 +309,6 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
     let warm_port = allocate_port()?;
     let port = allocate_port()?;
     let agent_name = format!("cli-degraded-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
 
     let init = run_init_json(
@@ -322,6 +321,7 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
             "http://127.0.0.1:9/v1",
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
     let backend_id = init
         .pointer("/init/backend_id")
         .and_then(Value::as_str)
@@ -451,7 +451,6 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
 
     let port = allocate_port()?;
     let agent_name = format!("cli-auth-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let backend_id = format!("{agent_name}-backend");
     let graphql = graphql_url(port);
     let tool_selection_id = "default-tools".to_string();
@@ -473,6 +472,7 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
             .and_then(Value::as_str),
         Some("DEFRA_AGENT_TEST_CLI_BACKEND_KEY")
     );
+    let agent_did = agent_did_from_init(&init)?;
 
     let mut serve = spawn_server_with_env(
         &home_dir,

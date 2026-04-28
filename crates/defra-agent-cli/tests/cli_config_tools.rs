@@ -18,11 +18,10 @@ async fn tool_selection_upsert_defaults_enabled_modes_to_readonly() -> Result<()
     let mock_endpoint = MockModelEndpoint::start(&model_name)?;
     let port = allocate_port()?;
     let agent_name = format!("cli-config-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
     let selection_id = format!("{agent_name}-tools");
 
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -32,6 +31,7 @@ async fn tool_selection_upsert_defaults_enabled_modes_to_readonly() -> Result<()
             mock_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
@@ -112,7 +112,6 @@ async fn tool_selection_upsert_persists_file_tool_root() -> Result<()> {
     let mock_endpoint = MockModelEndpoint::start(&model_name)?;
     let port = allocate_port()?;
     let agent_name = format!("cli-config-rooted-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
     let scoped_root = home_dir.join("bench").join("workspace");
 
@@ -131,6 +130,7 @@ async fn tool_selection_upsert_persists_file_tool_root() -> Result<()> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("init output missing tool_selection_id: {init}"))?
         .to_string();
+    let agent_did = agent_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;

@@ -58,7 +58,7 @@ use std::time::Duration;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
-use defra_agent::{AgentIdentity, DefraAgent, DocumentRuntimeOptions, SimpleIdentity, ToolCeiling};
+use defra_agent::{AgentIdentity, DefraAgent, DocumentRuntimeOptions, KeyIdentity, ToolCeiling};
 
 mod support;
 
@@ -67,9 +67,9 @@ use support::mock_endpoint::MockModelEndpoint;
 use support::snapshots::fetch_runtime_snapshot;
 use support::{test_db, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS};
 
-fn test_identity(name: &str) -> SimpleIdentity {
+fn test_identity(name: &str) -> KeyIdentity {
     let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
-    SimpleIdentity::new(name, path, None)
+    KeyIdentity::load_or_create(path, None).unwrap()
 }
 
 // -----------------------------------------------------------------------------

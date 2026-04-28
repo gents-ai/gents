@@ -12,7 +12,7 @@ use defra_agent::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     default_tool_selection_id_for_behavior, ensure_config_bootstrap_schemas, load_agent_behavior,
     load_agent_principal, upsert_agent_principal, upsert_inference_profile, AgentBehavior,
-    AgentIdentity, InferenceProfile, SimpleIdentity, ToolSelectionDocument,
+    AgentIdentity, InferenceProfile, KeyIdentity, ToolSelectionDocument,
 };
 use serde_json::json;
 
@@ -73,7 +73,10 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
             .with_context(|| format!("creating key directory {}", parent.display()))?;
     }
 
-    let identity = Arc::new(SimpleIdentity::new(&args.agent_name, &key_path, None));
+    let identity = Arc::new(
+        KeyIdentity::load_or_create(&key_path, None)
+            .context("creating or loading agent identity key")?,
+    );
     identity
         .sign(b"defra-agent init identity")
         .await

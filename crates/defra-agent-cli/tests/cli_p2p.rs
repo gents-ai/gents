@@ -23,23 +23,31 @@ async fn p2p_connects_two_local_servers_via_operator_commands() -> Result<()> {
     let port_b = allocate_port()?;
     let agent_name_a = format!("cli-amy-{}", Uuid::new_v4().simple());
     let agent_name_b = format!("cli-coding-{}", Uuid::new_v4().simple());
-    let agent_did_a = format!("did:defra-agent:{agent_name_a}");
-    let agent_did_b = format!("did:defra-agent:{agent_name_b}");
     let graphql_a = graphql_url(port_a);
     let graphql_b = graphql_url(port_b);
 
-    for (home_dir, agent_name) in [(&home_a, &agent_name_a), (&home_b, &agent_name_b)] {
-        run_init_json(
-            home_dir,
-            &[
-                "--agent-name",
-                agent_name,
-                "--model-name",
-                &model_name,
-                mock_endpoint.endpoint(),
-            ],
-        )?;
-    }
+    let init_a = run_init_json(
+        &home_a,
+        &[
+            "--agent-name",
+            &agent_name_a,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let init_b = run_init_json(
+        &home_b,
+        &[
+            "--agent-name",
+            &agent_name_b,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did_a = agent_did_from_init(&init_a)?;
+    let agent_did_b = agent_did_from_init(&init_b)?;
 
     let (mut serve_a, readiness_a) = spawn_server_with_ready_json(
         &home_a,

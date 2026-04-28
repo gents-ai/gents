@@ -7,8 +7,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::{
-    ensure_runtime_schemas, AgentIdentity, DefraAgent, DocumentRuntimeOptions, McpPool,
-    ProcessLifecycleObserver, ProcessLifecycleState, SimpleIdentity, ToolCeiling,
+    ensure_runtime_schemas, AgentIdentity, DefraAgent, DocumentRuntimeOptions, KeyIdentity,
+    McpPool, ProcessLifecycleObserver, ProcessLifecycleState, ToolCeiling,
 };
 use serde_json::{json, Value};
 use tokio::sync::watch;
@@ -128,7 +128,10 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     for cli_tool_arg in &args.cli_tools {
         tool_ceiling = tool_ceiling.with_cli_tool(parse_cli_tool_arg(cli_tool_arg)?);
     }
-    let identity = Arc::new(SimpleIdentity::new(&agent_name, &key_path, None));
+    let identity = Arc::new(
+        KeyIdentity::load_or_create(&key_path, None)
+            .context("creating or loading agent identity key")?,
+    );
     let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
 
     let agent = DefraAgent::from_default_behavior_documents(

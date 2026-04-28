@@ -11,7 +11,7 @@ use defra_agent::{
     cli_tool, default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     default_tool_selection_id_for_behavior, ensure_agent_principal, load_agent_behavior,
     upsert_agent_behavior, AgentIdentity, BackendProviderKind, DefraAgent, DocumentRuntimeOptions,
-    SimpleIdentity, ToolCeiling,
+    KeyIdentity, ToolCeiling,
 };
 use defra_agent_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths, PeerRecord};
 use defra_agent_desktop_core::local_runtime::DesktopInitSummary;
@@ -440,7 +440,7 @@ async fn spawn_live_agent(
         .with_context(|| format!("creating live tool root {}", tool_root.display()))?;
     seed_repo_workspace(&tool_root)?;
 
-    let identity = Arc::new(SimpleIdentity::new(name, key_path, None));
+    let identity = Arc::new(KeyIdentity::load_or_create(key_path, None)?);
     let did = identity.did().to_string();
     let docs = seed_live_behavior_documents(node_owner.as_ref(), &did, name, backend).await?;
     let agent = DefraAgent::from_default_behavior_documents(

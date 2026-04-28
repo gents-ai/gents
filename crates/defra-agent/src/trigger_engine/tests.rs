@@ -17,7 +17,7 @@ use crate::document_config::{
 };
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
-use crate::identity::SimpleIdentity;
+use crate::identity::KeyIdentity;
 use crate::runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot,
     ResolvedSchedule, ResolvedTask,
@@ -866,11 +866,13 @@ async fn schedule_source_next_fire_honors_cancellation_token() {
 /// not drive any inference: the integration test asserts lineage on the
 /// persisted `AgentRequest` doc only, not execution.
 fn integration_test_behavior(behavior_name: &str) -> Arc<BehaviorConfig> {
-    let identity = Arc::new(SimpleIdentity::new(
-        behavior_name,
-        std::env::temp_dir().join(format!("{behavior_name}-{}.key", uuid::Uuid::new_v4())),
-        None,
-    ));
+    let identity = Arc::new(
+        KeyIdentity::load_or_create(
+            std::env::temp_dir().join(format!("{behavior_name}-{}.key", uuid::Uuid::new_v4())),
+            None,
+        )
+        .unwrap(),
+    );
     Arc::new(BehaviorConfig {
         name: behavior_name.to_string(),
         identity,

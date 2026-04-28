@@ -5,9 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::shared::{StoredInitConfig, StoredRuntimeState};
-use crate::{
-    DEFAULT_AGENT_NAME, DEFAULT_HTTP_PORT, INIT_CONFIG_FILE_NAME, RUNTIME_STATE_FILE_NAME,
-};
+use crate::{DEFAULT_HTTP_PORT, INIT_CONFIG_FILE_NAME, RUNTIME_STATE_FILE_NAME};
 
 pub(crate) fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
     explicit
@@ -123,7 +121,9 @@ pub(crate) fn resolve_agent_did(home: Option<&Path>, explicit: Option<&str>) -> 
         return Ok(init_config.agent_did);
     }
 
-    Ok(format!("did:defra-agent:{DEFAULT_AGENT_NAME}"))
+    anyhow::bail!(
+        "agent DID is required; run `defra-agent init`, start `defra-agent server`, then retry `defra-agent status`, or pass --agent-did explicitly"
+    )
 }
 
 pub(crate) fn display_host(host: IpAddr) -> String {

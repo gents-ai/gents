@@ -86,7 +86,7 @@ export function renderTauriAppDriverWithBridge(
       return screen.getByTestId("behavior-save");
     },
     behaviorSaveStatus() {
-      return screen.getByTestId("behavior-save-status");
+      return screen.getByText("Saved", { selector: ".config-editor .chip" });
     },
     input(testId: string) {
       return screen.getByTestId(testId) as HTMLInputElement;

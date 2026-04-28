@@ -1,13 +1,12 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use crypto::keys::PublicKey;
 use crypto::Key;
-use identity::{FullIdentity as _, RawIdentity};
-use tokio::sync::RwLock;
+use identity::{FullIdentity as _, Identity as _, RawIdentity};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceAccount {
@@ -32,54 +31,36 @@ fn known_public_keys() -> &'static RwLock<HashMap<String, Vec<u8>>> {
 }
 
 #[derive(Debug)]
-pub struct SimpleIdentity {
+pub struct KeyIdentity {
     did: String,
-    key_path: PathBuf,
     service_account: Option<ServiceAccount>,
-    identity: tokio::sync::Mutex<Option<Arc<RawIdentity>>>,
+    identity: Arc<RawIdentity>,
 }
 
-impl SimpleIdentity {
-    pub fn new(
-        principal_name: impl Into<String>,
+impl KeyIdentity {
+    pub fn load_or_create(
         key_path: impl Into<PathBuf>,
         service_account: Option<ServiceAccount>,
-    ) -> Self {
-        let principal_name = principal_name.into();
-        Self {
-            did: format!("did:defra-agent:{principal_name}"),
-            key_path: key_path.into(),
+    ) -> Result<Self> {
+        let identity = Arc::new(load_or_create_identity(&key_path.into())?);
+        let did = identity.did().map_err(anyhow::Error::from)?.to_string();
+        register_public_key(&did, identity.public_key_bytes());
+        Ok(Self {
+            did,
             service_account,
-            identity: tokio::sync::Mutex::new(None),
-        }
-    }
-
-    async fn load_identity(&self) -> Result<Arc<RawIdentity>> {
-        if let Some(identity) = self.identity.lock().await.clone() {
-            return Ok(identity);
-        }
-
-        let mut guard = self.identity.lock().await;
-        if let Some(identity) = guard.clone() {
-            return Ok(identity);
-        }
-
-        let identity = Arc::new(load_or_create_identity(&self.key_path).await?);
-        register_public_key(&self.did, identity.public_key_bytes()).await;
-        *guard = Some(identity.clone());
-        Ok(identity)
+            identity,
+        })
     }
 }
 
 #[async_trait]
-impl AgentIdentity for SimpleIdentity {
+impl AgentIdentity for KeyIdentity {
     fn did(&self) -> &str {
         &self.did
     }
 
     async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>> {
-        let identity = self.load_identity().await?;
-        identity
+        self.identity
             .sign(payload)
             .map_err(anyhow::Error::from)
             .with_context(|| format!("signing payload for {}", self.did))
@@ -87,11 +68,12 @@ impl AgentIdentity for SimpleIdentity {
 
     async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> Result<bool> {
         let public_key = if did == self.did {
-            let identity = self.load_identity().await?;
-            crypto::Ed25519PublicKey::from_bytes(&identity.public_key_bytes())
+            crypto::Ed25519PublicKey::from_bytes(&self.identity.public_key_bytes())
                 .map_err(anyhow::Error::from)?
         } else {
-            let keys = known_public_keys().read().await;
+            let keys = known_public_keys()
+                .read()
+                .expect("known public keys lock poisoned");
             let bytes = keys
                 .get(did)
                 .ok_or_else(|| anyhow::anyhow!("no public key registered for DID {did}"))?;
@@ -109,29 +91,27 @@ impl AgentIdentity for SimpleIdentity {
     }
 }
 
-async fn register_public_key(did: &str, public_key: Vec<u8>) {
+fn register_public_key(did: &str, public_key: Vec<u8>) {
     known_public_keys()
         .write()
-        .await
+        .expect("known public keys lock poisoned")
         .insert(did.to_string(), public_key);
 }
 
-async fn load_or_create_identity(path: &Path) -> Result<RawIdentity> {
+fn load_or_create_identity(path: &Path) -> Result<RawIdentity> {
     if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
+        std::fs::create_dir_all(parent)
             .with_context(|| format!("creating key directory {}", parent.display()))?;
     }
 
-    match tokio::fs::read(path).await {
+    match std::fs::read(path) {
         Ok(bytes) => RawIdentity::from_bytes(crypto::KeyType::Ed25519, &bytes)
             .map_err(anyhow::Error::from)
             .with_context(|| format!("loading identity from {}", path.display())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let private_key = crypto::generate_ed25519().map_err(anyhow::Error::from)?;
             let bytes = private_key.raw();
-            tokio::fs::write(path, &bytes)
-                .await
+            std::fs::write(path, &bytes)
                 .with_context(|| format!("persisting identity key to {}", path.display()))?;
             RawIdentity::from_private_key(private_key)
                 .map_err(anyhow::Error::from)

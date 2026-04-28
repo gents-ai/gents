@@ -17,9 +17,8 @@ async fn diagnose_works_from_local_home_without_server() -> Result<()> {
     let model_name = format!("mock-diagnose-model-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockModelEndpoint::start(&model_name)?;
     let agent_name = format!("cli-diagnose-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
 
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -29,6 +28,7 @@ async fn diagnose_works_from_local_home_without_server() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
 
     let output = run_cli_json(&home_dir, &["diagnose"])?;
     assert_eq!(output.get("status").and_then(Value::as_str), Some("ok"));
@@ -96,10 +96,9 @@ async fn diagnose_with_explicit_graphql_does_not_reuse_unrelated_local_p2p_state
 
     let port = allocate_port()?;
     let agent_name = format!("cli-p2p-diagnose-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
 
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -109,6 +108,7 @@ async fn diagnose_with_explicit_graphql_does_not_reuse_unrelated_local_p2p_state
             mock_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
     let (mut serve, _) = spawn_server_with_ready_json(
         &home_dir,
         port,

@@ -107,7 +107,6 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
 
     let port = allocate_port()?;
     let agent_name = format!("cli-tool-loop-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
     let init = run_init_json(
         &home_dir,
@@ -129,6 +128,7 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("init output missing tool_selection_id: {init}"))?
         .to_string();
+    let agent_did = agent_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
