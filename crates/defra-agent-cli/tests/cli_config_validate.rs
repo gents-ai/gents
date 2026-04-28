@@ -447,6 +447,16 @@ async fn config_validate_bind_home_accepts_placeholder_agent_did() -> Result<()>
     )?;
     let agent_did = agent_did_from_init(&init)?;
     let explicit_home = home_dir.join(".defra-agent");
+    write_json_file(
+        &explicit_home.join("runtime.json"),
+        &serde_json::json!({
+            "home": explicit_home.to_string_lossy(),
+            "graphql": "http://127.0.0.1:9191/api/v0/graphql",
+            "agent_name": "mini-1-steward",
+            "agent_did": "did:defra-agent:mini-1-steward",
+            "default_behavior_id": "default"
+        }),
+    )?;
     write_rebindable_manifest_root(&root, "did:defra-agent:mini-1-steward")?;
 
     let output = run_cli_json(

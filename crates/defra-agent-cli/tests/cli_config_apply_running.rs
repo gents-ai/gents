@@ -176,6 +176,20 @@ async fn config_diff_bind_live_rebinds_placeholder_manifest_to_running_runtime()
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{
+                create_AgentRuntime(input: {{
+                    agent_did: "{}",
+                    process_state: "shutdown",
+                    updated_at: "2099-01-01T00:00:00Z"
+                }}) {{ _docID }}
+            }}"#,
+            escape_graphql_string(placeholder_did),
+        ),
+    )
+    .await?;
 
     let diff = run_cli_json(
         &home_dir,

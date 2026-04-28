@@ -1,8 +1,9 @@
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use defra_agent::{AgentIdentity, KeyIdentity};
 use serde_json::{json, Value};
 
 use crate::cli::ManifestAgentDidBindingArg;
@@ -177,9 +178,6 @@ pub(super) fn write_identity_binding(root: &Path, agent_did: &str) -> Result<()>
         Value::String("provisioned".to_string()),
     );
     object.insert("did".to_string(), Value::String(agent_did.to_string()));
-    object
-        .entry("identity_backend".to_string())
-        .or_insert_with(|| Value::String("file".to_string()));
 
     let bytes = serde_json::to_vec_pretty(&value).context("encoding identity binding JSON")?;
     fs::write(&path, bytes).with_context(|| format!("writing {}", path.display()))?;
@@ -230,7 +228,7 @@ async fn resolve_bound_agent_did(
         ManifestBindMode::Manifest => {
             anyhow::bail!("manifest binding mode does not resolve a runtime DID")
         }
-        ManifestBindMode::Home => crate::resolve_agent_did(home, None)
+        ManifestBindMode::Home => resolve_home_binding_agent_did(home)
             .context("resolving agent DID from initialized home"),
         ManifestBindMode::Live => {
             if let Some(access) = access {
@@ -242,34 +240,101 @@ async fn resolve_bound_agent_did(
     }
 }
 
+fn resolve_home_binding_agent_did(home: Option<&Path>) -> Result<String> {
+    let home_dir = crate::resolve_home_dir(home);
+    let init_config = crate::read_init_config(&home_dir)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "initialized home metadata is required for --bind-agent-did home; run `defra-agent init --identity-only --home {}` first",
+            home_dir.display()
+        )
+    })?;
+
+    let init_did = init_config.agent_did.trim();
+    if !init_did.is_empty() && !is_legacy_placeholder_did(init_did) {
+        if let Some(key_did) = load_init_key_did(init_config.key_path.as_deref(), &home_dir)? {
+            if key_did != init_did {
+                anyhow::bail!(
+                    "initialized home {} has agent DID {init_did}, but identity key resolves to {key_did}; rerun `defra-agent init --identity-only` or repair the home identity metadata",
+                    home_dir.display()
+                );
+            }
+        }
+        return Ok(init_did.to_string());
+    }
+
+    load_init_key_did(init_config.key_path.as_deref(), &home_dir)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "initialized home {} does not contain a real agent DID or identity key path; rerun `defra-agent init --identity-only`",
+            home_dir.display()
+        )
+    })
+}
+
+fn load_init_key_did(key_path: Option<&str>, home_dir: &Path) -> Result<Option<String>> {
+    let Some(key_path) = key_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+    else {
+        return Ok(None);
+    };
+    if !key_path.exists() {
+        anyhow::bail!(
+            "initialized home {} points to missing identity key {}; rerun `defra-agent init --identity-only`",
+            home_dir.display(),
+            key_path.display()
+        );
+    }
+
+    let identity = KeyIdentity::load_or_create(&key_path, None)
+        .with_context(|| format!("loading identity key {}", key_path.display()))?;
+    Ok(Some(identity.did().to_string()))
+}
+
 async fn resolve_live_agent_did(access: &ConfigAccess) -> Result<String> {
     let response = access
         .execute(
             r#"{
-                AgentRuntime {
+                AgentRuntime(order: { updated_at: DESC }) {
                     agent_did
+                    process_state
+                    updated_at
                 }
             }"#,
         )
         .await
         .context("querying live AgentRuntime for agent DID")?;
-    let dids = response
+    let rows = response
         .pointer("/data/AgentRuntime")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|row| row.get("agent_did").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    let selected = rows
+        .iter()
+        .copied()
+        .find(|row| {
+            row.get("process_state")
+                .and_then(Value::as_str)
+                .is_some_and(is_active_runtime_state)
+        })
+        .or_else(|| rows.first().copied())
+        .ok_or_else(|| anyhow::anyhow!("live runtime did not return an AgentRuntime agent_did"))?;
+    let agent_did = selected
+        .get("agent_did")
+        .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<BTreeSet<_>>();
+        .ok_or_else(|| {
+            anyhow::anyhow!("live runtime returned an AgentRuntime row without agent_did")
+        })?;
+    Ok(agent_did.to_string())
+}
 
-    match dids.len() {
-        0 => anyhow::bail!("live runtime did not return an AgentRuntime agent_did"),
-        1 => Ok(dids.into_iter().next().expect("one DID was present")),
-        _ => anyhow::bail!(
-            "live runtime returned multiple agent DIDs; use --bind-agent-did home or apply against a single-agent runtime"
-        ),
+fn is_active_runtime_state(state: &str) -> bool {
+    match state.trim() {
+        "shutdown" | "shuttingDown" => false,
+        value => !value.trim().is_empty(),
     }
 }
 
