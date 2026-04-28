@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use crypto::Key;
-use defra_core::signing::{SigningConfig, SigningKeyType};
+use defra_core::signing::{RemoteSigner, SigningConfig, SigningKeyType};
 use identity::{FullIdentity as _, Identity as _, RawIdentity};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,6 +124,20 @@ impl RegisteredIdentity {
     }
 }
 
+pub fn load_or_create_macos_secure_enclave_identity(
+    label: &str,
+    service_account: Option<ServiceAccount>,
+) -> Result<RegisteredIdentity> {
+    register_macos_secure_enclave_identity(label, true, service_account)
+}
+
+pub fn load_macos_secure_enclave_identity(
+    label: &str,
+    service_account: Option<ServiceAccount>,
+) -> Result<RegisteredIdentity> {
+    register_macos_secure_enclave_identity(label, false, service_account)
+}
+
 impl std::fmt::Debug for RegisteredIdentity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RegisteredIdentity")
@@ -193,6 +207,192 @@ fn register_public_key(did: &str, key_type: crypto::KeyType, public_key: Vec<u8>
                 bytes: public_key,
             },
         );
+}
+
+#[cfg(target_os = "macos")]
+const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+#[cfg(target_os = "macos")]
+const ERR_SEC_MISSING_ENTITLEMENT: i32 = -34018;
+
+#[cfg(target_os = "macos")]
+fn register_macos_secure_enclave_identity(
+    label: &str,
+    create_if_missing: bool,
+    service_account: Option<ServiceAccount>,
+) -> Result<RegisteredIdentity> {
+    let signer = MacosSecureEnclaveSigner::load(label, create_if_missing)?;
+    let did = signer.did.clone();
+    let public_key_bytes = signer.public_key_bytes.clone();
+    defra_core::signing::store_identity(
+        &did,
+        SigningConfig {
+            key_type: SigningKeyType::Secp256r1,
+            private_key_bytes: Vec::new(),
+            public_key_bytes: public_key_bytes.clone(),
+            public_key_hex: lowercase_hex(&public_key_bytes),
+            remote_signer: Some(Arc::new(signer)),
+            signing_authorization: None,
+        },
+    );
+    RegisteredIdentity::from_registered_did(did, service_account)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn register_macos_secure_enclave_identity(
+    _label: &str,
+    _create_if_missing: bool,
+    _service_account: Option<ServiceAccount>,
+) -> Result<RegisteredIdentity> {
+    anyhow::bail!("macos-secure-enclave identity backend is only available on macOS")
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Debug)]
+struct MacosSecureEnclaveSigner {
+    label: String,
+    key: security_framework::key::SecKey,
+    did: String,
+    public_key_bytes: Vec<u8>,
+}
+
+#[cfg(target_os = "macos")]
+impl MacosSecureEnclaveSigner {
+    fn load(label: &str, create_if_missing: bool) -> Result<Self> {
+        let key = match find_macos_secure_enclave_key(label)? {
+            Some(key) => key,
+            None if create_if_missing => create_macos_secure_enclave_key(label)?,
+            None => anyhow::bail!("macOS Secure Enclave key not found for label {label}"),
+        };
+        let public_key_bytes = public_key_bytes_for_sec_key(&key)
+            .with_context(|| format!("loading public key for Secure Enclave key {label}"))?;
+        let did = did_for_secp256r1_public_key(&public_key_bytes)
+            .with_context(|| format!("deriving DID for Secure Enclave key {label}"))?;
+        Ok(Self {
+            label: label.to_string(),
+            key,
+            did,
+            public_key_bytes,
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl RemoteSigner for MacosSecureEnclaveSigner {
+    fn sign_sync(
+        &self,
+        data: &[u8],
+        _authorization: Option<&defra_core::signing::SigningAuthorization>,
+    ) -> std::result::Result<Vec<u8>, String> {
+        self.key
+            .create_signature(
+                security_framework::key::Algorithm::ECDSASignatureMessageX962SHA256,
+                data,
+            )
+            .map_err(|error| {
+                format!(
+                    "Secure Enclave signing failed for label {}: {error}",
+                    self.label
+                )
+            })
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn find_macos_secure_enclave_key(label: &str) -> Result<Option<security_framework::key::SecKey>> {
+    use security_framework::item::{ItemSearchOptions, KeyClass, Reference, SearchResult};
+
+    let mut search = ItemSearchOptions::new();
+    search
+        .key_class(KeyClass::private())
+        .label(label)
+        .ignore_legacy_keychains()
+        .load_refs(true)
+        .limit(2);
+    let keys = match search.search() {
+        Ok(keys) => keys,
+        Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => {
+            return Ok(None);
+        }
+        Err(error) if error.code() == ERR_SEC_MISSING_ENTITLEMENT => {
+            return Err(missing_secure_enclave_entitlement_error(label));
+        }
+        Err(error) => {
+            return Err(anyhow::Error::from(error)).with_context(|| {
+                format!("searching keychain for macOS Secure Enclave key label {label}")
+            });
+        }
+    };
+    let mut matches = keys.into_iter().filter_map(|item| match item {
+        SearchResult::Ref(Reference::Key(key)) => Some(key),
+        _ => None,
+    });
+    let first = matches.next();
+    if matches.next().is_some() {
+        anyhow::bail!("multiple keychain private keys found for label {label}");
+    }
+    Ok(first)
+}
+
+#[cfg(target_os = "macos")]
+fn create_macos_secure_enclave_key(label: &str) -> Result<security_framework::key::SecKey> {
+    use security_framework::access_control::SecAccessControl;
+    use security_framework::item::Location;
+    use security_framework::key::{GenerateKeyOptions, KeyType, SecKey, Token};
+    use security_framework::passwords_options::AccessControlOptions;
+
+    let access_control =
+        SecAccessControl::create_with_flags(AccessControlOptions::PRIVATE_KEY_USAGE.bits())
+            .context("creating Secure Enclave key access control")?;
+    let mut options = GenerateKeyOptions::default();
+    options
+        .set_key_type(KeyType::ec())
+        .set_size_in_bits(256)
+        .set_label(label)
+        .set_access_control(access_control)
+        .set_token(Token::SecureEnclave)
+        .set_location(Location::DataProtectionKeychain);
+    match SecKey::new(&options) {
+        Ok(key) => Ok(key),
+        Err(error) if error.code() == ERR_SEC_MISSING_ENTITLEMENT as isize => {
+            Err(missing_secure_enclave_entitlement_error(label))
+        }
+        Err(error) => Err(anyhow!("{error}"))
+            .with_context(|| format!("creating macOS Secure Enclave key label {label}")),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn missing_secure_enclave_entitlement_error(label: &str) -> anyhow::Error {
+    anyhow!(
+        "macOS Secure Enclave key label {label} requires a codesigned binary with Data Protection keychain access-group entitlements"
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn public_key_bytes_for_sec_key(key: &security_framework::key::SecKey) -> Result<Vec<u8>> {
+    let public_key = key
+        .public_key()
+        .ok_or_else(|| anyhow!("Secure Enclave key has no public key"))?;
+    let data = public_key
+        .external_representation()
+        .ok_or_else(|| anyhow!("Secure Enclave public key is not exportable"))?;
+    Ok(data.to_vec())
+}
+
+fn did_for_secp256r1_public_key(public_key_bytes: &[u8]) -> Result<String> {
+    let public_key = crypto::public_key_from_bytes(crypto::KeyType::Secp256r1, public_key_bytes)
+        .map_err(anyhow::Error::from)?;
+    public_key.did().map_err(anyhow::Error::from)
+}
+
+fn lowercase_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
 }
 
 fn known_public_key_for_did(did: &str) -> Result<KnownPublicKey> {

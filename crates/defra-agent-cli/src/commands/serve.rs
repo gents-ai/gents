@@ -7,8 +7,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::{
-    ensure_runtime_schemas, AgentIdentity, DefraAgent, DocumentRuntimeOptions, KeyIdentity,
-    McpPool, ProcessLifecycleObserver, ProcessLifecycleState, ToolCeiling,
+    ensure_runtime_schemas, load_macos_secure_enclave_identity, AgentIdentity, DefraAgent,
+    DocumentRuntimeOptions, KeyIdentity, McpPool, ProcessLifecycleObserver, ProcessLifecycleState,
+    ToolCeiling,
 };
 use serde_json::{json, Value};
 use tokio::sync::watch;
@@ -65,7 +66,9 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         .clone()
         .or_else(|| init_config.as_ref().map(|config| config.agent_name.clone()))
         .unwrap_or_else(|| DEFAULT_AGENT_NAME.to_string());
-    let identity = resolve_server_identity(&args, init_config.as_ref(), &home_dir, &agent_name)?;
+    let server_identity =
+        resolve_server_identity(&args, init_config.as_ref(), &home_dir, &agent_name)?;
+    let identity = server_identity.identity;
     let effective_tool_ceiling = args
         .tool_ceiling
         .or_else(|| init_config.as_ref().map(|config| config.tool_ceiling))
@@ -107,6 +110,9 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         defra_node::HttpConfig::with_addr(http_addr)
             .with_extra_routes(runtime_contract_router(graphql_url.clone())),
     );
+    if let Some(node_identity_did) = server_identity.node_identity_did.as_ref() {
+        node_builder = node_builder.with_node_identity_did(node_identity_did.clone());
+    }
     if let Some(config) = p2p_config {
         node_builder = node_builder.with_p2p(config);
     }
@@ -240,12 +246,17 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         .context("joining defra-agent runtime task")?
 }
 
+struct ServerIdentity {
+    identity: Arc<dyn AgentIdentity>,
+    node_identity_did: Option<String>,
+}
+
 fn resolve_server_identity(
     args: &ServeArgs,
     init_config: Option<&StoredInitConfig>,
     home_dir: &Path,
     agent_name: &str,
-) -> Result<Arc<dyn AgentIdentity>> {
+) -> Result<ServerIdentity> {
     if let Some(config) = init_config {
         let agent_did = config.agent_did.trim();
         if is_real_agent_did(agent_did)
@@ -256,11 +267,7 @@ fn resolve_server_identity(
                 .map(str::trim)
                 .is_none_or(str::is_empty)
         {
-            anyhow::bail!(
-                "initialized home {} has agent DID {} but no key_path. Standalone `defra-agent server` cannot load a non-file identity from init.json yet; start this runtime from a host process that registers the signer in-process, or bootstrap a file-key identity for standalone development.",
-                home_dir.display(),
-                agent_did
-            );
+            return resolve_no_key_server_identity(config, home_dir);
         }
     }
 
@@ -275,7 +282,56 @@ fn resolve_server_identity(
             .context("creating or loading agent identity key")?,
     );
     ensure_identity_matches_init_config(init_config, identity.did())?;
-    Ok(identity)
+    Ok(ServerIdentity {
+        identity,
+        node_identity_did: None,
+    })
+}
+
+fn resolve_no_key_server_identity(
+    config: &StoredInitConfig,
+    home_dir: &Path,
+) -> Result<ServerIdentity> {
+    let backend = config
+        .identity_backend
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "initialized home {} has agent DID {} but no key_path or identity_backend",
+                home_dir.display(),
+                config.agent_did
+            )
+        })?;
+    match backend {
+        "macos-secure-enclave" => {
+            let label = config
+                .secure_enclave_label
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "initialized home {} uses macos-secure-enclave but has no secure_enclave_label",
+                        home_dir.display()
+                    )
+                })?;
+            let identity = Arc::new(
+                load_macos_secure_enclave_identity(label, None)
+                    .with_context(|| format!("loading macOS Secure Enclave identity {label}"))?,
+            );
+            ensure_identity_matches_init_config(Some(config), identity.did())?;
+            Ok(ServerIdentity {
+                node_identity_did: Some(identity.did().to_string()),
+                identity,
+            })
+        }
+        other => anyhow::bail!(
+            "initialized home {} uses unsupported identity_backend {other:?} without key_path",
+            home_dir.display()
+        ),
+    }
 }
 
 fn default_p2p_transport() -> String {

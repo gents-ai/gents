@@ -18,8 +18,14 @@ use crate::{
 pub(crate) async fn provision(args: ProvisionArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
     let agent_name = resolve_provision_agent_name(&args);
-    let identity =
-        ensure_home_identity(&home_dir, &agent_name, args.bootstrap_file_identity).await?;
+    let identity = ensure_home_identity(
+        &home_dir,
+        &agent_name,
+        args.bootstrap_file_identity,
+        args.bootstrap_macos_secure_enclave,
+        args.secure_enclave_label.as_deref(),
+    )
+    .await?;
 
     let (access, _) = resolve_config_access(Some(&home_dir), None, true).await?;
     let bound = binding::load_bound_manifest(binding::ManifestBindingOptions {
@@ -75,6 +81,8 @@ struct ProvisionIdentityReport {
     agent_name: String,
     agent_did: String,
     key_path: Option<String>,
+    identity_backend: Option<String>,
+    secure_enclave_label: Option<String>,
 }
 
 fn resolve_provision_agent_name(args: &ProvisionArgs) -> String {
@@ -99,7 +107,15 @@ async fn ensure_home_identity(
     home_dir: &Path,
     agent_name: &str,
     bootstrap_file_identity: bool,
+    bootstrap_macos_secure_enclave: bool,
+    secure_enclave_label: Option<&str>,
 ) -> Result<ProvisionIdentityReport> {
+    if bootstrap_file_identity && bootstrap_macos_secure_enclave {
+        anyhow::bail!(
+            "--bootstrap-file-identity and --bootstrap-macos-secure-enclave are mutually exclusive"
+        );
+    }
+
     if let Some(init_config) = read_init_config(home_dir)? {
         let agent_did = init_config.agent_did.trim().to_string();
         if !agent_did.is_empty() && !agent_did.starts_with("did:defra-agent:") {
@@ -108,11 +124,13 @@ async fn ensure_home_identity(
                 agent_name: init_config.agent_name,
                 agent_did,
                 key_path: init_config.key_path,
+                identity_backend: init_config.identity_backend,
+                secure_enclave_label: init_config.secure_enclave_label,
             });
         }
     }
 
-    if !bootstrap_file_identity {
+    if !bootstrap_file_identity && !bootstrap_macos_secure_enclave {
         anyhow::bail!(
             "initialized home identity is required before provisioning {}; run `defra-agent init --identity-only --home {}` for file-key development, or bootstrap the host identity backend first",
             home_dir.display(),
@@ -120,11 +138,21 @@ async fn ensure_home_identity(
         );
     }
 
-    let key_path = default_key_path(home_dir, agent_name);
+    let key_path = if bootstrap_macos_secure_enclave {
+        None
+    } else {
+        Some(default_key_path(home_dir, agent_name))
+    };
     let initialized = write_identity_only_home_metadata(IdentityOnlyHomeOptions {
         home: home_dir,
         agent_name,
-        key_path: &key_path,
+        key_path: key_path.as_deref(),
+        identity_backend: if bootstrap_macos_secure_enclave {
+            IdentityBackendArg::MacosSecureEnclave
+        } else {
+            IdentityBackendArg::File
+        },
+        secure_enclave_label,
         write_tools: false,
         tool_root: None,
         reset: false,
@@ -140,6 +168,8 @@ fn report_from_initialized_identity(summary: IdentityOnlyHomeSummary) -> Provisi
         agent_name: summary.agent_name,
         agent_did: summary.agent_did,
         key_path: summary.key_path,
+        identity_backend: summary.identity_backend,
+        secure_enclave_label: summary.secure_enclave_label,
     }
 }
 

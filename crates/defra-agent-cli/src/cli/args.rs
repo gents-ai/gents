@@ -104,6 +104,24 @@ pub(crate) struct ProvisionArgs {
         help = "Create a local file-key identity when the home is uninitialized. Production hosts should bootstrap identity first."
     )]
     pub(crate) bootstrap_file_identity: bool,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Create/load a macOS Secure Enclave identity when the home is uninitialized."
+    )]
+    pub(crate) bootstrap_macos_secure_enclave: bool,
+    #[arg(
+        long,
+        value_name = "LABEL",
+        help = "Keychain label for the macOS Secure Enclave identity."
+    )]
+    pub(crate) secure_enclave_label: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum IdentityBackendArg {
+    File,
+    MacosSecureEnclave,
 }
 
 #[derive(clap::Args)]
@@ -134,6 +152,19 @@ pub(crate) struct InitArgs {
     pub(crate) agent_name: String,
     #[arg(long)]
     pub(crate) key_path: Option<PathBuf>,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = IdentityBackendArg::File,
+        help = "Local identity backend for init metadata."
+    )]
+    pub(crate) identity_backend: IdentityBackendArg,
+    #[arg(
+        long,
+        value_name = "LABEL",
+        help = "Keychain label for --identity-backend macos-secure-enclave."
+    )]
+    pub(crate) secure_enclave_label: Option<String>,
     #[arg(
         long = "inference-url",
         alias = "inference-endpoint",

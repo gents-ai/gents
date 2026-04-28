@@ -54,6 +54,10 @@ pub(crate) struct StoredInitConfig {
     pub(crate) agent_name: String,
     pub(crate) agent_did: String,
     pub(crate) key_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) identity_backend: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) secure_enclave_label: Option<String>,
     pub(crate) tool_ceiling: ToolCeilingArg,
     pub(crate) tool_root: Option<String>,
 }
