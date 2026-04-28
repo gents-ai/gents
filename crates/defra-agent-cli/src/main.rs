@@ -87,6 +87,18 @@ Next:
   defra-agent config apply --root infra/agents/HOST/AGENT --bind-agent-did home
   defra-agent server
   defra-agent chat";
+const PROVISION_AFTER_HELP: &str = "\
+Provision binds a portable manifest root to this host's initialized identity,
+applies it locally, writes identity.json, and verifies an exact post-apply diff.
+
+Examples:
+  defra-agent provision --home /path/to/home --root infra/agents/HOST/AGENT
+  defra-agent provision --root infra/agents/mini-1/mini-1-steward
+
+Equivalent low-level flow:
+  defra-agent init --identity-only --home <home>
+  defra-agent config apply --root <root> --home <home> --bind-agent-did home --write-identity-binding
+  defra-agent config diff --root <root> --home <home> --bind-agent-did home";
 const RESET_AFTER_HELP: &str = "\
 Examples:
   defra-agent reset
@@ -238,6 +250,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let result = match cli.command {
         Command::Init(args) => commands::init::init(args).await,
+        Command::Provision(args) => commands::provision::provision(args).await,
         Command::Reset(args) => commands::reset::reset(args).await,
         Command::Server(args) => commands::serve::serve(args).await,
         Command::Chat(args) => commands::chat::chat(args).await,

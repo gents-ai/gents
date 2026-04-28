@@ -1,6 +1,8 @@
 use anyhow::Result;
+use std::path::Path;
 
 use crate::cli::*;
+use crate::config_writes::ConfigAccess;
 use crate::desired_state;
 use crate::print_json;
 use crate::shared::*;
@@ -22,6 +24,23 @@ pub(super) async fn config_apply(args: ConfigApplyArgs) -> Result<()> {
     })
     .await?
     .require_valid()?;
+    let report =
+        apply_bound_desired_manifest(&args.root, &access, &bound, args.write_identity_binding)
+            .await?;
+    print_json(&serde_json::to_value(&report)?)?;
+    if report.ok {
+        Ok(())
+    } else {
+        anyhow::bail!("desired-state apply did not converge")
+    }
+}
+
+pub(crate) async fn apply_bound_desired_manifest(
+    root: &Path,
+    access: &ConfigAccess,
+    bound: &super::binding::BoundDesiredManifest,
+    write_identity_binding: bool,
+) -> Result<ConfigApplyReport> {
     let desired_manifest = &bound.manifest;
 
     // Apply-time live validation complements the static desired-state
@@ -44,7 +63,7 @@ pub(super) async fn config_apply(args: ConfigApplyArgs) -> Result<()> {
     let (live_principal, live_manifest) =
         live_manifest_from_bundle(desired_manifest, &live_bundle)?;
     let planned = desired_state::diff_manifests(
-        &args.root,
+        root,
         access.mode(),
         desired_manifest,
         live_principal.as_ref(),
@@ -57,7 +76,7 @@ pub(super) async fn config_apply(args: ConfigApplyArgs) -> Result<()> {
     let (remaining_principal, remaining_manifest) =
         live_manifest_from_bundle(desired_manifest, &remaining_bundle)?;
     let remaining = desired_state::diff_manifests(
-        &args.root,
+        root,
         access.mode(),
         desired_manifest,
         remaining_principal.as_ref(),
@@ -73,20 +92,15 @@ pub(super) async fn config_apply(args: ConfigApplyArgs) -> Result<()> {
         ok: !diff_has_pending_apply(&remaining.counts),
         exact_match: remaining.ok,
         changed: config_apply_counts_changed(&applied),
-        root: args.root.display().to_string(),
+        root: root.display().to_string(),
         access_mode: access.mode().to_string(),
         agent_did: bound.context.target_agent_did.clone(),
         planned: planned.counts.clone(),
         applied,
         remaining: remaining.counts.clone(),
     };
-    if report.ok && args.write_identity_binding {
-        super::binding::write_identity_binding(&args.root, &bound.context.target_agent_did)?;
+    if report.ok && write_identity_binding {
+        super::binding::write_identity_binding(root, &bound.context.target_agent_did)?;
     }
-    print_json(&serde_json::to_value(&report)?)?;
-    if report.ok {
-        Ok(())
-    } else {
-        anyhow::bail!("desired-state apply did not converge")
-    }
+    Ok(report)
 }

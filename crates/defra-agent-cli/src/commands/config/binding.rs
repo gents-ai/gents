@@ -13,38 +13,38 @@ use crate::desired_state::{
 };
 use crate::print_json;
 
-pub(super) struct ManifestBindingOptions<'a> {
-    pub(super) root: &'a Path,
-    pub(super) home: Option<&'a Path>,
-    pub(super) graphql: Option<&'a str>,
-    pub(super) bind_agent_did: Option<ManifestAgentDidBindingArg>,
-    pub(super) force_rebind_concrete_did: bool,
-    pub(super) access: Option<&'a ConfigAccess>,
+pub(crate) struct ManifestBindingOptions<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) home: Option<&'a Path>,
+    pub(crate) graphql: Option<&'a str>,
+    pub(crate) bind_agent_did: Option<ManifestAgentDidBindingArg>,
+    pub(crate) force_rebind_concrete_did: bool,
+    pub(crate) access: Option<&'a ConfigAccess>,
 }
 
-pub(super) struct BoundManifestLoad {
-    pub(super) bound: Option<BoundDesiredManifest>,
-    pub(super) report: DesiredStateValidationReport,
+pub(crate) struct BoundManifestLoad {
+    pub(crate) bound: Option<BoundDesiredManifest>,
+    pub(crate) report: DesiredStateValidationReport,
 }
 
-pub(super) struct BoundDesiredManifest {
-    pub(super) context: ManifestBindingContext,
-    pub(super) manifest: DesiredStateManifest,
+pub(crate) struct BoundDesiredManifest {
+    pub(crate) context: ManifestBindingContext,
+    pub(crate) manifest: DesiredStateManifest,
 }
 
 #[derive(Debug, Clone)]
 // Provision orchestration will consume the full context; config validate/diff/apply
 // currently only need the target DID after loading.
 #[allow(dead_code)]
-pub(super) struct ManifestBindingContext {
-    pub(super) bind_mode: ManifestBindMode,
-    pub(super) target_agent_did: String,
-    pub(super) source_manifest_dids: BTreeSet<String>,
-    pub(super) identity_json_binding: IdentityJsonBinding,
+pub(crate) struct ManifestBindingContext {
+    pub(crate) bind_mode: ManifestBindMode,
+    pub(crate) target_agent_did: String,
+    pub(crate) source_manifest_dids: BTreeSet<String>,
+    pub(crate) identity_json_binding: IdentityJsonBinding,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ManifestBindMode {
+pub(crate) enum ManifestBindMode {
     Manifest,
     Home,
     Live,
@@ -62,13 +62,13 @@ impl ManifestBindMode {
 
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)]
-pub(super) struct IdentityJsonBinding {
-    pub(super) identity_status: Option<String>,
-    pub(super) did: Option<String>,
+pub(crate) struct IdentityJsonBinding {
+    pub(crate) identity_status: Option<String>,
+    pub(crate) did: Option<String>,
 }
 
 impl BoundManifestLoad {
-    pub(super) fn require_valid(self) -> Result<BoundDesiredManifest> {
+    pub(crate) fn require_valid(self) -> Result<BoundDesiredManifest> {
         if !self.report.is_ok() {
             print_json(&serde_json::to_value(&self.report)?)?;
             anyhow::bail!("desired-state manifest validation failed");
@@ -78,7 +78,7 @@ impl BoundManifestLoad {
     }
 }
 
-pub(super) async fn load_bound_manifest(
+pub(crate) async fn load_bound_manifest(
     options: ManifestBindingOptions<'_>,
 ) -> Result<BoundManifestLoad> {
     let root_display = options.root.display().to_string();
@@ -161,7 +161,7 @@ pub(super) async fn load_bound_manifest(
     })
 }
 
-pub(super) async fn resolve_target_agent_did(
+pub(crate) async fn resolve_target_agent_did(
     explicit_agent_did: Option<&str>,
     bind_agent_did: Option<ManifestAgentDidBindingArg>,
     home: Option<&Path>,
@@ -197,7 +197,7 @@ pub(super) async fn resolve_target_agent_did(
     .await
 }
 
-pub(super) fn write_identity_binding(root: &Path, agent_did: &str) -> Result<()> {
+pub(crate) fn write_identity_binding(root: &Path, agent_did: &str) -> Result<()> {
     let path = root.join("identity.json");
     let mut value = if path.exists() {
         let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;

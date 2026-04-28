@@ -14,6 +14,7 @@ use defra_agent::{
     load_agent_principal, upsert_agent_principal, upsert_inference_profile, AgentBehavior,
     AgentIdentity, InferenceProfile, KeyIdentity, ToolSelectionDocument,
 };
+use serde::Serialize;
 use serde_json::json;
 
 use crate::cli::*;
@@ -73,52 +74,29 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
             .with_context(|| format!("creating key directory {}", parent.display()))?;
     }
 
-    let identity = Arc::new(
-        KeyIdentity::load_or_create(&key_path, None)
-            .context("creating or loading agent identity key")?,
-    );
-    identity
-        .sign(b"defra-agent init identity")
-        .await
-        .context("creating or loading agent identity key")?;
     if args.identity_only {
-        let tool_ceiling = if args.write_tools {
-            ToolCeilingArg::Readwrite
-        } else {
-            ToolCeilingArg::Readonly
-        };
-        let tool_root = Some(
-            resolve_default_tool_root(args.tool_root.as_deref())?
-                .to_string_lossy()
-                .to_string(),
-        );
-        let stored = StoredInitConfig {
-            home: home_dir.to_string_lossy().to_string(),
-            agent_name: args.agent_name.clone(),
-            agent_did: identity.did().to_string(),
-            key_path: Some(key_path.to_string_lossy().to_string()),
-            tool_ceiling,
-            tool_root: tool_root.clone(),
-        };
-        write_init_config(&home_dir, &stored)?;
-        let runtime_state_reset = if args.reset {
-            clear_runtime_state(&home_dir)?
-        } else {
-            false
-        };
+        let summary = write_identity_only_home_metadata(IdentityOnlyHomeOptions {
+            home: &home_dir,
+            agent_name: &args.agent_name,
+            key_path: &key_path,
+            write_tools: args.write_tools,
+            tool_root: args.tool_root.as_deref(),
+            reset: args.reset,
+        })
+        .await?;
         let output = json!({
             "status": "initialized",
             "identity_only": true,
-            "home": home_dir,
-            "agent_name": args.agent_name,
-            "agent_did": identity.did(),
-            "key_path": key_path,
-            "tool_ceiling": format_tool_ceiling(tool_ceiling),
-            "tool_root": tool_root,
-            "runtime_state_reset": runtime_state_reset,
+            "home": summary.home,
+            "agent_name": summary.agent_name,
+            "agent_did": summary.agent_did,
+            "key_path": summary.key_path,
+            "tool_ceiling": format_tool_ceiling(summary.tool_ceiling),
+            "tool_root": summary.tool_root,
+            "runtime_state_reset": summary.runtime_state_reset,
             "identity": {
-                "agent_did": identity.did(),
-                "key_path": stored.key_path,
+                "agent_did": summary.agent_did,
+                "key_path": summary.key_path,
                 "permission_boundary": "This DID and key identify the permission boundary for every action the agent runtime performs."
             },
             "next_steps": [
@@ -130,6 +108,15 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
         print_json(&output)?;
         return Ok(());
     }
+
+    let identity = Arc::new(
+        KeyIdentity::load_or_create(&key_path, None)
+            .context("creating or loading agent identity key")?,
+    );
+    identity
+        .sign(b"defra-agent init identity")
+        .await
+        .context("creating or loading agent identity key")?;
 
     let node = EmbeddedNode::builder()
         .data_path(&data_dir)
@@ -178,6 +165,83 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
     print_json(&output)?;
 
     Ok(())
+}
+
+pub(crate) struct IdentityOnlyHomeOptions<'a> {
+    pub(crate) home: &'a Path,
+    pub(crate) agent_name: &'a str,
+    pub(crate) key_path: &'a Path,
+    pub(crate) write_tools: bool,
+    pub(crate) tool_root: Option<&'a Path>,
+    pub(crate) reset: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct IdentityOnlyHomeSummary {
+    pub(crate) home: String,
+    pub(crate) agent_name: String,
+    pub(crate) agent_did: String,
+    pub(crate) key_path: Option<String>,
+    pub(crate) tool_ceiling: ToolCeilingArg,
+    pub(crate) tool_root: Option<String>,
+    pub(crate) runtime_state_reset: bool,
+}
+
+pub(crate) async fn write_identity_only_home_metadata(
+    options: IdentityOnlyHomeOptions<'_>,
+) -> Result<IdentityOnlyHomeSummary> {
+    let data_dir = default_data_dir(options.home);
+    fs::create_dir_all(&data_dir)
+        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
+    if let Some(parent) = options.key_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating key directory {}", parent.display()))?;
+    }
+
+    let identity = Arc::new(
+        KeyIdentity::load_or_create(options.key_path, None)
+            .context("creating or loading agent identity key")?,
+    );
+    identity
+        .sign(b"defra-agent init identity")
+        .await
+        .context("creating or loading agent identity key")?;
+
+    let tool_ceiling = if options.write_tools {
+        ToolCeilingArg::Readwrite
+    } else {
+        ToolCeilingArg::Readonly
+    };
+    let tool_root = Some(
+        resolve_default_tool_root(options.tool_root)?
+            .to_string_lossy()
+            .to_string(),
+    );
+    let key_path = Some(options.key_path.to_string_lossy().to_string());
+    let stored = StoredInitConfig {
+        home: options.home.to_string_lossy().to_string(),
+        agent_name: options.agent_name.to_string(),
+        agent_did: identity.did().to_string(),
+        key_path: key_path.clone(),
+        tool_ceiling,
+        tool_root: tool_root.clone(),
+    };
+    write_init_config(options.home, &stored)?;
+    let runtime_state_reset = if options.reset {
+        clear_runtime_state(options.home)?
+    } else {
+        false
+    };
+
+    Ok(IdentityOnlyHomeSummary {
+        home: options.home.to_string_lossy().to_string(),
+        agent_name: options.agent_name.to_string(),
+        agent_did: identity.did().to_string(),
+        key_path,
+        tool_ceiling,
+        tool_root,
+        runtime_state_reset,
+    })
 }
 
 async fn initialize_runtime_home(
