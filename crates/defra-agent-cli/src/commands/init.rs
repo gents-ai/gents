@@ -81,6 +81,56 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
         .sign(b"defra-agent init identity")
         .await
         .context("creating or loading agent identity key")?;
+    if args.identity_only {
+        let tool_ceiling = if args.write_tools {
+            ToolCeilingArg::Readwrite
+        } else {
+            ToolCeilingArg::Readonly
+        };
+        let tool_root = Some(
+            resolve_default_tool_root(args.tool_root.as_deref())?
+                .to_string_lossy()
+                .to_string(),
+        );
+        let stored = StoredInitConfig {
+            home: home_dir.to_string_lossy().to_string(),
+            agent_name: args.agent_name.clone(),
+            agent_did: identity.did().to_string(),
+            key_path: Some(key_path.to_string_lossy().to_string()),
+            tool_ceiling,
+            tool_root: tool_root.clone(),
+        };
+        write_init_config(&home_dir, &stored)?;
+        let runtime_state_reset = if args.reset {
+            clear_runtime_state(&home_dir)?
+        } else {
+            false
+        };
+        let output = json!({
+            "status": "initialized",
+            "identity_only": true,
+            "home": home_dir,
+            "agent_name": args.agent_name,
+            "agent_did": identity.did(),
+            "key_path": key_path,
+            "tool_ceiling": format_tool_ceiling(tool_ceiling),
+            "tool_root": tool_root,
+            "runtime_state_reset": runtime_state_reset,
+            "identity": {
+                "agent_did": identity.did(),
+                "key_path": stored.key_path,
+                "permission_boundary": "This DID and key identify the permission boundary for every action the agent runtime performs."
+            },
+            "next_steps": [
+                "defra-agent config apply --root <manifest-root> --home <home> --bind-agent-did home",
+                "defra-agent server"
+            ],
+            "init": null
+        });
+        print_json(&output)?;
+        return Ok(());
+    }
+
     let node = EmbeddedNode::builder()
         .data_path(&data_dir)
         .build()

@@ -13,10 +13,6 @@ use super::{
 };
 use defra_agent::Collection;
 
-pub(crate) fn validate_manifest_root(root: &Path) -> DesiredStateValidationReport {
-    load_manifest_root(root).1
-}
-
 pub(crate) fn load_manifest_root(
     root: &Path,
 ) -> (Option<DesiredStateManifest>, DesiredStateValidationReport) {

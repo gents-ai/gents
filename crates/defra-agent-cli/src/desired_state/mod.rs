@@ -14,7 +14,7 @@ pub(crate) use convert::{
     normalize_tool_service_registry_storage_fields,
 };
 pub(crate) use diff::diff_manifests;
-pub(crate) use load::{load_manifest_root, validate_manifest_root};
+pub(crate) use load::load_manifest_root;
 pub(crate) use normalize::strip_deprecated_inference_backend_fields;
 pub(crate) use write::write_manifest_root;
 

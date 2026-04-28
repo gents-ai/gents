@@ -308,6 +308,34 @@ async fn init_defaults_to_local_ollama_and_surfaces_identity() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn init_identity_only_writes_stable_real_did_without_runtime_config() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let agent_name = format!("cli-identity-only-{}", Uuid::new_v4().simple());
+    let first = run_init_json(&home_dir, &["--identity-only", "--agent-name", &agent_name])?;
+    let first_agent_did = agent_did_from_init(&first)?;
+    assert_eq!(
+        first.get("identity_only").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(first.get("init"), Some(&Value::Null));
+
+    let second = run_init_json(&home_dir, &["--identity-only", "--agent-name", &agent_name])?;
+    let second_agent_did = agent_did_from_init(&second)?;
+    assert_eq!(second_agent_did, first_agent_did);
+
+    let init_json = read_json_file(&home_dir.join(".defra-agent").join("init.json"))?;
+    assert_eq!(
+        init_json.get("agent_did").and_then(Value::as_str),
+        Some(first_agent_did.as_str())
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn init_rejects_setting_both_api_key_and_api_key_env_var() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");

@@ -8,8 +8,9 @@ pub mod process;
 pub mod waits;
 
 pub use fs::{
-    assert_runtime_init_state, project_object_fields, read_captured_log, read_json_file,
-    read_runtime_state_json, write_json_file, write_manifest_root_from_export,
+    assert_manifest_agent_dids, assert_runtime_init_state, manifest_contains,
+    project_object_fields, read_captured_log, read_json_file, read_runtime_state_json,
+    rewrite_manifest_agent_dids, write_json_file, write_manifest_root_from_export,
 };
 pub use graphql::{doc_id_for_selection, escape_graphql_string, first_graphql_row, graphql_query};
 pub use mocks::{

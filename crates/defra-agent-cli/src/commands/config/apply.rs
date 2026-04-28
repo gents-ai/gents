@@ -9,18 +9,23 @@ use crate::{
     diff_has_pending_apply, live_manifest_from_bundle, resolve_config_access,
 };
 
-use super::validate::load_desired_manifest_or_bail;
-
 pub(super) async fn config_apply(args: ConfigApplyArgs) -> Result<()> {
-    let desired_manifest = load_desired_manifest_or_bail(&args.root)?;
     let (access, _) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+    let desired_manifest = super::binding::load_desired_manifest_with_binding_or_bail(
+        &args.root,
+        args.home.as_deref(),
+        args.graphql.as_deref(),
+        args.bind_agent_did,
+        args.force_rebind_concrete_did,
+        Some(&access),
+    )
+    .await?;
 
-    // Apply-time live validation complements the pure static validation in
-    // `validate_manifest_root`. It probes the live node's GraphQL schema for
-    // EventTrigger filter syntax and `doc.*` field resolution. We only run
-    // it from the apply path (where we already hold a live `ConfigAccess`);
-    // pure `validate` and `diff` paths remain DB-free.
+    // Apply-time live validation complements the static desired-state
+    // validation. It probes the live node's GraphQL schema for EventTrigger
+    // filter syntax and `doc.*` field resolution. We only run it from the
+    // apply path, where we already hold a live `ConfigAccess`.
     let live_errs =
         desired_state::validate::validate_manifest_against_live(&desired_manifest, &access).await?;
     if !live_errs.is_empty() {
@@ -73,6 +78,12 @@ pub(super) async fn config_apply(args: ConfigApplyArgs) -> Result<()> {
         applied,
         remaining: remaining.counts.clone(),
     };
+    if report.ok && args.write_identity_binding {
+        super::binding::write_identity_binding(
+            &args.root,
+            &desired_manifest.agent_principal.agent_did,
+        )?;
+    }
     print_json(&serde_json::to_value(&report)?)?;
     if report.ok {
         Ok(())

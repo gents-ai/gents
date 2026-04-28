@@ -80,9 +80,11 @@ Examples:
   defra-agent init --backend-preset openrouter --model-name MODEL
   defra-agent init --backend-preset openai --model-name MODEL
   defra-agent init --inference-url $INFERENCE_ENDPOINT --model-name MODEL --write-tools
+  defra-agent init --identity-only
 
 Next:
   ollama pull gemma4-26b-a4b
+  defra-agent config apply --root infra/agents/HOST/AGENT --bind-agent-did home
   defra-agent server
   defra-agent chat";
 const RESET_AFTER_HELP: &str = "\
@@ -132,8 +134,9 @@ Examples:
 const CONFIG_AFTER_HELP: &str = "\
 Examples:
   defra-agent config validate --root infra/agents/default
+  defra-agent config validate --root infra/agents/default --home /path/to/home --bind-agent-did home
   defra-agent config diff --root infra/agents/default --home /path/to/home
-  defra-agent config apply --root infra/agents/default --home /path/to/home
+  defra-agent config apply --root infra/agents/default --home /path/to/home --bind-agent-did home
   defra-agent config backend set --graphql URL --backend-id default-backend --name default-backend --backend-preset openrouter --max-concurrent 2
   defra-agent config backend discover-models --backend-preset openrouter
   defra-agent config behavior set --graphql URL --agent-did <AGENT_DID> --backend-id default-backend --model-name MODEL

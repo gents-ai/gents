@@ -96,6 +96,12 @@ pub(crate) struct InitArgs {
         help = "Clear persisted local runtime state after initialization"
     )]
     pub(crate) reset: bool,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Create/load identity and write init.json without seeding runtime config documents"
+    )]
+    pub(crate) identity_only: bool,
     #[arg(long, default_value = crate::DEFAULT_AGENT_NAME, help = "Local display name and default key filename. The agent DID is derived from the identity key.")]
     pub(crate) agent_name: String,
     #[arg(long)]
@@ -668,6 +674,14 @@ pub(crate) struct ConfigImportArgs {
 pub(crate) struct ConfigValidateArgs {
     #[arg(long, value_name = "ROOT")]
     pub(crate) root: PathBuf,
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long = "bind-agent-did", value_enum)]
+    pub(crate) bind_agent_did: Option<ManifestAgentDidBindingArg>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) force_rebind_concrete_did: bool,
 }
 
 #[derive(clap::Args)]
@@ -678,6 +692,10 @@ pub(crate) struct ConfigDiffArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
+    #[arg(long = "bind-agent-did", value_enum)]
+    pub(crate) bind_agent_did: Option<ManifestAgentDidBindingArg>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) force_rebind_concrete_did: bool,
 }
 
 #[derive(clap::Args)]
@@ -688,6 +706,18 @@ pub(crate) struct ConfigApplyArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
+    #[arg(long = "bind-agent-did", value_enum)]
+    pub(crate) bind_agent_did: Option<ManifestAgentDidBindingArg>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) force_rebind_concrete_did: bool,
+    #[arg(long, default_value_t = false)]
+    pub(crate) write_identity_binding: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ManifestAgentDidBindingArg {
+    Home,
+    Live,
 }
 
 #[derive(Subcommand)]
