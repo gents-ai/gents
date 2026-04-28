@@ -83,7 +83,7 @@ async fn config_diff_reports_no_changes_for_matching_live_state() -> Result<()> 
         output
             .pointer("/counts/inference_profiles/unchanged")
             .and_then(Value::as_u64),
-        Some(0)
+        Some(1)
     );
 
     Ok(())

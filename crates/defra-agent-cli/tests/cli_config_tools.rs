@@ -20,7 +20,7 @@ async fn tool_selection_upsert_defaults_enabled_modes_to_readonly() -> Result<()
     let agent_name = format!("cli-config-{}", Uuid::new_v4().simple());
     let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
-    let selection_id = format!("{agent_name}:tools");
+    let selection_id = format!("{agent_name}-tools");
 
     run_init_json(
         &home_dir,

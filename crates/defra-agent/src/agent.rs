@@ -196,21 +196,21 @@ pub(crate) fn behavior_config_from_documents(
     identity: Arc<dyn AgentIdentity>,
     behavior: &crate::document_config::AgentBehavior,
     backend: &crate::backend_registry::InferenceBackend,
-    inference_profile: Option<&crate::document_config::InferenceProfile>,
+    inference_profile: &crate::document_config::InferenceProfile,
     tool_selection: ToolSelection,
     tool_ceiling: &ToolCeiling,
 ) -> anyhow::Result<BehaviorConfig> {
     let compaction_strategy = parse_compaction_strategy(behavior.compaction_strategy.as_deref())?;
     let stream_batch_ms = inference_profile
-        .and_then(|profile| profile.stream_batch_ms)
+        .stream_batch_ms
         .and_then(|value| u64::try_from(value).ok())
         .unwrap_or(DEFAULT_STREAM_BATCH_MS);
     let deadline_duration_secs = inference_profile
-        .and_then(|profile| profile.deadline_duration_secs)
+        .deadline_duration_secs
         .and_then(|value| u64::try_from(value).ok())
         .unwrap_or(DEFAULT_DEADLINE_DURATION_SECS);
     let profile_max_tokens = inference_profile
-        .and_then(|profile| profile.max_output_tokens)
+        .max_output_tokens
         .and_then(|value| u64::try_from(value).ok());
 
     Ok(BehaviorConfig {
@@ -225,15 +225,15 @@ pub(crate) fn behavior_config_from_documents(
             .unwrap_or(DEFAULT_MODEL_NAME)
             .to_string(),
         context_window: inference_profile
-            .and_then(|profile| profile.context_window)
+            .context_window
             .and_then(|value| usize::try_from(value).ok())
             .unwrap_or(DEFAULT_CONTEXT_WINDOW),
         max_output_tokens: inference_profile
-            .and_then(|profile| profile.max_output_tokens)
+            .max_output_tokens
             .and_then(|value| usize::try_from(value).ok())
             .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS),
         max_turns: inference_profile
-            .and_then(|profile| profile.max_turns)
+            .max_turns
             .and_then(|value| usize::try_from(value).ok())
             .unwrap_or(DEFAULT_MAX_TURNS),
         system_prompt: behavior.system_prompt.clone().unwrap_or_default(),
@@ -250,7 +250,7 @@ pub(crate) fn behavior_config_from_documents(
         stream_batch_ms,
         deadline_duration: Duration::from_secs(deadline_duration_secs),
         sampling: SamplingConfig {
-            temperature: inference_profile.and_then(|profile| profile.temperature),
+            temperature: inference_profile.temperature,
             top_p: None,
             top_k: None,
             max_tokens: profile_max_tokens,

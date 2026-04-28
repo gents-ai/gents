@@ -8,6 +8,7 @@ import type {
   DesktopClientSnapshot,
   DesktopSessionSnapshot,
   InitSummary,
+  TaskRunResult,
 } from "../src/lib/types";
 import type {
   TauriDriverBridge,
@@ -19,6 +20,7 @@ type RunnerReadyMessage = {
   baseUrl: string;
   deploymentLabel: string;
   agentDid: string;
+  toolRoot: string;
 };
 
 type VersionResponse = {
@@ -304,6 +306,7 @@ async function waitForReadyMessage(
 export class LiveBridgeRunner implements TauriDriverBridge {
   readonly sentRequests: TauriDriverChatRequest[] = [];
   readonly sendResults: ChatSendResult[] = [];
+  readonly taskRunResults: TaskRunResult[] = [];
   readonly adapter: DesktopApiAdapter;
   readonly listenerFactory: DesktopClientUpdatedListenerFactory;
   private readonly stderrChunks: string[] = [];
@@ -316,6 +319,7 @@ export class LiveBridgeRunner implements TauriDriverBridge {
     readonly baseUrl: string,
     readonly deploymentLabel: string,
     readonly agentDid: string,
+    readonly toolRoot: string,
     startupStdout = "",
     startupStderr = "",
   ) {
@@ -339,6 +343,10 @@ export class LiveBridgeRunner implements TauriDriverBridge {
         this.postJson<DesktopClientSnapshot>("/desktop/client/start", {}),
       shutdownDesktopClient: async () =>
         this.postJson<DesktopClientSnapshot>("/desktop/client/shutdown", {}),
+      addPeer: async (request) =>
+        this.postJson<DesktopClientSnapshot>("/desktop/peer/add", request),
+      repairP2P: async () =>
+        this.postJson<DesktopClientSnapshot>("/desktop/p2p/repair", {}),
       fetchSessionSnapshot: async (sessionId, requestId) =>
         this.postJson<DesktopSessionSnapshot | null>(
           "/desktop/session/snapshot",
@@ -365,11 +373,69 @@ export class LiveBridgeRunner implements TauriDriverBridge {
       renameConversation: async (request) => {
         await this.postJson("/desktop/conversation/rename", request);
       },
+      saveAgentConfig: async (request) =>
+        this.postJson<DesktopClientSnapshot>("/desktop/agent/save", request),
+      saveBehaviorConfig: async (request) =>
+        this.postJson<DesktopClientSnapshot>("/desktop/behavior/save", request),
+      saveBackendConfig: async (request) =>
+        this.postJson<DesktopClientSnapshot>("/desktop/backend/save", request),
+      saveInferenceProfileConfig: async (request) =>
+        this.postJson<DesktopClientSnapshot>(
+          "/desktop/inference-profile/save",
+          request,
+        ),
+      saveToolSelectionConfig: async (request) =>
+        this.postJson<DesktopClientSnapshot>(
+          "/desktop/tool-selection/save",
+          request,
+        ),
+      saveToolServiceConfig: async (request) =>
+        this.postJson<DesktopClientSnapshot>(
+          "/desktop/tool-service/save",
+          request,
+        ),
+      testToolService: async (request) =>
+        this.postJson("/desktop/tool-service/test", request),
+      saveTaskConfig: async (request) =>
+        this.postJson<DesktopClientSnapshot>("/desktop/task/save", request),
+      saveScheduleConfig: async (request) =>
+        this.postJson<DesktopClientSnapshot>("/desktop/schedule/save", request),
+      runSchedule: async (request) => {
+        const result = await this.postJson<TaskRunResult>(
+          "/desktop/schedule/run",
+          request,
+        );
+        this.taskRunResults.push(result);
+        return result;
+      },
+      saveEventTriggerConfig: async (request) =>
+        this.postJson<DesktopClientSnapshot>(
+          "/desktop/event-trigger/save",
+          request,
+        ),
+      runTask: async (request) => {
+        const result = await this.postJson<TaskRunResult>(
+          "/desktop/task/run",
+          request,
+        );
+        this.taskRunResults.push(result);
+        return result;
+      },
     };
     this.listenerFactory = async (handler) => {
       let disposed = false;
       let inFlight = false;
-      let lastVersion = await this.fetchVersion();
+      let lastVersion = 0;
+      try {
+        lastVersion = await this.fetchVersion();
+      } catch (error) {
+        if (!this.exitStatus) {
+          this.pushLogChunk(
+            this.stderrChunks,
+            `[listener:init] ${String(error)}\n`,
+          );
+        }
+      }
       const timer = setInterval(async () => {
         if (disposed || inFlight) {
           return;
@@ -380,6 +446,13 @@ export class LiveBridgeRunner implements TauriDriverBridge {
           if (nextVersion !== lastVersion) {
             lastVersion = nextVersion;
             await handler();
+          }
+        } catch (error) {
+          if (!disposed && !this.exitStatus) {
+            this.pushLogChunk(
+              this.stderrChunks,
+              `[listener] ${String(error)}\n`,
+            );
           }
         } finally {
           inFlight = false;
@@ -431,6 +504,7 @@ export class LiveBridgeRunner implements TauriDriverBridge {
       message.baseUrl,
       message.deploymentLabel,
       message.agentDid,
+      message.toolRoot,
       stdout,
       stderr,
     );
@@ -587,7 +661,7 @@ export class LiveBridgeRunner implements TauriDriverBridge {
     return this.decodeJson<T>(response);
   }
 
-  private async fetchRequestDiagnostics(
+  async fetchRequestDiagnostics(
     sessionId: string,
     requestId: string,
   ) {

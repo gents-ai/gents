@@ -24,6 +24,7 @@ pub const CONFIG_BOOTSTRAP: &[&str] = &[
     AGENT_BEHAVIOR_SCHEMA,
     TOOL_SELECTION_SCHEMA,
     INFERENCE_BACKEND_SCHEMA,
+    INFERENCE_PROFILE_SCHEMA,
 ];
 async fn ensure_schema_set(node: &EmbeddedNode, schemas: &[&str]) -> Result<()> {
     for sdl in schemas {

@@ -241,7 +241,13 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
 
     let initial_request = captured_requests
         .iter()
-        .find(|request| !request_has_tool_result_message(request))
+        .find(|request| {
+            !request_has_tool_result_message(request)
+                && request_system_message(request).is_some_and(|system| {
+                    system.contains("You have access to these tools")
+                        && system.contains("read_file")
+                })
+        })
         .ok_or_else(|| anyhow!("missing initial chat completion request"))?;
     let tool_result_request = captured_requests
         .iter()

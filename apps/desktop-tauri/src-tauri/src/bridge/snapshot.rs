@@ -1,20 +1,38 @@
-use std::collections::HashMap;
-use std::sync::Arc;
+#[path = "snapshot/timeline.rs"]
+mod timeline;
 
-use defra_agent_desktop::client::{
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::time::SystemTime;
+
+use self::timeline::{build_rendered_timeline, materialized_user_turn_count};
+use chrono::{DateTime, Utc};
+use defra_agent_desktop_core::client::{
     ClientCore, ClientPeerStatus, DesktopPaths, P2PHealth, PeerDirectory,
 };
-use defra_agent_desktop::local_runtime::default_agent_home;
+use defra_agent_desktop_core::local_runtime::default_agent_home;
 use defra_agent_protocol::transcript::{normalize_markdown_text, present_persisted_message};
-use serde_json::Value;
 
 use super::types::{
-    normalize_optional, turn_state_label, BehaviorView, ConversationSummary, DeploymentView,
-    DesktopBootstrapSummary, DesktopClientSnapshot, DesktopRuntimeSnapshot, DesktopSessionSnapshot,
-    MessageView, P2PHealthView, PendingTurnView, RenderedTimelineItem, RenderedToolCallView,
-    ResponseView, RuntimeView, SavedPeerView, ToolCallView, ToolDetailFieldView,
-    ToolDetailValueView, ToolResultView,
+    normalize_optional, turn_state_label, AgentPrincipalView, BehaviorView, ConversationSummary,
+    DeploymentView, DesktopBootstrapSummary, DesktopClientSnapshot, DesktopRuntimeSnapshot,
+    DesktopSessionSnapshot, EventTriggerView, InferenceBackendView, InferenceProfileView,
+    MessageView, P2PHealthView, PendingTurnView, ResponseView, RuntimeView, SavedPeerView,
+    ScheduleView, TaskRecentRunsView, TaskRunSummaryView, TaskView, ToolCallView, ToolResultView,
+    ToolSelectionView, ToolServiceRegistryView,
 };
+
+#[derive(Debug, serde::Deserialize)]
+struct StoredInitConfigView {
+    #[serde(default)]
+    agent_name: Option<String>,
+    #[serde(default)]
+    agent_did: Option<String>,
+    #[serde(default)]
+    tool_ceiling: Option<String>,
+    #[serde(default)]
+    tool_root: Option<String>,
+}
 
 fn to_health_view(health: &P2PHealth) -> P2PHealthView {
     P2PHealthView {
@@ -23,7 +41,13 @@ fn to_health_view(health: &P2PHealth) -> P2PHealthView {
         replicator_count: health.replicator_count,
         consecutive_failures: health.consecutive_failures,
         last_error: health.last_error.clone(),
+        last_ok_at: system_time_rfc3339(health.last_ok_at),
+        last_failure_at: system_time_rfc3339(health.last_failure_at),
     }
+}
+
+fn system_time_rfc3339(value: Option<SystemTime>) -> Option<String> {
+    value.map(|value| DateTime::<Utc>::from(value).to_rfc3339())
 }
 
 pub(crate) async fn build_bootstrap_summary() -> Result<DesktopBootstrapSummary, String> {
@@ -32,9 +56,22 @@ pub(crate) async fn build_bootstrap_summary() -> Result<DesktopBootstrapSummary,
     let peer_directory = PeerDirectory::load(desktop_paths.peer_directory_path())
         .await
         .map_err(|error| error.to_string())?;
+    let init = read_stored_init_config(&agent_home);
 
     Ok(DesktopBootstrapSummary {
         default_agent_home: agent_home.display().to_string(),
+        init_agent_name: init
+            .as_ref()
+            .and_then(|config| normalize_optional(config.agent_name.as_deref())),
+        init_agent_did: init
+            .as_ref()
+            .and_then(|config| normalize_optional(config.agent_did.as_deref())),
+        init_tool_ceiling: init
+            .as_ref()
+            .and_then(|config| normalize_optional(config.tool_ceiling.as_deref())),
+        init_tool_root: init
+            .as_ref()
+            .and_then(|config| normalize_optional(config.tool_root.as_deref())),
         desktop_home: desktop_paths.root().display().to_string(),
         peer_directory_path: desktop_paths.peer_directory_path().display().to_string(),
         node_data_dir: desktop_paths.node_data_dir().display().to_string(),
@@ -56,6 +93,11 @@ pub(crate) async fn build_bootstrap_summary() -> Result<DesktopBootstrapSummary,
     })
 }
 
+fn read_stored_init_config(agent_home: &std::path::Path) -> Option<StoredInitConfigView> {
+    let bytes = std::fs::read(agent_home.join("init.json")).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
 pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot {
     let store = core.store().snapshot();
     let peer_records = core.peer_records().await;
@@ -69,6 +111,27 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
         .into_iter()
         .map(|peer| {
             let status = peer_statuses.get(&peer.agent_did);
+            let principal = store
+                .agent_principals
+                .iter()
+                .find(|row| row.agent_did == peer.agent_did);
+            let agent_principal = principal
+                .map(|row| AgentPrincipalView {
+                    agent_did: row.agent_did.clone(),
+                    display_name: normalize_optional(row.display_name.as_deref()),
+                    default_behavior_id: normalize_optional(row.default_behavior_id.as_deref()),
+                    enabled: row.enabled,
+                    created_at: normalize_optional(row.created_at.as_deref()),
+                    created_by: normalize_optional(row.created_by.as_deref()),
+                })
+                .unwrap_or_else(|| AgentPrincipalView {
+                    agent_did: peer.agent_did.clone(),
+                    display_name: Some(peer.label.clone()),
+                    default_behavior_id: None,
+                    enabled: Some(true),
+                    created_at: None,
+                    created_by: None,
+                });
             let default_behavior_id = store
                 .default_behavior_id_for_agent(&peer.agent_did)
                 .map(str::to_owned);
@@ -89,7 +152,13 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     behavior_id: row.behavior_id.clone(),
                     display_name: normalize_optional(row.display_name.as_deref())
                         .unwrap_or_else(|| row.behavior_id.clone()),
+                    system_prompt: normalize_optional(row.system_prompt.as_deref()),
+                    backend_id: normalize_optional(row.backend_id.as_deref()),
                     model_name: normalize_optional(row.model_name.as_deref()),
+                    tool_selection_id: normalize_optional(row.tool_selection_id.as_deref()),
+                    inference_profile_id: normalize_optional(row.inference_profile_id.as_deref()),
+                    compaction_strategy: normalize_optional(row.compaction_strategy.as_deref()),
+                    compaction_threshold: row.compaction_threshold,
                     enabled: row.enabled.unwrap_or(true),
                     is_default: default_behavior_id.as_deref() == Some(row.behavior_id.as_str()),
                 })
@@ -100,6 +169,159 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     .cmp(&left.is_default)
                     .then_with(|| left.display_name.cmp(&right.display_name))
             });
+            let behavior_ids = behaviors
+                .iter()
+                .map(|behavior| behavior.behavior_id.as_str())
+                .collect::<Vec<_>>();
+            let mut inference_backends = store
+                .inference_backends
+                .iter()
+                .map(|row| InferenceBackendView {
+                    backend_id: row.backend_id.clone(),
+                    name: normalize_optional(row.name.as_deref()),
+                    provider_kind: normalize_optional(row.provider_kind.as_deref()),
+                    endpoint: normalize_optional(row.endpoint.as_deref()),
+                    api_key_configured: normalize_optional(row.api_key.as_deref()).is_some(),
+                    api_key_env_var: normalize_optional(row.api_key_env_var.as_deref()),
+                    max_concurrent: row.max_concurrent,
+                    max_queue_depth: row.max_queue_depth,
+                    enabled: row.enabled,
+                    models: row.models.clone(),
+                    probe_status: normalize_optional(row.probe_status.as_deref()),
+                })
+                .collect::<Vec<_>>();
+            inference_backends.sort_by(|left, right| left.backend_id.cmp(&right.backend_id));
+
+            let mut inference_profiles = store
+                .inference_profiles
+                .iter()
+                .map(|row| InferenceProfileView {
+                    profile_id: row.profile_id.clone(),
+                    display_name: normalize_optional(row.display_name.as_deref()),
+                    context_window: row.context_window,
+                    max_output_tokens: row.max_output_tokens,
+                    max_turns: row.max_turns,
+                    temperature: row.temperature,
+                    stream_batch_ms: row.stream_batch_ms,
+                    deadline_duration_secs: row.deadline_duration_secs,
+                })
+                .collect::<Vec<_>>();
+            inference_profiles.sort_by(|left, right| left.profile_id.cmp(&right.profile_id));
+
+            let mut tool_selections = store
+                .tool_selections
+                .iter()
+                .filter(|row| row.agent_did.as_deref() == Some(peer.agent_did.as_str()))
+                .map(|row| ToolSelectionView {
+                    selection_id: row.selection_id.clone(),
+                    agent_did: normalize_optional(row.agent_did.as_deref()),
+                    display_name: normalize_optional(row.display_name.as_deref()),
+                    enable_file_tools: row.enable_file_tools,
+                    file_tools_mode: normalize_optional(row.file_tools_mode.as_deref()),
+                    file_tool_root: normalize_optional(row.file_tool_root.as_deref()),
+                    enable_bash: row.enable_bash,
+                    bash_mode: normalize_optional(row.bash_mode.as_deref()),
+                    cli_tool_names: row.cli_tool_names.clone(),
+                    enable_meta_tools: row.enable_meta_tools,
+                    delegate_to: row.delegate_to.clone(),
+                })
+                .collect::<Vec<_>>();
+            tool_selections.sort_by(|left, right| left.selection_id.cmp(&right.selection_id));
+
+            let mut tool_service_registries = store
+                .tool_service_registries
+                .iter()
+                .map(|row| ToolServiceRegistryView {
+                    service_id: row.service_id.clone(),
+                    display_name: normalize_optional(row.display_name.as_deref()),
+                    description: normalize_optional(row.description.as_deref()),
+                    hostname: normalize_optional(row.hostname.as_deref()),
+                    tailscale_ip: normalize_optional(row.tailscale_ip.as_deref()),
+                    lan_ip: normalize_optional(row.lan_ip.as_deref()),
+                    mcp_port: row.mcp_port,
+                    mcp_path: normalize_optional(row.mcp_path.as_deref()),
+                    status: normalize_optional(row.status.as_deref()),
+                    version: normalize_optional(row.version.as_deref()),
+                    updated_at: normalize_optional(row.updated_at.as_deref()),
+                })
+                .collect::<Vec<_>>();
+            tool_service_registries.sort_by(|left, right| left.service_id.cmp(&right.service_id));
+
+            let mut tasks = store
+                .tasks
+                .iter()
+                .filter(|row| {
+                    row.behavior_id
+                        .as_deref()
+                        .is_some_and(|behavior_id| behavior_ids.contains(&behavior_id))
+                })
+                .map(|row| TaskView {
+                    task_id: row.task_id.clone(),
+                    name: normalize_optional(row.name.as_deref()),
+                    description: normalize_optional(row.description.as_deref()),
+                    behavior_id: normalize_optional(row.behavior_id.as_deref()),
+                    prompt_template: normalize_optional(row.prompt_template.as_deref()),
+                    enabled: row.enabled,
+                    output_schema_ref: normalize_optional(row.output_schema_ref.as_deref()),
+                    recent_runs: recent_runs_view(&store.recent_runs_for_task(&row.task_id)),
+                    run_history: task_run_history(store.as_ref(), &row.task_id),
+                })
+                .collect::<Vec<_>>();
+            tasks.sort_by(|left, right| left.task_id.cmp(&right.task_id));
+            let task_ids = tasks
+                .iter()
+                .map(|task| task.task_id.as_str())
+                .collect::<Vec<_>>();
+
+            let mut schedules = store
+                .schedules
+                .iter()
+                .filter(|row| {
+                    row.task_id
+                        .as_deref()
+                        .is_some_and(|task_id| task_ids.contains(&task_id))
+                })
+                .map(|row| ScheduleView {
+                    schedule_id: row.schedule_id.clone(),
+                    task_id: normalize_optional(row.task_id.as_deref()),
+                    interval_secs: row.interval_secs,
+                    enabled: row.enabled,
+                    concurrency: normalize_optional(row.concurrency.as_deref()),
+                    next_run_at: normalize_optional(row.next_run_at.as_deref()),
+                    last_attempt_at: normalize_optional(row.last_attempt_at.as_deref()),
+                    last_status: normalize_optional(row.last_status.as_deref()),
+                    last_error: normalize_optional(row.last_error.as_deref()),
+                    fire_count: row.fire_count,
+                })
+                .collect::<Vec<_>>();
+            schedules.sort_by(|left, right| left.schedule_id.cmp(&right.schedule_id));
+
+            let mut event_triggers = store
+                .event_triggers
+                .iter()
+                .filter(|row| {
+                    row.task_id
+                        .as_deref()
+                        .is_some_and(|task_id| task_ids.contains(&task_id))
+                })
+                .map(|row| EventTriggerView {
+                    trigger_id: row.trigger_id.clone(),
+                    task_id: normalize_optional(row.task_id.as_deref()),
+                    source_collection: normalize_optional(row.source_collection.as_deref()),
+                    event_kind: normalize_optional(row.event_kind.as_deref()),
+                    filter: normalize_optional(row.filter.as_deref()),
+                    enabled: row.enabled,
+                    concurrency: normalize_optional(row.concurrency.as_deref()),
+                    last_attempt_at: normalize_optional(row.last_attempt_at.as_deref()),
+                    last_fired_source_doc_id: normalize_optional(
+                        row.last_fired_source_doc_id.as_deref(),
+                    ),
+                    last_status: normalize_optional(row.last_status.as_deref()),
+                    last_error: normalize_optional(row.last_error.as_deref()),
+                    fire_count: row.fire_count,
+                })
+                .collect::<Vec<_>>();
+            event_triggers.sort_by(|left, right| left.trigger_id.cmp(&right.trigger_id));
 
             let mut conversations = store
                 .conversation_rows(&peer.agent_did)
@@ -130,6 +352,7 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     .cmp(&left.updated_at)
                     .then_with(|| right.created_at.cmp(&left.created_at))
             });
+            retain_latest_conversation_summaries(&mut conversations);
 
             DeploymentView {
                 peer_id: peer.peer_id,
@@ -141,8 +364,16 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                 dial_succeeded: status.is_some_and(|status| status.dial_succeeded),
                 last_error: status.and_then(|status| status.last_error.clone()),
                 default_behavior_id,
+                agent_principal,
                 runtime,
                 behaviors,
+                inference_backends,
+                inference_profiles,
+                tool_selections,
+                tool_service_registries,
+                tasks,
+                schedules,
+                event_triggers,
                 conversations,
             }
         })
@@ -166,8 +397,77 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
     }
 }
 
+fn recent_runs_view(runs: &defra_agent_desktop_core::client::TaskRecentRuns) -> TaskRecentRunsView {
+    TaskRecentRunsView {
+        total_fires: runs.total_fires,
+        last_attempt_at: normalize_optional(runs.last_attempt_at.as_deref()),
+        last_status: normalize_optional(runs.last_status.as_deref()),
+        last_error: normalize_optional(runs.last_error.as_deref()),
+        schedule_count: runs.schedule_count,
+        event_trigger_count: runs.event_trigger_count,
+    }
+}
+
+fn retain_latest_conversation_summaries(conversations: &mut Vec<ConversationSummary>) {
+    let mut seen_sessions = HashSet::new();
+    conversations.retain(|conversation| seen_sessions.insert(conversation.session_id.clone()));
+}
+
+fn task_run_history(
+    store: &defra_agent_desktop_core::client::ClientStore,
+    task_id: &str,
+) -> Vec<TaskRunSummaryView> {
+    let schedule_ids = store
+        .schedules
+        .iter()
+        .filter(|row| row.task_id.as_deref() == Some(task_id))
+        .map(|row| row.schedule_id.as_str())
+        .collect::<Vec<_>>();
+    let event_trigger_ids = store
+        .event_triggers
+        .iter()
+        .filter(|row| row.task_id.as_deref() == Some(task_id))
+        .map(|row| row.trigger_id.as_str())
+        .collect::<Vec<_>>();
+
+    let mut runs = store
+        .requests
+        .iter()
+        .filter(|request| {
+            match (
+                request.caused_by_trigger_kind.as_deref(),
+                request.caused_by_trigger_id.as_deref(),
+            ) {
+                (Some("schedule"), Some(trigger_id)) => schedule_ids.contains(&trigger_id),
+                (Some("event"), Some(trigger_id)) => event_trigger_ids.contains(&trigger_id),
+                _ => false,
+            }
+        })
+        .map(|request| TaskRunSummaryView {
+            request_id: request.request_id.clone(),
+            session_id: normalize_optional(request.session_id.as_deref()),
+            behavior_id: normalize_optional(request.behavior_id.as_deref()),
+            status: normalize_optional(request.status.as_deref()),
+            lifecycle_state: normalize_optional(request.lifecycle_state.as_deref()),
+            execution_origin: normalize_optional(request.execution_origin.as_deref()),
+            caused_by_trigger_id: normalize_optional(request.caused_by_trigger_id.as_deref()),
+            caused_by_trigger_kind: normalize_optional(request.caused_by_trigger_kind.as_deref()),
+            created_at: normalize_optional(request.created_at.as_deref()),
+        })
+        .collect::<Vec<_>>();
+
+    runs.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| right.request_id.cmp(&left.request_id))
+    });
+    runs.truncate(8);
+    runs
+}
+
 pub(crate) fn build_session_snapshot_from_store(
-    store: &defra_agent_desktop::client::ClientStore,
+    store: &defra_agent_desktop_core::client::ClientStore,
     session_id: &str,
     preferred_request_id: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
@@ -352,86 +652,13 @@ pub(crate) fn build_session_snapshot_from_store(
     })
 }
 
-fn normalize_timeline_text(value: Option<&str>) -> String {
-    value.map(str::trim).unwrap_or_default().to_string()
-}
-
-fn render_json_value(value: &Value) -> String {
-    match value {
-        Value::Null => String::new(),
-        Value::String(value) => value.clone(),
-        Value::Bool(value) => value.to_string(),
-        Value::Number(value) => value.to_string(),
-        _ => serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string()),
-    }
-}
-
-fn parse_tool_detail_value(value: Option<&str>) -> Option<ToolDetailValueView> {
-    let raw_text = normalize_optional(value)?;
-    let parsed = serde_json::from_str::<Value>(&raw_text).ok();
-    let fields = match parsed {
-        Some(Value::Object(map)) => map
-            .into_iter()
-            .map(|(key, value)| ToolDetailFieldView {
-                key,
-                value: render_json_value(&value),
-            })
-            .collect::<Vec<_>>(),
-        _ => Vec::new(),
-    };
-
-    Some(ToolDetailValueView { raw_text, fields })
-}
-
-fn tool_status_kind(status: Option<&str>) -> String {
-    match status.unwrap_or_default().to_ascii_lowercase().as_str() {
-        "completed" | "complete" | "success" => "success".to_string(),
-        "failed" | "error" | "cancelled" => "error".to_string(),
-        _ => "running".to_string(),
-    }
-}
-
-fn render_tool_call(tool: ToolCallView) -> RenderedToolCallView {
-    RenderedToolCallView {
-        item_key: tool.tool_call_key.clone(),
-        tool_name: tool.tool_name.clone().unwrap_or_else(|| "tool".to_string()),
-        status_kind: tool_status_kind(tool.status.as_deref()),
-        status: tool.status.clone(),
-        args: parse_tool_detail_value(tool.args.as_deref()),
-        result: parse_tool_detail_value(tool.result.as_deref()),
-    }
-}
-
-fn live_overlay_suffix(
-    committed_assistant_texts: &[String],
-    overlay_text: Option<&str>,
-) -> Option<String> {
-    let mut remaining = normalize_timeline_text(overlay_text);
-    if remaining.is_empty() {
-        return None;
-    }
-
-    for committed_text in committed_assistant_texts {
-        let normalized = committed_text.trim();
-        if normalized.is_empty() {
-            continue;
-        }
-
-        if remaining.starts_with(normalized) {
-            remaining = remaining[normalized.len()..].trim_start().to_string();
-        }
-    }
-
-    (!remaining.is_empty()).then_some(remaining)
-}
-
 fn request_turn_root_id(request: &defra_agent_protocol::row::AgentRequestRow) -> String {
     normalize_optional(request.retry_root_request.as_deref())
         .unwrap_or_else(|| request.request_id.clone())
 }
 
 fn logical_turn_roots_for_session(
-    store: &defra_agent_desktop::client::ClientStore,
+    store: &defra_agent_desktop_core::client::ClientStore,
     session_id: &str,
 ) -> Vec<String> {
     let mut requests = store.requests_for_session(session_id);
@@ -454,7 +681,7 @@ fn logical_turn_roots_for_session(
 }
 
 fn logical_turn_index_for_request(
-    store: &defra_agent_desktop::client::ClientStore,
+    store: &defra_agent_desktop_core::client::ClientStore,
     session_id: &str,
     request_id: &str,
 ) -> Option<usize> {
@@ -467,179 +694,8 @@ fn logical_turn_index_for_request(
         .position(|candidate| candidate == &root_id)
 }
 
-fn materialized_user_turn_count(messages: &[MessageView]) -> usize {
-    let mut ordered = messages.iter().collect::<Vec<_>>();
-    ordered.sort_by_key(|message| message.sequence.unwrap_or_default());
-    ordered
-        .into_iter()
-        .filter(|message| {
-            let role = message
-                .display_role
-                .as_deref()
-                .or(message.role.as_deref())
-                .unwrap_or_default();
-            role.eq_ignore_ascii_case("user")
-                && normalize_optional(message.display_content.as_deref()).is_some()
-        })
-        .count()
-}
-
-fn active_turn_committed_assistant_texts(
-    messages: &[MessageView],
-    active_turn_index: Option<usize>,
-) -> Vec<String> {
-    let Some(active_turn_index) = active_turn_index else {
-        return Vec::new();
-    };
-
-    let mut ordered = messages.iter().collect::<Vec<_>>();
-    ordered.sort_by_key(|message| message.sequence.unwrap_or_default());
-
-    let mut current_turn_index = None;
-    let mut next_turn_index = 0usize;
-    let mut assistant_texts = Vec::new();
-
-    for message in ordered {
-        let role = message
-            .display_role
-            .as_deref()
-            .or(message.role.as_deref())
-            .unwrap_or_default();
-        let content = normalize_optional(message.display_content.as_deref());
-
-        if role.eq_ignore_ascii_case("user") && content.is_some() {
-            current_turn_index = Some(next_turn_index);
-            next_turn_index += 1;
-            continue;
-        }
-
-        if role.eq_ignore_ascii_case("assistant") && current_turn_index == Some(active_turn_index) {
-            if let Some(content) = content {
-                assistant_texts.push(content);
-            }
-        }
-    }
-
-    assistant_texts
-}
-
-fn build_rendered_timeline(
-    messages: &[MessageView],
-    tool_calls: &[ToolCallView],
-    pending_turn: Option<&PendingTurnView>,
-    active_response_overlay: Option<&ResponseView>,
-    active_turn_index: Option<usize>,
-) -> Vec<RenderedTimelineItem> {
-    let mut timeline = Vec::new();
-    let mut tool_groups: std::collections::BTreeMap<Option<i64>, Vec<ToolCallView>> =
-        std::collections::BTreeMap::new();
-
-    for tool in tool_calls.iter().cloned() {
-        tool_groups
-            .entry(tool.message_sequence)
-            .or_default()
-            .push(tool);
-    }
-
-    let mut used_group_keys = std::collections::BTreeSet::new();
-
-    let mut timeline_messages = messages
-        .iter()
-        .filter(|message| {
-            !message.has_tool_results
-                && (!normalize_timeline_text(message.display_content.as_deref()).is_empty()
-                    || !normalize_timeline_text(message.reasoning.as_deref()).is_empty()
-                    || message.has_tool_calls)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    timeline_messages.sort_by_key(|message| message.sequence.unwrap_or_default());
-
-    for message in timeline_messages {
-        let role = message
-            .display_role
-            .as_deref()
-            .or(message.role.as_deref())
-            .unwrap_or("assistant");
-        let normalized_content = normalize_optional(message.display_content.as_deref());
-        let normalized_reasoning = normalize_optional(message.reasoning.as_deref());
-
-        match role {
-            "user" => {
-                if let Some(content) = normalized_content.clone() {
-                    timeline.push(RenderedTimelineItem::UserMessage {
-                        item_key: message.message_key.clone(),
-                        sequence: message.sequence,
-                        content,
-                    });
-                }
-            }
-            _ => {
-                if normalized_content.is_some() || normalized_reasoning.is_some() {
-                    timeline.push(RenderedTimelineItem::AssistantMessage {
-                        item_key: message.message_key.clone(),
-                        sequence: message.sequence,
-                        content: normalized_content,
-                        reasoning: normalized_reasoning,
-                    });
-                }
-            }
-        }
-
-        let key = message.sequence;
-        if let Some(grouped_tools) = tool_groups.get(&key).cloned() {
-            used_group_keys.insert(key);
-            timeline.push(RenderedTimelineItem::ToolGroup {
-                item_key: format!("tools-{}", key.unwrap_or(-1)),
-                message_sequence: key,
-                tools: grouped_tools.into_iter().map(render_tool_call).collect(),
-            });
-        }
-    }
-
-    if let Some(pending_turn) = pending_turn {
-        timeline.push(RenderedTimelineItem::PendingUserTurn {
-            item_key: format!("pending-{}", pending_turn.request_id),
-            request_id: pending_turn.request_id.clone(),
-            content: pending_turn.content.clone(),
-            lifecycle_state: pending_turn.lifecycle_state.clone(),
-            created_at: pending_turn.created_at.clone(),
-        });
-    }
-
-    for (key, grouped_tools) in tool_groups {
-        if used_group_keys.contains(&key) {
-            continue;
-        }
-
-        timeline.push(RenderedTimelineItem::ToolGroup {
-            item_key: format!("tools-{}", key.unwrap_or(-1)),
-            message_sequence: key,
-            tools: grouped_tools.into_iter().map(render_tool_call).collect(),
-        });
-    }
-
-    let committed_assistant_texts =
-        active_turn_committed_assistant_texts(messages, active_turn_index);
-    let overlay_content = live_overlay_suffix(
-        &committed_assistant_texts,
-        active_response_overlay.and_then(|overlay| overlay.content.as_deref()),
-    );
-    let overlay_reasoning = active_response_overlay
-        .and_then(|overlay| normalize_optional(overlay.reasoning.as_deref()));
-    if overlay_content.is_some() || overlay_reasoning.is_some() {
-        timeline.push(RenderedTimelineItem::LiveAssistant {
-            item_key: "live-assistant".to_string(),
-            content: overlay_content,
-            reasoning: overlay_reasoning,
-        });
-    }
-
-    timeline
-}
-
 fn build_pending_turn(
-    store: &defra_agent_desktop::client::ClientStore,
+    store: &defra_agent_desktop_core::client::ClientStore,
     session_id: &str,
     request_id: &str,
 ) -> Option<PendingTurnView> {
@@ -706,14 +762,16 @@ pub(crate) async fn build_client_snapshot(
 
 #[cfg(test)]
 mod tests {
-    use defra_agent_desktop::client::{ClientStore, ClientStoreRows};
+    use defra_agent_desktop_core::client::{ClientStore, ClientStoreRows};
     use defra_agent_protocol::row::{
         AgentConversationRow, AgentMessageRow, AgentRequestRow, AgentResponseRow, AgentSessionRow,
     };
     use rig::completion::message::{Message, Text, UserContent};
     use rig::one_or_many::OneOrMany;
 
-    use super::{build_session_snapshot_from_store, RenderedTimelineItem};
+    use super::super::types::{ConversationSummary, RenderedTimelineItem};
+    use super::build_session_snapshot_from_store;
+    use super::retain_latest_conversation_summaries;
 
     fn user_message_json(text: &str) -> String {
         serde_json::to_string(&Message::User {
@@ -722,6 +780,42 @@ mod tests {
             })),
         })
         .expect("serialize user message")
+    }
+
+    fn conversation_summary(
+        session_id: &str,
+        latest_request_id: &str,
+        updated_at: &str,
+    ) -> ConversationSummary {
+        ConversationSummary {
+            session_id: session_id.to_string(),
+            title: None,
+            preview_text: None,
+            status: None,
+            behavior_id: None,
+            latest_request_id: Some(latest_request_id.to_string()),
+            created_at: Some("2026-04-21T12:00:00Z".to_string()),
+            updated_at: Some(updated_at.to_string()),
+            turn_state: None,
+            message_count: 0,
+            tool_call_count: 0,
+        }
+    }
+
+    #[test]
+    fn conversation_summaries_keep_newest_row_per_session() {
+        let mut conversations = vec![
+            conversation_summary("session-1", "req-3", "2026-04-21T12:03:00Z"),
+            conversation_summary("session-2", "req-a", "2026-04-21T12:02:00Z"),
+            conversation_summary("session-1", "req-2", "2026-04-21T12:01:00Z"),
+        ];
+
+        retain_latest_conversation_summaries(&mut conversations);
+
+        assert_eq!(conversations.len(), 2);
+        assert_eq!(conversations[0].session_id, "session-1");
+        assert_eq!(conversations[0].latest_request_id.as_deref(), Some("req-3"));
+        assert_eq!(conversations[1].session_id, "session-2");
     }
 
     #[test]

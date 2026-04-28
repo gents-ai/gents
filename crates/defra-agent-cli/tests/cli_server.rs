@@ -169,7 +169,7 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
     let agent_name = format!("cli-p2p-ready-{}", Uuid::new_v4().simple());
     let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
-    let default_behavior_id = format!("{agent_did}:default");
+    let default_behavior_id = "default".to_string();
 
     run_init_json(
         &home_dir,
@@ -454,7 +454,7 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
     let agent_did = format!("did:defra-agent:{agent_name}");
     let backend_id = format!("{agent_name}-backend");
     let graphql = graphql_url(port);
-    let tool_selection_id = format!("{agent_did}:default:tools");
+    let tool_selection_id = "default-tools".to_string();
 
     let init = run_init_json(
         &home_dir,

@@ -1,0 +1,5 @@
+@layer utilities {
+  .small {
+    font-size: 12px;
+  }
+}

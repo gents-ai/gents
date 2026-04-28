@@ -82,7 +82,8 @@ async fn load_document_runtime_view_includes_referenced_documents() {
     )
     .await;
 
-    let selection_id = format!("{}:tools", identity.did());
+    let default_behavior_id = crate::default_behavior_id_for_agent(identity.did());
+    let selection_id = crate::default_tool_selection_id_for_behavior(&default_behavior_id);
     crate::upsert_tool_selection(
         node.as_ref(),
         &ToolSelectionDocument {
@@ -102,7 +103,6 @@ async fn load_document_runtime_view_includes_referenced_documents() {
     .await
     .unwrap();
 
-    let default_behavior_id = format!("{}:default", identity.did());
     let mut default_behavior = crate::load_agent_behavior(node.as_ref(), &default_behavior_id)
         .await
         .unwrap()
@@ -143,7 +143,8 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
         .await
         .expect("initial document view");
 
-    let selection_id = format!("{}:tools", identity.did());
+    let default_behavior_id = crate::default_behavior_id_for_agent(identity.did());
+    let selection_id = crate::default_tool_selection_id_for_behavior(&default_behavior_id);
     crate::upsert_tool_selection(
         node.as_ref(),
         &ToolSelectionDocument {
@@ -170,7 +171,6 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
             .expect("tool selection record")
             .0;
 
-    let default_behavior_id = format!("{}:default", identity.did());
     let mut default_behavior = crate::load_agent_behavior(node.as_ref(), &default_behavior_id)
         .await
         .unwrap()
@@ -442,7 +442,7 @@ async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
     )
     .await;
 
-    let default_behavior_id = format!("{}:default", identity.did());
+    let default_behavior_id = crate::default_behavior_id_for_agent(identity.did());
     create_task_bound(
         node.as_ref(),
         "task-resolve-active",
@@ -506,7 +506,7 @@ async fn resolve_produces_active_event_trigger_when_task_and_behavior_exist() {
     )
     .await;
 
-    let default_behavior_id = format!("{}:default", identity.did());
+    let default_behavior_id = crate::default_behavior_id_for_agent(identity.did());
     create_task_bound(
         node.as_ref(),
         "task-trigger-active",
@@ -574,7 +574,7 @@ async fn resolve_marks_event_trigger_unavailable_when_task_missing_or_disabled()
     )
     .await;
 
-    let default_behavior_id = format!("{}:default", identity.did());
+    let default_behavior_id = crate::default_behavior_id_for_agent(identity.did());
     // Disabled task — trigger should be unavailable even though the task
     // document exists.
     create_task_bound(
@@ -652,7 +652,7 @@ async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
     )
     .await;
 
-    let default_behavior_id = format!("{}:default", identity.did());
+    let default_behavior_id = crate::default_behavior_id_for_agent(identity.did());
     // Disabled task — schedule should be unavailable even though the task
     // document exists.
     create_task_bound(
@@ -726,7 +726,7 @@ async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors()
     )
     .await;
 
-    let default_behavior_id = format!("{}:default", identity.did());
+    let default_behavior_id = crate::default_behavior_id_for_agent(identity.did());
     // Enabled task bound to the ready default behavior — should land in
     // active_tasks.
     create_task_bound(

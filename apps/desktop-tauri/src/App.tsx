@@ -1,10 +1,31 @@
+import { useState } from "react";
+
 import { ChatWorkspace } from "./components/ChatWorkspace";
+import { ConfigWorkspace } from "./components/ConfigWorkspace";
+import { FleetDashboard } from "./components/fleet/FleetDashboard";
 import { Sidebar } from "./components/Sidebar";
 import { useDesktopShell } from "./hooks/useDesktopShell";
 import "./App.css";
 
 function App() {
   const shell = useDesktopShell();
+  const [workspaceView, setWorkspaceView] = useState<"fleet" | "chat" | "config">(
+    "fleet",
+  );
+
+  function openChat(agentDid?: string) {
+    if (agentDid) {
+      shell.setSelectedAgentDid(agentDid);
+    }
+    setWorkspaceView("chat");
+  }
+
+  function openConfig(agentDid?: string) {
+    if (agentDid) {
+      shell.setSelectedAgentDid(agentDid);
+    }
+    setWorkspaceView("config");
+  }
 
   return (
     <main className="app-shell">
@@ -14,67 +35,111 @@ function App() {
         </div>
       ) : null}
 
-      <section className="workspace">
-        <Sidebar
-          conversations={shell.selectedDeployment?.conversations ?? []}
+      {workspaceView === "fleet" ? (
+        <FleetDashboard
+          addingPeer={shell.addingPeer}
+          bootstrap={shell.snapshot?.bootstrap ?? null}
           deployments={shell.deployments}
-          dangerouslyOverwrite={shell.dangerouslyOverwrite}
-          initSummary={shell.initSummary}
-          initializing={shell.initializing}
-          label={shell.label}
-          onDangerouslyOverwriteChange={shell.setDangerouslyOverwrite}
-          onInit={shell.onInit}
-          onLabelChange={shell.setLabel}
-          onResetChange={shell.setReset}
-          onRefresh={() => void shell.refreshSnapshot()}
-          onSelectDeployment={shell.setSelectedAgentDid}
-          onSelectSession={shell.setSelectedSessionId}
-          onShutdown={() => void shell.onShutdownClient()}
-          onStart={() => void shell.onStartClient()}
-          reset={shell.reset}
+          loading={shell.loading}
+          p2pHealth={shell.runtimeHealth}
+          repairingP2P={shell.repairingP2P}
           running={Boolean(shell.snapshot?.client)}
-          runtimeHealth={shell.runtimeHealth}
-          selectedAgentDid={shell.selectedAgentDid}
-          selectedSessionId={shell.selectedSessionId}
           starting={shell.starting}
-          stopping={shell.stopping}
+          onAddPeer={shell.onAddPeer}
+          onOpenChat={openChat}
+          onOpenConfig={openConfig}
+          onRepairP2P={shell.onRepairP2P}
+          onStart={() => void shell.onStartClient()}
         />
-
-        <section className="chat-column">
-          <ChatWorkspace
-            approxSerializedBytes={shell.snapshot?.client?.approxSerializedBytes ?? 0}
+      ) : workspaceView === "chat" ? (
+        <section className="workspace">
+          <Sidebar
             behaviorOptions={shell.behaviorOptions}
-            canSend={shell.canSendMessage}
-            configuredPeerCount={shell.snapshot?.client?.configuredPeerCount ?? 0}
-            dialedPeerCount={shell.snapshot?.client?.dialedPeerCount ?? 0}
-            draft={shell.draft}
-            onDraftChange={shell.setDraft}
-            onRenameConversationTitle={(sessionId, title) =>
-              void shell.onRenameConversationTitle(sessionId, title)
-            }
+            conversations={shell.selectedDeployment?.conversations ?? []}
+            deployments={shell.deployments}
+            dangerouslyOverwrite={shell.dangerouslyOverwrite}
+            initSummary={shell.initSummary}
+            initializing={shell.initializing}
+            label={shell.label}
+            onConfigureDeployment={(agentDid) => openConfig(agentDid)}
+            onDangerouslyOverwriteChange={shell.setDangerouslyOverwrite}
+            onInit={shell.onInit}
+            onLabelChange={shell.setLabel}
+            onResetChange={shell.setReset}
+            onRefresh={() => void shell.refreshSnapshot()}
+            onOpenFleet={() => setWorkspaceView("fleet")}
             onSelectBehavior={shell.setSelectedBehaviorId}
-            onSend={shell.onSendMessage}
+            onSelectDeployment={shell.setSelectedAgentDid}
+            onSelectSession={shell.setSelectedSessionId}
+            onShutdown={() => void shell.onShutdownClient()}
             onStart={() => void shell.onStartClient()}
-            rowCount={shell.snapshot?.client?.rowCount ?? 0}
+            reset={shell.reset}
             running={Boolean(shell.snapshot?.client)}
             runtimeHealth={shell.runtimeHealth}
-            sendHint={
-              shell.sendStatus.kind === "disabled" ? shell.sendStatus.hint : null
-            }
+            selectedAgentDid={shell.selectedAgentDid}
             selectedBehaviorId={shell.selectedBehaviorId}
-            selectedConversationTitle={
-              shell.session
-                ? shell.session.title ?? null
-                : shell.selectedConversation?.title ?? null
-            }
-            selectedDeployment={shell.selectedDeployment}
             selectedSessionId={shell.selectedSessionId}
-            sending={shell.sending}
-            session={shell.session}
             starting={shell.starting}
+            stopping={shell.stopping}
+          />
+
+          <section className="chat-column">
+            <ChatWorkspace
+              approxSerializedBytes={shell.snapshot?.client?.approxSerializedBytes ?? 0}
+              canSend={shell.canSendMessage}
+              configuredPeerCount={shell.snapshot?.client?.configuredPeerCount ?? 0}
+              dialedPeerCount={shell.snapshot?.client?.dialedPeerCount ?? 0}
+              draft={shell.draft}
+              onDraftChange={shell.setDraft}
+              onRenameConversationTitle={(sessionId, title) =>
+                void shell.onRenameConversationTitle(sessionId, title)
+              }
+              onSend={shell.onSendMessage}
+              onStart={() => void shell.onStartClient()}
+              rowCount={shell.snapshot?.client?.rowCount ?? 0}
+              running={Boolean(shell.snapshot?.client)}
+              runtimeHealth={shell.runtimeHealth}
+              sendHint={
+                shell.sendStatus.kind === "disabled" ? shell.sendStatus.hint : null
+              }
+              selectedBehaviorId={shell.selectedBehaviorId}
+              selectedConversationTitle={
+                shell.session
+                  ? shell.session.title ?? null
+                  : shell.selectedConversation?.title ?? null
+              }
+              selectedDeployment={shell.selectedDeployment}
+              selectedSessionId={shell.selectedSessionId}
+              sending={shell.sending}
+              session={shell.session}
+              starting={shell.starting}
+            />
+          </section>
+        </section>
+      ) : (
+        <section className="config-page">
+          <ConfigWorkspace
+            bootstrap={shell.snapshot?.bootstrap ?? null}
+            onBack={() => setWorkspaceView("fleet")}
+            onSaveAgentConfig={shell.onSaveAgentConfig}
+            onRunTask={shell.onRunTask}
+            onSaveBackendConfig={shell.onSaveBackendConfig}
+            onSaveBehaviorConfig={shell.onSaveBehaviorConfig}
+            onSaveEventTriggerConfig={shell.onSaveEventTriggerConfig}
+            onSaveInferenceProfileConfig={shell.onSaveInferenceProfileConfig}
+            onSaveScheduleConfig={shell.onSaveScheduleConfig}
+            onSaveTaskConfig={shell.onSaveTaskConfig}
+            onSaveToolSelectionConfig={shell.onSaveToolSelectionConfig}
+            onSaveToolServiceConfig={shell.onSaveToolServiceConfig}
+            onTestToolService={shell.onTestToolService}
+            onRunSchedule={shell.onRunSchedule}
+            runningTask={shell.runningTask}
+            saving={shell.savingConfig}
+            selectedBehaviorId={shell.selectedBehaviorId}
+            selectedDeployment={shell.selectedDeployment}
           />
         </section>
-      </section>
+      )}
     </main>
   );
 }

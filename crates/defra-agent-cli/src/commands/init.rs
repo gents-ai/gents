@@ -3,11 +3,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use defra_agent::config::{
+    DEFAULT_CONTEXT_WINDOW, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS,
+    DEFAULT_MAX_TURNS, DEFAULT_STREAM_BATCH_MS,
+};
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::{
-    default_behavior_id_for_agent, ensure_config_bootstrap_schemas, load_agent_behavior,
-    load_agent_principal, upsert_agent_principal, AgentBehavior, AgentIdentity, SimpleIdentity,
-    ToolSelectionDocument,
+    default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
+    default_tool_selection_id_for_behavior, ensure_config_bootstrap_schemas, load_agent_behavior,
+    load_agent_principal, upsert_agent_principal, upsert_inference_profile, AgentBehavior,
+    AgentIdentity, InferenceProfile, SimpleIdentity, ToolSelectionDocument,
 };
 use serde_json::json;
 
@@ -105,6 +110,7 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
         "key_path": key_path,
         "default_behavior_id": summary.default_behavior_id,
         "tool_selection_id": summary.tool_selection_id,
+        "inference_profile_id": summary.inference_profile_id,
         "tool_ceiling": format_tool_ceiling(summary.tool_ceiling),
         "tool_root": summary.tool_root,
         "runtime_state_reset": runtime_state_reset,
@@ -182,7 +188,7 @@ async fn initialize_runtime_home(
         principal_enabled,
     )
     .await?;
-    let tool_selection_id = format!("{default_behavior_id}:tools");
+    let tool_selection_id = default_tool_selection_id_for_behavior(&default_behavior_id);
     let tool_ceiling = if args.write_tools {
         ToolCeilingArg::Readwrite
     } else {
@@ -208,6 +214,10 @@ async fn initialize_runtime_home(
     let tool_selection = standard_tool_selection(agent_did, &tool_selection_id, tool_ceiling);
     write_tool_selection_document(access, &tool_selection).await?;
 
+    let inference_profile_id = default_inference_profile_id_for_behavior(&default_behavior_id);
+    let inference_profile = standard_inference_profile(&inference_profile_id);
+    upsert_inference_profile(node, &inference_profile).await?;
+
     let behavior = AgentBehavior {
         behavior_id: default_behavior_id.clone(),
         agent_did: agent_did.to_string(),
@@ -216,7 +226,7 @@ async fn initialize_runtime_home(
         backend_id: Some(backend_id.clone()),
         model_name: Some(model_name.to_string()),
         tool_selection_id: Some(tool_selection_id.clone()),
-        inference_profile_id: None,
+        inference_profile_id: Some(inference_profile_id.clone()),
         compaction_strategy: None,
         compaction_threshold: None,
         enabled: true,
@@ -236,6 +246,7 @@ async fn initialize_runtime_home(
         max_queue_depth: args.max_queue_depth,
         default_behavior_id,
         tool_selection_id,
+        inference_profile_id,
         tool_ceiling,
         tool_root: tool_root.map(|path| path.to_string_lossy().to_string()),
         created_principal: existing_principal.is_none(),
@@ -266,6 +277,19 @@ fn standard_tool_selection(
         cli_tool_names: Some(Vec::new()),
         enable_meta_tools: Some(true),
         delegate_to: Some(Vec::new()),
+    }
+}
+
+fn standard_inference_profile(profile_id: &str) -> InferenceProfile {
+    InferenceProfile {
+        profile_id: profile_id.to_string(),
+        display_name: Some("Default".to_string()),
+        context_window: Some(DEFAULT_CONTEXT_WINDOW as i64),
+        max_output_tokens: Some(DEFAULT_MAX_OUTPUT_TOKENS as i64),
+        max_turns: Some(DEFAULT_MAX_TURNS as i64),
+        temperature: Some(0.0),
+        stream_batch_ms: Some(DEFAULT_STREAM_BATCH_MS as i64),
+        deadline_duration_secs: Some(DEFAULT_DEADLINE_DURATION_SECS as i64),
     }
 }
 

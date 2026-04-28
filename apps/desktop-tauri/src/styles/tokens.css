@@ -1,0 +1,52 @@
+@layer tokens {
+  :root {
+    color-scheme: dark;
+    font-family:
+      "SF Pro Text",
+      "Inter",
+      system-ui,
+      sans-serif;
+    line-height: 1.45;
+    font-weight: 400;
+    color: var(--color-text);
+    background: var(--color-bg);
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+
+    --color-bg: linear-gradient(180deg, #201a14 0%, #17130f 100%);
+    --color-surface: rgba(28, 22, 17, 0.92);
+    --color-surface-strong: #16110d;
+    --color-surface-deep: #110d0a;
+    --color-surface-muted: rgba(18, 14, 11, 0.72);
+    --color-surface-row: rgba(22, 17, 13, 0.78);
+    --color-text: #f0e5d2;
+    --color-text-muted: #b19d81;
+    --color-text-soft: #ccbca4;
+    --color-text-warm: #ddb780;
+    --color-accent: #d6a767;
+    --color-accent-strong: #b67e38;
+    --color-accent-muted: #c08c4b;
+    --color-success: #9dd8ab;
+    --color-success-strong: #8bd39b;
+    --color-error: #ffb0a2;
+    --color-error-strong: #d96d6d;
+    --border-subtle: rgba(214, 167, 103, 0.12);
+    --border-default: rgba(214, 167, 103, 0.16);
+    --border-strong: rgba(214, 167, 103, 0.22);
+    --border-selected: rgba(214, 167, 103, 0.36);
+    --radius-sm: 8px;
+    --radius-md: 10px;
+    --radius-lg: 12px;
+    --radius-pill: 999px;
+    --space-1: 4px;
+    --space-2: 6px;
+    --space-3: 8px;
+    --space-4: 10px;
+    --space-5: 12px;
+    --space-6: 14px;
+    --space-7: 16px;
+    --space-8: 18px;
+  }
+}

@@ -256,6 +256,7 @@ pub(super) async fn create_default_behavior(
     node: &EmbeddedNode,
     agent_did: &str,
     behavior_id: &str,
+    inference_profile_id: &str,
 ) -> Result<()> {
     upsert_agent_behavior(
         node,
@@ -267,7 +268,7 @@ pub(super) async fn create_default_behavior(
             backend_id: None,
             model_name: None,
             tool_selection_id: None,
-            inference_profile_id: None,
+            inference_profile_id: Some(inference_profile_id.to_string()),
             compaction_strategy: None,
             compaction_threshold: None,
             enabled: true,

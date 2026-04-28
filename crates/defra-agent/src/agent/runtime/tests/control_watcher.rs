@@ -204,7 +204,7 @@ async fn control_watcher_resolves_tool_selection_into_reconciled_tool_surface() 
 
     tokio::task::yield_now().await;
 
-    let selection_id = format!("{}:tools", agent.default_behavior_id());
+    let selection_id = crate::default_tool_selection_id_for_behavior(agent.default_behavior_id());
     crate::upsert_tool_selection(
         node.as_ref(),
         &ToolSelectionDocument {

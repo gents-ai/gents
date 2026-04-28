@@ -239,21 +239,21 @@ mod tests {
         let bundle = bundle_with_rows(
             vec![
                 json!({
-                    "behavior_id": "did:defra-agent:test:default",
+                    "behavior_id": "default",
                     "enabled": true,
                     "backend_id": "",
                     "tool_selection_id": "",
                     "inference_profile_id": ""
                 }),
                 json!({
-                    "behavior_id": "did:defra-agent:test:ops",
+                    "behavior_id": "ops",
                     "enabled": true,
                     "backend_id": "backend-unhealthy",
                     "tool_selection_id": "",
                     "inference_profile_id": ""
                 }),
                 json!({
-                    "behavior_id": "did:defra-agent:test:broken-tools",
+                    "behavior_id": "broken-tools",
                     "enabled": true,
                     "backend_id": "backend-healthy",
                     "tool_selection_id": "missing-tools",
@@ -280,19 +280,20 @@ mod tests {
 
         let unavailable = collect_unavailable_behaviors_from_bundle(&bundle);
         assert_eq!(
-            unavailable.get("did:defra-agent:test:default"),
-            Some(&"behavior did:defra-agent:test:default has no backend binding".to_string())
+            unavailable.get("default"),
+            Some(&"behavior default has no backend binding".to_string())
         );
         assert_eq!(
-            unavailable.get("did:defra-agent:test:ops"),
+            unavailable.get("ops"),
             Some(
-                &"behavior did:defra-agent:test:ops backend backend-unhealthy is unavailable (enabled=true probe_status=unknown)".to_string()
+                &"behavior ops backend backend-unhealthy is unavailable (enabled=true probe_status=unknown)".to_string()
             )
         );
         assert_eq!(
-            unavailable.get("did:defra-agent:test:broken-tools"),
+            unavailable.get("broken-tools"),
             Some(
-                &"behavior did:defra-agent:test:broken-tools references missing tool selection missing-tools".to_string()
+                &"behavior broken-tools references missing tool selection missing-tools"
+                    .to_string()
             )
         );
     }

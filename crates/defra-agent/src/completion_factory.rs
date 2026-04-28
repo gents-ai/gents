@@ -9,6 +9,10 @@ use crate::backend_provider::BackendProviderKind;
 use crate::config::{BehaviorConfig, SamplingConfig};
 use crate::watcher::AgentRequest;
 
+fn effective_max_tokens(max_output_tokens: usize, sampling_max_tokens: Option<u64>) -> Option<u64> {
+    sampling_max_tokens.or_else(|| u64::try_from(max_output_tokens).ok())
+}
+
 pub(crate) fn build_agent<C>(
     client: &C,
     behavior: &BehaviorConfig,
@@ -81,7 +85,9 @@ where
         builder = builder.temperature(temperature);
     }
 
-    if let Some(max_tokens) = behavior.sampling.max_tokens {
+    if let Some(max_tokens) =
+        effective_max_tokens(behavior.max_output_tokens, behavior.sampling.max_tokens)
+    {
         builder = builder.max_tokens(max_tokens);
     }
 
@@ -106,7 +112,7 @@ where
     let sampling = sampling_for_request(behavior.sampling, request);
     let mut agent = agent.clone();
     agent.temperature = sampling.temperature;
-    agent.max_tokens = sampling.max_tokens;
+    agent.max_tokens = effective_max_tokens(behavior.max_output_tokens, sampling.max_tokens);
     let request_additional_params = merge_optional_params(
         sampling.additional_params(),
         request_additional_params(behavior, request),

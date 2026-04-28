@@ -1,0 +1,1342 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tauri Fleet Viewer Prototype</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family:
+          Inter,
+          "SF Pro Text",
+          system-ui,
+          sans-serif;
+        color: #f0e5d2;
+        background: linear-gradient(180deg, #201a14 0%, #17130f 100%);
+        font-synthesis: none;
+        text-rendering: optimizeLegibility;
+        -webkit-font-smoothing: antialiased;
+        --ink: #f0e5d2;
+        --muted: #a99a84;
+        --line: rgba(214, 167, 103, 0.16);
+        --panel: rgba(28, 22, 17, 0.94);
+        --panel-soft: rgba(22, 17, 13, 0.82);
+        --green: #6ad39b;
+        --green-bg: rgba(56, 137, 92, 0.16);
+        --yellow: #e3b459;
+        --yellow-bg: rgba(211, 155, 50, 0.16);
+        --red: #ef8a78;
+        --red-bg: rgba(196, 78, 62, 0.16);
+        --blue: #d6a767;
+        --blue-bg: rgba(214, 167, 103, 0.12);
+        --violet: #b99de8;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-width: 1240px;
+        height: 100vh;
+        overflow: hidden;
+      }
+
+      body,
+      button,
+      input,
+      select,
+      textarea {
+        font: inherit;
+      }
+
+      button,
+      select,
+      input,
+      textarea {
+        border-radius: 7px;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      h1,
+      h2,
+      h3,
+      p,
+      dl,
+      dd {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 22px;
+        line-height: 1.2;
+      }
+
+      h2 {
+        font-size: 17px;
+        line-height: 1.25;
+      }
+
+      h3 {
+        font-size: 14px;
+        line-height: 1.25;
+      }
+
+      .mono {
+        font-family:
+          "SF Mono",
+          "JetBrains Mono",
+          ui-monospace,
+          monospace;
+      }
+
+      .app {
+        height: 100vh;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        padding: 18px;
+        overflow: hidden;
+      }
+
+      .brand-lockup {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .brand-logo {
+        width: 42px;
+        height: 42px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(18, 14, 11, 0.72);
+        object-fit: contain;
+        padding: 4px;
+      }
+
+      .workspace {
+        min-width: 0;
+        min-height: 0;
+        padding: 0;
+        overflow: hidden;
+      }
+
+      .view {
+        display: none;
+        height: 100%;
+        min-height: 0;
+      }
+
+      .view.active {
+        display: grid;
+      }
+
+      .empty-view {
+        place-content: center;
+        grid-template-columns: minmax(520px, 720px);
+      }
+
+      .fleet-view {
+        grid-template-rows: auto minmax(0, 1fr);
+        gap: 16px;
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        background: var(--panel);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+        padding: 16px;
+        min-width: 0;
+        min-height: 0;
+      }
+
+      .panel.soft {
+        background: var(--panel-soft);
+      }
+
+      .panel.scroll {
+        overflow: auto;
+      }
+
+      .header,
+      .panel-header,
+      .row,
+      .split-row,
+      .actions,
+      .toolbar,
+      .metric-row,
+      .status-line,
+      .composer-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .stack {
+        display: grid;
+        gap: 12px;
+      }
+
+      .stack-tight {
+        display: grid;
+        gap: 8px;
+      }
+
+      .main-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        min-height: 0;
+      }
+
+      .eyebrow {
+        color: var(--blue);
+        font-size: 11px;
+        font-weight: 750;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .small {
+        font-size: 12px;
+      }
+
+      .tiny {
+        font-size: 11px;
+      }
+
+      .button {
+        border: 1px solid rgba(214, 167, 103, 0.18);
+        background: rgba(214, 167, 103, 0.08);
+        color: var(--ink);
+        padding: 9px 12px;
+        font-weight: 650;
+      }
+
+      .button.primary {
+        border-color: rgba(214, 167, 103, 0.58);
+        background: #d6a767;
+        color: #17130f;
+      }
+
+      .button.ghost {
+        background: transparent;
+      }
+
+      .button.danger {
+        border-color: var(--red);
+        color: var(--red);
+      }
+
+      .segmented {
+        display: inline-grid;
+        grid-auto-flow: column;
+        border: 1px solid var(--line);
+        overflow: hidden;
+      }
+
+      .segmented button {
+        border: 0;
+        border-radius: 0;
+        background: #ffffff;
+        padding: 8px 11px;
+        color: var(--muted);
+      }
+
+      .segmented button.selected {
+        background: #1d5e69;
+        color: #ffffff;
+      }
+
+      .field {
+        display: grid;
+        gap: 6px;
+      }
+
+      .field span {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      input,
+      select,
+      textarea {
+        width: 100%;
+        border: 1px solid rgba(214, 167, 103, 0.18);
+        background: rgba(18, 14, 11, 0.72);
+        color: var(--ink);
+        padding: 9px 10px;
+      }
+
+      textarea {
+        min-height: 78px;
+        resize: vertical;
+      }
+
+      .list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .list-button {
+        width: 100%;
+        border: 1px solid var(--line);
+        background: rgba(22, 17, 13, 0.8);
+        color: var(--ink);
+        padding: 11px;
+        text-align: left;
+        display: grid;
+        gap: 5px;
+      }
+
+      .list-button.selected {
+        border-color: #1d5e69;
+        box-shadow: inset 3px 0 0 #1d5e69;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid var(--line);
+        background: rgba(18, 14, 11, 0.78);
+        padding: 4px 8px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 650;
+        white-space: nowrap;
+      }
+
+      .pill.green {
+        border-color: #abd8c7;
+        background: var(--green-bg);
+        color: var(--green);
+      }
+
+      .pill.yellow {
+        border-color: #edcf85;
+        background: var(--yellow-bg);
+        color: var(--yellow);
+      }
+
+      .pill.red {
+        border-color: #e8abab;
+        background: var(--red-bg);
+        color: var(--red);
+      }
+
+      .pill.blue {
+        border-color: #bad2ef;
+        background: var(--blue-bg);
+        color: var(--blue);
+      }
+
+      .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: currentColor;
+        display: inline-block;
+      }
+
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .metric {
+        border: 1px solid var(--line);
+        background: rgba(22, 17, 13, 0.8);
+        padding: 13px;
+        min-height: 82px;
+      }
+
+      .metric strong {
+        display: block;
+        margin-top: 7px;
+        font-size: 24px;
+        line-height: 1;
+      }
+
+      .fleet-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+
+      .fleet-table th,
+      .fleet-table td {
+        border-bottom: 1px solid var(--line);
+        padding: 11px 10px;
+        text-align: left;
+        vertical-align: middle;
+      }
+
+      .fleet-table th {
+        color: var(--muted);
+        background: rgba(22, 17, 13, 0.94);
+        font-size: 11px;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+
+      .fleet-table tr {
+        cursor: pointer;
+      }
+
+      .fleet-table tr.selected td {
+        background: rgba(214, 167, 103, 0.13);
+      }
+
+      .service-cell {
+        display: grid;
+        gap: 3px;
+      }
+
+      .agent-name-button {
+        width: fit-content;
+        border: 0;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--ink);
+        padding: 0;
+        font-weight: 750;
+        text-align: left;
+      }
+
+      .agent-name-button:hover {
+        color: var(--blue);
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+
+      .agent-cell {
+        display: grid;
+        grid-template-columns: 14px minmax(0, 1fr);
+        gap: 10px;
+        align-items: center;
+      }
+
+      .status-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        display: inline-block;
+        box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.04);
+        cursor: help;
+      }
+
+      .status-dot.green {
+        background: var(--green);
+      }
+
+      .status-dot.yellow {
+        background: var(--yellow);
+      }
+
+      .status-dot.red {
+        background: var(--red);
+      }
+
+      .numeric {
+        font-variant-numeric: tabular-nums;
+        font-weight: 650;
+      }
+
+      .metric-inline {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 4px;
+        font-variant-numeric: tabular-nums;
+        font-weight: 700;
+      }
+
+      .metric-inline span {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 600;
+      }
+
+      .tool-icons {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+
+      .tool-icon {
+        width: 22px;
+        height: 22px;
+        display: inline-grid;
+        place-items: center;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: rgba(18, 14, 11, 0.72);
+        color: var(--muted);
+        cursor: help;
+      }
+
+      .tool-icon.readonly {
+        border-color: rgba(227, 180, 89, 0.38);
+        color: var(--yellow);
+      }
+
+      .tool-icon.readwrite {
+        border-color: rgba(106, 211, 155, 0.42);
+        color: var(--green);
+      }
+
+      .tool-icon.meta {
+        border-color: rgba(185, 157, 232, 0.42);
+        color: var(--violet);
+      }
+
+      .tool-icon svg {
+        width: 13px;
+        height: 13px;
+        display: block;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .table-action {
+        width: 24px;
+        height: 24px;
+        display: inline-grid;
+        place-items: center;
+        padding: 0;
+        white-space: nowrap;
+      }
+
+      .actions-header {
+        width: 102px;
+      }
+
+      .actions-cell {
+        min-width: 102px;
+      }
+
+      .row-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 6px;
+      }
+
+      .icon {
+        width: 13px;
+        height: 13px;
+        display: block;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .button:disabled {
+        cursor: default;
+        opacity: 0.38;
+        color: var(--muted);
+        border-color: var(--line);
+        background: rgba(18, 14, 11, 0.5);
+      }
+
+      .table-wrap {
+        border: 1px solid var(--line);
+        overflow: auto;
+        min-height: 0;
+        background: rgba(22, 17, 13, 0.8);
+      }
+
+      .detail-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+
+      .fact {
+        border: 1px solid var(--line);
+        background: rgba(22, 17, 13, 0.8);
+        padding: 10px;
+        min-height: 68px;
+      }
+
+      .fact span {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 6px;
+      }
+
+      .timeline {
+        display: grid;
+        gap: 8px;
+      }
+
+      .timeline-item {
+        border-left: 3px solid #b7c8c5;
+        padding-left: 10px;
+      }
+
+      .timeline-item.green {
+        border-left-color: var(--green);
+      }
+
+      .timeline-item.yellow {
+        border-left-color: var(--yellow);
+      }
+
+      .timeline-item.red {
+        border-left-color: var(--red);
+      }
+
+      .wizard {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+        gap: 14px;
+        height: 100%;
+      }
+
+      .steps {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .step {
+        border: 1px solid var(--line);
+        background: rgba(22, 17, 13, 0.8);
+        padding: 10px;
+      }
+
+      .step.active {
+        border-color: rgba(214, 167, 103, 0.42);
+        background: rgba(214, 167, 103, 0.13);
+      }
+
+      .codebox {
+        border: 1px solid rgba(214, 167, 103, 0.18);
+        background: rgba(18, 14, 11, 0.72);
+        padding: 11px;
+        color: #e7d7bd;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .callout {
+        border: 1px solid rgba(214, 167, 103, 0.22);
+        background: var(--blue-bg);
+        padding: 13px;
+      }
+
+      .progress {
+        height: 8px;
+        background: rgba(255, 255, 255, 0.08);
+        overflow: hidden;
+      }
+
+      .progress span {
+        display: block;
+        height: 100%;
+        background: #d6a767;
+      }
+
+      .hidden {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app">
+      <section class="workspace">
+        <section class="view active fleet-view" id="view-fleet">
+          <header class="header">
+            <div class="brand-lockup">
+              <img
+                alt=""
+                class="brand-logo"
+                src="../../../apps/desktop-tauri/src-tauri/icons/icon.png"
+              />
+              <div class="stack-tight">
+                <h1>Defra Agent</h1>
+                <p class="muted small">
+                  Fleet dashboard for P2P heartbeats, runtime state, and active tasks.
+                </p>
+              </div>
+            </div>
+            <div class="actions">
+              <button class="button primary" data-view-button="empty">Add Agent</button>
+            </div>
+          </header>
+
+          <div class="main-grid">
+            <div class="table-wrap">
+              <table class="fleet-table">
+                <thead>
+                  <tr>
+                    <th>Agent</th>
+                    <th>Behaviors</th>
+                    <th>Tasks</th>
+                    <th>Inference</th>
+                    <th>Tool ceiling</th>
+                    <th>Open work</th>
+                    <th>Last update</th>
+                    <th class="actions-header" aria-label="Actions"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr class="selected" data-agent-row="api-gateway" title="Select api-gateway">
+                    <td>
+                      <div class="agent-cell">
+                        <span
+                          class="status-dot green"
+                          title="P2P connected · runtime running · reconcile ok"
+                        ></span>
+                        <div class="service-cell">
+                          <button class="agent-name-button" data-chat-button="api-gateway" title="Open api-gateway chat" type="button">
+                            api-gateway
+                          </button>
+                          <span class="muted tiny mono">did:key:z6Mk-api · default: api-default · graphql</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Total behaviors configured for this agent">
+                        3 <span>total</span>
+                      </span>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Enabled tasks: reconcile-api, inspect-latency, rotate-keys, report-slo, audit-routes, deploy-check">
+                        6 <span>enabled</span>
+                      </span>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Configured inference backends: minimax-primary, openai-fallback">
+                        2 <span>backends</span>
+                      </span>
+                    </td>
+                    <td>
+                      <div class="tool-icons" title="Server ceiling: read/write files, read-only bash, HTTP MCP delegation, CLI tools">
+                        <span class="tool-icon readwrite" title="File tools: read/write under configured root">
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                            <path d="M14 2v6h6" />
+                          </svg>
+                        </span>
+                        <span class="tool-icon readonly" title="Bash: read-only">
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="m4 7 5 5-5 5" />
+                            <path d="M12 19h8" />
+                          </svg>
+                        </span>
+                        <span class="tool-icon meta" title="HTTP MCP delegation enabled">
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <circle cx="6" cy="12" r="2" />
+                            <circle cx="18" cy="6" r="2" />
+                            <circle cx="18" cy="18" r="2" />
+                            <path d="M8 12l8-6" />
+                            <path d="M8 12l8 6" />
+                          </svg>
+                        </span>
+                        <span class="tool-icon readonly" title="CLI tools: kubectl">
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M4 5h16v14H4z" />
+                            <path d="M8 9h.01" />
+                            <path d="M11 9h.01" />
+                            <path d="M14 9h.01" />
+                            <path d="M8 14h8" />
+                          </svg>
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Processing conversations">2</span>
+                    </td>
+                    <td title="Last P2P heartbeat from this agent">12s ago</td>
+                    <td class="actions-cell">
+                      <div class="row-actions">
+                        <button class="button primary table-action" data-chat-button="api-gateway" title="Open chat" aria-label="Open chat">
+                          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
+                          </svg>
+                        </button>
+                        <button class="button table-action" title="Configure agent" aria-label="Configure agent">
+                          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M4 6h16" />
+                            <path d="M4 12h16" />
+                            <path d="M4 18h16" />
+                            <path d="M8 6v.01" />
+                            <path d="M14 12v.01" />
+                            <path d="M10 18v.01" />
+                          </svg>
+                        </button>
+                        <button class="button table-action" disabled title="P2P healthy" aria-label="Repair P2P disabled because P2P is healthy">
+                          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M20 7h-6v6" />
+                            <path d="M20 7l-7 7" />
+                            <path d="M4 17h6v-6" />
+                            <path d="M4 17l7-7" />
+                          </svg>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr data-agent-row="auth-service" title="Select auth-service">
+                    <td>
+                      <div class="agent-cell">
+                        <span
+                          class="status-dot green"
+                          title="P2P connected · runtime running · reconcile ok"
+                        ></span>
+                        <div class="service-cell">
+                          <button class="agent-name-button" data-chat-button="auth-service" title="Open auth-service chat" type="button">
+                            auth-service
+                          </button>
+                          <span class="muted tiny mono">did:key:z6Mk-auth · default: identity-watch · graphql</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Total behaviors configured for this agent">
+                        2 <span>total</span>
+                      </span>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Enabled tasks: audit-auth, rotate-session-keys, inspect-login-errors, report-slo">
+                        4 <span>enabled</span>
+                      </span>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Configured inference backends: minimax-primary">
+                        1 <span>backend</span>
+                      </span>
+                    </td>
+                    <td>
+                      <div class="tool-icons" title="Server ceiling: read-only files, HTTP MCP delegation">
+                        <span class="tool-icon readonly" title="File tools: read-only">
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                            <path d="M14 2v6h6" />
+                          </svg>
+                        </span>
+                        <span class="tool-icon meta" title="HTTP MCP delegation enabled">
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <circle cx="6" cy="12" r="2" />
+                            <circle cx="18" cy="6" r="2" />
+                            <circle cx="18" cy="18" r="2" />
+                            <path d="M8 12l8-6" />
+                            <path d="M8 12l8 6" />
+                          </svg>
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Processing conversations">1</span>
+                    </td>
+                    <td title="Last P2P heartbeat from this agent">18s ago</td>
+                    <td class="actions-cell">
+                      <div class="row-actions">
+                        <button class="button primary table-action" data-chat-button="auth-service" title="Open chat" aria-label="Open chat">
+                          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
+                          </svg>
+                        </button>
+                        <button class="button table-action" title="Configure agent" aria-label="Configure agent">
+                          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M4 6h16" />
+                            <path d="M4 12h16" />
+                            <path d="M4 18h16" />
+                            <path d="M8 6v.01" />
+                            <path d="M14 12v.01" />
+                            <path d="M10 18v.01" />
+                          </svg>
+                        </button>
+                        <button class="button table-action" disabled title="P2P healthy" aria-label="Repair P2P disabled because P2P is healthy">
+                          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M20 7h-6v6" />
+                            <path d="M20 7l-7 7" />
+                            <path d="M4 17h6v-6" />
+                            <path d="M4 17l7-7" />
+                          </svg>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr data-agent-row="billing-worker" title="Select billing-worker">
+                    <td>
+                      <div class="agent-cell">
+                        <span
+                          class="status-dot yellow"
+                          title="P2P degraded · runtime running · reconcile retrying"
+                        ></span>
+                        <div class="service-cell">
+                          <button class="agent-name-button" data-chat-button="billing-worker" title="Open billing-worker chat" type="button">
+                            billing-worker
+                          </button>
+                          <span class="muted tiny mono">did:key:z6Mk-bill · default: billing-ops · graphql</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Total behaviors configured for this agent">
+                        4 <span>total</span>
+                      </span>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Enabled tasks: reconcile-invoices, inspect-ledger, retry-webhooks, audit-payouts, report-slo, repair-stale-runs, cost-check, queue-depth, billing-export">
+                        9 <span>enabled</span>
+                      </span>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Configured inference backends: minimax-primary, local-fallback">
+                        2 <span>backends</span>
+                      </span>
+                    </td>
+                    <td>
+                      <div class="tool-icons" title="Server ceiling: read/write files, unrestricted bash, HTTP MCP delegation">
+                        <span class="tool-icon readwrite" title="File tools: read/write under configured root">
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                            <path d="M14 2v6h6" />
+                          </svg>
+                        </span>
+                        <span class="tool-icon readwrite" title="Bash: unrestricted">
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="m4 7 5 5-5 5" />
+                            <path d="M12 19h8" />
+                          </svg>
+                        </span>
+                        <span class="tool-icon meta" title="HTTP MCP delegation enabled">
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <circle cx="6" cy="12" r="2" />
+                            <circle cx="18" cy="6" r="2" />
+                            <circle cx="18" cy="18" r="2" />
+                            <path d="M8 12l8-6" />
+                            <path d="M8 12l8 6" />
+                          </svg>
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Processing conversations">4</span>
+                    </td>
+                    <td title="Last P2P heartbeat from this agent">1m ago</td>
+                    <td class="actions-cell">
+                      <div class="row-actions">
+                        <button class="button primary table-action" data-chat-button="billing-worker" title="Open chat" aria-label="Open chat">
+                          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
+                          </svg>
+                        </button>
+                        <button class="button table-action" title="Configure agent" aria-label="Configure agent">
+                          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M4 6h16" />
+                            <path d="M4 12h16" />
+                            <path d="M4 18h16" />
+                            <path d="M8 6v.01" />
+                            <path d="M14 12v.01" />
+                            <path d="M10 18v.01" />
+                          </svg>
+                        </button>
+                        <button class="button danger table-action" title="Repair P2P" aria-label="Repair P2P">
+                          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M20 7h-6v6" />
+                            <path d="M20 7l-7 7" />
+                            <path d="M4 17h6v-6" />
+                            <path d="M4 17l7-7" />
+                          </svg>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr data-agent-row="search-index" title="Select search-index">
+                    <td>
+                      <div class="agent-cell">
+                        <span
+                          class="status-dot red"
+                          title="P2P wedged · runtime stale · missing heartbeat"
+                        ></span>
+                        <div class="service-cell">
+                          <button class="agent-name-button" data-chat-button="search-index" title="Open search-index chat" type="button">
+                            search-index
+                          </button>
+                          <span class="muted tiny mono">did:key:z6Mk-srch · default: search-repair · graphql</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Total behaviors configured for this agent">
+                        2 <span>total</span>
+                      </span>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Enabled tasks: rebuild-index, inspect-lag, report-slo">
+                        3 <span>enabled</span>
+                      </span>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Configured inference backends: minimax-primary">
+                        1 <span>backend</span>
+                      </span>
+                    </td>
+                    <td>
+                      <div class="tool-icons" title="Server ceiling: meta-only; local file and bash tools unavailable">
+                        <span class="tool-icon meta" title="HTTP MCP delegation only">
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <circle cx="6" cy="12" r="2" />
+                            <circle cx="18" cy="6" r="2" />
+                            <circle cx="18" cy="18" r="2" />
+                            <path d="M8 12l8-6" />
+                            <path d="M8 12l8 6" />
+                          </svg>
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Processing conversations">0</span>
+                    </td>
+                    <td title="Last P2P heartbeat from this agent">17m ago</td>
+                    <td class="actions-cell">
+                      <div class="row-actions">
+                        <button class="button primary table-action" data-chat-button="search-index" title="Open chat" aria-label="Open chat">
+                          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
+                          </svg>
+                        </button>
+                        <button class="button table-action" title="Configure agent" aria-label="Configure agent">
+                          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M4 6h16" />
+                            <path d="M4 12h16" />
+                            <path d="M4 18h16" />
+                            <path d="M8 6v.01" />
+                            <path d="M14 12v.01" />
+                            <path d="M10 18v.01" />
+                          </svg>
+                        </button>
+                        <button class="button danger table-action" title="Repair P2P" aria-label="Repair P2P">
+                          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M20 7h-6v6" />
+                            <path d="M20 7l-7 7" />
+                            <path d="M4 17h6v-6" />
+                            <path d="M4 17l7-7" />
+                          </svg>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr data-agent-row="storage-agent" title="Select storage-agent">
+                    <td>
+                      <div class="agent-cell">
+                        <span
+                          class="status-dot green"
+                          title="P2P connected · runtime running · reconcile ok"
+                        ></span>
+                        <div class="service-cell">
+                          <button class="agent-name-button" data-chat-button="storage-agent" title="Open storage-agent chat" type="button">
+                            storage-agent
+                          </button>
+                          <span class="muted tiny mono">did:key:z6Mk-store · default: storage-ops · graphql</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Total behaviors configured for this agent">
+                        3 <span>total</span>
+                      </span>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Enabled tasks: audit-buckets, check-retention, repair-policy, report-slo, verify-replication">
+                        5 <span>enabled</span>
+                      </span>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Configured inference backends: minimax-primary, anthropic-fallback">
+                        2 <span>backends</span>
+                      </span>
+                    </td>
+                    <td>
+                      <div class="tool-icons" title="Server ceiling: read/write files, read-only bash, CLI tools">
+                        <span class="tool-icon readwrite" title="File tools: read/write under configured root">
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                            <path d="M14 2v6h6" />
+                          </svg>
+                        </span>
+                        <span class="tool-icon readonly" title="Bash: read-only">
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="m4 7 5 5-5 5" />
+                            <path d="M12 19h8" />
+                          </svg>
+                        </span>
+                        <span class="tool-icon readonly" title="CLI tools: aws, s5cmd">
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M4 5h16v14H4z" />
+                            <path d="M8 9h.01" />
+                            <path d="M11 9h.01" />
+                            <path d="M14 9h.01" />
+                            <path d="M8 14h8" />
+                          </svg>
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Processing conversations">1</span>
+                    </td>
+                    <td title="Last P2P heartbeat from this agent">8s ago</td>
+                    <td class="actions-cell">
+                      <div class="row-actions">
+                        <button class="button primary table-action" data-chat-button="storage-agent" title="Open chat" aria-label="Open chat">
+                          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
+                          </svg>
+                        </button>
+                        <button class="button table-action" title="Configure agent" aria-label="Configure agent">
+                          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M4 6h16" />
+                            <path d="M4 12h16" />
+                            <path d="M4 18h16" />
+                            <path d="M8 6v.01" />
+                            <path d="M14 12v.01" />
+                            <path d="M10 18v.01" />
+                          </svg>
+                        </button>
+                        <button class="button table-action" disabled title="P2P healthy" aria-label="Repair P2P disabled because P2P is healthy">
+                          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M20 7h-6v6" />
+                            <path d="M20 7l-7 7" />
+                            <path d="M4 17h6v-6" />
+                            <path d="M4 17l7-7" />
+                          </svg>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr data-agent-row="scheduler" title="Select scheduler">
+                    <td>
+                      <div class="agent-cell">
+                        <span
+                          class="status-dot yellow"
+                          title="P2P connected · runtime reconciling · applying generation"
+                        ></span>
+                        <div class="service-cell">
+                          <button class="agent-name-button" data-chat-button="scheduler" title="Open scheduler chat" type="button">
+                            scheduler
+                          </button>
+                          <span class="muted tiny mono">did:key:z6Mk-schd · default: schedule-ops · graphql</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Total behaviors configured for this agent">
+                        5 <span>total</span>
+                      </span>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Enabled tasks: fire-daily-jobs, inspect-missed-runs, compact-history, report-slo, enqueue-retries, audit-triggers, drain-deadletters, schedule-repair, validate-cron, event-replay, heartbeat-check">
+                        11 <span>enabled</span>
+                      </span>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Configured inference backends: minimax-primary">
+                        1 <span>backend</span>
+                      </span>
+                    </td>
+                    <td>
+                      <div class="tool-icons" title="Server ceiling: read-only files, read-only bash, HTTP MCP delegation">
+                        <span class="tool-icon readonly" title="File tools: read-only">
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                            <path d="M14 2v6h6" />
+                          </svg>
+                        </span>
+                        <span class="tool-icon readonly" title="Bash: read-only">
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="m4 7 5 5-5 5" />
+                            <path d="M12 19h8" />
+                          </svg>
+                        </span>
+                        <span class="tool-icon meta" title="HTTP MCP delegation enabled">
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <circle cx="6" cy="12" r="2" />
+                            <circle cx="18" cy="6" r="2" />
+                            <circle cx="18" cy="18" r="2" />
+                            <path d="M8 12l8-6" />
+                            <path d="M8 12l8 6" />
+                          </svg>
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <span class="metric-inline" title="Processing conversations">3</span>
+                    </td>
+                    <td title="Last P2P heartbeat from this agent">24s ago</td>
+                    <td class="actions-cell">
+                      <div class="row-actions">
+                        <button class="button primary table-action" data-chat-button="scheduler" title="Open chat" aria-label="Open chat">
+                          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
+                          </svg>
+                        </button>
+                        <button class="button table-action" title="Configure agent" aria-label="Configure agent">
+                          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M4 6h16" />
+                            <path d="M4 12h16" />
+                            <path d="M4 18h16" />
+                            <path d="M8 6v.01" />
+                            <path d="M14 12v.01" />
+                            <path d="M10 18v.01" />
+                          </svg>
+                        </button>
+                        <button class="button table-action" disabled title="P2P healthy" aria-label="Repair P2P disabled because P2P is healthy">
+                          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M20 7h-6v6" />
+                            <path d="M20 7l-7 7" />
+                            <path d="M4 17h6v-6" />
+                            <path d="M4 17l7-7" />
+                          </svg>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section class="view empty-view" id="view-empty">
+          <aside class="panel wizard">
+            <div class="stack-tight">
+              <p class="eyebrow">Connection Flow</p>
+              <h2>Add Agent Connection</h2>
+            </div>
+            <div class="stack">
+              <div class="steps">
+                <div class="step active">
+                  <strong>1. Details</strong>
+                  <p class="muted tiny">identity and address</p>
+                </div>
+                <div class="step">
+                  <strong>2. Verify</strong>
+                  <p class="muted tiny">dial and replicate</p>
+                </div>
+                <div class="step">
+                  <strong>3. Metadata</strong>
+                  <p class="muted tiny">service ownership</p>
+                </div>
+                <div class="step">
+                  <strong>4. Save</strong>
+                  <p class="muted tiny">select agent</p>
+                </div>
+              </div>
+
+              <label class="field">
+                <span>Agent label</span>
+                <input value="api-gateway" />
+              </label>
+              <label class="field">
+                <span>Agent DID</span>
+                <input class="mono" value="did:key:z6Mk-api..." />
+              </label>
+              <label class="field">
+                <span>P2P multiaddr</span>
+                <input class="mono" value="/ip4/100.73.235.38/tcp/9161/p2p/12D3Koo..." />
+              </label>
+              <label class="field">
+                <span>GraphQL endpoint</span>
+                <input value="http://100.73.235.38:9181/graphql" />
+              </label>
+
+              <div class="codebox mono">
+                verify -> dial peer -> install 18 collection replicators -> wait for AgentPrincipal
+              </div>
+
+              <div class="detail-grid">
+                <label class="field">
+                  <span>Service</span>
+                  <input value="edge-api" />
+                </label>
+                <label class="field">
+                  <span>Environment</span>
+                  <select>
+                    <option>prod</option>
+                    <option>staging</option>
+                    <option>dev</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Region</span>
+                  <input value="us-east" />
+                </label>
+                <label class="field">
+                  <span>Owner</span>
+                  <input value="platform" />
+                </label>
+              </div>
+            </div>
+            <div class="actions">
+              <button class="button">Test Connection</button>
+              <button class="button primary" data-view-button="fleet">Save and View Fleet</button>
+            </div>
+          </aside>
+        </section>
+
+      </section>
+    </main>
+
+    <script>
+      const views = ["fleet", "empty"];
+      const viewButtons = document.querySelectorAll("[data-view-button]");
+
+      function showView(view) {
+        views.forEach((id) => {
+          document.getElementById(`view-${id}`).classList.toggle("active", id === view);
+        });
+      }
+
+      viewButtons.forEach((button) => {
+        button.addEventListener("click", () => showView(button.dataset.viewButton));
+      });
+
+      function selectAgent(agentId) {
+        document.querySelectorAll("[data-agent-row]").forEach((row) => {
+          row.classList.toggle("selected", row.dataset.agentRow === agentId);
+        });
+      }
+
+      document.querySelectorAll("[data-agent-row]").forEach((row) => {
+        row.addEventListener("click", () => selectAgent(row.dataset.agentRow));
+      });
+
+      document.querySelectorAll("[data-chat-button]").forEach((button) => {
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          const agentId = button.dataset.chatButton;
+          selectAgent(agentId);
+          window.location.hash = `chat/${agentId}`;
+        });
+      });
+
+      document.querySelectorAll(".row-actions button:not([data-chat-button])").forEach((button) => {
+        button.addEventListener("click", (event) => event.stopPropagation());
+      });
+
+    </script>
+  </body>
+</html>
