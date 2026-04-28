@@ -11,8 +11,9 @@ use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     default_tool_selection_id_for_behavior, ensure_config_bootstrap_schemas, load_agent_behavior,
-    load_agent_principal, upsert_agent_principal, upsert_inference_profile, AgentBehavior,
-    AgentIdentity, InferenceProfile, KeyIdentity, ToolSelectionDocument,
+    load_agent_principal, load_or_create_macos_secure_enclave_identity, upsert_agent_principal,
+    upsert_inference_profile, AgentBehavior, AgentIdentity, InferenceProfile, KeyIdentity,
+    ToolSelectionDocument,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -65,20 +66,17 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
 
-    let key_path = args
-        .key_path
-        .clone()
-        .unwrap_or_else(|| default_key_path(&home_dir, &args.agent_name));
-    if let Some(parent) = key_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating key directory {}", parent.display()))?;
-    }
-
     if args.identity_only {
+        let key_path = args
+            .key_path
+            .clone()
+            .unwrap_or_else(|| default_key_path(&home_dir, &args.agent_name));
         let summary = write_identity_only_home_metadata(IdentityOnlyHomeOptions {
             home: &home_dir,
             agent_name: &args.agent_name,
-            key_path: &key_path,
+            key_path: Some(&key_path),
+            identity_backend: args.identity_backend,
+            secure_enclave_label: args.secure_enclave_label.as_deref(),
             write_tools: args.write_tools,
             tool_root: args.tool_root.as_deref(),
             reset: args.reset,
@@ -97,6 +95,8 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
             "identity": {
                 "agent_did": summary.agent_did,
                 "key_path": summary.key_path,
+                "identity_backend": summary.identity_backend,
+                "secure_enclave_label": summary.secure_enclave_label,
                 "permission_boundary": "This DID and key identify the permission boundary for every action the agent runtime performs."
             },
             "next_steps": [
@@ -109,29 +109,39 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
         return Ok(());
     }
 
-    let identity = Arc::new(
-        KeyIdentity::load_or_create(&key_path, None)
-            .context("creating or loading agent identity key")?,
-    );
-    identity
+    let initialized_identity = load_or_create_home_identity(HomeIdentityOptions {
+        home: &home_dir,
+        agent_name: &args.agent_name,
+        key_path: args.key_path.as_deref(),
+        identity_backend: args.identity_backend,
+        secure_enclave_label: args.secure_enclave_label.as_deref(),
+    })?;
+    initialized_identity
+        .identity
         .sign(b"defra-agent init identity")
         .await
         .context("creating or loading agent identity key")?;
 
-    let node = EmbeddedNode::builder()
-        .data_path(&data_dir)
+    let mut node_builder = EmbeddedNode::builder().data_path(&data_dir);
+    if let Some(node_identity_did) = initialized_identity.node_identity_did.as_ref() {
+        node_builder = node_builder.with_node_identity_did(node_identity_did.clone());
+    }
+    let node = node_builder
         .build()
         .await
         .context("building embedded defra node for init")?;
     ensure_config_bootstrap_schemas(&node).await?;
 
     let access = ConfigAccess::Local(node);
-    let summary = initialize_runtime_home(&access, &args, identity.did()).await?;
+    let summary =
+        initialize_runtime_home(&access, &args, initialized_identity.identity.did()).await?;
     let stored = StoredInitConfig {
         home: home_dir.to_string_lossy().to_string(),
         agent_name: args.agent_name.clone(),
-        agent_did: identity.did().to_string(),
-        key_path: Some(key_path.to_string_lossy().to_string()),
+        agent_did: initialized_identity.identity.did().to_string(),
+        key_path: initialized_identity.key_path.clone(),
+        identity_backend: initialized_identity.identity_backend.clone(),
+        secure_enclave_label: initialized_identity.secure_enclave_label.clone(),
         tool_ceiling: summary.tool_ceiling,
         tool_root: summary.tool_root.clone(),
     };
@@ -146,8 +156,10 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
         "status": "initialized",
         "home": home_dir,
         "agent_name": args.agent_name,
-        "agent_did": identity.did(),
-        "key_path": key_path,
+        "agent_did": initialized_identity.identity.did(),
+        "key_path": initialized_identity.key_path,
+        "identity_backend": initialized_identity.identity_backend,
+        "secure_enclave_label": initialized_identity.secure_enclave_label,
         "default_behavior_id": summary.default_behavior_id,
         "tool_selection_id": summary.tool_selection_id,
         "inference_profile_id": summary.inference_profile_id,
@@ -155,8 +167,10 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
         "tool_root": summary.tool_root,
         "runtime_state_reset": runtime_state_reset,
         "identity": {
-            "agent_did": identity.did(),
+            "agent_did": initialized_identity.identity.did(),
             "key_path": stored.key_path,
+            "identity_backend": stored.identity_backend,
+            "secure_enclave_label": stored.secure_enclave_label,
             "permission_boundary": "This DID and key identify the permission boundary for every action the agent runtime performs."
         },
         "next_steps": init_next_steps(&summary),
@@ -170,10 +184,28 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
 pub(crate) struct IdentityOnlyHomeOptions<'a> {
     pub(crate) home: &'a Path,
     pub(crate) agent_name: &'a str,
-    pub(crate) key_path: &'a Path,
+    pub(crate) key_path: Option<&'a Path>,
+    pub(crate) identity_backend: IdentityBackendArg,
+    pub(crate) secure_enclave_label: Option<&'a str>,
     pub(crate) write_tools: bool,
     pub(crate) tool_root: Option<&'a Path>,
     pub(crate) reset: bool,
+}
+
+struct HomeIdentityOptions<'a> {
+    home: &'a Path,
+    agent_name: &'a str,
+    key_path: Option<&'a Path>,
+    identity_backend: IdentityBackendArg,
+    secure_enclave_label: Option<&'a str>,
+}
+
+struct HomeIdentity {
+    identity: Arc<dyn AgentIdentity>,
+    key_path: Option<String>,
+    identity_backend: Option<String>,
+    secure_enclave_label: Option<String>,
+    node_identity_did: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -182,6 +214,8 @@ pub(crate) struct IdentityOnlyHomeSummary {
     pub(crate) agent_name: String,
     pub(crate) agent_did: String,
     pub(crate) key_path: Option<String>,
+    pub(crate) identity_backend: Option<String>,
+    pub(crate) secure_enclave_label: Option<String>,
     pub(crate) tool_ceiling: ToolCeilingArg,
     pub(crate) tool_root: Option<String>,
     pub(crate) runtime_state_reset: bool,
@@ -193,16 +227,16 @@ pub(crate) async fn write_identity_only_home_metadata(
     let data_dir = default_data_dir(options.home);
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    if let Some(parent) = options.key_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating key directory {}", parent.display()))?;
-    }
 
-    let identity = Arc::new(
-        KeyIdentity::load_or_create(options.key_path, None)
-            .context("creating or loading agent identity key")?,
-    );
-    identity
+    let initialized_identity = load_or_create_home_identity(HomeIdentityOptions {
+        home: options.home,
+        agent_name: options.agent_name,
+        key_path: options.key_path,
+        identity_backend: options.identity_backend,
+        secure_enclave_label: options.secure_enclave_label,
+    })?;
+    initialized_identity
+        .identity
         .sign(b"defra-agent init identity")
         .await
         .context("creating or loading agent identity key")?;
@@ -217,12 +251,13 @@ pub(crate) async fn write_identity_only_home_metadata(
             .to_string_lossy()
             .to_string(),
     );
-    let key_path = Some(options.key_path.to_string_lossy().to_string());
     let stored = StoredInitConfig {
         home: options.home.to_string_lossy().to_string(),
         agent_name: options.agent_name.to_string(),
-        agent_did: identity.did().to_string(),
-        key_path: key_path.clone(),
+        agent_did: initialized_identity.identity.did().to_string(),
+        key_path: initialized_identity.key_path.clone(),
+        identity_backend: initialized_identity.identity_backend.clone(),
+        secure_enclave_label: initialized_identity.secure_enclave_label.clone(),
         tool_ceiling,
         tool_root: tool_root.clone(),
     };
@@ -236,12 +271,68 @@ pub(crate) async fn write_identity_only_home_metadata(
     Ok(IdentityOnlyHomeSummary {
         home: options.home.to_string_lossy().to_string(),
         agent_name: options.agent_name.to_string(),
-        agent_did: identity.did().to_string(),
-        key_path,
+        agent_did: initialized_identity.identity.did().to_string(),
+        key_path: initialized_identity.key_path,
+        identity_backend: initialized_identity.identity_backend,
+        secure_enclave_label: initialized_identity.secure_enclave_label,
         tool_ceiling,
         tool_root,
         runtime_state_reset,
     })
+}
+
+fn load_or_create_home_identity(options: HomeIdentityOptions<'_>) -> Result<HomeIdentity> {
+    match options.identity_backend {
+        IdentityBackendArg::File => {
+            let key_path = options
+                .key_path
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| default_key_path(options.home, options.agent_name));
+            if let Some(parent) = key_path.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("creating key directory {}", parent.display()))?;
+            }
+            let identity = Arc::new(
+                KeyIdentity::load_or_create(&key_path, None)
+                    .context("creating or loading agent identity key")?,
+            );
+            Ok(HomeIdentity {
+                identity,
+                key_path: Some(key_path.to_string_lossy().to_string()),
+                identity_backend: None,
+                secure_enclave_label: None,
+                node_identity_did: None,
+            })
+        }
+        IdentityBackendArg::MacosSecureEnclave => {
+            if options.key_path.is_some() {
+                anyhow::bail!(
+                    "--key-path cannot be used with --identity-backend macos-secure-enclave"
+                );
+            }
+            let label = options
+                .secure_enclave_label
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "--secure-enclave-label is required with --identity-backend macos-secure-enclave"
+                    )
+                })?;
+            let identity = Arc::new(
+                load_or_create_macos_secure_enclave_identity(label, None)
+                    .with_context(|| format!("loading macOS Secure Enclave identity {label}"))?,
+            );
+            let did = identity.did().to_string();
+            Ok(HomeIdentity {
+                identity,
+                key_path: None,
+                identity_backend: Some("macos-secure-enclave".to_string()),
+                secure_enclave_label: Some(label.to_string()),
+                node_identity_did: Some(did),
+            })
+        }
+    }
 }
 
 async fn initialize_runtime_home(
