@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use crate::post_graphql;
@@ -42,9 +42,16 @@ pub(crate) struct MetricsBackendRow {
     pub(crate) max_concurrent: i64,
     #[serde(default)]
     pub(crate) max_queue_depth: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_string_as_unknown")]
     pub(crate) probe_status: String,
     pub(crate) last_probe: Option<String>,
+}
+
+fn null_string_as_unknown<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_else(|| "unknown".to_string()))
 }
 
 pub(crate) async fn render_prometheus_metrics(graphql: &str) -> Result<String> {
@@ -320,4 +327,27 @@ fn rfc3339_timestamp_seconds(value: &str) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(value)
         .ok()
         .map(|timestamp| timestamp.timestamp())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metrics_query_data_treats_null_probe_status_as_unknown() {
+        let data: MetricsQueryData = serde_json::from_value(serde_json::json!({
+            "AgentRuntime": [],
+            "InferenceBackend": [{
+                "backend_id": "workstation-1",
+                "enabled": true,
+                "max_concurrent": 2,
+                "max_queue_depth": 8,
+                "probe_status": null,
+                "last_probe": null
+            }]
+        }))
+        .expect("metrics query data should decode null probe_status");
+
+        assert_eq!(data.inference_backends[0].probe_status, "unknown");
+    }
 }

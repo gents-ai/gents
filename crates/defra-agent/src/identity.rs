@@ -210,6 +210,11 @@ fn register_public_key(did: &str, key_type: crypto::KeyType, public_key: Vec<u8>
 }
 
 #[cfg(target_os = "macos")]
+const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+#[cfg(target_os = "macos")]
+const ERR_SEC_MISSING_ENTITLEMENT: i32 = -34018;
+
+#[cfg(target_os = "macos")]
 fn register_macos_secure_enclave_identity(
     label: &str,
     create_if_missing: bool,
@@ -300,11 +305,23 @@ fn find_macos_secure_enclave_key(label: &str) -> Result<Option<security_framewor
     search
         .key_class(KeyClass::private())
         .label(label)
+        .ignore_legacy_keychains()
         .load_refs(true)
         .limit(2);
-    let keys = search.search().with_context(|| {
-        format!("searching keychain for macOS Secure Enclave key label {label}")
-    })?;
+    let keys = match search.search() {
+        Ok(keys) => keys,
+        Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => {
+            return Ok(None);
+        }
+        Err(error) if error.code() == ERR_SEC_MISSING_ENTITLEMENT => {
+            return Err(missing_secure_enclave_entitlement_error(label));
+        }
+        Err(error) => {
+            return Err(anyhow::Error::from(error)).with_context(|| {
+                format!("searching keychain for macOS Secure Enclave key label {label}")
+            });
+        }
+    };
     let mut matches = keys.into_iter().filter_map(|item| match item {
         SearchResult::Ref(Reference::Key(key)) => Some(key),
         _ => None,
@@ -318,19 +335,37 @@ fn find_macos_secure_enclave_key(label: &str) -> Result<Option<security_framewor
 
 #[cfg(target_os = "macos")]
 fn create_macos_secure_enclave_key(label: &str) -> Result<security_framework::key::SecKey> {
+    use security_framework::access_control::SecAccessControl;
     use security_framework::item::Location;
     use security_framework::key::{GenerateKeyOptions, KeyType, SecKey, Token};
+    use security_framework::passwords_options::AccessControlOptions;
 
+    let access_control =
+        SecAccessControl::create_with_flags(AccessControlOptions::PRIVATE_KEY_USAGE.bits())
+            .context("creating Secure Enclave key access control")?;
     let mut options = GenerateKeyOptions::default();
     options
         .set_key_type(KeyType::ec())
         .set_size_in_bits(256)
         .set_label(label)
+        .set_access_control(access_control)
         .set_token(Token::SecureEnclave)
         .set_location(Location::DataProtectionKeychain);
-    SecKey::new(&options)
-        .map_err(|error| anyhow!("{error}"))
-        .with_context(|| format!("creating macOS Secure Enclave key label {label}"))
+    match SecKey::new(&options) {
+        Ok(key) => Ok(key),
+        Err(error) if error.code() == ERR_SEC_MISSING_ENTITLEMENT as isize => {
+            Err(missing_secure_enclave_entitlement_error(label))
+        }
+        Err(error) => Err(anyhow!("{error}"))
+            .with_context(|| format!("creating macOS Secure Enclave key label {label}")),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn missing_secure_enclave_entitlement_error(label: &str) -> anyhow::Error {
+    anyhow!(
+        "macOS Secure Enclave key label {label} requires a codesigned binary with Data Protection keychain access-group entitlements"
+    )
 }
 
 #[cfg(target_os = "macos")]
