@@ -80,15 +80,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         .clone()
         .or_else(|| init_config.as_ref().map(|config| config.agent_name.clone()))
         .unwrap_or_else(|| DEFAULT_AGENT_NAME.to_string());
-    let key_path = args
-        .key_path
-        .clone()
-        .or_else(|| {
-            init_config
-                .as_ref()
-                .and_then(|config| config.key_path.as_ref().map(PathBuf::from))
-        })
-        .unwrap_or_else(|| default_key_path(&home_dir, &agent_name));
+    let key_path = resolve_server_key_path(&args, init_config.as_ref(), &home_dir, &agent_name)?;
     if let Some(parent) = key_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("creating key directory {}", parent.display()))?;
@@ -132,6 +124,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         KeyIdentity::load_or_create(&key_path, None)
             .context("creating or loading agent identity key")?,
     );
+    ensure_identity_matches_init_config(init_config.as_ref(), identity.did())?;
     let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
 
     let agent = DefraAgent::from_default_behavior_documents(
@@ -257,6 +250,59 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
 
 fn default_p2p_transport() -> String {
     P2pTransportArg::Iroh.as_str().to_string()
+}
+
+fn resolve_server_key_path(
+    args: &ServeArgs,
+    init_config: Option<&StoredInitConfig>,
+    home_dir: &Path,
+    agent_name: &str,
+) -> Result<PathBuf> {
+    if let Some(path) = args.key_path.clone() {
+        return Ok(path);
+    }
+
+    if let Some(config) = init_config {
+        if let Some(path) = config
+            .key_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Ok(PathBuf::from(path));
+        }
+        if is_real_agent_did(&config.agent_did) {
+            anyhow::bail!(
+                "initialized home {} has agent DID {} but no key_path; this CLI cannot start a non-file identity backend yet. Bootstrap the host identity backend first, or pass --key-path only if that key resolves to the same DID",
+                home_dir.display(),
+                config.agent_did
+            );
+        }
+    }
+
+    Ok(default_key_path(home_dir, agent_name))
+}
+
+fn ensure_identity_matches_init_config(
+    init_config: Option<&StoredInitConfig>,
+    resolved_did: &str,
+) -> Result<()> {
+    let Some(config) = init_config else {
+        return Ok(());
+    };
+    if is_real_agent_did(&config.agent_did) && config.agent_did.trim() != resolved_did {
+        anyhow::bail!(
+            "initialized home agent DID {} does not match loaded identity DID {}; repair init.json or use the correct --key-path",
+            config.agent_did,
+            resolved_did
+        );
+    }
+    Ok(())
+}
+
+fn is_real_agent_did(did: &str) -> bool {
+    let did = did.trim();
+    !did.is_empty() && !did.starts_with("did:defra-agent:")
 }
 
 fn default_p2p_secret_key_path(home_dir: &Path) -> PathBuf {

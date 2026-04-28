@@ -96,10 +96,13 @@ Examples:
   defra-agent provision --root infra/agents/mini-1/mini-1-steward
   defra-agent provision --root infra/agents/dev/dev-agent --bootstrap-file-identity
 
-Equivalent low-level flow:
-  defra-agent init --identity-only --home <home>
+Production low-level flow:
+  bootstrap the host identity backend so init.json contains the real agent DID
   defra-agent config apply --root <root> --home <home> --bind-agent-did home
-  defra-agent config diff --root <root> --home <home> --bind-agent-did home";
+  defra-agent config diff --root <root> --home <home> --bind-agent-did home
+
+File-key development flow:
+  defra-agent provision --root <root> --bootstrap-file-identity";
 const RESET_AFTER_HELP: &str = "\
 Examples:
   defra-agent reset
