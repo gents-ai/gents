@@ -253,8 +253,19 @@ pub async fn assert_runtime_init_state(
                 backend_id
                 model_name
                 tool_selection_id
+                inference_profile_id
                 system_prompt
                 enabled
+            }}
+            InferenceProfile(filter: {{ profile_id: {{ _eq: "default-profile" }} }}, limit: 1) {{
+                profile_id
+                display_name
+                context_window
+                max_output_tokens
+                max_turns
+                temperature
+                stream_batch_ms
+                deadline_duration_secs
             }}
             InferenceBackend(filter: {{ backend_id: {{ _eq: "{}" }} }}, limit: 1) {{
                 backend_id
@@ -283,10 +294,12 @@ pub async fn assert_runtime_init_state(
     let response = graphql_query(graphql, &query).await?;
     let principal = first_graphql_row(&response, "AgentPrincipal")?;
     let behavior = first_graphql_row(&response, "AgentBehavior")?;
+    let inference_profile = first_graphql_row(&response, "InferenceProfile")?;
     let backend = first_graphql_row(&response, "InferenceBackend")?;
     let tool_selection = first_graphql_row(&response, "ToolSelection")?;
 
-    let default_behavior_id = format!("{agent_did}:default");
+    let default_behavior_id = "default".to_string();
+    let default_profile_id = "default-profile".to_string();
     assert_eq!(
         principal.get("agent_did").and_then(Value::as_str),
         Some(agent_did)
@@ -316,6 +329,10 @@ pub async fn assert_runtime_init_state(
         behavior.get("tool_selection_id").and_then(Value::as_str),
         Some(tool_selection_id)
     );
+    assert_eq!(
+        behavior.get("inference_profile_id").and_then(Value::as_str),
+        Some(default_profile_id.as_str())
+    );
     assert!(
         behavior
             .get("system_prompt")
@@ -324,6 +341,23 @@ pub async fn assert_runtime_init_state(
         "expected system_prompt to contain {expected_prompt_snippet}: {behavior}"
     );
     assert_eq!(behavior.get("enabled").and_then(Value::as_bool), Some(true));
+
+    assert_eq!(
+        inference_profile.get("profile_id").and_then(Value::as_str),
+        Some(default_profile_id.as_str())
+    );
+    assert_eq!(
+        inference_profile
+            .get("display_name")
+            .and_then(Value::as_str),
+        Some("Default")
+    );
+    assert_eq!(
+        inference_profile
+            .get("max_output_tokens")
+            .and_then(Value::as_i64),
+        Some(32768)
+    );
 
     assert_eq!(
         backend.get("backend_id").and_then(Value::as_str),

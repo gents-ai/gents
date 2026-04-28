@@ -16,8 +16,8 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
     fs::create_dir_all(&root)?;
 
     let agent_did = format!("did:defra-agent:{}", Uuid::new_v4().simple());
-    let default_behavior_id = format!("{agent_did}:default");
-    let tool_selection_id = format!("{default_behavior_id}:tools");
+    let default_behavior_id = "default".to_string();
+    let tool_selection_id = format!("{default_behavior_id}-tools");
 
     write_json_file(
         &root.join("agent-principal.json"),
@@ -161,7 +161,7 @@ async fn config_validate_reports_reference_errors_and_fails_nonzero() -> Result<
         &serde_json::json!({
             "agent_did": agent_did.clone(),
             "display_name": "Broken Agent",
-            "default_behavior_id": format!("{agent_did}:default"),
+            "default_behavior_id": "default".to_string(),
             "enabled": true
         }),
     )?;
@@ -240,8 +240,8 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
     fs::create_dir_all(&root)?;
 
     let agent_did = format!("did:defra-agent:{}", Uuid::new_v4().simple());
-    let default_behavior_id = format!("{agent_did}:default");
-    let tool_selection_id = format!("{default_behavior_id}:tools");
+    let default_behavior_id = "default".to_string();
+    let tool_selection_id = format!("{default_behavior_id}-tools");
 
     write_json_file(
         &root.join("agent-principal.json"),

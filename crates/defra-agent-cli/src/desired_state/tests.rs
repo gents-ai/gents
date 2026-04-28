@@ -31,9 +31,9 @@ fn empty_manifest(agent_did: &str) -> DesiredStateManifest {
 
 fn manifest_with_default_behavior() -> DesiredStateManifest {
     let mut manifest = empty_manifest("did:defra-agent:test");
-    manifest.agent_principal.default_behavior_id = Some("did:defra-agent:test:default".to_string());
+    manifest.agent_principal.default_behavior_id = Some("default".to_string());
     manifest.agent_behaviors.push(DesiredAgentBehavior {
-        behavior_id: "did:defra-agent:test:default".to_string(),
+        behavior_id: "default".to_string(),
         agent_did: "did:defra-agent:test".to_string(),
         display_name: None,
         system_prompt: None,
@@ -53,7 +53,7 @@ fn sample_task(task_id: &str) -> DesiredTask {
         task_id: task_id.to_string(),
         name: "Sample task".to_string(),
         description: None,
-        behavior_id: "did:defra-agent:test:default".to_string(),
+        behavior_id: "default".to_string(),
         prompt_template: "Do the thing.".to_string(),
         enabled: true,
         output_schema_ref: None,
@@ -1482,12 +1482,12 @@ mod write_manifest_root_safe_id {
     }
 
     #[test]
-    fn accepts_colon_in_did_style_ids() {
+    fn accepts_colon_in_human_keys() {
         assert!(
-            check_filesystem_safe_id("did:defra-agent:example:default").is_ok(),
+            check_filesystem_safe_id("profile:default").is_ok(),
             "colons are legal on POSIX"
         );
-        assert!(check_filesystem_safe_id("did:key:abc:default:tools").is_ok());
+        assert!(check_filesystem_safe_id("tools:default").is_ok());
     }
 
     #[test]

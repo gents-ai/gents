@@ -8,6 +8,9 @@
     "build": "tsc && vite build",
     "test": "vitest run",
     "test:live": "node ./tests/run-live-test.mjs",
+    "test:live:behavior-config": "node ./tests/run-live-test.mjs -t \"edits behavior config\"",
+    "test:live:config": "node ./tests/run-live-test.mjs -t \"configures backend profile tools behavior task\"",
+    "test:live:chat": "node ./tests/run-live-test.mjs -t \"drives three real UI turns\"",
     "preview": "vite preview",
     "tauri": "tauri"
   },

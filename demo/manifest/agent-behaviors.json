@@ -1,12 +1,12 @@
 [
   {
-    "behavior_id": "did:defra-agent:default:default",
+    "behavior_id": "default",
     "agent_did": "did:defra-agent:default",
     "display_name": "Default",
     "system_prompt": "You are a terminal-native engineering and operations agent. Inspect before you act, prefer real evidence over assumptions, keep answers tight. You have write-capable local tools and MCP-backed data services (discoverable via discover_tools / describe_tool / call_tool).",
     "backend_id": "workstation-1",
     "model_name": "MiniMax-M2.7-NVFP4",
-    "tool_selection_id": "did:defra-agent:default:default:tools",
+    "tool_selection_id": "default-tools",
     "inference_profile_id": null,
     "compaction_strategy": null,
     "compaction_threshold": null,

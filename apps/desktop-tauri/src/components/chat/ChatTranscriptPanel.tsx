@@ -1,0 +1,84 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+
+import type { DesktopSessionSnapshot } from "../../lib/types";
+import { MessageList } from "../Transcript";
+
+export type ChatTranscriptPanelProps = {
+  selectedSessionId: string | null;
+  session: DesktopSessionSnapshot | null;
+};
+
+export function ChatTranscriptPanel({
+  selectedSessionId,
+  session,
+}: ChatTranscriptPanelProps) {
+  const transcriptPanelRef = useRef<HTMLElement | null>(null);
+  const transcriptEndRef = useRef<HTMLDivElement | null>(null);
+  const [autoFollowTranscript, setAutoFollowTranscript] = useState(true);
+
+  const transcriptSignature = useMemo(
+    () =>
+      JSON.stringify({
+        sessionId: selectedSessionId,
+        timelineLength: session?.timelineItems.length ?? 0,
+        timelineKinds: session?.timelineItems.map((item) => item.kind) ?? [],
+        turnState: session?.turnState ?? "",
+      }),
+    [selectedSessionId, session?.timelineItems, session?.turnState],
+  );
+
+  useEffect(() => {
+    setAutoFollowTranscript(true);
+  }, [selectedSessionId]);
+
+  useEffect(() => {
+    if (!autoFollowTranscript) {
+      return;
+    }
+
+    const scrollTarget = transcriptEndRef.current;
+    if (!scrollTarget) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      scrollTarget.scrollIntoView({ block: "end" });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [autoFollowTranscript, transcriptSignature]);
+
+  function handleTranscriptScroll() {
+    const panel = transcriptPanelRef.current;
+    if (!panel) {
+      return;
+    }
+
+    const remaining = panel.scrollHeight - panel.scrollTop - panel.clientHeight;
+    setAutoFollowTranscript(remaining < 64);
+  }
+
+  return (
+    <section
+      className="panel transcript-panel"
+      data-testid="transcript-panel"
+      onScroll={handleTranscriptScroll}
+      ref={transcriptPanelRef}
+    >
+      {selectedSessionId && session ? (
+        <div className="message-list">
+          <MessageList timelineItems={session.timelineItems} />
+          <div className="transcript-end-anchor" ref={transcriptEndRef} />
+        </div>
+      ) : (
+        <div className="empty-transcript compact-empty">
+          <p className="eyebrow">Start Here</p>
+          <h3>Send the first message</h3>
+          <p className="muted">
+            The first message creates the conversation automatically.
+          </p>
+        </div>
+      )}
+    </section>
+  );
+}

@@ -53,7 +53,8 @@ pub use defra_agent_protocol::client_protocol;
 pub use defra_node;
 pub use desired_fields::{DesiredFields, LiveFields};
 pub use document_config::{
-    default_behavior_id_for_agent, ensure_agent_principal, list_agent_behaviors,
+    default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
+    default_tool_selection_id_for_behavior, ensure_agent_principal, list_agent_behaviors,
     load_agent_behavior, load_agent_principal, load_inference_profile, load_tool_selection,
     upsert_agent_behavior, upsert_agent_principal, upsert_inference_profile, upsert_tool_selection,
     AgentBehavior, AgentPrincipal, InferenceProfile, PrincipalBootstrap, ToolSelectionDocument,

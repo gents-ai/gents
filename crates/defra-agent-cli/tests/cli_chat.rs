@@ -78,17 +78,26 @@ async fn chat_uses_runtime_state_for_interactive_turns() -> Result<()> {
     );
 
     let captured_requests = mock_endpoint.captured_chat_requests();
-    assert_eq!(captured_requests.len(), 1);
+    let chat_request = captured_requests
+        .iter()
+        .find(|request| {
+            request_contains_role_text(request, "user", "Reply with exactly the configured token.")
+                && request_system_message(request).is_some_and(|system| {
+                    system.contains("read-only operating mode")
+                        && system.contains("incident triage")
+                })
+        })
+        .ok_or_else(|| anyhow!("mock endpoint did not capture the user chat request"))?;
     assert_eq!(
-        captured_requests[0].get("model").and_then(Value::as_str),
+        chat_request.get("model").and_then(Value::as_str),
         Some(model_name.as_str())
     );
     assert!(
-        request_system_message(&captured_requests[0])
+        request_system_message(chat_request)
             .is_some_and(|system| system.contains("read-only operating mode")
                 && system.contains("incident triage")),
         "expected system prompt in request: {}",
-        captured_requests[0]
+        chat_request
     );
 
     Ok(())
@@ -144,21 +153,24 @@ async fn chat_continues_existing_session_when_session_id_is_provided() -> Result
     );
 
     let captured_requests = mock_endpoint.captured_chat_requests();
-    assert_eq!(captured_requests.len(), 2);
+    let follow_up_request = captured_requests
+        .iter()
+        .find(|request| request_contains_role_text(request, "user", second_prompt))
+        .ok_or_else(|| anyhow!("mock endpoint did not capture the follow-up chat request"))?;
     assert!(
-        request_contains_role_text(&captured_requests[1], "user", &first_prompt),
+        request_contains_role_text(follow_up_request, "user", &first_prompt),
         "expected follow-up request to include prior user turn: {}",
-        captured_requests[1]
+        follow_up_request
     );
     assert!(
-        request_contains_role_text(&captured_requests[1], "assistant", &expected_reply),
+        request_contains_role_text(follow_up_request, "assistant", &expected_reply),
         "expected follow-up request to include prior assistant turn: {}",
-        captured_requests[1]
+        follow_up_request
     );
     assert!(
-        request_contains_role_text(&captured_requests[1], "user", second_prompt),
+        request_contains_role_text(follow_up_request, "user", second_prompt),
         "expected follow-up request to include current user turn: {}",
-        captured_requests[1]
+        follow_up_request
     );
 
     Ok(())
@@ -234,11 +246,14 @@ async fn chat_supports_message_file_json_output_and_output_file() -> Result<()> 
     );
 
     let captured_requests = mock_endpoint.captured_chat_requests();
-    assert_eq!(captured_requests.len(), 1);
+    let chat_request = captured_requests
+        .iter()
+        .find(|request| request_contains_role_text(request, "user", &message))
+        .ok_or_else(|| anyhow!("mock endpoint did not capture the message-file chat request"))?;
     assert!(
-        request_contains_role_text(&captured_requests[0], "user", &message),
+        request_contains_role_text(chat_request, "user", &message),
         "expected request to include message file content: {}",
-        captured_requests[0]
+        chat_request
     );
 
     Ok(())

@@ -1,0 +1,88 @@
+@layer chat {
+  .chat-workspace {
+    display: grid;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .chat-main {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) auto;
+    gap: var(--space-5);
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .transcript-panel,
+  .composer-panel {
+    min-height: 0;
+  }
+
+  .transcript-panel {
+    height: 100%;
+    overflow: auto;
+    display: grid;
+    align-content: start;
+    scroll-behavior: smooth;
+    scroll-padding-bottom: 24px;
+  }
+
+  .composer-panel {
+    display: grid;
+    gap: var(--space-5);
+    padding-top: var(--space-6);
+  }
+
+  .composer-input {
+    width: 100%;
+    min-height: 132px;
+    resize: vertical;
+    padding: var(--space-6);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-default);
+    background: var(--color-surface-strong);
+    color: var(--color-text);
+  }
+
+  .chat-title-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    min-width: 0;
+  }
+
+  .chat-title-row h2 {
+    min-width: 0;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
+
+  .title-rename-form {
+    max-width: min(560px, 100%);
+  }
+
+  .title-rename-input {
+    width: 100%;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-strong);
+    background: var(--color-surface-strong);
+    color: var(--color-text);
+    padding: var(--space-4) var(--space-5);
+    font-size: 26px;
+    font-weight: 600;
+    line-height: 1.1;
+  }
+
+  .message-list {
+    align-content: start;
+    padding-bottom: var(--space-2);
+  }
+
+  .compact-empty {
+    min-height: 180px;
+  }
+}

@@ -107,7 +107,7 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
     let identity = Arc::new(test_identity("tool-selection"));
     let did = identity.did().to_string();
     let default_behavior_id = default_behavior_id_for_agent(&did);
-    let selection_id = format!("{default_behavior_id}:tools");
+    let selection_id = crate::default_tool_selection_id_for_behavior(&default_behavior_id);
 
     let bootstrap = crate::ensure_agent_principal(node.as_ref(), &did)
         .await
@@ -141,7 +141,7 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
             backend_id: Some("backend-tools".to_string()),
             model_name: None,
             tool_selection_id: Some(selection_id),
-            inference_profile_id: None,
+            inference_profile_id: bootstrap.default_behavior.inference_profile_id,
             compaction_strategy: Some("StripThenSummarize".to_string()),
             compaction_threshold: Some(0.75),
             enabled: true,
@@ -183,6 +183,7 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
     crate::ensure_agent_principal(node.as_ref(), &did)
         .await
         .unwrap();
+    let default_profile_id = crate::default_inference_profile_id_for_behavior(&default_behavior_id);
     insert_backend_with_health(
         node.as_ref(),
         "backend-healthy",
@@ -202,14 +203,14 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
     crate::upsert_agent_behavior(
         node.as_ref(),
         &AgentBehavior {
-            behavior_id: format!("{did}:code"),
+            behavior_id: "code".to_string(),
             agent_did: did.clone(),
             display_name: Some("Code".to_string()),
             system_prompt: Some("You write code.".to_string()),
             backend_id: Some("backend-healthy".to_string()),
             model_name: Some("gpt-code".to_string()),
             tool_selection_id: None,
-            inference_profile_id: None,
+            inference_profile_id: Some(default_profile_id),
             compaction_strategy: Some("StripThenSummarize".to_string()),
             compaction_threshold: Some(0.7),
             enabled: true,
@@ -221,7 +222,7 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
     crate::upsert_agent_behavior(
         node.as_ref(),
         &AgentBehavior {
-            behavior_id: format!("{did}:broken"),
+            behavior_id: "broken".to_string(),
             agent_did: did.clone(),
             display_name: Some("Broken".to_string()),
             system_prompt: Some("This backend is missing.".to_string()),
@@ -240,7 +241,7 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
     crate::upsert_agent_behavior(
         node.as_ref(),
         &AgentBehavior {
-            behavior_id: format!("{did}:disabled"),
+            behavior_id: "disabled".to_string(),
             agent_did: did.clone(),
             display_name: Some("Disabled".to_string()),
             system_prompt: Some("You should never run.".to_string()),
@@ -259,7 +260,7 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
     crate::upsert_agent_behavior(
         node.as_ref(),
         &AgentBehavior {
-            behavior_id: format!("{did}:unhealthy"),
+            behavior_id: "unhealthy".to_string(),
             agent_did: did.clone(),
             display_name: Some("Unhealthy".to_string()),
             system_prompt: Some("Backend is unhealthy.".to_string()),
@@ -295,7 +296,7 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
     assert_eq!(agent.agent_did(), did);
     assert_eq!(agent.default_behavior_id(), default_behavior_id);
     assert_eq!(agent.behaviors().len(), 1);
-    assert!(runnable_names.contains(format!("{did}:code").as_str()));
+    assert!(runnable_names.contains("code"));
     let default_reason = agent
         .unavailable_behaviors()
         .get(default_behavior_id.as_str())
@@ -307,22 +308,19 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
     );
     let broken_reason = agent
         .unavailable_behaviors()
-        .get(format!("{did}:broken").as_str())
+        .get("broken")
         .cloned()
         .expect("missing broken behavior rejection");
     assert!(broken_reason.contains("references missing backend backend-missing"));
     let disabled_reason = agent
         .unavailable_behaviors()
-        .get(format!("{did}:disabled").as_str())
+        .get("disabled")
         .cloned()
         .expect("missing disabled behavior rejection");
-    assert_eq!(
-        disabled_reason,
-        format!("behavior {did}:disabled is disabled")
-    );
+    assert_eq!(disabled_reason, "behavior disabled is disabled");
     let unhealthy_reason = agent
         .unavailable_behaviors()
-        .get(format!("{did}:unhealthy").as_str())
+        .get("unhealthy")
         .cloned()
         .expect("missing unhealthy behavior rejection");
     assert!(unhealthy_reason.contains("backend backend-unhealthy is unavailable"));

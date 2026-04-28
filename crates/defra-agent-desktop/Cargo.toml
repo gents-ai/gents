@@ -4,35 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Native egui desktop dashboard for defra-agent"
+description = "Compatibility launcher for the Tauri defra-agent desktop"
 
 [dependencies]
 anyhow.workspace = true
-chrono.workspace = true
 clap.workspace = true
-crypto.workspace = true
-defra-agent = { path = "../defra-agent" }
-defra-agent-protocol.workspace = true
-defra-node = { workspace = true, features = ["p2p", "rocksdb"] }
-defra-p2p-adapter.workspace = true
-dirs.workspace = true
-eframe.workspace = true
-egui.workspace = true
-egui_commonmark.workspace = true
-identity.workspace = true
-p2p.workspace = true
-pulldown-cmark.workspace = true
-reqwest.workspace = true
-serde.workspace = true
+defra-agent-desktop-core.workspace = true
 serde_json.workspace = true
-syntect.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-uuid.workspace = true
-
-[dev-dependencies]
-async-trait = "0.1"
-pprof = { version = "0.14", features = ["flamegraph", "prost-codec"] }
-rig-core.workspace = true
-tempfile = "3"

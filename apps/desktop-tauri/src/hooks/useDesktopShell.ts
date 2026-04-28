@@ -1,86 +1,64 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  addPeer,
   fetchDesktopSnapshot,
   fetchSessionSnapshot,
   initLocalStandardRuntime,
   renameConversation,
+  repairP2P,
+  runSchedule,
+  runTask,
+  saveAgentConfig,
+  saveBackendConfig,
+  saveBehaviorConfig,
+  saveEventTriggerConfig,
+  saveInferenceProfileConfig,
+  saveScheduleConfig,
+  saveTaskConfig,
+  saveToolSelectionConfig,
+  saveToolServiceConfig,
   sendChatMessage,
   shutdownDesktopClient,
   startDesktopClient,
+  testToolService,
 } from "../lib/desktop-api";
 import { listenToDesktopClientUpdates } from "../lib/desktop-events";
 import {
   projectChatShell,
   type ChatWorkflowState,
 } from "../lib/chat-shell";
+import {
+  delay,
+  logShellEvent,
+  setDesktopShellTimingConfigForTests,
+  shouldAutoRestartP2P,
+  timingConfig,
+  trackedRequestIdForSession,
+} from "./desktopShellRuntime";
 import type {
+  AgentConfigSaveRequest,
+  BackendSaveRequest,
+  BehaviorSaveRequest,
   DesktopClientSnapshot,
   DesktopSessionSnapshot,
+  EventTriggerSaveRequest,
+  InferenceProfileSaveRequest,
   InitSummary,
   P2PHealth,
+  PeerAddRequest,
+  ScheduleRunRequest,
+  ScheduleSaveRequest,
+  TaskRunRequest,
+  TaskRunResult,
+  TaskSaveRequest,
+  ToolSelectionSaveRequest,
+  ToolServiceSaveRequest,
+  ToolServiceTestRequest,
+  ToolServiceTestResult,
 } from "../lib/types";
 
-type DesktopShellTimingConfig = {
-  p2pAutoRestartCooldownMs: number;
-  clientRestartMaxAttempts: number;
-  clientRestartBackoffMs: number;
-};
-
-const DEFAULT_TIMING_CONFIG: DesktopShellTimingConfig = {
-  p2pAutoRestartCooldownMs: 20_000,
-  clientRestartMaxAttempts: 10,
-  clientRestartBackoffMs: 250,
-};
-
-let timingConfigOverrides: Partial<DesktopShellTimingConfig> | null = null;
-
-function timingConfig(): DesktopShellTimingConfig {
-  return {
-    ...DEFAULT_TIMING_CONFIG,
-    ...timingConfigOverrides,
-  };
-}
-
-export function setDesktopShellTimingConfigForTests(
-  overrides: Partial<DesktopShellTimingConfig> | null,
-) {
-  timingConfigOverrides = overrides;
-}
-
-function shouldAutoRestartP2P(
-  previous: P2PHealth | null,
-  next: P2PHealth | null,
-  lastAttemptAt: number | null,
-  now: number,
-  cooldownMs: number,
-) {
-  if (!next || next.status !== "wedged") {
-    return false;
-  }
-
-  if (lastAttemptAt !== null && now - lastAttemptAt < cooldownMs) {
-    return false;
-  }
-
-  if (!previous) {
-    return true;
-  }
-
-  return (
-    previous.status !== "wedged" ||
-    previous.consecutiveFailures !== next.consecutiveFailures ||
-    previous.lastError !== next.lastError
-  );
-}
-
-async function delay(ms: number) {
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function logShellEvent(message: string) {
-  console.info(`[live-tauri-shell] ${message}`);
-}
+export { setDesktopShellTimingConfigForTests };
 
 export function useDesktopShell() {
   const autostartAttempted = useRef(false);
@@ -95,6 +73,11 @@ export function useDesktopShell() {
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [sending, setSending] = useState(false);
+  const [savingBehaviorConfig, setSavingBehaviorConfig] = useState(false);
+  const [savingConfig, setSavingConfig] = useState(false);
+  const [addingPeer, setAddingPeer] = useState(false);
+  const [repairingP2P, setRepairingP2P] = useState(false);
+  const [runningTask, setRunningTask] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [label, setLabel] = useState("Local Agent");
   const [dangerouslyOverwrite, setDangerouslyOverwrite] = useState(false);
@@ -139,26 +122,6 @@ export function useDesktopShell() {
     ],
   );
   const canSendMessage = shellProjection.sendStatus.kind === "ready";
-
-  function trackedRequestIdForSession(
-    sessionId: string | null,
-    workflow: ChatWorkflowState,
-  ) {
-    if (!sessionId) {
-      return null;
-    }
-
-    if (
-      workflow.kind === "awaitingObservation" ||
-      workflow.kind === "turnInProgress"
-    ) {
-      return workflow.sessionId === sessionId
-        ? workflow.requestId ?? null
-        : null;
-    }
-
-    return null;
-  }
 
   const selectedTrackedRequestId = trackedRequestIdForSession(
     selectedSessionId,
@@ -452,6 +415,37 @@ export function useDesktopShell() {
     }
   }
 
+  async function onAddPeer(request: PeerAddRequest) {
+    setAddingPeer(true);
+    setError(null);
+    try {
+      const next = await addPeer(request);
+      setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setAddingPeer(false);
+    }
+  }
+
+  async function onRepairP2P() {
+    setRepairingP2P(true);
+    setError(null);
+    try {
+      const next = await repairP2P();
+      setSnapshot(next);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setRepairingP2P(false);
+    }
+  }
+
   async function onSendMessage(event: FormEvent) {
     event.preventDefault();
     if (!selectedDeployment || !draft.trim()) {
@@ -506,6 +500,200 @@ export function useDesktopShell() {
     }
   }
 
+  async function onSaveAgentConfig(request: AgentConfigSaveRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await saveAgentConfig(request);
+      setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
+      setSelectedBehaviorId(request.defaultBehaviorId);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onSaveBehaviorConfig(request: BehaviorSaveRequest) {
+    setSavingBehaviorConfig(true);
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await saveBehaviorConfig(request);
+      setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
+      setSelectedBehaviorId(request.behaviorId);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingBehaviorConfig(false);
+      setSavingConfig(false);
+    }
+  }
+
+  async function onSaveBackendConfig(request: BackendSaveRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await saveBackendConfig(request);
+      setSnapshot(next);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onSaveInferenceProfileConfig(
+    request: InferenceProfileSaveRequest,
+  ) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await saveInferenceProfileConfig(request);
+      setSnapshot(next);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onSaveToolSelectionConfig(request: ToolSelectionSaveRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await saveToolSelectionConfig(request);
+      setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onSaveToolServiceConfig(request: ToolServiceSaveRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await saveToolServiceConfig(request);
+      setSnapshot(next);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onTestToolService(
+    request: ToolServiceTestRequest,
+  ): Promise<ToolServiceTestResult> {
+    setError(null);
+    try {
+      return await testToolService(request);
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    }
+  }
+
+  async function onSaveTaskConfig(request: TaskSaveRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await saveTaskConfig(request);
+      setSnapshot(next);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onSaveScheduleConfig(request: ScheduleSaveRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await saveScheduleConfig(request);
+      setSnapshot(next);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onRunSchedule(request: ScheduleRunRequest): Promise<TaskRunResult> {
+    setRunningTask(true);
+    setError(null);
+    try {
+      const result = await runSchedule(request);
+      await refreshSnapshot();
+      if (result.sessionId) {
+        setSelectedSessionId(result.sessionId);
+        await refreshSession(result.sessionId);
+      }
+      return result;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setRunningTask(false);
+    }
+  }
+
+  async function onSaveEventTriggerConfig(request: EventTriggerSaveRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await saveEventTriggerConfig(request);
+      setSnapshot(next);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onRunTask(request: TaskRunRequest): Promise<TaskRunResult> {
+    setRunningTask(true);
+    setError(null);
+    try {
+      const result = await runTask(request);
+      await refreshSnapshot();
+      if (result.sessionId) {
+        setSelectedSessionId(result.sessionId);
+        await refreshSession(result.sessionId);
+      }
+      return result;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setRunningTask(false);
+    }
+  }
+
   return {
     snapshot,
     session,
@@ -514,6 +702,11 @@ export function useDesktopShell() {
     starting,
     stopping,
     sending,
+    savingBehaviorConfig,
+    savingConfig,
+    addingPeer,
+    repairingP2P,
+    runningTask,
     error,
     label,
     dangerouslyOverwrite,
@@ -542,7 +735,21 @@ export function useDesktopShell() {
     onInit,
     onStartClient,
     onShutdownClient,
+    onAddPeer,
+    onRepairP2P,
     onSendMessage,
     onRenameConversationTitle,
+    onSaveAgentConfig,
+    onSaveBehaviorConfig,
+    onSaveBackendConfig,
+    onSaveInferenceProfileConfig,
+    onSaveToolSelectionConfig,
+    onSaveToolServiceConfig,
+    onTestToolService,
+    onSaveTaskConfig,
+    onSaveScheduleConfig,
+    onRunSchedule,
+    onSaveEventTriggerConfig,
+    onRunTask,
   };
 }

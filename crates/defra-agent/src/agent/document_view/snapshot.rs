@@ -86,23 +86,27 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                     backend.probe_status
                 );
             }
-            let inference_profile = behavior
+            let profile_id = behavior
                 .inference_profile_id
                 .as_deref()
                 .filter(|value| !value.trim().is_empty())
-                .map(|profile_id| {
-                    view.inference_profiles
-                        .get(profile_id)
-                        .map(|record| &record.value)
-                        .ok_or_else(|| {
-                            anyhow!(
-                                "behavior {} references missing inference profile {}",
-                                behavior.behavior_id,
-                                profile_id
-                            )
-                        })
-                })
-                .transpose()?;
+                .ok_or_else(|| {
+                    anyhow!(
+                        "behavior {} has no inference profile binding",
+                        behavior.behavior_id
+                    )
+                })?;
+            let inference_profile = view
+                .inference_profiles
+                .get(profile_id)
+                .map(|record| &record.value)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "behavior {} references missing inference profile {}",
+                        behavior.behavior_id,
+                        profile_id
+                    )
+                })?;
             let tool_selection = match behavior
                 .tool_selection_id
                 .as_deref()

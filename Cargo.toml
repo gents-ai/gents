@@ -5,6 +5,7 @@ members = [
     "crates/defra-agent",
     "crates/defra-agent-cli",
     "crates/defra-agent-desktop",
+    "crates/defra-agent-desktop-core",
     "crates/defra-agent-protocol",
 ]
 
@@ -20,12 +21,10 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 crypto = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "b1e6c2cfd2a38231e128716e5d13e482dbfacd92" }
 defra-agent-protocol = { path = "crates/defra-agent-protocol" }
+defra-agent-desktop-core = { path = "crates/defra-agent-desktop-core" }
 defra-node = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "b1e6c2cfd2a38231e128716e5d13e482dbfacd92" }
 defra-p2p-adapter = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "b1e6c2cfd2a38231e128716e5d13e482dbfacd92" }
 dirs = "5"
-eframe = "0.34.1"
-egui = "0.34.1"
-egui_commonmark = { version = "0.23.0", features = ["better_syntax_highlighting"] }
 events = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "b1e6c2cfd2a38231e128716e5d13e482dbfacd92" }
 hostname = "0.4"
 identity = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "b1e6c2cfd2a38231e128716e5d13e482dbfacd92" }
@@ -34,13 +33,11 @@ opentelemetry = { version = "0.31", default-features = false, features = ["trace
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"] }
 p2p = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "b1e6c2cfd2a38231e128716e5d13e482dbfacd92" }
-pulldown-cmark = { version = "0.13", default-features = false }
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rig-core = "0.35.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-syntect = "5.3.0"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"

@@ -137,7 +137,7 @@ Examples:
   defra-agent config backend set --graphql URL --backend-id default-backend --name default-backend --backend-preset openrouter --max-concurrent 2
   defra-agent config backend discover-models --backend-preset openrouter
   defra-agent config behavior set --graphql URL --agent-did did:defra-agent:default --backend-id default-backend --model-name MODEL
-  defra-agent config tools set --graphql URL --agent-did did:defra-agent:default --selection-id did:defra-agent:default:default:tools --enable-file-tools";
+  defra-agent config tools set --graphql URL --agent-did did:defra-agent:default --selection-id default-tools --enable-file-tools";
 const REQUEST_AFTER_HELP: &str = "\
 `request` is the low-level document path. Most users should prefer `defra-agent chat`.
 
@@ -209,6 +209,7 @@ const CONFIG_SCHEMA_COLLECTIONS: &[&str] = &[
     "AgentBehavior",
     "ToolSelection",
     "InferenceBackend",
+    "InferenceProfile",
 ];
 pub(crate) const EXPORT_AGENT_PRINCIPAL_FIELDS: &str =
     "agent_did display_name default_behavior_id enabled created_at created_by";

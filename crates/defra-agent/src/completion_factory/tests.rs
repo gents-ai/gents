@@ -15,6 +15,7 @@ fn request() -> AgentRequest {
         top_k: None,
         max_tokens: None,
         metadata: None,
+        execution_origin: None,
         created_at: String::new(),
     }
 }
@@ -84,6 +85,16 @@ fn request_sampling_overrides_behavior_defaults() {
     assert_eq!(sampling.top_p, Some(0.9));
     assert_eq!(sampling.top_k, Some(40));
     assert_eq!(sampling.max_tokens, Some(512));
+}
+
+#[test]
+fn effective_max_tokens_falls_back_to_behavior_budget() {
+    assert_eq!(effective_max_tokens(4096, None), Some(4096));
+}
+
+#[test]
+fn effective_max_tokens_prefers_sampling_override() {
+    assert_eq!(effective_max_tokens(4096, Some(512)), Some(512));
 }
 
 #[test]

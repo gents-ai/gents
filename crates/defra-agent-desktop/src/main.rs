@@ -2,18 +2,17 @@ use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 
 use clap::{Parser, Subcommand};
-use defra_agent_desktop::client::DesktopPaths;
-use defra_agent_desktop::local_runtime::{
+use defra_agent_desktop_core::client::DesktopPaths;
+use defra_agent_desktop_core::local_runtime::{
     dangerously_overwrite_desktop_home, default_agent_home, init_standard_local_runtime,
     render_human_summary, reset_desktop_runtime_state, DesktopInitOptions,
 };
-use defra_agent_desktop::telemetry::{global_log_layer, with_default_transport_noise_filters};
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 #[derive(Debug, Parser)]
 #[command(
     name = "defra-agent-desktop",
-    about = "Native desktop dashboard for local and peered defra-agent runtimes"
+    about = "Tauri desktop launcher for local and peered defra-agent runtimes"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -158,14 +157,9 @@ fn init_tracing() {
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         with_default_transport_noise_filters(EnvFilter::new(
             "warn,\
-                 defra_agent_desktop=trace,\
+                 defra_agent_desktop_core=trace,\
                  defra_agent=info,\
-                 defra_node=info,\
-                 wgpu=warn,\
-                 winit=warn,\
-                 eframe=warn,\
-                 egui=warn,\
-                 naga=warn",
+                 defra_node=info",
         ))
     });
 
@@ -177,8 +171,29 @@ fn init_tracing() {
                 .compact()
                 .without_time(),
         )
-        .with(global_log_layer())
         .try_init();
 
-    tracing::info!("launching defra-agent-desktop");
+    tracing::info!("launching defra-agent desktop launcher");
+}
+
+fn with_default_transport_noise_filters(filter: EnvFilter) -> EnvFilter {
+    [
+        "iroh=error",
+        "iroh_net=error",
+        "iroh_relay=error",
+        "iroh_gossip=error",
+        "iroh_blobs=error",
+        "iroh_quinn=error",
+        "iroh_quinn_proto=error",
+        "iroh_quinn_proto::connection=error",
+        "quinn=error",
+        "quinn_proto=error",
+        "quinn_udp=error",
+        "netwatch=error",
+        "noq_proto::connection=error",
+    ]
+    .into_iter()
+    .fold(filter, |filter, directive| {
+        filter.add_directive(directive.parse().expect("valid tracing directive"))
+    })
 }

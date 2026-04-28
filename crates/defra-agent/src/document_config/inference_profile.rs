@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 
 use super::graphql_fields;
 use super::serde_helpers;
+use crate::config::{
+    DEFAULT_CONTEXT_WINDOW, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS,
+    DEFAULT_MAX_TURNS, DEFAULT_STREAM_BATCH_MS,
+};
 use crate::graphql::escape_graphql_string;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -16,6 +20,34 @@ pub struct InferenceProfile {
     pub temperature: Option<f64>,
     pub stream_batch_ms: Option<i64>,
     pub deadline_duration_secs: Option<i64>,
+}
+
+const DEFAULT_INFERENCE_PROFILE_LABEL: &str = "Default";
+
+pub fn default_inference_profile_id_for_behavior(behavior_id: &str) -> String {
+    format!("{behavior_id}-profile")
+}
+
+pub(super) fn default_inference_profile_for_behavior(behavior_id: &str) -> InferenceProfile {
+    InferenceProfile {
+        profile_id: default_inference_profile_id_for_behavior(behavior_id),
+        display_name: Some(DEFAULT_INFERENCE_PROFILE_LABEL.to_string()),
+        context_window: Some(DEFAULT_CONTEXT_WINDOW as i64),
+        max_output_tokens: Some(DEFAULT_MAX_OUTPUT_TOKENS as i64),
+        max_turns: Some(DEFAULT_MAX_TURNS as i64),
+        temperature: Some(0.0),
+        stream_batch_ms: Some(DEFAULT_STREAM_BATCH_MS as i64),
+        deadline_duration_secs: Some(DEFAULT_DEADLINE_DURATION_SECS as i64),
+    }
+}
+
+pub(super) async fn create_default_inference_profile(
+    node: &EmbeddedNode,
+    behavior_id: &str,
+) -> Result<InferenceProfile> {
+    let profile = default_inference_profile_for_behavior(behavior_id);
+    upsert_inference_profile(node, &profile).await?;
+    Ok(profile)
 }
 
 pub async fn load_inference_profile(

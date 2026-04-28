@@ -467,6 +467,8 @@ pub struct ToolSelectionRow {
     #[serde(default)]
     pub file_tools_mode: Option<String>,
     #[serde(default)]
+    pub file_tool_root: Option<String>,
+    #[serde(default)]
     pub enable_bash: Option<bool>,
     #[serde(default)]
     pub bash_mode: Option<String>,

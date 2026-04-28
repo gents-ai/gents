@@ -3,6 +3,9 @@ use serde_json::{Map, Value};
 use super::DesiredStateManifest;
 
 pub(crate) fn normalize_manifest(manifest: &mut DesiredStateManifest) {
+    normalize_optional_string(&mut manifest.agent_principal.display_name);
+    normalize_optional_string(&mut manifest.agent_principal.default_behavior_id);
+
     manifest
         .agent_behaviors
         .sort_by(|left, right| left.behavior_id.cmp(&right.behavior_id));
@@ -28,20 +31,51 @@ pub(crate) fn normalize_manifest(manifest: &mut DesiredStateManifest) {
         .event_triggers
         .sort_by(|left, right| left.trigger_id.cmp(&right.trigger_id));
 
+    for behavior in &mut manifest.agent_behaviors {
+        normalize_optional_string(&mut behavior.display_name);
+        normalize_optional_string(&mut behavior.system_prompt);
+        normalize_optional_string(&mut behavior.backend_id);
+        normalize_optional_string(&mut behavior.model_name);
+        normalize_optional_string(&mut behavior.tool_selection_id);
+        normalize_optional_string(&mut behavior.inference_profile_id);
+        normalize_optional_string(&mut behavior.compaction_strategy);
+    }
     for selection in &mut manifest.tool_selections {
+        normalize_optional_string(&mut selection.display_name);
+        normalize_optional_string(&mut selection.file_tool_root);
         selection.cli_tool_names.sort();
         selection.cli_tool_names.dedup();
         selection.delegate_to.sort();
         selection.delegate_to.dedup();
     }
     for backend in &mut manifest.inference_backends {
+        normalize_optional_string(&mut backend.api_key);
+        normalize_optional_string(&mut backend.api_key_env_var);
         backend.models.sort();
         backend.models.dedup();
+    }
+    for profile in &mut manifest.inference_profiles {
+        normalize_optional_string(&mut profile.display_name);
+    }
+    for task in &mut manifest.tasks {
+        normalize_optional_string(&mut task.description);
+        normalize_optional_string(&mut task.output_schema_ref);
+    }
+    for trigger in &mut manifest.event_triggers {
+        normalize_optional_string(&mut trigger.filter);
     }
 }
 
 pub(crate) fn default_max_queue_depth() -> i64 {
     100
+}
+
+fn normalize_optional_string(value: &mut Option<String>) {
+    *value = value
+        .as_deref()
+        .map(str::trim)
+        .filter(|candidate| !candidate.is_empty())
+        .map(ToOwned::to_owned);
 }
 
 pub(crate) fn strip_deprecated_inference_backend_fields(object: &mut Map<String, Value>) {

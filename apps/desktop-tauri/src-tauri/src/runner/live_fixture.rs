@@ -8,12 +8,13 @@ use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{
-    cli_tool, default_behavior_id_for_agent, ensure_agent_principal, load_agent_behavior,
+    cli_tool, default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
+    default_tool_selection_id_for_behavior, ensure_agent_principal, load_agent_behavior,
     upsert_agent_behavior, AgentIdentity, BackendProviderKind, DefraAgent, DocumentRuntimeOptions,
     SimpleIdentity, ToolCeiling,
 };
-use defra_agent_desktop::client::{ClientCore, ClientCoreOptions, DesktopPaths, PeerRecord};
-use defra_agent_desktop::local_runtime::DesktopInitSummary;
+use defra_agent_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths, PeerRecord};
+use defra_agent_desktop_core::local_runtime::DesktopInitSummary;
 use defra_agent_protocol::client_protocol::ClientTurnState;
 use defra_agent_protocol::row::{AgentBehaviorRow, InferenceProfileRow, ToolSelectionRow};
 use serde_json::Value;
@@ -137,6 +138,7 @@ pub(crate) struct LiveBridgeFixture {
     remote_core: Arc<ClientCore>,
     deployment_label: String,
     agent_did: String,
+    tool_root: PathBuf,
     init_summary: DesktopInitSummary,
     bootstrap_saved_peers: Vec<SavedPeerView>,
     update_version: Arc<AtomicU64>,
@@ -168,6 +170,10 @@ impl LiveBridgeFixture {
 
     pub(crate) fn deployment_label(&self) -> &str {
         &self.deployment_label
+    }
+
+    pub(crate) fn tool_root(&self) -> &Path {
+        &self.tool_root
     }
 
     pub(crate) fn update_version(&self) -> u64 {
@@ -327,6 +333,7 @@ impl LiveBridgeFixture {
             remote_core,
             deployment_label: DEFAULT_DEPLOYMENT_LABEL.to_string(),
             agent_did: running_agent.did.clone(),
+            tool_root,
             init_summary,
             bootstrap_saved_peers,
             update_version,
@@ -339,6 +346,10 @@ impl LiveBridgeFixture {
     pub(crate) async fn build_bootstrap_summary(&self) -> DesktopBootstrapSummary {
         DesktopBootstrapSummary {
             default_agent_home: self.agent_home.display().to_string(),
+            init_agent_name: Some(DEFAULT_AGENT_NAME.to_string()),
+            init_agent_did: Some(self.init_summary.agent_did.clone()),
+            init_tool_ceiling: Some("Readwrite".to_string()),
+            init_tool_root: Some(self.tool_root.display().to_string()),
             desktop_home: self.desktop_paths.root().display().to_string(),
             peer_directory_path: self
                 .desktop_paths
@@ -473,8 +484,8 @@ async fn seed_live_behavior_documents(
 ) -> Result<LiveAgentDocs> {
     let behavior_id = default_behavior_id_for_agent(agent_did);
     let backend_id = format!("{agent_name}-backend");
-    let tool_selection_id = format!("{behavior_id}:tools");
-    let inference_profile_id = format!("{behavior_id}:profile");
+    let tool_selection_id = default_tool_selection_id_for_behavior(&behavior_id);
+    let inference_profile_id = default_inference_profile_id_for_behavior(&behavior_id);
 
     bind_default_behavior_backend(core.node(), agent_did, &backend_id, backend).await?;
 
@@ -484,6 +495,7 @@ async fn seed_live_behavior_documents(
         display_name: Some("Live Repo Audit Tools".to_string()),
         enable_file_tools: Some(true),
         file_tools_mode: Some("ReadOnly".to_string()),
+        file_tool_root: None,
         enable_bash: Some(true),
         bash_mode: Some("ReadOnly".to_string()),
         cli_tool_names: vec!["rg".to_string()],

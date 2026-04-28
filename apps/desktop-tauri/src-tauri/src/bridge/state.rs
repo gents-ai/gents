@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use defra_agent_desktop::client::ClientCore;
+use defra_agent_desktop_core::client::ClientCore;
 use tauri::async_runtime::{spawn, JoinHandle};
 use tauri::{AppHandle, Emitter, State};
 

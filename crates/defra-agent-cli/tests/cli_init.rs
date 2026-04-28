@@ -25,7 +25,7 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
     let agent_did = format!("did:defra-agent:{agent_name}");
     let backend_id = format!("{agent_name}-backend");
     let graphql = graphql_url(port);
-    let tool_selection_id = format!("{agent_did}:default:tools");
+    let tool_selection_id = "default-tools".to_string();
 
     let init = run_init_json(
         &home_dir,
@@ -179,7 +179,7 @@ async fn init_supports_provider_auth_backend_fields() -> Result<()> {
     let agent_did = format!("did:defra-agent:{agent_name}");
     let backend_id = format!("{agent_name}-backend");
     let graphql = graphql_url(port);
-    let tool_selection_id = format!("{agent_did}:default:tools");
+    let tool_selection_id = "default-tools".to_string();
 
     let init = run_init_json(
         &home_dir,
@@ -401,7 +401,7 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
     let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
     let backend_id = format!("{agent_name}-custom-backend");
-    let tool_selection_id = format!("{agent_did}:default:tools");
+    let tool_selection_id = "default-tools".to_string();
 
     run_init_json(
         &home_dir,
@@ -489,7 +489,7 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
     let agent_did = format!("did:defra-agent:{agent_name}");
     let graphql = graphql_url(port);
     let backend_id = format!("{agent_name}-backend");
-    let tool_selection_id = format!("{agent_did}:default:tools");
+    let tool_selection_id = "default-tools".to_string();
 
     let init = run_init_json(
         &home_dir,

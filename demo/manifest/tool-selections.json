@@ -1,6 +1,6 @@
 [
   {
-    "selection_id": "did:defra-agent:default:default:tools",
+    "selection_id": "default-tools",
     "agent_did": "did:defra-agent:default",
     "display_name": "Standard Write Tools",
     "enable_file_tools": true,

@@ -29,6 +29,10 @@ pub struct ToolSelectionDocument {
     pub delegate_to: Option<Vec<String>>,
 }
 
+pub fn default_tool_selection_id_for_behavior(behavior_id: &str) -> String {
+    format!("{behavior_id}-tools")
+}
+
 pub async fn load_tool_selection(
     node: &EmbeddedNode,
     selection_id: &str,
