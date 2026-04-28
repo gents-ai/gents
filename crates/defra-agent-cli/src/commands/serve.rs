@@ -81,6 +81,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
         .or_else(|| init_config.as_ref().map(|config| config.agent_name.clone()))
         .unwrap_or_else(|| DEFAULT_AGENT_NAME.to_string());
     let key_path = resolve_server_key_path(&args, init_config.as_ref(), &home_dir, &agent_name)?;
+    ensure_key_path_exists_for_initialized_did(init_config.as_ref(), &key_path)?;
     if let Some(parent) = key_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("creating key directory {}", parent.display()))?;
@@ -295,6 +296,23 @@ fn ensure_identity_matches_init_config(
             "initialized home agent DID {} does not match loaded identity DID {}; repair init.json or use the correct --key-path",
             config.agent_did,
             resolved_did
+        );
+    }
+    Ok(())
+}
+
+fn ensure_key_path_exists_for_initialized_did(
+    init_config: Option<&StoredInitConfig>,
+    key_path: &Path,
+) -> Result<()> {
+    let Some(config) = init_config else {
+        return Ok(());
+    };
+    if is_real_agent_did(&config.agent_did) && !key_path.exists() {
+        anyhow::bail!(
+            "initialized home agent DID {} requires identity key {} to already exist; restore the configured key, pass --key-path for the matching key, or bootstrap the host identity backend first",
+            config.agent_did,
+            key_path.display()
         );
     }
     Ok(())

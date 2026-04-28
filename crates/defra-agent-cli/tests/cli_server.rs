@@ -204,6 +204,55 @@ async fn server_rejects_real_initialized_did_without_key_path() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_rejects_real_initialized_did_with_missing_key_file_without_creating_it(
+) -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_env = tempdir.path().join("home-env");
+    let agent_home = home_env.join(".defra-agent");
+    let key_path = agent_home.join("keys").join("missing.key");
+    fs::create_dir_all(&agent_home)?;
+
+    let agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
+    write_json_file(
+        &agent_home.join("init.json"),
+        &serde_json::json!({
+            "home": agent_home.to_string_lossy(),
+            "agent_name": "mini-1-steward",
+            "agent_did": agent_did,
+            "key_path": key_path.to_string_lossy(),
+            "tool_ceiling": "Readonly",
+            "tool_root": tempdir.path().to_string_lossy()
+        }),
+    )?;
+
+    let port = allocate_port()?;
+    let stderr = run_cli_failure_stderr(
+        &home_env,
+        &[
+            "server",
+            "--home",
+            agent_home.to_str().expect("utf-8 home"),
+            "--http-port",
+            &port.to_string(),
+        ],
+    )?;
+    assert!(
+        stderr.contains("requires identity key"),
+        "expected missing-key error, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("to already exist"),
+        "expected no-create hint, got:\n{stderr}"
+    );
+    assert!(
+        !key_path.exists(),
+        "server must not create a new key for a real initialized DID with missing key file"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
