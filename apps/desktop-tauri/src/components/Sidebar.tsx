@@ -40,7 +40,7 @@ export function Sidebar({
     <aside className="sidebar">
       <section className="sidebar-section">
         <button
-          className="ghost-button sidebar-wide-button"
+          className="ghost-button sidebar-wide-button sidebar-nav-button"
           onClick={onOpenFleet}
           type="button"
         >

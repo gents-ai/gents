@@ -2,15 +2,33 @@
   .sidebar {
     display: grid;
     grid-template-rows: auto auto auto minmax(0, 1fr) auto;
-    gap: var(--space-5);
+    gap: var(--space-6);
     min-height: 0;
+    min-width: 0;
     overflow: hidden;
+    padding: var(--space-1) 0;
   }
 
   .sidebar-section,
   .stack-panel {
     display: grid;
-    gap: var(--space-5);
+    gap: var(--space-4);
+    min-width: 0;
+  }
+
+  .sidebar .panel-header {
+    align-items: end;
+    padding: 0 1px;
+  }
+
+  .sidebar .panel-header h2 {
+    font-size: 18px;
+    line-height: 1.15;
+  }
+
+  .sidebar .eyebrow {
+    margin-bottom: var(--space-2);
+    letter-spacing: 0.14em;
   }
 
   .sidebar-utility {
@@ -44,27 +62,104 @@
     gap: var(--space-3);
   }
 
-  .peer-item {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 42px;
-    gap: var(--space-3);
-    align-items: stretch;
+  .sidebar .list {
+    gap: 0;
+    align-content: start;
+    overflow: auto;
+    border: 1px solid var(--border-subtle);
+    background: var(--color-surface-strong);
   }
 
-  .peer-button {
+  .sidebar .list-item {
     min-width: 0;
+    border: 0;
+    border-bottom: 1px solid var(--border-subtle);
+    border-radius: 0;
+    background: transparent;
+    padding: 12px 12px;
+  }
+
+  .sidebar .list-item:last-of-type {
+    border-bottom: 0;
+  }
+
+  .sidebar .list-item:hover {
+    background: rgb(var(--source-green-rgb) / 0.07);
+  }
+
+  .sidebar .list-item.selected {
+    border-color: var(--border-subtle);
+    background: rgb(var(--source-green-rgb) / 0.13);
+    box-shadow: inset 3px 0 0 var(--color-accent);
+  }
+
+  .sidebar .list-item-title {
+    font-size: 14px;
+  }
+
+  .sidebar .list-item-meta {
+    color: var(--color-accent-muted);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+  }
+
+  .peer-item-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-4);
+    align-items: center;
+  }
+
+  .peer-select-button {
+    display: grid;
+    gap: var(--space-1);
+    min-width: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    padding: 0;
+    text-align: left;
   }
 
   .peer-config-button {
-    width: 42px;
-    min-height: 42px;
-    display: grid;
-    place-items: center;
-    padding: 0;
+    align-self: center;
+    min-height: 30px;
+    border: 1px solid rgb(var(--source-green-rgb) / 0.24);
+    border-radius: var(--radius-sm);
+    background: rgb(0 0 0 / 0.36);
+    color: var(--color-accent-muted);
+    padding: var(--space-2) var(--space-4);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .peer-config-button:hover {
+    color: var(--source-black);
+    border-color: rgb(var(--source-green-rgb) / 0.4);
+    background: var(--color-accent);
   }
 
   .sidebar-wide-button {
     width: 100%;
+  }
+
+  .sidebar-nav-button {
+    min-height: 44px;
+    justify-content: center;
+    background:
+      linear-gradient(90deg, rgb(var(--source-green-rgb) / 0.08), transparent 60%),
+      rgb(0 0 0 / 0.42);
+    color: var(--color-text-soft);
+    font-weight: 600;
+  }
+
+  .sidebar-nav-button:hover {
+    background:
+      linear-gradient(90deg, rgb(var(--source-green-rgb) / 0.14), transparent 64%),
+      rgb(0 0 0 / 0.54);
   }
 
   .conversation-list-row {
@@ -88,22 +183,22 @@
 
   .conversation-status-dot-success {
     background: var(--color-success-strong);
-    box-shadow: 0 0 0 1px rgba(139, 211, 155, 0.18);
+    box-shadow: 0 0 0 1px rgb(var(--source-green-rgb) / 0.22);
   }
 
   .conversation-status-dot-error {
     background: var(--color-error-strong);
-    box-shadow: 0 0 0 1px rgba(217, 109, 109, 0.18);
+    box-shadow: 0 0 0 1px rgb(255 111 95 / 0.22);
   }
 
   .conversation-status-dot-running {
-    background: var(--color-text-warm);
-    box-shadow: 0 0 0 1px rgba(221, 183, 128, 0.18);
+    background: var(--color-warning);
+    box-shadow: 0 0 0 1px rgb(var(--source-orange-rgb) / 0.22);
   }
 
   .conversation-status-dot-idle {
-    background: rgba(177, 157, 129, 0.55);
-    box-shadow: 0 0 0 1px rgba(177, 157, 129, 0.14);
+    background: rgb(149 164 157 / 0.55);
+    box-shadow: 0 0 0 1px rgb(149 164 157 / 0.16);
   }
 
   .untitled-title {

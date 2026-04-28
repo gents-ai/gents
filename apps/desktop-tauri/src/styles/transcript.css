@@ -2,11 +2,30 @@
   .turn-block {
     display: grid;
     gap: var(--space-4);
+    min-width: 0;
+  }
+
+  .message-card,
+  .message-list,
+  .tool-group,
+  .tool-item,
+  .tool-item-body,
+  .tool-detail,
+  .tool-detail-grid,
+  .tool-detail-row {
+    min-width: 0;
+    max-width: 100%;
   }
 
   .pending-card {
-    border-color: rgba(214, 167, 103, 0.18);
-    background: rgba(30, 22, 16, 0.76);
+    border-color: rgb(var(--source-green-rgb) / 0.2);
+    background: rgb(var(--source-green-rgb) / 0.08);
+  }
+
+  .transcript-panel .message-card {
+    border-color: rgb(var(--source-green-rgb) / 0.12);
+    background: var(--color-surface-deep);
+    box-shadow: inset 2px 0 0 rgb(var(--source-green-rgb) / 0.18);
   }
 
   .message-role {
@@ -71,7 +90,7 @@
   .markdown-content code {
     padding: 1px 5px;
     border-radius: var(--space-2);
-    background: rgba(214, 167, 103, 0.12);
+    background: rgb(var(--source-green-rgb) / 0.12);
   }
 
   .markdown-content pre {
@@ -89,7 +108,7 @@
 
   .markdown-content blockquote {
     padding-left: var(--space-5);
-    border-left: 3px solid rgba(214, 167, 103, 0.28);
+    border-left: 3px solid rgb(var(--source-green-rgb) / 0.32);
     color: var(--color-text-soft);
   }
 
@@ -101,21 +120,21 @@
   .markdown-content th,
   .markdown-content td {
     padding: var(--space-3) var(--space-4);
-    border: 1px solid rgba(214, 167, 103, 0.14);
+    border: 1px solid rgb(var(--source-green-rgb) / 0.16);
     text-align: left;
     vertical-align: top;
   }
 
   .markdown-content th {
     color: var(--color-text-warm);
-    background: rgba(214, 167, 103, 0.06);
+    background: rgb(var(--source-green-rgb) / 0.08);
   }
 
   .message-reasoning {
     margin-bottom: var(--space-4);
     padding: var(--space-4) var(--space-5);
     border-radius: var(--radius-md);
-    background: rgba(192, 140, 75, 0.08);
+    background: rgb(var(--source-green-rgb) / 0.08);
     color: var(--color-text-soft);
     font-size: 13px;
     white-space: pre-wrap;
@@ -156,7 +175,11 @@
 
   .tool-group {
     display: grid;
-    gap: var(--space-2);
+    gap: 0;
+    overflow: hidden;
+    border: 1px solid rgb(var(--source-green-rgb) / 0.12);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface-deep);
   }
 
   .tool-group-meta {
@@ -164,7 +187,9 @@
     justify-content: flex-start;
     align-items: center;
     gap: var(--space-3);
-    margin-top: 2px;
+    min-width: 0;
+    padding: var(--space-4) var(--space-5);
+    border-bottom: 1px solid rgb(var(--source-green-rgb) / 0.1);
   }
 
   .tool-group-label,
@@ -180,6 +205,11 @@
   .tool-item {
     background: transparent;
     overflow: hidden;
+    border-bottom: 1px solid rgb(var(--source-green-rgb) / 0.08);
+  }
+
+  .tool-item:last-child {
+    border-bottom: 0;
   }
 
   .tool-item-summary {
@@ -188,8 +218,12 @@
     justify-content: flex-start;
     align-items: center;
     gap: var(--space-5);
-    padding: var(--space-3) 0;
+    padding: var(--space-4) var(--space-5);
     cursor: pointer;
+  }
+
+  .tool-item-summary:hover {
+    background: rgb(var(--source-green-rgb) / 0.06);
   }
 
   .tool-item-summary::-webkit-details-marker {
@@ -223,12 +257,15 @@
   }
 
   .tool-item-dot-error {
-    background: #ff9d8f;
+    background: var(--color-error);
   }
 
   .tool-item-name {
     font-weight: 500;
-    color: #d7c7ae;
+    color: var(--color-text-soft);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .tool-item-action {
@@ -241,7 +278,7 @@
   .tool-item-body {
     display: grid;
     gap: var(--space-4);
-    padding: 2px 0 var(--space-4) var(--space-8);
+    padding: 0 var(--space-5) var(--space-5) calc(var(--space-8) + var(--space-5));
   }
 
   .tool-detail,
@@ -262,7 +299,7 @@
     gap: var(--space-1);
     padding: var(--space-3) var(--space-4);
     border-radius: var(--radius-sm);
-    background: var(--color-surface-deep);
+    background: var(--color-surface-strong);
   }
 
   .transcript-end-anchor {
@@ -271,7 +308,7 @@
   }
 
   .tool-detail-key {
-    color: #a38f70;
+    color: var(--color-accent-muted);
   }
 
   .tool-detail-value {
@@ -283,11 +320,12 @@
   .tool-block {
     margin: var(--space-3) 0 0;
     border-radius: var(--radius-md);
-    background: var(--color-surface-deep);
+    background: var(--color-surface-strong);
     padding: var(--space-4);
     max-height: 260px;
     overflow: auto;
     white-space: pre-wrap;
     word-break: break-word;
+    overflow-wrap: anywhere;
   }
 }

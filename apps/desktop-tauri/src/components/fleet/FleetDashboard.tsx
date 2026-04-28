@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 
+import sourceMarkUrl from "../../assets/source-mark-light.png";
 import { isTerminalTurnState } from "../../lib/chat-shell";
 import type {
   BootstrapSummary,
@@ -9,7 +10,6 @@ import type {
   ToolSelectionView,
 } from "../../lib/types";
 import { displayAgentIdentity, displayBehaviorLabel } from "../../lib/types";
-import sourceLogoUrl from "../../../src-tauri/icons/icon.png";
 import { parsePeerConnectionJson, validateAgentDid } from "./peerConnectionImport";
 
 type FleetDashboardProps = {
@@ -164,8 +164,9 @@ export function FleetDashboard({
 function BrandLockup() {
   return (
     <div className="fleet-brand">
-      <img alt="" className="fleet-brand-logo" src={sourceLogoUrl} />
+      <img alt="Source" className="fleet-brand-logo" src={sourceMarkUrl} />
       <div>
+        <p className="eyebrow">Source Network</p>
         <h1>Defra Agent</h1>
         <p className="muted">
           Fleet dashboard for P2P heartbeats, runtime state, and active tasks.

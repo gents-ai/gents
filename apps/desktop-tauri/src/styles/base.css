@@ -13,7 +13,7 @@
   }
 
   body {
-    background: transparent;
+    background: var(--source-black);
   }
 
   button,
@@ -34,6 +34,13 @@
       "JetBrains Mono",
       ui-monospace,
       monospace;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-heading);
+    font-weight: 700;
   }
 
   h1,

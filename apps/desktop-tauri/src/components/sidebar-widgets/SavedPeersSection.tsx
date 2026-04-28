@@ -32,13 +32,16 @@ export function SavedPeersSection({
           {deployments.map((deployment) => {
             const agentIdentity = displayAgentIdentity(deployment.agentDid);
             return (
-              <div className="peer-item" key={deployment.peerId}>
+              <div
+                className={
+                  deployment.agentDid === selectedAgentDid
+                    ? "list-item selected peer-item-card"
+                    : "list-item peer-item-card"
+                }
+                key={deployment.peerId}
+              >
                 <button
-                  className={
-                    deployment.agentDid === selectedAgentDid
-                      ? "list-item selected peer-button"
-                      : "list-item peer-button"
-                  }
+                  className="peer-select-button"
                   data-testid={`deployment-${deployment.peerId}`}
                   onClick={() => onSelectDeployment(deployment.agentDid)}
                   type="button"
@@ -53,13 +56,13 @@ export function SavedPeersSection({
                 </button>
                 <button
                   aria-label={`Configure ${deployment.label}`}
-                  className="icon-button peer-config-button"
+                  className="peer-config-button"
                   data-testid={`deployment-config-${deployment.peerId}`}
                   onClick={() => onConfigureDeployment(deployment.agentDid)}
                   title={`Configure ${deployment.label}`}
                   type="button"
                 >
-                  <span aria-hidden="true">&#9881;</span>
+                  Configure
                 </button>
               </div>
             );
