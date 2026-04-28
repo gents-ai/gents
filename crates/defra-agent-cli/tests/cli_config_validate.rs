@@ -394,6 +394,43 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_validate_without_binding_keeps_manifest_agent_did_authoritative() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir
+        .path()
+        .join("infra")
+        .join("agents")
+        .join("mini-1-steward");
+    fs::create_dir_all(&home_dir)?;
+
+    let placeholder_did = "did:defra-agent:mini-1-steward";
+    write_rebindable_manifest_root(&root, placeholder_did)?;
+
+    let output = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "validate",
+            "--root",
+            root.to_str().expect("utf-8 manifest root"),
+        ],
+    )?;
+
+    assert_eq!(
+        output.get("status").and_then(Value::as_str),
+        Some("validated")
+    );
+    assert_eq!(output.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        output.get("agent_did").and_then(Value::as_str),
+        Some(placeholder_did)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_validate_bind_home_accepts_placeholder_agent_did() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");

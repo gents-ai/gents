@@ -12,46 +12,106 @@ use crate::desired_state::{
 };
 use crate::print_json;
 
-pub(super) async fn load_desired_manifest_with_binding_or_bail(
-    root: &Path,
-    home: Option<&Path>,
-    graphql: Option<&str>,
-    bind_agent_did: Option<ManifestAgentDidBindingArg>,
-    force_rebind_concrete_did: bool,
-    access: Option<&ConfigAccess>,
-) -> Result<DesiredStateManifest> {
-    let (manifest, report) = load_desired_manifest_with_binding_report(
-        root,
-        home,
-        graphql,
-        bind_agent_did,
-        force_rebind_concrete_did,
-        access,
-    )
-    .await?;
-    if !report.is_ok() {
-        print_json(&serde_json::to_value(&report)?)?;
-        anyhow::bail!("desired-state manifest validation failed")
-    }
-    manifest.ok_or_else(|| anyhow::anyhow!("validated manifest root produced no manifest"))
+pub(super) struct ManifestBindingOptions<'a> {
+    pub(super) root: &'a Path,
+    pub(super) home: Option<&'a Path>,
+    pub(super) graphql: Option<&'a str>,
+    pub(super) bind_agent_did: Option<ManifestAgentDidBindingArg>,
+    pub(super) force_rebind_concrete_did: bool,
+    pub(super) access: Option<&'a ConfigAccess>,
 }
 
-pub(super) async fn load_desired_manifest_with_binding_report(
-    root: &Path,
-    home: Option<&Path>,
-    graphql: Option<&str>,
-    bind_agent_did: Option<ManifestAgentDidBindingArg>,
-    force_rebind_concrete_did: bool,
-    access: Option<&ConfigAccess>,
-) -> Result<(Option<DesiredStateManifest>, DesiredStateValidationReport)> {
-    let root_display = root.display().to_string();
-    let (manifest, initial_report) = desired_state::load_manifest_root(root);
+pub(super) struct BoundManifestLoad {
+    pub(super) bound: Option<BoundDesiredManifest>,
+    pub(super) report: DesiredStateValidationReport,
+}
+
+pub(super) struct BoundDesiredManifest {
+    pub(super) context: ManifestBindingContext,
+    pub(super) manifest: DesiredStateManifest,
+}
+
+#[derive(Debug, Clone)]
+// Provision orchestration will consume the full context; config validate/diff/apply
+// currently only need the target DID after loading.
+#[allow(dead_code)]
+pub(super) struct ManifestBindingContext {
+    pub(super) bind_mode: ManifestBindMode,
+    pub(super) target_agent_did: String,
+    pub(super) source_manifest_dids: BTreeSet<String>,
+    pub(super) identity_json_binding: IdentityJsonBinding,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ManifestBindMode {
+    Manifest,
+    Home,
+    Live,
+}
+
+impl ManifestBindMode {
+    fn from_cli(value: Option<ManifestAgentDidBindingArg>) -> Self {
+        match value {
+            None => Self::Manifest,
+            Some(ManifestAgentDidBindingArg::Home) => Self::Home,
+            Some(ManifestAgentDidBindingArg::Live) => Self::Live,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
+pub(super) struct IdentityJsonBinding {
+    pub(super) identity_status: Option<String>,
+    pub(super) did: Option<String>,
+}
+
+impl BoundManifestLoad {
+    pub(super) fn require_valid(self) -> Result<BoundDesiredManifest> {
+        if !self.report.is_ok() {
+            print_json(&serde_json::to_value(&self.report)?)?;
+            anyhow::bail!("desired-state manifest validation failed");
+        }
+        self.bound
+            .ok_or_else(|| anyhow::anyhow!("validated manifest root produced no manifest"))
+    }
+}
+
+pub(super) async fn load_bound_manifest(
+    options: ManifestBindingOptions<'_>,
+) -> Result<BoundManifestLoad> {
+    let root_display = options.root.display().to_string();
+    let (manifest, initial_report) = desired_state::load_manifest_root(options.root);
     let Some(mut manifest) = manifest else {
-        return Ok((None, initial_report));
+        return Ok(BoundManifestLoad {
+            bound: None,
+            report: initial_report,
+        });
     };
 
-    if bind_agent_did.is_none() {
-        return Ok((Some(manifest), initial_report));
+    let bind_mode = ManifestBindMode::from_cli(options.bind_agent_did);
+    let source_manifest_dids = manifest_agent_dids(&manifest);
+    let identity_json_binding = read_identity_json_binding(options.root)?;
+
+    if bind_mode == ManifestBindMode::Manifest {
+        let target_agent_did = manifest.agent_principal.agent_did.clone();
+        enforce_identity_binding_safety(
+            &identity_json_binding,
+            &target_agent_did,
+            options.force_rebind_concrete_did,
+        )?;
+        return Ok(BoundManifestLoad {
+            bound: Some(BoundDesiredManifest {
+                context: ManifestBindingContext {
+                    bind_mode,
+                    target_agent_did,
+                    source_manifest_dids,
+                    identity_json_binding,
+                },
+                manifest,
+            }),
+            report: initial_report,
+        });
     }
 
     if !initial_report.is_ok()
@@ -60,16 +120,44 @@ pub(super) async fn load_desired_manifest_with_binding_report(
             .iter()
             .all(|error| is_rebindable_agent_did_error(error))
     {
-        return Ok((Some(manifest), initial_report));
+        let agent_did = manifest.agent_principal.agent_did.clone();
+        return Ok(BoundManifestLoad {
+            bound: Some(BoundDesiredManifest {
+                context: ManifestBindingContext {
+                    bind_mode,
+                    target_agent_did: agent_did,
+                    source_manifest_dids,
+                    identity_json_binding,
+                },
+                manifest,
+            }),
+            report: initial_report,
+        });
     }
 
-    let target_did = resolve_bound_agent_did(bind_agent_did, home, graphql, access).await?;
-    enforce_identity_binding_safety(root, &target_did, force_rebind_concrete_did)?;
-    enforce_manifest_rebind_safety(&manifest, &target_did, force_rebind_concrete_did)?;
+    let target_did =
+        resolve_bound_agent_did(bind_mode, options.home, options.graphql, options.access).await?;
+    enforce_identity_binding_safety(
+        &identity_json_binding,
+        &target_did,
+        options.force_rebind_concrete_did,
+    )?;
+    enforce_manifest_rebind_safety(&manifest, &target_did, options.force_rebind_concrete_did)?;
     rebind_manifest_agent_did(&mut manifest, &target_did);
 
     let report = validation_report_for_manifest(root_display, &manifest);
-    Ok((Some(manifest), report))
+    Ok(BoundManifestLoad {
+        bound: Some(BoundDesiredManifest {
+            context: ManifestBindingContext {
+                bind_mode,
+                target_agent_did: target_did,
+                source_manifest_dids,
+                identity_json_binding,
+            },
+            manifest,
+        }),
+        report,
+    })
 }
 
 pub(super) fn write_identity_binding(root: &Path, agent_did: &str) -> Result<()> {
@@ -133,22 +221,24 @@ fn counts_for_manifest(manifest: &DesiredStateManifest) -> DesiredStateCounts {
 }
 
 async fn resolve_bound_agent_did(
-    bind_agent_did: Option<ManifestAgentDidBindingArg>,
+    bind_mode: ManifestBindMode,
     home: Option<&Path>,
     graphql: Option<&str>,
     access: Option<&ConfigAccess>,
 ) -> Result<String> {
-    match bind_agent_did {
-        Some(ManifestAgentDidBindingArg::Home) => crate::resolve_agent_did(home, None)
+    match bind_mode {
+        ManifestBindMode::Manifest => {
+            anyhow::bail!("manifest binding mode does not resolve a runtime DID")
+        }
+        ManifestBindMode::Home => crate::resolve_agent_did(home, None)
             .context("resolving agent DID from initialized home"),
-        Some(ManifestAgentDidBindingArg::Live) => {
+        ManifestBindMode::Live => {
             if let Some(access) = access {
                 return resolve_live_agent_did(access).await;
             }
             let (access, _) = crate::resolve_config_access(home, graphql, false).await?;
             resolve_live_agent_did(&access).await
         }
-        None => anyhow::bail!("agent DID binding mode is required"),
     }
 }
 
@@ -183,18 +273,21 @@ async fn resolve_live_agent_did(access: &ConfigAccess) -> Result<String> {
     }
 }
 
-fn enforce_identity_binding_safety(
-    root: &Path,
-    target_did: &str,
-    force_rebind_concrete_did: bool,
-) -> Result<()> {
+fn read_identity_json_binding(root: &Path) -> Result<IdentityJsonBinding> {
     let path = root.join("identity.json");
     if !path.exists() {
-        return Ok(());
+        return Ok(IdentityJsonBinding::default());
     }
+
     let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
     let value: Value =
         serde_json::from_slice(&bytes).with_context(|| format!("decoding {}", path.display()))?;
+    let identity_status = value
+        .get("identity_status")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
     let did = match value.get("did") {
         None | Some(Value::Null) => None,
         Some(Value::String(value)) => {
@@ -211,7 +304,18 @@ fn enforce_identity_binding_safety(
         ),
     };
 
-    if let Some(did) = did {
+    Ok(IdentityJsonBinding {
+        identity_status,
+        did,
+    })
+}
+
+fn enforce_identity_binding_safety(
+    identity_json_binding: &IdentityJsonBinding,
+    target_did: &str,
+    force_rebind_concrete_did: bool,
+) -> Result<()> {
+    if let Some(did) = identity_json_binding.did.as_deref() {
         if did != target_did && !force_rebind_concrete_did {
             anyhow::bail!(
                 "identity.json.did is {did}, but resolved runtime DID is {target_did}; pass --force-rebind-concrete-did to rebind this provisioned manifest"
