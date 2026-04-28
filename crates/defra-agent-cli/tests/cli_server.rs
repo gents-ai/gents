@@ -192,8 +192,12 @@ async fn server_rejects_real_initialized_did_without_key_path() -> Result<()> {
         "expected no-key-path error, got:\n{stderr}"
     );
     assert!(
-        stderr.contains("non-file identity backend"),
-        "expected non-file identity backend hint, got:\n{stderr}"
+        stderr.contains("cannot load a non-file identity"),
+        "expected non-file identity load error, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("registers the signer in-process"),
+        "expected host-process signer hint, got:\n{stderr}"
     );
     assert!(
         !agent_home.join("keys").exists(),

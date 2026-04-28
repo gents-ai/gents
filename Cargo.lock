@@ -3616,6 +3616,7 @@ dependencies = [
  "chrono",
  "crypto",
  "defra-agent-protocol",
+ "defra-core",
  "defra-node",
  "dirs 5.0.1",
  "events",

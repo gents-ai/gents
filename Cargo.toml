@@ -20,6 +20,7 @@ anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 crypto = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "b1e6c2cfd2a38231e128716e5d13e482dbfacd92" }
+defra-core = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "b1e6c2cfd2a38231e128716e5d13e482dbfacd92" }
 defra-agent-protocol = { path = "crates/defra-agent-protocol" }
 defra-agent-desktop-core = { path = "crates/defra-agent-desktop-core" }
 defra-node = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "b1e6c2cfd2a38231e128716e5d13e482dbfacd92" }

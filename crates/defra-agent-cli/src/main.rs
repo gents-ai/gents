@@ -115,7 +115,11 @@ Common flow:
   defra-agent server
   defra-agent-desktop init
   defra-agent-desktop
-  defra-agent chat";
+  defra-agent chat
+
+Identity note:
+  Standalone server startup currently requires a loadable file key.
+  Homes with a real agent DID and no key_path must be started by a host identity backend that registers the signer in-process before constructing the runtime.";
 const CHAT_AFTER_HELP: &str = "\
 Examples:
   defra-agent chat

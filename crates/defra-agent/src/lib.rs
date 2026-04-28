@@ -61,7 +61,7 @@ pub use document_config::{
 };
 pub use health_checker::{spawn_health_checker, HealthStatus, ServiceHealth, ServiceHealthMap};
 pub use hook::{DefraSessionHook, FailurePolicy, HookStats};
-pub use identity::{AgentIdentity, KeyIdentity, ServiceAccount};
+pub use identity::{AgentIdentity, KeyIdentity, RegisteredIdentity, ServiceAccount};
 pub use interrupt::{fetch_interrupt_requested_at, interrupt_request};
 pub use lifecycle::{write_manual_agent_request, RecoveryReport, RequestLifecycle};
 pub use mcp_pool::McpPool;
