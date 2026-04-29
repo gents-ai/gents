@@ -93,9 +93,8 @@ jobs:
       - name: Validate release signing mode
         env:
           DRY_RUN_UNSIGNED_INPUT: ${{ inputs.dry_run_unsigned }}
-          MACOS_CODESIGN_CERT_P12_BASE64: ${{ secrets.MACOS_CODESIGN_CERT_P12_BASE64 }}
-          MACOS_CODESIGN_CERT_PASSWORD: ${{ secrets.MACOS_CODESIGN_CERT_PASSWORD }}
           MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+          MACOS_CODESIGN_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_CODESIGN_KEYCHAIN_PASSWORD }}
         run: |
           set -euo pipefail
 
@@ -120,9 +119,8 @@ jobs:
           fi
 
           missing=()
-          [[ -n "${MACOS_CODESIGN_CERT_P12_BASE64}" ]] || missing+=("MACOS_CODESIGN_CERT_P12_BASE64")
-          [[ -n "${MACOS_CODESIGN_CERT_PASSWORD}" ]] || missing+=("MACOS_CODESIGN_CERT_PASSWORD")
           [[ -n "${MACOS_CODESIGN_IDENTITY}" ]] || missing+=("MACOS_CODESIGN_IDENTITY")
+          [[ -n "${MACOS_CODESIGN_KEYCHAIN_PASSWORD}" ]] || missing+=("MACOS_CODESIGN_KEYCHAIN_PASSWORD")
 
           if [[ "${signing_enabled}" == "true" && "${#missing[@]}" -gt 0 ]]; then
             printf "::error::Missing required macOS signing secret(s): %s\n" "${missing[*]}"
@@ -134,6 +132,77 @@ jobs:
           fi
 
           echo "SIGNING_ENABLED=${signing_enabled}" >> "${GITHUB_ENV}"
+
+      - name: Preflight native signing keychain
+        env:
+          MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+          MACOS_CODESIGN_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_CODESIGN_KEYCHAIN_PASSWORD }}
+          MACOS_CODESIGN_KEYCHAIN_PATH_VAR: ${{ vars.MACOS_CODESIGN_KEYCHAIN_PATH }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${SIGNING_ENABLED}" != "true" ]]; then
+            echo "Skipping native signing keychain preflight for unsigned manual dry-run."
+            exit 0
+          fi
+
+          keychain_path="${MACOS_CODESIGN_KEYCHAIN_PATH_VAR:-${HOME}/Library/Keychains/defra-agent-signing.keychain-db}"
+          keychain_password="${MACOS_CODESIGN_KEYCHAIN_PASSWORD}"
+          login_keychain="${HOME}/Library/Keychains/login.keychain-db"
+          original_keychains_path="${RUNNER_TEMP}/defra-agent-original-keychains.txt"
+          original_default_keychain_path="${RUNNER_TEMP}/defra-agent-original-default-keychain.txt"
+
+          if [[ ! -f "${keychain_path}" ]]; then
+            echo "::error::Native macOS signing keychain not found at ${keychain_path}."
+            exit 1
+          fi
+
+          echo "SIGNING_KEYCHAIN=${keychain_path}" >> "${GITHUB_ENV}"
+          security list-keychains -d user > "${original_keychains_path}"
+          security default-keychain -d user > "${original_default_keychain_path}" || true
+          security unlock-keychain -p "${keychain_password}" "${keychain_path}"
+
+          keychains=()
+          while IFS= read -r keychain; do
+            [[ -n "${keychain}" ]] && keychains+=("${keychain}")
+          done < <(sed -e 's/^[[:space:]]*"//' -e 's/"$//' "${original_keychains_path}")
+
+          security list-keychains -d user -s "${keychain_path}" "${login_keychain}" "${keychains[@]}"
+          security list-keychains -s "${keychain_path}" "${login_keychain}" "${keychains[@]}"
+          security default-keychain -d user -s "${keychain_path}"
+          security unlock-keychain -p "${keychain_password}" "${keychain_path}"
+
+          identity_output="$(security find-identity -v -p codesigning "${keychain_path}")"
+          printf '%s\n' "${identity_output}"
+          identity_line="$(grep -F "${MACOS_CODESIGN_IDENTITY}" <<< "${identity_output}" | head -n 1 || true)"
+          if [[ -z "${identity_line}" ]]; then
+            echo "::error::Configured MACOS_CODESIGN_IDENTITY was not found in ${keychain_path}."
+            exit 1
+          fi
+          signing_identity="$(awk '{ print $2 }' <<< "${identity_line}")"
+          if [[ -z "${signing_identity}" ]]; then
+            echo "::error::Could not extract signing identity fingerprint from native keychain identity."
+            exit 1
+          fi
+          echo "SIGNING_IDENTITY=${signing_identity}" >> "${GITHUB_ENV}"
+
+          smoke_bin="${RUNNER_TEMP}/defra-agent-codesign-smoke"
+          cp /bin/echo "${smoke_bin}"
+          codesign --remove-signature "${smoke_bin}" 2>/dev/null || true
+          codesign \
+            --force \
+            --sign "${signing_identity}" \
+            --keychain "${keychain_path}" \
+            --identifier "${MACOS_CODESIGN_IDENTIFIER}.smoke" \
+            --timestamp=none \
+            "${smoke_bin}"
+          codesign --verify --strict --verbose=2 "${smoke_bin}"
+          designated_requirement="$(codesign -d -r- "${smoke_bin}" 2>&1)"
+          printf '%s\n' "${designated_requirement}"
+          if grep -q 'designated => cdhash' <<< "${designated_requirement}"; then
+            echo "::error::Native signing smoke test produced an ad-hoc cdhash designated requirement."
+            exit 1
+          fi
 
       - name: Build release binary
         run: |
@@ -147,11 +216,8 @@ jobs:
           cargo build -p defra-agent-cli --release
           file target/release/defra-agent
 
-      - name: Import signing certificate and sign binary
+      - name: Sign binary with native macOS identity
         env:
-          MACOS_CODESIGN_CERT_P12_BASE64: ${{ secrets.MACOS_CODESIGN_CERT_P12_BASE64 }}
-          MACOS_CODESIGN_CERT_PASSWORD: ${{ secrets.MACOS_CODESIGN_CERT_PASSWORD }}
-          MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
           MACOS_CODESIGN_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_CODESIGN_KEYCHAIN_PASSWORD }}
           TIMESTAMP_MODE_INPUT: ${{ inputs.codesign_timestamp }}
           TIMESTAMP_MODE_VAR: ${{ vars.MACOS_CODESIGN_TIMESTAMP_MODE }}
@@ -164,94 +230,26 @@ jobs:
           fi
 
           binary_path="target/release/defra-agent"
-          keychain_name="defra-agent-signing-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          keychain_path="${HOME}/Library/Keychains/${keychain_name}.keychain-db"
-          keychain_password="${MACOS_CODESIGN_KEYCHAIN_PASSWORD:-$(uuidgen)}"
-          cert_path="${RUNNER_TEMP}/defra-agent-codesign.p12"
-          original_keychains_path="${RUNNER_TEMP}/defra-agent-original-keychains.txt"
-          original_default_keychain_path="${RUNNER_TEMP}/defra-agent-original-default-keychain.txt"
-          login_keychain="${HOME}/Library/Keychains/login.keychain-db"
+          keychain_path="${SIGNING_KEYCHAIN}"
+          signing_identity="${SIGNING_IDENTITY}"
           timestamp_mode="${TIMESTAMP_MODE_INPUT:-${TIMESTAMP_MODE_VAR:-auto}}"
 
-          trap 'rm -f "${cert_path}"' EXIT
-          echo "SIGNING_KEYCHAIN=${keychain_path}" >> "${GITHUB_ENV}"
-          printf '%s' "${MACOS_CODESIGN_CERT_P12_BASE64}" | base64 -D > "${cert_path}"
-
-          security list-keychains -d user > "${original_keychains_path}"
-          security default-keychain -d user > "${original_default_keychain_path}" || true
-          security create-keychain -p "${keychain_password}" "${keychain_path}"
-          security set-keychain-settings -lut 21600 "${keychain_path}"
-          security unlock-keychain -p "${keychain_password}" "${keychain_path}"
-          security import "${cert_path}" \
-            -k "${keychain_path}" \
-            -A \
-            -t cert \
-            -f pkcs12 \
-            -P "${MACOS_CODESIGN_CERT_PASSWORD}" \
-            -T /usr/bin/codesign \
-            -T /usr/bin/security \
-            -T /usr/bin/pkgbuild \
-            -T /usr/bin/productbuild \
-            -T /usr/bin/productsign
-
-          keychains=()
-          while IFS= read -r keychain; do
-            [[ -n "${keychain}" ]] && keychains+=("${keychain}")
-          done < <(sed -e 's/^[[:space:]]*"//' -e 's/"$//' "${original_keychains_path}")
-
-          security list-keychains -d user -s "${keychain_path}" "${login_keychain}" "${keychains[@]}"
-          security list-keychains -s "${keychain_path}" "${login_keychain}" "${keychains[@]}"
-          security default-keychain -d user -s "${keychain_path}"
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${keychain_password}" "${keychain_path}"
-          security unlock-keychain -p "${keychain_password}" "${keychain_path}"
-          echo "Active user keychain search list:"
-          security list-keychains -d user
-          echo "Active default keychain:"
-          security default-keychain -d user
-
-          identity_output="$(security find-identity -v -p codesigning "${keychain_path}")"
-          printf '%s\n' "${identity_output}"
-          echo "Codesigning identities visible through the active search list:"
-          security find-identity -v -p codesigning
-          identity_line="$(grep -F "${MACOS_CODESIGN_IDENTITY}" <<< "${identity_output}" | head -n 1 || true)"
-          if [[ -z "${identity_line}" ]]; then
-            echo "::error::Configured MACOS_CODESIGN_IDENTITY was not found in the imported signing keychain."
+          if [[ -z "${keychain_path}" || -z "${signing_identity}" ]]; then
+            echo "::error::Native signing keychain preflight did not provide SIGNING_KEYCHAIN/SIGNING_IDENTITY."
             exit 1
           fi
-          signing_identity="$(awk '{ print $2 }' <<< "${identity_line}")"
-          if [[ -z "${signing_identity}" ]]; then
-            echo "::error::Could not extract signing identity fingerprint from imported keychain identity."
-            exit 1
-          fi
-          echo "Using imported signing identity fingerprint ${signing_identity}."
-
-          identity_candidates=("${MACOS_CODESIGN_IDENTITY}")
-          if [[ "${signing_identity}" != "${MACOS_CODESIGN_IDENTITY}" ]]; then
-            identity_candidates+=("${signing_identity}")
-          fi
+          security unlock-keychain -p "${MACOS_CODESIGN_KEYCHAIN_PASSWORD}" "${keychain_path}"
+          echo "Signing with native macOS identity fingerprint ${signing_identity} from ${keychain_path}."
 
           sign_with_timestamp_arg() {
             local timestamp_arg="$1"
-            local identity_candidate
-            local status=1
-
-            for identity_candidate in "${identity_candidates[@]}"; do
-              if codesign \
-                --force \
-                --sign "${identity_candidate}" \
-                --keychain "${keychain_path}" \
-                --identifier "${MACOS_CODESIGN_IDENTIFIER}" \
-                "${timestamp_arg}" \
-                "${binary_path}"; then
-                return 0
-              else
-                status=$?
-              fi
-
-              echo "::warning::codesign could not use one imported identity candidate; trying the next candidate if available."
-            done
-
-            return "${status}"
+            codesign \
+              --force \
+              --sign "${signing_identity}" \
+              --keychain "${keychain_path}" \
+              --identifier "${MACOS_CODESIGN_IDENTIFIER}" \
+              "${timestamp_arg}" \
+              "${binary_path}"
           }
 
           codesign --remove-signature "${binary_path}" 2>/dev/null || true
@@ -367,7 +365,7 @@ jobs:
             gh release create "${GITHUB_REF_NAME}" --verify-tag --title "${GITHUB_REF_NAME}" --notes "Signed defra-agent macOS release artifact."
           gh release upload "${GITHUB_REF_NAME}" "${TARBALL}" "${CHECKSUM_FILE}" --clobber
 
-      - name: Delete temporary keychain
+      - name: Restore keychain search list
         if: always()
         env:
           PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
@@ -375,7 +373,6 @@ jobs:
           set -euo pipefail
           git config --global --remove-section "url.https://x-access-token:${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
           git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
-          keychain_path="${SIGNING_KEYCHAIN:-${RUNNER_TEMP}/defra-agent-signing.keychain-db}"
           original_keychains_path="${RUNNER_TEMP}/defra-agent-original-keychains.txt"
           original_default_keychain_path="${RUNNER_TEMP}/defra-agent-original-default-keychain.txt"
 
@@ -396,8 +393,4 @@ jobs:
             if [[ -n "${default_keychain}" ]]; then
               security default-keychain -d user -s "${default_keychain}" || true
             fi
-          fi
-
-          if [[ -f "${keychain_path}" ]]; then
-            security delete-keychain "${keychain_path}" || true
           fi
