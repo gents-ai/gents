@@ -445,4 +445,76 @@ describe("config panel action buttons", () => {
       "connection refused",
     );
   });
+
+  it("makes tool service delegates explicit in tool selections", async () => {
+    const onSaveToolSelectionConfig = vi.fn<
+      [(request: ToolSelectionSaveRequest) => Promise<unknown>]
+    >(() => Promise.resolve());
+
+    render(
+      <ToolSelectionConfigEditor
+        agentDid="did:key:z6MkAgent"
+        savedStatus={null}
+        saving={false}
+        toolCeiling="Readwrite"
+        toolRoot="/tmp/work"
+        toolSelection={{
+          ...toolSelection,
+          enableMetaTools: false,
+          delegateTo: [],
+        }}
+        toolServiceRegistries={[toolService]}
+        onSaveToolSelectionConfig={onSaveToolSelectionConfig}
+        onSaved={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("tool-delegate-mcp-local")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("tool-enable-meta-tools"));
+    expect(screen.getByTestId("tool-delegate-mcp-local")).not.toBeDisabled();
+    fireEvent.click(screen.getByTestId("tool-delegate-mcp-local"));
+    fireEvent.click(screen.getByTestId("tool-selection-save"));
+
+    await waitFor(() =>
+      expect(onSaveToolSelectionConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          enableMetaTools: true,
+          delegateTo: ["mcp-local"],
+        }),
+      ),
+    );
+  });
+
+  it("applies the server tool ceiling when saving tool selections", async () => {
+    const onSaveToolSelectionConfig = vi.fn<
+      [(request: ToolSelectionSaveRequest) => Promise<unknown>]
+    >(() => Promise.resolve());
+
+    render(
+      <ToolSelectionConfigEditor
+        agentDid="did:key:z6MkAgent"
+        savedStatus={null}
+        saving={false}
+        toolCeiling="MetaOnly"
+        toolRoot="/tmp/work"
+        toolSelection={toolSelection}
+        toolServiceRegistries={[toolService]}
+        onSaveToolSelectionConfig={onSaveToolSelectionConfig}
+        onSaved={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("tool-enable-file-tools")).toBeDisabled();
+    expect(screen.getByTestId("tool-enable-bash")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("tool-selection-save"));
+
+    await waitFor(() =>
+      expect(onSaveToolSelectionConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          enableFileTools: false,
+          enableBash: false,
+        }),
+      ),
+    );
+  });
 });

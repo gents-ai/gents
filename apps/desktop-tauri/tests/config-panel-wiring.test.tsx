@@ -73,9 +73,9 @@ const deployment: DeploymentView = {
       behaviorId: "ops",
       displayName: "Ops",
       systemPrompt: "You are the ops behavior.",
-      backendId: "backend-a",
-      inferenceProfileId: "profile-a",
-      toolSelectionId: "tools-a",
+      backendId: "backend-b",
+      inferenceProfileId: "profile-b",
+      toolSelectionId: "tools-b",
       enabled: true,
       isDefault: false,
     },
@@ -90,12 +90,26 @@ const deployment: DeploymentView = {
       enabled: true,
       models: ["model-a"],
     },
+    {
+      backendId: "backend-b",
+      name: "Backend B",
+      providerKind: "openai",
+      endpoint: "http://127.0.0.1:9000/v1",
+      apiKeyConfigured: false,
+      enabled: true,
+      models: ["model-b"],
+    },
   ],
   inferenceProfiles: [
     {
       profileId: "profile-a",
       displayName: "Profile A",
       contextWindow: 131072,
+    },
+    {
+      profileId: "profile-b",
+      displayName: "Profile B",
+      contextWindow: 65536,
     },
   ],
   toolSelections: [
@@ -110,6 +124,18 @@ const deployment: DeploymentView = {
       cliToolNames: ["grep"],
       enableMetaTools: true,
       delegateTo: ["service-a"],
+    },
+    {
+      selectionId: "tools-b",
+      agentDid: "did:key:z6MkAgent",
+      displayName: "Tools B",
+      enableFileTools: false,
+      fileToolsMode: "ReadOnly",
+      enableBash: false,
+      bashMode: "ReadOnly",
+      cliToolNames: [],
+      enableMetaTools: false,
+      delegateTo: [],
     },
   ],
   toolServiceRegistries: [
@@ -133,6 +159,19 @@ const deployment: DeploymentView = {
         totalFires: 0,
         scheduleCount: 1,
         eventTriggerCount: 1,
+      },
+      runHistory: [],
+    },
+    {
+      taskId: "task-b",
+      name: "Task B",
+      behaviorId: "ops",
+      promptTemplate: "Run task B",
+      enabled: true,
+      recentRuns: {
+        totalFires: 0,
+        scheduleCount: 0,
+        eventTriggerCount: 0,
       },
       runHistory: [],
     },
@@ -812,6 +851,60 @@ describe("config panel wiring", () => {
     fireEvent.click(screen.getByTestId("behavior-create-tool-selection"));
     expect(screen.getByTestId("tool-selection-id")).not.toHaveAttribute("readonly");
     expect(screen.getByTestId("tool-selection-id")).toHaveValue("");
+  });
+
+  it("makes selected behavior dependencies explicit across linked panes", () => {
+    const handlers = workspaceHandlers();
+    render(
+      <ConfigWorkspace
+        bootstrap={bootstrap}
+        runningTask={false}
+        saving={false}
+        selectedBehaviorId="default"
+        selectedDeployment={deployment}
+        {...handlers}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("config-behavior-ops"));
+
+    fireEvent.click(screen.getByTestId("config-tab-backends"));
+    expect(screen.getByTestId("backend-id")).toHaveValue("backend-b");
+
+    fireEvent.click(screen.getByTestId("config-tab-profiles"));
+    expect(screen.getByTestId("profile-id")).toHaveValue("profile-b");
+
+    fireEvent.click(screen.getByTestId("config-tab-toolSelections"));
+    expect(screen.getByTestId("tool-selection-id")).toHaveValue("tools-b");
+
+    fireEvent.click(screen.getByTestId("config-tab-tasks"));
+    fireEvent.click(screen.getByTestId("task-new"));
+    expect(screen.getByTestId("task-behavior-id")).toHaveValue("ops");
+  });
+
+  it("uses the selected task when creating timer and event trigger drafts", () => {
+    const handlers = workspaceHandlers();
+    render(
+      <ConfigWorkspace
+        bootstrap={bootstrap}
+        runningTask={false}
+        saving={false}
+        selectedBehaviorId="default"
+        selectedDeployment={deployment}
+        {...handlers}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("config-tab-tasks"));
+    fireEvent.click(screen.getByTestId("config-task-task-b"));
+
+    fireEvent.click(screen.getByTestId("config-tab-timerTriggers"));
+    fireEvent.click(screen.getByTestId("schedule-new"));
+    expect(screen.getByTestId("schedule-task-id")).toHaveValue("task-b");
+
+    fireEvent.click(screen.getByTestId("config-tab-eventTriggers"));
+    fireEvent.click(screen.getByTestId("event-trigger-new"));
+    expect(screen.getByTestId("event-trigger-task-id")).toHaveValue("task-b");
   });
 
   it("routes workspace save buttons to the active panel handlers", async () => {

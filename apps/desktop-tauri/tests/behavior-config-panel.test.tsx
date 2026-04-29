@@ -105,4 +105,51 @@ describe("BehaviorConfigEditor", () => {
     expect(onSaveAgentConfig).not.toHaveBeenCalled();
     expect(onSaved).toHaveBeenCalledWith("did:key:z6MkAgent:default");
   });
+
+  it("makes the behavior-to-agent default dependency explicit", async () => {
+    const opsBehavior = {
+      ...behavior,
+      behaviorId: "did:key:z6MkAgent:ops",
+      displayName: "Ops",
+      isDefault: false,
+    };
+    const onSaveAgentConfig = vi.fn<
+      [(request: AgentConfigSaveRequest) => Promise<unknown>]
+    >(() => Promise.resolve());
+    const onSaveBehaviorConfig = vi.fn<
+      [(request: BehaviorSaveRequest) => Promise<unknown>]
+    >(() => Promise.resolve());
+
+    render(
+      <BehaviorConfigEditor
+        agentDid="did:key:z6MkAgent"
+        agentDisplayName="Local Agent"
+        agentEnabled
+        behavior={opsBehavior}
+        currentDefaultBehaviorId={behavior.behaviorId}
+        inferenceBackends={inferenceBackends}
+        inferenceProfiles={inferenceProfiles}
+        savedStatus={null}
+        saving={false}
+        toolSelections={toolSelections}
+        onCreateBackend={vi.fn()}
+        onCreateProfile={vi.fn()}
+        onCreateToolSelection={vi.fn()}
+        onSaveAgentConfig={onSaveAgentConfig}
+        onSaveBehaviorConfig={onSaveBehaviorConfig}
+        onSaved={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("behavior-default-for-agent"));
+    fireEvent.click(screen.getByTestId("behavior-save"));
+
+    await waitFor(() => expect(onSaveBehaviorConfig).toHaveBeenCalledTimes(1));
+    expect(onSaveAgentConfig).toHaveBeenCalledWith({
+      agentDid: "did:key:z6MkAgent",
+      displayName: "Local Agent",
+      defaultBehaviorId: "did:key:z6MkAgent:ops",
+      enabled: true,
+    });
+  });
 });

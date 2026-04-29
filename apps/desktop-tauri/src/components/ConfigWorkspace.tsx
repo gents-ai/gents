@@ -257,6 +257,40 @@ export function ConfigWorkspace({
     );
   }
 
+  function selectConfigBehavior(behaviorId: string) {
+    setSelectedConfigBehaviorId(behaviorId);
+    const behavior = selectedDeployment?.behaviors.find(
+      (candidate) => candidate.behaviorId === behaviorId,
+    );
+    if (!behavior || !selectedDeployment) {
+      return;
+    }
+    if (
+      behavior.backendId &&
+      selectedDeployment.inferenceBackends.some(
+        (backend) => backend.backendId === behavior.backendId,
+      )
+    ) {
+      setSelectedBackendId(behavior.backendId);
+    }
+    if (
+      behavior.inferenceProfileId &&
+      selectedDeployment.inferenceProfiles.some(
+        (profile) => profile.profileId === behavior.inferenceProfileId,
+      )
+    ) {
+      setSelectedProfileId(behavior.inferenceProfileId);
+    }
+    if (
+      behavior.toolSelectionId &&
+      selectedDeployment.toolSelections.some(
+        (selection) => selection.selectionId === behavior.toolSelectionId,
+      )
+    ) {
+      setSelectedToolSelectionId(behavior.toolSelectionId);
+    }
+  }
+
   return (
     <section className="config-workspace config-workspace-full">
       <header className="config-header">
@@ -353,7 +387,7 @@ export function ConfigWorkspace({
           onSaveAgentConfig={onSaveAgentConfig}
           onSaveBehaviorConfig={onSaveBehaviorConfig}
           onSavedStatusChange={setSavedStatus}
-          onSelectBehavior={setSelectedConfigBehaviorId}
+          onSelectBehavior={selectConfigBehavior}
         />
       ) : null}
 
