@@ -311,6 +311,7 @@ That flow already has a mocked end-to-end harness in [crates/defra-agent-cli/tes
 
 - Schema/data model: `crates/defra-agent-protocol/schemas/README.md`
 - Lean proof guide: `crates/defra-agent/proofs/README.md`
+- macOS release signing: `docs/macos-signing.md`
 
 Run the mocked binary-flow suite locally with:
 

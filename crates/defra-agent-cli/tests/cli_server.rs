@@ -403,6 +403,40 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
         .and_then(Value::as_array)
         .is_some_and(|rows| !rows.is_empty()));
 
+    let status_response = reqwest::Client::new()
+        .get(format!("http://127.0.0.1:{port}/status"))
+        .send()
+        .await
+        .context("fetching /status")?;
+    assert!(
+        status_response.status().is_success(),
+        "unexpected /status response: {status_response:?}"
+    );
+    let status: Value = status_response
+        .json()
+        .await
+        .context("reading /status body")?;
+    assert_eq!(
+        status.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+    assert_eq!(
+        status.get("agent_name").and_then(Value::as_str),
+        Some(agent_name.as_str())
+    );
+    assert_eq!(
+        status.get("p2p_transport").and_then(Value::as_str),
+        Some("iroh")
+    );
+    assert!(status
+        .get("p2p_peer_id")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty()));
+    assert!(status
+        .get("p2p_listen_addresses")
+        .and_then(Value::as_array)
+        .is_some_and(|rows| !rows.is_empty()));
+
     let runtime_state = read_runtime_state_json(&home_dir)?;
     assert_eq!(
         runtime_state.get("p2p_transport").and_then(Value::as_str),

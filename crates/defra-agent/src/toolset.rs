@@ -321,8 +321,30 @@ pub fn build_delegate_tool(
 
 fn default_read_only_commands() -> Vec<String> {
     [
-        "pwd", "ls", "find", "cat", "head", "tail", "sed", "grep", "rg", "wc", "stat", "file",
+        "pwd",
+        "ls",
+        "find",
+        "cat",
+        "head",
+        "tail",
+        "sed",
+        "grep",
+        "rg",
+        "wc",
+        "stat",
+        "file",
         "git",
+        "date",
+        "hostname",
+        "uptime",
+        "df",
+        "vm_stat",
+        "ps",
+        "lsof",
+        "curl",
+        "launchctl",
+        "tailscale",
+        "sudo",
     ]
     .into_iter()
     .map(str::to_string)

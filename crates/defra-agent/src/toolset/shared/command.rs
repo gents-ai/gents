@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -100,10 +101,109 @@ pub(crate) fn validate_read_only_command(
             }
         }
         "git" => validate_git_args(args)?,
+        "launchctl" => validate_launchctl_args(args)?,
+        "tailscale" => validate_tailscale_args(args)?,
+        "curl" => validate_curl_args(args)?,
+        "sudo" => validate_sudo_args(args)?,
         _ => {}
     }
 
     Ok(())
+}
+
+fn validate_launchctl_args(args: &[String]) -> Result<()> {
+    let subcommand = args
+        .first()
+        .map(String::as_str)
+        .ok_or_else(|| anyhow!("launchctl requires a read-only subcommand"))?;
+
+    match subcommand {
+        "list" | "print" | "print-disabled" | "blame" => Ok(()),
+        other => bail!("launchctl subcommand is not allowed by the read-only bash tool: {other}"),
+    }
+}
+
+fn validate_tailscale_args(args: &[String]) -> Result<()> {
+    let subcommand = args
+        .first()
+        .map(String::as_str)
+        .ok_or_else(|| anyhow!("tailscale requires a read-only subcommand"))?;
+
+    match subcommand {
+        "status" | "ip" | "netcheck" | "version" | "ping" => Ok(()),
+        other => bail!("tailscale subcommand is not allowed by the read-only bash tool: {other}"),
+    }
+}
+
+fn validate_curl_args(args: &[String]) -> Result<()> {
+    let mut has_http_url = false;
+    for arg in args {
+        if arg.starts_with("http://") || arg.starts_with("https://") {
+            has_http_url = true;
+        }
+
+        let mutating = matches!(
+            arg.as_str(),
+            "-d" | "--data"
+                | "--data-raw"
+                | "--data-binary"
+                | "--data-urlencode"
+                | "-F"
+                | "--form"
+                | "-T"
+                | "--upload-file"
+                | "-X"
+                | "--request"
+                | "-o"
+                | "--output"
+                | "-O"
+                | "--remote-name"
+                | "--remote-header-name"
+                | "-K"
+                | "--config"
+                | "--next"
+        ) || arg.starts_with("-d")
+            || arg.starts_with("--data=")
+            || arg.starts_with("-F")
+            || arg.starts_with("--form=")
+            || arg.starts_with("-T")
+            || arg.starts_with("--upload-file=")
+            || arg.starts_with("-X")
+            || arg.starts_with("--request=")
+            || arg.starts_with("-o")
+            || arg.starts_with("--output=")
+            || arg.starts_with("-O")
+            || arg.starts_with("-K")
+            || arg.starts_with("--config=");
+        if mutating {
+            bail!("curl argument is not allowed by the read-only bash tool: {arg}");
+        }
+    }
+
+    if !has_http_url {
+        bail!("curl requires an http:// or https:// URL in the read-only bash tool");
+    }
+
+    Ok(())
+}
+
+fn validate_sudo_args(args: &[String]) -> Result<()> {
+    let command = args
+        .first()
+        .map(String::as_str)
+        .ok_or_else(|| anyhow!("sudo requires an approved command"))?;
+    let command_name = Path::new(command)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(command);
+
+    match command_name {
+        "launchctl" if command == "/bin/launchctl" => validate_launchctl_args(&args[1..]),
+        "launchctl" => {
+            bail!("sudo launchctl must use the absolute /bin/launchctl path")
+        }
+        other => bail!("sudo command is not allowed by the read-only bash tool: {other}"),
+    }
 }
 
 fn validate_git_args(args: &[String]) -> Result<()> {

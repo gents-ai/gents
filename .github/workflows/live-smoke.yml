@@ -15,6 +15,8 @@ on:
 env:
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+  HOMEBREW_NO_INSTALL_CLEANUP: "1"
   RUST_BACKTRACE: "1"
   DEFRA_AGENT_CLI_E2E_MODEL_ENDPOINT: ${{ github.event.inputs.inference_endpoint }}
   DEFRA_AGENT_CLI_E2E_MODEL_NAME: ${{ github.event.inputs.model_name }}
@@ -23,20 +25,62 @@ env:
 
 jobs:
   live-cli-smoke:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64, studio]
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Rewrite Git SSH dependencies to HTTPS
         env:
           PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
         run: |
-          git config --global url."https://x-access-token:${PRIVATE_REPO_PAT}@github.com/sourcenetwork/".insteadOf "ssh://git@github.com/sourcenetwork/"
+          set -euo pipefail
+          if [[ -z "${PRIVATE_REPO_PAT}" ]]; then
+            echo "::error::Missing PRIVATE_REPO_PAT; required to fetch private Source Network git dependencies."
+            exit 1
+          fi
+          auth_url="https://x-access-token:${PRIVATE_REPO_PAT}@github.com/sourcenetwork/"
+          git config --global --add url."${auth_url}".insteadOf "https://github.com/sourcenetwork/"
+          git config --global --add url."${auth_url}".insteadOf "ssh://git@github.com/sourcenetwork/"
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Install protobuf compiler
+        run: |
+          set -euo pipefail
+
+          protoc_path=""
+          if [[ -x "/opt/homebrew/bin/protoc" ]]; then
+            protoc_path="/opt/homebrew/bin/protoc"
+          elif command -v protoc >/dev/null 2>&1; then
+            protoc_path="$(command -v protoc)"
+          else
+            if ! command -v brew >/dev/null 2>&1; then
+              echo "::error::protoc is missing and Homebrew is not available to install protobuf."
+              exit 1
+            fi
+            brew install protobuf
+            protoc_path="$(brew --prefix protobuf)/bin/protoc"
+          fi
+
+          if [[ ! -x "${protoc_path}" ]]; then
+            echo "::error::protoc was not found at ${protoc_path}."
+            exit 1
+          fi
+
+          echo "$(dirname "${protoc_path}")" >> "${GITHUB_PATH}"
+          echo "PROTOC=${protoc_path}" >> "${GITHUB_ENV}"
+          "${protoc_path}" --version
 
       - name: Run live CLI smoke test
         run: cargo test -p defra-agent-cli --test cli_e2e standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools -- --ignored --nocapture --test-threads=1
+
+      - name: Cleanup git auth
+        if: always()
+        env:
+          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
+        run: |
+          git config --global --remove-section "url.https://x-access-token:${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
+          git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
