@@ -21,6 +21,7 @@ type FleetDashboardProps = {
   repairingP2P: boolean;
   starting: boolean;
   onAddPeer: (request: PeerAddRequest) => Promise<unknown>;
+  onFetchPeerStatus: (serverAddress: string) => Promise<unknown>;
   onOpenChat: (agentDid: string) => void;
   onOpenConfig: (agentDid: string) => void;
   onRepairP2P: () => Promise<unknown>;
@@ -51,6 +52,7 @@ export function FleetDashboard({
   repairingP2P,
   starting,
   onAddPeer,
+  onFetchPeerStatus,
   onOpenChat,
   onOpenConfig,
   onRepairP2P,
@@ -60,13 +62,12 @@ export function FleetDashboard({
   const [localError, setLocalError] = useState<string | null>(null);
   const hasDeployments = deployments.length > 0;
 
-  async function submitPeer(event: FormEvent) {
-    event.preventDefault();
+  async function submitPeer(request: PeerAddRequest) {
     setLocalError(null);
     try {
       await onAddPeer({
-        ...peerForm,
-        agentDid: validateAgentDid(peerForm.agentDid),
+        ...request,
+        agentDid: validateAgentDid(request.agentDid),
       });
       setPeerForm(DEFAULT_PEER_FORM);
       setShowAddPeer(false);
@@ -92,6 +93,7 @@ export function FleetDashboard({
             localError={localError}
             peerForm={peerForm}
             onPeerFormChange={setPeerForm}
+            onFetchPeerStatus={onFetchPeerStatus}
             onSubmit={submitPeer}
           />
         </div>
@@ -122,6 +124,7 @@ export function FleetDashboard({
             localError={localError}
             peerForm={peerForm}
             onPeerFormChange={setPeerForm}
+            onFetchPeerStatus={onFetchPeerStatus}
             onSubmit={submitPeer}
           />
         </section>
@@ -180,7 +183,8 @@ type AddPeerFormProps = {
   localError: string | null;
   peerForm: PeerAddRequest;
   onPeerFormChange: (value: PeerAddRequest) => void;
-  onSubmit: (event: FormEvent) => void;
+  onFetchPeerStatus: (serverAddress: string) => Promise<unknown>;
+  onSubmit: (request: PeerAddRequest) => Promise<void>;
 };
 
 function AddPeerForm({
@@ -189,10 +193,19 @@ function AddPeerForm({
   localError,
   peerForm,
   onPeerFormChange,
+  onFetchPeerStatus,
   onSubmit,
 }: AddPeerFormProps) {
   const [connectionJson, setConnectionJson] = useState("");
   const [importStatus, setImportStatus] = useState<string | null>(null);
+  const [serverAddress, setServerAddress] = useState("");
+  const [fetchingStatus, setFetchingStatus] = useState(false);
+  const manualPeerReady =
+    Boolean(peerForm.label.trim()) &&
+    Boolean(peerForm.agentDid.trim()) &&
+    Boolean(peerForm.addr.trim());
+  const serverAddressReady = Boolean(serverAddress.trim());
+  const busy = disabled || addingPeer || fetchingStatus;
 
   function updateConnectionJson(value: string) {
     setConnectionJson(value);
@@ -209,14 +222,79 @@ function AddPeerForm({
     }
   }
 
+  async function fetchServerStatus() {
+    const trimmed = serverAddress.trim();
+    if (!trimmed) {
+      throw new Error("Server address is required");
+    }
+
+    setFetchingStatus(true);
+    setImportStatus(null);
+    try {
+      const status = await onFetchPeerStatus(trimmed);
+      const request = parsePeerConnectionJson(JSON.stringify(status));
+      onPeerFormChange(request);
+      setImportStatus("Fetched /status");
+      return request;
+    } catch (error) {
+      setImportStatus(String(error));
+      throw error;
+    } finally {
+      setFetchingStatus(false);
+    }
+  }
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    try {
+      const request = manualPeerReady ? peerForm : await fetchServerStatus();
+      await onSubmit(request);
+    } catch {
+      // Field-level and parent errors are rendered in the form.
+    }
+  }
+
+  async function handleFetchClick() {
+    try {
+      await fetchServerStatus();
+    } catch {
+      // The status line renders the discovery error.
+    }
+  }
+
   return (
-    <form className="fleet-add-form" onSubmit={onSubmit}>
+    <form
+      className="fleet-add-form"
+      onSubmit={(event) => void handleSubmit(event)}
+    >
+      <div className="fleet-discovery-row">
+        <label className="field">
+          <span>Server address</span>
+          <input
+            className="mono"
+            data-testid="fleet-add-server-address"
+            disabled={busy}
+            onChange={(event) => setServerAddress(event.currentTarget.value)}
+            placeholder="http://127.0.0.1:9181"
+            value={serverAddress}
+          />
+        </label>
+        <button
+          className="ghost-button"
+          data-testid="fleet-fetch-status"
+          disabled={busy || !serverAddressReady}
+          onClick={() => void handleFetchClick()}
+          type="button"
+        >
+          {fetchingStatus ? "Fetching..." : "Fetch /status"}
+        </button>
+      </div>
       <label className="field fleet-import-field">
         <span>Connection JSON</span>
         <textarea
           className="mono"
           data-testid="fleet-add-connection-json"
-          disabled={disabled || addingPeer}
+          disabled={busy}
           onChange={(event) => updateConnectionJson(event.currentTarget.value)}
           placeholder='{"label":"api-gateway","agentDid":"did:key:z6Mk...","addr":"/ip4/100.73.235.38/tcp/9161/p2p/12D3Koo..."}'
           value={connectionJson}
@@ -229,7 +307,7 @@ function AddPeerForm({
         <span>Agent label</span>
         <input
           data-testid="fleet-add-label"
-          disabled={disabled || addingPeer}
+          disabled={busy}
           onChange={(event) =>
             onPeerFormChange({ ...peerForm, label: event.currentTarget.value })
           }
@@ -242,7 +320,7 @@ function AddPeerForm({
         <input
           className="mono"
           data-testid="fleet-add-agent-did"
-          disabled={disabled || addingPeer}
+          disabled={busy}
           onChange={(event) =>
             onPeerFormChange({
               ...peerForm,
@@ -258,7 +336,7 @@ function AddPeerForm({
         <input
           className="mono"
           data-testid="fleet-add-addr"
-          disabled={disabled || addingPeer}
+          disabled={busy}
           onChange={(event) =>
             onPeerFormChange({ ...peerForm, addr: event.currentTarget.value })
           }
@@ -274,14 +352,15 @@ function AddPeerForm({
           disabled={
             disabled ||
             addingPeer ||
-            !peerForm.label.trim() ||
-            !peerForm.agentDid.trim() ||
-            !peerForm.addr.trim()
+            fetchingStatus ||
+            (!manualPeerReady && !serverAddressReady)
           }
           type="submit"
         >
-          {addingPeer
-            ? "Adding..."
+          {fetchingStatus
+            ? "Fetching..."
+            : addingPeer
+              ? "Adding..."
             : disabled
               ? "Preparing..."
               : "Add Agent Connection"}

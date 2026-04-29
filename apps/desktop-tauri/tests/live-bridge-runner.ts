@@ -345,6 +345,13 @@ export class LiveBridgeRunner implements TauriDriverBridge {
         this.postJson<DesktopClientSnapshot>("/desktop/client/shutdown", {}),
       addPeer: async (request) =>
         this.postJson<DesktopClientSnapshot>("/desktop/peer/add", request),
+      fetchPeerStatus: async (serverAddress) => {
+        const response = await this.fetchWithTimeout(
+          normalizePeerStatusUrl(serverAddress),
+          {},
+        );
+        return this.decodeJson<unknown>(response);
+      },
       repairP2P: async () =>
         this.postJson<DesktopClientSnapshot>("/desktop/p2p/repair", {}),
       fetchSessionSnapshot: async (sessionId, requestId) =>
@@ -725,4 +732,27 @@ function appendRunnerArg(
     return;
   }
   args.push(flag, trimmed);
+}
+
+function normalizePeerStatusUrl(serverAddress: string) {
+  const trimmed = serverAddress.trim();
+  const url = new URL(
+    trimmed.startsWith("http://") || trimmed.startsWith("https://")
+      ? trimmed
+      : `http://${trimmed}`,
+  );
+  const path = url.pathname.replace(/\/+$/, "");
+  if (
+    path === "" ||
+    path === "/" ||
+    path === "/api/v0" ||
+    path === "/api/v0/graphql"
+  ) {
+    url.pathname = "/status";
+  } else if (!path.endsWith("/status")) {
+    url.pathname = `${path}/status`;
+  }
+  url.search = "";
+  url.hash = "";
+  return url.toString();
 }

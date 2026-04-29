@@ -118,6 +118,39 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         "expected runtime row for {agent_did} in /healthz body: {health}"
     );
 
+    let status_response = client
+        .get(format!("http://127.0.0.1:{port}/status"))
+        .send()
+        .await
+        .context("fetching /status")?;
+    assert!(
+        status_response.status().is_success(),
+        "unexpected /status response: {status_response:?}"
+    );
+    let status: Value = status_response
+        .json()
+        .await
+        .context("reading /status body")?;
+    assert_eq!(
+        status.get("agent_name").and_then(Value::as_str),
+        Some(agent_name.as_str())
+    );
+    assert_eq!(
+        status.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+    assert_eq!(
+        status.get("graphql").and_then(Value::as_str),
+        Some(graphql.as_str())
+    );
+    assert!(
+        status
+            .get("p2p_listen_addresses")
+            .and_then(Value::as_array)
+            .is_some_and(|rows| !rows.is_empty()),
+        "expected /status to include P2P listen addresses: {status}"
+    );
+
     let response = client
         .get(format!("http://127.0.0.1:{port}/metrics"))
         .send()

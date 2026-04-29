@@ -61,6 +61,7 @@ export type DesktopApiAdapter = {
   startDesktopClient: () => Promise<DesktopClientSnapshot>;
   shutdownDesktopClient: () => Promise<DesktopClientSnapshot>;
   addPeer: (request: PeerAddRequest) => Promise<DesktopClientSnapshot>;
+  fetchPeerStatus: (serverAddress: string) => Promise<unknown>;
   repairP2P: () => Promise<DesktopClientSnapshot>;
   fetchSessionSnapshot: (
     sessionId: string,
@@ -123,6 +124,11 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
   },
   addPeer(request) {
     return invokeDesktop<DesktopClientSnapshot>("desktop_peer_add", { request });
+  },
+  fetchPeerStatus(serverAddress) {
+    return invokeDesktop<unknown>("desktop_peer_status_fetch", {
+      request: { serverAddress },
+    });
   },
   repairP2P() {
     return invokeDesktop<DesktopClientSnapshot>("desktop_p2p_repair");
@@ -223,6 +229,10 @@ export async function shutdownDesktopClient() {
 
 export async function addPeer(request: PeerAddRequest) {
   return desktopApiAdapter().addPeer(request);
+}
+
+export async function fetchPeerStatus(serverAddress: string) {
+  return desktopApiAdapter().fetchPeerStatus(serverAddress);
 }
 
 export async function repairP2P() {
