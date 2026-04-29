@@ -264,6 +264,73 @@ fn read_only_bash_rejects_write_commands() {
     .is_err());
 }
 
+#[test]
+fn read_only_bash_allows_host_diagnostics_commands() {
+    let allowlist = default_read_only_commands();
+    assert!(validate_read_only_command("date", &[String::from("-u")], &allowlist).is_ok());
+    assert!(validate_read_only_command(
+        "launchctl",
+        &[
+            String::from("print"),
+            String::from("system/com.amygdala.alloy.mini-1")
+        ],
+        &allowlist
+    )
+    .is_ok());
+    assert!(validate_read_only_command(
+        "sudo",
+        &[
+            String::from("/bin/launchctl"),
+            String::from("print"),
+            String::from("system/com.amygdala.alloy.mini-1"),
+        ],
+        &allowlist
+    )
+    .is_ok());
+    assert!(validate_read_only_command(
+        "curl",
+        &[
+            String::from("-fsS"),
+            String::from("http://127.0.0.1:9100/metrics"),
+        ],
+        &allowlist
+    )
+    .is_ok());
+    assert!(validate_read_only_command("tailscale", &[String::from("status")], &allowlist).is_ok());
+}
+
+#[test]
+fn read_only_bash_rejects_mutating_host_diagnostics_commands() {
+    let allowlist = default_read_only_commands();
+    assert!(validate_read_only_command(
+        "launchctl",
+        &[String::from("bootout"), String::from("system/com.example")],
+        &allowlist
+    )
+    .is_err());
+    assert!(validate_read_only_command(
+        "sudo",
+        &[
+            String::from("/bin/launchctl"),
+            String::from("kickstart"),
+            String::from("system/com.example"),
+        ],
+        &allowlist
+    )
+    .is_err());
+    assert!(validate_read_only_command(
+        "curl",
+        &[
+            String::from("-X"),
+            String::from("POST"),
+            String::from("http://127.0.0.1:9191/api/v0/graphql"),
+        ],
+        &allowlist
+    )
+    .is_err());
+    assert!(validate_read_only_command("tailscale", &[String::from("up")], &allowlist).is_err());
+}
+
 #[tokio::test]
 async fn delegate_to_agent_round_trip_waits_for_response() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
