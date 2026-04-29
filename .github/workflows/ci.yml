@@ -33,8 +33,9 @@ jobs:
             echo "::error::Missing PRIVATE_REPO_PAT; required to fetch private Source Network git dependencies."
             exit 1
           fi
-          git config --global url."https://${PRIVATE_REPO_PAT}@github.com/sourcenetwork/".insteadOf "https://github.com/sourcenetwork/"
-          git config --global url."https://${PRIVATE_REPO_PAT}@github.com/sourcenetwork/".insteadOf "ssh://git@github.com/sourcenetwork/"
+          auth_url="https://x-access-token:${PRIVATE_REPO_PAT}@github.com/sourcenetwork/"
+          git config --global url."${auth_url}".insteadOf "https://github.com/sourcenetwork/"
+          git config --global url."${auth_url}".insteadOf "ssh://git@github.com/sourcenetwork/"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -55,7 +56,9 @@ jobs:
         if: always()
         env:
           PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
-        run: git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
+        run: |
+          git config --global --remove-section "url.https://x-access-token:${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
+          git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
 
   lean-proofs:
     runs-on: ubuntu-latest
