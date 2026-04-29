@@ -348,7 +348,10 @@ jobs:
           chmod 0755 "${package_root}/defra-agent"
 
           tar -C "${package_parent}" -czf "${tarball}" "${artifact_basename}"
-          shasum -a 256 "${tarball}" > "${checksum_file}"
+          (
+            cd "${dist_dir}"
+            shasum -a 256 "${artifact_basename}.tar.gz" > "${artifact_basename}.tar.gz.sha256"
+          )
 
           echo "tarball=${tarball}" >> "${GITHUB_OUTPUT}"
           echo "checksum_file=${checksum_file}" >> "${GITHUB_OUTPUT}"
