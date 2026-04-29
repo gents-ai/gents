@@ -29,7 +29,8 @@ designated requirement, so keychain trust can survive binary updates.
 
 The macOS release workflow:
 
-- runs on a macOS Apple silicon runner;
+- runs on a self-hosted Mac Studio runner labeled `self-hosted`, `macOS`,
+  `ARM64`, and `studio`;
 - builds `defra-agent-cli` in release mode, producing `target/release/defra-agent`;
 - imports a signing certificate into a temporary keychain;
 - signs with `--identifier org.sourcenetwork.defra-agent`;
@@ -44,6 +45,11 @@ Tagged releases require signing secrets and will fail rather than publish an
 unsigned artifact. A manual `workflow_dispatch` run can set `dry_run_unsigned`
 for build-only validation, but the artifact is named `unsigned-dry-run` and must
 not be deployed.
+
+The Studio runners should have Homebrew protobuf available at
+`/opt/homebrew/bin/protoc`. The workflow sets `PROTOC` explicitly from that path
+when present, because non-interactive runner shells may not include
+`/opt/homebrew/bin` in `PATH`.
 
 ## Required GitHub secrets
 

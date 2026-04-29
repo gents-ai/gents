@@ -1,0 +1,7 @@
+self-hosted-runner:
+  labels:
+    - macOS
+    - ARM64
+    - studio
+    - studio-1
+    - studio-2
