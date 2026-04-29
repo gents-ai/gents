@@ -38,7 +38,7 @@ The macOS release workflow:
 - packages `defra-agent-aarch64-apple-darwin.tar.gz`;
 - writes a `.sha256` checksum file;
 - uploads both files as workflow artifacts;
-- attaches both files to the GitHub Release for tags matching `defra-agent-v*`.
+- attaches both files to the GitHub Release for tags matching `v*`.
 
 Tagged releases require signing secrets and will fail rather than publish an
 unsigned artifact. A manual `workflow_dispatch` run can set `dry_run_unsigned`
