@@ -251,7 +251,7 @@ export function ConfigWorkspace({
         <p className="eyebrow">Config</p>
         <h2>Select a deployment</h2>
         <button className="ghost-button" onClick={onBack} type="button">
-          Back to Fleet
+          Back to Chat
         </button>
       </article>
     );
@@ -293,7 +293,7 @@ export function ConfigWorkspace({
             onClick={onBack}
             type="button"
           >
-            Back to Fleet
+            Back to Chat
           </button>
         </div>
       </header>
