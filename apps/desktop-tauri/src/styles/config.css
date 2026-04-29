@@ -323,21 +323,6 @@
     background: var(--color-surface-strong);
   }
 
-  .behavior-compaction-box.disabled {
-    opacity: 0.56;
-  }
-
-  .behavior-compaction-box.disabled select,
-  .behavior-compaction-box.disabled input:not([type="checkbox"]) {
-    cursor: default;
-  }
-
-  .behavior-compaction-toggle {
-    border: 0;
-    padding: 0;
-    background: transparent;
-  }
-
   .behavior-system-prompt {
     min-height: 320px;
   }
