@@ -115,44 +115,62 @@
   .primary-button,
   .chip-button {
     position: relative;
+    isolation: isolate;
+    overflow: hidden;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: var(--space-3);
-    min-height: 36px;
+    min-height: 40px;
     border-radius: 0;
-    padding: 0 var(--space-6);
-    border: 1px solid var(--border-strong);
+    padding: 0 var(--space-7);
+    border: 1px solid var(--button-border, var(--border-strong));
     font-weight: 600;
-    letter-spacing: 0.02em;
+    letter-spacing: 0.01em;
     line-height: 1;
+    box-shadow:
+      inset 0 1px 0 var(--button-top-line, rgb(255 255 255 / 0.05)),
+      inset var(--button-rail-width, 0) 0 0 var(--button-rail, transparent);
     transition:
       background-color 120ms ease,
       border-color 120ms ease,
+      box-shadow 120ms ease,
       color 120ms ease;
   }
 
   .ghost-button {
+    --button-border: rgb(var(--source-green-rgb) / 0.24);
+    --button-rail-width: 2px;
+    --button-rail: rgb(var(--source-green-rgb) / 0.18);
     color: var(--color-text-soft);
-    background: var(--color-surface-strong);
+    background: rgb(1 8 6 / 0.9);
   }
 
-  .ghost-button:hover,
-  .chip-button:hover {
-    border-color: rgb(var(--source-green-rgb) / 0.46);
-    background: rgb(var(--source-green-rgb) / 0.08);
+  .ghost-button:not(:disabled):hover,
+  .chip-button:not(:disabled):hover {
+    --button-rail-width: 3px;
+    --button-rail: var(--color-accent);
+    border-color: rgb(var(--source-green-rgb) / 0.52);
+    background: rgb(var(--source-green-rgb) / 0.1);
     color: var(--color-text);
   }
 
   .primary-button {
+    --button-border: rgb(var(--source-green-rgb) / 0.9);
+    --button-top-line: rgb(255 255 255 / 0.22);
     color: var(--source-black);
-    border-color: rgb(var(--source-green-rgb) / 0.72);
     background: var(--color-accent);
+    box-shadow:
+      inset -4px 0 0 rgb(0 0 0 / 0.22),
+      inset 0 1px 0 rgb(255 255 255 / 0.24);
   }
 
-  .primary-button:hover {
+  .primary-button:not(:disabled):hover {
     border-color: var(--color-accent-strong);
     background: var(--color-accent-strong);
+    box-shadow:
+      inset -4px 0 0 rgb(0 0 0 / 0.32),
+      inset 0 1px 0 rgb(255 255 255 / 0.28);
   }
 
   .primary-button:disabled,
@@ -172,12 +190,15 @@
   }
 
   .icon-button {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-height: 28px;
-    border: 1px solid rgb(var(--source-green-rgb) / 0.16);
-    background: var(--color-surface-strong);
+    min-height: 32px;
+    border: 1px solid rgb(var(--source-green-rgb) / 0.24);
+    background: rgb(1 8 6 / 0.9);
     color: var(--color-text-soft);
     border-radius: 0;
     padding: 0 var(--space-4);
@@ -185,12 +206,22 @@
     font-weight: 600;
     line-height: 1;
     flex-shrink: 0;
-    transition: 120ms ease;
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.05),
+      inset 2px 0 0 rgb(var(--source-green-rgb) / 0.16);
+    transition:
+      background-color 120ms ease,
+      border-color 120ms ease,
+      box-shadow 120ms ease,
+      color 120ms ease;
   }
 
-  .icon-button:hover {
-    border-color: rgb(var(--source-green-rgb) / 0.4);
-    background: rgb(var(--source-green-rgb) / 0.12);
+  .icon-button:not(:disabled):hover {
+    border-color: rgb(var(--source-green-rgb) / 0.52);
+    background: rgb(var(--source-green-rgb) / 0.1);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.06),
+      inset 3px 0 0 var(--color-accent);
     color: var(--color-text);
   }
 
@@ -212,16 +243,21 @@
   }
 
   .chip-button {
+    --button-border: rgb(var(--source-green-rgb) / 0.2);
+    --button-rail-width: 2px;
+    --button-rail: rgb(var(--source-green-rgb) / 0.14);
     min-height: 30px;
-    background: var(--color-surface-strong);
+    padding: 0 var(--space-5);
+    background: rgb(1 8 6 / 0.88);
     color: var(--color-text-warm);
     font-size: 12px;
   }
 
   .chip-button.selected {
+    --button-border: rgb(var(--source-green-rgb) / 0.48);
+    --button-rail-width: 3px;
+    --button-rail: var(--color-accent);
     background: rgb(var(--source-green-rgb) / 0.12);
-    border-color: rgb(var(--source-green-rgb) / 0.42);
-    box-shadow: inset 2px 0 0 var(--color-accent);
   }
 
   .field {
