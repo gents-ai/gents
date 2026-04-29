@@ -6,8 +6,18 @@ use std::fs;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use defra_agent::{default_behavior_id_for_agent, default_tool_selection_id_for_behavior};
 use serde_json::Value;
 use uuid::Uuid;
+
+fn generated_backend_id_for_agent(agent_did: &str) -> String {
+    format!("{agent_did}:backend")
+}
+
+fn generated_tool_selection_id_for_agent(agent_did: &str) -> String {
+    let default_behavior_id = default_behavior_id_for_agent(agent_did);
+    default_tool_selection_id_for_behavior(&default_behavior_id)
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
@@ -260,7 +270,6 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
     let port = allocate_port()?;
     let agent_name = format!("cli-p2p-ready-{}", Uuid::new_v4().simple());
     let graphql = graphql_url(port);
-    let default_behavior_id = "default".to_string();
 
     let init = run_init_json(
         &home_dir,
@@ -273,6 +282,7 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
         ],
     )?;
     let agent_did = agent_did_from_init(&init)?;
+    let default_behavior_id = default_behavior_id_for_agent(&agent_did);
     let (mut serve, readiness) = spawn_server_with_ready_json(
         &home_dir,
         port,
@@ -543,9 +553,7 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
 
     let port = allocate_port()?;
     let agent_name = format!("cli-auth-{}", Uuid::new_v4().simple());
-    let backend_id = format!("{agent_name}-backend");
     let graphql = graphql_url(port);
-    let tool_selection_id = "default-tools".to_string();
 
     let init = run_init_json(
         &home_dir,
@@ -565,6 +573,8 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
         Some("DEFRA_AGENT_TEST_CLI_BACKEND_KEY")
     );
     let agent_did = agent_did_from_init(&init)?;
+    let backend_id = generated_backend_id_for_agent(&agent_did);
+    let tool_selection_id = generated_tool_selection_id_for_agent(&agent_did);
 
     let mut serve = spawn_server_with_env(
         &home_dir,

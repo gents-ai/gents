@@ -106,7 +106,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     }
 
     let p2p_config = resolve_server_p2p_config(&home_dir, &args)?;
-    let mut node_builder = EmbeddedNode::builder().data_path(&data_dir).with_http(
+    let mut node_builder = crate::persistent_node_builder(&data_dir).with_http(
         defra_node::HttpConfig::with_addr(http_addr)
             .with_extra_routes(runtime_contract_router(graphql_url.clone())),
     );

@@ -8,8 +8,18 @@ use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use defra_agent::{default_behavior_id_for_agent, default_tool_selection_id_for_behavior};
 use serde_json::Value;
 use uuid::Uuid;
+
+fn generated_backend_id_for_agent(agent_did: &str) -> String {
+    format!("{agent_did}:backend")
+}
+
+fn generated_tool_selection_id_for_agent(agent_did: &str) -> String {
+    let default_behavior_id = default_behavior_id_for_agent(agent_did);
+    default_tool_selection_id_for_behavior(&default_behavior_id)
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotently() -> Result<()> {
@@ -22,9 +32,7 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
 
     let port = allocate_port()?;
     let agent_name = format!("cli-init-{}", Uuid::new_v4().simple());
-    let backend_id = format!("{agent_name}-backend");
     let graphql = graphql_url(port);
-    let tool_selection_id = "default-tools".to_string();
 
     let init = run_init_json(
         &home_dir,
@@ -45,6 +53,8 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
         Some("Readonly")
     );
     let agent_did = agent_did_from_init(&init)?;
+    let backend_id = generated_backend_id_for_agent(&agent_did);
+    let tool_selection_id = generated_tool_selection_id_for_agent(&agent_did);
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -176,9 +186,7 @@ async fn init_supports_provider_auth_backend_fields() -> Result<()> {
 
     let port = allocate_port()?;
     let agent_name = format!("cli-openrouter-{}", Uuid::new_v4().simple());
-    let backend_id = format!("{agent_name}-backend");
     let graphql = graphql_url(port);
-    let tool_selection_id = "default-tools".to_string();
 
     let init = run_init_json(
         &home_dir,
@@ -203,6 +211,8 @@ async fn init_supports_provider_auth_backend_fields() -> Result<()> {
         Some("<redacted>")
     );
     let agent_did = agent_did_from_init(&init)?;
+    let backend_id = generated_backend_id_for_agent(&agent_did);
+    let tool_selection_id = generated_tool_selection_id_for_agent(&agent_did);
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -428,7 +438,6 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
     let agent_name = format!("cli-explicit-{}", Uuid::new_v4().simple());
     let graphql = graphql_url(port);
     let backend_id = format!("{agent_name}-custom-backend");
-    let tool_selection_id = "default-tools".to_string();
 
     let init = run_init_json(
         &home_dir,
@@ -443,6 +452,7 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
         ],
     )?;
     let agent_did = agent_did_from_init(&init)?;
+    let tool_selection_id = generated_tool_selection_id_for_agent(&agent_did);
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
@@ -515,8 +525,6 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
     let port = allocate_port()?;
     let agent_name = format!("cli-write-{}", Uuid::new_v4().simple());
     let graphql = graphql_url(port);
-    let backend_id = format!("{agent_name}-backend");
-    let tool_selection_id = "default-tools".to_string();
 
     let init = run_init_json(
         &home_dir,
@@ -534,6 +542,8 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
         Some("Readwrite")
     );
     let agent_did = agent_did_from_init(&init)?;
+    let backend_id = generated_backend_id_for_agent(&agent_did);
+    let tool_selection_id = generated_tool_selection_id_for_agent(&agent_did);
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;

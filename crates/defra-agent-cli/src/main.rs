@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use defra_agent::defra_node::EmbeddedNode;
+use defra_agent::defra_node::{EmbeddedNode, NodeBuilder, StorageBackend};
 use defra_agent::ensure_runtime_schemas;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -159,10 +159,10 @@ Examples:
   defra-agent config validate --root infra/agents/default --home /path/to/home --bind-agent-did home
   defra-agent config diff --root infra/agents/default --home /path/to/home
   defra-agent config apply --root infra/agents/default --home /path/to/home --bind-agent-did home
-  defra-agent config backend set --graphql URL --backend-id default-backend --name default-backend --backend-preset openrouter --max-concurrent 2
+  defra-agent config backend set --graphql URL --backend-id <backend-id> --name <name> --backend-preset openrouter --max-concurrent 2
   defra-agent config backend discover-models --backend-preset openrouter
-  defra-agent config behavior set --graphql URL --agent-did <AGENT_DID> --backend-id default-backend --model-name MODEL
-  defra-agent config tools set --graphql URL --agent-did <AGENT_DID> --selection-id default-tools --enable-file-tools";
+  defra-agent config behavior set --graphql URL --agent-did <AGENT_DID> --backend-id <backend-id> --model-name MODEL
+  defra-agent config tools set --graphql URL --agent-did <AGENT_DID> --selection-id <selection-id> --enable-file-tools";
 const REQUEST_AFTER_HELP: &str = "\
 `request` is the low-level document path. Most users should prefer `defra-agent chat`.
 
@@ -386,8 +386,7 @@ pub(crate) async fn resolve_config_access(
     let data_dir = default_data_dir(&home_dir);
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let node = EmbeddedNode::builder()
-        .data_path(&data_dir)
+    let node = persistent_node_builder(&data_dir)
         .build()
         .await
         .with_context(|| format!("building embedded defra node from {}", data_dir.display()))?;
@@ -395,6 +394,12 @@ pub(crate) async fn resolve_config_access(
         ensure_runtime_schemas(&node).await?;
     }
     Ok((ConfigAccess::Local(node), home_dir))
+}
+
+pub(crate) fn persistent_node_builder(data_dir: &Path) -> NodeBuilder {
+    EmbeddedNode::builder()
+        .data_path(data_dir)
+        .with_storage_backend(StorageBackend::RocksDb)
 }
 
 pub(crate) fn require_non_empty<'a>(field: &str, value: &'a str) -> Result<&'a str> {

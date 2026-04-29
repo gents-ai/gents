@@ -1,10 +1,8 @@
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
-    default_tool_selection_id_for_behavior, ensure_agent_principal, list_agent_behaviors,
-    load_agent_behavior, load_inference_profile, load_tool_selection, upsert_agent_behavior,
-    upsert_inference_profile, upsert_tool_selection, AgentBehavior, InferenceProfile,
-    ToolSelectionDocument,
+    ensure_agent_principal, list_agent_behaviors, load_agent_behavior, load_inference_profile,
+    upsert_agent_behavior, upsert_inference_profile, AgentBehavior, InferenceProfile,
 };
 
 mod support;
@@ -88,121 +86,6 @@ async fn ensure_agent_principal_backfills_missing_default_behavior() {
             default_inference_profile_id_for_behavior(&default_behavior_id_for_agent(agent_did))
                 .as_str()
         )
-    );
-}
-
-#[tokio::test]
-async fn ensure_agent_principal_migrates_legacy_did_derived_default_behavior() {
-    let db = test_db("principal-bootstrap-legacy-default").await;
-    let agent_did = "did:defra-agent:legacy";
-    let legacy_behavior_id = format!("{agent_did}:default");
-    let legacy_profile_id = format!("{legacy_behavior_id}:profile");
-    let legacy_tool_selection_id = format!("{legacy_behavior_id}:tools");
-    let default_behavior_id = default_behavior_id_for_agent(agent_did);
-    let default_profile_id = default_inference_profile_id_for_behavior(&default_behavior_id);
-    let default_tool_selection_id = default_tool_selection_id_for_behavior(&default_behavior_id);
-
-    insert_principal(db.node.as_ref(), agent_did, &legacy_behavior_id).await;
-    upsert_inference_profile(
-        db.node.as_ref(),
-        &InferenceProfile {
-            profile_id: legacy_profile_id.clone(),
-            display_name: Some("Legacy Profile".to_string()),
-            context_window: Some(131072),
-            max_output_tokens: Some(4096),
-            max_turns: Some(50),
-            temperature: Some(0.1),
-            stream_batch_ms: Some(250),
-            deadline_duration_secs: Some(300),
-        },
-    )
-    .await
-    .expect("upsert legacy profile");
-    upsert_tool_selection(
-        db.node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: legacy_tool_selection_id.clone(),
-            agent_did: agent_did.to_string(),
-            display_name: Some("Legacy Tools".to_string()),
-            enable_file_tools: Some(true),
-            file_tools_mode: Some("ReadOnly".to_string()),
-            file_tool_root: None,
-            enable_bash: Some(false),
-            bash_mode: Some("Off".to_string()),
-            cli_tool_names: Some(vec!["rg".to_string()]),
-            enable_meta_tools: Some(false),
-            delegate_to: Some(Vec::new()),
-        },
-    )
-    .await
-    .expect("upsert legacy tool selection");
-    upsert_agent_behavior(
-        db.node.as_ref(),
-        &AgentBehavior {
-            behavior_id: legacy_behavior_id.clone(),
-            agent_did: agent_did.to_string(),
-            display_name: Some("Default".to_string()),
-            system_prompt: Some("Use the migrated defaults.".to_string()),
-            backend_id: Some("backend-legacy".to_string()),
-            model_name: Some("model-legacy".to_string()),
-            tool_selection_id: Some(legacy_tool_selection_id.clone()),
-            inference_profile_id: Some(legacy_profile_id.clone()),
-            compaction_strategy: Some("StripThenSummarize".to_string()),
-            compaction_threshold: Some(0.8),
-            enabled: true,
-            created_at: None,
-        },
-    )
-    .await
-    .expect("upsert legacy behavior");
-
-    let bootstrap = ensure_agent_principal(db.node.as_ref(), agent_did)
-        .await
-        .expect("bootstrap succeeds");
-
-    assert_eq!(
-        bootstrap.principal.default_behavior_id.as_deref(),
-        Some("default")
-    );
-    assert_eq!(bootstrap.default_behavior.behavior_id, "default");
-    assert_eq!(
-        bootstrap.default_behavior.backend_id.as_deref(),
-        Some("backend-legacy")
-    );
-    assert_eq!(
-        bootstrap.default_behavior.inference_profile_id.as_deref(),
-        Some(default_profile_id.as_str())
-    );
-    assert_eq!(
-        bootstrap.default_behavior.tool_selection_id.as_deref(),
-        Some(default_tool_selection_id.as_str())
-    );
-
-    let profile = load_inference_profile(db.node.as_ref(), &default_profile_id)
-        .await
-        .expect("load default profile")
-        .expect("default profile exists");
-    assert_eq!(profile.display_name.as_deref(), Some("Legacy Profile"));
-
-    let tools = load_tool_selection(db.node.as_ref(), &default_tool_selection_id)
-        .await
-        .expect("load default tool selection")
-        .expect("default tool selection exists");
-    assert_eq!(tools.display_name.as_deref(), Some("Legacy Tools"));
-
-    assert!(load_agent_behavior(db.node.as_ref(), &legacy_behavior_id)
-        .await
-        .expect("load legacy behavior")
-        .is_none());
-    assert!(load_inference_profile(db.node.as_ref(), &legacy_profile_id)
-        .await
-        .expect("load legacy profile")
-        .is_none());
-    assert!(
-        load_tool_selection(db.node.as_ref(), &legacy_tool_selection_id)
-            .await
-            .expect("load legacy tool selection")
-            .is_none()
     );
 }
 

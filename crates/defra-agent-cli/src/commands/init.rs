@@ -7,7 +7,6 @@ use defra_agent::config::{
     DEFAULT_CONTEXT_WINDOW, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS,
     DEFAULT_MAX_TURNS, DEFAULT_STREAM_BATCH_MS,
 };
-use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     default_tool_selection_id_for_behavior, ensure_config_bootstrap_schemas, load_agent_behavior,
@@ -122,7 +121,7 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
         .await
         .context("creating or loading agent identity key")?;
 
-    let mut node_builder = EmbeddedNode::builder().data_path(&data_dir);
+    let mut node_builder = crate::persistent_node_builder(&data_dir);
     if let Some(node_identity_did) = initialized_identity.node_identity_did.as_ref() {
         node_builder = node_builder.with_node_identity_did(node_identity_did.clone());
     }
@@ -358,12 +357,19 @@ async fn initialize_runtime_home(
         anyhow::bail!("--model-name must not be empty");
     }
     let backend = resolve_init_backend_config(args)?;
+    let backend_id_was_generated = explicit_backend_id.is_none();
     let backend_id = explicit_backend_id
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| format!("{}-backend", args.agent_name));
+        .unwrap_or_else(|| default_backend_id_for_agent(agent_did));
     let backend_name = explicit_backend_name
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| backend_id.clone());
+        .unwrap_or_else(|| {
+            if backend_id_was_generated {
+                format!("{} backend", args.agent_name)
+            } else {
+                backend_id.clone()
+            }
+        });
     let existing_principal = load_agent_principal(node, agent_did).await?;
     let default_behavior_id = existing_principal
         .as_ref()
@@ -499,6 +505,10 @@ fn standard_inference_profile(profile_id: &str) -> InferenceProfile {
         stream_batch_ms: Some(DEFAULT_STREAM_BATCH_MS as i64),
         deadline_duration_secs: Some(DEFAULT_DEADLINE_DURATION_SECS as i64),
     }
+}
+
+fn default_backend_id_for_agent(agent_did: &str) -> String {
+    format!("{agent_did}:backend")
 }
 
 fn standard_system_prompt(tool_ceiling: ToolCeilingArg) -> &'static str {

@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::session::{fork, ForkError, ForkParams};
 use serde_json::json;
 
@@ -37,8 +36,7 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
     let home = resolve_home_dir(args.home.as_deref());
     let data_dir = default_data_dir(&home);
 
-    let node = EmbeddedNode::builder()
-        .data_path(&data_dir)
+    let node = crate::persistent_node_builder(&data_dir)
         .build()
         .await
         .with_context(|| {
