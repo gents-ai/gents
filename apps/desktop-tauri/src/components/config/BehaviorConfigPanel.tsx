@@ -10,13 +10,16 @@ import type {
   InferenceProfileView,
   ToolSelectionView,
 } from "../../lib/types";
-import { ConfigDocumentList, PencilIcon, PlusIcon } from "./ConfigChrome";
+import { ConfigDocumentList, PlusIcon } from "./ConfigChrome";
 import {
   boolText,
   isOptionalFloat,
   optionalString,
   parseOptionalFloat,
 } from "./formUtils";
+
+const DEFAULT_COMPACTION_STRATEGY = "StripThenSummarize";
+const DEFAULT_COMPACTION_THRESHOLD = "0.75";
 
 export type BehaviorConfigPanelProps = {
   deployment: DeploymentView;
@@ -132,15 +135,15 @@ export function BehaviorConfigEditor({
   onSaveBehaviorConfig,
 }: BehaviorConfigEditorProps) {
   const [behaviorId, setBehaviorId] = useState("");
-  const [editingBehaviorId, setEditingBehaviorId] = useState(false);
   const [systemPrompt, setSystemPrompt] = useState("");
   const [backendId, setBackendId] = useState("");
   const [profileId, setProfileId] = useState("");
   const [toolSelectionId, setToolSelectionId] = useState("");
   const [compactionStrategy, setCompactionStrategy] =
-    useState("StripThenSummarize");
-  const [compactionThreshold, setCompactionThreshold] = useState("0.95");
-  const [compactionEnabled, setCompactionEnabled] = useState(true);
+    useState(DEFAULT_COMPACTION_STRATEGY);
+  const [compactionThreshold, setCompactionThreshold] = useState(
+    DEFAULT_COMPACTION_THRESHOLD,
+  );
   const [enabled, setEnabled] = useState(true);
   const [defaultForAgent, setDefaultForAgent] = useState(false);
 
@@ -154,20 +157,15 @@ export function BehaviorConfigEditor({
       nextProfileId = selectedProfileId;
     }
     setBehaviorId(behavior?.behaviorId ?? "");
-    setEditingBehaviorId(!behavior);
     setSystemPrompt(behavior?.systemPrompt ?? "");
     setBackendId(behavior?.backendId ?? "");
     setProfileId(nextProfileId);
     setToolSelectionId(behavior?.toolSelectionId ?? "");
-    setCompactionStrategy(behavior?.compactionStrategy ?? "StripThenSummarize");
+    setCompactionStrategy(behavior?.compactionStrategy ?? DEFAULT_COMPACTION_STRATEGY);
     setCompactionThreshold(
       behavior?.compactionThreshold != null
         ? String(behavior.compactionThreshold)
-        : "0.95",
-    );
-    setCompactionEnabled(
-      !behavior ||
-        Boolean(behavior.compactionStrategy || behavior.compactionThreshold != null),
+        : DEFAULT_COMPACTION_THRESHOLD,
     );
     setEnabled(behavior?.enabled ?? true);
     setDefaultForAgent(behavior?.isDefault ?? false);
@@ -190,7 +188,6 @@ export function BehaviorConfigEditor({
     ),
   );
   const compactionThresholdValid =
-    !compactionEnabled ||
     isOptionalFloat(compactionThreshold, {
       min: 0,
       max: 1,
@@ -207,12 +204,8 @@ export function BehaviorConfigEditor({
       backendId: optionalString(backendId),
       inferenceProfileId: profileId.trim(),
       toolSelectionId: optionalString(toolSelectionId),
-      compactionStrategy: compactionEnabled
-        ? optionalString(compactionStrategy)
-        : null,
-      compactionThreshold: compactionEnabled
-        ? parseOptionalFloat(compactionThreshold)
-        : null,
+      compactionStrategy: optionalString(compactionStrategy),
+      compactionThreshold: parseOptionalFloat(compactionThreshold),
       enabled,
     });
     if (defaultForAgent && nextId !== currentDefaultBehaviorId) {
@@ -232,7 +225,7 @@ export function BehaviorConfigEditor({
         <div>
           <p className="eyebrow">Behavior</p>
           <div className="behavior-key-row">
-            {editingBehaviorId ? (
+            {!behavior ? (
               <input
                 className="behavior-key-input"
                 data-testid="behavior-id"
@@ -242,18 +235,6 @@ export function BehaviorConfigEditor({
             ) : (
               <h3>{behaviorId || "New Behavior"}</h3>
             )}
-            {!editingBehaviorId ? (
-              <button
-                aria-label="Edit behavior key"
-                className="ghost-button config-icon-button"
-                data-testid="behavior-edit-key"
-                onClick={() => setEditingBehaviorId(true)}
-                title="Edit behavior key"
-                type="button"
-              >
-                <PencilIcon />
-              </button>
-            ) : null}
           </div>
         </div>
         {savedStatus === `behavior:${behaviorId.trim()}` ? (
@@ -369,28 +350,12 @@ export function BehaviorConfigEditor({
         </label>
       </div>
 
-      <section
-        className={
-          compactionEnabled
-            ? "behavior-compaction-box"
-            : "behavior-compaction-box disabled"
-        }
-      >
-        <label className="checkbox behavior-compaction-toggle">
-          <input
-            checked={compactionEnabled}
-            data-testid="behavior-compaction-enabled"
-            onChange={(event) => setCompactionEnabled(event.currentTarget.checked)}
-            type="checkbox"
-          />
-          <span>Enable compaction</span>
-        </label>
+      <section className="behavior-compaction-box">
         <div className="grid-2">
           <label className="field">
             <span>Strategy</span>
             <select
               data-testid="behavior-compaction-strategy"
-              disabled={!compactionEnabled}
               onChange={(event) => setCompactionStrategy(event.currentTarget.value)}
               value={compactionStrategy}
             >
@@ -403,7 +368,6 @@ export function BehaviorConfigEditor({
             <span>Threshold</span>
             <input
               data-testid="behavior-compaction-threshold"
-              disabled={!compactionEnabled}
               max="1"
               min="0"
               onChange={(event) =>

@@ -323,21 +323,6 @@
     background: var(--color-surface-strong);
   }
 
-  .behavior-compaction-box.disabled {
-    opacity: 0.56;
-  }
-
-  .behavior-compaction-box.disabled select,
-  .behavior-compaction-box.disabled input:not([type="checkbox"]) {
-    cursor: default;
-  }
-
-  .behavior-compaction-toggle {
-    border: 0;
-    padding: 0;
-    background: transparent;
-  }
-
   .behavior-system-prompt {
     min-height: 320px;
   }
@@ -364,13 +349,23 @@
   }
 
   .config-document-list-body .list-item:hover {
-    background: rgb(var(--source-green-rgb) / 0.07);
+    background: rgb(255 255 255 / 0.035);
   }
 
   .config-document-list-body .list-item.selected {
     border-color: var(--border-subtle);
-    background: rgb(var(--source-green-rgb) / 0.13);
-    box-shadow: inset 2px 0 0 var(--color-accent);
+    background: rgb(0 0 0 / 0.32);
+    box-shadow:
+      inset 3px 0 0 rgb(var(--source-green-rgb) / 0.72),
+      inset 0 0 0 1px rgb(255 255 255 / 0.035);
+  }
+
+  .config-document-list-body .list-item-meta {
+    color: var(--color-text-muted);
+  }
+
+  .config-document-list-body .list-item.selected .list-item-meta {
+    color: var(--color-text-soft);
   }
 
   .config-document-list-body > .muted {
@@ -479,6 +474,13 @@
     min-height: 40px;
     border-radius: var(--radius-sm);
     padding: var(--space-4) var(--space-5);
+  }
+
+  .config-workspace .field > input[readonly] {
+    border-color: var(--border-subtle);
+    background: rgb(0 0 0 / 0.48);
+    color: var(--color-text-muted);
+    cursor: default;
   }
 
   .config-workspace .field > input:focus,

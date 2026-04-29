@@ -162,7 +162,13 @@ export function InferenceProfileConfigEditor({
           <span>Profile document ID</span>
           <input
             data-testid="profile-id"
-            onChange={(event) => setProfileId(event.currentTarget.value)}
+            onChange={(event) => {
+              if (!profile) {
+                setProfileId(event.currentTarget.value);
+              }
+            }}
+            readOnly={Boolean(profile)}
+            title={profile ? "Profile IDs cannot be renamed after creation." : undefined}
             value={profileId}
           />
         </label>

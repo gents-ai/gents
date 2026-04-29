@@ -193,7 +193,17 @@ export function ToolServiceConfigEditor({
           <span>Service ID</span>
           <input
             data-testid="tool-service-id"
-            onChange={(event) => setServiceId(event.currentTarget.value)}
+            onChange={(event) => {
+              if (!toolService) {
+                setServiceId(event.currentTarget.value);
+              }
+            }}
+            readOnly={Boolean(toolService)}
+            title={
+              toolService
+                ? "Tool service IDs cannot be renamed after creation."
+                : undefined
+            }
             value={serviceId}
           />
         </label>

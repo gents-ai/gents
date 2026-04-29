@@ -208,7 +208,17 @@ export function ToolSelectionConfigEditor({
           <span>Selection ID</span>
           <input
             data-testid="tool-selection-id"
-            onChange={(event) => setSelectionId(event.currentTarget.value)}
+            onChange={(event) => {
+              if (!toolSelection) {
+                setSelectionId(event.currentTarget.value);
+              }
+            }}
+            readOnly={Boolean(toolSelection)}
+            title={
+              toolSelection
+                ? "Tool selection IDs cannot be renamed after creation."
+                : undefined
+            }
             value={selectionId}
           />
         </label>

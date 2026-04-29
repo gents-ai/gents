@@ -145,7 +145,17 @@ export function EventTriggerConfigEditor({
           <span>Trigger ID</span>
           <input
             data-testid="event-trigger-id"
-            onChange={(event) => setTriggerId(event.currentTarget.value)}
+            onChange={(event) => {
+              if (!eventTrigger) {
+                setTriggerId(event.currentTarget.value);
+              }
+            }}
+            readOnly={Boolean(eventTrigger)}
+            title={
+              eventTrigger
+                ? "Event trigger IDs cannot be renamed after creation."
+                : undefined
+            }
             value={triggerId}
           />
         </label>

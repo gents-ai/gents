@@ -152,7 +152,13 @@ export function BackendConfigEditor({
           <span>Backend ID</span>
           <input
             data-testid="backend-id"
-            onChange={(event) => setBackendId(event.currentTarget.value)}
+            onChange={(event) => {
+              if (!backend) {
+                setBackendId(event.currentTarget.value);
+              }
+            }}
+            readOnly={Boolean(backend)}
+            title={backend ? "Backend IDs cannot be renamed after creation." : undefined}
             value={backendId}
           />
         </label>

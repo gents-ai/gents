@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   addPeer,
   fetchDesktopSnapshot,
+  fetchPeerStatus,
   fetchSessionSnapshot,
   renameConversation,
   repairP2P,
@@ -396,6 +397,16 @@ export function useDesktopShell() {
     }
   }
 
+  async function onFetchPeerStatus(serverAddress: string) {
+    setError(null);
+    try {
+      return await fetchPeerStatus(serverAddress);
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    }
+  }
+
   async function onRepairP2P() {
     setRepairingP2P(true);
     setError(null);
@@ -690,6 +701,7 @@ export function useDesktopShell() {
     setDraft,
     refreshSnapshot,
     onAddPeer,
+    onFetchPeerStatus,
     onRepairP2P,
     onSendMessage,
     onRenameConversationTitle,

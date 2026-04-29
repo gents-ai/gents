@@ -71,6 +71,14 @@
     align-items: end;
   }
 
+  .fleet-discovery-row {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: minmax(260px, 1fr) auto;
+    gap: var(--space-5);
+    align-items: end;
+  }
+
   .fleet-add-form > .field {
     min-width: 0;
   }
@@ -109,6 +117,10 @@
 
   .fleet-empty-card .fleet-add-form {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .fleet-empty-card .fleet-discovery-row {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .fleet-empty-card .fleet-add-actions {

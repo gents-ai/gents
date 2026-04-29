@@ -157,7 +157,13 @@ export function ScheduleConfigEditor({
           <span>Schedule ID</span>
           <input
             data-testid="schedule-id"
-            onChange={(event) => setScheduleId(event.currentTarget.value)}
+            onChange={(event) => {
+              if (!schedule) {
+                setScheduleId(event.currentTarget.value);
+              }
+            }}
+            readOnly={Boolean(schedule)}
+            title={schedule ? "Schedule IDs cannot be renamed after creation." : undefined}
             value={scheduleId}
           />
         </label>
@@ -264,7 +270,7 @@ export function ScheduleConfigEditor({
           <button
             className="ghost-button"
             data-testid="schedule-run"
-            disabled={runningTask || !scheduleId.trim()}
+            disabled={runningTask || !schedule || !scheduleId.trim()}
             onClick={() => void runSelectedSchedule()}
             type="button"
           >

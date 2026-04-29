@@ -3719,6 +3719,7 @@ dependencies = [
  "defra-agent",
  "defra-agent-desktop-core",
  "defra-agent-protocol",
+ "reqwest 0.12.28",
  "rig-core",
  "serde",
  "serde_json",
