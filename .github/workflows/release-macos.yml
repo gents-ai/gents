@@ -61,6 +61,15 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Install protobuf compiler
+        run: |
+          set -euo pipefail
+          if ! command -v protoc >/dev/null 2>&1; then
+            brew install protobuf
+          fi
+          echo "PROTOC=$(command -v protoc)" >> "${GITHUB_ENV}"
+          protoc --version
+
       - uses: Swatinem/rust-cache@v2
 
       - name: Validate release signing mode
