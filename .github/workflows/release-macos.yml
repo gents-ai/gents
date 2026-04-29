@@ -147,25 +147,32 @@ jobs:
           cargo build -p defra-agent-cli --release
           file target/release/defra-agent
 
-      - name: Import signing certificate
+      - name: Import signing certificate and sign binary
         env:
           MACOS_CODESIGN_CERT_P12_BASE64: ${{ secrets.MACOS_CODESIGN_CERT_P12_BASE64 }}
           MACOS_CODESIGN_CERT_PASSWORD: ${{ secrets.MACOS_CODESIGN_CERT_PASSWORD }}
+          MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
           MACOS_CODESIGN_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_CODESIGN_KEYCHAIN_PASSWORD }}
+          TIMESTAMP_MODE_INPUT: ${{ inputs.codesign_timestamp }}
+          TIMESTAMP_MODE_VAR: ${{ vars.MACOS_CODESIGN_TIMESTAMP_MODE }}
         run: |
           set -euo pipefail
 
           if [[ "${SIGNING_ENABLED}" != "true" ]]; then
-            echo "Skipping certificate import for unsigned manual dry-run."
+            echo "Skipping certificate import and codesign for unsigned manual dry-run."
             exit 0
           fi
 
+          binary_path="target/release/defra-agent"
           keychain_path="${RUNNER_TEMP}/defra-agent-signing.keychain-db"
           keychain_password="${MACOS_CODESIGN_KEYCHAIN_PASSWORD:-$(uuidgen)}"
           cert_path="${RUNNER_TEMP}/defra-agent-codesign.p12"
           original_keychains_path="${RUNNER_TEMP}/defra-agent-original-keychains.txt"
           original_default_keychain_path="${RUNNER_TEMP}/defra-agent-original-default-keychain.txt"
+          timestamp_mode="${TIMESTAMP_MODE_INPUT:-${TIMESTAMP_MODE_VAR:-auto}}"
 
+          trap 'rm -f "${cert_path}"' EXIT
+          echo "SIGNING_KEYCHAIN=${keychain_path}" >> "${GITHUB_ENV}"
           printf '%s' "${MACOS_CODESIGN_CERT_P12_BASE64}" | base64 -D > "${cert_path}"
 
           security list-keychains -d user > "${original_keychains_path}"
@@ -187,31 +194,20 @@ jobs:
           security list-keychains -d user -s "${keychain_path}" "${keychains[@]}"
           security default-keychain -d user -s "${keychain_path}"
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${keychain_password}" "${keychain_path}"
-          security find-identity -v -p codesigning "${keychain_path}"
+          security unlock-keychain -p "${keychain_password}" "${keychain_path}"
 
-          echo "SIGNING_KEYCHAIN=${keychain_path}" >> "${GITHUB_ENV}"
-          rm -f "${cert_path}"
-
-      - name: Sign release binary
-        env:
-          MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
-          TIMESTAMP_MODE_INPUT: ${{ inputs.codesign_timestamp }}
-          TIMESTAMP_MODE_VAR: ${{ vars.MACOS_CODESIGN_TIMESTAMP_MODE }}
-        run: |
-          set -euo pipefail
-
-          if [[ "${SIGNING_ENABLED}" != "true" ]]; then
-            echo "Skipping codesign for unsigned manual dry-run."
-            exit 0
+          identity_output="$(security find-identity -v -p codesigning "${keychain_path}")"
+          printf '%s\n' "${identity_output}"
+          if ! grep -Fq "${MACOS_CODESIGN_IDENTITY}" <<< "${identity_output}"; then
+            echo "::error::Configured MACOS_CODESIGN_IDENTITY was not found in the imported signing keychain."
+            exit 1
           fi
-
-          binary_path="target/release/defra-agent"
-          timestamp_mode="${TIMESTAMP_MODE_INPUT:-${TIMESTAMP_MODE_VAR:-auto}}"
 
           sign_with_timestamp_arg() {
             local timestamp_arg="$1"
             codesign \
               --force \
+              --keychain "${keychain_path}" \
               --sign "${MACOS_CODESIGN_IDENTITY}" \
               --identifier "${MACOS_CODESIGN_IDENTIFIER}" \
               "${timestamp_arg}" \
@@ -221,7 +217,7 @@ jobs:
           case "${timestamp_mode}" in
             auto)
               if ! sign_with_timestamp_arg "--timestamp"; then
-                echo "::warning::codesign timestamping failed; retrying with --timestamp=none for this signed artifact."
+                echo "::warning::codesign with timestamp failed; retrying with --timestamp=none for this signed artifact."
                 sign_with_timestamp_arg "--timestamp=none"
               fi
               ;;
