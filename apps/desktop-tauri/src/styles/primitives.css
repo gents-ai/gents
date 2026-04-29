@@ -2,7 +2,9 @@
   .panel {
     border: 1px solid var(--border-default);
     background: var(--color-surface);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.04),
+      0 18px 60px rgb(0 0 0 / 0.22);
     padding: var(--space-7);
   }
 
@@ -40,7 +42,7 @@
     text-align: left;
     border-radius: var(--radius-lg);
     border: 1px solid var(--border-subtle);
-    background: rgba(18, 14, 11, 0.92);
+    background: rgb(0 0 0 / 0.58);
     padding: var(--space-5) var(--space-6);
     display: grid;
     gap: var(--space-1);
@@ -50,7 +52,7 @@
 
   .list-item.selected {
     border-color: var(--border-selected);
-    background: rgba(214, 167, 103, 0.09);
+    background: rgb(var(--source-green-rgb) / 0.12);
   }
 
   .list-item-title {
@@ -91,7 +93,7 @@
   .centered-panel {
     border-radius: var(--radius-lg);
     border: 1px solid var(--border-subtle);
-    background: rgba(18, 14, 11, 0.92);
+    background: rgb(0 0 0 / 0.58);
   }
 
   .callout,
@@ -112,45 +114,116 @@
   .ghost-button,
   .primary-button,
   .chip-button {
-    border-radius: var(--radius-md);
-    padding: var(--space-4) var(--space-6);
-    border: 1px solid var(--border-strong);
-    transition: 120ms ease;
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-3);
+    min-height: 40px;
+    border-radius: 0;
+    padding: 0 var(--space-7);
+    border: 1px solid var(--button-border, var(--border-strong));
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    line-height: 1;
+    box-shadow:
+      inset 0 1px 0 var(--button-top-line, rgb(255 255 255 / 0.05)),
+      inset var(--button-rail-width, 0) 0 0 var(--button-rail, transparent);
+    transition:
+      background-color 120ms ease,
+      border-color 120ms ease,
+      box-shadow 120ms ease,
+      color 120ms ease;
   }
 
   .ghost-button {
-    color: #e6d7c0;
-    background: rgba(214, 167, 103, 0.06);
+    --button-border: rgb(var(--source-green-rgb) / 0.24);
+    --button-rail-width: 2px;
+    --button-rail: rgb(var(--source-green-rgb) / 0.18);
+    color: var(--color-text-soft);
+    background: rgb(1 8 6 / 0.9);
   }
 
-  .ghost-button:hover,
-  .primary-button:hover,
-  .chip-button:hover {
-    border-color: rgba(214, 167, 103, 0.4);
-    background: rgba(214, 167, 103, 0.12);
+  .ghost-button:not(:disabled):hover,
+  .chip-button:not(:disabled):hover {
+    --button-rail-width: 3px;
+    --button-rail: var(--color-accent);
+    border-color: rgb(var(--source-green-rgb) / 0.52);
+    background: rgb(var(--source-green-rgb) / 0.1);
+    color: var(--color-text);
   }
 
   .primary-button {
-    color: #1c160f;
-    background: linear-gradient(180deg, var(--color-accent) 0%, var(--color-accent-strong) 100%);
-    font-weight: 600;
+    --button-border: rgb(var(--source-green-rgb) / 0.46);
+    --button-rail-width: 3px;
+    --button-rail: var(--color-accent);
+    color: var(--color-text);
+    background: rgb(1 8 6 / 0.94);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.06),
+      inset 3px 0 0 var(--color-accent);
+  }
+
+  .primary-button:not(:disabled):hover {
+    border-color: rgb(var(--source-green-rgb) / 0.68);
+    background: rgb(var(--source-green-rgb) / 0.1);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.07),
+      inset 4px 0 0 var(--color-accent);
   }
 
   .primary-button:disabled,
-  .ghost-button:disabled {
+  .ghost-button:disabled,
+  .chip-button:disabled {
     cursor: default;
-    opacity: 0.65;
+    opacity: 0.52;
+  }
+
+  .primary-button:focus-visible,
+  .ghost-button:focus-visible,
+  .chip-button:focus-visible,
+  .icon-button:focus-visible,
+  .tab-button:focus-visible {
+    outline: 2px solid rgb(var(--source-green-rgb) / 0.36);
+    outline-offset: 2px;
   }
 
   .icon-button {
-    border: 1px solid rgba(214, 167, 103, 0.14);
-    background: var(--color-surface-muted);
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 32px;
+    border: 1px solid rgb(var(--source-green-rgb) / 0.24);
+    background: rgb(1 8 6 / 0.9);
     color: var(--color-text-soft);
-    border-radius: var(--radius-pill);
-    padding: var(--space-2) var(--space-4);
+    border-radius: 0;
+    padding: 0 var(--space-4);
     font-size: 12px;
+    font-weight: 600;
     line-height: 1;
     flex-shrink: 0;
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.05),
+      inset 2px 0 0 rgb(var(--source-green-rgb) / 0.16);
+    transition:
+      background-color 120ms ease,
+      border-color 120ms ease,
+      box-shadow 120ms ease,
+      color 120ms ease;
+  }
+
+  .icon-button:not(:disabled):hover {
+    border-color: rgb(var(--source-green-rgb) / 0.52);
+    background: rgb(var(--source-green-rgb) / 0.1);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.06),
+      inset 3px 0 0 var(--color-accent);
+    color: var(--color-text);
   }
 
   .chip {
@@ -158,26 +231,34 @@
     align-items: center;
     padding: 5px 9px;
     border-radius: var(--radius-pill);
-    background: rgba(214, 167, 103, 0.12);
+    background: rgb(var(--source-green-rgb) / 0.12);
     color: var(--color-text-warm);
     font-size: 12px;
     border: 1px solid var(--border-subtle);
   }
 
   .chip-green {
-    background: rgba(89, 191, 112, 0.14);
+    background: rgb(var(--source-green-rgb) / 0.16);
     color: var(--color-success);
-    border-color: rgba(89, 191, 112, 0.18);
+    border-color: rgb(var(--source-green-rgb) / 0.24);
   }
 
   .chip-button {
-    background: rgba(214, 167, 103, 0.06);
+    --button-border: rgb(var(--source-green-rgb) / 0.2);
+    --button-rail-width: 2px;
+    --button-rail: rgb(var(--source-green-rgb) / 0.14);
+    min-height: 30px;
+    padding: 0 var(--space-5);
+    background: rgb(1 8 6 / 0.88);
     color: var(--color-text-warm);
+    font-size: 12px;
   }
 
   .chip-button.selected {
-    background: rgba(214, 167, 103, 0.16);
-    border-color: rgba(214, 167, 103, 0.32);
+    --button-border: rgb(var(--source-green-rgb) / 0.48);
+    --button-rail-width: 3px;
+    --button-rail: var(--color-accent);
+    background: rgb(var(--source-green-rgb) / 0.12);
   }
 
   .field {
@@ -227,7 +308,7 @@
     font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: #a38f70;
+    color: var(--color-accent-muted);
   }
 
   .facts dd {
@@ -282,7 +363,7 @@
   .lede {
     margin-top: var(--space-4);
     max-width: 56rem;
-    color: #c8b9a0;
+    color: var(--color-text-soft);
   }
 
   .lede.compact {

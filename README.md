@@ -207,8 +207,8 @@ If you want to replace the default tool selection, you can still update document
 
 ```bash
 export GRAPHQL=http://127.0.0.1:9191/api/v0/graphql
-export AGENT_DID="did:defra-agent:default"
-export TOOL_SELECTION_ID=default-tools
+export AGENT_DID="did:key:..."
+export TOOL_SELECTION_ID="${AGENT_DID}:default-tools"
 
 $AGENT config tools set \
   --graphql "$GRAPHQL" \

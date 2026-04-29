@@ -82,7 +82,6 @@ export function ActiveChatWorkspace({
   return (
     <>
       <ChatHeader
-        agentDid={selectedDeployment.agentDid}
         behaviorLabel={behaviorLabel}
         runtimeHealth={runtimeHealth}
         selectedConversationTitle={selectedConversationTitle}

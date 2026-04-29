@@ -37,14 +37,14 @@
   }
 
   .config-brand-logo {
-    width: 42px;
-    height: 42px;
+    width: 40px;
+    height: 48px;
     flex: 0 0 auto;
-    border: 1px solid var(--border-default);
+    border: 1px solid rgb(var(--source-green-rgb) / 0.2);
     border-radius: var(--radius-sm);
-    background: var(--color-surface-muted);
+    background: rgb(0 0 0 / 0.58);
     object-fit: contain;
-    padding: var(--space-1);
+    padding: var(--space-2);
   }
 
   .config-title-block {
@@ -76,7 +76,7 @@
     width: 10px;
     height: 10px;
     border-radius: var(--radius-pill);
-    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.04);
+    box-shadow: 0 0 0 3px rgb(255 255 255 / 0.04);
   }
 
   .config-status-dot.green {
@@ -84,7 +84,7 @@
   }
 
   .config-status-dot.yellow {
-    background: var(--color-accent);
+    background: var(--color-warning);
   }
 
   .config-screen-nav {
@@ -100,7 +100,7 @@
   .config-screen-nav .tab-button {
     height: 34px;
     flex: 0 0 auto;
-    border-right: 1px solid rgba(214, 167, 103, 0.1);
+    border-right: 1px solid rgb(var(--source-green-rgb) / 0.12);
     border-radius: 0;
     padding: 0 var(--space-5);
     color: var(--color-text-muted);
@@ -113,7 +113,7 @@
   }
 
   .config-screen-nav .tab-button.selected {
-    background: rgba(214, 167, 103, 0.12);
+    background: rgb(var(--source-green-rgb) / 0.14);
     box-shadow: inset 0 -2px 0 var(--color-accent);
     color: var(--color-text);
   }
@@ -161,18 +161,19 @@
   .config-workspace .panel-header .ghost-button {
     align-self: start;
     min-height: 28px;
-    padding: var(--space-2) var(--space-4);
-    border-radius: var(--radius-sm);
+    padding: 0 var(--space-4);
+    border-radius: 0;
     font-size: 12px;
   }
 
   .config-icon-button {
     width: 28px;
     height: 28px;
+    min-height: 28px;
     display: inline-grid;
     place-items: center;
     padding: 0;
-    border-radius: var(--radius-sm);
+    border-radius: 0;
   }
 
   .config-icon-button svg {
@@ -286,20 +287,27 @@
 
   .behavior-link-control {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 28px;
+    grid-template-columns: minmax(0, 1fr) 40px;
     gap: var(--space-2);
-    align-items: center;
+    align-items: stretch;
   }
 
   .behavior-link-control select {
     min-width: 0;
-    min-height: 34px;
+    height: 40px;
+    min-height: 40px;
     border: 1px solid var(--border-default);
     border-radius: var(--radius-sm);
     background: var(--color-surface-strong);
     color: var(--color-text);
     padding: var(--space-3) var(--space-4);
     font-size: 12px;
+  }
+
+  .behavior-link-control .config-icon-button {
+    width: 40px;
+    height: 40px;
+    min-height: 40px;
   }
 
   .behavior-state-grid {
@@ -356,12 +364,12 @@
   }
 
   .config-document-list-body .list-item:hover {
-    background: rgba(214, 167, 103, 0.07);
+    background: rgb(var(--source-green-rgb) / 0.07);
   }
 
   .config-document-list-body .list-item.selected {
     border-color: var(--border-subtle);
-    background: rgba(214, 167, 103, 0.12);
+    background: rgb(var(--source-green-rgb) / 0.13);
     box-shadow: inset 2px 0 0 var(--color-accent);
   }
 
@@ -428,8 +436,8 @@
   }
 
   .config-result-error {
-    border-color: rgba(217, 109, 109, 0.3);
-    color: #e9a0a0;
+    border-color: rgb(255 111 95 / 0.34);
+    color: var(--color-error);
   }
 
   .run-history {
@@ -444,7 +452,7 @@
     align-items: start;
     min-width: 0;
     padding: var(--space-3) 0;
-    border-top: 1px solid rgba(214, 167, 103, 0.1);
+    border-top: 1px solid rgb(var(--source-green-rgb) / 0.12);
   }
 
   .run-history-row > * {
@@ -478,7 +486,7 @@
   .config-workspace .field > textarea:focus,
   .config-textarea:focus,
   .config-small-textarea:focus {
-    outline: 2px solid rgba(214, 167, 103, 0.24);
+    outline: 2px solid rgb(var(--source-green-rgb) / 0.28);
     outline-offset: 1px;
     border-color: var(--border-selected);
   }

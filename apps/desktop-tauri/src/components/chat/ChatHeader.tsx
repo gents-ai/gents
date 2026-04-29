@@ -2,10 +2,9 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 
 import type { P2PHealth } from "../../lib/types";
-import { displayAgentIdentity, displayConversationTitle } from "../../lib/types";
+import { displayConversationTitle } from "../../lib/types";
 
 export type ChatHeaderProps = {
-  agentDid: string;
   behaviorLabel: string | null;
   runtimeHealth: P2PHealth | null;
   selectedConversationTitle: string | null;
@@ -14,14 +13,12 @@ export type ChatHeaderProps = {
 };
 
 export function ChatHeader({
-  agentDid,
   behaviorLabel,
   runtimeHealth,
   selectedConversationTitle,
   selectedSessionId,
   onRenameConversationTitle,
 }: ChatHeaderProps) {
-  const displayAgentDid = displayAgentIdentity(agentDid);
   const visibleConversationTitle = selectedSessionId
     ? displayConversationTitle(selectedConversationTitle)
     : "Start a conversation";
@@ -99,7 +96,6 @@ export function ChatHeader({
         ) : (
           <h2>{visibleConversationTitle}</h2>
         )}
-        {displayAgentDid ? <p className="muted mono">{displayAgentDid}</p> : null}
       </div>
       <div className="chat-status">
         {behaviorLabel ? <span className="chip">{behaviorLabel}</span> : null}

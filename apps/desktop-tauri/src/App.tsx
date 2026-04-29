@@ -99,7 +99,7 @@ function App() {
         <section className="config-page">
           <ConfigWorkspace
             bootstrap={shell.snapshot?.bootstrap ?? null}
-            onBack={() => setWorkspaceView("fleet")}
+            onBack={() => setWorkspaceView("chat")}
             onSaveAgentConfig={shell.onSaveAgentConfig}
             onRunTask={shell.onRunTask}
             onSaveBackendConfig={shell.onSaveBackendConfig}

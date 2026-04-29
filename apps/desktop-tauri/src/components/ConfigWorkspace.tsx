@@ -27,7 +27,7 @@ import {
   ToolSelectionConfigPanel,
   ToolServiceConfigPanel,
 } from "./config";
-import sourceLogoUrl from "../../src-tauri/icons/icon.png";
+import sourceMarkUrl from "../assets/source-mark-light.png";
 
 type ConfigTab =
   | "agent"
@@ -251,7 +251,7 @@ export function ConfigWorkspace({
         <p className="eyebrow">Config</p>
         <h2>Select a deployment</h2>
         <button className="ghost-button" onClick={onBack} type="button">
-          Back to Fleet
+          Back to Chat
         </button>
       </article>
     );
@@ -261,9 +261,9 @@ export function ConfigWorkspace({
     <section className="config-workspace config-workspace-full">
       <header className="config-header">
         <div className="config-brand">
-          <img alt="" className="config-brand-logo" src={sourceLogoUrl} />
+          <img alt="Source" className="config-brand-logo" src={sourceMarkUrl} />
           <div className="config-title-block">
-            <p className="eyebrow">Defra Agent Config</p>
+            <p className="eyebrow">Source Network Config</p>
             <h1>{selectedDeployment.label}</h1>
             <p className="muted mono" title={selectedDeployment.agentDid}>
               {selectedDeployment.agentDid}
@@ -293,7 +293,7 @@ export function ConfigWorkspace({
             onClick={onBack}
             type="button"
           >
-            Back to Fleet
+            Back to Chat
           </button>
         </div>
       </header>

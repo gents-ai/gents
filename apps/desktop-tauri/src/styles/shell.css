@@ -1,10 +1,38 @@
 @layer shell {
   .app-shell {
+    position: relative;
+    isolation: isolate;
     height: 100vh;
     padding: var(--space-8);
     display: grid;
     gap: var(--space-6);
     overflow: hidden;
+    background:
+      linear-gradient(180deg, rgb(0 0 0 / 0.96) 0%, rgb(2 8 6 / 0.98) 100%),
+      var(--color-bg);
+  }
+
+  .app-shell::before {
+    content: "";
+    position: absolute;
+    inset: -12% -6% -8% 38%;
+    z-index: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(circle, rgb(var(--source-green-rgb) / 0.42) 0 1.6px, transparent 2px) 0 0 / 22px 22px,
+      radial-gradient(circle, rgb(var(--source-green-rgb) / 0.24) 0 1px, transparent 1.6px) 11px 11px / 22px 22px;
+    -webkit-mask-image:
+      radial-gradient(ellipse at 72% 24%, black 0 16%, transparent 42%),
+      linear-gradient(125deg, transparent 0 24%, black 38% 73%, transparent 88%);
+    mask-image:
+      radial-gradient(ellipse at 72% 24%, black 0 16%, transparent 42%),
+      linear-gradient(125deg, transparent 0 24%, black 38% 73%, transparent 88%);
+    opacity: 0.68;
+  }
+
+  .app-shell > * {
+    position: relative;
+    z-index: 1;
   }
 
   .workspace {
@@ -23,7 +51,7 @@
 
   .chat-column {
     display: grid;
-    grid-template-rows: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
     gap: var(--space-5);
     min-width: 0;
     min-height: 0;
@@ -34,31 +62,48 @@
     display: inline-flex;
     align-items: center;
     justify-self: start;
-    gap: var(--space-2);
-    padding: var(--space-1);
-    border: 1px solid rgba(214, 167, 103, 0.14);
-    background: rgba(18, 14, 11, 0.7);
-    border-radius: var(--radius-md);
+    gap: 0;
+    border: 1px solid rgb(var(--source-green-rgb) / 0.16);
+    background: var(--color-surface-strong);
+    border-radius: 0;
+    overflow: hidden;
   }
 
   .tab-button {
+    min-height: 34px;
     border: 0;
-    border-radius: var(--radius-sm);
-    padding: var(--space-3) var(--space-5);
+    border-right: 1px solid rgb(var(--source-green-rgb) / 0.1);
+    border-radius: 0;
+    padding: 0 var(--space-5);
     background: transparent;
-    color: #bda98f;
+    color: var(--color-text-muted);
+    font-weight: 600;
+    transition: 120ms ease;
+  }
+
+  .tab-button:last-child {
+    border-right: 0;
+  }
+
+  .tab-button:hover {
+    background: rgb(var(--source-green-rgb) / 0.08);
+    color: var(--color-text-soft);
   }
 
   .tab-button.selected {
-    background: rgba(214, 167, 103, 0.16);
+    background: rgb(var(--source-green-rgb) / 0.14);
+    box-shadow: inset 0 -2px 0 var(--color-accent);
     color: var(--color-text);
   }
 
   .chat-header {
+    position: relative;
+    z-index: 2;
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
     gap: var(--space-6);
+    min-width: 0;
     padding: 2px 2px 0;
   }
 
@@ -73,13 +118,13 @@
   }
 
   .success {
-    border-color: rgba(89, 191, 112, 0.18);
-    background: rgba(89, 191, 112, 0.08);
+    border-color: rgb(var(--source-green-rgb) / 0.2);
+    background: rgb(var(--source-green-rgb) / 0.09);
   }
 
   .error-banner {
     color: var(--color-error);
-    border-color: rgba(255, 143, 127, 0.22);
-    background: rgba(126, 35, 26, 0.28);
+    border-color: rgb(255 111 95 / 0.28);
+    background: rgb(72 15 10 / 0.42);
   }
 }
