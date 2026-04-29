@@ -476,6 +476,13 @@
     padding: var(--space-4) var(--space-5);
   }
 
+  .config-workspace .field > input[readonly] {
+    border-color: var(--border-subtle);
+    background: rgb(0 0 0 / 0.48);
+    color: var(--color-text-muted);
+    cursor: default;
+  }
+
   .config-workspace .field > input:focus,
   .config-workspace .field > select:focus,
   .config-workspace .field > textarea:focus,

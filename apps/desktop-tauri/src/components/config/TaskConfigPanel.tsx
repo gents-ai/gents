@@ -158,7 +158,13 @@ export function TaskConfigEditor({
           <span>Task ID</span>
           <input
             data-testid="task-id"
-            onChange={(event) => setTaskId(event.currentTarget.value)}
+            onChange={(event) => {
+              if (!task) {
+                setTaskId(event.currentTarget.value);
+              }
+            }}
+            readOnly={Boolean(task)}
+            title={task ? "Task IDs cannot be renamed after creation." : undefined}
             value={taskId}
           />
         </label>
@@ -314,7 +320,7 @@ export function TaskConfigEditor({
           <button
             className="ghost-button"
             data-testid="task-run"
-            disabled={runningTask || !taskId.trim() || !runArgsValid}
+            disabled={runningTask || !task || !taskId.trim() || !runArgsValid}
             onClick={() => void runSelectedTask()}
             type="button"
           >

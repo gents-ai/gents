@@ -83,6 +83,8 @@ describe("BehaviorConfigEditor", () => {
     );
 
     expect(screen.queryByTestId("behavior-compaction-enabled")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("behavior-id")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("behavior-edit-key")).not.toBeInTheDocument();
     expect(screen.getByTestId("behavior-compaction-strategy")).toHaveValue(
       "StripThenSummarize",
     );

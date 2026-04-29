@@ -10,7 +10,7 @@ import type {
   InferenceProfileView,
   ToolSelectionView,
 } from "../../lib/types";
-import { ConfigDocumentList, PencilIcon, PlusIcon } from "./ConfigChrome";
+import { ConfigDocumentList, PlusIcon } from "./ConfigChrome";
 import {
   boolText,
   isOptionalFloat,
@@ -135,7 +135,6 @@ export function BehaviorConfigEditor({
   onSaveBehaviorConfig,
 }: BehaviorConfigEditorProps) {
   const [behaviorId, setBehaviorId] = useState("");
-  const [editingBehaviorId, setEditingBehaviorId] = useState(false);
   const [systemPrompt, setSystemPrompt] = useState("");
   const [backendId, setBackendId] = useState("");
   const [profileId, setProfileId] = useState("");
@@ -158,7 +157,6 @@ export function BehaviorConfigEditor({
       nextProfileId = selectedProfileId;
     }
     setBehaviorId(behavior?.behaviorId ?? "");
-    setEditingBehaviorId(!behavior);
     setSystemPrompt(behavior?.systemPrompt ?? "");
     setBackendId(behavior?.backendId ?? "");
     setProfileId(nextProfileId);
@@ -227,7 +225,7 @@ export function BehaviorConfigEditor({
         <div>
           <p className="eyebrow">Behavior</p>
           <div className="behavior-key-row">
-            {editingBehaviorId ? (
+            {!behavior ? (
               <input
                 className="behavior-key-input"
                 data-testid="behavior-id"
@@ -237,18 +235,6 @@ export function BehaviorConfigEditor({
             ) : (
               <h3>{behaviorId || "New Behavior"}</h3>
             )}
-            {!editingBehaviorId ? (
-              <button
-                aria-label="Edit behavior key"
-                className="ghost-button config-icon-button"
-                data-testid="behavior-edit-key"
-                onClick={() => setEditingBehaviorId(true)}
-                title="Edit behavior key"
-                type="button"
-              >
-                <PencilIcon />
-              </button>
-            ) : null}
           </div>
         </div>
         {savedStatus === `behavior:${behaviorId.trim()}` ? (
