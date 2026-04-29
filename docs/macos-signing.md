@@ -32,7 +32,9 @@ The macOS release workflow:
 - runs on a self-hosted Mac Studio runner labeled `self-hosted`, `macOS`,
   `ARM64`, and `studio`;
 - builds `defra-agent-cli` in release mode, producing `target/release/defra-agent`;
-- imports a signing certificate into a temporary keychain;
+- unlocks the runner's persistent signing keychain;
+- makes that keychain visible to non-interactive `codesign` jobs;
+- smoke-signs a test binary before the Rust build starts;
 - signs with `--identifier org.sourcenetwork.defra-agent`;
 - verifies with `codesign --verify --strict --verbose=2`;
 - prints the designated requirement with `codesign -d -r-`;
@@ -57,31 +59,31 @@ Set these repository or environment secrets before running the release workflow:
 
 ```text
 PRIVATE_REPO_PAT
-MACOS_CODESIGN_CERT_P12_BASE64
-MACOS_CODESIGN_CERT_PASSWORD
 MACOS_CODESIGN_IDENTITY
+MACOS_CODESIGN_KEYCHAIN_PASSWORD
 ```
 
 `PRIVATE_REPO_PAT` is the same private dependency fetch token used by CI. The
 workflow disables checkout's persisted `GITHUB_TOKEN` credentials and uses this
 PAT for Source Network git dependencies, matching the Backbone CI pattern.
 
-Optional:
-
-```text
-MACOS_CODESIGN_KEYCHAIN_PASSWORD
-```
-
 `MACOS_CODESIGN_IDENTITY` can be the identity name shown by
 `security find-identity -v -p codesigning`, or the certificate SHA-1 hash from
 that output.
 
+`MACOS_CODESIGN_KEYCHAIN_PASSWORD` must unlock the persistent signing keychain on
+each Studio runner.
+
 The workflow also honors optional repository variables:
 
 ```text
+MACOS_CODESIGN_KEYCHAIN_PATH=/Users/admin/Library/Keychains/defra-agent-signing.keychain-db
 MACOS_CODESIGN_TIMESTAMP_MODE=auto|enabled|none
 MACOS_CODESIGN_SPCTL_REQUIRED=true|false
 ```
+
+`MACOS_CODESIGN_KEYCHAIN_PATH` defaults to
+`$HOME/Library/Keychains/defra-agent-signing.keychain-db`.
 
 Use `enabled` for Developer ID release signing when timestamping must succeed.
 Use `none` for self-signed or internal identities that cannot use Apple's
@@ -92,7 +94,7 @@ with `--timestamp=none` if timestamping is unavailable.
 not pass Gatekeeper assessment. Set `MACOS_CODESIGN_SPCTL_REQUIRED=true` only for
 Developer ID releases where Gatekeeper assessment is expected to pass.
 
-## Creating and exporting a certificate
+## Studio signing keychain
 
 Preferred production path: use an Apple Developer ID Application certificate
 owned by Source Network.
@@ -101,7 +103,20 @@ Internal path: use a stable self-signed code-signing certificate that is kept an
 reused for all steward releases. Replacing the certificate changes the
 designated requirement and may require another keychain approval/migration.
 
-To create or export the identity on macOS:
+Each self-hosted Studio runner must have the signing identity installed in a
+persistent keychain that CI can unlock over SSH and from the GitHub Actions
+runner session. The release workflow defaults to:
+
+```text
+/Users/admin/Library/Keychains/defra-agent-signing.keychain-db
+```
+
+The current release identity is a Developer ID Application identity. The workflow
+finds it in the signing keychain, extracts the SHA-1 fingerprint, smoke-signs a
+copy of `/bin/echo`, and refuses to continue if the designated requirement is an
+ad-hoc `cdhash`.
+
+To create or rotate the identity on a Studio:
 
 1. Open Keychain Access.
 2. For Developer ID, import the Apple-issued certificate and private key into the
@@ -110,21 +125,22 @@ To create or export the identity on macOS:
    code-signing certificate in the login keychain.
 4. In Keychain Access, export the signing identity as a `.p12` file and set an
    export password.
-5. Find the identity value:
+5. Create or unlock the persistent CI signing keychain.
+6. Import the `.p12` into that keychain.
+7. Allow `codesign` and `security` to use the private key from non-interactive
+   runner jobs.
+8. Store the keychain password in `MACOS_CODESIGN_KEYCHAIN_PASSWORD`.
+9. Find the identity value:
 
 ```sh
 security find-identity -v -p codesigning
 ```
 
-6. Base64-encode the exported `.p12` for GitHub:
+10. Store the identity name or SHA-1 hash in `MACOS_CODESIGN_IDENTITY`.
 
-```sh
-base64 -i defra-agent-codesign.p12 | pbcopy
-```
-
-7. Store the copied value in `MACOS_CODESIGN_CERT_P12_BASE64`, the export
-   password in `MACOS_CODESIGN_CERT_PASSWORD`, and the identity name or SHA-1
-   hash in `MACOS_CODESIGN_IDENTITY`.
+The exported `.p12` is only needed for runner provisioning or certificate
+rotation. The release workflow does not import a `.p12` at runtime; tagged
+release artifacts must be signed by the native Studio keychain path.
 
 ## Local verification
 
