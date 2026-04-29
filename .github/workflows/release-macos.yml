@@ -198,17 +198,24 @@ jobs:
 
           identity_output="$(security find-identity -v -p codesigning "${keychain_path}")"
           printf '%s\n' "${identity_output}"
-          if ! grep -Fq "${MACOS_CODESIGN_IDENTITY}" <<< "${identity_output}"; then
+          identity_line="$(grep -F "${MACOS_CODESIGN_IDENTITY}" <<< "${identity_output}" | head -n 1 || true)"
+          if [[ -z "${identity_line}" ]]; then
             echo "::error::Configured MACOS_CODESIGN_IDENTITY was not found in the imported signing keychain."
             exit 1
           fi
+          signing_identity="$(awk '{ print $2 }' <<< "${identity_line}")"
+          if [[ -z "${signing_identity}" ]]; then
+            echo "::error::Could not extract signing identity fingerprint from imported keychain identity."
+            exit 1
+          fi
+          echo "Using imported signing identity fingerprint ${signing_identity}."
 
           sign_with_timestamp_arg() {
             local timestamp_arg="$1"
             codesign \
               --force \
               --keychain "${keychain_path}" \
-              --sign "${MACOS_CODESIGN_IDENTITY}" \
+              --sign "${signing_identity}" \
               --identifier "${MACOS_CODESIGN_IDENTIFIER}" \
               "${timestamp_arg}" \
               "${binary_path}"
