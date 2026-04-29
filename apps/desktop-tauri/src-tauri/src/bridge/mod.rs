@@ -28,8 +28,8 @@ use self::types::{
     AgentConfigSaveRequest, BackendSaveRequest, BehaviorSaveRequest, ChatSendRequest,
     ChatSendResult, ClientUpdateEvent, ConversationRenameRequest, DesktopBootstrapSummary,
     DesktopClientSnapshot, DesktopInitRequest, DesktopSessionSnapshot, EventTriggerSaveRequest,
-    InferenceProfileSaveRequest, PeerAddRequest, ScheduleRunRequest, ScheduleSaveRequest,
-    TaskRunRequest, TaskRunResult, TaskSaveRequest, ToolSelectionSaveRequest,
+    InferenceProfileSaveRequest, PeerAddRequest, PeerStatusFetchRequest, ScheduleRunRequest,
+    ScheduleSaveRequest, TaskRunRequest, TaskRunResult, TaskSaveRequest, ToolSelectionSaveRequest,
     ToolServiceSaveRequest, ToolServiceTestRequest, ToolServiceTestResult, ToolServiceToolView,
 };
 
@@ -69,6 +69,26 @@ fn require_trimmed(name: &str, value: impl AsRef<str>) -> Result<String, String>
     } else {
         Ok(value)
     }
+}
+
+fn peer_status_url(server_address: &str) -> Result<String, String> {
+    let trimmed = require_trimmed("server_address", server_address)?;
+    let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed
+    } else {
+        format!("http://{trimmed}")
+    };
+    let mut url = reqwest::Url::parse(&with_scheme)
+        .map_err(|error| format!("server_address is not a valid URL: {error}"))?;
+    let path = url.path().trim_end_matches('/');
+    if path.is_empty() || path == "/" || path == "/api/v0" || path == "/api/v0/graphql" {
+        url.set_path("/status");
+    } else if !path.ends_with("/status") {
+        url.set_path(&format!("{path}/status"));
+    }
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url.to_string())
 }
 
 fn validate_event_kind(event_kind: &str) -> Result<(), String> {
@@ -265,6 +285,31 @@ fn desktop_peer_add(
             .await
             .map_err(|error| error.to_string())?;
         emit_config_update_and_snapshot(&app, &core).await
+    })
+}
+
+#[tauri::command]
+fn desktop_peer_status_fetch(request: PeerStatusFetchRequest) -> Result<serde_json::Value, String> {
+    let url = peer_status_url(&request.server_address)?;
+    tauri::async_runtime::block_on(async move {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|error| format!("building status HTTP client failed: {error}"))?;
+        let response = client
+            .get(url.clone())
+            .send()
+            .await
+            .map_err(|error| format!("fetching {url} failed: {error}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("GET {url} returned {status}: {body}"));
+        }
+        response
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|error| format!("decoding {url} response failed: {error}"))
     })
 }
 
@@ -1035,6 +1080,7 @@ pub fn run() {
             desktop_client_start,
             desktop_client_shutdown,
             desktop_peer_add,
+            desktop_peer_status_fetch,
             desktop_p2p_repair,
             desktop_client_snapshot,
             desktop_session_snapshot,
@@ -1055,4 +1101,22 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::peer_status_url;
+
+    #[test]
+    fn peer_status_url_accepts_bare_host_and_graphql_endpoint() {
+        assert_eq!(
+            peer_status_url("127.0.0.1:9181").expect("bare host should normalize"),
+            "http://127.0.0.1:9181/status"
+        );
+        assert_eq!(
+            peer_status_url("http://127.0.0.1:9181/api/v0/graphql")
+                .expect("graphql endpoint should normalize"),
+            "http://127.0.0.1:9181/status"
+        );
+    }
 }
