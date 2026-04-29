@@ -105,7 +105,7 @@
 
   .peer-item-card {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) 42px;
     gap: var(--space-4);
     align-items: center;
   }
@@ -123,23 +123,33 @@
 
   .peer-config-button {
     align-self: center;
-    min-height: 30px;
+    width: 42px;
+    height: 42px;
+    min-height: 42px;
+    display: grid;
+    place-items: center;
     border: 1px solid rgb(var(--source-green-rgb) / 0.24);
     border-radius: 0;
     background: rgb(0 0 0 / 0.36);
     color: var(--color-accent-muted);
-    padding: var(--space-2) var(--space-4);
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    white-space: nowrap;
+    padding: 0;
   }
 
   .peer-config-button:hover {
     color: var(--source-black);
     border-color: rgb(var(--source-green-rgb) / 0.4);
     background: var(--color-accent);
+  }
+
+  .peer-config-button svg {
+    width: 18px;
+    height: 18px;
+    display: block;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
   }
 
   .sidebar-wide-button {

@@ -287,20 +287,27 @@
 
   .behavior-link-control {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 28px;
+    grid-template-columns: minmax(0, 1fr) 40px;
     gap: var(--space-2);
-    align-items: center;
+    align-items: stretch;
   }
 
   .behavior-link-control select {
     min-width: 0;
-    min-height: 34px;
+    height: 40px;
+    min-height: 40px;
     border: 1px solid var(--border-default);
     border-radius: var(--radius-sm);
     background: var(--color-surface-strong);
     color: var(--color-text);
     padding: var(--space-3) var(--space-4);
     font-size: 12px;
+  }
+
+  .behavior-link-control .config-icon-button {
+    width: 40px;
+    height: 40px;
+    min-height: 40px;
   }
 
   .behavior-state-grid {

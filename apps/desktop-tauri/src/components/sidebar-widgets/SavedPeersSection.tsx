@@ -62,7 +62,7 @@ export function SavedPeersSection({
                   title={`Configure ${deployment.label}`}
                   type="button"
                 >
-                  Configure
+                  <GearIcon />
                 </button>
               </div>
             );
@@ -70,5 +70,14 @@ export function SavedPeersSection({
         </div>
       )}
     </section>
+  );
+}
+
+function GearIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.03.03a2 2 0 1 1-2.83 2.83l-.03-.03A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .58V20a2 2 0 1 1-4 0v-.02a1.7 1.7 0 0 0-1-.58 1.7 1.7 0 0 0-1.87.34l-.03.03a2 2 0 1 1-2.83-2.83l.03-.03A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.58-1H4a2 2 0 1 1 0-4h.02a1.7 1.7 0 0 0 .58-1 1.7 1.7 0 0 0-.34-1.87l-.03-.03A2 2 0 1 1 7.06 4.27l.03.03A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.58V4a2 2 0 1 1 4 0v.02a1.7 1.7 0 0 0 1 .58 1.7 1.7 0 0 0 1.87-.34l.03-.03a2 2 0 1 1 2.83 2.83l-.03.03A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 .58 1H20a2 2 0 1 1 0 4h-.02a1.7 1.7 0 0 0-.58 1Z" />
+    </svg>
   );
 }

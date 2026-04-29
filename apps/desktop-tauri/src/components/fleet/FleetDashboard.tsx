@@ -168,9 +168,7 @@ function BrandLockup() {
       <div>
         <p className="eyebrow">Source Network</p>
         <h1>Defra Agent</h1>
-        <p className="muted">
-          Fleet dashboard for P2P heartbeats, runtime state, and active tasks.
-        </p>
+        <p className="muted">Fleet Dashboard</p>
       </div>
     </div>
   );
@@ -362,7 +360,6 @@ function FleetRow({
               {[
                 agentIdentity,
                 defaultBehaviorLabel ? `default: ${defaultBehaviorLabel}` : null,
-                deployment.graphql ? "graphql" : null,
               ]
                 .filter(Boolean)
                 .join(" | ")}
@@ -547,28 +544,32 @@ function toolCeilingIcons(
     icons.push({
       kind: "file",
       tone: bestFileMode === "readwrite" ? "readwrite" : "readonly",
-      title: `File tools: ${modeTitle(bestFileMode)}. Server ceiling: ${ceilingLabel}`,
+      title: `Files (${modeTitle(bestFileMode)}): inspect${
+        bestFileMode === "readwrite" ? " and edit" : ""
+      } workspace files. Server ceiling: ${ceilingLabel}.`,
     });
   }
   if (bestBashMode) {
     icons.push({
       kind: "bash",
       tone: bestBashMode === "readwrite" ? "readwrite" : "readonly",
-      title: `Bash: ${modeTitle(bestBashMode)}. Server ceiling: ${ceilingLabel}`,
+      title: `Shell (${modeTitle(bestBashMode)}): run terminal commands for diagnostics${
+        bestBashMode === "readwrite" ? " and changes" : ""
+      }. Server ceiling: ${ceilingLabel}.`,
     });
   }
   if (metaDelegates.length) {
     icons.push({
       kind: "meta",
       tone: "meta",
-      title: `HTTP MCP delegation: ${metaDelegates.join(", ")}`,
+      title: `Delegation: call configured MCP delegates (${metaDelegates.join(", ")}).`,
     });
   }
   if (cliTools.length) {
     icons.push({
       kind: "cli",
       tone: "readonly",
-      title: `CLI tools: ${cliTools.join(", ")}`,
+      title: `CLI tools: use configured command-line integrations (${cliTools.join(", ")}).`,
     });
   }
 
