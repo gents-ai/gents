@@ -27,12 +27,20 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Rewrite Git SSH dependencies to HTTPS
         env:
           PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
         run: |
-          git config --global url."https://x-access-token:${PRIVATE_REPO_PAT}@github.com/sourcenetwork/".insteadOf "ssh://git@github.com/sourcenetwork/"
+          set -euo pipefail
+          if [[ -z "${PRIVATE_REPO_PAT}" ]]; then
+            echo "::error::Missing PRIVATE_REPO_PAT; required to fetch private Source Network git dependencies."
+            exit 1
+          fi
+          git config --global url."https://${PRIVATE_REPO_PAT}@github.com/sourcenetwork/".insteadOf "https://github.com/sourcenetwork/"
+          git config --global url."https://${PRIVATE_REPO_PAT}@github.com/sourcenetwork/".insteadOf "ssh://git@github.com/sourcenetwork/"
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -40,3 +48,9 @@ jobs:
 
       - name: Run live CLI smoke test
         run: cargo test -p defra-agent-cli --test cli_e2e standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools -- --ignored --nocapture --test-threads=1
+
+      - name: Cleanup git auth
+        if: always()
+        env:
+          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
+        run: git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
