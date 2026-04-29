@@ -165,11 +165,12 @@ jobs:
 
           binary_path="target/release/defra-agent"
           keychain_name="defra-agent-signing-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          keychain_path="${keychain_name}.keychain"
+          keychain_path="${HOME}/Library/Keychains/${keychain_name}.keychain-db"
           keychain_password="${MACOS_CODESIGN_KEYCHAIN_PASSWORD:-$(uuidgen)}"
           cert_path="${RUNNER_TEMP}/defra-agent-codesign.p12"
           original_keychains_path="${RUNNER_TEMP}/defra-agent-original-keychains.txt"
           original_default_keychain_path="${RUNNER_TEMP}/defra-agent-original-default-keychain.txt"
+          login_keychain="${HOME}/Library/Keychains/login.keychain-db"
           timestamp_mode="${TIMESTAMP_MODE_INPUT:-${TIMESTAMP_MODE_VAR:-auto}}"
 
           trap 'rm -f "${cert_path}"' EXIT
@@ -196,7 +197,7 @@ jobs:
             [[ -n "${keychain}" ]] && keychains+=("${keychain}")
           done < <(sed -e 's/^[[:space:]]*"//' -e 's/"$//' "${original_keychains_path}")
 
-          security list-keychains -d user -s "${keychain_path}" login.keychain "${keychains[@]}"
+          security list-keychains -d user -s "${keychain_path}" "${login_keychain}" "${keychains[@]}"
           security default-keychain -d user -s "${keychain_path}"
           security set-key-partition-list -S apple-tool:,apple: -k "${keychain_password}" "${keychain_path}"
           security unlock-keychain -p "${keychain_password}" "${keychain_path}"
