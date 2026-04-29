@@ -5,6 +5,7 @@ use std::process::Command;
 fn main() {
     println!("cargo:rerun-if-env-changed=DEFRA_AGENT_BUILD_GIT_SHA");
     println!("cargo:rerun-if-env-changed=DEFRA_AGENT_BUILD_GIT_REF");
+    println!("cargo:rerun-if-env-changed=DEFRA_AGENT_BUILD_GIT_TAG");
 
     if let Some(head_path) = git_path("HEAD") {
         println!("cargo:rerun-if-changed={head_path}");
@@ -36,6 +37,14 @@ fn main() {
         println!("cargo:rustc-env=DEFRA_AGENT_BUILD_GIT_REF={value}");
     }
 
+    if let Some(value) = env::var("DEFRA_AGENT_BUILD_GIT_TAG")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .or_else(|| git_output(&["describe", "--tags", "--exact-match", "HEAD"]))
+    {
+        println!("cargo:rustc-env=DEFRA_AGENT_BUILD_GIT_TAG={value}");
+    }
+
     if let Some(value) = git_output(&["status", "--porcelain", "--untracked-files=no"]) {
         println!(
             "cargo:rustc-env=DEFRA_AGENT_BUILD_GIT_DIRTY={}",
@@ -49,10 +58,17 @@ fn main() {
     if let Ok(profile) = env::var("PROFILE") {
         println!("cargo:rustc-env=DEFRA_AGENT_BUILD_PROFILE={profile}");
     }
+    if let Some(rustc) = command_output(Command::new("rustc").arg("--version")) {
+        println!("cargo:rustc-env=DEFRA_AGENT_BUILD_RUSTC={rustc}");
+    }
 }
 
 fn git_output(args: &[&str]) -> Option<String> {
-    let output = Command::new("git").args(args).output().ok()?;
+    command_output(Command::new("git").args(args))
+}
+
+fn command_output(command: &mut Command) -> Option<String> {
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }

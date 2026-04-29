@@ -262,6 +262,10 @@ async fn main() -> Result<()> {
     let telemetry = telemetry::init(DEFAULT_LOG_FILTER)?;
     let cli = Cli::parse();
     let result = match cli.command {
+        Command::Version => {
+            print!("{}", http::version::version_text());
+            Ok(())
+        }
         Command::Init(args) => commands::init::init(args).await,
         Command::Provision(args) => commands::provision::provision(args).await,
         Command::Reset(args) => commands::reset::reset(args).await,

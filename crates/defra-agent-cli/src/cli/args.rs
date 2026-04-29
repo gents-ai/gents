@@ -30,6 +30,8 @@ pub(crate) struct Cli {
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
+    #[command(about = "Print build and release metadata")]
+    Version,
     #[command(about = "Initialize a local agent home directory", after_help = INIT_AFTER_HELP)]
     Init(InitArgs),
     #[command(
