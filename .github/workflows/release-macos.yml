@@ -171,6 +171,8 @@ jobs:
           security list-keychains -s "${keychain_path}" "${login_keychain}" "${keychains[@]}"
           security default-keychain -d user -s "${keychain_path}"
           security unlock-keychain -p "${keychain_password}" "${keychain_path}"
+          security set-keychain-settings -lut 21600 "${keychain_path}"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${keychain_password}" "${keychain_path}"
 
           identity_output="$(security find-identity -v -p codesigning "${keychain_path}")"
           printf '%s\n' "${identity_output}"
@@ -184,14 +186,20 @@ jobs:
             echo "::error::Could not extract signing identity fingerprint from native keychain identity."
             exit 1
           fi
+          signing_identity_name="$(sed -E 's/^[[:space:]]*[0-9]+\) [A-Fa-f0-9]+ "(.+)"$/\1/' <<< "${identity_line}")"
+          if [[ -z "${signing_identity_name}" || "${signing_identity_name}" == "${identity_line}" ]]; then
+            echo "::error::Could not extract signing identity name from native keychain identity."
+            exit 1
+          fi
           echo "SIGNING_IDENTITY=${signing_identity}" >> "${GITHUB_ENV}"
+          echo "SIGNING_IDENTITY_NAME=${signing_identity_name}" >> "${GITHUB_ENV}"
 
           smoke_bin="${RUNNER_TEMP}/defra-agent-codesign-smoke"
           cp /bin/echo "${smoke_bin}"
           codesign --remove-signature "${smoke_bin}" 2>/dev/null || true
           codesign \
             --force \
-            --sign "${signing_identity}" \
+            --sign "${signing_identity_name}" \
             --keychain "${keychain_path}" \
             --identifier "${MACOS_CODESIGN_IDENTIFIER}.smoke" \
             --timestamp=none \
@@ -231,15 +239,15 @@ jobs:
 
           binary_path="target/release/defra-agent"
           keychain_path="${SIGNING_KEYCHAIN}"
-          signing_identity="${SIGNING_IDENTITY}"
+          signing_identity="${SIGNING_IDENTITY_NAME}"
           timestamp_mode="${TIMESTAMP_MODE_INPUT:-${TIMESTAMP_MODE_VAR:-auto}}"
 
           if [[ -z "${keychain_path}" || -z "${signing_identity}" ]]; then
-            echo "::error::Native signing keychain preflight did not provide SIGNING_KEYCHAIN/SIGNING_IDENTITY."
+            echo "::error::Native signing keychain preflight did not provide SIGNING_KEYCHAIN/SIGNING_IDENTITY_NAME."
             exit 1
           fi
           security unlock-keychain -p "${MACOS_CODESIGN_KEYCHAIN_PASSWORD}" "${keychain_path}"
-          echo "Signing with native macOS identity fingerprint ${signing_identity} from ${keychain_path}."
+          echo "Signing with native macOS identity from ${keychain_path}."
 
           sign_with_timestamp_arg() {
             local timestamp_arg="$1"
