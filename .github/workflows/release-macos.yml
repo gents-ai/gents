@@ -198,12 +198,19 @@ jobs:
           done < <(sed -e 's/^[[:space:]]*"//' -e 's/"$//' "${original_keychains_path}")
 
           security list-keychains -d user -s "${keychain_path}" "${login_keychain}" "${keychains[@]}"
+          security list-keychains -s "${keychain_path}" "${login_keychain}" "${keychains[@]}"
           security default-keychain -d user -s "${keychain_path}"
           security set-key-partition-list -S apple-tool:,apple: -k "${keychain_password}" "${keychain_path}"
           security unlock-keychain -p "${keychain_password}" "${keychain_path}"
+          echo "Active user keychain search list:"
+          security list-keychains -d user
+          echo "Active default keychain:"
+          security default-keychain -d user
 
           identity_output="$(security find-identity -v -p codesigning "${keychain_path}")"
           printf '%s\n' "${identity_output}"
+          echo "Codesigning identities visible through the active search list:"
+          security find-identity -v -p codesigning
           identity_line="$(grep -F "${MACOS_CODESIGN_IDENTITY}" <<< "${identity_output}" | head -n 1 || true)"
           if [[ -z "${identity_line}" ]]; then
             echo "::error::Configured MACOS_CODESIGN_IDENTITY was not found in the imported signing keychain."
@@ -216,14 +223,32 @@ jobs:
           fi
           echo "Using imported signing identity fingerprint ${signing_identity}."
 
+          identity_candidates=("${MACOS_CODESIGN_IDENTITY}")
+          if [[ "${signing_identity}" != "${MACOS_CODESIGN_IDENTITY}" ]]; then
+            identity_candidates+=("${signing_identity}")
+          fi
+
           sign_with_timestamp_arg() {
             local timestamp_arg="$1"
-            codesign \
-              --force \
-              --sign "${signing_identity}" \
-              --identifier "${MACOS_CODESIGN_IDENTIFIER}" \
-              "${timestamp_arg}" \
-              "${binary_path}"
+            local identity_candidate
+            local status=1
+
+            for identity_candidate in "${identity_candidates[@]}"; do
+              if codesign \
+                --force \
+                --sign "${identity_candidate}" \
+                --keychain "${keychain_path}" \
+                --identifier "${MACOS_CODESIGN_IDENTIFIER}" \
+                "${timestamp_arg}" \
+                "${binary_path}"; then
+                return 0
+              fi
+
+              status=$?
+              echo "::warning::codesign could not use one imported identity candidate; trying the next candidate if available."
+            done
+
+            return "${status}"
           }
 
           case "${timestamp_mode}" in
@@ -344,6 +369,7 @@ jobs:
 
             if [[ "${#keychains[@]}" -gt 0 ]]; then
               security list-keychains -d user -s "${keychains[@]}" || true
+              security list-keychains -s "${keychains[@]}" || true
             fi
           fi
 
