@@ -56,8 +56,8 @@ jobs:
             exit 1
           fi
           auth_url="https://x-access-token:${PRIVATE_REPO_PAT}@github.com/sourcenetwork/"
-          git config --global url."${auth_url}".insteadOf "https://github.com/sourcenetwork/"
-          git config --global url."${auth_url}".insteadOf "ssh://git@github.com/sourcenetwork/"
+          git config --global --add url."${auth_url}".insteadOf "https://github.com/sourcenetwork/"
+          git config --global --add url."${auth_url}".insteadOf "ssh://git@github.com/sourcenetwork/"
 
       - uses: dtolnay/rust-toolchain@stable
 
