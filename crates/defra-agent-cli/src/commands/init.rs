@@ -10,9 +10,9 @@ use defra_agent::config::{
 use defra_agent::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     default_tool_selection_id_for_behavior, ensure_config_bootstrap_schemas, load_agent_behavior,
-    load_agent_principal, load_or_create_macos_secure_enclave_identity, upsert_agent_principal,
-    upsert_inference_profile, AgentBehavior, AgentIdentity, InferenceProfile, KeyIdentity,
-    ToolSelectionDocument,
+    load_agent_principal, load_or_create_macos_keychain_identity,
+    load_or_create_macos_secure_enclave_identity, upsert_agent_principal, upsert_inference_profile,
+    AgentBehavior, AgentIdentity, InferenceProfile, KeyIdentity, ToolSelectionDocument,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -66,15 +66,20 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
 
     if args.identity_only {
-        let key_path = args
-            .key_path
-            .clone()
-            .unwrap_or_else(|| default_key_path(&home_dir, &args.agent_name));
+        if args.identity_backend != IdentityBackendArg::File && args.key_path.is_some() {
+            anyhow::bail!("--key-path cannot be used with non-file identity backends");
+        }
+        let key_path = (args.identity_backend == IdentityBackendArg::File).then(|| {
+            args.key_path
+                .clone()
+                .unwrap_or_else(|| default_key_path(&home_dir, &args.agent_name))
+        });
         let summary = write_identity_only_home_metadata(IdentityOnlyHomeOptions {
             home: &home_dir,
             agent_name: &args.agent_name,
-            key_path: Some(&key_path),
+            key_path: key_path.as_deref(),
             identity_backend: args.identity_backend,
+            keychain_label: args.keychain_label.as_deref(),
             secure_enclave_label: args.secure_enclave_label.as_deref(),
             write_tools: args.write_tools,
             tool_root: args.tool_root.as_deref(),
@@ -95,6 +100,7 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
                 "agent_did": summary.agent_did,
                 "key_path": summary.key_path,
                 "identity_backend": summary.identity_backend,
+                "keychain_label": summary.keychain_label,
                 "secure_enclave_label": summary.secure_enclave_label,
                 "permission_boundary": "This DID and key identify the permission boundary for every action the agent runtime performs."
             },
@@ -113,6 +119,7 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
         agent_name: &args.agent_name,
         key_path: args.key_path.as_deref(),
         identity_backend: args.identity_backend,
+        keychain_label: args.keychain_label.as_deref(),
         secure_enclave_label: args.secure_enclave_label.as_deref(),
     })?;
     initialized_identity
@@ -140,6 +147,7 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
         agent_did: initialized_identity.identity.did().to_string(),
         key_path: initialized_identity.key_path.clone(),
         identity_backend: initialized_identity.identity_backend.clone(),
+        keychain_label: initialized_identity.keychain_label.clone(),
         secure_enclave_label: initialized_identity.secure_enclave_label.clone(),
         tool_ceiling: summary.tool_ceiling,
         tool_root: summary.tool_root.clone(),
@@ -158,6 +166,7 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
         "agent_did": initialized_identity.identity.did(),
         "key_path": initialized_identity.key_path,
         "identity_backend": initialized_identity.identity_backend,
+        "keychain_label": initialized_identity.keychain_label,
         "secure_enclave_label": initialized_identity.secure_enclave_label,
         "default_behavior_id": summary.default_behavior_id,
         "tool_selection_id": summary.tool_selection_id,
@@ -169,6 +178,7 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
             "agent_did": initialized_identity.identity.did(),
             "key_path": stored.key_path,
             "identity_backend": stored.identity_backend,
+            "keychain_label": stored.keychain_label,
             "secure_enclave_label": stored.secure_enclave_label,
             "permission_boundary": "This DID and key identify the permission boundary for every action the agent runtime performs."
         },
@@ -185,6 +195,7 @@ pub(crate) struct IdentityOnlyHomeOptions<'a> {
     pub(crate) agent_name: &'a str,
     pub(crate) key_path: Option<&'a Path>,
     pub(crate) identity_backend: IdentityBackendArg,
+    pub(crate) keychain_label: Option<&'a str>,
     pub(crate) secure_enclave_label: Option<&'a str>,
     pub(crate) write_tools: bool,
     pub(crate) tool_root: Option<&'a Path>,
@@ -196,6 +207,7 @@ struct HomeIdentityOptions<'a> {
     agent_name: &'a str,
     key_path: Option<&'a Path>,
     identity_backend: IdentityBackendArg,
+    keychain_label: Option<&'a str>,
     secure_enclave_label: Option<&'a str>,
 }
 
@@ -203,6 +215,7 @@ struct HomeIdentity {
     identity: Arc<dyn AgentIdentity>,
     key_path: Option<String>,
     identity_backend: Option<String>,
+    keychain_label: Option<String>,
     secure_enclave_label: Option<String>,
     node_identity_did: Option<String>,
 }
@@ -214,6 +227,7 @@ pub(crate) struct IdentityOnlyHomeSummary {
     pub(crate) agent_did: String,
     pub(crate) key_path: Option<String>,
     pub(crate) identity_backend: Option<String>,
+    pub(crate) keychain_label: Option<String>,
     pub(crate) secure_enclave_label: Option<String>,
     pub(crate) tool_ceiling: ToolCeilingArg,
     pub(crate) tool_root: Option<String>,
@@ -232,6 +246,7 @@ pub(crate) async fn write_identity_only_home_metadata(
         agent_name: options.agent_name,
         key_path: options.key_path,
         identity_backend: options.identity_backend,
+        keychain_label: options.keychain_label,
         secure_enclave_label: options.secure_enclave_label,
     })?;
     initialized_identity
@@ -256,6 +271,7 @@ pub(crate) async fn write_identity_only_home_metadata(
         agent_did: initialized_identity.identity.did().to_string(),
         key_path: initialized_identity.key_path.clone(),
         identity_backend: initialized_identity.identity_backend.clone(),
+        keychain_label: initialized_identity.keychain_label.clone(),
         secure_enclave_label: initialized_identity.secure_enclave_label.clone(),
         tool_ceiling,
         tool_root: tool_root.clone(),
@@ -273,6 +289,7 @@ pub(crate) async fn write_identity_only_home_metadata(
         agent_did: initialized_identity.identity.did().to_string(),
         key_path: initialized_identity.key_path,
         identity_backend: initialized_identity.identity_backend,
+        keychain_label: initialized_identity.keychain_label,
         secure_enclave_label: initialized_identity.secure_enclave_label,
         tool_ceiling,
         tool_root,
@@ -299,8 +316,36 @@ fn load_or_create_home_identity(options: HomeIdentityOptions<'_>) -> Result<Home
                 identity,
                 key_path: Some(key_path.to_string_lossy().to_string()),
                 identity_backend: None,
+                keychain_label: None,
                 secure_enclave_label: None,
                 node_identity_did: None,
+            })
+        }
+        IdentityBackendArg::MacosKeychain => {
+            if options.key_path.is_some() {
+                anyhow::bail!("--key-path cannot be used with --identity-backend macos-keychain");
+            }
+            let label = options
+                .keychain_label
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "--keychain-label is required with --identity-backend macos-keychain"
+                    )
+                })?;
+            let identity = Arc::new(
+                load_or_create_macos_keychain_identity(label, None)
+                    .with_context(|| format!("loading macOS keychain identity {label}"))?,
+            );
+            let did = identity.did().to_string();
+            Ok(HomeIdentity {
+                identity,
+                key_path: None,
+                identity_backend: Some("macos-keychain".to_string()),
+                keychain_label: Some(label.to_string()),
+                secure_enclave_label: None,
+                node_identity_did: Some(did),
             })
         }
         IdentityBackendArg::MacosSecureEnclave => {
@@ -327,6 +372,7 @@ fn load_or_create_home_identity(options: HomeIdentityOptions<'_>) -> Result<Home
                 identity,
                 key_path: None,
                 identity_backend: Some("macos-secure-enclave".to_string()),
+                keychain_label: None,
                 secure_enclave_label: Some(label.to_string()),
                 node_identity_did: Some(did),
             })

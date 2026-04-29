@@ -81,6 +81,7 @@ Examples:
   defra-agent init --backend-preset openai --model-name MODEL
   defra-agent init --inference-url $INFERENCE_ENDPOINT --model-name MODEL --write-tools
   defra-agent init --identity-only
+  defra-agent init --identity-only --identity-backend macos-keychain --keychain-label LABEL
   defra-agent init --identity-only --identity-backend macos-secure-enclave --secure-enclave-label LABEL
 
 Next:
@@ -96,9 +97,11 @@ Examples:
   defra-agent provision --home /path/to/home --root infra/agents/HOST/AGENT
   defra-agent provision --root infra/agents/mini-1/mini-1-steward
   defra-agent provision --root infra/agents/dev/dev-agent --bootstrap-file-identity
+  defra-agent provision --root infra/agents/mini-1/mini-1-steward --bootstrap-macos-keychain --keychain-label LABEL
   defra-agent provision --root infra/agents/mini-1/mini-1-steward --bootstrap-macos-secure-enclave --secure-enclave-label LABEL
 
 Production low-level flow:
+  defra-agent init --identity-only --identity-backend macos-keychain --keychain-label LABEL
   defra-agent init --identity-only --identity-backend macos-secure-enclave --secure-enclave-label LABEL
   defra-agent config apply --root <root> --home <home> --bind-agent-did home
   defra-agent config diff --root <root> --home <home> --bind-agent-did home
@@ -120,7 +123,7 @@ Common flow:
   defra-agent chat
 
 Identity note:
-  Standalone server startup supports file keys and macOS Secure Enclave homes initialized with identity_backend=macos-secure-enclave.
+  Standalone server startup supports file keys, macOS keychain software-key homes initialized with identity_backend=macos-keychain, and macOS Secure Enclave homes initialized with identity_backend=macos-secure-enclave.
   Homes with a real agent DID and no key_path must include a supported identity_backend and label in init.json.";
 const CHAT_AFTER_HELP: &str = "\
 Examples:

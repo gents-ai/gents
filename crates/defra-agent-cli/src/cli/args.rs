@@ -112,6 +112,18 @@ pub(crate) struct ProvisionArgs {
     pub(crate) bootstrap_macos_secure_enclave: bool,
     #[arg(
         long,
+        default_value_t = false,
+        help = "Create/load a macOS login-keychain software identity when the home is uninitialized."
+    )]
+    pub(crate) bootstrap_macos_keychain: bool,
+    #[arg(
+        long,
+        value_name = "LABEL",
+        help = "Keychain label for the macOS keychain identity."
+    )]
+    pub(crate) keychain_label: Option<String>,
+    #[arg(
+        long,
         value_name = "LABEL",
         help = "Keychain label for the macOS Secure Enclave identity."
     )]
@@ -121,6 +133,7 @@ pub(crate) struct ProvisionArgs {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub(crate) enum IdentityBackendArg {
     File,
+    MacosKeychain,
     MacosSecureEnclave,
 }
 
@@ -159,6 +172,12 @@ pub(crate) struct InitArgs {
         help = "Local identity backend for init metadata."
     )]
     pub(crate) identity_backend: IdentityBackendArg,
+    #[arg(
+        long,
+        value_name = "LABEL",
+        help = "Keychain label for --identity-backend macos-keychain."
+    )]
+    pub(crate) keychain_label: Option<String>,
     #[arg(
         long,
         value_name = "LABEL",

@@ -210,6 +210,50 @@ async fn server_rejects_real_initialized_did_without_key_path() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_rejects_macos_keychain_identity_without_label() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_env = tempdir.path().join("home-env");
+    let agent_home = home_env.join(".defra-agent");
+    fs::create_dir_all(&agent_home)?;
+
+    let agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
+    write_json_file(
+        &agent_home.join("init.json"),
+        &serde_json::json!({
+            "home": agent_home.to_string_lossy(),
+            "agent_name": "mini-1-steward",
+            "agent_did": agent_did,
+            "key_path": null,
+            "identity_backend": "macos-keychain",
+            "tool_ceiling": "Readonly",
+            "tool_root": tempdir.path().to_string_lossy()
+        }),
+    )?;
+
+    let port = allocate_port()?;
+    let stderr = run_cli_failure_stderr(
+        &home_env,
+        &[
+            "server",
+            "--home",
+            agent_home.to_str().expect("utf-8 home"),
+            "--http-port",
+            &port.to_string(),
+        ],
+    )?;
+    assert!(
+        stderr.contains("macos-keychain"),
+        "expected macos-keychain error, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("no keychain_label"),
+        "expected missing keychain label error, got:\n{stderr}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_rejects_real_initialized_did_with_missing_key_file_without_creating_it(
 ) -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
