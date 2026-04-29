@@ -74,8 +74,6 @@ jobs:
           echo "PROTOC=${protoc_path}" >> "${GITHUB_ENV}"
           "${protoc_path}" --version
 
-      - uses: Swatinem/rust-cache@v2
-
       - name: Run live CLI smoke test
         run: cargo test -p defra-agent-cli --test cli_e2e standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools -- --ignored --nocapture --test-threads=1
 

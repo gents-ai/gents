@@ -70,8 +70,6 @@ jobs:
           echo "PROTOC=${protoc_path}" >> "${GITHUB_ENV}"
           "${protoc_path}" --version
 
-      - uses: Swatinem/rust-cache@v2
-
       - name: Check formatting
         run: cargo fmt --all --check
 
