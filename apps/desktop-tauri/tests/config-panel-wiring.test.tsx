@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 
 import { ConfigWorkspace } from "../src/components/ConfigWorkspace";
 import {
+  AgentConfigPanel,
   AgentConfigEditor,
   BackendConfigPanel,
   BehaviorConfigPanel,
@@ -17,6 +18,7 @@ import {
 import type {
   AgentConfigSaveRequest,
   BackendSaveRequest,
+  BehaviorSaveRequest,
   BootstrapSummary,
   DeploymentView,
   EventTriggerSaveRequest,
@@ -358,7 +360,9 @@ function workspaceHandlers() {
         tools: [],
       }),
     ),
-    onSaveBehaviorConfig: vi.fn(),
+    onSaveBehaviorConfig: vi.fn<
+      [(request: BehaviorSaveRequest) => Promise<unknown>]
+    >(() => Promise.resolve()),
     onSaveTaskConfig: vi.fn<[(request: TaskSaveRequest) => Promise<unknown>]>(
       () => Promise.resolve(),
     ),
@@ -376,6 +380,179 @@ function workspaceHandlers() {
     >(() => Promise.resolve(runResult)),
   };
 }
+
+type SaveBoundaryCase = {
+  name: string;
+  saveTestId: string;
+  selectedId: string;
+  savedStatus: string;
+  renderPanel: (
+    onSave: (request: unknown) => Promise<unknown>,
+    onSelect: (id: string) => void,
+    onSavedStatusChange: (value: string) => void,
+  ) => ReactElement;
+};
+
+const saveBoundaryCases: SaveBoundaryCase[] = [
+  {
+    name: "behavior",
+    saveTestId: "behavior-save",
+    selectedId: "default",
+    savedStatus: "behavior:default",
+    renderPanel: (onSave, onSelect, onSavedStatusChange) => (
+      <BehaviorConfigPanel
+        deployment={deployment}
+        savedStatus={null}
+        saving={false}
+        selectedBehavior={deployment.behaviors[0]}
+        onCreateBackend={vi.fn()}
+        onCreateBehavior={vi.fn()}
+        onCreateProfile={vi.fn()}
+        onCreateToolSelection={vi.fn()}
+        onSaveAgentConfig={vi.fn()}
+        onSaveBehaviorConfig={(request) => onSave(request)}
+        onSavedStatusChange={onSavedStatusChange}
+        onSelectBehavior={onSelect}
+      />
+    ),
+  },
+  {
+    name: "backend",
+    saveTestId: "backend-save",
+    selectedId: "backend-a",
+    savedStatus: "backend:backend-a",
+    renderPanel: (onSave, onSelect, onSavedStatusChange) => (
+      <BackendConfigPanel
+        deployment={deployment}
+        savedStatus={null}
+        saving={false}
+        selectedBackendId={deployment.inferenceBackends[0].backendId}
+        onCreateBackend={vi.fn()}
+        onSaveBackendConfig={(request) => onSave(request)}
+        onSavedStatusChange={onSavedStatusChange}
+        onSelectBackend={onSelect}
+      />
+    ),
+  },
+  {
+    name: "profile",
+    saveTestId: "profile-save",
+    selectedId: "profile-a",
+    savedStatus: "profile:profile-a",
+    renderPanel: (onSave, onSelect, onSavedStatusChange) => (
+      <InferenceProfileConfigPanel
+        deployment={deployment}
+        savedStatus={null}
+        saving={false}
+        selectedProfileId={deployment.inferenceProfiles[0].profileId}
+        onCreateProfile={vi.fn()}
+        onSaveInferenceProfileConfig={(request) => onSave(request)}
+        onSavedStatusChange={onSavedStatusChange}
+        onSelectProfile={onSelect}
+      />
+    ),
+  },
+  {
+    name: "tool selection",
+    saveTestId: "tool-selection-save",
+    selectedId: "tools-a",
+    savedStatus: "tool:tools-a",
+    renderPanel: (onSave, onSelect, onSavedStatusChange) => (
+      <ToolSelectionConfigPanel
+        deployment={deployment}
+        savedStatus={null}
+        saving={false}
+        selectedToolSelectionId={deployment.toolSelections[0].selectionId}
+        toolCeiling="Readwrite"
+        toolRoot="/tmp/work"
+        onCreateToolSelection={vi.fn()}
+        onSaveToolSelectionConfig={(request) => onSave(request)}
+        onSavedStatusChange={onSavedStatusChange}
+        onSelectToolSelection={onSelect}
+      />
+    ),
+  },
+  {
+    name: "tool service",
+    saveTestId: "tool-service-save",
+    selectedId: "service-a",
+    savedStatus: "tool-service:service-a",
+    renderPanel: (onSave, onSelect, onSavedStatusChange) => (
+      <ToolServiceConfigPanel
+        deployment={deployment}
+        savedStatus={null}
+        saving={false}
+        selectedToolServiceId={deployment.toolServiceRegistries[0].serviceId}
+        onCreateToolService={vi.fn()}
+        onSaveToolServiceConfig={(request) => onSave(request)}
+        onSavedStatusChange={onSavedStatusChange}
+        onSelectToolService={onSelect}
+        onTestToolService={vi.fn()}
+      />
+    ),
+  },
+  {
+    name: "task",
+    saveTestId: "task-save",
+    selectedId: "task-a",
+    savedStatus: "task:task-a",
+    renderPanel: (onSave, onSelect, onSavedStatusChange) => (
+      <TaskConfigPanel
+        deployment={deployment}
+        runningTask={false}
+        savedStatus={null}
+        saving={false}
+        selectedBehavior={deployment.behaviors[0]}
+        selectedTaskId={deployment.tasks[0].taskId}
+        onCreateTask={vi.fn()}
+        onRunTask={vi.fn()}
+        onSaveTaskConfig={(request) => onSave(request)}
+        onSavedStatusChange={onSavedStatusChange}
+        onSelectTask={onSelect}
+      />
+    ),
+  },
+  {
+    name: "schedule",
+    saveTestId: "schedule-save",
+    selectedId: "timer-a",
+    savedStatus: "schedule:timer-a",
+    renderPanel: (onSave, onSelect, onSavedStatusChange) => (
+      <ScheduleConfigPanel
+        deployment={deployment}
+        runningTask={false}
+        savedStatus={null}
+        saving={false}
+        selectedScheduleId={deployment.schedules[0].scheduleId}
+        selectedTaskId={deployment.tasks[0].taskId}
+        onCreateSchedule={vi.fn()}
+        onRunSchedule={vi.fn()}
+        onSaveScheduleConfig={(request) => onSave(request)}
+        onSavedStatusChange={onSavedStatusChange}
+        onSelectSchedule={onSelect}
+      />
+    ),
+  },
+  {
+    name: "event trigger",
+    saveTestId: "event-trigger-save",
+    selectedId: "event-a",
+    savedStatus: "event-trigger:event-a",
+    renderPanel: (onSave, onSelect, onSavedStatusChange) => (
+      <EventTriggerConfigPanel
+        deployment={deployment}
+        savedStatus={null}
+        saving={false}
+        selectedEventTriggerId={deployment.eventTriggers[0].triggerId}
+        selectedTaskId={deployment.tasks[0].taskId}
+        onCreateEventTrigger={vi.fn()}
+        onSaveEventTriggerConfig={(request) => onSave(request)}
+        onSavedStatusChange={onSavedStatusChange}
+        onSelectEventTrigger={onSelect}
+      />
+    ),
+  },
+];
 
 describe("config panel wiring", () => {
   it.each(listCases)(
@@ -423,6 +600,46 @@ describe("config panel wiring", () => {
     expect(onCreateBackend).toHaveBeenCalledTimes(1);
     expect(onCreateProfile).toHaveBeenCalledTimes(1);
     expect(onCreateToolSelection).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(saveBoundaryCases)(
+    "wires save completion across the $name panel boundary",
+    async ({ saveTestId, selectedId, savedStatus, renderPanel }) => {
+      const onSave = vi.fn(async (_request: unknown) => undefined);
+      const onSelect = vi.fn();
+      const onSavedStatusChange = vi.fn();
+
+      render(renderPanel(onSave, onSelect, onSavedStatusChange));
+      fireEvent.click(screen.getByTestId(saveTestId));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSelect).toHaveBeenCalledWith(selectedId);
+      expect(onSavedStatusChange).toHaveBeenCalledWith(savedStatus);
+    },
+  );
+
+  it("wires save completion across the agent panel boundary", async () => {
+    const onSaveAgentConfig = vi.fn<
+      [(request: AgentConfigSaveRequest) => Promise<unknown>]
+    >(() => Promise.resolve());
+    const onSavedStatusChange = vi.fn();
+
+    render(
+      <AgentConfigPanel
+        bootstrap={bootstrap}
+        deployment={deployment}
+        savedStatus={null}
+        saving={false}
+        onSaveAgentConfig={onSaveAgentConfig}
+        onSavedStatusChange={onSavedStatusChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("agent-edit-display-name"));
+    fireEvent.click(screen.getByTestId("agent-save"));
+
+    await waitFor(() => expect(onSaveAgentConfig).toHaveBeenCalledTimes(1));
+    expect(onSavedStatusChange).toHaveBeenCalledWith("agent:did:key:z6MkAgent");
   });
 
   it("wires agent edit, cancel, and save buttons", async () => {
@@ -595,5 +812,91 @@ describe("config panel wiring", () => {
     fireEvent.click(screen.getByTestId("behavior-create-tool-selection"));
     expect(screen.getByTestId("tool-selection-id")).not.toHaveAttribute("readonly");
     expect(screen.getByTestId("tool-selection-id")).toHaveValue("");
+  });
+
+  it("routes workspace save buttons to the active panel handlers", async () => {
+    const handlers = workspaceHandlers();
+    render(
+      <ConfigWorkspace
+        bootstrap={bootstrap}
+        runningTask={false}
+        saving={false}
+        selectedBehaviorId="default"
+        selectedDeployment={deployment}
+        {...handlers}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("behavior-save"));
+    await waitFor(() =>
+      expect(handlers.onSaveBehaviorConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ behaviorId: "default" }),
+      ),
+    );
+
+    fireEvent.click(screen.getByTestId("config-tab-agent"));
+    fireEvent.click(screen.getByTestId("agent-edit-display-name"));
+    fireEvent.click(screen.getByTestId("agent-save"));
+    await waitFor(() =>
+      expect(handlers.onSaveAgentConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ agentDid: "did:key:z6MkAgent" }),
+      ),
+    );
+
+    fireEvent.click(screen.getByTestId("config-tab-backends"));
+    fireEvent.click(screen.getByTestId("backend-save"));
+    await waitFor(() =>
+      expect(handlers.onSaveBackendConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ backendId: "backend-a" }),
+      ),
+    );
+
+    fireEvent.click(screen.getByTestId("config-tab-profiles"));
+    fireEvent.click(screen.getByTestId("profile-save"));
+    await waitFor(() =>
+      expect(handlers.onSaveInferenceProfileConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ profileId: "profile-a" }),
+      ),
+    );
+
+    fireEvent.click(screen.getByTestId("config-tab-toolSelections"));
+    fireEvent.click(screen.getByTestId("tool-selection-save"));
+    await waitFor(() =>
+      expect(handlers.onSaveToolSelectionConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ selectionId: "tools-a" }),
+      ),
+    );
+
+    fireEvent.click(screen.getByTestId("config-tab-metaTools"));
+    fireEvent.click(screen.getByTestId("tool-service-save"));
+    await waitFor(() =>
+      expect(handlers.onSaveToolServiceConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ serviceId: "service-a" }),
+      ),
+    );
+
+    fireEvent.click(screen.getByTestId("config-tab-tasks"));
+    fireEvent.click(screen.getByTestId("task-save"));
+    await waitFor(() =>
+      expect(handlers.onSaveTaskConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: "task-a" }),
+      ),
+    );
+
+    fireEvent.click(screen.getByTestId("config-tab-timerTriggers"));
+    fireEvent.click(screen.getByTestId("schedule-save"));
+    await waitFor(() =>
+      expect(handlers.onSaveScheduleConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ scheduleId: "timer-a" }),
+      ),
+    );
+
+    fireEvent.click(screen.getByTestId("config-tab-eventTriggers"));
+    fireEvent.click(screen.getByTestId("event-trigger-save"));
+    await waitFor(() =>
+      expect(handlers.onSaveEventTriggerConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ triggerId: "event-a" }),
+      ),
+    );
   });
 });
