@@ -156,21 +156,22 @@
   }
 
   .primary-button {
-    --button-border: rgb(var(--source-green-rgb) / 0.9);
-    --button-top-line: rgb(255 255 255 / 0.22);
-    color: var(--source-black);
-    background: var(--color-accent);
+    --button-border: rgb(var(--source-green-rgb) / 0.46);
+    --button-rail-width: 3px;
+    --button-rail: var(--color-accent);
+    color: var(--color-text);
+    background: rgb(1 8 6 / 0.94);
     box-shadow:
-      inset -4px 0 0 rgb(0 0 0 / 0.22),
-      inset 0 1px 0 rgb(255 255 255 / 0.24);
+      inset 0 1px 0 rgb(255 255 255 / 0.06),
+      inset 3px 0 0 var(--color-accent);
   }
 
   .primary-button:not(:disabled):hover {
-    border-color: var(--color-accent-strong);
-    background: var(--color-accent-strong);
+    border-color: rgb(var(--source-green-rgb) / 0.68);
+    background: rgb(var(--source-green-rgb) / 0.1);
     box-shadow:
-      inset -4px 0 0 rgb(0 0 0 / 0.32),
-      inset 0 1px 0 rgb(255 255 255 / 0.28);
+      inset 0 1px 0 rgb(255 255 255 / 0.07),
+      inset 4px 0 0 var(--color-accent);
   }
 
   .primary-button:disabled,
