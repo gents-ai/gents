@@ -301,6 +301,7 @@
   .fleet-table-action {
     width: 24px;
     height: 24px;
+    min-height: 24px;
     display: inline-grid;
     place-items: center;
     padding: 0;

@@ -161,7 +161,7 @@
   .config-workspace .panel-header .ghost-button {
     align-self: start;
     min-height: 28px;
-    padding: var(--space-2) var(--space-4);
+    padding: 0 var(--space-4);
     border-radius: var(--radius-sm);
     font-size: 12px;
   }
@@ -169,6 +169,7 @@
   .config-icon-button {
     width: 28px;
     height: 28px;
+    min-height: 28px;
     display: inline-grid;
     place-items: center;
     padding: 0;
