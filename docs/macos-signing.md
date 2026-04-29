@@ -117,6 +117,16 @@ puts the keychain first in the active search list, smoke-signs a copy of
 `/bin/echo`, and refuses to continue if the designated requirement is an ad-hoc
 `cdhash`.
 
+The defra-agent Studio runner is launched by
+`/Library/LaunchDaemons/com.github.actions.runner.defra-agent.plist`. That
+LaunchDaemon must set `SessionCreate=true`; otherwise the job can update the
+user keychain search list while the default keychain domain seen by `codesign`
+still contains only the System keychain. Use:
+
+```sh
+scripts/enable-defra-agent-runner-session.sh
+```
+
 To create or rotate the identity on a Studio:
 
 1. Open Keychain Access.
