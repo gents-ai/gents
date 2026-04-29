@@ -7,9 +7,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::{
-    ensure_runtime_schemas, load_macos_secure_enclave_identity, AgentIdentity, DefraAgent,
-    DocumentRuntimeOptions, KeyIdentity, McpPool, ProcessLifecycleObserver, ProcessLifecycleState,
-    ToolCeiling,
+    ensure_runtime_schemas, load_macos_keychain_identity, load_macos_secure_enclave_identity,
+    AgentIdentity, DefraAgent, DocumentRuntimeOptions, KeyIdentity, McpPool,
+    ProcessLifecycleObserver, ProcessLifecycleState, ToolCeiling,
 };
 use serde_json::{json, Value};
 use tokio::sync::watch;
@@ -305,6 +305,28 @@ fn resolve_no_key_server_identity(
             )
         })?;
     match backend {
+        "macos-keychain" => {
+            let label = config
+                .keychain_label
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "initialized home {} uses macos-keychain but has no keychain_label",
+                        home_dir.display()
+                    )
+                })?;
+            let identity = Arc::new(
+                load_macos_keychain_identity(label, None)
+                    .with_context(|| format!("loading macOS keychain identity {label}"))?,
+            );
+            ensure_identity_matches_init_config(Some(config), identity.did())?;
+            Ok(ServerIdentity {
+                node_identity_did: Some(identity.did().to_string()),
+                identity,
+            })
+        }
         "macos-secure-enclave" => {
             let label = config
                 .secure_enclave_label

@@ -57,6 +57,8 @@ pub(crate) struct StoredInitConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) identity_backend: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) keychain_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) secure_enclave_label: Option<String>,
     pub(crate) tool_ceiling: ToolCeilingArg,
     pub(crate) tool_root: Option<String>,

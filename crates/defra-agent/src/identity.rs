@@ -138,6 +138,20 @@ pub fn load_macos_secure_enclave_identity(
     register_macos_secure_enclave_identity(label, false, service_account)
 }
 
+pub fn load_or_create_macos_keychain_identity(
+    label: &str,
+    service_account: Option<ServiceAccount>,
+) -> Result<RegisteredIdentity> {
+    register_macos_keychain_identity(label, true, service_account)
+}
+
+pub fn load_macos_keychain_identity(
+    label: &str,
+    service_account: Option<ServiceAccount>,
+) -> Result<RegisteredIdentity> {
+    register_macos_keychain_identity(label, false, service_account)
+}
+
 impl std::fmt::Debug for RegisteredIdentity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RegisteredIdentity")
@@ -245,6 +259,72 @@ fn register_macos_secure_enclave_identity(
 ) -> Result<RegisteredIdentity> {
     anyhow::bail!("macos-secure-enclave identity backend is only available on macOS")
 }
+
+#[cfg(target_os = "macos")]
+fn register_macos_keychain_identity(
+    label: &str,
+    create_if_missing: bool,
+    service_account: Option<ServiceAccount>,
+) -> Result<RegisteredIdentity> {
+    let identity = load_or_create_macos_keychain_raw_identity(label, create_if_missing)?;
+    let did = identity.did().map_err(anyhow::Error::from)?.to_string();
+    let public_key_bytes = identity.public_key_bytes();
+    defra_core::signing::store_identity(
+        &did,
+        SigningConfig {
+            key_type: SigningKeyType::Ed25519,
+            private_key_bytes: SigningConfig::private_key_bytes_from_vec(
+                identity.private_key_bytes(),
+            ),
+            public_key_bytes: public_key_bytes.clone(),
+            public_key_hex: lowercase_hex(&public_key_bytes),
+            remote_signer: None,
+            signing_authorization: None,
+        },
+    );
+    RegisteredIdentity::from_registered_did(did, service_account)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn register_macos_keychain_identity(
+    _label: &str,
+    _create_if_missing: bool,
+    _service_account: Option<ServiceAccount>,
+) -> Result<RegisteredIdentity> {
+    anyhow::bail!("macos-keychain identity backend is only available on macOS")
+}
+
+#[cfg(target_os = "macos")]
+fn load_or_create_macos_keychain_raw_identity(
+    label: &str,
+    create_if_missing: bool,
+) -> Result<RawIdentity> {
+    let keychain = security_framework::os::macos::keychain::SecKeychain::default()
+        .context("loading default macOS keychain")?;
+    match keychain.find_generic_password(MACOS_KEYCHAIN_SERVICE, label) {
+        Ok((password, _)) => RawIdentity::from_bytes(crypto::KeyType::Ed25519, password.as_ref())
+            .map_err(anyhow::Error::from)
+            .with_context(|| format!("loading macOS keychain identity {label}")),
+        Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => {
+            if !create_if_missing {
+                anyhow::bail!("macOS keychain identity not found for label {label}");
+            }
+            let private_key = crypto::generate_ed25519().map_err(anyhow::Error::from)?;
+            let bytes = private_key.raw();
+            keychain
+                .set_generic_password(MACOS_KEYCHAIN_SERVICE, label, &bytes)
+                .with_context(|| format!("storing macOS keychain identity {label}"))?;
+            RawIdentity::from_private_key(private_key)
+                .map_err(anyhow::Error::from)
+                .with_context(|| format!("constructing macOS keychain identity {label}"))
+        }
+        Err(error) => Err(anyhow::Error::from(error))
+            .with_context(|| format!("reading macOS keychain identity {label}")),
+    }
+}
+
+#[cfg(target_os = "macos")]
+const MACOS_KEYCHAIN_SERVICE: &str = "defra-agent.identity";
 
 #[cfg(target_os = "macos")]
 #[derive(Debug)]
