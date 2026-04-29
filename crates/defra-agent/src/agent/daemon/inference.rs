@@ -1,6 +1,8 @@
+use std::future::IntoFuture;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
+use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use rig::streaming::StreamingPrompt;
 use tracing::Instrument;
@@ -18,8 +20,55 @@ enum InferenceAttemptOutcome {
     Finished(HandleRequestOutcome),
 }
 
+type RequestDeadline = Option<DateTime<Utc>>;
+
 fn terminal_response_has_visible_output(streamed_text: &str, final_text: Option<&str>) -> bool {
     !streamed_text.trim().is_empty() || final_text.is_some_and(|text| !text.trim().is_empty())
+}
+
+fn request_deadline_remaining(deadline: RequestDeadline) -> Option<Duration> {
+    let deadline = deadline?;
+    let now = Utc::now();
+    if now >= deadline {
+        return Some(Duration::ZERO);
+    }
+    Some((deadline - now).to_std().unwrap_or(Duration::ZERO))
+}
+
+fn request_deadline_error(deadline: RequestDeadline, context: &str) -> anyhow::Error {
+    match deadline {
+        Some(deadline) => anyhow!(
+            "request deadline exceeded while {}; deadline={}",
+            context,
+            deadline.to_rfc3339()
+        ),
+        None => anyhow!("request deadline exceeded while {}", context),
+    }
+}
+
+fn ensure_request_deadline_open(deadline: RequestDeadline, context: &str) -> Result<()> {
+    if request_deadline_remaining(deadline).is_some_and(|remaining| remaining.is_zero()) {
+        return Err(request_deadline_error(deadline, context));
+    }
+    Ok(())
+}
+
+async fn await_with_request_deadline<F, T>(
+    deadline: RequestDeadline,
+    future: F,
+    context: &str,
+) -> Result<T>
+where
+    F: IntoFuture<Output = T>,
+{
+    let future = future.into_future();
+    match request_deadline_remaining(deadline) {
+        None => Ok(future.await),
+        Some(remaining) if remaining.is_zero() => Err(request_deadline_error(deadline, context)),
+        Some(remaining) => tokio::time::timeout(remaining, future)
+            .await
+            .map_err(|_| request_deadline_error(deadline, context)),
+    }
 }
 
 impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
@@ -37,10 +86,12 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         interrupt_rx: &mut tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
         request_token: &tokio_util::sync::CancellationToken,
     ) -> Result<HandleRequestOutcome> {
+        let request_deadline = lifecycle.claimed_deadline_at();
         let max_attempts = self.retry_policy.max_retries + 1;
         let mut last_inference_error: Option<crate::error::InferenceError> = None;
 
         for attempt in 0..max_attempts {
+            ensure_request_deadline_open(request_deadline, "starting inference attempt")?;
             if *shutdown.borrow() {
                 return Err(anyhow!("shutdown requested during inference"));
             }
@@ -66,7 +117,13 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         request_token.cancel();
                         return Err(anyhow!("request interrupted during inference"));
                     }
-                    _ = tokio::time::sleep(delay) => {}
+                    result = await_with_request_deadline(
+                        request_deadline,
+                        tokio::time::sleep(delay),
+                        "waiting for inference retry backoff",
+                    ) => {
+                        result?;
+                    }
                 }
             }
 
@@ -106,10 +163,14 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 request_token.cancel();
                                 Err(anyhow!("request interrupted during inference"))
                             }
-                            stream = agent
-                                .stream_prompt(&request.content)
-                                .with_history(history.to_vec())
-                                .with_hook(hook) => Ok::<_, anyhow::Error>(stream)
+                            stream = await_with_request_deadline(
+                                request_deadline,
+                                agent
+                                    .stream_prompt(&request.content)
+                                    .with_history(history.to_vec())
+                                    .with_hook(hook),
+                                "starting inference stream",
+                            ) => stream
                         }
                     },
                 )
@@ -135,7 +196,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             request_token.cancel();
                             return Err(anyhow!("request interrupted during inference"));
                         }
-                        result = tokio::time::timeout(liveness_timeout, stream.next()) => result
+                        result = await_with_request_deadline(
+                            request_deadline,
+                            tokio::time::timeout(liveness_timeout, stream.next()),
+                            "waiting for inference stream item",
+                        ) => result?
                     } {
                         Ok(Some(item)) => item,
                         Ok(None) => break,
@@ -219,6 +284,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     ));
                 }
 
+                ensure_request_deadline_open(request_deadline, "finalizing inference response")?;
                 self.stream_writer
                     .finalize(doc_id, StreamStatus::Complete)
                     .await?;
@@ -296,7 +362,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
 
 #[cfg(test)]
 mod tests {
-    use super::terminal_response_has_visible_output;
+    use super::{
+        await_with_request_deadline, ensure_request_deadline_open, request_deadline_remaining,
+        terminal_response_has_visible_output,
+    };
+    use std::time::Duration;
 
     #[test]
     fn terminal_response_requires_visible_output() {
@@ -305,5 +375,41 @@ mod tests {
         assert!(!terminal_response_has_visible_output("", Some("   ")));
         assert!(terminal_response_has_visible_output("hello", None));
         assert!(terminal_response_has_visible_output("", Some("hello")));
+    }
+
+    #[test]
+    fn request_deadline_remaining_reports_expired_deadline() {
+        let deadline = chrono::Utc::now() - chrono::Duration::milliseconds(1);
+
+        assert_eq!(
+            request_deadline_remaining(Some(deadline)),
+            Some(Duration::ZERO)
+        );
+        assert!(ensure_request_deadline_open(Some(deadline), "test").is_err());
+    }
+
+    #[tokio::test]
+    async fn await_with_request_deadline_bounds_waits() {
+        let deadline = chrono::Utc::now() + chrono::Duration::milliseconds(10);
+
+        let result = await_with_request_deadline(
+            Some(deadline),
+            tokio::time::sleep(Duration::from_secs(5)),
+            "test wait",
+        )
+        .await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn await_with_request_deadline_allows_fast_work() {
+        let deadline = chrono::Utc::now() + chrono::Duration::seconds(1);
+
+        let result = await_with_request_deadline(Some(deadline), async { 42 }, "test wait")
+            .await
+            .expect("fast work should finish before deadline");
+
+        assert_eq!(result, 42);
     }
 }

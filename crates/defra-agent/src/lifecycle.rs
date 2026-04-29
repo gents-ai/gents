@@ -153,11 +153,16 @@ pub struct RequestLifecycle {
     response_doc_id: Option<String>,
     progress_seq: u32,
     deadline_duration_secs: u64,
+    claimed_deadline_at: Option<chrono::DateTime<chrono::Utc>>,
     state: LocalLifecycleState,
     valid_until_at_claim: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl RequestLifecycle {
+    pub(crate) fn claimed_deadline_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.claimed_deadline_at
+    }
+
     /// Test-only accessor for S8 caching validation. Do not call from production code.
     pub fn valid_until_at_claim_for_test(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.valid_until_at_claim

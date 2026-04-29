@@ -182,6 +182,7 @@ impl RequestLifecycle {
             response_doc_id: None,
             progress_seq: 0,
             deadline_duration_secs,
+            claimed_deadline_at: None,
             state: LocalLifecycleState::Pending,
             valid_until_at_claim: None,
         }
@@ -202,11 +203,11 @@ impl RequestLifecycle {
         let behavior_id = agent_name.to_string();
         let request_id = uuid::Uuid::new_v4().to_string();
         let session_id = uuid::Uuid::new_v4().to_string();
-        let created_at = chrono::Utc::now().to_rfc3339();
+        let now = chrono::Utc::now();
+        let created_at = now.to_rfc3339();
         let claimed_at = created_at.clone();
-        let deadline = (chrono::Utc::now()
-            + chrono::Duration::seconds(deadline_duration_secs as i64))
-        .to_rfc3339();
+        let deadline_at = now + chrono::Duration::seconds(deadline_duration_secs as i64);
+        let deadline = deadline_at.to_rfc3339();
 
         session::create_session_with_behavior_id(
             node.as_ref(),
@@ -362,6 +363,7 @@ impl RequestLifecycle {
             response_doc_id: None,
             progress_seq: 0,
             deadline_duration_secs,
+            claimed_deadline_at: Some(deadline_at),
             state: LocalLifecycleState::Claimed,
             valid_until_at_claim: None,
         })

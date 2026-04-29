@@ -151,8 +151,8 @@ impl RequestLifecycle {
 
         let now = chrono::Utc::now();
         let claimed_at = now.to_rfc3339();
-        let deadline =
-            (now + chrono::Duration::seconds(self.deadline_duration_secs as i64)).to_rfc3339();
+        let deadline_at = now + chrono::Duration::seconds(self.deadline_duration_secs as i64);
+        let deadline = deadline_at.to_rfc3339();
         let doc_id = &self.request.doc_id;
         let escaped_claimed_at = escape_graphql_string(&claimed_at);
         let escaped_deadline = escape_graphql_string(&deadline);
@@ -212,6 +212,7 @@ impl RequestLifecycle {
         self.suppress_later_pending_duplicates(&dedup.duplicates_to_suppress)
             .await?;
         self.state = LocalLifecycleState::Claimed;
+        self.claimed_deadline_at = Some(deadline_at);
         self.valid_until_at_claim = valid_until_at_claim;
 
         Ok(ClaimOutcome::Claimed)
