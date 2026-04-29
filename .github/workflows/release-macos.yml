@@ -164,10 +164,12 @@ jobs:
           keychain_password="${MACOS_CODESIGN_KEYCHAIN_PASSWORD:-$(uuidgen)}"
           cert_path="${RUNNER_TEMP}/defra-agent-codesign.p12"
           original_keychains_path="${RUNNER_TEMP}/defra-agent-original-keychains.txt"
+          original_default_keychain_path="${RUNNER_TEMP}/defra-agent-original-default-keychain.txt"
 
           printf '%s' "${MACOS_CODESIGN_CERT_P12_BASE64}" | base64 -D > "${cert_path}"
 
           security list-keychains -d user > "${original_keychains_path}"
+          security default-keychain -d user > "${original_default_keychain_path}" || true
           security create-keychain -p "${keychain_password}" "${keychain_path}"
           security set-keychain-settings -lut 21600 "${keychain_path}"
           security unlock-keychain -p "${keychain_password}" "${keychain_path}"
@@ -183,6 +185,7 @@ jobs:
           done < <(sed -e 's/^[[:space:]]*"//' -e 's/"$//' "${original_keychains_path}")
 
           security list-keychains -d user -s "${keychain_path}" "${keychains[@]}"
+          security default-keychain -d user -s "${keychain_path}"
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${keychain_password}" "${keychain_path}"
           security find-identity -v -p codesigning "${keychain_path}"
 
@@ -212,7 +215,6 @@ jobs:
               --sign "${MACOS_CODESIGN_IDENTITY}" \
               --identifier "${MACOS_CODESIGN_IDENTIFIER}" \
               "${timestamp_arg}" \
-              --keychain "${SIGNING_KEYCHAIN}" \
               "${binary_path}"
           }
 
@@ -324,6 +326,7 @@ jobs:
           git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
           keychain_path="${SIGNING_KEYCHAIN:-${RUNNER_TEMP}/defra-agent-signing.keychain-db}"
           original_keychains_path="${RUNNER_TEMP}/defra-agent-original-keychains.txt"
+          original_default_keychain_path="${RUNNER_TEMP}/defra-agent-original-default-keychain.txt"
 
           if [[ -f "${original_keychains_path}" ]]; then
             keychains=()
@@ -333,6 +336,13 @@ jobs:
 
             if [[ "${#keychains[@]}" -gt 0 ]]; then
               security list-keychains -d user -s "${keychains[@]}" || true
+            fi
+          fi
+
+          if [[ -f "${original_default_keychain_path}" ]]; then
+            default_keychain="$(sed -e 's/^[[:space:]]*"//' -e 's/"$//' "${original_default_keychain_path}")"
+            if [[ -n "${default_keychain}" ]]; then
+              security default-keychain -d user -s "${default_keychain}" || true
             fi
           fi
 
