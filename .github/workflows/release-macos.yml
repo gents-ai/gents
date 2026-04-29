@@ -170,9 +170,18 @@ jobs:
           security list-keychains -d user -s "${keychain_path}" "${login_keychain}" "${keychains[@]}"
           security list-keychains -s "${keychain_path}" "${login_keychain}" "${keychains[@]}"
           security default-keychain -d user -s "${keychain_path}"
+          security default-keychain -s "${keychain_path}" || true
           security unlock-keychain -p "${keychain_password}" "${keychain_path}"
           security set-keychain-settings -lut 21600 "${keychain_path}"
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${keychain_password}" "${keychain_path}"
+          echo "Active user keychain search list:"
+          security list-keychains -d user
+          echo "Active default keychain search list:"
+          security list-keychains
+          echo "Active user default keychain:"
+          security default-keychain -d user
+          echo "Active default keychain:"
+          security default-keychain
 
           identity_output="$(security find-identity -v -p codesigning "${keychain_path}")"
           printf '%s\n' "${identity_output}"
@@ -400,5 +409,6 @@ jobs:
             default_keychain="$(sed -e 's/^[[:space:]]*"//' -e 's/"$//' "${original_default_keychain_path}")"
             if [[ -n "${default_keychain}" ]]; then
               security default-keychain -d user -s "${default_keychain}" || true
+              security default-keychain -s "${default_keychain}" || true
             fi
           fi
