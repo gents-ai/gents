@@ -170,7 +170,7 @@ jobs:
           security list-keychains -d user -s "${keychain_path}" "${login_keychain}" "${keychains[@]}"
           security list-keychains -s "${keychain_path}" "${login_keychain}" "${keychains[@]}"
           security default-keychain -d user -s "${keychain_path}"
-          security default-keychain -s "${keychain_path}"
+          security default-keychain -s "${keychain_path}" || true
           security unlock-keychain -p "${keychain_password}" "${keychain_path}"
           security set-keychain-settings -lut 21600 "${keychain_path}"
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${keychain_password}" "${keychain_path}"
