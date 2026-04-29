@@ -184,6 +184,8 @@ jobs:
           security unlock-keychain -p "${keychain_password}" "${keychain_path}"
           security import "${cert_path}" \
             -k "${keychain_path}" \
+            -A \
+            -t cert \
             -f pkcs12 \
             -P "${MACOS_CODESIGN_CERT_PASSWORD}" \
             -T /usr/bin/codesign \
@@ -200,7 +202,7 @@ jobs:
           security list-keychains -d user -s "${keychain_path}" "${login_keychain}" "${keychains[@]}"
           security list-keychains -s "${keychain_path}" "${login_keychain}" "${keychains[@]}"
           security default-keychain -d user -s "${keychain_path}"
-          security set-key-partition-list -S apple-tool:,apple: -k "${keychain_password}" "${keychain_path}"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${keychain_password}" "${keychain_path}"
           security unlock-keychain -p "${keychain_password}" "${keychain_path}"
           echo "Active user keychain search list:"
           security list-keychains -d user
@@ -242,14 +244,17 @@ jobs:
                 "${timestamp_arg}" \
                 "${binary_path}"; then
                 return 0
+              else
+                status=$?
               fi
 
-              status=$?
               echo "::warning::codesign could not use one imported identity candidate; trying the next candidate if available."
             done
 
             return "${status}"
           }
+
+          codesign --remove-signature "${binary_path}" 2>/dev/null || true
 
           case "${timestamp_mode}" in
             auto)
@@ -279,7 +284,20 @@ jobs:
           binary_path="target/release/defra-agent"
           if [[ "${SIGNING_ENABLED}" == "true" ]]; then
             codesign --verify --strict --verbose=2 "${binary_path}"
-            codesign -d -r- "${binary_path}"
+
+            signature_details="$(codesign -d -vv "${binary_path}" 2>&1)"
+            printf '%s\n' "${signature_details}"
+            if ! grep -q '^Authority=' <<< "${signature_details}"; then
+              echo "::error::Signed release artifact has no signing authority. This usually means it is still ad-hoc signed."
+              exit 1
+            fi
+
+            designated_requirement="$(codesign -d -r- "${binary_path}" 2>&1)"
+            printf '%s\n' "${designated_requirement}"
+            if grep -q 'designated => cdhash' <<< "${designated_requirement}"; then
+              echo "::error::Signed release artifact still has an ad-hoc cdhash designated requirement."
+              exit 1
+            fi
 
             spctl_required="${REQUIRE_SPCTL_VAR:-false}"
             if [[ "${spctl_required}" == "true" ]]; then
