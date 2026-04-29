@@ -125,7 +125,7 @@
     align-self: center;
     min-height: 30px;
     border: 1px solid rgb(var(--source-green-rgb) / 0.24);
-    border-radius: var(--radius-sm);
+    border-radius: 0;
     background: rgb(0 0 0 / 0.36);
     color: var(--color-accent-muted);
     padding: var(--space-2) var(--space-4);
@@ -149,17 +149,13 @@
   .sidebar-nav-button {
     min-height: 44px;
     justify-content: center;
-    background:
-      linear-gradient(90deg, rgb(var(--source-green-rgb) / 0.08), transparent 60%),
-      rgb(0 0 0 / 0.42);
+    background: var(--color-surface-strong);
     color: var(--color-text-soft);
     font-weight: 600;
   }
 
   .sidebar-nav-button:hover {
-    background:
-      linear-gradient(90deg, rgb(var(--source-green-rgb) / 0.14), transparent 64%),
-      rgb(0 0 0 / 0.54);
+    background: rgb(var(--source-green-rgb) / 0.08);
   }
 
   .conversation-list-row {

@@ -65,7 +65,7 @@
     gap: 0;
     border: 1px solid rgb(var(--source-green-rgb) / 0.16);
     background: var(--color-surface-strong);
-    border-radius: var(--radius-md);
+    border-radius: 0;
     overflow: hidden;
   }
 
