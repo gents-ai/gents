@@ -176,6 +176,8 @@ jobs:
 
           identity_output="$(security find-identity -v -p codesigning "${keychain_path}")"
           printf '%s\n' "${identity_output}"
+          active_identity_output="$(security find-identity -v -p codesigning)"
+          printf '%s\n' "${active_identity_output}"
           identity_line="$(grep -F "${MACOS_CODESIGN_IDENTITY}" <<< "${identity_output}" | head -n 1 || true)"
           if [[ -z "${identity_line}" ]]; then
             echo "::error::Configured MACOS_CODESIGN_IDENTITY was not found in ${keychain_path}."
@@ -200,7 +202,6 @@ jobs:
           codesign \
             --force \
             --sign "${signing_identity_name}" \
-            --keychain "${keychain_path}" \
             --identifier "${MACOS_CODESIGN_IDENTIFIER}.smoke" \
             --timestamp=none \
             "${smoke_bin}"
@@ -254,7 +255,6 @@ jobs:
             codesign \
               --force \
               --sign "${signing_identity}" \
-              --keychain "${keychain_path}" \
               --identifier "${MACOS_CODESIGN_IDENTIFIER}" \
               "${timestamp_arg}" \
               "${binary_path}"

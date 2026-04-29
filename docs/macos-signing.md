@@ -113,8 +113,9 @@ runner session. The release workflow defaults to:
 
 The current release identity is a Developer ID Application identity. The workflow
 finds it in the signing keychain, refreshes private-key access for `codesign`,
-smoke-signs a copy of `/bin/echo`, and refuses to continue if the designated
-requirement is an ad-hoc `cdhash`.
+puts the keychain first in the active search list, smoke-signs a copy of
+`/bin/echo`, and refuses to continue if the designated requirement is an ad-hoc
+`cdhash`.
 
 To create or rotate the identity on a Studio:
 
