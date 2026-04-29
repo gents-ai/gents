@@ -17,6 +17,7 @@ pub(crate) struct VersionResponse {
 pub(super) struct BuildMetadata {
     pub(super) git_sha: Option<&'static str>,
     pub(super) git_ref: Option<&'static str>,
+    pub(super) git_tag: Option<&'static str>,
     pub(super) git_dirty: Option<bool>,
     pub(super) target: Option<&'static str>,
     pub(super) profile: Option<&'static str>,
@@ -44,6 +45,7 @@ pub(crate) fn version_response() -> VersionResponse {
         build: BuildMetadata {
             git_sha: option_env!("DEFRA_AGENT_BUILD_GIT_SHA"),
             git_ref: option_env!("DEFRA_AGENT_BUILD_GIT_REF"),
+            git_tag: option_env!("DEFRA_AGENT_BUILD_GIT_TAG"),
             git_dirty: option_env!("DEFRA_AGENT_BUILD_GIT_DIRTY").and_then(|value| match value {
                 "true" => Some(true),
                 "false" => Some(false),
@@ -53,4 +55,25 @@ pub(crate) fn version_response() -> VersionResponse {
             profile: option_env!("DEFRA_AGENT_BUILD_PROFILE"),
         },
     }
+}
+
+pub(crate) fn version_text() -> String {
+    let version = version_response();
+    let mut revision = version.build.git_sha.unwrap_or("unknown").to_string();
+    if version.build.git_dirty == Some(true) {
+        revision.push_str("-dirty");
+    }
+    if let Some(tag) = version.build.git_tag {
+        revision.push_str(", tag ");
+        revision.push_str(tag);
+    }
+
+    format!(
+        "{} {} ({revision})\nbuilt {} for {}\n{}\n",
+        version.binary,
+        version.version,
+        version.build.profile.unwrap_or("unknown"),
+        version.build.target.unwrap_or("unknown"),
+        option_env!("DEFRA_AGENT_BUILD_RUSTC").unwrap_or("rustc unknown")
+    )
 }

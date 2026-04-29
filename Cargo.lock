@@ -3609,7 +3609,7 @@ dependencies = [
 
 [[package]]
 name = "defra-agent"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3644,7 +3644,7 @@ dependencies = [
 
 [[package]]
 name = "defra-agent-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum 0.8.9",
@@ -3674,7 +3674,7 @@ dependencies = [
 
 [[package]]
 name = "defra-agent-desktop"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -3687,7 +3687,7 @@ dependencies = [
 
 [[package]]
 name = "defra-agent-desktop-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3711,7 +3711,7 @@ dependencies = [
 
 [[package]]
 name = "defra-agent-desktop-tauri"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3734,7 +3734,7 @@ dependencies = [
 
 [[package]]
 name = "defra-agent-protocol"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
