@@ -386,6 +386,129 @@ async fn fork_copies_compaction_entries_strictly_before_cut_ts() {
 }
 
 #[tokio::test]
+async fn fork_batches_multiple_rows_for_all_copy_collections() {
+    let db = test_db("fork-batch-copy-all").await;
+
+    let parent_session = "parent-batch-copy";
+    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+
+    for (sequence, role, content, timestamp) in [
+        (1, "user", "u1", "2026-04-21T10:00:00Z"),
+        (2, "assistant", "a1", "2026-04-21T10:00:01Z"),
+        (3, "tool", "tool output", "2026-04-21T10:00:02Z"),
+        (4, "user", "u2", "2026-04-21T10:00:04Z"),
+    ] {
+        create_agent_message(&db.node, parent_session, sequence, role, content, timestamp).await;
+    }
+
+    for i in 1..=3 {
+        let tool_call_id = format!("tc-{i}");
+        let args = format!(r#"{{"index":{i}}}"#);
+        let result = format!("tool-call-result-{i}");
+        let timestamp = format!("2026-04-21T10:00:0{i}Z");
+        create_agent_tool_call(
+            &db.node,
+            parent_session,
+            i,
+            &tool_call_id,
+            "read_file",
+            &args,
+            &result,
+            "completed",
+            &timestamp,
+            &timestamp,
+        )
+        .await;
+
+        let tool_input = format!(r#"{{"path":"file-{i}.txt"}}"#);
+        let output_text = format!("tool-result-{i}");
+        create_agent_tool_result(
+            &db.node,
+            parent_session,
+            "read_file",
+            &tool_input,
+            &output_text,
+            &timestamp,
+        )
+        .await;
+
+        create_compaction_entry(
+            &db.node,
+            parent_session,
+            i,
+            &format!("summary-{i}"),
+            i,
+            &timestamp,
+        )
+        .await;
+    }
+
+    let outcome = fork(
+        &db.node,
+        ForkParams {
+            source_session_id: parent_session,
+            fork_at_user_turn: 1,
+            caller_agent_did: AGENT_DID,
+            target_behavior_id: None,
+        },
+    )
+    .await
+    .expect("fork succeeds");
+
+    assert_eq!(outcome.copied_messages, 3);
+    assert_eq!(outcome.copied_tool_calls, 3);
+    assert_eq!(outcome.copied_tool_results, 3);
+    assert_eq!(outcome.copied_compaction_entries, 3);
+
+    let child_messages = fetch_message_snapshots_for_session(&db.node, &outcome.session_id).await;
+    assert_eq!(child_messages.len(), 3);
+    assert_eq!(
+        child_messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>(),
+        vec!["u1", "a1", "tool output"]
+    );
+
+    let child_tool_calls =
+        fetch_tool_call_snapshots_for_session(&db.node, &outcome.session_id).await;
+    assert_eq!(child_tool_calls.len(), 3);
+    assert_eq!(
+        child_tool_calls
+            .iter()
+            .map(|tool_call| tool_call.tool_call_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["tc-1", "tc-2", "tc-3"]
+    );
+
+    let child_tool_results =
+        fetch_tool_result_snapshots_for_session(&db.node, &outcome.session_id).await;
+    assert_eq!(child_tool_results.len(), 3);
+    assert_eq!(
+        child_tool_results
+            .iter()
+            .map(|tool_result| tool_result.output_text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["tool-result-1", "tool-result-2", "tool-result-3"]
+    );
+
+    let child_compactions =
+        fetch_compaction_entry_snapshots_for_session(&db.node, &outcome.session_id).await;
+    assert_eq!(child_compactions.len(), 3);
+    for (index, compaction) in child_compactions.iter().enumerate() {
+        let sequence = (index + 1) as u32;
+        assert_eq!(compaction.sequence, sequence);
+        assert_eq!(compaction.summary, format!("summary-{sequence}"));
+        assert_eq!(
+            compaction.compaction_key,
+            format!("{}:{sequence}", outcome.session_id)
+        );
+    }
+}
+
+#[tokio::test]
 async fn fork_rejects_source_with_non_terminal_request() {
     let db = test_db("fork-busy-source").await;
 
