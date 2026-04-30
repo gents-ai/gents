@@ -112,21 +112,40 @@ pub(super) async fn upsert_session(
     behavior_id: &Option<String>,
 ) -> Result<()> {
     let now = Utc::now().to_rfc3339();
+    let field = build_upsert_session_field(
+        "upsert_AgentSession",
+        store,
+        session_id,
+        agent_name,
+        behavior_id,
+        &now,
+    );
+    let mutation = format!("mutation {{\n{field}\n}}");
+    execute_mutation(node, &mutation, "upsert_session").await
+}
+
+pub(super) fn build_upsert_session_field(
+    alias: &str,
+    store: &ClientStore,
+    session_id: &str,
+    agent_name: &str,
+    behavior_id: &Option<String>,
+    now: &str,
+) -> String {
     let existing = store
         .sessions
         .iter()
         .find(|row| row.session_id == session_id);
     let started = existing
         .and_then(|row| normalize_optional_string(row.started.as_deref()))
-        .unwrap_or(now.as_str());
+        .unwrap_or(now);
 
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_name = escape_graphql_string(agent_name);
     let escaped_behavior_id = escape_graphql_string(behavior_id.as_deref().unwrap_or(""));
     let escaped_started = escape_graphql_string(started);
-    let mutation = format!(
-        r#"mutation {{
-            upsert_AgentSession(
+    format!(
+        r#"{alias}: upsert_AgentSession(
                 filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
                 add: {{
                     session_id: "{escaped_session_id}",
@@ -142,9 +161,8 @@ pub(super) async fn upsert_session(
                     status: "active"
                 }}
             ) {{ _docID }}
-        }}"#
-    );
-    execute_mutation(node, &mutation, "upsert_session").await
+        "#
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -160,6 +178,35 @@ pub(super) async fn upsert_conversation(
     status: &str,
 ) -> Result<()> {
     let now = Utc::now().to_rfc3339();
+    let field = build_upsert_conversation_field(
+        "upsert_AgentConversation",
+        store,
+        session_id,
+        agent_did,
+        agent_name,
+        behavior_id,
+        latest_request_id,
+        content,
+        status,
+        &now,
+    );
+    let mutation = format!("mutation {{\n{field}\n}}");
+    execute_mutation(node, &mutation, "upsert_conversation").await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn build_upsert_conversation_field(
+    alias: &str,
+    store: &ClientStore,
+    session_id: &str,
+    agent_did: &str,
+    agent_name: &str,
+    behavior_id: &Option<String>,
+    latest_request_id: &str,
+    content: &str,
+    status: &str,
+    now: &str,
+) -> String {
     let existing = store
         .conversations
         .iter()
@@ -188,7 +235,7 @@ pub(super) async fn upsert_conversation(
     };
     let created_at = existing
         .and_then(|row| normalize_optional_string(row.created_at.as_deref()))
-        .unwrap_or(now.as_str());
+        .unwrap_or(now);
     let latest_request_id = normalize_optional_string(Some(latest_request_id))
         .or_else(|| {
             existing.and_then(|row| normalize_optional_string(row.latest_request_id.as_deref()))
@@ -205,9 +252,8 @@ pub(super) async fn upsert_conversation(
     let escaped_status = escape_graphql_string(status);
     let escaped_created_at = escape_graphql_string(created_at);
     let escaped_latest_request_id = escape_graphql_string(latest_request_id);
-    let mutation = format!(
-        r#"mutation {{
-            upsert_AgentConversation(
+    format!(
+        r#"{alias}: upsert_AgentConversation(
                 filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
                 add: {{
                     session_id: "{escaped_session_id}",
@@ -235,9 +281,8 @@ pub(super) async fn upsert_conversation(
                     latest_request_id: "{escaped_latest_request_id}"
                 }}
             ) {{ _docID }}
-        }}"#
-    );
-    execute_mutation(node, &mutation, "upsert_conversation").await
+        "#
+    )
 }
 
 fn derive_conversation_preview(content: &str) -> String {

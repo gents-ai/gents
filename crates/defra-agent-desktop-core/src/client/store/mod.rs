@@ -127,9 +127,7 @@ impl ClientStore {
             .iter()
             .find(|row| {
                 row.session_id == session_id
-                    && agent_did.map_or(true, |agent_did| {
-                        row.agent_did.as_deref() == Some(agent_did)
-                    })
+                    && agent_did.is_none_or(|agent_did| row.agent_did.as_deref() == Some(agent_did))
             })
             .and_then(|row| clean_string(row.behavior_id.as_deref()))
             .or_else(|| {
@@ -194,7 +192,7 @@ impl ClientStore {
             .filter(|row| {
                 row.task_id
                     .as_deref()
-                    .is_some_and(|task_id| task_ids.iter().any(|candidate| *candidate == task_id))
+                    .is_some_and(|task_id| task_ids.contains(&task_id))
             })
             .collect()
     }
@@ -212,7 +210,7 @@ impl ClientStore {
             .filter(|row| {
                 row.task_id
                     .as_deref()
-                    .is_some_and(|task_id| task_ids.iter().any(|candidate| *candidate == task_id))
+                    .is_some_and(|task_id| task_ids.contains(&task_id))
             })
             .collect()
     }
