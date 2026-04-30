@@ -415,7 +415,7 @@ async fn add_and_remove_peer_persists_peer_directory() -> Result<()> {
 
     let addr = wait_for_connectable_iroh_addr(&remote).await?;
     let added = local
-        .add_peer("Workshop Bay", &addr, "did:defra:workshop")
+        .add_peer("Workshop Bay", &addr, "did:defra:workshop", None)
         .await?;
 
     assert_eq!(added.label, "Workshop Bay");

@@ -67,7 +67,10 @@ pub use identity::{
     AgentIdentity, KeyIdentity, RegisteredIdentity, ServiceAccount,
 };
 pub use interrupt::{fetch_interrupt_requested_at, interrupt_request};
-pub use lifecycle::{write_manual_agent_request, RecoveryReport, RequestLifecycle};
+pub use lifecycle::{
+    task_run_conversation_title, write_manual_agent_request,
+    write_manual_agent_request_with_conversation_title, RecoveryReport, RequestLifecycle,
+};
 pub use mcp_pool::McpPool;
 pub use meta_tools::build_meta_tools;
 pub use oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunResult};

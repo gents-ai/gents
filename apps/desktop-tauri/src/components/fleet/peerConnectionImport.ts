@@ -37,6 +37,12 @@ export function parsePeerConnectionJson(input: string): PeerAddRequest {
     );
   }
   const validatedAgentDid = validateAgentDid(agentDid);
+  const graphql =
+    stringAt(record, "desktopGraphql") ??
+    stringAt(record, "desktop_graphql") ??
+    stringAt(record, "graphql") ??
+    stringAt(record, "checks.graphql.endpoint") ??
+    stringAt(record, "runtime_state.graphql");
 
   return {
     label:
@@ -50,6 +56,7 @@ export function parsePeerConnectionJson(input: string): PeerAddRequest {
       inferLabel(validatedAgentDid),
     agentDid: validatedAgentDid,
     addr,
+    ...(graphql ? { graphql } : {}),
   };
 }
 

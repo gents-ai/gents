@@ -169,6 +169,7 @@ fn snapshot_with_schedules(
 fn resolved_task(prompt_template: &str) -> ResolvedTask {
     ResolvedTask {
         task_id: "t1".to_string(),
+        name: None,
         behavior_id: "general".to_string(),
         prompt_template: prompt_template.to_string(),
         output_schema_ref: None,
@@ -597,6 +598,7 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
 
     let task = ResolvedTask {
         task_id: "task-1".to_string(),
+        name: None,
         behavior_id: "general".to_string(),
         prompt_template: "hi".to_string(),
         output_schema_ref: None,
@@ -658,6 +660,7 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
 
     let task = ResolvedTask {
         task_id: "task-1".to_string(),
+        name: None,
         behavior_id: "general".to_string(),
         prompt_template: "hi".to_string(),
         output_schema_ref: None,
@@ -939,6 +942,7 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
     let behavior = integration_test_behavior("general");
     let task = ResolvedTask {
         task_id: "task-e2e".to_string(),
+        name: Some("Mini Host Health".to_string()),
         behavior_id: behavior.name.clone(),
         prompt_template: "integration fire".to_string(),
         output_schema_ref: None,
@@ -986,6 +990,7 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
                 caused_by_trigger_kind
                 lifecycle_state
                 execution_origin
+                session_id
                 content
             }
         }"#;
@@ -1040,6 +1045,47 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
         Some("integration fire"),
         "rendered prompt template should land in AgentRequest.content: {row}"
     );
+
+    let session_id = row
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .expect("materialized request should have session_id");
+    let conversation_query = format!(
+        r#"{{
+            AgentConversation(
+                filter: {{ session_id: {{ _eq: "{}" }} }},
+                limit: 1
+            ) {{
+                title
+                title_source
+            }}
+        }}"#,
+        escape_graphql_string(session_id)
+    );
+    let conversation_resp = node.execute(&conversation_query).await;
+    assert!(
+        !conversation_resp.has_errors(),
+        "AgentConversation query errored: {:?}",
+        conversation_resp.errors
+    );
+    let conversation = conversation_resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentConversation"))
+        .and_then(|v| v.as_array())
+        .and_then(|rows| rows.first())
+        .expect("task materialization should seed AgentConversation title");
+    assert_eq!(
+        conversation.get("title_source").and_then(|v| v.as_str()),
+        Some("task")
+    );
+    assert!(
+        conversation
+            .get("title")
+            .and_then(|v| v.as_str())
+            .is_some_and(|title| title.starts_with("mini-host-health-20")),
+        "task conversation title should use task name plus timestamp: {conversation}"
+    );
 }
 
 /// Regression for Finding 2: Schedules created with a null `next_run_at`
@@ -1092,6 +1138,7 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
 
     let task = ResolvedTask {
         task_id: "task-null".to_string(),
+        name: None,
         behavior_id: "general".to_string(),
         prompt_template: "hi".to_string(),
         output_schema_ref: None,
@@ -1353,6 +1400,7 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
     // The trigger_id is what the returned FireIntent should carry.
     let task = ResolvedTask {
         task_id: "task-webhook".to_string(),
+        name: None,
         behavior_id: "general".to_string(),
         prompt_template: "handle webhook".to_string(),
         output_schema_ref: None,
@@ -1471,6 +1519,7 @@ async fn event_source_filter_probe_gates_fire_on_operator_filter() {
 
     let task = ResolvedTask {
         task_id: "task-webhook".to_string(),
+        name: None,
         behavior_id: "general".to_string(),
         prompt_template: "handle webhook".to_string(),
         output_schema_ref: None,
@@ -1592,6 +1641,7 @@ async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
 
     let task = ResolvedTask {
         task_id: "task-webhook".to_string(),
+        name: None,
         behavior_id: "general".to_string(),
         prompt_template: "handle webhook".to_string(),
         output_schema_ref: None,
@@ -1733,6 +1783,7 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
 
     let task = ResolvedTask {
         task_id: "task-webhook".to_string(),
+        name: None,
         behavior_id: "general".to_string(),
         prompt_template: "handle webhook".to_string(),
         output_schema_ref: None,
@@ -1860,6 +1911,7 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
 
     let task = ResolvedTask {
         task_id: "task-webhook".to_string(),
+        name: None,
         behavior_id: "general".to_string(),
         prompt_template: "handle webhook".to_string(),
         output_schema_ref: None,
@@ -2003,6 +2055,7 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
 fn resolved_task_for_test(task_id: &str, behavior_id: &str, prompt_template: &str) -> ResolvedTask {
     ResolvedTask {
         task_id: task_id.to_string(),
+        name: None,
         behavior_id: behavior_id.to_string(),
         prompt_template: prompt_template.to_string(),
         output_schema_ref: None,

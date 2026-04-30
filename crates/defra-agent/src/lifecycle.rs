@@ -14,10 +14,12 @@ mod materialize;
 mod query;
 mod recovery;
 mod rows;
+mod task_title;
 mod transition;
 
-pub use manual::write_manual_agent_request;
-pub(crate) use materialize::write_pending_agent_request_with_lineage;
+pub use manual::{write_manual_agent_request, write_manual_agent_request_with_conversation_title};
+pub(crate) use materialize::write_pending_agent_request_with_lineage_and_conversation_title;
+pub use task_title::task_run_conversation_title;
 
 pub const DEFAULT_REQUEST_MAX_RETRIES: u32 = 3;
 

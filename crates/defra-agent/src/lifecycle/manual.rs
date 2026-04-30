@@ -17,7 +17,10 @@ use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 use serde_json::Value;
 
-use crate::lifecycle::{write_pending_agent_request_with_lineage, ExecutionOrigin, TriggerLineage};
+use crate::lifecycle::{
+    write_pending_agent_request_with_lineage_and_conversation_title, ExecutionOrigin,
+    TriggerLineage,
+};
 use crate::template::{render_template, TemplateScope};
 
 /// Write an `AgentRequest` row representing a manual task run, after rendering
@@ -36,6 +39,27 @@ pub async fn write_manual_agent_request(
     prompt_template: &str,
     args: Value,
 ) -> Result<String> {
+    write_manual_agent_request_with_conversation_title(
+        node,
+        agent_did,
+        behavior_id,
+        task_id,
+        prompt_template,
+        args,
+        None,
+    )
+    .await
+}
+
+pub async fn write_manual_agent_request_with_conversation_title(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    behavior_id: &str,
+    task_id: &str,
+    prompt_template: &str,
+    args: Value,
+    conversation_title: Option<&str>,
+) -> Result<String> {
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let scope = TemplateScope {
         event: serde_json::json!({
@@ -49,7 +73,7 @@ pub async fn write_manual_agent_request(
     let content = render_template(prompt_template, &scope)
         .map_err(|e| anyhow!("render manual template for task {task_id}: {e}"))?;
 
-    let enqueued = write_pending_agent_request_with_lineage(
+    let enqueued = write_pending_agent_request_with_lineage_and_conversation_title(
         node,
         agent_did,
         behavior_id,
@@ -59,6 +83,7 @@ pub async fn write_manual_agent_request(
             trigger_id: None,
             trigger_kind: Some("manual".to_string()),
         },
+        conversation_title,
     )
     .await
     .map_err(|e| anyhow!("create manual AgentRequest for task {task_id}: {e}"))?;
@@ -66,6 +91,7 @@ pub async fn write_manual_agent_request(
     tracing::info!(
         task_id = %task_id,
         request_id = %enqueued.request_id,
+        session_id = %enqueued.session_id,
         doc_id = %enqueued.doc_id,
         "manual task run enqueued as AgentRequest"
     );
@@ -79,7 +105,7 @@ mod tests {
     use defra_node::EmbeddedNode;
     use serde_json::Value;
 
-    use super::write_manual_agent_request;
+    use super::{write_manual_agent_request, write_manual_agent_request_with_conversation_title};
     use crate::schema::ensure_schemas;
 
     async fn test_node() -> Arc<EmbeddedNode> {
@@ -144,6 +170,85 @@ mod tests {
         assert_eq!(row["execution_origin"].as_str(), Some("interactive"));
         assert_eq!(row["lifecycle_state"].as_str(), Some("pending"));
         assert_eq!(row["status"].as_str(), Some("pending"));
+    }
+
+    #[tokio::test]
+    async fn writes_manual_request_with_seeded_conversation_title() {
+        let node = test_node().await;
+
+        let doc_id = write_manual_agent_request_with_conversation_title(
+            node.as_ref(),
+            "did:agent:test",
+            "behavior-1",
+            "task-1",
+            "hello {{ args.name }}",
+            serde_json::json!({"name": "Amy"}),
+            Some("mini-host-health-20260430t180405z"),
+        )
+        .await
+        .unwrap();
+
+        let query = format!(
+            r#"{{
+                AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
+                    session_id
+                }}
+            }}"#
+        );
+        let response = node.execute(&query).await;
+        assert!(
+            !response.has_errors(),
+            "request query failed: {:?}",
+            response.errors
+        );
+        let session_id = response
+            .data
+            .as_ref()
+            .and_then(|d| d.get("AgentRequest"))
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("session_id"))
+            .and_then(Value::as_str)
+            .expect("request should have session_id");
+
+        let conversation_query = format!(
+            r#"{{
+                AgentConversation(
+                    filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                    limit: 1
+                ) {{
+                    title
+                    title_source
+                    status
+                }}
+            }}"#
+        );
+        let conversation_response = node.execute(&conversation_query).await;
+        assert!(
+            !conversation_response.has_errors(),
+            "conversation query failed: {:?}",
+            conversation_response.errors
+        );
+        let conversation = conversation_response
+            .data
+            .as_ref()
+            .and_then(|d| d.get("AgentConversation"))
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+            .expect("manual task run should seed AgentConversation");
+
+        assert_eq!(
+            conversation.get("title").and_then(Value::as_str),
+            Some("mini-host-health-20260430t180405z")
+        );
+        assert_eq!(
+            conversation.get("title_source").and_then(Value::as_str),
+            Some("task")
+        );
+        assert_eq!(
+            conversation.get("status").and_then(Value::as_str),
+            Some("pending")
+        );
     }
 
     #[tokio::test]

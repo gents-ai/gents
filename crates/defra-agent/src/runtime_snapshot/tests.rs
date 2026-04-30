@@ -89,6 +89,7 @@ fn configuration_fingerprint_reflects_schedule_set() {
 
     let task = ResolvedTask {
         task_id: "t1".to_string(),
+        name: None,
         behavior_id: "general".to_string(),
         prompt_template: "do the thing".to_string(),
         output_schema_ref: None,

@@ -6,6 +6,7 @@ export type BehaviorSelectorSectionProps = {
   selectedAgentDid: string | null;
   selectedBehaviorId: string | null;
   onSelectBehavior: (behaviorId: string) => void;
+  onStartNewConversation: (behaviorId: string) => void;
 };
 
 export function BehaviorSelectorSection({
@@ -13,6 +14,7 @@ export function BehaviorSelectorSection({
   selectedAgentDid,
   selectedBehaviorId,
   onSelectBehavior,
+  onStartNewConversation,
 }: BehaviorSelectorSectionProps) {
   return (
     <section className="sidebar-section">
@@ -29,25 +31,49 @@ export function BehaviorSelectorSection({
       ) : (
         <div className="list compact-list">
           {behaviorOptions.map((behavior) => (
-            <button
-              className={
-                behavior.behaviorId === selectedBehaviorId
-                  ? "list-item selected"
-                  : "list-item"
-              }
-              data-testid={`sidebar-behavior-${behavior.behaviorId}`}
+            <div
+              className="behavior-list-row"
               key={behavior.behaviorId}
-              onClick={() => onSelectBehavior(behavior.behaviorId)}
-              type="button"
             >
-              <span className="list-item-title">{behavior.displayName}</span>
-              <span className="list-item-meta">
-                {behavior.isDefault ? "default" : boolText(behavior.enabled)}
-              </span>
-            </button>
+              <button
+                className={
+                  behavior.behaviorId === selectedBehaviorId
+                    ? "list-item behavior-select-button selected"
+                    : "list-item behavior-select-button"
+                }
+                data-testid={`sidebar-behavior-${behavior.behaviorId}`}
+                onClick={() => onSelectBehavior(behavior.behaviorId)}
+                type="button"
+              >
+                <span className="list-item-title">{behavior.displayName}</span>
+                <span className="list-item-meta">
+                  {behavior.isDefault ? "default" : boolText(behavior.enabled)}
+                </span>
+              </button>
+              <button
+                aria-label={`Start new chat with ${behavior.displayName}`}
+                className="behavior-new-chat-button"
+                data-testid={`sidebar-new-chat-${behavior.behaviorId}`}
+                onClick={() => onStartNewConversation(behavior.behaviorId)}
+                title={`Start new chat with ${behavior.displayName}`}
+                type="button"
+              >
+                <ChatPlusIcon />
+              </button>
+            </div>
           ))}
         </div>
       )}
     </section>
+  );
+}
+
+function ChatPlusIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
+      <path d="M12 8v6" />
+      <path d="M9 11h6" />
+    </svg>
   );
 }

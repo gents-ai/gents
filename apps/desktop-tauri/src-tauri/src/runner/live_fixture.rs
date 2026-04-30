@@ -269,6 +269,7 @@ impl LiveBridgeFixture {
         let init_summary = DesktopInitSummary {
             status: "initialized",
             source: "bridge-runner",
+            status_endpoint: None,
             agent_home: agent_home.display().to_string(),
             desktop_home: desktop_paths.root().display().to_string(),
             peer_directory: desktop_paths.peer_directory_path().display().to_string(),
@@ -357,6 +358,7 @@ impl LiveBridgeFixture {
                 .display()
                 .to_string(),
             node_data_dir: self.desktop_paths.node_data_dir().display().to_string(),
+            log_file_path: self.desktop_paths.log_file_path().display().to_string(),
             agent_home_exists: self.agent_home.exists(),
             desktop_home_exists: self.desktop_paths.root().exists(),
             peer_directory_exists: self.desktop_paths.peer_directory_path().exists(),

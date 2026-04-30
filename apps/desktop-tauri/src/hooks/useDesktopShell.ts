@@ -65,6 +65,7 @@ export function useDesktopShell() {
   const lastP2PAutoRestartAt = useRef<number | null>(null);
   const lastObservedP2PHealth = useRef<P2PHealth | null>(null);
   const selectedSessionIdRef = useRef<string | null>(null);
+  const newConversationAgentRef = useRef<string | null>(null);
   const [snapshot, setSnapshot] = useState<DesktopClientSnapshot | null>(null);
   const [session, setSession] = useState<DesktopSessionSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
@@ -148,6 +149,7 @@ export function useDesktopShell() {
     try {
       const next = await fetchSessionSnapshot(
         nextSessionId,
+        selectedAgentDid,
         trackedRequestIdForSession(nextSessionId, shellProjection.workflow),
       );
       setSession(next);
@@ -282,6 +284,14 @@ export function useDesktopShell() {
       selectedDeployment.conversations.some(
         (conversation) => conversation.sessionId === selectedSessionId,
       )
+    ) {
+      newConversationAgentRef.current = null;
+      return;
+    }
+
+    if (
+      !selectedSessionId &&
+      newConversationAgentRef.current === selectedDeployment.agentDid
     ) {
       return;
     }
@@ -448,6 +458,7 @@ export function useDesktopShell() {
         content: draft,
       });
       setDraft("");
+      newConversationAgentRef.current = null;
       setSelectedSessionId(result.sessionId);
       setLocalWorkflow({
         kind: "awaitingObservation",
@@ -474,6 +485,37 @@ export function useDesktopShell() {
       setError(String(err));
       throw err;
     }
+  }
+
+  function onSelectSession(sessionId: string) {
+    const conversation = selectedDeployment?.conversations.find(
+      (conversation) => conversation.sessionId === sessionId,
+    );
+    if (conversation?.behaviorId) {
+      setSelectedBehaviorId(conversation.behaviorId);
+    }
+    newConversationAgentRef.current = null;
+    if (session?.sessionId !== sessionId) {
+      setSession(null);
+    }
+    setSelectedSessionId(sessionId);
+  }
+
+  function onStartNewConversation(behaviorId?: string | null) {
+    if (!selectedDeployment) {
+      return;
+    }
+    if (
+      behaviorId &&
+      selectedDeployment.behaviors.some((behavior) => behavior.behaviorId === behaviorId)
+    ) {
+      setSelectedBehaviorId(behaviorId);
+    }
+    newConversationAgentRef.current = selectedDeployment.agentDid;
+    setSelectedSessionId(null);
+    setSession(null);
+    setLocalWorkflow({ kind: "ready" });
+    setError(null);
   }
 
   async function onSaveAgentConfig(request: AgentConfigSaveRequest) {
@@ -699,6 +741,8 @@ export function useDesktopShell() {
     setSelectedSessionId,
     setSelectedBehaviorId,
     setDraft,
+    onSelectSession,
+    onStartNewConversation,
     refreshSnapshot,
     onAddPeer,
     onFetchPeerStatus,

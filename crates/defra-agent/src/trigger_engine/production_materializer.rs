@@ -28,8 +28,9 @@ use tokio::sync::watch;
 
 use crate::graphql::escape_graphql_string;
 use crate::lifecycle::{
-    nonterminal_lifecycle_state_graphql_list, write_pending_agent_request_with_lineage,
-    ExecutionOrigin, TriggerLineage,
+    nonterminal_lifecycle_state_graphql_list, task_run_conversation_title,
+    write_pending_agent_request_with_lineage_and_conversation_title, ExecutionOrigin,
+    TriggerLineage,
 };
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ResolvedTask};
 use crate::trigger_engine::{MaterializerHandle, TriggerKind};
@@ -105,6 +106,7 @@ impl MaterializerHandle for ProductionMaterializer {
         let resolved = self.resolve_behavior(task);
         let node = self.node.clone();
         let task_id = task.task_id.clone();
+        let task_label = task.display_label().to_string();
         let rendered_prompt = rendered_prompt.to_string();
         let trigger_id = trigger_id.map(str::to_owned);
         let trigger_kind_str = trigger_kind.as_str().to_owned();
@@ -125,19 +127,23 @@ impl MaterializerHandle for ProductionMaterializer {
                 trigger_id: trigger_id.clone(),
                 trigger_kind: Some(trigger_kind_str),
             };
-            let enqueued = write_pending_agent_request_with_lineage(
+            let conversation_title = task_run_conversation_title(&task_label);
+            let enqueued = write_pending_agent_request_with_lineage_and_conversation_title(
                 node.as_ref(),
                 &behavior_did,
                 &behavior_name,
                 &rendered_prompt,
                 execution_origin,
                 lineage,
+                Some(&conversation_title),
             )
             .await?;
             tracing::info!(
                 task_id = %task_id,
                 trigger_id = ?trigger_id,
                 request_id = %enqueued.request_id,
+                session_id = %enqueued.session_id,
+                conversation_title = %conversation_title,
                 "enqueued AgentRequest for trigger fire"
             );
             Ok(enqueued.request_id)

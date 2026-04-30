@@ -19,6 +19,7 @@ const MATERIALIZATION_MONITOR_INTERVAL: Duration = Duration::from_secs(1);
 const MATERIALIZATION_STALL_THRESHOLD: Duration = Duration::from_secs(5);
 const MATERIALIZATION_REPAIR_COOLDOWN: Duration = Duration::from_secs(5);
 const MATERIALIZATION_REFRESH_DELAY: Duration = Duration::from_millis(250);
+const MATERIALIZATION_P2P_REPAIR_ENV: &str = "DEFRA_AGENT_DESKTOP_MATERIALIZATION_P2P_REPAIR";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MaterializationSignature {
@@ -80,6 +81,15 @@ pub(super) fn spawn_materialization_supervisor_task(
 
             let snapshot = store.snapshot();
             let repairs = tracker.due_repairs(snapshot.as_ref(), Instant::now());
+            if !repairs.is_empty() && !materialization_p2p_repair_enabled() {
+                tracing::debug!(
+                    target: "defra_agent_desktop_core::materialization",
+                    repairs = repairs.len(),
+                    env = MATERIALIZATION_P2P_REPAIR_ENV,
+                    "skipping opt-in P2P materialization repair"
+                );
+                continue;
+            }
 
             for repair in repairs {
                 tracing::warn!(
@@ -136,6 +146,14 @@ pub(super) fn spawn_materialization_supervisor_task(
             }
         }
     })
+}
+
+fn materialization_p2p_repair_enabled() -> bool {
+    let Ok(value) = std::env::var(MATERIALIZATION_P2P_REPAIR_ENV) else {
+        return false;
+    };
+    let value = value.trim().to_ascii_lowercase();
+    matches!(value.as_str(), "1" | "true" | "yes" | "on")
 }
 
 impl MaterializationTracker {

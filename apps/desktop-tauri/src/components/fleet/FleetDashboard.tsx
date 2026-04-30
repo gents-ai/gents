@@ -37,10 +37,11 @@ type ToolIcon = {
   title: string;
 };
 
-const DEFAULT_PEER_FORM = {
+const DEFAULT_PEER_FORM: PeerAddRequest = {
   label: "",
   agentDid: "",
   addr: "",
+  graphql: null,
 };
 
 export function FleetDashboard({
@@ -207,6 +208,13 @@ function AddPeerForm({
   const serverAddressReady = Boolean(serverAddress.trim());
   const busy = disabled || addingPeer || fetchingStatus;
 
+  function updateServerAddress(value: string) {
+    setServerAddress(value);
+    if (looksLikeGraphqlEndpoint(value) && !peerForm.graphql?.trim()) {
+      onPeerFormChange({ ...peerForm, graphql: value.trim() });
+    }
+  }
+
   function updateConnectionJson(value: string) {
     setConnectionJson(value);
     if (!value.trim()) {
@@ -247,7 +255,9 @@ function AddPeerForm({
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     try {
-      const request = manualPeerReady ? peerForm : await fetchServerStatus();
+      const request = manualPeerReady
+        ? withGraphqlFallback(peerForm, serverAddress)
+        : await fetchServerStatus();
       await onSubmit(request);
     } catch {
       // Field-level and parent errors are rendered in the form.
@@ -274,8 +284,8 @@ function AddPeerForm({
             className="mono"
             data-testid="fleet-add-server-address"
             disabled={busy}
-            onChange={(event) => setServerAddress(event.currentTarget.value)}
-            placeholder="http://127.0.0.1:9181"
+            onChange={(event) => updateServerAddress(event.currentTarget.value)}
+            placeholder="http://127.0.0.1:9181/api/v0/graphql"
             value={serverAddress}
           />
         </label>
@@ -344,6 +354,22 @@ function AddPeerForm({
           value={peerForm.addr}
         />
       </label>
+      <label className="field">
+        <span>GraphQL endpoint</span>
+        <input
+          className="mono"
+          data-testid="fleet-add-graphql"
+          disabled={busy}
+          onChange={(event) =>
+            onPeerFormChange({
+              ...peerForm,
+              graphql: event.currentTarget.value,
+            })
+          }
+          placeholder="http://127.0.0.1:9181/api/v0/graphql"
+          value={peerForm.graphql ?? ""}
+        />
+      </label>
       {localError ? <p className="fleet-inline-error">{localError}</p> : null}
       <div className="fleet-add-actions">
         <button
@@ -368,6 +394,24 @@ function AddPeerForm({
       </div>
     </form>
   );
+}
+
+function looksLikeGraphqlEndpoint(value: string) {
+  const trimmed = value.trim();
+  return /\/graphql\/?$/i.test(trimmed.split(/[?#]/, 1)[0] ?? "");
+}
+
+function withGraphqlFallback(
+  request: PeerAddRequest,
+  serverAddress: string,
+): PeerAddRequest {
+  if (request.graphql?.trim()) {
+    return request;
+  }
+  if (!looksLikeGraphqlEndpoint(serverAddress)) {
+    return request;
+  }
+  return { ...request, graphql: serverAddress.trim() };
 }
 
 type FleetRowProps = {

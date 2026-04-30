@@ -8,7 +8,7 @@ use defra_p2p_adapter::{
     ExplicitReplayCapabilityInput, P2PResult, P2pDocumentInfo, P2pDocumentRequest, ReplicatorInfo,
 };
 
-use super::bootstrap::select_local_runtime_pairing_addr;
+use super::bootstrap::{select_local_runtime_pairing_addr, select_runtime_pairing_addr};
 use super::supervisor::{
     p2p_health_materially_changed, probe_p2p_health, repair_saved_peer, saved_peer_needs_repair,
 };
@@ -262,6 +262,22 @@ fn select_local_runtime_pairing_addr_falls_back_to_first_nonempty() {
     ]);
 
     assert_eq!(selected.as_deref(), Some("endpointabc123"));
+}
+
+#[test]
+fn select_runtime_pairing_addr_avoids_loopback_for_remote_graphql() {
+    let selected = select_runtime_pairing_addr(
+        &[
+            "127.0.0.1:56000/p2p/peer-alpha".to_string(),
+            "100.73.235.38:56000/p2p/peer-alpha".to_string(),
+        ],
+        "http://100.73.235.38:9181/api/v0/graphql",
+    );
+
+    assert_eq!(
+        selected.as_deref(),
+        Some("100.73.235.38:56000/p2p/peer-alpha")
+    );
 }
 
 #[tokio::test]

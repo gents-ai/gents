@@ -65,6 +65,7 @@ export type DesktopApiAdapter = {
   repairP2P: () => Promise<DesktopClientSnapshot>;
   fetchSessionSnapshot: (
     sessionId: string,
+    agentDid?: string | null,
     requestId?: string | null,
   ) => Promise<DesktopSessionSnapshot | null>;
   sendChatMessage: (request: {
@@ -133,9 +134,10 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
   repairP2P() {
     return invokeDesktop<DesktopClientSnapshot>("desktop_p2p_repair");
   },
-  fetchSessionSnapshot(sessionId, requestId) {
+  fetchSessionSnapshot(sessionId, agentDid, requestId) {
     return invokeDesktop<DesktopSessionSnapshot | null>("desktop_session_snapshot", {
       sessionId,
+      agentDid,
       requestId,
     });
   },
@@ -241,9 +243,10 @@ export async function repairP2P() {
 
 export async function fetchSessionSnapshot(
   sessionId: string,
+  agentDid?: string | null,
   requestId?: string | null,
 ) {
-  return desktopApiAdapter().fetchSessionSnapshot(sessionId, requestId);
+  return desktopApiAdapter().fetchSessionSnapshot(sessionId, agentDid, requestId);
 }
 
 export async function sendChatMessage(request: {

@@ -167,7 +167,15 @@ $DESKTOP init
 $DESKTOP
 ```
 
-`defra-agent-desktop init` only discovers the local runtime and saves it in the desktop peer directory. The desktop app completes the P2P pairing and replication bootstrap when it launches. For the replicated chat demo, leave the desktop app open and wait for the status bar to show `replication: subscriptions armed` before sending prompts you expect to render in the UI.
+`defra-agent-desktop init` discovers a runtime and saves it in the desktop peer directory. To seed a remote or deployed runtime from its operations API, pass its GraphQL or status endpoint:
+
+```bash
+$DESKTOP init --graphql http://agent-host:9181/api/v0/graphql
+# or:
+$DESKTOP init --status-endpoint http://agent-host:9181/status
+```
+
+The discovery URL is used to read connection metadata; the saved deployment stores the runtime's P2P address and GraphQL endpoint. The desktop app completes the P2P pairing and replication bootstrap when it launches. For the replicated chat demo, leave the desktop app open and wait for the status bar to show `replication: subscriptions armed` before sending prompts you expect to render in the UI.
 
 ### 6. Start chatting
 

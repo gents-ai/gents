@@ -75,6 +75,7 @@ pub(crate) async fn build_bootstrap_summary() -> Result<DesktopBootstrapSummary,
         desktop_home: desktop_paths.root().display().to_string(),
         peer_directory_path: desktop_paths.peer_directory_path().display().to_string(),
         node_data_dir: desktop_paths.node_data_dir().display().to_string(),
+        log_file_path: desktop_paths.log_file_path().display().to_string(),
         agent_home_exists: agent_home.exists(),
         desktop_home_exists: desktop_paths.root().exists(),
         peer_directory_exists: desktop_paths.peer_directory_path().exists(),
@@ -111,6 +112,10 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
         .into_iter()
         .map(|peer| {
             let status = peer_statuses.get(&peer.agent_did);
+            let require_source_scope = peer
+                .graphql
+                .as_deref()
+                .is_some_and(|graphql| !graphql.trim().is_empty());
             let principal = store
                 .agent_principals
                 .iter()
@@ -176,7 +181,16 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
             let mut inference_backends = store
                 .inference_backends
                 .iter()
-                .map(|row| InferenceBackendView {
+                .enumerate()
+                .filter(|(index, _row)| {
+                    source_matches_agent(
+                        &store.inference_backend_source_agent_dids,
+                        *index,
+                        &peer.agent_did,
+                        require_source_scope,
+                    )
+                })
+                .map(|(_index, row)| InferenceBackendView {
                     backend_id: row.backend_id.clone(),
                     name: normalize_optional(row.name.as_deref()),
                     provider_kind: normalize_optional(row.provider_kind.as_deref()),
@@ -195,7 +209,16 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
             let mut inference_profiles = store
                 .inference_profiles
                 .iter()
-                .map(|row| InferenceProfileView {
+                .enumerate()
+                .filter(|(index, _row)| {
+                    source_matches_agent(
+                        &store.inference_profile_source_agent_dids,
+                        *index,
+                        &peer.agent_did,
+                        require_source_scope,
+                    )
+                })
+                .map(|(_index, row)| InferenceProfileView {
                     profile_id: row.profile_id.clone(),
                     display_name: normalize_optional(row.display_name.as_deref()),
                     context_window: row.context_window,
@@ -231,7 +254,16 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
             let mut tool_service_registries = store
                 .tool_service_registries
                 .iter()
-                .map(|row| ToolServiceRegistryView {
+                .enumerate()
+                .filter(|(index, _row)| {
+                    source_matches_agent(
+                        &store.tool_service_registry_source_agent_dids,
+                        *index,
+                        &peer.agent_did,
+                        require_source_scope,
+                    )
+                })
+                .map(|(_index, row)| ToolServiceRegistryView {
                     service_id: row.service_id.clone(),
                     display_name: normalize_optional(row.display_name.as_deref()),
                     description: normalize_optional(row.description.as_deref()),
@@ -247,41 +279,43 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                 .collect::<Vec<_>>();
             tool_service_registries.sort_by(|left, right| left.service_id.cmp(&right.service_id));
 
-            let mut tasks = store
+            let scoped_task_rows = store
                 .tasks
                 .iter()
-                .filter(|row| {
-                    row.behavior_id
+                .enumerate()
+                .filter(|(index, row)| {
+                    source_matches_agent(
+                        &store.task_source_agent_dids,
+                        *index,
+                        &peer.agent_did,
+                        require_source_scope,
+                    ) && row
+                        .behavior_id
                         .as_deref()
                         .is_some_and(|behavior_id| behavior_ids.contains(&behavior_id))
                 })
-                .map(|row| TaskView {
-                    task_id: row.task_id.clone(),
-                    name: normalize_optional(row.name.as_deref()),
-                    description: normalize_optional(row.description.as_deref()),
-                    behavior_id: normalize_optional(row.behavior_id.as_deref()),
-                    prompt_template: normalize_optional(row.prompt_template.as_deref()),
-                    enabled: row.enabled,
-                    output_schema_ref: normalize_optional(row.output_schema_ref.as_deref()),
-                    recent_runs: recent_runs_view(&store.recent_runs_for_task(&row.task_id)),
-                    run_history: task_run_history(store.as_ref(), &row.task_id),
-                })
                 .collect::<Vec<_>>();
-            tasks.sort_by(|left, right| left.task_id.cmp(&right.task_id));
-            let task_ids = tasks
+            let task_ids = scoped_task_rows
                 .iter()
-                .map(|task| task.task_id.as_str())
+                .map(|(_index, task)| task.task_id.as_str())
                 .collect::<Vec<_>>();
 
             let mut schedules = store
                 .schedules
                 .iter()
-                .filter(|row| {
-                    row.task_id
+                .enumerate()
+                .filter(|(index, row)| {
+                    source_matches_agent(
+                        &store.schedule_source_agent_dids,
+                        *index,
+                        &peer.agent_did,
+                        require_source_scope,
+                    ) && row
+                        .task_id
                         .as_deref()
                         .is_some_and(|task_id| task_ids.contains(&task_id))
                 })
-                .map(|row| ScheduleView {
+                .map(|(_index, row)| ScheduleView {
                     schedule_id: row.schedule_id.clone(),
                     task_id: normalize_optional(row.task_id.as_deref()),
                     interval_secs: row.interval_secs,
@@ -299,12 +333,19 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
             let mut event_triggers = store
                 .event_triggers
                 .iter()
-                .filter(|row| {
-                    row.task_id
+                .enumerate()
+                .filter(|(index, row)| {
+                    source_matches_agent(
+                        &store.event_trigger_source_agent_dids,
+                        *index,
+                        &peer.agent_did,
+                        require_source_scope,
+                    ) && row
+                        .task_id
                         .as_deref()
                         .is_some_and(|task_id| task_ids.contains(&task_id))
                 })
-                .map(|row| EventTriggerView {
+                .map(|(_index, row)| EventTriggerView {
                     trigger_id: row.trigger_id.clone(),
                     task_id: normalize_optional(row.task_id.as_deref()),
                     source_collection: normalize_optional(row.source_collection.as_deref()),
@@ -323,22 +364,70 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                 .collect::<Vec<_>>();
             event_triggers.sort_by(|left, right| left.trigger_id.cmp(&right.trigger_id));
 
+            let mut tasks = scoped_task_rows
+                .into_iter()
+                .map(|(_index, row)| TaskView {
+                    task_id: row.task_id.clone(),
+                    name: normalize_optional(row.name.as_deref()),
+                    description: normalize_optional(row.description.as_deref()),
+                    behavior_id: normalize_optional(row.behavior_id.as_deref()),
+                    prompt_template: normalize_optional(row.prompt_template.as_deref()),
+                    enabled: row.enabled,
+                    output_schema_ref: normalize_optional(row.output_schema_ref.as_deref()),
+                    recent_runs: recent_runs_for_task_views(
+                        &schedules,
+                        &event_triggers,
+                        &row.task_id,
+                    ),
+                    run_history: task_run_history(
+                        store.as_ref(),
+                        &peer.agent_did,
+                        require_source_scope,
+                        &row.task_id,
+                        &schedules,
+                        &event_triggers,
+                    ),
+                })
+                .collect::<Vec<_>>();
+            tasks.sort_by(|left, right| left.task_id.cmp(&right.task_id));
+
             let mut conversations = store
                 .conversation_rows(&peer.agent_did)
                 .into_iter()
                 .map(|row| {
-                    let transcript = store.transcript(&row.session_id);
+                    let transcript = store.transcript_for_agent(&row.session_id, &peer.agent_did);
+                    let task_tag = conversation_task_tag(
+                        store.as_ref(),
+                        &peer.agent_did,
+                        require_source_scope,
+                        &row.session_id,
+                        &tasks,
+                        &schedules,
+                        &event_triggers,
+                    );
                     ConversationSummary {
                         session_id: row.session_id.clone(),
                         title: normalize_optional(row.title.as_deref()),
                         preview_text: normalize_optional(row.preview_text.as_deref()),
                         status: normalize_optional(row.status.as_deref()),
                         behavior_id: normalize_optional(row.behavior_id.as_deref()),
-                        latest_request_id: store.latest_request_id_for_session(&row.session_id),
+                        latest_request_id: store.latest_request_id_for_session_for_agent(
+                            &row.session_id,
+                            &peer.agent_did,
+                        ),
+                        task_id: task_tag.as_ref().map(|tag| tag.task_id.clone()),
+                        task_name: task_tag.as_ref().and_then(|tag| tag.task_name.clone()),
+                        trigger_id: task_tag.as_ref().and_then(|tag| tag.trigger_id.clone()),
+                        trigger_kind: task_tag.as_ref().and_then(|tag| tag.trigger_kind.clone()),
                         created_at: normalize_optional(row.created_at.as_deref()),
                         updated_at: normalize_optional(row.updated_at.as_deref()),
                         turn_state: store
-                            .derive_turn(&row.session_id)
+                            .latest_request_id_for_session_for_agent(
+                                &row.session_id,
+                                &peer.agent_did,
+                            )
+                            .as_deref()
+                            .and_then(|request_id| store.derive_turn_for_request(request_id))
                             .map(turn_state_label)
                             .map(str::to_owned),
                         message_count: transcript.messages.len(),
@@ -408,32 +497,175 @@ fn recent_runs_view(runs: &defra_agent_desktop_core::client::TaskRecentRuns) -> 
     }
 }
 
+fn source_matches_agent(
+    sources: &[Option<String>],
+    row_index: usize,
+    agent_did: &str,
+    require_source_scope: bool,
+) -> bool {
+    match sources.get(row_index).and_then(|source| source.as_deref()) {
+        Some(source_agent_did) => source_agent_did == agent_did,
+        None => !require_source_scope,
+    }
+}
+
+fn request_matches_agent(
+    request: &defra_agent_protocol::row::AgentRequestRow,
+    agent_did: &str,
+    require_source_scope: bool,
+) -> bool {
+    match request.agent_did.as_deref() {
+        Some(request_agent_did) => request_agent_did == agent_did,
+        None => !require_source_scope,
+    }
+}
+
+fn recent_runs_for_task_views(
+    schedules: &[ScheduleView],
+    event_triggers: &[EventTriggerView],
+    task_id: &str,
+) -> TaskRecentRunsView {
+    let matching_schedules = schedules
+        .iter()
+        .filter(|schedule| schedule.task_id.as_deref() == Some(task_id))
+        .collect::<Vec<_>>();
+    let matching_events = event_triggers
+        .iter()
+        .filter(|trigger| trigger.task_id.as_deref() == Some(task_id))
+        .collect::<Vec<_>>();
+
+    let total_fires = matching_schedules
+        .iter()
+        .map(|schedule| schedule.fire_count.unwrap_or(0).max(0) as u64)
+        .sum::<u64>()
+        + matching_events
+            .iter()
+            .map(|trigger| trigger.fire_count.unwrap_or(0).max(0) as u64)
+            .sum::<u64>();
+    let last_attempt_at = matching_schedules
+        .iter()
+        .filter_map(|schedule| schedule.last_attempt_at.as_deref())
+        .chain(
+            matching_events
+                .iter()
+                .filter_map(|trigger| trigger.last_attempt_at.as_deref()),
+        )
+        .max()
+        .map(str::to_owned);
+
+    let (last_status, last_error) = if let Some(target_ts) = last_attempt_at.as_deref() {
+        matching_schedules
+            .iter()
+            .find(|schedule| schedule.last_attempt_at.as_deref() == Some(target_ts))
+            .map(|schedule| (schedule.last_status.clone(), schedule.last_error.clone()))
+            .or_else(|| {
+                matching_events
+                    .iter()
+                    .find(|trigger| trigger.last_attempt_at.as_deref() == Some(target_ts))
+                    .map(|trigger| (trigger.last_status.clone(), trigger.last_error.clone()))
+            })
+            .unwrap_or((None, None))
+    } else {
+        (None, None)
+    };
+
+    recent_runs_view(&defra_agent_desktop_core::client::TaskRecentRuns {
+        total_fires,
+        last_attempt_at,
+        last_status,
+        last_error,
+        schedule_count: matching_schedules.len(),
+        event_trigger_count: matching_events.len(),
+    })
+}
+
 fn retain_latest_conversation_summaries(conversations: &mut Vec<ConversationSummary>) {
     let mut seen_sessions = HashSet::new();
     conversations.retain(|conversation| seen_sessions.insert(conversation.session_id.clone()));
 }
 
+#[derive(Debug)]
+struct ConversationTaskTag {
+    task_id: String,
+    task_name: Option<String>,
+    trigger_id: Option<String>,
+    trigger_kind: Option<String>,
+}
+
+fn conversation_task_tag(
+    store: &defra_agent_desktop_core::client::ClientStore,
+    agent_did: &str,
+    require_source_scope: bool,
+    session_id: &str,
+    tasks: &[TaskView],
+    schedules: &[ScheduleView],
+    event_triggers: &[EventTriggerView],
+) -> Option<ConversationTaskTag> {
+    let mut requests = store.requests_for_session(session_id);
+    requests.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| right.request_id.cmp(&left.request_id))
+    });
+
+    requests.into_iter().find_map(|request| {
+        if !request_matches_agent(request, agent_did, require_source_scope) {
+            return None;
+        }
+        let trigger_kind = normalize_optional(request.caused_by_trigger_kind.as_deref())?;
+        let trigger_id = normalize_optional(request.caused_by_trigger_id.as_deref());
+        let task_id = match (trigger_kind.as_str(), trigger_id.as_deref()) {
+            ("schedule", Some(trigger_id)) => schedules
+                .iter()
+                .find(|schedule| schedule.schedule_id == trigger_id)
+                .and_then(|schedule| schedule.task_id.clone()),
+            ("event", Some(trigger_id)) => event_triggers
+                .iter()
+                .find(|trigger| trigger.trigger_id == trigger_id)
+                .and_then(|trigger| trigger.task_id.clone()),
+            _ => None,
+        }?;
+        let task_name = tasks
+            .iter()
+            .find(|task| task.task_id == task_id)
+            .and_then(|task| task.name.clone());
+
+        Some(ConversationTaskTag {
+            task_id,
+            task_name,
+            trigger_id,
+            trigger_kind: Some(trigger_kind),
+        })
+    })
+}
+
 fn task_run_history(
     store: &defra_agent_desktop_core::client::ClientStore,
+    agent_did: &str,
+    require_source_scope: bool,
     task_id: &str,
+    schedules: &[ScheduleView],
+    event_triggers: &[EventTriggerView],
 ) -> Vec<TaskRunSummaryView> {
-    let schedule_ids = store
-        .schedules
+    let schedule_ids = schedules
         .iter()
-        .filter(|row| row.task_id.as_deref() == Some(task_id))
-        .map(|row| row.schedule_id.as_str())
+        .filter(|schedule| schedule.task_id.as_deref() == Some(task_id))
+        .map(|schedule| schedule.schedule_id.as_str())
         .collect::<Vec<_>>();
-    let event_trigger_ids = store
-        .event_triggers
+    let event_trigger_ids = event_triggers
         .iter()
-        .filter(|row| row.task_id.as_deref() == Some(task_id))
-        .map(|row| row.trigger_id.as_str())
+        .filter(|trigger| trigger.task_id.as_deref() == Some(task_id))
+        .map(|trigger| trigger.trigger_id.as_str())
         .collect::<Vec<_>>();
 
     let mut runs = store
         .requests
         .iter()
         .filter(|request| {
+            if !request_matches_agent(request, agent_did, require_source_scope) {
+                return false;
+            }
             match (
                 request.caused_by_trigger_kind.as_deref(),
                 request.caused_by_trigger_id.as_deref(),
@@ -466,30 +698,60 @@ fn task_run_history(
     runs
 }
 
+#[cfg(test)]
 pub(crate) fn build_session_snapshot_from_store(
     store: &defra_agent_desktop_core::client::ClientStore,
     session_id: &str,
     preferred_request_id: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
-    let conversation = store
-        .conversations
-        .iter()
-        .find(|row| row.session_id == session_id);
+    build_session_snapshot_from_store_for_agent(store, None, session_id, preferred_request_id)
+}
+
+pub(crate) fn build_session_snapshot_from_store_for_agent(
+    store: &defra_agent_desktop_core::client::ClientStore,
+    agent_did: Option<&str>,
+    session_id: &str,
+    preferred_request_id: Option<&str>,
+) -> Option<DesktopSessionSnapshot> {
+    let conversation = store.conversations.iter().find(|row| {
+        row.session_id == session_id
+            && agent_did.map_or(true, |agent_did| {
+                row.agent_did.as_deref() == Some(agent_did)
+            })
+    });
     let session_row = store
         .sessions
         .iter()
-        .find(|row| row.session_id == session_id);
-    let requests = store.requests_for_session(session_id);
+        .enumerate()
+        .find(|(index, row)| {
+            row.session_id == session_id
+                && agent_did.map_or(true, |agent_did| {
+                    source_matches_agent(&store.session_source_agent_dids, *index, agent_did, false)
+                })
+        })
+        .map(|(_index, row)| row);
+    let requests = agent_did.map_or_else(
+        || store.requests_for_session(session_id),
+        |agent_did| store.requests_for_session_for_agent(session_id, agent_did),
+    );
 
     if conversation.is_none() && session_row.is_none() && requests.is_empty() {
         return None;
     }
 
-    let transcript = store.transcript(session_id);
+    let transcript = agent_did.map_or_else(
+        || store.transcript(session_id),
+        |agent_did| store.transcript_for_agent(session_id, agent_did),
+    );
     let latest_request_id = preferred_request_id
         .filter(|request_id| requests.iter().any(|row| row.request_id == *request_id))
         .map(str::to_owned)
-        .or_else(|| store.latest_request_id_for_session(session_id));
+        .or_else(|| {
+            agent_did.map_or_else(
+                || store.latest_request_id_for_session(session_id),
+                |agent_did| store.latest_request_id_for_session_for_agent(session_id, agent_did),
+            )
+        });
     let latest_request = latest_request_id
         .as_deref()
         .and_then(|request_id| {
@@ -502,11 +764,22 @@ pub(crate) fn build_session_snapshot_from_store(
     let turn_state = latest_request_id
         .as_deref()
         .and_then(|request_id| store.derive_turn_for_request(request_id))
-        .or_else(|| store.derive_turn(session_id));
+        .or_else(|| {
+            if agent_did.is_none() {
+                store.derive_turn(session_id)
+            } else {
+                None
+            }
+        });
     let turn_state_label = turn_state.map(turn_state_label).map(str::to_owned);
     let latest_response = latest_request_id
         .as_deref()
-        .and_then(|request_id| store.latest_response_for_request(request_id))
+        .and_then(|request_id| {
+            agent_did.map_or_else(
+                || store.latest_response_for_request(request_id),
+                |agent_did| store.latest_response_for_request_for_agent(request_id, agent_did),
+            )
+        })
         .map(|row| ResponseView {
             status: normalize_optional(row.status.as_deref()),
             content: row
@@ -542,10 +815,10 @@ pub(crate) fn build_session_snapshot_from_store(
     });
     let pending_turn = latest_request_id
         .as_deref()
-        .and_then(|request_id| build_pending_turn(store, session_id, request_id));
-    let active_turn_index = latest_request_id
-        .as_deref()
-        .and_then(|request_id| logical_turn_index_for_request(store, session_id, request_id));
+        .and_then(|request_id| build_pending_turn(store, agent_did, session_id, request_id));
+    let active_turn_index = latest_request_id.as_deref().and_then(|request_id| {
+        logical_turn_index_for_request(store, agent_did, session_id, request_id)
+    });
 
     let messages = transcript
         .messages
@@ -659,9 +932,13 @@ fn request_turn_root_id(request: &defra_agent_protocol::row::AgentRequestRow) ->
 
 fn logical_turn_roots_for_session(
     store: &defra_agent_desktop_core::client::ClientStore,
+    agent_did: Option<&str>,
     session_id: &str,
 ) -> Vec<String> {
-    let mut requests = store.requests_for_session(session_id);
+    let mut requests = agent_did.map_or_else(
+        || store.requests_for_session(session_id),
+        |agent_did| store.requests_for_session_for_agent(session_id, agent_did),
+    );
     requests.sort_by(|left, right| {
         normalize_optional(left.created_at.as_deref())
             .cmp(&normalize_optional(right.created_at.as_deref()))
@@ -682,31 +959,45 @@ fn logical_turn_roots_for_session(
 
 fn logical_turn_index_for_request(
     store: &defra_agent_desktop_core::client::ClientStore,
+    agent_did: Option<&str>,
     session_id: &str,
     request_id: &str,
 ) -> Option<usize> {
     let request = store.requests.iter().find(|row| {
-        row.request_id == request_id && row.session_id.as_deref() == Some(session_id)
+        row.request_id == request_id
+            && row.session_id.as_deref() == Some(session_id)
+            && agent_did.map_or(true, |agent_did| {
+                request_matches_agent(row, agent_did, false)
+            })
     })?;
     let root_id = request_turn_root_id(request);
-    logical_turn_roots_for_session(store, session_id)
+    logical_turn_roots_for_session(store, agent_did, session_id)
         .iter()
         .position(|candidate| candidate == &root_id)
 }
 
 fn build_pending_turn(
     store: &defra_agent_desktop_core::client::ClientStore,
+    agent_did: Option<&str>,
     session_id: &str,
     request_id: &str,
 ) -> Option<PendingTurnView> {
     let request = store.requests.iter().find(|row| {
-        row.request_id == request_id && row.session_id.as_deref() == Some(session_id)
+        row.request_id == request_id
+            && row.session_id.as_deref() == Some(session_id)
+            && agent_did.map_or(true, |agent_did| {
+                request_matches_agent(row, agent_did, false)
+            })
     })?;
 
     let lifecycle_state = normalize_optional(request.lifecycle_state.as_deref());
     let content = normalize_optional(request.content.as_deref())?;
-    let active_turn_index = logical_turn_index_for_request(store, session_id, request_id)?;
-    let transcript = store.transcript(session_id);
+    let active_turn_index =
+        logical_turn_index_for_request(store, agent_did, session_id, request_id)?;
+    let transcript = agent_did.map_or_else(
+        || store.transcript(session_id),
+        |agent_did| store.transcript_for_agent(session_id, agent_did),
+    );
     let messages = transcript
         .messages
         .into_iter()
@@ -769,9 +1060,14 @@ mod tests {
     use rig::completion::message::{Message, Text, UserContent};
     use rig::one_or_many::OneOrMany;
 
-    use super::super::types::{ConversationSummary, RenderedTimelineItem};
+    use super::super::types::{
+        ConversationSummary, RenderedTimelineItem, ScheduleView, TaskRecentRunsView, TaskView,
+    };
     use super::build_session_snapshot_from_store;
+    use super::build_session_snapshot_from_store_for_agent;
+    use super::conversation_task_tag;
     use super::retain_latest_conversation_summaries;
+    use super::task_run_history;
 
     fn user_message_json(text: &str) -> String {
         serde_json::to_string(&Message::User {
@@ -794,11 +1090,51 @@ mod tests {
             status: None,
             behavior_id: None,
             latest_request_id: Some(latest_request_id.to_string()),
+            task_id: None,
+            task_name: None,
+            trigger_id: None,
+            trigger_kind: None,
             created_at: Some("2026-04-21T12:00:00Z".to_string()),
             updated_at: Some(updated_at.to_string()),
             turn_state: None,
             message_count: 0,
             tool_call_count: 0,
+        }
+    }
+
+    fn task_view(task_id: &str, name: &str) -> TaskView {
+        TaskView {
+            task_id: task_id.to_string(),
+            name: Some(name.to_string()),
+            description: None,
+            behavior_id: None,
+            prompt_template: None,
+            enabled: Some(true),
+            output_schema_ref: None,
+            recent_runs: TaskRecentRunsView {
+                total_fires: 0,
+                last_attempt_at: None,
+                last_status: None,
+                last_error: None,
+                schedule_count: 0,
+                event_trigger_count: 0,
+            },
+            run_history: Vec::new(),
+        }
+    }
+
+    fn schedule_view(schedule_id: &str, task_id: &str) -> ScheduleView {
+        ScheduleView {
+            schedule_id: schedule_id.to_string(),
+            task_id: Some(task_id.to_string()),
+            interval_secs: Some(60),
+            enabled: Some(true),
+            concurrency: None,
+            next_run_at: None,
+            last_attempt_at: None,
+            last_status: None,
+            last_error: None,
+            fire_count: None,
         }
     }
 
@@ -816,6 +1152,220 @@ mod tests {
         assert_eq!(conversations[0].session_id, "session-1");
         assert_eq!(conversations[0].latest_request_id.as_deref(), Some("req-3"));
         assert_eq!(conversations[1].session_id, "session-2");
+    }
+
+    #[test]
+    fn conversation_task_tag_uses_latest_schedule_lineage() {
+        let store = ClientStore::from_rows(ClientStoreRows {
+            requests: vec![
+                AgentRequestRow {
+                    request_id: "req-old".to_string(),
+                    agent_did: Some("did:defra:amy".to_string()),
+                    behavior_id: Some("amy-default".to_string()),
+                    session_id: Some("session-1".to_string()),
+                    retry_parent_request: None,
+                    retry_root_request: None,
+                    superseded_by_request: None,
+                    content: Some("old".to_string()),
+                    status: Some("completed".to_string()),
+                    lifecycle_state: Some("completed".to_string()),
+                    backend_id: None,
+                    execution_origin: Some("scheduled".to_string()),
+                    failure_reason: None,
+                    created_at: Some("2026-04-21T12:00:00Z".to_string()),
+                    claimed_at: None,
+                    deadline: None,
+                    retry_count: Some(0),
+                    max_retries: Some(3),
+                    caused_by_trigger_id: Some("sched-old".to_string()),
+                    caused_by_trigger_kind: Some("schedule".to_string()),
+                    interrupt_requested_at: None,
+                    valid_until: None,
+                },
+                AgentRequestRow {
+                    request_id: "req-new".to_string(),
+                    agent_did: Some("did:defra:amy".to_string()),
+                    behavior_id: Some("amy-default".to_string()),
+                    session_id: Some("session-1".to_string()),
+                    retry_parent_request: None,
+                    retry_root_request: None,
+                    superseded_by_request: None,
+                    content: Some("new".to_string()),
+                    status: Some("completed".to_string()),
+                    lifecycle_state: Some("completed".to_string()),
+                    backend_id: None,
+                    execution_origin: Some("scheduled".to_string()),
+                    failure_reason: None,
+                    created_at: Some("2026-04-21T12:02:00Z".to_string()),
+                    claimed_at: None,
+                    deadline: None,
+                    retry_count: Some(0),
+                    max_retries: Some(3),
+                    caused_by_trigger_id: Some("sched-new".to_string()),
+                    caused_by_trigger_kind: Some("schedule".to_string()),
+                    interrupt_requested_at: None,
+                    valid_until: None,
+                },
+            ],
+            ..ClientStoreRows::default()
+        });
+        let tasks = vec![
+            task_view("task-old", "Old task"),
+            task_view("task-new", "Freshness check"),
+        ];
+        let schedules = vec![
+            schedule_view("sched-old", "task-old"),
+            schedule_view("sched-new", "task-new"),
+        ];
+
+        let tag = conversation_task_tag(
+            &store,
+            "did:defra:amy",
+            true,
+            "session-1",
+            &tasks,
+            &schedules,
+            &[],
+        )
+        .expect("task tag");
+
+        assert_eq!(tag.task_id, "task-new");
+        assert_eq!(tag.task_name.as_deref(), Some("Freshness check"));
+        assert_eq!(tag.trigger_id.as_deref(), Some("sched-new"));
+        assert_eq!(tag.trigger_kind.as_deref(), Some("schedule"));
+    }
+
+    #[test]
+    fn task_run_history_is_agent_scoped_when_trigger_ids_match() {
+        let store = ClientStore::from_rows(ClientStoreRows {
+            requests: vec![
+                AgentRequestRow {
+                    request_id: "req-mini-1".to_string(),
+                    agent_did: Some("did:defra:mini-1".to_string()),
+                    behavior_id: Some("default".to_string()),
+                    session_id: Some("session-mini-1".to_string()),
+                    retry_parent_request: None,
+                    retry_root_request: None,
+                    superseded_by_request: None,
+                    content: Some("run task".to_string()),
+                    status: Some("completed".to_string()),
+                    lifecycle_state: Some("completed".to_string()),
+                    backend_id: None,
+                    execution_origin: Some("scheduled".to_string()),
+                    failure_reason: None,
+                    created_at: Some("2026-04-21T12:00:00Z".to_string()),
+                    claimed_at: None,
+                    deadline: None,
+                    retry_count: Some(0),
+                    max_retries: Some(3),
+                    caused_by_trigger_id: Some("shared-schedule".to_string()),
+                    caused_by_trigger_kind: Some("schedule".to_string()),
+                    interrupt_requested_at: None,
+                    valid_until: None,
+                },
+                AgentRequestRow {
+                    request_id: "req-mini-2".to_string(),
+                    agent_did: Some("did:defra:mini-2".to_string()),
+                    behavior_id: Some("default".to_string()),
+                    session_id: Some("session-mini-2".to_string()),
+                    retry_parent_request: None,
+                    retry_root_request: None,
+                    superseded_by_request: None,
+                    content: Some("run task".to_string()),
+                    status: Some("completed".to_string()),
+                    lifecycle_state: Some("completed".to_string()),
+                    backend_id: None,
+                    execution_origin: Some("scheduled".to_string()),
+                    failure_reason: None,
+                    created_at: Some("2026-04-21T12:01:00Z".to_string()),
+                    claimed_at: None,
+                    deadline: None,
+                    retry_count: Some(0),
+                    max_retries: Some(3),
+                    caused_by_trigger_id: Some("shared-schedule".to_string()),
+                    caused_by_trigger_kind: Some("schedule".to_string()),
+                    interrupt_requested_at: None,
+                    valid_until: None,
+                },
+            ],
+            ..ClientStoreRows::default()
+        });
+        let schedules = vec![schedule_view("shared-schedule", "task-1")];
+
+        let runs = task_run_history(&store, "did:defra:mini-1", true, "task-1", &schedules, &[]);
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].request_id, "req-mini-1");
+    }
+
+    #[test]
+    fn session_snapshot_is_agent_scoped_when_session_ids_match() {
+        let store = ClientStore::from_rows(ClientStoreRows {
+            conversations: vec![
+                AgentConversationRow {
+                    session_id: "shared-session".to_string(),
+                    agent_name: Some("Mini 1".to_string()),
+                    agent_did: Some("did:defra:mini-1".to_string()),
+                    behavior_id: Some("default".to_string()),
+                    title: Some("mini-1 run".to_string()),
+                    title_source: Some("manual".to_string()),
+                    preview_text: None,
+                    status: Some("active".to_string()),
+                    created_at: Some("2026-04-21T12:00:00Z".to_string()),
+                    updated_at: Some("2026-04-21T12:00:00Z".to_string()),
+                    latest_request_id: None,
+                },
+                AgentConversationRow {
+                    session_id: "shared-session".to_string(),
+                    agent_name: Some("Mini 2".to_string()),
+                    agent_did: Some("did:defra:mini-2".to_string()),
+                    behavior_id: Some("default".to_string()),
+                    title: Some("mini-2 run".to_string()),
+                    title_source: Some("manual".to_string()),
+                    preview_text: None,
+                    status: Some("active".to_string()),
+                    created_at: Some("2026-04-21T12:01:00Z".to_string()),
+                    updated_at: Some("2026-04-21T12:01:00Z".to_string()),
+                    latest_request_id: None,
+                },
+            ],
+            messages: vec![
+                AgentMessageRow {
+                    message_key: "msg-mini-1".to_string(),
+                    session_id: Some("shared-session".to_string()),
+                    sequence: Some(1),
+                    role: Some("user".to_string()),
+                    content: Some(user_message_json("mini 1 only")),
+                    timestamp: Some("2026-04-21T12:00:01Z".to_string()),
+                },
+                AgentMessageRow {
+                    message_key: "msg-mini-2".to_string(),
+                    session_id: Some("shared-session".to_string()),
+                    sequence: Some(2),
+                    role: Some("user".to_string()),
+                    content: Some(user_message_json("mini 2 only")),
+                    timestamp: Some("2026-04-21T12:01:01Z".to_string()),
+                },
+            ],
+            message_source_agent_dids: vec![
+                Some("did:defra:mini-1".to_string()),
+                Some("did:defra:mini-2".to_string()),
+            ],
+            ..ClientStoreRows::default()
+        });
+
+        let snapshot = build_session_snapshot_from_store_for_agent(
+            &store,
+            Some("did:defra:mini-1"),
+            "shared-session",
+            None,
+        )
+        .expect("session snapshot");
+
+        assert_eq!(snapshot.agent_did.as_deref(), Some("did:defra:mini-1"));
+        assert_eq!(snapshot.title.as_deref(), Some("mini-1 run"));
+        assert_eq!(snapshot.messages.len(), 1);
+        assert_eq!(snapshot.messages[0].message_key, "msg-mini-1");
     }
 
     #[test]

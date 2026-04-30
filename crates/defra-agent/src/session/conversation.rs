@@ -6,6 +6,7 @@ use super::*;
 
 pub(crate) const CONVERSATION_TITLE_SOURCE_PLACEHOLDER: &str = "placeholder";
 pub(crate) const CONVERSATION_TITLE_SOURCE_GENERATED: &str = "generated";
+pub(crate) const CONVERSATION_TITLE_SOURCE_TASK: &str = "task";
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn upsert_conversation_from_request_with_identity(
@@ -18,6 +19,32 @@ pub(crate) async fn upsert_conversation_from_request_with_identity(
     content: &str,
     status: &str,
 ) -> Result<()> {
+    upsert_conversation_from_request_with_identity_and_title(
+        node,
+        session_id,
+        agent_name,
+        agent_did,
+        behavior_id,
+        request_id,
+        content,
+        status,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn upsert_conversation_from_request_with_identity_and_title(
+    node: &EmbeddedNode,
+    session_id: &str,
+    agent_name: &str,
+    agent_did: &str,
+    behavior_id: &str,
+    request_id: &str,
+    content: &str,
+    status: &str,
+    title_override: Option<(&str, &str)>,
+) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_name = escape_graphql_string(agent_name);
@@ -28,7 +55,7 @@ pub(crate) async fn upsert_conversation_from_request_with_identity(
     let existing = load_conversation_document(node, session_id).await?;
     let resolved_behavior_id =
         resolve_behavior_id(existing.as_ref(), behavior_id, "AgentConversation")?;
-    let (title, title_source) = existing_title_state(existing.as_ref());
+    let (title, title_source) = existing_title_state(existing.as_ref(), title_override);
     let created_at = existing
         .as_ref()
         .map(|conversation| conversation.created_at.clone())
@@ -345,18 +372,36 @@ fn normalize_optional_string(value: Option<&str>) -> Option<&str> {
     })
 }
 
-fn existing_title_state(existing: Option<&ConversationDocument>) -> (String, String) {
+fn existing_title_state(
+    existing: Option<&ConversationDocument>,
+    title_override: Option<(&str, &str)>,
+) -> (String, String) {
+    let normalized_override = title_override.and_then(|(title, source)| {
+        let title = title.trim();
+        let source = source.trim();
+        (!title.is_empty() && !source.is_empty()).then(|| (title.to_string(), source.to_string()))
+    });
+
     match existing {
-        Some(existing) => (
-            existing.title.clone(),
-            normalize_optional_string(existing.title_source.as_deref())
-                .unwrap_or(CONVERSATION_TITLE_SOURCE_PLACEHOLDER)
-                .to_string(),
-        ),
-        None => (
-            String::new(),
-            CONVERSATION_TITLE_SOURCE_PLACEHOLDER.to_string(),
-        ),
+        Some(existing) => {
+            let existing_title = existing.title.trim();
+            let existing_source = normalize_optional_string(existing.title_source.as_deref())
+                .unwrap_or(CONVERSATION_TITLE_SOURCE_PLACEHOLDER);
+            if existing_title.is_empty() || existing_source == CONVERSATION_TITLE_SOURCE_PLACEHOLDER
+            {
+                if let Some((title, source)) = normalized_override.as_ref() {
+                    return (title.clone(), source.clone());
+                }
+            }
+
+            (existing.title.clone(), existing_source.to_string())
+        }
+        None => normalized_override.unwrap_or_else(|| {
+            (
+                String::new(),
+                CONVERSATION_TITLE_SOURCE_PLACEHOLDER.to_string(),
+            )
+        }),
     }
 }
 

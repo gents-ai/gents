@@ -11,7 +11,8 @@ use super::super::peer_directory::{PeerDirectory, PeerRecord};
 use super::super::schema::subscribed_collection_names;
 use super::bootstrap::{
     add_replicator_with_retry, configure_local_runtime_pairing, connect_peer_with_retry,
-    force_connect_peer_with_retry, is_connected_peer,
+    force_connect_peer_with_retry, is_connected_peer, p2p_pairing_enabled_for_graphql,
+    REMOTE_P2P_PAIRING_ENV,
 };
 use super::p2p_ops::{
     p2p_connected_peers, p2p_get_replicators, p2p_listen_addresses, p2p_local_peer_id,
@@ -293,7 +294,12 @@ pub(super) async fn repair_saved_peer(
         match connect_result {
             Ok(()) => {
                 status.dial_succeeded = true;
-                if install_replicators_on_bootstrap {
+                let p2p_pairing_enabled = record
+                    .graphql
+                    .as_deref()
+                    .map(p2p_pairing_enabled_for_graphql)
+                    .unwrap_or(true);
+                if install_replicators_on_bootstrap && p2p_pairing_enabled {
                     if let Err(error) = add_replicator_with_retry(
                         p2p,
                         subscribed_collection_names()
@@ -311,6 +317,14 @@ pub(super) async fn repair_saved_peer(
                         ));
                         return status;
                     }
+                } else if record.graphql.is_some() && !p2p_pairing_enabled {
+                    tracing::debug!(
+                        target: "defra_agent_desktop_core::peer_maintenance",
+                        peer_id = %record.peer_id,
+                        label = %record.label,
+                        env = REMOTE_P2P_PAIRING_ENV,
+                        "skipping automatic remote P2P replicator repair for GraphQL-managed peer"
+                    );
                 }
             }
             Err(error) => {
@@ -324,14 +338,18 @@ pub(super) async fn repair_saved_peer(
     }
 
     if let Some(graphql) = record.graphql.as_deref() {
-        match configure_local_runtime_pairing(p2p, graphql).await {
-            Ok(()) => status.last_error = None,
-            Err(error) => {
-                status.last_error = Some(format!(
-                    "peer {} local runtime pairing failed: {}",
-                    record.label, error
-                ));
+        if p2p_pairing_enabled_for_graphql(graphql) {
+            match configure_local_runtime_pairing(p2p, graphql).await {
+                Ok(()) => status.last_error = None,
+                Err(error) => {
+                    status.last_error = Some(format!(
+                        "peer {} local runtime pairing failed: {}",
+                        record.label, error
+                    ));
+                }
             }
+        } else {
+            status.last_error = None;
         }
     } else {
         status.last_error = None;

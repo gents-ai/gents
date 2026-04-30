@@ -59,8 +59,8 @@ function App() {
             onConfigureDeployment={(agentDid) => openConfig(agentDid)}
             onOpenFleet={() => setWorkspaceView("fleet")}
             onSelectBehavior={shell.setSelectedBehaviorId}
-            onSelectDeployment={shell.setSelectedAgentDid}
-            onSelectSession={shell.setSelectedSessionId}
+            onSelectSession={shell.onSelectSession}
+            onStartNewConversation={shell.onStartNewConversation}
             selectedAgentDid={shell.selectedAgentDid}
             selectedBehaviorId={shell.selectedBehaviorId}
             selectedSessionId={shell.selectedSessionId}

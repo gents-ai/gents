@@ -34,7 +34,7 @@ use defra_agent_protocol::row::{
 use serde::Deserialize;
 use serde::Serialize;
 
-use bridge::snapshot::{build_runtime_snapshot, build_session_snapshot_from_store};
+use bridge::snapshot::{build_runtime_snapshot, build_session_snapshot_from_store_for_agent};
 use bridge::types::{
     AgentConfigSaveRequest, BackendSaveRequest, BehaviorSaveRequest, ChatSendRequest,
     ChatSendResult, ConversationRenameRequest, DesktopClientSnapshot, DesktopSessionSnapshot,
@@ -68,6 +68,8 @@ struct HttpRequestData {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionSnapshotRequest {
+    #[serde(default)]
+    agent_did: Option<String>,
     session_id: String,
     request_id: Option<String>,
 }
@@ -322,7 +324,12 @@ fn handle_request(
             runtime.block_on(async {
                 fixture
                     .desktop_core()
-                    .add_peer(&request.label, &request.addr, &request.agent_did)
+                    .add_peer(
+                        &request.label,
+                        &request.addr,
+                        &request.agent_did,
+                        request.graphql.as_deref(),
+                    )
                     .await
             })?;
             let snapshot = runtime.block_on(build_desktop_client_snapshot(fixture));
@@ -342,6 +349,7 @@ fn handle_request(
                 .context("decoding session snapshot request")?;
             let snapshot = runtime.block_on(build_desktop_session_snapshot(
                 fixture,
+                request.agent_did.as_deref(),
                 &request.session_id,
                 request.request_id.as_deref(),
             ));
@@ -461,12 +469,18 @@ async fn build_desktop_client_snapshot(fixture: &LiveBridgeFixture) -> DesktopCl
 
 async fn build_desktop_session_snapshot(
     fixture: &LiveBridgeFixture,
+    agent_did: Option<&str>,
     session_id: &str,
     request_id: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
     let _ = refresh_store_with_timeout(fixture.desktop_core().as_ref()).await;
     let snapshot = fixture.desktop_core().store().snapshot();
-    build_session_snapshot_from_store(snapshot.as_ref(), session_id, request_id)
+    build_session_snapshot_from_store_for_agent(
+        snapshot.as_ref(),
+        agent_did,
+        session_id,
+        request_id,
+    )
 }
 
 async fn build_request_diagnostics_bundle(
@@ -526,8 +540,12 @@ async fn build_request_diagnostics(
                     .is_some_and(|value| matches!(value, "completed" | "success" | "ok"))
         })
         .count();
-    let session_snapshot =
-        build_session_snapshot_from_store(snapshot.as_ref(), session_id, Some(request_id));
+    let session_snapshot = build_session_snapshot_from_store_for_agent(
+        snapshot.as_ref(),
+        None,
+        session_id,
+        Some(request_id),
+    );
 
     RequestDiagnostics {
         source: source.to_string(),

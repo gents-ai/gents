@@ -206,6 +206,7 @@ fn resolve_tasks(
 
         let resolved_task = ResolvedTask {
             task_id: task.task_id.clone(),
+            name: task.name.clone(),
             behavior_id: behavior_id.to_string(),
             prompt_template: task.prompt_template.clone().unwrap_or_default(),
             output_schema_ref: task.output_schema_ref.clone(),
@@ -280,6 +281,7 @@ fn resolve_schedules(
 
         let resolved_task = ResolvedTask {
             task_id: task.task_id.clone(),
+            name: task.name.clone(),
             behavior_id: task.behavior_id.clone().unwrap_or_default(),
             prompt_template: task.prompt_template.clone().unwrap_or_default(),
             output_schema_ref: task.output_schema_ref.clone(),
@@ -369,6 +371,7 @@ fn resolve_event_triggers(
 
         let resolved_task = ResolvedTask {
             task_id: task.task_id.clone(),
+            name: task.name.clone(),
             behavior_id: task.behavior_id.clone().unwrap_or_default(),
             prompt_template: task.prompt_template.clone().unwrap_or_default(),
             output_schema_ref: task.output_schema_ref.clone(),

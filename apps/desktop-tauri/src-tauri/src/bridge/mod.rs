@@ -2,6 +2,8 @@ mod snapshot;
 mod state;
 mod types;
 
+use std::fs::OpenOptions;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -10,8 +12,9 @@ use defra_agent::graphql::escape_graphql_string;
 use defra_agent::mcp_pool::{resolve_mcp_url, McpPool};
 use defra_agent_desktop_core::client::{ClientCore, DesktopPaths};
 use defra_agent_desktop_core::local_runtime::{
-    dangerously_overwrite_desktop_home, default_agent_home, init_standard_local_runtime,
-    reset_desktop_runtime_state, DesktopInitOptions, DesktopInitSummary,
+    dangerously_overwrite_desktop_home, default_agent_home, fetch_runtime_connection_payload,
+    init_standard_local_runtime, reset_desktop_runtime_state, DesktopInitOptions,
+    DesktopInitSummary,
 };
 use defra_agent_protocol::client_protocol::ClientTurnState;
 use defra_agent_protocol::row::{
@@ -19,9 +22,10 @@ use defra_agent_protocol::row::{
     InferenceProfileRow, ScheduleRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
 };
 use tauri::{AppHandle, Emitter, State};
+use tracing_subscriber::{prelude::*, EnvFilter};
 
 use self::snapshot::{
-    build_bootstrap_summary, build_client_snapshot, build_session_snapshot_from_store,
+    build_bootstrap_summary, build_client_snapshot, build_session_snapshot_from_store_for_agent,
 };
 use self::state::{current_core, spawn_client_update_task, DesktopAppState};
 use self::types::{
@@ -69,26 +73,6 @@ fn require_trimmed(name: &str, value: impl AsRef<str>) -> Result<String, String>
     } else {
         Ok(value)
     }
-}
-
-fn peer_status_url(server_address: &str) -> Result<String, String> {
-    let trimmed = require_trimmed("server_address", server_address)?;
-    let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        trimmed
-    } else {
-        format!("http://{trimmed}")
-    };
-    let mut url = reqwest::Url::parse(&with_scheme)
-        .map_err(|error| format!("server_address is not a valid URL: {error}"))?;
-    let path = url.path().trim_end_matches('/');
-    if path.is_empty() || path == "/" || path == "/api/v0" || path == "/api/v0/graphql" {
-        url.set_path("/status");
-    } else if !path.ends_with("/status") {
-        url.set_path(&format!("{path}/status"));
-    }
-    url.set_query(None);
-    url.set_fragment(None);
-    Ok(url.to_string())
 }
 
 fn validate_event_kind(event_kind: &str) -> Result<(), String> {
@@ -279,9 +263,10 @@ fn desktop_peer_add(
     let label = require_trimmed("label", request.label)?;
     let agent_did = require_trimmed("agent_did", request.agent_did)?;
     let addr = require_trimmed("addr", request.addr)?;
+    let graphql = trim_optional(request.graphql);
 
     tauri::async_runtime::block_on(async move {
-        core.add_peer(&label, &addr, &agent_did)
+        core.add_peer(&label, &addr, &agent_did, graphql.as_deref())
             .await
             .map_err(|error| error.to_string())?;
         emit_config_update_and_snapshot(&app, &core).await
@@ -290,26 +275,10 @@ fn desktop_peer_add(
 
 #[tauri::command]
 fn desktop_peer_status_fetch(request: PeerStatusFetchRequest) -> Result<serde_json::Value, String> {
-    let url = peer_status_url(&request.server_address)?;
     tauri::async_runtime::block_on(async move {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .map_err(|error| format!("building status HTTP client failed: {error}"))?;
-        let response = client
-            .get(url.clone())
-            .send()
+        fetch_runtime_connection_payload(&request.server_address)
             .await
-            .map_err(|error| format!("fetching {url} failed: {error}"))?;
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(format!("GET {url} returned {status}: {body}"));
-        }
-        response
-            .json::<serde_json::Value>()
-            .await
-            .map_err(|error| format!("decoding {url} response failed: {error}"))
+            .map_err(|error| error.to_string())
     })
 }
 
@@ -342,6 +311,7 @@ fn desktop_client_snapshot(
 #[tauri::command]
 fn desktop_session_snapshot(
     session_id: String,
+    agent_did: Option<String>,
     request_id: Option<String>,
     state: State<'_, DesktopAppState>,
 ) -> Result<Option<DesktopSessionSnapshot>, String> {
@@ -350,8 +320,9 @@ fn desktop_session_snapshot(
     };
 
     let snapshot = tauri::async_runtime::block_on(async move { core.store().snapshot() });
-    Ok(build_session_snapshot_from_store(
+    Ok(build_session_snapshot_from_store_for_agent(
         snapshot.as_ref(),
+        agent_did.as_deref(),
         &session_id,
         request_id.as_deref(),
     ))
@@ -1059,6 +1030,7 @@ fn desktop_task_run(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    init_tracing();
     let runtime = TAURI_RUNTIME.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -1103,18 +1075,114 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
+fn init_tracing() {
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        with_default_transport_noise_filters(EnvFilter::new(
+            "warn,\
+                 defra_agent_desktop_core=info,\
+                 defra_agent_desktop_tauri=info,\
+                 defra_agent=info,\
+                 defra_node=info",
+        ))
+    });
+    let log_path = DesktopPaths::discover()
+        .map(|paths| paths.log_file_path())
+        .unwrap_or_else(|_| std::env::temp_dir().join("defra-agent-desktop.log"));
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let writer_path = log_path.clone();
+
+    if desktop_console_log_enabled() {
+        let file_writer_path = writer_path.clone();
+        let file_layer = tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_target(true)
+            .with_writer(move || open_log_writer(&file_writer_path));
+        let stderr_layer = tracing_subscriber::fmt::layer()
+            .with_target(false)
+            .compact()
+            .without_time();
+        let _ = tracing_subscriber::registry()
+            .with(env_filter)
+            .with(stderr_layer)
+            .with(file_layer)
+            .try_init();
+    } else {
+        let file_layer = tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_target(true)
+            .with_writer(move || open_log_writer(&writer_path));
+        let _ = tracing_subscriber::registry()
+            .with(env_filter)
+            .with(file_layer)
+            .try_init();
+    }
+
+    tracing::info!(path = %log_path.display(), "desktop logs initialized");
+}
+
+fn desktop_console_log_enabled() -> bool {
+    std::env::var("DEFRA_AGENT_DESKTOP_CONSOLE_LOG")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+}
+
+fn open_log_writer(path: &Path) -> std::fs::File {
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .unwrap_or_else(|_| {
+            let fallback = std::env::temp_dir().join("defra-agent-desktop.log");
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&fallback)
+                .expect("open fallback desktop log file")
+        })
+}
+
+fn with_default_transport_noise_filters(filter: EnvFilter) -> EnvFilter {
+    [
+        "iroh=error",
+        "iroh_net=error",
+        "iroh_relay=error",
+        "iroh_gossip=error",
+        "iroh_blobs=error",
+        "iroh_quinn=error",
+        "iroh_quinn_proto=error",
+        "iroh_quinn_proto::connection=error",
+        "quinn=error",
+        "quinn_proto=error",
+        "quinn_udp=error",
+        "netwatch=error",
+        "noq_proto::connection=error",
+        "p2p::sync::replication::loop_runner=off",
+    ]
+    .into_iter()
+    .fold(filter, |filter, directive| {
+        filter.add_directive(directive.parse().expect("valid tracing directive"))
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::peer_status_url;
+    use defra_agent_desktop_core::local_runtime::runtime_status_url;
 
     #[test]
     fn peer_status_url_accepts_bare_host_and_graphql_endpoint() {
         assert_eq!(
-            peer_status_url("127.0.0.1:9181").expect("bare host should normalize"),
+            runtime_status_url("127.0.0.1:9181").expect("bare host should normalize"),
             "http://127.0.0.1:9181/status"
         );
         assert_eq!(
-            peer_status_url("http://127.0.0.1:9181/api/v0/graphql")
+            runtime_status_url("http://127.0.0.1:9181/api/v0/graphql")
                 .expect("graphql endpoint should normalize"),
             "http://127.0.0.1:9181/status"
         );

@@ -47,11 +47,14 @@ export function TaskConfigPanel({
     <section className="config-layout">
       <ConfigDocumentList
         eyebrow="Tasks"
-        items={deployment.tasks.map((task) => ({
-          id: task.taskId,
-          title: task.name ?? task.taskId,
-          meta: task.behaviorId ?? "task",
-        }))}
+        items={deployment.tasks.map((task) => {
+          const title = displayTaskListTitle(task);
+          return {
+            id: task.taskId,
+            title,
+            meta: title === task.taskId ? "task" : task.taskId,
+          };
+        })}
         selectedId={selectedTaskId}
         testPrefix="task"
         title="Task Prompts"
@@ -339,4 +342,13 @@ function isJsonObject(value: string) {
   } catch {
     return false;
   }
+}
+
+function displayTaskListTitle(task: TaskView) {
+  const name = task.name?.trim();
+  if (name && name.toLowerCase() !== "default") {
+    return name;
+  }
+
+  return task.taskId;
 }

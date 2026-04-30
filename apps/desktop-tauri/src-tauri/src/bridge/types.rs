@@ -19,6 +19,8 @@ pub(crate) struct PeerAddRequest {
     pub label: String,
     pub agent_did: String,
     pub addr: String,
+    #[serde(default)]
+    pub graphql: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -236,6 +238,7 @@ pub(crate) struct DesktopBootstrapSummary {
     pub desktop_home: String,
     pub peer_directory_path: String,
     pub node_data_dir: String,
+    pub log_file_path: String,
     pub agent_home_exists: bool,
     pub desktop_home_exists: bool,
     pub peer_directory_exists: bool,
@@ -432,6 +435,10 @@ pub(crate) struct ConversationSummary {
     pub status: Option<String>,
     pub behavior_id: Option<String>,
     pub latest_request_id: Option<String>,
+    pub task_id: Option<String>,
+    pub task_name: Option<String>,
+    pub trigger_id: Option<String>,
+    pub trigger_kind: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
     pub turn_state: Option<String>,

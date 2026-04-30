@@ -4,6 +4,7 @@ use super::*;
 pub(crate) struct EnqueuedAgentRequest {
     pub(crate) doc_id: String,
     pub(crate) request_id: String,
+    pub(crate) session_id: String,
 }
 
 fn trigger_lineage_graphql_fields(trigger_lineage: &TriggerLineage) -> String {
@@ -36,13 +37,14 @@ fn trigger_lineage_graphql_fields(trigger_lineage: &TriggerLineage) -> String {
     format!("{caused_by_trigger_id_field}{caused_by_trigger_kind_field}")
 }
 
-pub(crate) async fn write_pending_agent_request_with_lineage(
+pub(crate) async fn write_pending_agent_request_with_lineage_and_conversation_title(
     node: &EmbeddedNode,
     agent_did: &str,
     behavior_id: &str,
     content: &str,
     execution_origin: ExecutionOrigin,
     trigger_lineage: TriggerLineage,
+    conversation_title: Option<&str>,
 ) -> Result<EnqueuedAgentRequest> {
     if trigger_lineage.trigger_kind.as_deref() == Some("manual")
         && trigger_lineage.trigger_id.is_some()
@@ -62,6 +64,10 @@ pub(crate) async fn write_pending_agent_request_with_lineage(
     let escaped_created_at = escape_graphql_string(&now);
     let execution_origin = execution_origin.as_str();
     let lineage_fields = trigger_lineage_graphql_fields(&trigger_lineage);
+    let conversation_title = conversation_title.and_then(|title| {
+        let title = title.trim();
+        (!title.is_empty()).then(|| title.to_string())
+    });
 
     let mutation = format!(
         r#"mutation {{
@@ -138,7 +144,41 @@ pub(crate) async fn write_pending_agent_request_with_lineage(
             .to_string()
     };
 
-    Ok(EnqueuedAgentRequest { doc_id, request_id })
+    if let Some(title) = conversation_title {
+        let seed_result = async {
+            session::ensure_session_with_behavior_id(node, &session_id, behavior_id, behavior_id)
+                .await?;
+            session::upsert_conversation_from_request_with_identity_and_title(
+                node,
+                &session_id,
+                behavior_id,
+                agent_did,
+                behavior_id,
+                &request_id,
+                content,
+                "pending",
+                Some((&title, session::CONVERSATION_TITLE_SOURCE_TASK)),
+            )
+            .await
+        }
+        .await;
+
+        if let Err(error) = seed_result {
+            tracing::warn!(
+                request_id = %request_id,
+                session_id = %session_id,
+                title = %title,
+                error = %error,
+                "failed to seed task conversation title"
+            );
+        }
+    }
+
+    Ok(EnqueuedAgentRequest {
+        doc_id,
+        request_id,
+        session_id,
+    })
 }
 
 impl RequestLifecycle {

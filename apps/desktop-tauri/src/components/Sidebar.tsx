@@ -5,8 +5,8 @@ import type {
 } from "../lib/types";
 import {
   BehaviorSelectorSection,
+  ConnectedPeerSection,
   ConversationListSection,
-  SavedPeersSection,
 } from "./sidebar-widgets";
 
 export type SidebarProps = {
@@ -17,10 +17,10 @@ export type SidebarProps = {
   selectedBehaviorId: string | null;
   selectedSessionId: string | null;
   onOpenFleet: () => void;
-  onSelectDeployment: (agentDid: string) => void;
   onConfigureDeployment: (agentDid: string) => void;
   onSelectBehavior: (behaviorId: string) => void;
   onSelectSession: (sessionId: string) => void;
+  onStartNewConversation: (behaviorId: string) => void;
 };
 
 export function Sidebar({
@@ -31,28 +31,18 @@ export function Sidebar({
   selectedBehaviorId,
   selectedSessionId,
   onOpenFleet,
-  onSelectDeployment,
   onConfigureDeployment,
   onSelectBehavior,
   onSelectSession,
+  onStartNewConversation,
 }: SidebarProps) {
   return (
     <aside className="sidebar">
-      <section className="sidebar-section">
-        <button
-          className="ghost-button sidebar-wide-button sidebar-nav-button"
-          onClick={onOpenFleet}
-          type="button"
-        >
-          Fleet Dashboard
-        </button>
-      </section>
-
-      <SavedPeersSection
+      <ConnectedPeerSection
         deployments={deployments}
         selectedAgentDid={selectedAgentDid}
         onConfigureDeployment={onConfigureDeployment}
-        onSelectDeployment={onSelectDeployment}
+        onOpenFleet={onOpenFleet}
       />
 
       <BehaviorSelectorSection
@@ -60,6 +50,7 @@ export function Sidebar({
         selectedAgentDid={selectedAgentDid}
         selectedBehaviorId={selectedBehaviorId}
         onSelectBehavior={onSelectBehavior}
+        onStartNewConversation={onStartNewConversation}
       />
 
       <ConversationListSection

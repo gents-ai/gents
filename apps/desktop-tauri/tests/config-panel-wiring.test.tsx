@@ -201,13 +201,19 @@ const deployment: DeploymentView = {
 };
 
 const bootstrap: BootstrapSummary = {
-  dataDir: "/tmp/defra-agent",
-  agentDid: "did:key:z6MkAgent",
-  localPeerId: "peer-1",
+  defaultAgentHome: "/tmp/agent",
   initAgentName: "Local Agent",
+  initAgentDid: "did:key:z6MkAgent",
   initToolCeiling: "Readwrite",
   initToolRoot: "/tmp/work",
-  defaultPeerAddr: "iroh://local",
+  desktopHome: "/tmp/defra-agent",
+  peerDirectoryPath: "/tmp/defra-agent/peers.json",
+  nodeDataDir: "/tmp/defra-agent/node",
+  logFilePath: "/tmp/defra-agent/logs/desktop.log",
+  agentHomeExists: true,
+  desktopHomeExists: true,
+  peerDirectoryExists: true,
+  savedPeers: [],
 };
 
 type ListCase = {

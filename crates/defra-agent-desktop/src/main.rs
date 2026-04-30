@@ -1,11 +1,13 @@
 use std::path::PathBuf;
-use std::process::Command as ProcessCommand;
+use std::process::{Command as ProcessCommand, Stdio};
+use std::{fs::OpenOptions, path::Path};
 
 use clap::{Parser, Subcommand};
 use defra_agent_desktop_core::client::DesktopPaths;
 use defra_agent_desktop_core::local_runtime::{
     dangerously_overwrite_desktop_home, default_agent_home, init_standard_local_runtime,
-    render_human_summary, reset_desktop_runtime_state, DesktopInitOptions,
+    init_status_endpoint_runtime, render_human_summary, reset_desktop_runtime_state,
+    DesktopInitOptions, StatusEndpointInitOptions,
 };
 use tracing_subscriber::{prelude::*, EnvFilter};
 
@@ -21,7 +23,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    #[command(about = "Discover and save the standard local defra-agent runtime")]
+    #[command(about = "Discover and save a local or status-endpoint defra-agent runtime")]
     Init(InitArgs),
 }
 
@@ -29,6 +31,13 @@ enum Command {
 struct InitArgs {
     #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
     agent_home: Option<PathBuf>,
+    #[arg(
+        long,
+        visible_aliases = ["status-url", "graphql", "graphql-endpoint"],
+        value_name = "URL",
+        help = "Remote defra-agent /status or GraphQL endpoint to seed as the initial desktop deployment"
+    )]
+    status_endpoint: Option<String>,
     #[arg(
         long,
         help = "Desktop data directory. Defaults to the platform-local desktop data dir"
@@ -46,8 +55,8 @@ struct InitArgs {
         help = "Clear persisted desktop runtime state before re-initializing it"
     )]
     reset: bool,
-    #[arg(long, default_value = "Local Agent", help = "Saved deployment label")]
-    label: String,
+    #[arg(long, help = "Saved deployment label")]
+    label: Option<String>,
     #[arg(long, help = "Print machine-readable JSON instead of human output")]
     json: bool,
 }
@@ -69,7 +78,6 @@ fn run_command(command: Command) -> anyhow::Result<()> {
                 .enable_all()
                 .build()
                 .map_err(|error| anyhow::anyhow!(error))?;
-            let agent_home = args.agent_home.unwrap_or(default_agent_home()?);
             let desktop_paths = match args.desktop_home {
                 Some(root) => DesktopPaths::from_root(root),
                 None => DesktopPaths::discover()?,
@@ -79,11 +87,20 @@ fn run_command(command: Command) -> anyhow::Result<()> {
             } else if args.reset {
                 let _ = reset_desktop_runtime_state(&desktop_paths)?;
             }
-            let summary = runtime.block_on(init_standard_local_runtime(DesktopInitOptions {
-                agent_home,
-                desktop_paths,
-                label: args.label,
-            }))?;
+            let summary = if let Some(status_endpoint) = args.status_endpoint {
+                runtime.block_on(init_status_endpoint_runtime(StatusEndpointInitOptions {
+                    desktop_paths,
+                    status_endpoint,
+                    label: args.label,
+                }))?
+            } else {
+                let agent_home = args.agent_home.unwrap_or(default_agent_home()?);
+                runtime.block_on(init_standard_local_runtime(DesktopInitOptions {
+                    agent_home,
+                    desktop_paths,
+                    label: args.label.unwrap_or_else(|| "Local Agent".to_string()),
+                }))?
+            };
             if args.json {
                 println!("{}", serde_json::to_string_pretty(&summary)?);
             } else {
@@ -97,10 +114,54 @@ fn run_command(command: Command) -> anyhow::Result<()> {
 fn launch_desktop() -> anyhow::Result<()> {
     let tauri_binary = resolve_tauri_binary()?;
     tracing::info!(path = %tauri_binary.display(), "launching tauri desktop shell");
+    if desktop_console_log_enabled() {
+        ProcessCommand::new(&tauri_binary)
+            .spawn()
+            .map_err(|error| {
+                anyhow::anyhow!("failed to launch {}: {error}", tauri_binary.display())
+            })?;
+        return Ok(());
+    }
+
+    let log_path = DesktopPaths::discover()
+        .map(|paths| paths.log_file_path())
+        .unwrap_or_else(|_| std::env::temp_dir().join("defra-agent-desktop.log"));
+    let stderr = open_log_writer(&log_path)?;
+    let stdout = stderr.try_clone().map_err(|error| {
+        anyhow::anyhow!(
+            "failed to clone desktop log writer {}: {error}",
+            log_path.display()
+        )
+    })?;
+
     ProcessCommand::new(&tauri_binary)
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
         .spawn()
         .map_err(|error| anyhow::anyhow!("failed to launch {}: {error}", tauri_binary.display()))?;
     Ok(())
+}
+
+fn desktop_console_log_enabled() -> bool {
+    std::env::var("DEFRA_AGENT_DESKTOP_CONSOLE_LOG")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+}
+
+fn open_log_writer(path: &Path) -> anyhow::Result<std::fs::File> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| anyhow::anyhow!("failed to open desktop log {}: {error}", path.display()))
 }
 
 fn resolve_tauri_binary() -> anyhow::Result<PathBuf> {

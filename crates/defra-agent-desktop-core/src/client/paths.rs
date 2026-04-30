@@ -53,6 +53,10 @@ impl DesktopPaths {
         &self.peer_directory_path
     }
 
+    pub fn log_file_path(&self) -> PathBuf {
+        self.root.join("logs").join("desktop.log")
+    }
+
     pub fn principal_metadata_path(&self) -> &Path {
         &self.principal_metadata_path
     }

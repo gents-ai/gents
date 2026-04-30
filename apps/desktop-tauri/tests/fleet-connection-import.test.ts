@@ -24,6 +24,7 @@ describe("parsePeerConnectionJson", () => {
       parsePeerConnectionJson(
         JSON.stringify({
           agent_did: "did:key:z6MkInfraApi",
+          desktop_graphql: "http://100.73.235.38:9181/api/v0/graphql",
           runtime_state: {
             agent_name: "infra-api",
           },
@@ -37,6 +38,7 @@ describe("parsePeerConnectionJson", () => {
       label: "infra-api",
       agentDid: "did:key:z6MkInfraApi",
       addr: "/ip4/100.73.235.38/tcp/9161/p2p/12D3KooInfra",
+      graphql: "http://100.73.235.38:9181/api/v0/graphql",
     });
   });
 

@@ -11,6 +11,7 @@ export type PeerAddRequest = {
   label: string;
   agentDid: string;
   addr: string;
+  graphql?: string | null;
 };
 
 export type BootstrapSummary = {
@@ -22,6 +23,7 @@ export type BootstrapSummary = {
   desktopHome: string;
   peerDirectoryPath: string;
   nodeDataDir: string;
+  logFilePath: string;
   agentHomeExists: boolean;
   desktopHomeExists: boolean;
   peerDirectoryExists: boolean;
@@ -207,6 +209,10 @@ export type ConversationSummary = {
   status?: string | null;
   behaviorId?: string | null;
   latestRequestId?: string | null;
+  taskId?: string | null;
+  taskName?: string | null;
+  triggerId?: string | null;
+  triggerKind?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
   turnState?: string | null;

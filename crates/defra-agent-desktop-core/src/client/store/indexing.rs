@@ -13,19 +13,23 @@ impl ClientStore {
                 })
                 .then_with(|| left.session_id.cmp(&right.session_id))
         });
-        rows.messages.sort_by(|left, right| {
-            left.session_id
-                .cmp(&right.session_id)
-                .then_with(|| {
-                    left.sequence
-                        .unwrap_or_default()
-                        .cmp(&right.sequence.unwrap_or_default())
-                })
-                .then_with(|| {
-                    cmp_opt_str_asc(left.timestamp.as_deref(), right.timestamp.as_deref())
-                })
-                .then_with(|| left.message_key.cmp(&right.message_key))
-        });
+        sort_rows_with_sources(
+            &mut rows.messages,
+            &mut rows.message_source_agent_dids,
+            |left, right| {
+                left.session_id
+                    .cmp(&right.session_id)
+                    .then_with(|| {
+                        left.sequence
+                            .unwrap_or_default()
+                            .cmp(&right.sequence.unwrap_or_default())
+                    })
+                    .then_with(|| {
+                        cmp_opt_str_asc(left.timestamp.as_deref(), right.timestamp.as_deref())
+                    })
+                    .then_with(|| left.message_key.cmp(&right.message_key))
+            },
+        );
         rows.requests.sort_by(|left, right| {
             left.session_id
                 .cmp(&right.session_id)
@@ -34,27 +38,59 @@ impl ClientStore {
                 })
                 .then_with(|| left.request_id.cmp(&right.request_id))
         });
-        rows.tool_calls.sort_by(|left, right| {
-            left.session_id
-                .cmp(&right.session_id)
-                .then_with(|| {
-                    left.message_sequence
-                        .unwrap_or_default()
-                        .cmp(&right.message_sequence.unwrap_or_default())
-                })
-                .then_with(|| {
-                    cmp_opt_str_asc(left.started_at.as_deref(), right.started_at.as_deref())
-                })
-                .then_with(|| left.tool_call_key.cmp(&right.tool_call_key))
-        });
-        rows.tool_results.sort_by(|left, right| {
-            left.session_id
-                .cmp(&right.session_id)
-                .then_with(|| {
-                    cmp_opt_str_asc(left.created_at.as_deref(), right.created_at.as_deref())
-                })
-                .then_with(|| left.tool_name.cmp(&right.tool_name))
-        });
+        sort_rows_with_sources(
+            &mut rows.tool_calls,
+            &mut rows.tool_call_source_agent_dids,
+            |left, right| {
+                left.session_id
+                    .cmp(&right.session_id)
+                    .then_with(|| {
+                        left.message_sequence
+                            .unwrap_or_default()
+                            .cmp(&right.message_sequence.unwrap_or_default())
+                    })
+                    .then_with(|| {
+                        cmp_opt_str_asc(left.started_at.as_deref(), right.started_at.as_deref())
+                    })
+                    .then_with(|| left.tool_call_key.cmp(&right.tool_call_key))
+            },
+        );
+        sort_rows_with_sources(
+            &mut rows.tool_results,
+            &mut rows.tool_result_source_agent_dids,
+            |left, right| {
+                left.session_id
+                    .cmp(&right.session_id)
+                    .then_with(|| {
+                        cmp_opt_str_asc(left.created_at.as_deref(), right.created_at.as_deref())
+                    })
+                    .then_with(|| left.tool_name.cmp(&right.tool_name))
+            },
+        );
+
+        normalize_source_agent_dids(&mut rows.session_source_agent_dids, rows.sessions.len());
+        normalize_source_agent_dids(
+            &mut rows.compaction_entry_source_agent_dids,
+            rows.compaction_entries.len(),
+        );
+        normalize_source_agent_dids(&mut rows.task_source_agent_dids, rows.tasks.len());
+        normalize_source_agent_dids(&mut rows.schedule_source_agent_dids, rows.schedules.len());
+        normalize_source_agent_dids(
+            &mut rows.event_trigger_source_agent_dids,
+            rows.event_triggers.len(),
+        );
+        normalize_source_agent_dids(
+            &mut rows.inference_backend_source_agent_dids,
+            rows.inference_backends.len(),
+        );
+        normalize_source_agent_dids(
+            &mut rows.inference_profile_source_agent_dids,
+            rows.inference_profiles.len(),
+        );
+        normalize_source_agent_dids(
+            &mut rows.tool_service_registry_source_agent_dids,
+            rows.tool_service_registries.len(),
+        );
 
         let mut conversations_by_agent_did = HashMap::new();
         for (index, row) in rows.conversations.iter().enumerate() {
@@ -121,13 +157,24 @@ impl ClientStore {
             tool_calls: rows.tool_calls,
             tool_results: rows.tool_results,
             compaction_entries: rows.compaction_entries,
+            message_source_agent_dids: rows.message_source_agent_dids,
+            session_source_agent_dids: rows.session_source_agent_dids,
+            tool_call_source_agent_dids: rows.tool_call_source_agent_dids,
+            tool_result_source_agent_dids: rows.tool_result_source_agent_dids,
+            compaction_entry_source_agent_dids: rows.compaction_entry_source_agent_dids,
             tasks: rows.tasks,
             schedules: rows.schedules,
             event_triggers: rows.event_triggers,
+            task_source_agent_dids: rows.task_source_agent_dids,
+            schedule_source_agent_dids: rows.schedule_source_agent_dids,
+            event_trigger_source_agent_dids: rows.event_trigger_source_agent_dids,
             tool_selections: rows.tool_selections,
             inference_backends: rows.inference_backends,
             inference_profiles: rows.inference_profiles,
             tool_service_registries: rows.tool_service_registries,
+            inference_backend_source_agent_dids: rows.inference_backend_source_agent_dids,
+            inference_profile_source_agent_dids: rows.inference_profile_source_agent_dids,
+            tool_service_registry_source_agent_dids: rows.tool_service_registry_source_agent_dids,
             conversations_by_agent_did,
             messages_by_session_id,
             requests_by_session_id,
@@ -138,6 +185,28 @@ impl ClientStore {
             request_index_by_id,
         }
     }
+}
+
+fn normalize_source_agent_dids(sources: &mut Vec<Option<String>>, row_count: usize) {
+    sources.truncate(row_count);
+    sources.resize_with(row_count, || None);
+}
+
+fn sort_rows_with_sources<T>(
+    rows: &mut Vec<T>,
+    sources: &mut Vec<Option<String>>,
+    compare: impl Fn(&T, &T) -> std::cmp::Ordering,
+) {
+    normalize_source_agent_dids(sources, rows.len());
+    let mut paired = rows
+        .drain(..)
+        .zip(sources.drain(..))
+        .collect::<Vec<(T, Option<String>)>>();
+    paired.sort_by(|(left, _), (right, _)| compare(left, right));
+    rows.extend(paired.into_iter().map(|(row, source)| {
+        sources.push(source);
+        row
+    }));
 }
 
 pub(super) fn build_vec_index<T>(

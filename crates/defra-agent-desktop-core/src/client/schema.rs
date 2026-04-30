@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use defra_agent_protocol::schemas::{
-    ALL, ALL_COLLECTION_NAMES, RUNTIME_ALL, RUNTIME_COLLECTION_NAMES,
+    ALL, ALL_COLLECTION_NAMES, BRANCHABLE_COLLECTION_NAMES, RUNTIME_ALL, RUNTIME_COLLECTION_NAMES,
 };
 use defra_node::EmbeddedNode;
 
@@ -58,4 +58,8 @@ pub fn subscribed_collection_names() -> Vec<&'static str> {
         .chain(ALL_COLLECTION_NAMES.iter())
         .copied()
         .collect()
+}
+
+pub fn branchable_collection_names() -> Vec<&'static str> {
+    BRANCHABLE_COLLECTION_NAMES.to_vec()
 }

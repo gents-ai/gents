@@ -31,7 +31,9 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
-use defra_agent::write_manual_agent_request;
+use defra_agent::{
+    task_run_conversation_title, write_manual_agent_request_with_conversation_title,
+};
 use defra_agent_protocol::graphql::normalize_optional_rfc3339;
 use defra_agent_protocol::row::{EventTriggerRow, ScheduleRow, TaskRow};
 use defra_node::EmbeddedNode;
@@ -256,7 +258,24 @@ pub async fn fire_task_now(
         bail!("AgentBehavior {behavior_id} is disabled");
     }
 
-    write_manual_agent_request(node, agent_did, behavior_id, task_id, prompt_template, args).await
+    let task_label = task_row
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(task_id);
+    let conversation_title = task_run_conversation_title(task_label);
+
+    write_manual_agent_request_with_conversation_title(
+        node,
+        agent_did,
+        behavior_id,
+        task_id,
+        prompt_template,
+        args,
+        Some(&conversation_title),
+    )
+    .await
 }
 
 /// Fire a schedule's task immediately.

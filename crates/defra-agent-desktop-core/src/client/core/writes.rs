@@ -9,7 +9,9 @@ use super::super::mutations::{
 };
 use super::super::schema::subscribed_collection_names;
 use super::bootstrap::{
-    add_replicator_with_retry_until, connect_peer_with_retry_until, normalize_required,
+    add_replicator_with_retry_until, branchable_pair_sync_enabled, connect_peer_with_retry_until,
+    normalize_required, p2p_pairing_enabled_for_graphql, sync_branchable_collections_with_retry,
+    BRANCHABLE_PAIR_SYNC_ENV, REMOTE_P2P_PAIRING_ENV,
 };
 use super::{ClientCore, ClientPeerStatus, PEER_ADD_OPERATION_TIMEOUT};
 
@@ -187,19 +189,28 @@ impl ClientCore {
         label: &str,
         addr: &str,
         agent_did: &str,
+        graphql: Option<&str>,
     ) -> Result<PeerMutationResult> {
         let label = normalize_required("label", label)?;
         let addr = normalize_required("addr", addr)?;
         let agent_did = normalize_required("agent_did", agent_did)?;
+        let graphql = graphql.map(str::trim).filter(|value| !value.is_empty());
 
         let record = {
             let mut peer_directory = self.peer_directory.write().await;
             peer_directory
-                .upsert_saved_peer(label, addr, agent_did)
+                .upsert_saved_peer_with_graphql(label, addr, agent_did, graphql)
                 .await?
         };
 
-        let (connected, warning) = match connect_peer_with_retry_until(
+        let mut warning = None;
+        let p2p_pairing_enabled = record
+            .graphql
+            .as_deref()
+            .map(p2p_pairing_enabled_for_graphql)
+            .unwrap_or(true);
+
+        let connected = match connect_peer_with_retry_until(
             &self.p2p,
             &record.addr,
             &record.label,
@@ -207,31 +218,120 @@ impl ClientCore {
         )
         .await
         {
-            Ok(()) => match add_replicator_with_retry_until(
-                &self.p2p,
-                subscribed_collection_names()
-                    .into_iter()
-                    .map(str::to_owned)
-                    .collect(),
-                &record.addr,
-                &record.label,
-                PEER_ADD_OPERATION_TIMEOUT,
-            )
-            .await
-            {
-                Ok(()) => (true, None),
-                Err(error) => (
-                    true,
-                    Some(format!(
-                        "deployment connected but replication setup failed: {error}"
-                    )),
-                ),
-            },
-            Err(error) => (
-                false,
-                Some(format!("deployment saved but dial failed: {error}")),
-            ),
+            Ok(()) => {
+                if p2p_pairing_enabled {
+                    match add_replicator_with_retry_until(
+                        &self.p2p,
+                        subscribed_collection_names()
+                            .into_iter()
+                            .map(str::to_owned)
+                            .collect(),
+                        &record.addr,
+                        &record.label,
+                        PEER_ADD_OPERATION_TIMEOUT,
+                    )
+                    .await
+                    {
+                        Ok(()) => {}
+                        Err(error) => {
+                            append_warning(
+                                &mut warning,
+                                format!(
+                                    "deployment connected but replication setup failed: {error}"
+                                ),
+                            );
+                        }
+                    }
+                } else {
+                    tracing::info!(
+                        target: "defra_agent_desktop_core::peer",
+                        peer_id = %record.peer_id,
+                        label = %record.label,
+                        env = REMOTE_P2P_PAIRING_ENV,
+                        "skipping automatic remote P2P replicator setup for GraphQL-managed peer"
+                    );
+                }
+                true
+            }
+            Err(error) => {
+                append_warning(
+                    &mut warning,
+                    format!("deployment saved but dial failed: {error}"),
+                );
+                false
+            }
         };
+
+        if let Some(graphql) = record.graphql.as_deref() {
+            if p2p_pairing_enabled {
+                match super::bootstrap::configure_local_runtime_pairing(&self.p2p, graphql).await {
+                    Ok(()) => {
+                        if branchable_pair_sync_enabled() {
+                            match sync_branchable_collections_with_retry(
+                                self.node.as_ref(),
+                                &self.p2p,
+                                &record.label,
+                                PEER_ADD_OPERATION_TIMEOUT,
+                            )
+                            .await
+                            {
+                                Ok(synced) => {
+                                    tracing::info!(
+                                        target: "defra_agent_desktop_core::peer",
+                                        peer_id = %record.peer_id,
+                                        label = %record.label,
+                                        synced_collections = ?synced,
+                                        "desktop requested branchable collection sync after peer add"
+                                    );
+                                }
+                                Err(error) => {
+                                    append_warning(
+                                        &mut warning,
+                                        format!(
+                                            "deployment paired but existing branchable sync failed: {error}"
+                                        ),
+                                    );
+                                }
+                            }
+                        } else {
+                            tracing::debug!(
+                                target: "defra_agent_desktop_core::peer",
+                                peer_id = %record.peer_id,
+                                label = %record.label,
+                                env = BRANCHABLE_PAIR_SYNC_ENV,
+                                "skipping opt-in branchable collection sync after peer add"
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        let prefix = if connected {
+                            "deployment connected"
+                        } else {
+                            "deployment saved"
+                        };
+                        append_warning(
+                            &mut warning,
+                            format!("{prefix} but reverse pairing failed: {error}"),
+                        );
+                    }
+                }
+            } else {
+                tracing::info!(
+                    target: "defra_agent_desktop_core::peer",
+                    peer_id = %record.peer_id,
+                    label = %record.label,
+                    graphql,
+                    env = REMOTE_P2P_PAIRING_ENV,
+                    "skipping automatic reverse P2P pairing for GraphQL-managed peer"
+                );
+            }
+            if let Err(error) = self.refresh_store().await {
+                append_warning(
+                    &mut warning,
+                    format!("deployment saved but remote snapshot refresh failed: {error}"),
+                );
+            }
+        }
 
         self.update_peer_status(ClientPeerStatus {
             peer_id: record.peer_id.clone(),
@@ -561,5 +661,15 @@ impl ClientCore {
             .write()
             .expect("mutation error lock poisoned") = Some(message);
         error
+    }
+}
+
+fn append_warning(warning: &mut Option<String>, message: String) {
+    match warning {
+        Some(existing) => {
+            existing.push_str("; ");
+            existing.push_str(&message);
+        }
+        None => *warning = Some(message),
     }
 }

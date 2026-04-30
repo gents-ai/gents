@@ -101,9 +101,21 @@ impl PeerDirectory {
         addr: &str,
         agent_did: &str,
     ) -> Result<PeerRecord> {
+        self.upsert_saved_peer_with_graphql(label, addr, agent_did, None)
+            .await
+    }
+
+    pub async fn upsert_saved_peer_with_graphql(
+        &mut self,
+        label: &str,
+        addr: &str,
+        agent_did: &str,
+        graphql: Option<&str>,
+    ) -> Result<PeerRecord> {
         let label = normalize_non_empty("label", label)?;
         let addr = normalize_non_empty("addr", addr)?;
         let agent_did = normalize_non_empty("agent_did", agent_did)?;
+        let graphql = normalize_optional(graphql);
 
         let mut record = self
             .peers
@@ -114,6 +126,12 @@ impl PeerDirectory {
         record.label = label.to_string();
         record.addr = addr.to_string();
         record.agent_did = agent_did.to_string();
+        if let Some(graphql) = graphql {
+            record.graphql = Some(graphql.to_string());
+            if record.source.as_deref() != Some("local-standard") {
+                record.source = Some("server-status".to_string());
+            }
+        }
 
         self.upsert(record.clone()).await?;
         Ok(record)
@@ -226,6 +244,10 @@ fn normalize_non_empty<'a>(field: &str, value: &'a str) -> Result<&'a str> {
         .with_context(|| format!("{field} must not be empty"))
 }
 
+fn normalize_optional(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,6 +278,35 @@ mod tests {
 
         let reloaded = PeerDirectory::load(&path).await.unwrap();
         assert!(reloaded.is_empty());
+    }
+
+    #[tokio::test]
+    async fn upsert_saved_peer_persists_graphql_pairing_endpoint() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let mut directory = PeerDirectory::load(&path).await.unwrap();
+
+        let record = directory
+            .upsert_saved_peer_with_graphql(
+                "Workshop Bay",
+                "iroh://alpha",
+                "did:key:z6MkAlpha",
+                Some(" http://100.73.235.38:9181/api/v0/graphql "),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            record.graphql.as_deref(),
+            Some("http://100.73.235.38:9181/api/v0/graphql")
+        );
+        assert_eq!(record.source.as_deref(), Some("server-status"));
+
+        let reloaded = PeerDirectory::load(&path).await.unwrap();
+        assert_eq!(
+            reloaded.records()[0].graphql.as_deref(),
+            Some("http://100.73.235.38:9181/api/v0/graphql")
+        );
     }
 
     #[tokio::test]

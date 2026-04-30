@@ -7,9 +7,13 @@ use defra_agent_protocol::row::{
 };
 use defra_node::EmbeddedNode;
 use serde::de::DeserializeOwned;
-use serde_json::Value;
+use serde::Deserialize;
+use serde_json::{json, Value};
 
+use super::peer_directory::PeerRecord;
 use super::store::{ClientStore, ClientStoreRows};
+
+const REMOTE_SNAPSHOT_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
     Ok(ClientStore::from_rows(ClientStoreRows {
@@ -31,7 +35,71 @@ pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
         inference_backends: load_inference_backends(node).await?,
         inference_profiles: load_inference_profiles(node).await?,
         tool_service_registries: load_tool_service_registries(node).await?,
+        ..ClientStoreRows::default()
     }))
+}
+
+pub async fn load_full_snapshot_with_peer_records(
+    node: &EmbeddedNode,
+    peers: &[PeerRecord],
+) -> Result<ClientStore> {
+    let mut rows = load_full_snapshot(node).await?.to_rows();
+    let mut remote_loads = Vec::new();
+
+    for peer in peers {
+        let Some(graphql) = peer
+            .graphql
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+
+        let peer = peer.clone();
+        let graphql = graphql.to_string();
+        remote_loads.push(tokio::spawn(async move {
+            let result = load_full_snapshot_from_graphql(&graphql).await;
+            (peer, graphql, result)
+        }));
+    }
+
+    for remote_load in remote_loads {
+        match remote_load.await {
+            Ok((peer, graphql, Ok(mut remote))) => {
+                remote.stamp_source_agent_did(&peer.agent_did);
+                let remote_count = remote.row_count();
+                append_rows(&mut rows, remote.to_rows());
+                tracing::info!(
+                    target: "defra_agent_desktop_core::query",
+                    peer_id = %peer.peer_id,
+                    label = %peer.label,
+                    graphql,
+                    rows = remote_count,
+                    "desktop loaded remote GraphQL snapshot"
+                );
+            }
+            Ok((peer, graphql, Err(error))) => {
+                tracing::warn!(
+                    target: "defra_agent_desktop_core::query",
+                    peer_id = %peer.peer_id,
+                    label = %peer.label,
+                    graphql,
+                    error = %error,
+                    "desktop could not load remote GraphQL snapshot"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "defra_agent_desktop_core::query",
+                    error = %error,
+                    "desktop remote GraphQL snapshot task failed"
+                );
+            }
+        }
+    }
+
+    Ok(ClientStore::from_rows(rows))
 }
 
 pub async fn load_agent_principals(node: &EmbeddedNode) -> Result<Vec<AgentPrincipalRow>> {
@@ -198,6 +266,36 @@ pub async fn load_tool_service_registries(
     .await
 }
 
+pub async fn load_full_snapshot_from_graphql(graphql: &str) -> Result<ClientStore> {
+    let client = reqwest::Client::builder()
+        .timeout(REMOTE_SNAPSHOT_HTTP_TIMEOUT)
+        .build()
+        .context("building remote GraphQL snapshot HTTP client")?;
+    let data = execute_remote_snapshot_query(&client, graphql).await?;
+
+    Ok(ClientStore::from_rows(ClientStoreRows {
+        agent_principals: parse_remote_rows(&data, "AgentPrincipal")?,
+        behaviors: parse_remote_rows(&data, "AgentBehavior")?,
+        runtimes: parse_remote_rows(&data, "AgentRuntime")?,
+        conversations: parse_remote_rows(&data, "AgentConversation")?,
+        requests: parse_remote_rows(&data, "AgentRequest")?,
+        responses: parse_remote_rows(&data, "AgentResponse")?,
+        messages: parse_remote_rows(&data, "AgentMessage")?,
+        sessions: parse_remote_rows(&data, "AgentSession")?,
+        tool_calls: parse_remote_rows(&data, "AgentToolCall")?,
+        tool_results: parse_remote_rows(&data, "AgentToolResult")?,
+        compaction_entries: parse_remote_rows(&data, "CompactionEntry")?,
+        tasks: parse_remote_rows(&data, "Task")?,
+        schedules: parse_remote_rows(&data, "Schedule")?,
+        event_triggers: parse_remote_rows(&data, "EventTrigger")?,
+        tool_selections: parse_remote_rows(&data, "ToolSelection")?,
+        inference_backends: parse_remote_rows(&data, "InferenceBackend")?,
+        inference_profiles: parse_remote_rows(&data, "InferenceProfile")?,
+        tool_service_registries: parse_remote_rows(&data, "ToolServiceRegistry")?,
+        ..ClientStoreRows::default()
+    }))
+}
+
 async fn load_rows<T>(node: &EmbeddedNode, root: &str, query: &str) -> Result<Vec<T>>
 where
     T: DeserializeOwned,
@@ -244,3 +342,176 @@ where
         )),
     }
 }
+
+#[derive(Debug, Deserialize)]
+struct RemoteGraphqlResponse {
+    #[serde(default)]
+    data: Option<Value>,
+    #[serde(default)]
+    errors: Option<Value>,
+}
+
+async fn execute_remote_snapshot_query(client: &reqwest::Client, graphql: &str) -> Result<Value> {
+    let response = client
+        .post(graphql)
+        .json(&json!({ "query": REMOTE_SNAPSHOT_QUERY }))
+        .send()
+        .await
+        .with_context(|| format!("sending remote GraphQL snapshot query to {graphql}"))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .await
+        .with_context(|| format!("reading remote GraphQL snapshot response from {graphql}"))?;
+    if !status.is_success() {
+        bail!(
+            "remote GraphQL snapshot query to {graphql} failed with {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+
+    let response: RemoteGraphqlResponse = serde_json::from_slice(&body)
+        .with_context(|| format!("decoding remote GraphQL snapshot response from {graphql}"))?;
+    if let Some(errors) = response
+        .errors
+        .as_ref()
+        .filter(|errors| !errors_is_empty(errors))
+    {
+        bail!("remote GraphQL snapshot query returned errors: {errors}");
+    }
+    response
+        .data
+        .context("remote GraphQL snapshot query returned no data")
+}
+
+fn parse_remote_rows<T>(data: &Value, root: &str) -> Result<Vec<T>>
+where
+    T: DeserializeOwned,
+{
+    let rows = data
+        .get(root)
+        .ok_or_else(|| anyhow!("remote GraphQL snapshot missing root field {root}"))?;
+    parse_row_array(rows, root)
+}
+
+fn parse_row_array<T>(rows: &Value, root: &str) -> Result<Vec<T>>
+where
+    T: DeserializeOwned,
+{
+    match rows {
+        Value::Null => Ok(Vec::new()),
+        Value::Array(rows) => {
+            let mut parsed = Vec::with_capacity(rows.len());
+            for row in rows {
+                match serde_json::from_value(row.clone()) {
+                    Ok(row) => parsed.push(row),
+                    Err(error) => tracing::warn!(
+                        target: "defra_agent_desktop_core::query",
+                        root,
+                        error = %error,
+                        "skipping malformed remote row"
+                    ),
+                }
+            }
+            Ok(parsed)
+        }
+        other => Err(anyhow!(
+            "remote GraphQL snapshot for {root} returned non-array payload: {other}"
+        )),
+    }
+}
+
+fn errors_is_empty(errors: &Value) -> bool {
+    match errors {
+        Value::Null => true,
+        Value::Array(errors) => errors.is_empty(),
+        _ => false,
+    }
+}
+
+fn append_rows(target: &mut ClientStoreRows, mut incoming: ClientStoreRows) {
+    target
+        .agent_principals
+        .append(&mut incoming.agent_principals);
+    target.behaviors.append(&mut incoming.behaviors);
+    target.runtimes.append(&mut incoming.runtimes);
+    target.conversations.append(&mut incoming.conversations);
+    target.requests.append(&mut incoming.requests);
+    target.responses.append(&mut incoming.responses);
+    target.messages.append(&mut incoming.messages);
+    target.sessions.append(&mut incoming.sessions);
+    target.tool_calls.append(&mut incoming.tool_calls);
+    target.tool_results.append(&mut incoming.tool_results);
+    target
+        .compaction_entries
+        .append(&mut incoming.compaction_entries);
+    target
+        .message_source_agent_dids
+        .append(&mut incoming.message_source_agent_dids);
+    target
+        .session_source_agent_dids
+        .append(&mut incoming.session_source_agent_dids);
+    target
+        .tool_call_source_agent_dids
+        .append(&mut incoming.tool_call_source_agent_dids);
+    target
+        .tool_result_source_agent_dids
+        .append(&mut incoming.tool_result_source_agent_dids);
+    target
+        .compaction_entry_source_agent_dids
+        .append(&mut incoming.compaction_entry_source_agent_dids);
+    target.tasks.append(&mut incoming.tasks);
+    target.schedules.append(&mut incoming.schedules);
+    target.event_triggers.append(&mut incoming.event_triggers);
+    target
+        .task_source_agent_dids
+        .append(&mut incoming.task_source_agent_dids);
+    target
+        .schedule_source_agent_dids
+        .append(&mut incoming.schedule_source_agent_dids);
+    target
+        .event_trigger_source_agent_dids
+        .append(&mut incoming.event_trigger_source_agent_dids);
+    target.tool_selections.append(&mut incoming.tool_selections);
+    target
+        .inference_backends
+        .append(&mut incoming.inference_backends);
+    target
+        .inference_profiles
+        .append(&mut incoming.inference_profiles);
+    target
+        .tool_service_registries
+        .append(&mut incoming.tool_service_registries);
+    target
+        .inference_backend_source_agent_dids
+        .append(&mut incoming.inference_backend_source_agent_dids);
+    target
+        .inference_profile_source_agent_dids
+        .append(&mut incoming.inference_profile_source_agent_dids);
+    target
+        .tool_service_registry_source_agent_dids
+        .append(&mut incoming.tool_service_registry_source_agent_dids);
+}
+
+const REMOTE_SNAPSHOT_QUERY: &str = r#"
+query DesktopRemoteSnapshot {
+  AgentPrincipal { agent_did display_name default_behavior_id enabled created_at created_by }
+  AgentBehavior { behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled created_at }
+  AgentRuntime { agent_did process_state reconcile_phase active_generation router_generation default_behavior_id runnable_behavior_count unavailable_behavior_count last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at }
+  AgentConversation { session_id agent_name agent_did behavior_id title title_source preview_text status created_at updated_at latest_request_id }
+  AgentRequest { request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind failure_reason created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until }
+  AgentResponse { response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at }
+  AgentMessage { message_key session_id sequence role content timestamp }
+  AgentSession { session_id agent_name behavior_id started ended status }
+  AgentToolCall { tool_call_key session_id message_sequence tool_name tool_call_id args result status started_at completed_at }
+  AgentToolResult { agent_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted }
+  CompactionEntry { compaction_key session_id sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at }
+  Task { task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at }
+  Schedule { schedule_id task_id interval_secs enabled concurrency next_run_at last_attempt_at last_status last_error fire_count created_at updated_at }
+  EventTrigger { trigger_id task_id source_collection event_kind filter enabled concurrency created_at updated_at last_attempt_at last_fired_source_doc_id last_status last_error fire_count }
+  ToolSelection { selection_id agent_did display_name enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode cli_tool_names enable_meta_tools delegate_to }
+  InferenceBackend { backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models last_probe probe_status }
+  InferenceProfile { profile_id display_name context_window max_output_tokens max_turns temperature stream_batch_ms deadline_duration_secs }
+  ToolServiceRegistry { service_id display_name description hostname tailscale_ip lan_ip mcp_port mcp_path status version updated_at }
+}
+"#;

@@ -354,11 +354,12 @@ export class LiveBridgeRunner implements TauriDriverBridge {
       },
       repairP2P: async () =>
         this.postJson<DesktopClientSnapshot>("/desktop/p2p/repair", {}),
-      fetchSessionSnapshot: async (sessionId, requestId) =>
+      fetchSessionSnapshot: async (sessionId, agentDid, requestId) =>
         this.postJson<DesktopSessionSnapshot | null>(
           "/desktop/session/snapshot",
           {
             sessionId,
+            agentDid: agentDid ?? null,
             requestId: requestId ?? null,
           },
         ),
@@ -593,6 +594,7 @@ export class LiveBridgeRunner implements TauriDriverBridge {
         if (isTerminalTurnState(diagnostics.desktop.turnState)) {
           const snapshot = await this.adapter.fetchSessionSnapshot(
             request.sessionId,
+            request.agentDid,
             request.requestId,
           );
           if (snapshot) {

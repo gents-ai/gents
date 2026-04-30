@@ -28,13 +28,35 @@ pub struct ClientStoreRows {
     pub tool_calls: Vec<AgentToolCallRow>,
     pub tool_results: Vec<AgentToolResultRow>,
     pub compaction_entries: Vec<CompactionEntryRow>,
+    #[serde(skip)]
+    pub message_source_agent_dids: Vec<Option<String>>,
+    #[serde(skip)]
+    pub session_source_agent_dids: Vec<Option<String>>,
+    #[serde(skip)]
+    pub tool_call_source_agent_dids: Vec<Option<String>>,
+    #[serde(skip)]
+    pub tool_result_source_agent_dids: Vec<Option<String>>,
+    #[serde(skip)]
+    pub compaction_entry_source_agent_dids: Vec<Option<String>>,
     pub tasks: Vec<TaskRow>,
     pub schedules: Vec<ScheduleRow>,
     pub event_triggers: Vec<EventTriggerRow>,
+    #[serde(skip)]
+    pub task_source_agent_dids: Vec<Option<String>>,
+    #[serde(skip)]
+    pub schedule_source_agent_dids: Vec<Option<String>>,
+    #[serde(skip)]
+    pub event_trigger_source_agent_dids: Vec<Option<String>>,
     pub tool_selections: Vec<ToolSelectionRow>,
     pub inference_backends: Vec<InferenceBackendRow>,
     pub inference_profiles: Vec<InferenceProfileRow>,
     pub tool_service_registries: Vec<ToolServiceRegistryRow>,
+    #[serde(skip)]
+    pub inference_backend_source_agent_dids: Vec<Option<String>>,
+    #[serde(skip)]
+    pub inference_profile_source_agent_dids: Vec<Option<String>>,
+    #[serde(skip)]
+    pub tool_service_registry_source_agent_dids: Vec<Option<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -50,13 +72,24 @@ pub struct ClientStore {
     pub tool_calls: Vec<AgentToolCallRow>,
     pub tool_results: Vec<AgentToolResultRow>,
     pub compaction_entries: Vec<CompactionEntryRow>,
+    pub message_source_agent_dids: Vec<Option<String>>,
+    pub session_source_agent_dids: Vec<Option<String>>,
+    pub tool_call_source_agent_dids: Vec<Option<String>>,
+    pub tool_result_source_agent_dids: Vec<Option<String>>,
+    pub compaction_entry_source_agent_dids: Vec<Option<String>>,
     pub tasks: Vec<TaskRow>,
     pub schedules: Vec<ScheduleRow>,
     pub event_triggers: Vec<EventTriggerRow>,
+    pub task_source_agent_dids: Vec<Option<String>>,
+    pub schedule_source_agent_dids: Vec<Option<String>>,
+    pub event_trigger_source_agent_dids: Vec<Option<String>>,
     pub tool_selections: Vec<ToolSelectionRow>,
     pub inference_backends: Vec<InferenceBackendRow>,
     pub inference_profiles: Vec<InferenceProfileRow>,
     pub tool_service_registries: Vec<ToolServiceRegistryRow>,
+    pub inference_backend_source_agent_dids: Vec<Option<String>>,
+    pub inference_profile_source_agent_dids: Vec<Option<String>>,
+    pub tool_service_registry_source_agent_dids: Vec<Option<String>>,
     conversations_by_agent_did: HashMap<String, Vec<usize>>,
     messages_by_session_id: HashMap<String, Vec<usize>>,
     requests_by_session_id: HashMap<String, Vec<usize>>,
@@ -100,6 +133,61 @@ impl Default for ClientStore {
 }
 
 impl ClientStore {
+    pub fn stamp_source_agent_did(&mut self, agent_did: &str) {
+        let source = Some(agent_did.to_string());
+        self.message_source_agent_dids = vec![source.clone(); self.messages.len()];
+        self.session_source_agent_dids = vec![source.clone(); self.sessions.len()];
+        self.tool_call_source_agent_dids = vec![source.clone(); self.tool_calls.len()];
+        self.tool_result_source_agent_dids = vec![source.clone(); self.tool_results.len()];
+        self.compaction_entry_source_agent_dids =
+            vec![source.clone(); self.compaction_entries.len()];
+        self.task_source_agent_dids = vec![source.clone(); self.tasks.len()];
+        self.schedule_source_agent_dids = vec![source.clone(); self.schedules.len()];
+        self.event_trigger_source_agent_dids = vec![source.clone(); self.event_triggers.len()];
+        self.inference_backend_source_agent_dids =
+            vec![source.clone(); self.inference_backends.len()];
+        self.inference_profile_source_agent_dids =
+            vec![source.clone(); self.inference_profiles.len()];
+        self.tool_service_registry_source_agent_dids =
+            vec![source; self.tool_service_registries.len()];
+    }
+
+    pub fn to_rows(&self) -> ClientStoreRows {
+        ClientStoreRows {
+            agent_principals: self.agent_principals.clone(),
+            behaviors: self.behaviors.clone(),
+            runtimes: self.runtimes.clone(),
+            conversations: self.conversations.clone(),
+            requests: self.requests.clone(),
+            responses: self.responses.clone(),
+            messages: self.messages.clone(),
+            sessions: self.sessions.clone(),
+            tool_calls: self.tool_calls.clone(),
+            tool_results: self.tool_results.clone(),
+            compaction_entries: self.compaction_entries.clone(),
+            message_source_agent_dids: self.message_source_agent_dids.clone(),
+            session_source_agent_dids: self.session_source_agent_dids.clone(),
+            tool_call_source_agent_dids: self.tool_call_source_agent_dids.clone(),
+            tool_result_source_agent_dids: self.tool_result_source_agent_dids.clone(),
+            compaction_entry_source_agent_dids: self.compaction_entry_source_agent_dids.clone(),
+            tasks: self.tasks.clone(),
+            schedules: self.schedules.clone(),
+            event_triggers: self.event_triggers.clone(),
+            task_source_agent_dids: self.task_source_agent_dids.clone(),
+            schedule_source_agent_dids: self.schedule_source_agent_dids.clone(),
+            event_trigger_source_agent_dids: self.event_trigger_source_agent_dids.clone(),
+            tool_selections: self.tool_selections.clone(),
+            inference_backends: self.inference_backends.clone(),
+            inference_profiles: self.inference_profiles.clone(),
+            tool_service_registries: self.tool_service_registries.clone(),
+            inference_backend_source_agent_dids: self.inference_backend_source_agent_dids.clone(),
+            inference_profile_source_agent_dids: self.inference_profile_source_agent_dids.clone(),
+            tool_service_registry_source_agent_dids: self
+                .tool_service_registry_source_agent_dids
+                .clone(),
+        }
+    }
+
     pub fn default_behavior_id_for_agent(&self, agent_did: &str) -> Option<&str> {
         self.agent_principals
             .iter()
@@ -317,8 +405,69 @@ impl ClientStore {
         }
     }
 
+    pub fn transcript_for_agent(&self, session_id: &str, agent_did: &str) -> TranscriptView<'_> {
+        let message_indexes = self
+            .messages_by_session_id
+            .get(session_id)
+            .into_iter()
+            .flat_map(|indexes| indexes.iter())
+            .copied()
+            .filter(|index| {
+                source_agent_matches(&self.message_source_agent_dids, *index, agent_did)
+            })
+            .collect::<Vec<_>>();
+        let tool_call_indexes = self
+            .tool_calls_by_session_id
+            .get(session_id)
+            .into_iter()
+            .flat_map(|indexes| indexes.iter())
+            .copied()
+            .filter(|index| {
+                source_agent_matches(&self.tool_call_source_agent_dids, *index, agent_did)
+            })
+            .collect::<Vec<_>>();
+        let tool_result_indexes = self
+            .tool_results_by_session_id
+            .get(session_id)
+            .into_iter()
+            .flat_map(|indexes| indexes.iter())
+            .copied()
+            .filter(|index| {
+                let row = &self.tool_results[*index];
+                row_agent_matches(row.agent_did.as_deref(), agent_did)
+                    && source_agent_matches(&self.tool_result_source_agent_dids, *index, agent_did)
+            })
+            .collect::<Vec<_>>();
+
+        TranscriptView {
+            messages: message_indexes
+                .into_iter()
+                .map(|index| &self.messages[index])
+                .collect(),
+            tool_calls: tool_call_indexes
+                .into_iter()
+                .map(|index| &self.tool_calls[index])
+                .collect(),
+            tool_results: tool_result_indexes
+                .into_iter()
+                .map(|index| &self.tool_results[index])
+                .collect(),
+        }
+    }
+
     pub fn requests_for_session(&self, session_id: &str) -> Vec<&AgentRequestRow> {
         indexes_to_refs(&self.requests, self.requests_by_session_id.get(session_id))
+    }
+
+    pub fn requests_for_session_for_agent(
+        &self,
+        session_id: &str,
+        agent_did: &str,
+    ) -> Vec<&AgentRequestRow> {
+        self.requests_for_session(session_id)
+            .into_iter()
+            .filter(|row| row_agent_matches(row.agent_did.as_deref(), agent_did))
+            .collect()
     }
 
     pub fn latest_request_id_for_session(&self, session_id: &str) -> Option<String> {
@@ -334,6 +483,30 @@ impl ClientStore {
             })
     }
 
+    pub fn latest_request_id_for_session_for_agent(
+        &self,
+        session_id: &str,
+        agent_did: &str,
+    ) -> Option<String> {
+        self.conversations
+            .iter()
+            .find(|row| row.session_id == session_id && row.agent_did.as_deref() == Some(agent_did))
+            .and_then(|row| clean_string(row.latest_request_id.as_deref()))
+            .or_else(|| {
+                self.requests_by_session_id
+                    .get(session_id)
+                    .and_then(|indexes| {
+                        indexes.iter().rev().find(|index| {
+                            row_agent_matches(
+                                self.requests[**index].agent_did.as_deref(),
+                                agent_did,
+                            )
+                        })
+                    })
+                    .map(|index| self.requests[*index].request_id.clone())
+            })
+    }
+
     pub fn latest_runtime(&self, agent_did: &str) -> Option<&AgentRuntimeRow> {
         self.runtimes_by_agent_did
             .get(agent_did)
@@ -344,6 +517,37 @@ impl ClientStore {
         self.latest_response_by_request_id
             .get(request_id)
             .map(|index| &self.responses[*index])
+    }
+
+    pub fn latest_response_for_request_for_agent(
+        &self,
+        request_id: &str,
+        agent_did: &str,
+    ) -> Option<&AgentResponseRow> {
+        self.responses
+            .iter()
+            .filter(|row| {
+                row.request_id.as_deref() == Some(request_id)
+                    && row_agent_matches(row.agent_did.as_deref(), agent_did)
+            })
+            .max_by(|left, right| {
+                left.progress_seq
+                    .unwrap_or_default()
+                    .cmp(&right.progress_seq.unwrap_or_default())
+                    .then_with(|| {
+                        left.completed_at
+                            .as_deref()
+                            .unwrap_or_default()
+                            .cmp(right.completed_at.as_deref().unwrap_or_default())
+                    })
+                    .then_with(|| {
+                        left.created_at
+                            .as_deref()
+                            .unwrap_or_default()
+                            .cmp(right.created_at.as_deref().unwrap_or_default())
+                    })
+                    .then_with(|| left.response_key.cmp(&right.response_key))
+            })
     }
 
     pub fn request_row(&self, request_id: &str) -> Option<&AgentRequestRow> {
@@ -374,28 +578,9 @@ impl ClientStore {
     }
 
     pub fn approx_serialized_bytes(&self) -> usize {
-        serde_json::to_vec(&ClientStoreRows {
-            agent_principals: self.agent_principals.clone(),
-            behaviors: self.behaviors.clone(),
-            runtimes: self.runtimes.clone(),
-            conversations: self.conversations.clone(),
-            requests: self.requests.clone(),
-            responses: self.responses.clone(),
-            messages: self.messages.clone(),
-            sessions: self.sessions.clone(),
-            tool_calls: self.tool_calls.clone(),
-            tool_results: self.tool_results.clone(),
-            compaction_entries: self.compaction_entries.clone(),
-            tasks: self.tasks.clone(),
-            schedules: self.schedules.clone(),
-            event_triggers: self.event_triggers.clone(),
-            tool_selections: self.tool_selections.clone(),
-            inference_backends: self.inference_backends.clone(),
-            inference_profiles: self.inference_profiles.clone(),
-            tool_service_registries: self.tool_service_registries.clone(),
-        })
-        .map(|bytes| bytes.len())
-        .unwrap_or_default()
+        serde_json::to_vec(&self.to_rows())
+            .map(|bytes| bytes.len())
+            .unwrap_or_default()
     }
 
     pub fn derive_turn(&self, session_id: &str) -> Option<ClientTurnState> {
@@ -408,6 +593,17 @@ impl ClientStore {
 }
 
 pub type SharedClientStore = Arc<ClientStore>;
+
+fn row_agent_matches(row_agent_did: Option<&str>, agent_did: &str) -> bool {
+    row_agent_did.map_or(true, |row_agent_did| row_agent_did == agent_did)
+}
+
+fn source_agent_matches(sources: &[Option<String>], row_index: usize, agent_did: &str) -> bool {
+    sources
+        .get(row_index)
+        .and_then(|source| source.as_deref())
+        .map_or(true, |source_agent_did| source_agent_did == agent_did)
+}
 
 #[cfg(test)]
 mod tests {
@@ -463,6 +659,20 @@ mod tests {
         }
     }
 
+    fn task_row(task_id: &str, behavior_id: &str) -> TaskRow {
+        TaskRow {
+            task_id: task_id.to_string(),
+            name: None,
+            description: None,
+            behavior_id: Some(behavior_id.to_string()),
+            prompt_template: None,
+            enabled: Some(true),
+            output_schema_ref: None,
+            created_at: None,
+            updated_at: None,
+        }
+    }
+
     #[test]
     fn recent_runs_aggregates_across_schedules_and_event_triggers() {
         let mut store = ClientStore::default();
@@ -500,5 +710,38 @@ mod tests {
         let store = ClientStore::default();
         let runs = store.recent_runs_for_task("task-missing");
         assert_eq!(runs, TaskRecentRuns::default());
+    }
+
+    #[test]
+    fn source_agent_dids_round_trip_with_rows() {
+        let mut store = ClientStore::from_rows(ClientStoreRows {
+            tasks: vec![task_row("task-1", "default")],
+            schedules: vec![schedule_row("schedule-1", "task-1", None, None, None, None)],
+            event_triggers: vec![event_trigger_row(
+                "trigger-1",
+                "task-1",
+                None,
+                None,
+                None,
+                None,
+            )],
+            ..ClientStoreRows::default()
+        });
+        store.stamp_source_agent_did("did:defra:mini-1");
+
+        let restored = ClientStore::from_rows(store.to_rows());
+
+        assert_eq!(
+            restored.task_source_agent_dids,
+            vec![Some("did:defra:mini-1".to_string())]
+        );
+        assert_eq!(
+            restored.schedule_source_agent_dids,
+            vec![Some("did:defra:mini-1".to_string())]
+        );
+        assert_eq!(
+            restored.event_trigger_source_agent_dids,
+            vec![Some("did:defra:mini-1".to_string())]
+        );
     }
 }

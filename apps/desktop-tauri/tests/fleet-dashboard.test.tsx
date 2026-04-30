@@ -8,6 +8,7 @@ describe("FleetDashboard add connection flow", () => {
     const onFetchPeerStatus = vi.fn(async () => ({
       agent_name: "worker-a",
       agent_did: "did:key:z6MkWorkerA",
+      desktop_graphql: "http://127.0.0.1:9181/api/v0/graphql",
       p2p: {
         p2p_shareable_address:
           "/ip4/100.73.235.39/tcp/9161/p2p/12D3KooWorker",
@@ -43,6 +44,7 @@ describe("FleetDashboard add connection flow", () => {
         label: "worker-a",
         agentDid: "did:key:z6MkWorkerA",
         addr: "/ip4/100.73.235.39/tcp/9161/p2p/12D3KooWorker",
+        graphql: "http://127.0.0.1:9181/api/v0/graphql",
       });
     });
   });
@@ -82,6 +84,54 @@ describe("FleetDashboard add connection flow", () => {
         "did:key:z6MkGateway",
       );
       expect(screen.getByTestId("fleet-add-addr")).toHaveValue("iroh://gateway");
+    });
+  });
+
+  it("saves a typed GraphQL endpoint when manually adding a peer", async () => {
+    const onFetchPeerStatus = vi.fn();
+    const onAddPeer = vi.fn(async () => undefined);
+
+    render(
+      <FleetDashboard
+        addingPeer={false}
+        bootstrap={null}
+        deployments={[]}
+        loading={false}
+        p2pHealth={null}
+        repairingP2P={false}
+        starting={false}
+        onAddPeer={onAddPeer}
+        onFetchPeerStatus={onFetchPeerStatus}
+        onOpenChat={vi.fn()}
+        onOpenConfig={vi.fn()}
+        onRepairP2P={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByTestId("fleet-add-server-address"), {
+      target: { value: "http://100.73.235.38:9181/api/v0/graphql" },
+    });
+    fireEvent.change(screen.getByTestId("fleet-add-label"), {
+      target: { value: "studio-1-steward" },
+    });
+    fireEvent.change(screen.getByTestId("fleet-add-agent-did"), {
+      target: { value: "did:key:z6MkStudio" },
+    });
+    fireEvent.change(screen.getByTestId("fleet-add-addr"), {
+      target: {
+        value: "/ip4/100.73.235.38/tcp/9161/p2p/12D3KooStudio",
+      },
+    });
+    fireEvent.click(screen.getByTestId("fleet-add-submit"));
+
+    await waitFor(() => {
+      expect(onFetchPeerStatus).not.toHaveBeenCalled();
+      expect(onAddPeer).toHaveBeenCalledWith({
+        label: "studio-1-steward",
+        agentDid: "did:key:z6MkStudio",
+        addr: "/ip4/100.73.235.38/tcp/9161/p2p/12D3KooStudio",
+        graphql: "http://100.73.235.38:9181/api/v0/graphql",
+      });
     });
   });
 });

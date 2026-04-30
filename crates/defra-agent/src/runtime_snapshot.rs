@@ -21,10 +21,21 @@ pub(crate) type DispatcherMap = HashMap<String, mpsc::Sender<AgentRequest>>;
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedTask {
     pub(crate) task_id: String,
+    pub(crate) name: Option<String>,
     pub(crate) behavior_id: String,
     pub(crate) prompt_template: String,
     #[allow(dead_code)]
     pub(crate) output_schema_ref: Option<String>,
+}
+
+impl ResolvedTask {
+    pub(crate) fn display_label(&self) -> &str {
+        self.name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&self.task_id)
+    }
 }
 
 /// Resolved view of a `Schedule` document paired with its resolved `Task`.

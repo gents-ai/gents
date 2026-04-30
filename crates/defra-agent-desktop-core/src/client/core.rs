@@ -23,7 +23,7 @@ use super::observe::{ObservedStore, ObserverHandle};
 use super::paths::DesktopPaths;
 use super::peer_directory::{PeerDirectory, PeerRecord};
 use super::principal_identity::PrincipalIdentity;
-use super::query::load_full_snapshot;
+use super::query::load_full_snapshot_with_peer_records;
 
 const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -273,7 +273,8 @@ impl ClientCore {
     }
 
     pub async fn refresh_store(&self) -> Result<u64> {
-        let snapshot = load_full_snapshot(self.node.as_ref()).await?;
+        let records = self.peer_directory.read().await.records().to_vec();
+        let snapshot = load_full_snapshot_with_peer_records(self.node.as_ref(), &records).await?;
         let rows = snapshot.row_count();
         let version = self.store.replace_snapshot(snapshot);
         tracing::debug!(

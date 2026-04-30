@@ -2,9 +2,10 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use defra_node::{EmbeddedNode, EventName};
-use tokio::sync::watch;
+use tokio::sync::{watch, RwLock as AsyncRwLock};
 
-use super::query::load_full_snapshot;
+use super::peer_directory::PeerDirectory;
+use super::query::load_full_snapshot_with_peer_records;
 use super::store::{ClientStore, SharedClientStore};
 
 const OBSERVER_DEBOUNCE: Duration = Duration::from_millis(150);
@@ -72,7 +73,11 @@ impl ObserverHandle {
     }
 }
 
-pub fn spawn_observer(node: Arc<EmbeddedNode>, store: Arc<ObservedStore>) -> ObserverHandle {
+pub fn spawn_observer(
+    node: Arc<EmbeddedNode>,
+    store: Arc<ObservedStore>,
+    peer_directory: Arc<AsyncRwLock<PeerDirectory>>,
+) -> ObserverHandle {
     let (stop_tx, mut stop_rx) = watch::channel(false);
     let task = tokio::spawn(async move {
         let mut subscription = node.subscribe(&[EventName::Update]);
@@ -103,7 +108,8 @@ pub fn spawn_observer(node: Arc<EmbeddedNode>, store: Arc<ObservedStore>) -> Obs
                 tracing::warn!(dropped, "desktop observation subscription dropped messages");
             }
 
-            match load_full_snapshot(node.as_ref()).await {
+            let records = peer_directory.read().await.records().to_vec();
+            match load_full_snapshot_with_peer_records(node.as_ref(), &records).await {
                 Ok(snapshot) => {
                     let version = store.replace_snapshot(snapshot);
                     tracing::trace!(version, "desktop observation snapshot refreshed");
