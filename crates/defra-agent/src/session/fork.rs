@@ -2,7 +2,7 @@ use anyhow::Result;
 use defra_node::EmbeddedNode;
 
 use super::query::load_conversation_document;
-use super::retry::execute_mutation_with_retry;
+use super::retry::{execute_batch_mutation_with_retry, execute_mutation_with_retry};
 use crate::graphql::escape_graphql_string;
 
 #[derive(Debug, Clone)]
@@ -287,9 +287,9 @@ async fn copy_messages(
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    let mut count = 0u32;
     let child_session_escaped = escape_graphql_string(child_session_id);
-    for row in &rows {
+    let mut mutation_fields = Vec::with_capacity(rows.len());
+    for (index, row) in rows.iter().enumerate() {
         let sequence = row
             .get("sequence")
             .and_then(|v| v.as_u64())
@@ -298,9 +298,8 @@ async fn copy_messages(
         let content = row.get("content").and_then(|v| v.as_str()).unwrap_or("");
         let timestamp = row.get("timestamp").and_then(|v| v.as_str()).unwrap_or("");
         let message_key = format!("{child_session_escaped}:{sequence}");
-        let mutation = format!(
-            r#"mutation {{
-                create_AgentMessage(input: {{
+        mutation_fields.push(format!(
+            r#"message_{index}: create_AgentMessage(input: {{
                     message_key: "{message_key}",
                     session_id: "{child_session_escaped}",
                     sequence: {sequence},
@@ -308,15 +307,14 @@ async fn copy_messages(
                     content: "{content_escaped}",
                     timestamp: "{timestamp_escaped}"
                 }}) {{ _docID }}
-            }}"#,
+            "#,
             role_escaped = escape_graphql_string(role),
             content_escaped = escape_graphql_string(content),
             timestamp_escaped = escape_graphql_string(timestamp),
-        );
-        execute_mutation_with_retry(node, &mutation, "fork::copy_message").await?;
-        count += 1;
+        ));
     }
-    Ok(count)
+    execute_batch_mutation_with_retry(node, &mutation_fields, "fork::copy_messages").await?;
+    Ok(mutation_fields.len() as u32)
 }
 
 async fn copy_tool_calls(
@@ -350,9 +348,9 @@ async fn copy_tool_calls(
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    let mut count = 0u32;
     let child_session_escaped = escape_graphql_string(child_session_id);
-    for row in &rows {
+    let mut mutation_fields = Vec::with_capacity(rows.len());
+    for (index, row) in rows.iter().enumerate() {
         let message_sequence = row
             .get("message_sequence")
             .and_then(|v| v.as_u64())
@@ -372,9 +370,8 @@ async fn copy_tool_calls(
             .unwrap_or("");
         let tool_call_id_escaped = escape_graphql_string(tool_call_id);
         let tool_call_key = format!("{child_session_escaped}:{tool_call_id_escaped}");
-        let mutation = format!(
-            r#"mutation {{
-                create_AgentToolCall(input: {{
+        mutation_fields.push(format!(
+            r#"tool_call_{index}: create_AgentToolCall(input: {{
                     tool_call_key: "{tool_call_key}",
                     session_id: "{child_session_escaped}",
                     message_sequence: {message_sequence},
@@ -386,18 +383,17 @@ async fn copy_tool_calls(
                     started_at: "{started_at_escaped}",
                     completed_at: "{completed_at_escaped}"
                 }}) {{ _docID }}
-            }}"#,
+            "#,
             tool_name_escaped = escape_graphql_string(tool_name),
             args_escaped = escape_graphql_string(args),
             result_escaped = escape_graphql_string(result),
             status_escaped = escape_graphql_string(status),
             started_at_escaped = escape_graphql_string(started_at),
             completed_at_escaped = escape_graphql_string(completed_at),
-        );
-        execute_mutation_with_retry(node, &mutation, "fork::copy_tool_call").await?;
-        count += 1;
+        ));
     }
-    Ok(count)
+    execute_batch_mutation_with_retry(node, &mutation_fields, "fork::copy_tool_calls").await?;
+    Ok(mutation_fields.len() as u32)
 }
 
 async fn copy_tool_results(
@@ -431,10 +427,10 @@ async fn copy_tool_results(
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    let mut count = 0u32;
     let child_session_escaped = escape_graphql_string(child_session_id);
     let child_agent_did_escaped = escape_graphql_string(child_agent_did);
-    for row in &rows {
+    let mut mutation_fields = Vec::with_capacity(rows.len());
+    for (index, row) in rows.iter().enumerate() {
         let tool_name = row.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
         let tool_input = row.get("tool_input").and_then(|v| v.as_str()).unwrap_or("");
         let output_text = row
@@ -454,9 +450,8 @@ async fn copy_tool_results(
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let created_at = row.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
-        let mutation = format!(
-            r#"mutation {{
-                create_AgentToolResult(input: {{
+        mutation_fields.push(format!(
+            r#"tool_result_{index}: create_AgentToolResult(input: {{
                     agent_did: "{child_agent_did_escaped}",
                     session_id: "{child_session_escaped}",
                     tool_name: "{tool_name_escaped}",
@@ -467,18 +462,17 @@ async fn copy_tool_results(
                     conversation_doc_id: "{conversation_doc_id_escaped}",
                     created_at: "{created_at_escaped}"
                 }}) {{ _docID }}
-            }}"#,
+            "#,
             tool_name_escaped = escape_graphql_string(tool_name),
             tool_input_escaped = escape_graphql_string(tool_input),
             output_text_escaped = escape_graphql_string(output_text),
             truncation_metadata_escaped = escape_graphql_string(truncation_metadata),
             conversation_doc_id_escaped = escape_graphql_string(conversation_doc_id),
             created_at_escaped = escape_graphql_string(created_at),
-        );
-        execute_mutation_with_retry(node, &mutation, "fork::copy_tool_result").await?;
-        count += 1;
+        ));
     }
-    Ok(count)
+    execute_batch_mutation_with_retry(node, &mutation_fields, "fork::copy_tool_results").await?;
+    Ok(mutation_fields.len() as u32)
 }
 
 async fn copy_compaction_entries(
@@ -513,9 +507,9 @@ async fn copy_compaction_entries(
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    let mut count = 0u32;
     let child_session_escaped = escape_graphql_string(child_session_id);
-    for row in &rows {
+    let mut mutation_fields = Vec::with_capacity(rows.len());
+    for (index, row) in rows.iter().enumerate() {
         let sequence = row
             .get("sequence")
             .and_then(|v| v.as_u64())
@@ -543,9 +537,8 @@ async fn copy_compaction_entries(
             .unwrap_or(0);
         let created_at = row.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
         let compaction_key = format!("{child_session_escaped}:{sequence}");
-        let mutation = format!(
-            r#"mutation {{
-                create_CompactionEntry(input: {{
+        mutation_fields.push(format!(
+            r#"compaction_{index}: create_CompactionEntry(input: {{
                     compaction_key: "{compaction_key}",
                     session_id: "{child_session_escaped}",
                     sequence: {sequence},
@@ -557,16 +550,16 @@ async fn copy_compaction_entries(
                     compacted_tokens: {compacted_tokens},
                     created_at: "{created_at_escaped}"
                 }}) {{ _docID }}
-            }}"#,
+            "#,
             summary_escaped = escape_graphql_string(summary),
             files_read_escaped = escape_graphql_string(files_read),
             files_modified_escaped = escape_graphql_string(files_modified),
             created_at_escaped = escape_graphql_string(created_at),
-        );
-        execute_mutation_with_retry(node, &mutation, "fork::copy_compaction_entry").await?;
-        count += 1;
+        ));
     }
-    Ok(count)
+    execute_batch_mutation_with_retry(node, &mutation_fields, "fork::copy_compaction_entries")
+        .await?;
+    Ok(mutation_fields.len() as u32)
 }
 
 async fn create_child_session_and_conversation(
