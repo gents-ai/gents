@@ -200,6 +200,98 @@ async fn submit_request_writes_request_and_updates_conversation_summary() -> Res
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn retry_request_writes_retry_chain_and_updates_conversation_summary() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path()),
+        ClientCoreOptions::local_only(),
+    )
+    .await?;
+
+    let created = core
+        .create_conversation("did:defra:amy", Some("amy-code"))
+        .await?;
+    let original = core
+        .submit_request(&created.session_id, "did:defra:amy", "first attempt", None)
+        .await?;
+    let parent = core
+        .store()
+        .snapshot()
+        .requests
+        .iter()
+        .find(|row| row.request_id == original.request_id)
+        .cloned()
+        .context("expected submitted parent request in desktop store")?;
+
+    let retried = core.retry_request(&parent).await?;
+
+    let request: RequestRow = query_single(
+        core.node(),
+        &format!(
+            r#"{{
+                AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    request_id
+                    agent_did
+                    behavior_id
+                    session_id
+                    content
+                    status
+                    lifecycle_state
+                    execution_origin
+                    retry_root_request
+                    retry_parent_request
+                    retry_count
+                    max_retries
+                }}
+            }}"#,
+            retried.request_id
+        ),
+        "AgentRequest",
+    )
+    .await?;
+    assert_eq!(request.request_id, retried.request_id);
+    assert_eq!(request.agent_did, "did:defra:amy");
+    assert_eq!(request.behavior_id, "amy-code");
+    assert_eq!(request.session_id, created.session_id);
+    assert_eq!(request.content, "first attempt");
+    assert_eq!(request.status, "pending");
+    assert_eq!(request.lifecycle_state, "pending");
+    assert_eq!(request.execution_origin, "interactive");
+    assert_eq!(request.retry_parent_request, original.request_id);
+    assert_eq!(request.retry_root_request, original.request_id);
+    assert_eq!(request.retry_count, 1);
+    assert_eq!(request.max_retries, 3);
+
+    let conversation: ConversationRow = query_single(
+        core.node(),
+        &format!(
+            r#"{{
+                AgentConversation(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    session_id
+                    agent_name
+                    agent_did
+                    behavior_id
+                    title
+                    preview_text
+                    status
+                    latest_request_id
+                }}
+            }}"#,
+            created.session_id
+        ),
+        "AgentConversation",
+    )
+    .await?;
+    assert_eq!(conversation.preview_text, "first attempt");
+    assert_eq!(conversation.status, "active");
+    assert_eq!(conversation.latest_request_id, retried.request_id);
+    assert_eq!(core.store().focused_request_id(), Some(retried.request_id));
+
+    core.shutdown().await?;
+    Ok(())
+}
+
 /// Regression test for the "resend drops overrides" bug. Previously,
 /// `fetch_request_view` only queried `session_id`, `agent_did`, `behavior_id`,
 /// `content`, `lifecycle_state`, `failure_reason` — so `resend_request`

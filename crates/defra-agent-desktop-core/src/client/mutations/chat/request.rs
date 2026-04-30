@@ -10,7 +10,7 @@ use super::super::graphql::{
     escape_graphql_string, execute_mutation, normalize_optional_string, normalize_required,
 };
 use super::binding::resolve_agent_binding;
-use super::conversation::{upsert_conversation, upsert_session};
+use super::conversation::{build_upsert_conversation_field, build_upsert_session_field};
 
 const DEFAULT_REQUEST_MAX_RETRIES: u32 = 3;
 
@@ -62,15 +62,6 @@ pub async fn submit_request(
     let created_at = Utc::now().to_rfc3339();
     let binding = resolve_agent_binding(store, agent_did, behavior_id, Some(session_id))?;
 
-    upsert_session(
-        node,
-        store,
-        session_id,
-        &binding.agent_name,
-        &binding.behavior_id,
-    )
-    .await?;
-
     // Thread retry linkage: carry parent's retry root forward, else this row is
     // the root of its own retry chain.
     let (retry_parent_request, retry_root_request) =
@@ -83,85 +74,30 @@ pub async fn submit_request(
             (String::new(), request_id.clone())
         };
 
-    let escaped_request_id = escape_graphql_string(&request_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_behavior_id = escape_graphql_string(binding.behavior_id.as_deref().unwrap_or(""));
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_content = escape_graphql_string(content);
-    let escaped_created_at = escape_graphql_string(&created_at);
-    let escaped_retry_parent = escape_graphql_string(&retry_parent_request);
-    let escaped_retry_root = escape_graphql_string(&retry_root_request);
-
-    let valid_until_field = match options.valid_until {
-        Some(valid_until) => {
-            let escaped = escape_graphql_string(&valid_until.to_rfc3339());
-            format!(
-                r#",
-                valid_until: "{escaped}""#,
-            )
-        }
-        None => String::new(),
-    };
-
-    // Only emit sampling override + metadata fields when the caller actually
-    // set them. Omitting a field leaves the schema default (null) in place;
-    // emitting `null` explicitly also works but leaving the field out keeps
-    // the mutation shape identical to what previously-submitted rows used
-    // before the override plumbing landed.
-    let override_fields = {
-        let mut parts: Vec<String> = Vec::new();
-        if let Some(temperature) = options.temperature {
-            parts.push(format!("temperature: {temperature}"));
-        }
-        if let Some(top_p) = options.top_p {
-            parts.push(format!("top_p: {top_p}"));
-        }
-        if let Some(top_k) = options.top_k {
-            parts.push(format!("top_k: {top_k}"));
-        }
-        if let Some(max_tokens) = options.max_tokens {
-            parts.push(format!("max_tokens: {max_tokens}"));
-        }
-        if let Some(metadata) = options.metadata.as_deref() {
-            parts.push(format!(
-                r#"metadata: "{}""#,
-                escape_graphql_string(metadata)
-            ));
-        }
-        if parts.is_empty() {
-            String::new()
-        } else {
-            format!(",\n                {}", parts.join(",\n                "))
-        }
-    };
-
-    let mutation = format!(
-        r#"mutation {{
-            add_AgentRequest(input: {{
-                request_id: "{escaped_request_id}",
-                agent_did: "{escaped_agent_did}",
-                behavior_id: "{escaped_behavior_id}",
-                session_id: "{escaped_session_id}",
-                retry_parent_request: "{escaped_retry_parent}",
-                retry_root_request: "{escaped_retry_root}",
-                superseded_by_request: "",
-                content: "{escaped_content}",
-                status: "pending",
-                lifecycle_state: "pending",
-                backend_id: "",
-                execution_origin: "interactive",
-                failure_reason: "",
-                created_at: "{escaped_created_at}",
-                retry_count: 0,
-                max_retries: {max_retries}{valid_until_field}{override_fields}
-            }}) {{ _docID }}
-        }}"#,
-        max_retries = DEFAULT_REQUEST_MAX_RETRIES,
+    let session_field = build_upsert_session_field(
+        "session",
+        store,
+        session_id,
+        &binding.agent_name,
+        &binding.behavior_id,
+        &created_at,
     );
-    execute_mutation(node, &mutation, "submit_request").await?;
-
-    upsert_conversation(
-        node,
+    let request_field = build_add_agent_request_field(
+        "request",
+        &request_id,
+        agent_did,
+        binding.behavior_id.as_deref().unwrap_or(""),
+        session_id,
+        &retry_parent_request,
+        &retry_root_request,
+        content,
+        &created_at,
+        0,
+        i64::from(DEFAULT_REQUEST_MAX_RETRIES),
+        &submit_request_extra_fields(&options),
+    );
+    let conversation_field = build_upsert_conversation_field(
+        "conversation",
         store,
         session_id,
         agent_did,
@@ -170,8 +106,11 @@ pub async fn submit_request(
         &request_id,
         content,
         "active",
-    )
-    .await?;
+        &created_at,
+    );
+    let mutation =
+        build_coalesced_submit_mutation(&[session_field, request_field, conversation_field]);
+    execute_mutation(node, &mutation, "submit_request").await?;
 
     Ok(SubmittedRequest {
         request_id,
@@ -219,33 +158,132 @@ pub async fn retry_request(
     let created_at = Utc::now().to_rfc3339();
     let binding = resolve_agent_binding(store, agent_did, behavior_id, Some(session_id))?;
 
-    upsert_session(
-        node,
+    let session_field = build_upsert_session_field(
+        "session",
         store,
         session_id,
         &binding.agent_name,
         &binding.behavior_id,
-    )
-    .await?;
+        &created_at,
+    );
+    let request_field = build_add_agent_request_field(
+        "request",
+        &request_id,
+        agent_did,
+        binding.behavior_id.as_deref().unwrap_or(""),
+        session_id,
+        parent_request_id,
+        retry_root_request,
+        content,
+        &created_at,
+        retry_count,
+        max_retries,
+        "",
+    );
+    let conversation_field = build_upsert_conversation_field(
+        "conversation",
+        store,
+        session_id,
+        agent_did,
+        &binding.agent_name,
+        &binding.behavior_id,
+        &request_id,
+        content,
+        "active",
+        &created_at,
+    );
+    let mutation =
+        build_coalesced_submit_mutation(&[session_field, request_field, conversation_field]);
+    execute_mutation(node, &mutation, "retry_request").await?;
 
-    let escaped_request_id = escape_graphql_string(&request_id);
-    let escaped_parent_request_id = escape_graphql_string(parent_request_id);
-    let escaped_retry_root_request = escape_graphql_string(retry_root_request);
+    Ok(SubmittedRequest {
+        request_id,
+        session_id: session_id.to_string(),
+        agent_did: agent_did.to_string(),
+        behavior_id: binding.behavior_id,
+    })
+}
+
+fn submit_request_extra_fields(options: &SubmitRequestOptions) -> String {
+    let valid_until_field = match options.valid_until.as_ref() {
+        Some(valid_until) => {
+            let escaped = escape_graphql_string(&valid_until.to_rfc3339());
+            format!(
+                r#",
+                valid_until: "{escaped}""#,
+            )
+        }
+        None => String::new(),
+    };
+
+    // Only emit sampling override + metadata fields when the caller actually
+    // set them. Omitting a field leaves the schema default (null) in place;
+    // emitting `null` explicitly also works but leaving the field out keeps
+    // the mutation shape identical to what previously-submitted rows used
+    // before the override plumbing landed.
+    let mut override_parts: Vec<String> = Vec::new();
+    if let Some(temperature) = options.temperature {
+        override_parts.push(format!("temperature: {temperature}"));
+    }
+    if let Some(top_p) = options.top_p {
+        override_parts.push(format!("top_p: {top_p}"));
+    }
+    if let Some(top_k) = options.top_k {
+        override_parts.push(format!("top_k: {top_k}"));
+    }
+    if let Some(max_tokens) = options.max_tokens {
+        override_parts.push(format!("max_tokens: {max_tokens}"));
+    }
+    if let Some(metadata) = options.metadata.as_deref() {
+        override_parts.push(format!(
+            r#"metadata: "{}""#,
+            escape_graphql_string(metadata)
+        ));
+    }
+    let override_fields = if override_parts.is_empty() {
+        String::new()
+    } else {
+        format!(
+            ",\n                {}",
+            override_parts.join(",\n                ")
+        )
+    };
+
+    format!("{valid_until_field}{override_fields}")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_add_agent_request_field(
+    alias: &str,
+    request_id: &str,
+    agent_did: &str,
+    behavior_id: &str,
+    session_id: &str,
+    retry_parent_request: &str,
+    retry_root_request: &str,
+    content: &str,
+    created_at: &str,
+    retry_count: i64,
+    max_retries: i64,
+    extra_fields: &str,
+) -> String {
+    let escaped_request_id = escape_graphql_string(request_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_behavior_id = escape_graphql_string(binding.behavior_id.as_deref().unwrap_or(""));
+    let escaped_behavior_id = escape_graphql_string(behavior_id);
     let escaped_session_id = escape_graphql_string(session_id);
+    let escaped_retry_parent = escape_graphql_string(retry_parent_request);
+    let escaped_retry_root = escape_graphql_string(retry_root_request);
     let escaped_content = escape_graphql_string(content);
-    let escaped_created_at = escape_graphql_string(&created_at);
+    let escaped_created_at = escape_graphql_string(created_at);
 
-    let mutation = format!(
-        r#"mutation {{
-            add_AgentRequest(input: {{
+    format!(
+        r#"{alias}: add_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
                 agent_did: "{escaped_agent_did}",
                 behavior_id: "{escaped_behavior_id}",
                 session_id: "{escaped_session_id}",
-                retry_parent_request: "{escaped_parent_request_id}",
-                retry_root_request: "{escaped_retry_root_request}",
+                retry_parent_request: "{escaped_retry_parent}",
+                retry_root_request: "{escaped_retry_root}",
                 superseded_by_request: "",
                 content: "{escaped_content}",
                 status: "pending",
@@ -255,31 +293,17 @@ pub async fn retry_request(
                 failure_reason: "",
                 created_at: "{escaped_created_at}",
                 retry_count: {retry_count},
-                max_retries: {max_retries}
+                max_retries: {max_retries}{extra_fields}
             }}) {{ _docID }}
-        }}"#
-    );
-    execute_mutation(node, &mutation, "retry_request").await?;
-
-    upsert_conversation(
-        node,
-        store,
-        session_id,
-        agent_did,
-        &binding.agent_name,
-        &binding.behavior_id,
-        &request_id,
-        content,
-        "active",
+        "#
     )
-    .await?;
+}
 
-    Ok(SubmittedRequest {
-        request_id,
-        session_id: session_id.to_string(),
-        agent_did: agent_did.to_string(),
-        behavior_id: binding.behavior_id,
-    })
+fn build_coalesced_submit_mutation(fields: &[String; 3]) -> String {
+    format!(
+        "mutation {{\n{}\n{}\n{}\n}}",
+        fields[0], fields[1], fields[2]
+    )
 }
 
 /// Resend a stale-terminal request by reading its inputs and submitting a
