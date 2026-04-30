@@ -1,27 +1,10 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  addPeer,
   fetchDesktopSnapshot,
-  fetchPeerStatus,
   fetchSessionSnapshot,
-  renameConversation,
-  repairP2P,
-  runSchedule,
-  runTask,
-  saveAgentConfig,
-  saveBackendConfig,
-  saveBehaviorConfig,
-  saveEventTriggerConfig,
-  saveInferenceProfileConfig,
-  saveScheduleConfig,
-  saveTaskConfig,
-  saveToolSelectionConfig,
-  saveToolServiceConfig,
-  sendChatMessage,
   shutdownDesktopClient,
   startDesktopClient,
-  testToolService,
 } from "../lib/desktop-api";
 import { listenToDesktopClientUpdates } from "../lib/desktop-events";
 import {
@@ -36,25 +19,14 @@ import {
   timingConfig,
   trackedRequestIdForSession,
 } from "./desktopShellRuntime";
+import { createDesktopShellChatActions } from "./desktopShellChatActions";
+import { createDesktopShellConfigActions } from "./desktopShellConfigActions";
+import { createDesktopShellPeerActions } from "./desktopShellPeerActions";
+import { createDesktopShellTaskActions } from "./desktopShellTaskActions";
 import type {
-  AgentConfigSaveRequest,
-  BackendSaveRequest,
-  BehaviorSaveRequest,
   DesktopClientSnapshot,
   DesktopSessionSnapshot,
-  EventTriggerSaveRequest,
-  InferenceProfileSaveRequest,
   P2PHealth,
-  PeerAddRequest,
-  ScheduleRunRequest,
-  ScheduleSaveRequest,
-  TaskRunRequest,
-  TaskRunResult,
-  TaskSaveRequest,
-  ToolSelectionSaveRequest,
-  ToolServiceSaveRequest,
-  ToolServiceTestRequest,
-  ToolServiceTestResult,
 } from "../lib/types";
 
 export { setDesktopShellTimingConfigForTests };
@@ -385,332 +357,73 @@ export function useDesktopShell() {
     }
   }
 
-  async function onAddPeer(request: PeerAddRequest) {
-    setAddingPeer(true);
-    setError(null);
-    try {
-      if (!snapshot?.client) {
-        setStarting(true);
-        const started = await startDesktopClient();
-        setSnapshot(started);
-      }
-      const next = await addPeer(request);
-      setSnapshot(next);
-      setSelectedAgentDid(request.agentDid);
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setStarting(false);
-      setAddingPeer(false);
-    }
-  }
-
-  async function onFetchPeerStatus(serverAddress: string) {
-    setError(null);
-    try {
-      return await fetchPeerStatus(serverAddress);
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    }
-  }
-
-  async function onRepairP2P() {
-    setRepairingP2P(true);
-    setError(null);
-    try {
-      const next = await repairP2P();
-      setSnapshot(next);
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setRepairingP2P(false);
-    }
-  }
-
-  async function onSendMessage(event: FormEvent) {
-    event.preventDefault();
-    if (!selectedDeployment || !draft.trim()) {
-      return;
-    }
-
-    if (shellProjection.sendStatus.kind !== "ready") {
-      setError(shellProjection.sendStatus.hint);
-      return;
-    }
-
-    setLocalWorkflow({
-      kind: "submittingRequest",
-      agentDid: selectedDeployment.agentDid,
-      sessionId: selectedSessionId,
+  const { onAddPeer, onFetchPeerStatus, onRepairP2P } =
+    createDesktopShellPeerActions({
+      snapshot,
+      setAddingPeer,
+      setError,
+      setRepairingP2P,
+      setSelectedAgentDid,
+      setSnapshot,
+      setStarting,
     });
-    setSending(true);
-    setError(null);
-    try {
-      const result = await sendChatMessage({
-        agentDid: selectedDeployment.agentDid,
-        behaviorId: selectedBehaviorId,
-        sessionId: selectedSessionId,
-        content: draft,
-      });
-      setDraft("");
-      newConversationAgentRef.current = null;
-      setSelectedSessionId(result.sessionId);
-      setLocalWorkflow({
-        kind: "awaitingObservation",
-        sessionId: result.sessionId,
-        requestId: result.requestId,
-      });
-      await refreshSnapshot();
-      await refreshSession(result.sessionId);
-    } catch (err) {
-      setLocalWorkflow({ kind: "ready" });
-      setError(String(err));
-    } finally {
-      setSending(false);
-    }
-  }
 
-  async function onRenameConversationTitle(sessionId: string, title: string) {
-    setError(null);
-    try {
-      await renameConversation({ sessionId, title });
-      await refreshSnapshot();
-      await refreshSession(sessionId);
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    }
-  }
+  const {
+    onSaveAgentConfig,
+    onSaveBackendConfig,
+    onSaveBehaviorConfig,
+    onSaveInferenceProfileConfig,
+    onSaveToolSelectionConfig,
+    onSaveToolServiceConfig,
+    onTestToolService,
+  } = createDesktopShellConfigActions({
+    setError,
+    setSavingBehaviorConfig,
+    setSavingConfig,
+    setSelectedAgentDid,
+    setSelectedBehaviorId,
+    setSnapshot,
+    });
 
-  function onSelectSession(sessionId: string) {
-    const conversation = selectedDeployment?.conversations.find(
-      (conversation) => conversation.sessionId === sessionId,
-    );
-    if (conversation?.behaviorId) {
-      setSelectedBehaviorId(conversation.behaviorId);
-    }
-    newConversationAgentRef.current = null;
-    if (session?.sessionId !== sessionId) {
-      setSession(null);
-    }
-    setSelectedSessionId(sessionId);
-  }
+  const {
+    onRenameConversationTitle,
+    onSelectSession,
+    onSendMessage,
+    onStartNewConversation,
+  } = createDesktopShellChatActions({
+    draft,
+    newConversationAgentRef,
+    refreshSession,
+    refreshSnapshot,
+    selectedBehaviorId,
+    selectedDeployment,
+    selectedSessionId,
+    session,
+    setDraft,
+    setError,
+    setLocalWorkflow,
+    setSelectedBehaviorId,
+    setSelectedSessionId,
+    setSending,
+    setSession,
+    shellProjection,
+  });
 
-  function onStartNewConversation(behaviorId?: string | null) {
-    if (!selectedDeployment) {
-      return;
-    }
-    if (
-      behaviorId &&
-      selectedDeployment.behaviors.some((behavior) => behavior.behaviorId === behaviorId)
-    ) {
-      setSelectedBehaviorId(behaviorId);
-    }
-    newConversationAgentRef.current = selectedDeployment.agentDid;
-    setSelectedSessionId(null);
-    setSession(null);
-    setLocalWorkflow({ kind: "ready" });
-    setError(null);
-  }
-
-  async function onSaveAgentConfig(request: AgentConfigSaveRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await saveAgentConfig(request);
-      setSnapshot(next);
-      setSelectedAgentDid(request.agentDid);
-      setSelectedBehaviorId(request.defaultBehaviorId);
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onSaveBehaviorConfig(request: BehaviorSaveRequest) {
-    setSavingBehaviorConfig(true);
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await saveBehaviorConfig(request);
-      setSnapshot(next);
-      setSelectedAgentDid(request.agentDid);
-      setSelectedBehaviorId(request.behaviorId);
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingBehaviorConfig(false);
-      setSavingConfig(false);
-    }
-  }
-
-  async function onSaveBackendConfig(request: BackendSaveRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await saveBackendConfig(request);
-      setSnapshot(next);
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onSaveInferenceProfileConfig(
-    request: InferenceProfileSaveRequest,
-  ) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await saveInferenceProfileConfig(request);
-      setSnapshot(next);
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onSaveToolSelectionConfig(request: ToolSelectionSaveRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await saveToolSelectionConfig(request);
-      setSnapshot(next);
-      setSelectedAgentDid(request.agentDid);
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onSaveToolServiceConfig(request: ToolServiceSaveRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await saveToolServiceConfig(request);
-      setSnapshot(next);
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onTestToolService(
-    request: ToolServiceTestRequest,
-  ): Promise<ToolServiceTestResult> {
-    setError(null);
-    try {
-      return await testToolService(request);
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    }
-  }
-
-  async function onSaveTaskConfig(request: TaskSaveRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await saveTaskConfig(request);
-      setSnapshot(next);
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onSaveScheduleConfig(request: ScheduleSaveRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await saveScheduleConfig(request);
-      setSnapshot(next);
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onRunSchedule(request: ScheduleRunRequest): Promise<TaskRunResult> {
-    setRunningTask(true);
-    setError(null);
-    try {
-      const result = await runSchedule(request);
-      await refreshSnapshot();
-      if (result.sessionId) {
-        setSelectedSessionId(result.sessionId);
-        await refreshSession(result.sessionId);
-      }
-      return result;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setRunningTask(false);
-    }
-  }
-
-  async function onSaveEventTriggerConfig(request: EventTriggerSaveRequest) {
-    setSavingConfig(true);
-    setError(null);
-    try {
-      const next = await saveEventTriggerConfig(request);
-      setSnapshot(next);
-      return next;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
-  async function onRunTask(request: TaskRunRequest): Promise<TaskRunResult> {
-    setRunningTask(true);
-    setError(null);
-    try {
-      const result = await runTask(request);
-      await refreshSnapshot();
-      if (result.sessionId) {
-        setSelectedSessionId(result.sessionId);
-        await refreshSession(result.sessionId);
-      }
-      return result;
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      setRunningTask(false);
-    }
-  }
+  const {
+    onRunSchedule,
+    onRunTask,
+    onSaveEventTriggerConfig,
+    onSaveScheduleConfig,
+    onSaveTaskConfig,
+  } = createDesktopShellTaskActions({
+    refreshSession,
+    refreshSnapshot,
+    setError,
+    setRunningTask,
+    setSavingConfig,
+    setSelectedSessionId,
+    setSnapshot,
+  });
 
   return {
     snapshot,

@@ -90,12 +90,17 @@ fn read_stored_init_config(agent_home: &std::path::Path) -> Option<StoredInitCon
     serde_json::from_slice(&bytes).ok()
 }
 
+#[path = "snapshot/runtime_tasks.rs"]
+mod runtime_tasks;
+#[cfg(test)]
+use runtime_tasks::{
+    conversation_task_tag, retain_latest_conversation_summaries, task_run_history,
+};
+use runtime_tasks::{request_matches_agent, source_matches_agent};
+
 #[path = "snapshot/runtime.rs"]
 mod runtime;
 pub(crate) use runtime::build_runtime_snapshot;
-#[cfg(test)]
-use runtime::{conversation_task_tag, retain_latest_conversation_summaries, task_run_history};
-use runtime::{request_matches_agent, source_matches_agent};
 
 #[path = "snapshot/session.rs"]
 mod session;

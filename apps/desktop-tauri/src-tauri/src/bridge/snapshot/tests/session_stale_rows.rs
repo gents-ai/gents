@@ -1,0 +1,298 @@
+use super::*;
+
+#[test]
+fn session_snapshot_hides_live_overlay_once_turn_is_terminal_even_if_response_is_stale() {
+    let store = ClientStore::from_rows(ClientStoreRows {
+        conversations: vec![AgentConversationRow {
+            session_id: "session-1".to_string(),
+            agent_name: Some("Amy".to_string()),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            title: Some("conversation".to_string()),
+            title_source: Some("generated".to_string()),
+            preview_text: Some("turn one".to_string()),
+            status: Some("completed".to_string()),
+            created_at: Some("2026-04-21T12:00:00Z".to_string()),
+            updated_at: Some("2026-04-21T12:02:00Z".to_string()),
+            latest_request_id: Some("req-1".to_string()),
+        }],
+        requests: vec![AgentRequestRow {
+            request_id: "req-1".to_string(),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            session_id: Some("session-1".to_string()),
+            retry_parent_request: None,
+            retry_root_request: None,
+            superseded_by_request: None,
+            content: Some("turn one".to_string()),
+            status: Some("completed".to_string()),
+            lifecycle_state: Some("completed".to_string()),
+            backend_id: None,
+            execution_origin: Some("interactive".to_string()),
+            failure_reason: None,
+            created_at: Some("2026-04-21T12:00:00Z".to_string()),
+            claimed_at: None,
+            deadline: None,
+            retry_count: Some(0),
+            max_retries: Some(3),
+            caused_by_trigger_id: None,
+            caused_by_trigger_kind: None,
+            interrupt_requested_at: None,
+            valid_until: None,
+        }],
+        messages: vec![
+            AgentMessageRow {
+                message_key: "msg-1".to_string(),
+                session_id: Some("session-1".to_string()),
+                sequence: Some(1),
+                role: Some("user".to_string()),
+                content: Some(user_message_json("turn one")),
+                timestamp: Some("2026-04-21T12:00:00Z".to_string()),
+            },
+            AgentMessageRow {
+                message_key: "msg-2".to_string(),
+                session_id: Some("session-1".to_string()),
+                sequence: Some(2),
+                role: Some("assistant".to_string()),
+                content: Some(
+                    serde_json::to_string(&Message::assistant("final answer"))
+                        .expect("serialize assistant"),
+                ),
+                timestamp: Some("2026-04-21T12:00:01Z".to_string()),
+            },
+        ],
+        responses: vec![AgentResponseRow {
+            response_key: "resp-1".to_string(),
+            request_id: Some("req-1".to_string()),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            session_id: Some("session-1".to_string()),
+            content: Some("final answer".to_string()),
+            reasoning: None,
+            status: Some("streaming".to_string()),
+            error_message: None,
+            token_count: Some(12),
+            progress_seq: Some(1),
+            materialized_message_sequence: None,
+            materialized_at: None,
+            created_at: Some("2026-04-21T12:00:01Z".to_string()),
+            completed_at: None,
+            interrupted_at: None,
+        }],
+        ..ClientStoreRows::default()
+    });
+
+    let snapshot = build_session_snapshot_from_store(&store, "session-1", Some("req-1"))
+        .expect("session snapshot");
+    assert_eq!(snapshot.turn_state.as_deref(), Some("completed"));
+    assert!(snapshot.active_response_overlay.is_none());
+    assert!(!snapshot
+        .timeline_items
+        .iter()
+        .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })));
+}
+
+#[test]
+fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_rows() {
+    let store = ClientStore::from_rows(ClientStoreRows {
+        conversations: vec![AgentConversationRow {
+            session_id: "session-1".to_string(),
+            agent_name: Some("Amy".to_string()),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            title: Some("conversation".to_string()),
+            title_source: Some("generated".to_string()),
+            preview_text: Some("turn three".to_string()),
+            status: Some("active".to_string()),
+            created_at: Some("2026-04-21T12:00:00Z".to_string()),
+            updated_at: Some("2026-04-21T12:03:00Z".to_string()),
+            latest_request_id: Some("req-2".to_string()),
+        }],
+        requests: vec![
+            AgentRequestRow {
+                request_id: "req-1".to_string(),
+                agent_did: Some("did:defra:amy".to_string()),
+                behavior_id: Some("amy-default".to_string()),
+                session_id: Some("session-1".to_string()),
+                retry_parent_request: None,
+                retry_root_request: None,
+                superseded_by_request: None,
+                content: Some("turn one".to_string()),
+                status: Some("completed".to_string()),
+                lifecycle_state: Some("completed".to_string()),
+                backend_id: None,
+                execution_origin: Some("interactive".to_string()),
+                failure_reason: None,
+                created_at: Some("2026-04-21T12:00:00Z".to_string()),
+                claimed_at: None,
+                deadline: None,
+                retry_count: Some(0),
+                max_retries: Some(3),
+                caused_by_trigger_id: None,
+                caused_by_trigger_kind: None,
+                interrupt_requested_at: None,
+                valid_until: None,
+            },
+            AgentRequestRow {
+                request_id: "req-2".to_string(),
+                agent_did: Some("did:defra:amy".to_string()),
+                behavior_id: Some("amy-default".to_string()),
+                session_id: Some("session-1".to_string()),
+                retry_parent_request: None,
+                retry_root_request: None,
+                superseded_by_request: None,
+                content: Some("turn two".to_string()),
+                status: Some("completed".to_string()),
+                lifecycle_state: Some("completed".to_string()),
+                backend_id: None,
+                execution_origin: Some("interactive".to_string()),
+                failure_reason: None,
+                created_at: Some("2026-04-21T12:01:00Z".to_string()),
+                claimed_at: None,
+                deadline: None,
+                retry_count: Some(0),
+                max_retries: Some(3),
+                caused_by_trigger_id: None,
+                caused_by_trigger_kind: None,
+                interrupt_requested_at: None,
+                valid_until: None,
+            },
+            AgentRequestRow {
+                request_id: "req-3".to_string(),
+                agent_did: Some("did:defra:amy".to_string()),
+                behavior_id: Some("amy-default".to_string()),
+                session_id: Some("session-1".to_string()),
+                retry_parent_request: None,
+                retry_root_request: None,
+                superseded_by_request: None,
+                content: Some("turn three".to_string()),
+                status: Some("processing".to_string()),
+                lifecycle_state: Some("processing".to_string()),
+                backend_id: None,
+                execution_origin: Some("interactive".to_string()),
+                failure_reason: None,
+                created_at: Some("2026-04-21T12:02:00Z".to_string()),
+                claimed_at: None,
+                deadline: None,
+                retry_count: Some(0),
+                max_retries: Some(3),
+                caused_by_trigger_id: None,
+                caused_by_trigger_kind: None,
+                interrupt_requested_at: None,
+                valid_until: None,
+            },
+        ],
+        responses: vec![
+            AgentResponseRow {
+                response_key: "resp-1".to_string(),
+                request_id: Some("req-1".to_string()),
+                agent_did: Some("did:defra:amy".to_string()),
+                behavior_id: Some("amy-default".to_string()),
+                session_id: Some("session-1".to_string()),
+                content: Some("answer one".to_string()),
+                reasoning: None,
+                status: Some("complete".to_string()),
+                error_message: None,
+                token_count: Some(10),
+                progress_seq: Some(1),
+                materialized_message_sequence: Some(2),
+                materialized_at: Some("2026-04-21T12:00:05Z".to_string()),
+                created_at: Some("2026-04-21T12:00:01Z".to_string()),
+                completed_at: Some("2026-04-21T12:00:05Z".to_string()),
+            interrupted_at: None,
+            },
+            AgentResponseRow {
+                response_key: "resp-2".to_string(),
+                request_id: Some("req-2".to_string()),
+                agent_did: Some("did:defra:amy".to_string()),
+                behavior_id: Some("amy-default".to_string()),
+                session_id: Some("session-1".to_string()),
+                content: Some("answer two".to_string()),
+                reasoning: None,
+                status: Some("complete".to_string()),
+                error_message: None,
+                token_count: Some(10),
+                progress_seq: Some(1),
+                materialized_message_sequence: Some(4),
+                materialized_at: Some("2026-04-21T12:01:05Z".to_string()),
+                created_at: Some("2026-04-21T12:01:01Z".to_string()),
+                completed_at: Some("2026-04-21T12:01:05Z".to_string()),
+            interrupted_at: None,
+            },
+            AgentResponseRow {
+                response_key: "resp-3".to_string(),
+                request_id: Some("req-3".to_string()),
+                agent_did: Some("did:defra:amy".to_string()),
+                behavior_id: Some("amy-default".to_string()),
+                session_id: Some("session-1".to_string()),
+                content: Some("answer three in progress".to_string()),
+                reasoning: None,
+                status: Some("streaming".to_string()),
+                error_message: None,
+                token_count: Some(10),
+                progress_seq: Some(1),
+                materialized_message_sequence: None,
+                materialized_at: None,
+                created_at: Some("2026-04-21T12:02:01Z".to_string()),
+                completed_at: None,
+            interrupted_at: None,
+            },
+        ],
+        messages: vec![
+            AgentMessageRow {
+                message_key: "msg-1".to_string(),
+                session_id: Some("session-1".to_string()),
+                sequence: Some(1),
+                role: Some("user".to_string()),
+                content: Some(user_message_json("turn one")),
+                timestamp: Some("2026-04-21T12:00:00Z".to_string()),
+            },
+            AgentMessageRow {
+                message_key: "msg-2".to_string(),
+                session_id: Some("session-1".to_string()),
+                sequence: Some(2),
+                role: Some("assistant".to_string()),
+                content: Some("{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"answer one\"}]}".to_string()),
+                timestamp: Some("2026-04-21T12:00:05Z".to_string()),
+            },
+            AgentMessageRow {
+                message_key: "msg-3".to_string(),
+                session_id: Some("session-1".to_string()),
+                sequence: Some(3),
+                role: Some("user".to_string()),
+                content: Some(user_message_json("turn two")),
+                timestamp: Some("2026-04-21T12:01:00Z".to_string()),
+            },
+            AgentMessageRow {
+                message_key: "msg-4".to_string(),
+                session_id: Some("session-1".to_string()),
+                sequence: Some(4),
+                role: Some("assistant".to_string()),
+                content: Some("{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"answer two\"}]}".to_string()),
+                timestamp: Some("2026-04-21T12:01:05Z".to_string()),
+            },
+        ],
+        ..ClientStoreRows::default()
+    });
+
+    let snapshot = build_session_snapshot_from_store(&store, "session-1", Some("req-3"))
+        .expect("session snapshot");
+
+    assert_eq!(snapshot.latest_request_id.as_deref(), Some("req-3"));
+    assert_eq!(snapshot.turn_state.as_deref(), Some("streaming"));
+    assert_eq!(snapshot.messages.len(), 4);
+    assert_eq!(
+        snapshot
+            .pending_turn
+            .as_ref()
+            .map(|turn| turn.request_id.as_str()),
+        Some("req-3")
+    );
+    assert_eq!(
+        snapshot
+            .active_response_overlay
+            .as_ref()
+            .and_then(|response| response.content.as_deref()),
+        Some("answer three in progress")
+    );
+}

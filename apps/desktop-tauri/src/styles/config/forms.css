@@ -1,0 +1,162 @@
+@layer config {
+  .config-icon-button {
+    width: 28px;
+    height: 28px;
+    min-height: 28px;
+    display: inline-grid;
+    place-items: center;
+    padding: 0;
+    border-radius: 0;
+  }
+
+  .config-icon-button svg {
+    width: 14px;
+    height: 14px;
+    display: block;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 2;
+  }
+  .config-textarea,
+  .config-small-textarea {
+    resize: vertical;
+    border: 1px solid var(--border-default);
+    background: var(--color-surface-strong);
+    color: var(--color-text);
+    padding: var(--space-4) var(--space-5);
+    border-radius: var(--radius-sm);
+  }
+
+  .config-textarea {
+    min-height: 220px;
+  }
+
+  .config-small-textarea {
+    min-height: 96px;
+  }
+
+  .config-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-3);
+    padding-top: var(--space-2);
+  }
+
+  .config-runner {
+    display: grid;
+    gap: var(--space-5);
+    border-top: 1px solid var(--border-subtle);
+    padding-top: var(--space-6);
+  }
+
+  .linked-doc-list {
+    display: grid;
+    gap: var(--space-3);
+    min-height: 96px;
+    padding: var(--space-4) var(--space-5);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-strong);
+  }
+
+  .config-result {
+    display: grid;
+    gap: var(--space-4);
+    padding: var(--space-5);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-strong);
+  }
+
+  .config-result-error {
+    border-color: rgb(255 111 95 / 0.34);
+    color: var(--color-error);
+  }
+
+  .run-history {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .run-history-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 0.8fr);
+    gap: var(--space-4);
+    align-items: start;
+    min-width: 0;
+    padding: var(--space-3) 0;
+    border-top: 1px solid rgb(var(--source-green-rgb) / 0.12);
+  }
+
+  .run-history-row > * {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .config-workspace .field {
+    gap: var(--space-2);
+  }
+
+  .config-workspace .field > span,
+  .config-workspace .facts dt {
+    color: var(--color-text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .config-workspace .field > input,
+  .config-workspace .field > select,
+  .config-workspace .field > textarea {
+    min-height: 40px;
+    border-radius: var(--radius-sm);
+    padding: var(--space-4) var(--space-5);
+  }
+
+  .config-workspace .field > input[readonly] {
+    border-color: var(--border-subtle);
+    background: rgb(0 0 0 / 0.48);
+    color: var(--color-text-muted);
+    cursor: default;
+  }
+
+  .config-workspace .field > input:focus,
+  .config-workspace .field > select:focus,
+  .config-workspace .field > textarea:focus,
+  .config-textarea:focus,
+  .config-small-textarea:focus {
+    outline: 2px solid rgb(var(--source-green-rgb) / 0.28);
+    outline-offset: 1px;
+    border-color: var(--border-selected);
+  }
+
+  .config-workspace .checkbox {
+    min-height: 40px;
+    padding: var(--space-4) var(--space-5);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-strong);
+  }
+
+  .config-workspace .checkbox input {
+    accent-color: var(--color-accent);
+  }
+
+  .config-workspace .facts {
+    padding: var(--space-5);
+    border: 1px solid var(--border-subtle);
+    background: var(--color-surface-strong);
+  }
+
+  .config-workspace .facts dd {
+    font-size: 13px;
+  }
+
+  .config-workspace .grid-2,
+  .config-workspace .grid-3 {
+    gap: var(--space-5);
+  }
+}

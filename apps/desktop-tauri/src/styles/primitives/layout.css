@@ -1,0 +1,113 @@
+@layer primitives {
+  .panel {
+    border: 1px solid var(--border-default);
+    background: var(--color-surface);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.04),
+      0 18px 60px rgb(0 0 0 / 0.22);
+    padding: var(--space-7);
+  }
+
+  .composer-footer,
+  .composer-toolbar,
+  .panel-header,
+  .tool-card-title,
+  .chat-status {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-5);
+  }
+
+  .panel-header > div,
+  .chat-title-block {
+    min-width: 0;
+  }
+
+  .list,
+  .message-list,
+  .stack {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .list {
+    align-content: start;
+    min-height: 0;
+    overflow: auto;
+  }
+
+  .list-item {
+    width: 100%;
+    text-align: left;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-subtle);
+    background: rgb(0 0 0 / 0.58);
+    padding: var(--space-5) var(--space-6);
+    display: grid;
+    gap: var(--space-1);
+    color: inherit;
+    overflow: hidden;
+  }
+
+  .list-item.selected {
+    border-color: var(--border-selected);
+    background: rgb(var(--source-green-rgb) / 0.12);
+  }
+
+  .list-item-title {
+    font-weight: 600;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-height: 1.25;
+  }
+
+  .list-item-meta {
+    color: var(--color-text-warm);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .list-item-subtle,
+  .muted {
+    color: var(--color-text-muted);
+  }
+
+  .list-item-title,
+  .list-item-subtle {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .list-item-subtle {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .message-card,
+  .tool-card,
+  .callout,
+  .centered-panel {
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-subtle);
+    background: rgb(0 0 0 / 0.58);
+  }
+
+  .callout,
+  .message-card,
+  .tool-card {
+    padding: var(--space-6);
+  }
+
+  .centered-panel,
+  .empty-transcript {
+    min-height: 260px;
+    display: grid;
+    gap: var(--space-4);
+    place-content: center;
+    text-align: center;
+  }
+}

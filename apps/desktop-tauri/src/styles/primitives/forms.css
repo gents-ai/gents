@@ -1,0 +1,29 @@
+@layer primitives {
+  .field {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .field > span {
+    color: var(--color-text-soft);
+    font-size: 14px;
+  }
+
+  .field > input,
+  .field > select,
+  .field > textarea {
+    border: 1px solid var(--border-default);
+    background: var(--color-surface-strong);
+    color: var(--color-text);
+    padding: var(--space-5) var(--space-6);
+    border-radius: var(--radius-md);
+    min-width: 0;
+  }
+
+  .checkbox {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    color: var(--color-text-soft);
+  }
+}

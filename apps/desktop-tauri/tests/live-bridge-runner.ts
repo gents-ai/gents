@@ -14,294 +14,40 @@ import type {
   TauriDriverBridge,
   TauriDriverChatRequest,
 } from "./tauri-driver";
+import {
+  isTerminalTurnState,
+  observeRemoteAheadDesktopLag,
+  observeRemoteTerminalDesktopStall,
+  requestProgressSignature,
+} from "./live-bridge-runner/observations";
+import {
+  appendRunnerArg,
+  normalizePeerStatusUrl,
+  waitForReadyMessage,
+} from "./live-bridge-runner/process";
+import type {
+  LiveBridgeRunnerOptions,
+  RequestDiagnosticsBundle,
+  VersionResponse,
+} from "./live-bridge-runner/types";
 
-type RunnerReadyMessage = {
-  kind: "ready";
-  baseUrl: string;
-  deploymentLabel: string;
-  agentDid: string;
-  toolRoot: string;
-};
-
-type VersionResponse = {
-  version: number;
-};
-
-type ToolCallDiagnostics = {
-  total: number;
-  completed: number;
-  pending: number;
-  latestToolName?: string | null;
-  latestStatus?: string | null;
-  latestCompletedAt?: string | null;
-};
-
-export type RequestDiagnostics = {
-  source: string;
-  sessionId: string;
-  requestId: string;
-  turnState?: string | null;
-  latestRequestId?: string | null;
-  conversationUpdatedAt?: string | null;
-  request?: {
-    status?: string | null;
-    lifecycleState?: string | null;
-    failureReason?: string | null;
-    createdAt?: string | null;
-    claimedAt?: string | null;
-    interruptRequestedAt?: string | null;
-    validUntil?: string | null;
-  } | null;
-  response?: {
-    status?: string | null;
-    errorMessage?: string | null;
-    progressSeq?: number | null;
-    materializedMessageSequence?: number | null;
-    materializedAt?: string | null;
-    completedAt?: string | null;
-    contentLen: number;
-    reasoningLen: number;
-  } | null;
-  toolCalls: ToolCallDiagnostics;
-  toolResultCount: number;
-  messageCount: number;
-  timelineCount: number;
-  activeResponseOverlayContentLen: number;
-  activeResponseOverlayReasoningLen: number;
-};
-
-export type RequestDiagnosticsBundle = {
-  desktop: RequestDiagnostics;
-  remote: RequestDiagnostics;
-};
-
-export type RemoteTerminalDesktopStallObservation = {
-  startedAt: number | null;
-  stallMs: number | null;
-  exceededThreshold: boolean;
-};
-
-export type RemoteAheadDesktopLagObservation = {
-  startedAt: number | null;
-  lagMs: number | null;
-  exceededThreshold: boolean;
-};
-
-type LiveBridgeRunnerOptions = {
-  inferenceUrl?: string | null;
-  modelName?: string | null;
-  provider?: string | null;
-  apiKey?: string | null;
-  apiKeyEnvVar?: string | null;
-};
+export {
+  observeRemoteAheadDesktopLag,
+  observeRemoteTerminalDesktopStall,
+} from "./live-bridge-runner/observations";
+export type {
+  LiveBridgeRunnerOptions,
+  RemoteAheadDesktopLagObservation,
+  RemoteTerminalDesktopStallObservation,
+  RequestDiagnostics,
+  RequestDiagnosticsBundle,
+} from "./live-bridge-runner/types";
 
 const RUNNER_START_TIMEOUT_MS = 120_000;
 const REQUEST_TIMEOUT_MS = 600_000;
 const HTTP_REQUEST_TIMEOUT_MS = 15_000;
 const VERSION_POLL_MS = 250;
-const REMOTE_TERMINAL_DESKTOP_STALL_MS = 30_000;
-const REMOTE_AHEAD_DESKTOP_LAG_MS = 30_000;
 const REPO_ROOT = resolve(process.cwd(), "../..");
-
-function isTerminalTurnState(value?: string | null) {
-  return (
-    value === "completed" ||
-    value === "failed" ||
-    value === "superseded" ||
-    value === "interrupted"
-  );
-}
-
-export function observeRemoteTerminalDesktopStall({
-  diagnostics,
-  previousStartedAt,
-  now,
-  thresholdMs = REMOTE_TERMINAL_DESKTOP_STALL_MS,
-}: {
-  diagnostics: RequestDiagnosticsBundle;
-  previousStartedAt: number | null;
-  now: number;
-  thresholdMs?: number;
-}): RemoteTerminalDesktopStallObservation {
-  if (
-    !isTerminalTurnState(diagnostics.remote.turnState) ||
-    isTerminalTurnState(diagnostics.desktop.turnState)
-  ) {
-    return {
-      startedAt: null,
-      stallMs: null,
-      exceededThreshold: false,
-    };
-  }
-
-  const startedAt = previousStartedAt ?? now;
-  const stallMs = now - startedAt;
-  return {
-    startedAt,
-    stallMs,
-    exceededThreshold:
-      previousStartedAt !== null && stallMs >= thresholdMs,
-  };
-}
-
-function progressNumber(value?: number | null) {
-  return value ?? 0;
-}
-
-function requestProgressSignature(diagnostics: RequestDiagnostics) {
-  return JSON.stringify({
-    turnState: diagnostics.turnState ?? null,
-    latestRequestId: diagnostics.latestRequestId ?? null,
-    requestStatus: diagnostics.request?.status ?? null,
-    requestLifecycleState: diagnostics.request?.lifecycleState ?? null,
-    responseStatus: diagnostics.response?.status ?? null,
-    responseProgressSeq: progressNumber(diagnostics.response?.progressSeq),
-    materializedMessageSequence: progressNumber(
-      diagnostics.response?.materializedMessageSequence,
-    ),
-    responseContentLen: progressNumber(diagnostics.response?.contentLen),
-    responseReasoningLen: progressNumber(diagnostics.response?.reasoningLen),
-    toolCallsCompleted: diagnostics.toolCalls.completed,
-    toolCallsPending: diagnostics.toolCalls.pending,
-    toolResultCount: diagnostics.toolResultCount,
-    messageCount: diagnostics.messageCount,
-    timelineCount: diagnostics.timelineCount,
-    activeResponseOverlayContentLen: diagnostics.activeResponseOverlayContentLen,
-    activeResponseOverlayReasoningLen: diagnostics.activeResponseOverlayReasoningLen,
-  });
-}
-
-function isRemoteAheadOfDesktop(diagnostics: RequestDiagnosticsBundle) {
-  return (
-    progressNumber(diagnostics.remote.response?.progressSeq) >
-      progressNumber(diagnostics.desktop.response?.progressSeq) ||
-    progressNumber(diagnostics.remote.response?.materializedMessageSequence) >
-      progressNumber(diagnostics.desktop.response?.materializedMessageSequence) ||
-    progressNumber(diagnostics.remote.response?.contentLen) >
-      progressNumber(diagnostics.desktop.response?.contentLen) ||
-    diagnostics.remote.toolCalls.completed > diagnostics.desktop.toolCalls.completed ||
-    diagnostics.remote.toolResultCount > diagnostics.desktop.toolResultCount ||
-    diagnostics.remote.messageCount > diagnostics.desktop.messageCount ||
-    diagnostics.remote.timelineCount > diagnostics.desktop.timelineCount ||
-    diagnostics.remote.activeResponseOverlayContentLen >
-      diagnostics.desktop.activeResponseOverlayContentLen
-  );
-}
-
-export function observeRemoteAheadDesktopLag({
-  diagnostics,
-  desktopProgressed,
-  previousStartedAt,
-  now,
-  thresholdMs = REMOTE_AHEAD_DESKTOP_LAG_MS,
-}: {
-  diagnostics: RequestDiagnosticsBundle;
-  desktopProgressed: boolean;
-  previousStartedAt: number | null;
-  now: number;
-  thresholdMs?: number;
-}): RemoteAheadDesktopLagObservation {
-  if (
-    desktopProgressed ||
-    isTerminalTurnState(diagnostics.desktop.turnState) ||
-    !isRemoteAheadOfDesktop(diagnostics)
-  ) {
-    return {
-      startedAt: null,
-      lagMs: null,
-      exceededThreshold: false,
-    };
-  }
-
-  const startedAt = previousStartedAt ?? now;
-  const lagMs = now - startedAt;
-  return {
-    startedAt,
-    lagMs,
-    exceededThreshold:
-      previousStartedAt !== null && lagMs >= thresholdMs,
-  };
-}
-
-async function waitForReadyMessage(
-  process: ChildProcessWithoutNullStreams,
-  timeoutMs: number,
-) {
-  let stdoutBuffer = "";
-  let stdout = "";
-  let stderr = "";
-
-  return await new Promise<{
-    message: RunnerReadyMessage;
-    stdout: string;
-    stderr: string;
-  }>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(
-        new Error(
-          `bridge runner did not become ready within ${timeoutMs}ms\nstdout:\n${stdout}\nstderr:\n${stderr}`,
-        ),
-      );
-    }, timeoutMs);
-
-    const tryResolveLine = (line: string) => {
-      if (!line) {
-        return;
-      }
-      stdout += `${line}\n`;
-      try {
-        const message = JSON.parse(line) as Partial<RunnerReadyMessage>;
-        if (message.kind !== "ready") {
-          return;
-        }
-        cleanup();
-        resolve({
-          message: message as RunnerReadyMessage,
-          stdout,
-          stderr,
-        });
-      } catch {
-        // The Rust side can emit tracing/log lines before the ready JSON.
-      }
-    };
-
-    const onStdout = (chunk: Buffer) => {
-      stdoutBuffer += chunk.toString();
-      let newlineIndex = stdoutBuffer.indexOf("\n");
-      while (newlineIndex !== -1) {
-        const line = stdoutBuffer.slice(0, newlineIndex).trim();
-        stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
-        tryResolveLine(line);
-        newlineIndex = stdoutBuffer.indexOf("\n");
-      }
-    };
-
-    const onStderr = (chunk: Buffer) => {
-      stderr += chunk.toString();
-    };
-
-    const onExit = (code: number | null) => {
-      cleanup();
-      reject(
-        new Error(
-          `bridge runner exited before ready (code=${code ?? "null"})\nstdout:\n${stdout}${stdoutBuffer}\nstderr:\n${stderr}`,
-        ),
-      );
-    };
-
-    const cleanup = () => {
-      clearTimeout(timeout);
-      process.stdout.off("data", onStdout);
-      process.stderr.off("data", onStderr);
-      process.off("exit", onExit);
-    };
-
-    process.stdout.on("data", onStdout);
-    process.stderr.on("data", onStderr);
-    process.on("exit", onExit);
-  });
-}
 
 export class LiveBridgeRunner implements TauriDriverBridge {
   readonly sentRequests: TauriDriverChatRequest[] = [];
@@ -722,39 +468,4 @@ export class LiveBridgeRunner implements TauriDriverBridge {
   private logTail(chunks: string[]) {
     return chunks.join("").slice(-4000);
   }
-}
-
-function appendRunnerArg(
-  args: string[],
-  flag: string,
-  value?: string | null,
-) {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return;
-  }
-  args.push(flag, trimmed);
-}
-
-function normalizePeerStatusUrl(serverAddress: string) {
-  const trimmed = serverAddress.trim();
-  const url = new URL(
-    trimmed.startsWith("http://") || trimmed.startsWith("https://")
-      ? trimmed
-      : `http://${trimmed}`,
-  );
-  const path = url.pathname.replace(/\/+$/, "");
-  if (
-    path === "" ||
-    path === "/" ||
-    path === "/api/v0" ||
-    path === "/api/v0/graphql"
-  ) {
-    url.pathname = "/status";
-  } else if (!path.endsWith("/status")) {
-    url.pathname = `${path}/status`;
-  }
-  url.search = "";
-  url.hash = "";
-  return url.toString();
 }

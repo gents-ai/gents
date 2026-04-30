@@ -1,0 +1,53 @@
+@layer config {
+  .config-document-list-body {
+    display: grid;
+    gap: 0;
+    align-content: start;
+    overflow: auto;
+    border: 1px solid var(--border-subtle);
+    background: var(--color-surface-strong);
+  }
+
+  .config-document-list-body .list-item {
+    border: 0;
+    border-bottom: 1px solid var(--border-subtle);
+    border-radius: 0;
+    background: transparent;
+    padding: 11px 10px;
+  }
+
+  .config-document-list-body .list-item:last-of-type {
+    border-bottom: 0;
+  }
+
+  .config-document-list-body .list-item:hover {
+    background: rgb(255 255 255 / 0.035);
+  }
+
+  .config-document-list-body .list-item.selected {
+    border-color: var(--border-subtle);
+    background: rgb(0 0 0 / 0.32);
+    box-shadow:
+      inset 3px 0 0 rgb(var(--source-green-rgb) / 0.72),
+      inset 0 0 0 1px rgb(255 255 255 / 0.035);
+  }
+
+  .config-document-list-body .list-item-meta {
+    color: var(--color-text-muted);
+  }
+
+  .config-document-list-body .list-item.selected .list-item-meta {
+    color: var(--color-text-soft);
+  }
+
+  .config-document-list-body > .muted {
+    padding: var(--space-5);
+  }
+
+  .config-editor {
+    display: grid;
+    gap: var(--space-6);
+    align-content: start;
+    overflow: auto;
+  }
+}

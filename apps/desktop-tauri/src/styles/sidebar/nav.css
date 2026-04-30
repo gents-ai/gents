@@ -1,0 +1,17 @@
+@layer sidebar {
+  .sidebar-wide-button {
+    width: 100%;
+  }
+
+  .sidebar-nav-button {
+    min-height: 44px;
+    justify-content: center;
+    background: var(--color-surface-strong);
+    color: var(--color-text-soft);
+    font-weight: 600;
+  }
+
+  .sidebar-nav-button:hover {
+    background: rgb(var(--source-green-rgb) / 0.08);
+  }
+}

@@ -1,0 +1,169 @@
+@layer config {
+  .config-workspace {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: var(--space-6);
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .config-page {
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .config-workspace-full {
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  .config-header,
+  .config-brand,
+  .config-header-actions {
+    display: flex;
+    align-items: center;
+  }
+
+  .config-header {
+    justify-content: space-between;
+    gap: var(--space-7);
+    min-width: 0;
+  }
+
+  .config-brand {
+    min-width: 0;
+    gap: var(--space-6);
+  }
+
+  .config-brand-logo {
+    width: 40px;
+    height: 48px;
+    flex: 0 0 auto;
+    border: 1px solid rgb(var(--source-green-rgb) / 0.2);
+    border-radius: var(--radius-sm);
+    background: rgb(0 0 0 / 0.58);
+    object-fit: contain;
+    padding: var(--space-2);
+  }
+
+  .config-title-block {
+    min-width: 0;
+  }
+
+  .config-title-block h1 {
+    margin: 0;
+    font-size: 28px;
+    line-height: 1.15;
+  }
+
+  .config-title-block .mono {
+    max-width: min(760px, 58vw);
+    margin-top: var(--space-1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+  }
+
+  .config-header-actions {
+    justify-content: flex-end;
+    gap: var(--space-3);
+    flex: 0 0 auto;
+  }
+
+  .config-status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: var(--radius-pill);
+    box-shadow: 0 0 0 3px rgb(255 255 255 / 0.04);
+  }
+
+  .config-status-dot.green {
+    background: var(--color-success-strong);
+  }
+
+  .config-status-dot.yellow {
+    background: var(--color-warning);
+  }
+
+  .config-screen-nav {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    overflow: auto;
+    min-height: 36px;
+    border: 1px solid var(--border-default);
+    background: var(--color-surface-row);
+  }
+
+  .config-screen-nav .tab-button {
+    height: 34px;
+    flex: 0 0 auto;
+    border-right: 1px solid rgb(var(--source-green-rgb) / 0.12);
+    border-radius: 0;
+    padding: 0 var(--space-5);
+    color: var(--color-text-muted);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .config-screen-nav .tab-button:last-child {
+    border-right: 0;
+  }
+
+  .config-screen-nav .tab-button.selected {
+    background: rgb(var(--source-green-rgb) / 0.14);
+    box-shadow: inset 0 -2px 0 var(--color-accent);
+    color: var(--color-text);
+  }
+
+  .config-layout {
+    display: grid;
+    grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+    gap: var(--space-6);
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .config-single-layout {
+    display: grid;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .config-list,
+  .config-editor {
+    min-height: 0;
+    border-color: var(--border-default);
+    background: var(--color-surface-row);
+    padding: var(--space-6);
+  }
+
+  .config-list {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: var(--space-4);
+    overflow: hidden;
+  }
+
+  .config-workspace .panel-header {
+    align-items: flex-start;
+    padding-bottom: var(--space-4);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .config-workspace .panel-header h3 {
+    font-size: 17px;
+    line-height: 1.2;
+  }
+
+  .config-workspace .panel-header .ghost-button {
+    align-self: start;
+    min-height: 28px;
+    padding: 0 var(--space-4);
+    border-radius: 0;
+    font-size: 12px;
+  }
+
+}

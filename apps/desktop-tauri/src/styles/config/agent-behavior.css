@@ -1,0 +1,141 @@
+@layer config {
+  .agent-config-editor {
+    align-content: start;
+  }
+
+  .agent-config-header > div {
+    min-width: 0;
+  }
+
+  .agent-name-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+
+  .agent-name-row h3 {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 22px;
+    line-height: 1.2;
+  }
+
+  .agent-name-input {
+    width: min(460px, 100%);
+    min-height: 40px;
+    border: 1px solid var(--border-selected);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-strong);
+    color: var(--color-text);
+    padding: var(--space-4) var(--space-5);
+    font-size: 18px;
+    font-weight: 700;
+  }
+
+  .agent-install-facts {
+    width: min(860px, 100%);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .agent-install-facts dd {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .agent-config-actions {
+    justify-content: flex-start;
+  }
+
+  .behavior-config-editor {
+    align-content: start;
+  }
+
+  .behavior-config-header > div {
+    min-width: 0;
+  }
+
+  .behavior-key-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+
+  .behavior-key-row h3 {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 22px;
+    line-height: 1.2;
+  }
+
+  .behavior-key-input {
+    width: min(420px, 100%);
+    min-height: 40px;
+    border: 1px solid var(--border-selected);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-strong);
+    color: var(--color-text);
+    padding: var(--space-4) var(--space-5);
+    font-size: 18px;
+    font-weight: 700;
+  }
+
+  .behavior-link-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-4);
+  }
+
+  .behavior-link-field {
+    gap: var(--space-2);
+  }
+
+  .behavior-link-control {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 40px;
+    gap: var(--space-2);
+    align-items: stretch;
+  }
+
+  .behavior-link-control select {
+    min-width: 0;
+    height: 40px;
+    min-height: 40px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-strong);
+    color: var(--color-text);
+    padding: var(--space-3) var(--space-4);
+    font-size: 12px;
+  }
+
+  .behavior-link-control .config-icon-button {
+    width: 40px;
+    height: 40px;
+    min-height: 40px;
+  }
+
+  .behavior-state-grid {
+    grid-template-columns: repeat(2, minmax(0, 220px));
+  }
+
+  .behavior-compaction-box {
+    display: grid;
+    gap: var(--space-4);
+    width: min(720px, 100%);
+    padding: var(--space-5);
+    border: 1px solid var(--border-default);
+    background: var(--color-surface-strong);
+  }
+
+  .behavior-system-prompt {
+    min-height: 320px;
+  }
+}
