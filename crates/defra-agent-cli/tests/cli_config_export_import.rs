@@ -208,6 +208,8 @@ async fn config_import_round_trips_and_requires_override() -> Result<()> {
     let agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
     let default_behavior_id = "default".to_string();
     let tool_selection_id = format!("{default_behavior_id}-tools");
+    let profile_id_a = format!("{default_behavior_id}-profile-a");
+    let profile_id_b = format!("{default_behavior_id}-profile-b");
     let backend_id = format!("{agent_name}-backend");
     let export_path = tempdir.path().join("agent-config.json");
 
@@ -248,7 +250,28 @@ async fn config_import_round_trips_and_requires_override() -> Result<()> {
             "enabled": true,
             "models": ["mock-model"]
         }],
-        "inference_profiles": [],
+        "inference_profiles": [
+            {
+                "profile_id": profile_id_a,
+                "display_name": "Fast",
+                "context_window": 8192,
+                "max_output_tokens": 1024,
+                "max_turns": 16,
+                "temperature": 0.0,
+                "stream_batch_ms": 40,
+                "deadline_duration_secs": 300
+            },
+            {
+                "profile_id": profile_id_b,
+                "display_name": "Deep",
+                "context_window": 16384,
+                "max_output_tokens": 2048,
+                "max_turns": 32,
+                "temperature": 0.2,
+                "stream_batch_ms": 80,
+                "deadline_duration_secs": 600
+            }
+        ],
         "tool_service_registries": [],
         "tasks": [],
         "schedules": []
@@ -280,6 +303,12 @@ async fn config_import_round_trips_and_requires_override() -> Result<()> {
             .pointer("/counts/agent_behaviors")
             .and_then(Value::as_u64),
         Some(1)
+    );
+    assert_eq!(
+        imported
+            .pointer("/counts/inference_profiles")
+            .and_then(Value::as_u64),
+        Some(2)
     );
 
     // A second import without --override must fail with guidance.
@@ -337,6 +366,8 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
     let service_id = format!("ops-mcp-{}", Uuid::new_v4().simple());
     let task_id = format!("nightly-audit-{}", Uuid::new_v4().simple());
     let schedule_id = format!("{task_id}-hourly");
+    let second_task_id = format!("weekly-audit-{}", Uuid::new_v4().simple());
+    let second_schedule_id = format!("{second_task_id}-daily");
 
     // Set up the source DB via `config apply --root` using simple, safe IDs.
     let (agent_did, behavior_id, _selection_id, _backend_id) = write_simple_manifest_root(
@@ -381,6 +412,22 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         )?;
     }
     {
+        let dir = initial_root.join("tasks").join(&second_task_id);
+        fs::create_dir_all(&dir)?;
+        write_json_file(
+            &dir.join("object.json"),
+            &serde_json::json!({
+                "task_id": second_task_id,
+                "name": "Weekly Audit",
+                "description": null,
+                "behavior_id": behavior_id,
+                "prompt_template": "Summarize weekly infrastructure changes.",
+                "enabled": true,
+                "output_schema_ref": null
+            }),
+        )?;
+    }
+    {
         let dir = initial_root.join("schedules").join(&schedule_id);
         fs::create_dir_all(&dir)?;
         write_json_file(
@@ -391,6 +438,20 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
                 "interval_secs": 3600,
                 "enabled": false,
                 "concurrency": "serial"
+            }),
+        )?;
+    }
+    {
+        let dir = initial_root.join("schedules").join(&second_schedule_id);
+        fs::create_dir_all(&dir)?;
+        write_json_file(
+            &dir.join("object.json"),
+            &serde_json::json!({
+                "schedule_id": second_schedule_id,
+                "task_id": second_task_id,
+                "interval_secs": 86400,
+                "enabled": true,
+                "concurrency": "parallel"
             }),
         )?;
     }
@@ -410,13 +471,13 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
     );
     assert_eq!(
         applied.pointer("/applied/tasks").and_then(Value::as_u64),
-        Some(1)
+        Some(2)
     );
     assert_eq!(
         applied
             .pointer("/applied/schedules")
             .and_then(Value::as_u64),
-        Some(1)
+        Some(2)
     );
 
     // Export the source DB to a new manifest root.
@@ -497,6 +558,17 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         Some(schedule_id.as_str()),
         "expected schedule {schedule_id} in export root"
     );
+    assert_eq!(
+        schedules
+            .iter()
+            .find(|s| {
+                s.get("schedule_id").and_then(Value::as_str) == Some(second_schedule_id.as_str())
+            })
+            .and_then(|s| s.get("schedule_id"))
+            .and_then(Value::as_str),
+        Some(second_schedule_id.as_str()),
+        "expected schedule {second_schedule_id} in export root"
+    );
 
     // Apply the exported root to a fresh target DB and verify convergence.
     let reapplied = run_config_apply(&target_home, &export_root)?;
@@ -513,13 +585,13 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
     );
     assert_eq!(
         reapplied.pointer("/applied/tasks").and_then(Value::as_u64),
-        Some(1)
+        Some(2)
     );
     assert_eq!(
         reapplied
             .pointer("/applied/schedules")
             .and_then(Value::as_u64),
-        Some(1)
+        Some(2)
     );
 
     // Re-export from the target and verify the data survived the apply.
@@ -540,6 +612,15 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         Some(task_id.as_str()),
         "expected task {task_id} in re-exported root"
     );
+    assert_eq!(
+        reexported_tasks
+            .iter()
+            .find(|t| { t.get("task_id").and_then(Value::as_str) == Some(second_task_id.as_str()) })
+            .and_then(|t| t.get("task_id"))
+            .and_then(Value::as_str),
+        Some(second_task_id.as_str()),
+        "expected task {second_task_id} in re-exported root"
+    );
 
     let reexported_schedules = read_per_doc_collection(&reapply_root, "schedules")?;
     assert_eq!(
@@ -550,6 +631,17 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
             .and_then(Value::as_str),
         Some(schedule_id.as_str()),
         "expected schedule {schedule_id} in re-exported root"
+    );
+    assert_eq!(
+        reexported_schedules
+            .iter()
+            .find(|s| {
+                s.get("schedule_id").and_then(Value::as_str) == Some(second_schedule_id.as_str())
+            })
+            .and_then(|s| s.get("schedule_id"))
+            .and_then(Value::as_str),
+        Some(second_schedule_id.as_str()),
+        "expected schedule {second_schedule_id} in re-exported root"
     );
 
     Ok(())
