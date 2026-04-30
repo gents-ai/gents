@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import {
   fetchDesktopSnapshot,
@@ -6,7 +6,6 @@ import {
   shutdownDesktopClient,
   startDesktopClient,
 } from "../lib/desktop-api";
-import { listenToDesktopClientUpdates } from "../lib/desktop-events";
 import {
   projectChatShell,
   type ChatWorkflowState,
@@ -15,12 +14,12 @@ import {
   delay,
   logShellEvent,
   setDesktopShellTimingConfigForTests,
-  shouldAutoRestartP2P,
   timingConfig,
   trackedRequestIdForSession,
 } from "./desktopShellRuntime";
 import { createDesktopShellChatActions } from "./desktopShellChatActions";
 import { createDesktopShellConfigActions } from "./desktopShellConfigActions";
+import { useDesktopShellEffects } from "./desktopShellEffects";
 import { createDesktopShellPeerActions } from "./desktopShellPeerActions";
 import { createDesktopShellTaskActions } from "./desktopShellTaskActions";
 import type {
@@ -95,10 +94,6 @@ export function useDesktopShell() {
     shellProjection.workflow,
   );
 
-  useEffect(() => {
-    selectedSessionIdRef.current = selectedSessionId;
-  }, [selectedSessionId]);
-
   async function refreshSnapshot() {
     setLoading(true);
     try {
@@ -129,160 +124,6 @@ export function useDesktopShell() {
       setError(String(err));
     }
   }
-
-  useEffect(() => {
-    void refreshSnapshot();
-  }, []);
-
-  useEffect(() => {
-    if (!snapshot || snapshot.client || starting || sending) {
-      return;
-    }
-
-    if (!snapshot.bootstrap.savedPeers.length) {
-      return;
-    }
-
-    if (autostartAttempted.current) {
-      return;
-    }
-
-    autostartAttempted.current = true;
-    void onStartClient();
-  }, [sending, snapshot, starting]);
-
-  useEffect(() => {
-    const previousHealth = lastObservedP2PHealth.current;
-    lastObservedP2PHealth.current = runtimeHealth;
-
-    if (!runtimeHealth) {
-      return;
-    }
-
-    if (runtimeHealth.status === "healthy") {
-      lastP2PAutoRestartAt.current = null;
-      return;
-    }
-
-    if (
-      autoRestartInFlight.current ||
-      starting ||
-      stopping ||
-      sending ||
-      !shouldAutoRestartP2P(
-        previousHealth,
-        runtimeHealth,
-        lastP2PAutoRestartAt.current,
-        Date.now(),
-        timingConfig().p2pAutoRestartCooldownMs,
-      )
-    ) {
-      return;
-    }
-
-    lastP2PAutoRestartAt.current = Date.now();
-    logShellEvent(
-      `auto restart requested reason="P2P transport wedged" status=${runtimeHealth.status} failures=${runtimeHealth.consecutiveFailures}`,
-    );
-    void restartDesktopClient("P2P transport wedged");
-  }, [runtimeHealth, sending, starting, stopping]);
-
-  useEffect(() => {
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-
-    void listenToDesktopClientUpdates(async () => {
-      if (disposed) {
-        return;
-      }
-      await refreshSnapshot();
-      if (selectedSessionId) {
-        await refreshSession(selectedSessionId);
-      }
-    }).then((cleanup) => {
-      if (disposed) {
-        cleanup();
-        return;
-      }
-      unlisten = cleanup;
-    });
-
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, [selectedSessionId, selectedTrackedRequestId]);
-
-  useEffect(() => {
-    if (!deployments.length) {
-      setSelectedAgentDid(null);
-      return;
-    }
-
-    if (
-      selectedAgentDid &&
-      deployments.some((deployment) => deployment.agentDid === selectedAgentDid)
-    ) {
-      return;
-    }
-
-    setSelectedAgentDid(deployments[0].agentDid);
-  }, [deployments, selectedAgentDid]);
-
-  useEffect(() => {
-    if (!selectedDeployment) {
-      setSelectedBehaviorId(null);
-      setSelectedSessionId(null);
-      return;
-    }
-
-    const defaultBehaviorId =
-      selectedDeployment.defaultBehaviorId ??
-      selectedDeployment.behaviors.find((behavior) => behavior.isDefault)?.behaviorId ??
-      selectedDeployment.behaviors[0]?.behaviorId ??
-      null;
-
-    if (
-      !selectedBehaviorId ||
-      !selectedDeployment.behaviors.some(
-        (behavior) => behavior.behaviorId === selectedBehaviorId,
-      )
-    ) {
-      setSelectedBehaviorId(defaultBehaviorId);
-    }
-
-    if (
-      selectedSessionId &&
-      selectedDeployment.conversations.some(
-        (conversation) => conversation.sessionId === selectedSessionId,
-      )
-    ) {
-      newConversationAgentRef.current = null;
-      return;
-    }
-
-    if (
-      !selectedSessionId &&
-      newConversationAgentRef.current === selectedDeployment.agentDid
-    ) {
-      return;
-    }
-
-    setSelectedSessionId(selectedDeployment.conversations[0]?.sessionId ?? null);
-  }, [selectedDeployment, selectedBehaviorId, selectedSessionId]);
-
-  useEffect(() => {
-    void refreshSession(selectedSessionId);
-  }, [selectedSessionId, selectedTrackedRequestId]);
-
-  useEffect(() => {
-    if (
-      localWorkflow.kind === "submittingRequest" &&
-      !sending
-    ) {
-      setLocalWorkflow({ kind: "ready" });
-    }
-  }, [localWorkflow, sending]);
 
   async function onStartClient() {
     setStarting(true);
@@ -357,6 +198,35 @@ export function useDesktopShell() {
     }
   }
 
+  useDesktopShellEffects({
+    autoRestartInFlight,
+    autostartAttempted,
+    deployments,
+    lastObservedP2PHealth,
+    lastP2PAutoRestartAt,
+    localWorkflow,
+    newConversationAgentRef,
+    onStartClient,
+    refreshSession,
+    refreshSnapshot,
+    restartDesktopClient,
+    runtimeHealth,
+    selectedAgentDid,
+    selectedBehaviorId,
+    selectedDeployment,
+    selectedSessionId,
+    selectedSessionIdRef,
+    selectedTrackedRequestId,
+    sending,
+    setLocalWorkflow,
+    setSelectedAgentDid,
+    setSelectedBehaviorId,
+    setSelectedSessionId,
+    snapshot,
+    starting,
+    stopping,
+  });
+
   const { onAddPeer, onFetchPeerStatus, onRepairP2P } =
     createDesktopShellPeerActions({
       snapshot,
@@ -383,7 +253,7 @@ export function useDesktopShell() {
     setSelectedAgentDid,
     setSelectedBehaviorId,
     setSnapshot,
-    });
+  });
 
   const {
     onRenameConversationTitle,

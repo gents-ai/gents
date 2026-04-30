@@ -1,0 +1,120 @@
+use std::sync::Arc;
+
+use defra_agent_desktop_core::client::{ClientCore, DesktopPaths};
+use defra_agent_desktop_core::local_runtime::{
+    dangerously_overwrite_desktop_home, default_agent_home, init_standard_local_runtime,
+    reset_desktop_runtime_state, DesktopInitOptions, DesktopInitSummary,
+};
+use tauri::{AppHandle, Emitter, State};
+
+use super::super::snapshot::{build_bootstrap_summary, build_client_snapshot};
+use super::super::state::{current_core, spawn_client_update_task, DesktopAppState};
+use super::super::types::{
+    ClientUpdateEvent, DesktopBootstrapSummary, DesktopClientSnapshot, DesktopInitRequest,
+};
+
+#[tauri::command]
+pub(crate) fn desktop_bootstrap_summary() -> Result<DesktopBootstrapSummary, String> {
+    tauri::async_runtime::block_on(build_bootstrap_summary())
+}
+
+#[tauri::command]
+pub(crate) fn desktop_init_local_standard(
+    request: DesktopInitRequest,
+) -> Result<DesktopInitSummary, String> {
+    tauri::async_runtime::block_on(async move {
+        let agent_home = match request.agent_home {
+            Some(path) => path,
+            None => default_agent_home().map_err(|error| error.to_string())?,
+        };
+        let desktop_paths = match request.desktop_home {
+            Some(root) => DesktopPaths::from_root(root),
+            None => DesktopPaths::discover().map_err(|error| error.to_string())?,
+        };
+
+        if request.dangerously_overwrite {
+            dangerously_overwrite_desktop_home(desktop_paths.root())
+                .map_err(|error| error.to_string())?;
+        } else if request.reset {
+            let _ =
+                reset_desktop_runtime_state(&desktop_paths).map_err(|error| error.to_string())?;
+        }
+
+        init_standard_local_runtime(DesktopInitOptions {
+            agent_home,
+            desktop_paths,
+            label: request
+                .label
+                .filter(|label| !label.trim().is_empty())
+                .unwrap_or_else(|| "Local Agent".to_string()),
+        })
+        .await
+        .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+pub(crate) fn desktop_client_start(
+    app: AppHandle,
+    state: State<'_, DesktopAppState>,
+) -> Result<DesktopClientSnapshot, String> {
+    if let Some(core) = current_core(&state) {
+        return tauri::async_runtime::block_on(build_client_snapshot(Some(&core)));
+    }
+
+    let core = Arc::new(
+        tauri::async_runtime::block_on(ClientCore::start()).map_err(|error| error.to_string())?,
+    );
+    let updates_task = spawn_client_update_task(app.clone(), Arc::clone(&core));
+
+    {
+        let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
+        bridge.core = Some(Arc::clone(&core));
+        bridge.updates_task = Some(updates_task);
+    }
+
+    let _ = app.emit(
+        "desktop://client-updated",
+        ClientUpdateEvent {
+            reason: "lifecycle",
+        },
+    );
+
+    tauri::async_runtime::block_on(build_client_snapshot(Some(&core)))
+}
+
+#[tauri::command]
+pub(crate) fn desktop_client_shutdown(
+    app: AppHandle,
+    state: State<'_, DesktopAppState>,
+) -> Result<DesktopClientSnapshot, String> {
+    let (core, updates_task) = {
+        let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
+        (bridge.core.take(), bridge.updates_task.take())
+    };
+
+    if let Some(task) = updates_task {
+        task.abort();
+    }
+
+    if let Some(core) = core {
+        tauri::async_runtime::block_on(core.shutdown()).map_err(|error| error.to_string())?;
+    }
+
+    let _ = app.emit(
+        "desktop://client-updated",
+        ClientUpdateEvent {
+            reason: "lifecycle",
+        },
+    );
+
+    tauri::async_runtime::block_on(build_client_snapshot(None))
+}
+
+#[tauri::command]
+pub(crate) fn desktop_client_snapshot(
+    state: State<'_, DesktopAppState>,
+) -> Result<DesktopClientSnapshot, String> {
+    let core = current_core(&state);
+    tauri::async_runtime::block_on(build_client_snapshot(core.as_ref()))
+}

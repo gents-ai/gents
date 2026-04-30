@@ -1,0 +1,30 @@
+use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SavedPeerView {
+    pub peer_id: String,
+    pub label: String,
+    pub agent_did: String,
+    pub addr: String,
+    pub source: Option<String>,
+    pub graphql: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopBootstrapSummary {
+    pub default_agent_home: String,
+    pub init_agent_name: Option<String>,
+    pub init_agent_did: Option<String>,
+    pub init_tool_ceiling: Option<String>,
+    pub init_tool_root: Option<String>,
+    pub desktop_home: String,
+    pub peer_directory_path: String,
+    pub node_data_dir: String,
+    pub log_file_path: String,
+    pub agent_home_exists: bool,
+    pub desktop_home_exists: bool,
+    pub peer_directory_exists: bool,
+    pub saved_peers: Vec<SavedPeerView>,
+}

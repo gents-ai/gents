@@ -7,7 +7,6 @@ import type {
   ChatSendResult,
   DesktopClientSnapshot,
   DesktopSessionSnapshot,
-  InitSummary,
   TaskRunResult,
 } from "../src/lib/types";
 import type {
@@ -20,11 +19,8 @@ import {
   observeRemoteTerminalDesktopStall,
   requestProgressSignature,
 } from "./live-bridge-runner/observations";
-import {
-  appendRunnerArg,
-  normalizePeerStatusUrl,
-  waitForReadyMessage,
-} from "./live-bridge-runner/process";
+import { createRunnerAdapter } from "./live-bridge-runner/adapter";
+import { appendRunnerArg, waitForReadyMessage } from "./live-bridge-runner/process";
 import type {
   LiveBridgeRunnerOptions,
   RequestDiagnosticsBundle,
@@ -80,102 +76,7 @@ export class LiveBridgeRunner implements TauriDriverBridge {
     this.process.once("exit", (code, signal) => {
       this.exitStatus = { code, signal };
     });
-    this.adapter = {
-      fetchDesktopSnapshot: async () =>
-        this.getJson<DesktopClientSnapshot>("/desktop/client/snapshot"),
-      initLocalStandardRuntime: async () =>
-        this.postJson<InitSummary>("/desktop/init", {}),
-      startDesktopClient: async () =>
-        this.postJson<DesktopClientSnapshot>("/desktop/client/start", {}),
-      shutdownDesktopClient: async () =>
-        this.postJson<DesktopClientSnapshot>("/desktop/client/shutdown", {}),
-      addPeer: async (request) =>
-        this.postJson<DesktopClientSnapshot>("/desktop/peer/add", request),
-      fetchPeerStatus: async (serverAddress) => {
-        const response = await this.fetchWithTimeout(
-          normalizePeerStatusUrl(serverAddress),
-          {},
-        );
-        return this.decodeJson<unknown>(response);
-      },
-      repairP2P: async () =>
-        this.postJson<DesktopClientSnapshot>("/desktop/p2p/repair", {}),
-      fetchSessionSnapshot: async (sessionId, agentDid, requestId) =>
-        this.postJson<DesktopSessionSnapshot | null>(
-          "/desktop/session/snapshot",
-          {
-            sessionId,
-            agentDid: agentDid ?? null,
-            requestId: requestId ?? null,
-          },
-        ),
-      sendChatMessage: async (request) => {
-        const normalized = {
-          agentDid: request.agentDid,
-          behaviorId: request.behaviorId ?? null,
-          sessionId: request.sessionId ?? null,
-          content: request.content,
-        };
-        this.sentRequests.push(normalized);
-        const result = await this.postJson<ChatSendResult>(
-          "/desktop/chat/send",
-          normalized,
-        );
-        this.sendResults.push(result);
-        return result;
-      },
-      renameConversation: async (request) => {
-        await this.postJson("/desktop/conversation/rename", request);
-      },
-      saveAgentConfig: async (request) =>
-        this.postJson<DesktopClientSnapshot>("/desktop/agent/save", request),
-      saveBehaviorConfig: async (request) =>
-        this.postJson<DesktopClientSnapshot>("/desktop/behavior/save", request),
-      saveBackendConfig: async (request) =>
-        this.postJson<DesktopClientSnapshot>("/desktop/backend/save", request),
-      saveInferenceProfileConfig: async (request) =>
-        this.postJson<DesktopClientSnapshot>(
-          "/desktop/inference-profile/save",
-          request,
-        ),
-      saveToolSelectionConfig: async (request) =>
-        this.postJson<DesktopClientSnapshot>(
-          "/desktop/tool-selection/save",
-          request,
-        ),
-      saveToolServiceConfig: async (request) =>
-        this.postJson<DesktopClientSnapshot>(
-          "/desktop/tool-service/save",
-          request,
-        ),
-      testToolService: async (request) =>
-        this.postJson("/desktop/tool-service/test", request),
-      saveTaskConfig: async (request) =>
-        this.postJson<DesktopClientSnapshot>("/desktop/task/save", request),
-      saveScheduleConfig: async (request) =>
-        this.postJson<DesktopClientSnapshot>("/desktop/schedule/save", request),
-      runSchedule: async (request) => {
-        const result = await this.postJson<TaskRunResult>(
-          "/desktop/schedule/run",
-          request,
-        );
-        this.taskRunResults.push(result);
-        return result;
-      },
-      saveEventTriggerConfig: async (request) =>
-        this.postJson<DesktopClientSnapshot>(
-          "/desktop/event-trigger/save",
-          request,
-        ),
-      runTask: async (request) => {
-        const result = await this.postJson<TaskRunResult>(
-          "/desktop/task/run",
-          request,
-        );
-        this.taskRunResults.push(result);
-        return result;
-      },
-    };
+    this.adapter = createRunnerAdapter(this);
     this.listenerFactory = async (handler) => {
       let disposed = false;
       let inFlight = false;
@@ -400,12 +301,12 @@ export class LiveBridgeRunner implements TauriDriverBridge {
     );
   }
 
-  private async getJson<T>(path: string) {
+  async getJson<T>(path: string) {
     const response = await this.fetchWithTimeout(`${this.baseUrl}${path}`, {});
     return this.decodeJson<T>(response);
   }
 
-  private async postJson<T = unknown>(path: string, body: unknown) {
+  async postJson<T = unknown>(path: string, body: unknown) {
     const response = await this.fetchWithTimeout(`${this.baseUrl}${path}`, {
       method: "POST",
       headers: {
@@ -429,7 +330,7 @@ export class LiveBridgeRunner implements TauriDriverBridge {
     );
   }
 
-  private async fetchWithTimeout(input: string, init: RequestInit) {
+  async fetchWithTimeout(input: string, init: RequestInit) {
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     try {
       return await Promise.race([
@@ -451,7 +352,7 @@ export class LiveBridgeRunner implements TauriDriverBridge {
     }
   }
 
-  private async decodeJson<T>(response: Response) {
+  async decodeJson<T>(response: Response) {
     if (!response.ok) {
       throw new Error(await response.text());
     }
