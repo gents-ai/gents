@@ -6,6 +6,7 @@ use crate::cli::*;
 use crate::extract_mutation_doc_id;
 use crate::optional_f64_field;
 use crate::optional_i64_field;
+use crate::optional_string_field;
 use crate::post_graphql;
 use crate::print_json;
 
@@ -15,10 +16,7 @@ pub(super) async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> R
             r#"profile_id: "{}""#,
             escape_graphql_string(&args.profile_id)
         )),
-        Some(format!(
-            r#"display_name: "{}""#,
-            escape_graphql_string(args.display_name.as_deref().unwrap_or(""))
-        )),
+        optional_string_field("display_name", args.display_name.as_deref()),
         optional_i64_field("context_window", args.context_window),
         optional_i64_field("max_output_tokens", args.max_output_tokens),
         optional_i64_field("max_turns", args.max_turns),
@@ -31,10 +29,7 @@ pub(super) async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> R
     .collect::<Vec<_>>()
     .join(",\n                    ");
     let update_fields = vec![
-        Some(format!(
-            r#"display_name: "{}""#,
-            escape_graphql_string(args.display_name.as_deref().unwrap_or(""))
-        )),
+        optional_string_field("display_name", args.display_name.as_deref()),
         optional_i64_field("context_window", args.context_window),
         optional_i64_field("max_output_tokens", args.max_output_tokens),
         optional_i64_field("max_turns", args.max_turns),
