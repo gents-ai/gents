@@ -6,7 +6,8 @@ use defra_agent_desktop_core::client::{
 };
 use defra_agent_protocol::client_protocol::ClientTurnState;
 use defra_agent_protocol::row::{
-    AgentConversationRow, AgentPrincipalRow, AgentRequestRow, AgentResponseRow, AgentRuntimeRow,
+    AgentConversationRow, AgentMessageRow, AgentPrincipalRow, AgentRequestRow, AgentResponseRow,
+    AgentRuntimeRow, AgentSessionRow,
 };
 use tokio::time::{sleep, timeout};
 
@@ -275,6 +276,146 @@ fn focused_request_id_defaults_to_none() {
     let (observed_store, _rx) =
         defra_agent_desktop_core::client::ObservedStore::new(ClientStore::default());
     assert!(observed_store.focused_request_id().is_none());
+}
+
+#[test]
+fn chat_patch_merge_updates_one_agent_without_dropping_other_agent_rows() {
+    let base = ClientStore::from_rows(ClientStoreRows {
+        conversations: vec![
+            AgentConversationRow {
+                session_id: "session-1".to_string(),
+                agent_name: Some("Amy".to_string()),
+                agent_did: Some("did:defra:amy".to_string()),
+                behavior_id: Some("amy-default".to_string()),
+                title: Some("Old title".to_string()),
+                title_source: None,
+                preview_text: None,
+                status: None,
+                created_at: Some("2026-04-14T00:00:00Z".to_string()),
+                updated_at: Some("2026-04-14T00:01:00Z".to_string()),
+                latest_request_id: Some("req-1".to_string()),
+            },
+            AgentConversationRow {
+                session_id: "session-1".to_string(),
+                agent_name: Some("Bea".to_string()),
+                agent_did: Some("did:defra:bea".to_string()),
+                behavior_id: Some("bea-default".to_string()),
+                title: Some("Other agent".to_string()),
+                title_source: None,
+                preview_text: None,
+                status: None,
+                created_at: Some("2026-04-14T00:00:00Z".to_string()),
+                updated_at: Some("2026-04-14T00:02:00Z".to_string()),
+                latest_request_id: Some("bea-req-1".to_string()),
+            },
+        ],
+        messages: vec![AgentMessageRow {
+            message_key: "session-1:1".to_string(),
+            session_id: Some("session-1".to_string()),
+            sequence: Some(1),
+            role: Some("user".to_string()),
+            content: Some("old".to_string()),
+            timestamp: Some("2026-04-14T00:01:00Z".to_string()),
+        }],
+        message_source_agent_dids: vec![Some("did:defra:amy".to_string())],
+        sessions: vec![AgentSessionRow {
+            session_id: "session-1".to_string(),
+            agent_name: Some("Bea".to_string()),
+            behavior_id: Some("bea-default".to_string()),
+            started: Some("2026-04-14T00:00:00Z".to_string()),
+            ended: None,
+            status: Some("active".to_string()),
+        }],
+        session_source_agent_dids: vec![Some("did:defra:bea".to_string())],
+        ..ClientStoreRows::default()
+    });
+
+    let mut patch = ClientStore::from_rows(ClientStoreRows {
+        conversations: vec![AgentConversationRow {
+            session_id: "session-1".to_string(),
+            agent_name: Some("Amy".to_string()),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            title: Some("Updated title".to_string()),
+            title_source: None,
+            preview_text: Some("new preview".to_string()),
+            status: None,
+            created_at: Some("2026-04-14T00:00:00Z".to_string()),
+            updated_at: Some("2026-04-14T00:03:00Z".to_string()),
+            latest_request_id: Some("req-2".to_string()),
+        }],
+        requests: vec![AgentRequestRow {
+            request_id: "req-2".to_string(),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            session_id: Some("session-1".to_string()),
+            retry_parent_request: None,
+            retry_root_request: None,
+            superseded_by_request: None,
+            content: Some("hello".to_string()),
+            status: Some("completed".to_string()),
+            lifecycle_state: Some("completed".to_string()),
+            backend_id: None,
+            execution_origin: None,
+            caused_by_trigger_id: None,
+            caused_by_trigger_kind: None,
+            failure_reason: None,
+            created_at: Some("2026-04-14T00:02:00Z".to_string()),
+            claimed_at: None,
+            deadline: None,
+            retry_count: None,
+            max_retries: None,
+            interrupt_requested_at: None,
+            valid_until: None,
+        }],
+        messages: vec![AgentMessageRow {
+            message_key: "session-1:1".to_string(),
+            session_id: Some("session-1".to_string()),
+            sequence: Some(1),
+            role: Some("user".to_string()),
+            content: Some("new".to_string()),
+            timestamp: Some("2026-04-14T00:02:00Z".to_string()),
+        }],
+        sessions: vec![AgentSessionRow {
+            session_id: "session-1".to_string(),
+            agent_name: Some("Amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            started: Some("2026-04-14T00:00:00Z".to_string()),
+            ended: None,
+            status: Some("active".to_string()),
+        }],
+        ..ClientStoreRows::default()
+    });
+    patch.stamp_source_agent_did("did:defra:amy");
+
+    let merged = base.merge_chat_patch(patch);
+
+    assert_eq!(merged.conversations.len(), 2);
+    assert_eq!(
+        merged
+            .conversation_rows("did:defra:amy")
+            .first()
+            .and_then(|row| row.title.as_deref()),
+        Some("Updated title")
+    );
+    assert_eq!(
+        merged
+            .conversation_rows("did:defra:bea")
+            .first()
+            .and_then(|row| row.title.as_deref()),
+        Some("Other agent")
+    );
+    assert_eq!(merged.messages.len(), 1);
+    assert_eq!(merged.messages[0].content.as_deref(), Some("new"));
+    assert_eq!(merged.sessions.len(), 2);
+    assert!(merged
+        .session_source_agent_dids
+        .iter()
+        .any(|source| source.as_deref() == Some("did:defra:amy")));
+    assert!(merged
+        .session_source_agent_dids
+        .iter()
+        .any(|source| source.as_deref() == Some("did:defra:bea")));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

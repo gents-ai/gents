@@ -5,7 +5,7 @@ use defra_node::{EmbeddedNode, EventName};
 use tokio::sync::{watch, RwLock as AsyncRwLock};
 
 use super::peer_directory::PeerDirectory;
-use super::query::load_full_snapshot_with_peer_records;
+use super::query::load_full_snapshot;
 use super::store::{ClientStore, SharedClientStore};
 
 const OBSERVER_DEBOUNCE: Duration = Duration::from_millis(150);
@@ -59,6 +59,26 @@ impl ObservedStore {
         self.version_tx.send_replace(next_version);
         next_version
     }
+
+    pub fn merge_chat_patch(&self, patch: ClientStore) -> u64 {
+        let mut snapshot = self.snapshot.write().expect("store snapshot lock poisoned");
+        let next_snapshot = snapshot.merge_chat_patch(patch);
+        *snapshot = Arc::new(next_snapshot);
+
+        let next_version = self.version_tx.borrow().saturating_add(1);
+        self.version_tx.send_replace(next_version);
+        next_version
+    }
+
+    pub fn merge_snapshot(&self, incoming: ClientStore) -> u64 {
+        let mut snapshot = self.snapshot.write().expect("store snapshot lock poisoned");
+        let next_snapshot = snapshot.merge_snapshot(incoming);
+        *snapshot = Arc::new(next_snapshot);
+
+        let next_version = self.version_tx.borrow().saturating_add(1);
+        self.version_tx.send_replace(next_version);
+        next_version
+    }
 }
 
 pub struct ObserverHandle {
@@ -76,7 +96,7 @@ impl ObserverHandle {
 pub fn spawn_observer(
     node: Arc<EmbeddedNode>,
     store: Arc<ObservedStore>,
-    peer_directory: Arc<AsyncRwLock<PeerDirectory>>,
+    _peer_directory: Arc<AsyncRwLock<PeerDirectory>>,
 ) -> ObserverHandle {
     let (stop_tx, mut stop_rx) = watch::channel(false);
     let task = tokio::spawn(async move {
@@ -108,10 +128,9 @@ pub fn spawn_observer(
                 tracing::warn!(dropped, "desktop observation subscription dropped messages");
             }
 
-            let records = peer_directory.read().await.records().to_vec();
-            match load_full_snapshot_with_peer_records(node.as_ref(), &records).await {
+            match load_full_snapshot(node.as_ref()).await {
                 Ok(snapshot) => {
-                    let version = store.replace_snapshot(snapshot);
+                    let version = store.merge_snapshot(snapshot);
                     tracing::trace!(version, "desktop observation snapshot refreshed");
                 }
                 Err(error) => {

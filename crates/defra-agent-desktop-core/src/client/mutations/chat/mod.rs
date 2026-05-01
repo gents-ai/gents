@@ -10,7 +10,8 @@ pub use conversation::{create_conversation, rename_conversation, CreatedConversa
 // the conformance test; desktop code only uses `interrupt_request`.
 pub use defra_agent::interrupt_request;
 pub use request::{
-    resend_request, retry_request, submit_request, SubmitRequestOptions, SubmittedRequest,
+    resend_request, retry_request, submit_request, submit_request_to_graphql, SubmitRequestOptions,
+    SubmittedRequest,
 };
 
 #[cfg(test)]

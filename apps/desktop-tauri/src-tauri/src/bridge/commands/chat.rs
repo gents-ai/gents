@@ -1,6 +1,7 @@
 use anyhow::{bail, Result};
 use defra_agent_desktop_core::client::ClientCore;
 use defra_agent_protocol::client_protocol::ClientTurnState;
+use uuid::Uuid;
 
 use super::super::types::{ChatSendRequest, ChatSendResult, ConversationRenameRequest};
 
@@ -46,13 +47,15 @@ pub(crate) async fn send_chat_message(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
 
-    let session_id = match request
+    let requested_session_id = request
         .session_id
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+        .filter(|value| !value.is_empty());
+    let remote_graphql = core.graphql_for_agent(&agent_did).await;
+    let session_id = match requested_session_id {
         Some(session_id) => session_id.to_string(),
+        None if remote_graphql.is_some() => Uuid::new_v4().to_string(),
         None => {
             core.create_conversation(&agent_did, behavior_id.as_deref())
                 .await?
@@ -70,9 +73,23 @@ pub(crate) async fn send_chat_message(
         }
     }
 
-    let submitted = core
-        .submit_request(&session_id, &agent_did, &content, behavior_id.as_deref())
-        .await?;
+    let submitted = match remote_graphql {
+        Some(graphql) => {
+            core.submit_remote_graphql_request_with_options(
+                &graphql,
+                &session_id,
+                &agent_did,
+                &content,
+                behavior_id.as_deref(),
+                Default::default(),
+            )
+            .await?
+        }
+        None => {
+            core.submit_request(&session_id, &agent_did, &content, behavior_id.as_deref())
+                .await?
+        }
+    };
 
     Ok(ChatSendResult {
         session_id,

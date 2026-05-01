@@ -124,6 +124,94 @@ fn session_snapshot_orders_pending_turn_before_orphan_tool_groups_and_live_overl
 }
 
 #[test]
+fn session_snapshot_keeps_failed_unmaterialized_response_overlay() {
+    let store = ClientStore::from_rows(ClientStoreRows {
+        conversations: vec![AgentConversationRow {
+            session_id: "session-1".to_string(),
+            agent_name: Some("Amy".to_string()),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            title: Some("conversation".to_string()),
+            title_source: Some("generated".to_string()),
+            preview_text: Some("turn one".to_string()),
+            status: Some("active".to_string()),
+            created_at: Some("2026-04-21T12:00:00Z".to_string()),
+            updated_at: Some("2026-04-21T12:15:00Z".to_string()),
+            latest_request_id: Some("req-1".to_string()),
+        }],
+        requests: vec![AgentRequestRow {
+            request_id: "req-1".to_string(),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            session_id: Some("session-1".to_string()),
+            retry_parent_request: None,
+            retry_root_request: None,
+            superseded_by_request: None,
+            content: Some("turn one".to_string()),
+            status: Some("error".to_string()),
+            lifecycle_state: Some("failed".to_string()),
+            backend_id: None,
+            execution_origin: Some("interactive".to_string()),
+            failure_reason: Some("request deadline exceeded".to_string()),
+            created_at: Some("2026-04-21T12:00:00Z".to_string()),
+            claimed_at: Some("2026-04-21T12:00:01Z".to_string()),
+            deadline: Some("2026-04-21T12:15:00Z".to_string()),
+            retry_count: Some(0),
+            max_retries: Some(3),
+            caused_by_trigger_id: None,
+            caused_by_trigger_kind: None,
+            interrupt_requested_at: None,
+            valid_until: None,
+        }],
+        messages: vec![AgentMessageRow {
+            message_key: "msg-1".to_string(),
+            session_id: Some("session-1".to_string()),
+            sequence: Some(1),
+            role: Some("user".to_string()),
+            content: Some(user_message_json("turn one")),
+            timestamp: Some("2026-04-21T12:00:00Z".to_string()),
+        }],
+        responses: vec![AgentResponseRow {
+            response_key: "resp-1".to_string(),
+            request_id: Some("req-1".to_string()),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            session_id: Some("session-1".to_string()),
+            content: Some("partial answer before timeout".to_string()),
+            reasoning: None,
+            status: Some("error".to_string()),
+            error_message: Some("request deadline exceeded".to_string()),
+            token_count: Some(12),
+            progress_seq: Some(3),
+            materialized_message_sequence: None,
+            materialized_at: None,
+            created_at: Some("2026-04-21T12:00:02Z".to_string()),
+            completed_at: Some("2026-04-21T12:15:00Z".to_string()),
+            interrupted_at: None,
+        }],
+        ..ClientStoreRows::default()
+    });
+
+    let snapshot = build_session_snapshot_from_store(&store, "session-1", Some("req-1"))
+        .expect("session snapshot");
+
+    assert_eq!(snapshot.turn_state.as_deref(), Some("failed"));
+    assert_eq!(
+        snapshot
+            .active_response_overlay
+            .as_ref()
+            .and_then(|overlay| overlay.content.as_deref()),
+        Some("partial answer before timeout")
+    );
+
+    let live_content = snapshot.timeline_items.iter().find_map(|item| match item {
+        RenderedTimelineItem::LiveAssistant { content, .. } => content.as_deref(),
+        _ => None,
+    });
+    assert_eq!(live_content, Some("partial answer before timeout"));
+}
+
+#[test]
 fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix() {
     let store = ClientStore::from_rows(ClientStoreRows {
         conversations: vec![AgentConversationRow {

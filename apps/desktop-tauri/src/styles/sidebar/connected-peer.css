@@ -39,7 +39,7 @@
   }
 
   .connected-peer-identity,
-  .connected-peer-endpoint {
+  .connected-peer-detail {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -49,6 +49,31 @@
   }
 
   .connected-peer-identity {
+    font-family:
+      "SF Mono",
+      "JetBrains Mono",
+      ui-monospace,
+      monospace;
+  }
+
+  .connected-peer-detail {
+    display: inline-flex;
+    gap: var(--space-2);
+    align-items: baseline;
+  }
+
+  .connected-peer-detail-label {
+    flex: 0 0 auto;
+    color: var(--color-accent);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .connected-peer-endpoint {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-family:
       "SF Mono",
       "JetBrains Mono",

@@ -112,6 +112,8 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
             turn_state,
             Some(defra_agent_protocol::client_protocol::ClientTurnState::WaitingForClaim)
                 | Some(defra_agent_protocol::client_protocol::ClientTurnState::Streaming)
+                | Some(defra_agent_protocol::client_protocol::ClientTurnState::Failed)
+                | Some(defra_agent_protocol::client_protocol::ClientTurnState::Interrupted)
         ) && response.materialized_message_sequence.is_none()
             && (response
                 .content

@@ -23,7 +23,7 @@ use super::observe::{ObservedStore, ObserverHandle};
 use super::paths::DesktopPaths;
 use super::peer_directory::{PeerDirectory, PeerRecord};
 use super::principal_identity::PrincipalIdentity;
-use super::query::load_full_snapshot_with_peer_records;
+use super::query::{load_full_snapshot, load_full_snapshot_from_graphql};
 
 const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -273,15 +273,60 @@ impl ClientCore {
     }
 
     pub async fn refresh_store(&self) -> Result<u64> {
-        let records = self.peer_directory.read().await.records().to_vec();
-        let snapshot = load_full_snapshot_with_peer_records(self.node.as_ref(), &records).await?;
+        let snapshot = load_full_snapshot(self.node.as_ref()).await?;
         let rows = snapshot.row_count();
-        let version = self.store.replace_snapshot(snapshot);
+        let version = self.store.merge_snapshot(snapshot);
         tracing::debug!(
             target: "defra_agent_desktop_core::replication",
             version,
             rows,
-            "desktop replica snapshot refreshed"
+            "desktop local replica snapshot refreshed"
+        );
+        Ok(version)
+    }
+
+    pub async fn refresh_remote_agent(&self, agent_did: &str) -> Result<Option<u64>> {
+        let agent_did = agent_did.trim();
+        if agent_did.is_empty() {
+            return Ok(None);
+        }
+
+        let record = {
+            let peer_directory = self.peer_directory.read().await;
+            peer_directory
+                .records()
+                .iter()
+                .find(|record| record.agent_did == agent_did)
+                .cloned()
+        };
+        let Some(record) = record else {
+            return Ok(None);
+        };
+
+        self.refresh_remote_peer_record(&record).await.map(Some)
+    }
+
+    pub async fn refresh_remote_peer_record(&self, record: &PeerRecord) -> Result<u64> {
+        let graphql = record
+            .graphql
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("peer {} has no GraphQL endpoint", record.label))?;
+
+        let mut snapshot = load_full_snapshot_from_graphql(graphql).await?;
+        snapshot.stamp_source_agent_did(&record.agent_did);
+        let rows = snapshot.row_count();
+        let version = self.store.merge_snapshot(snapshot);
+        tracing::info!(
+            target: "defra_agent_desktop_core::replication",
+            peer_id = %record.peer_id,
+            label = %record.label,
+            agent_did = %record.agent_did,
+            graphql,
+            version,
+            rows,
+            "desktop remote peer snapshot merged"
         );
         Ok(version)
     }

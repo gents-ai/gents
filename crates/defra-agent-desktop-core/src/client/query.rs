@@ -1,4 +1,5 @@
 use anyhow::{anyhow, bail, Context, Result};
+use defra_agent_protocol::graphql::escape_graphql_string;
 use defra_agent_protocol::row::{
     AgentBehaviorRow, AgentConversationRow, AgentMessageRow, AgentPrincipalRow, AgentRequestRow,
     AgentResponseRow, AgentRuntimeRow, AgentSessionRow, AgentToolCallRow, AgentToolResultRow,
@@ -296,6 +297,57 @@ pub async fn load_full_snapshot_from_graphql(graphql: &str) -> Result<ClientStor
     }))
 }
 
+pub async fn load_chat_patch_from_graphql(graphql: &str, request_id: &str) -> Result<ClientStore> {
+    let request_id = request_id.trim();
+    if request_id.is_empty() {
+        return Ok(ClientStore::default());
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(REMOTE_SNAPSHOT_HTTP_TIMEOUT)
+        .build()
+        .context("building remote GraphQL chat patch HTTP client")?;
+    let lookup_query = remote_request_lookup_query(request_id);
+    let lookup_data = execute_remote_graphql_query(
+        &client,
+        graphql,
+        &lookup_query,
+        "remote GraphQL request lookup",
+    )
+    .await?;
+    let request_rows: Vec<AgentRequestRow> = parse_remote_rows(&lookup_data, "AgentRequest")?;
+    let Some(session_id) = request_rows
+        .first()
+        .and_then(|row| row.session_id.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+    else {
+        return Ok(ClientStore::from_rows(ClientStoreRows {
+            requests: request_rows,
+            responses: parse_remote_rows(&lookup_data, "AgentResponse")?,
+            ..ClientStoreRows::default()
+        }));
+    };
+
+    let patch_query = remote_chat_patch_query(&session_id);
+    let data =
+        execute_remote_graphql_query(&client, graphql, &patch_query, "remote GraphQL chat patch")
+            .await?;
+
+    Ok(ClientStore::from_rows(ClientStoreRows {
+        conversations: parse_remote_rows(&data, "AgentConversation")?,
+        requests: parse_remote_rows(&data, "AgentRequest")?,
+        responses: parse_remote_rows(&data, "AgentResponse")?,
+        messages: parse_remote_rows(&data, "AgentMessage")?,
+        sessions: parse_remote_rows(&data, "AgentSession")?,
+        tool_calls: parse_remote_rows(&data, "AgentToolCall")?,
+        tool_results: parse_remote_rows(&data, "AgentToolResult")?,
+        compaction_entries: parse_remote_rows(&data, "CompactionEntry")?,
+        ..ClientStoreRows::default()
+    }))
+}
+
 async fn load_rows<T>(node: &EmbeddedNode, root: &str, query: &str) -> Result<Vec<T>>
 where
     T: DeserializeOwned,
@@ -352,36 +404,45 @@ struct RemoteGraphqlResponse {
 }
 
 async fn execute_remote_snapshot_query(client: &reqwest::Client, graphql: &str) -> Result<Value> {
+    execute_remote_graphql_query(client, graphql, REMOTE_SNAPSHOT_QUERY, "snapshot").await
+}
+
+async fn execute_remote_graphql_query(
+    client: &reqwest::Client,
+    graphql: &str,
+    query: &str,
+    operation: &str,
+) -> Result<Value> {
     let response = client
         .post(graphql)
-        .json(&json!({ "query": REMOTE_SNAPSHOT_QUERY }))
+        .json(&json!({ "query": query }))
         .send()
         .await
-        .with_context(|| format!("sending remote GraphQL snapshot query to {graphql}"))?;
+        .with_context(|| format!("sending {operation} query to {graphql}"))?;
     let status = response.status();
     let body = response
         .bytes()
         .await
-        .with_context(|| format!("reading remote GraphQL snapshot response from {graphql}"))?;
+        .with_context(|| format!("reading {operation} response from {graphql}"))?;
     if !status.is_success() {
         bail!(
-            "remote GraphQL snapshot query to {graphql} failed with {status}: {}",
+            "{operation} query to {graphql} failed with {status}: {}",
             String::from_utf8_lossy(&body)
         );
     }
 
     let response: RemoteGraphqlResponse = serde_json::from_slice(&body)
-        .with_context(|| format!("decoding remote GraphQL snapshot response from {graphql}"))?;
+        .with_context(|| format!("decoding {operation} response from {graphql}"))?;
     if let Some(errors) = response
         .errors
         .as_ref()
         .filter(|errors| !errors_is_empty(errors))
     {
-        bail!("remote GraphQL snapshot query returned errors: {errors}");
+        bail!("{operation} query returned errors: {errors}");
     }
     response
         .data
-        .context("remote GraphQL snapshot query returned no data")
+        .context(format!("{operation} query returned no data"))
 }
 
 fn parse_remote_rows<T>(data: &Value, root: &str) -> Result<Vec<T>>
@@ -491,6 +552,36 @@ fn append_rows(target: &mut ClientStoreRows, mut incoming: ClientStoreRows) {
     target
         .tool_service_registry_source_agent_dids
         .append(&mut incoming.tool_service_registry_source_agent_dids);
+}
+
+fn remote_request_lookup_query(request_id: &str) -> String {
+    let request_id = escape_graphql_string(request_id);
+    format!(
+        r#"
+query DesktopRemoteRequestLookup {{
+  AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind failure_reason created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until }}
+  AgentResponse(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at }}
+}}
+"#
+    )
+}
+
+fn remote_chat_patch_query(session_id: &str) -> String {
+    let session_id = escape_graphql_string(session_id);
+    format!(
+        r#"
+query DesktopRemoteChatPatch {{
+  AgentConversation(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ session_id agent_name agent_did behavior_id title title_source preview_text status created_at updated_at latest_request_id }}
+  AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind failure_reason created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until }}
+  AgentResponse(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at }}
+  AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ message_key session_id sequence role content timestamp }}
+  AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ session_id agent_name behavior_id started ended status }}
+  AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ tool_call_key session_id message_sequence tool_name tool_call_id args result status started_at completed_at }}
+  AgentToolResult(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ agent_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted }}
+  CompactionEntry(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ compaction_key session_id sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at }}
+}}
+"#
+    )
 }
 
 const REMOTE_SNAPSHOT_QUERY: &str = r#"

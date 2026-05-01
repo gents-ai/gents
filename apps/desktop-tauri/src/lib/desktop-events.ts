@@ -1,6 +1,11 @@
 import { listen } from "@tauri-apps/api/event";
 
-export type DesktopClientUpdatedHandler = () => void | Promise<void>;
+export type DesktopClientUpdatedEvent = {
+  reason?: string | null;
+};
+export type DesktopClientUpdatedHandler = (
+  event: DesktopClientUpdatedEvent,
+) => void | Promise<void>;
 export type DesktopClientUpdatedUnlisten = () => void;
 export type DesktopClientUpdatedListenerFactory = (
   handler: DesktopClientUpdatedHandler,
@@ -9,9 +14,12 @@ export type DesktopClientUpdatedListenerFactory = (
 async function defaultDesktopClientUpdatedListenerFactory(
   handler: DesktopClientUpdatedHandler,
 ) {
-  const unlisten = await listen("desktop://client-updated", () => {
-    void handler();
-  });
+  const unlisten = await listen<DesktopClientUpdatedEvent>(
+    "desktop://client-updated",
+    (event) => {
+      void handler(event.payload ?? {});
+    },
+  );
   return () => {
     unlisten();
   };

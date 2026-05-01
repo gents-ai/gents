@@ -203,7 +203,7 @@ async fn request_resend(args: RequestResendArgs) -> Result<()> {
         &graphql,
         &stale.agent_did,
         &stale.content,
-        Some(stale.session_id.as_str()),
+        None,
         stale.behavior_id.as_deref(),
         RequestSubmitOptions {
             // Preserve sampling overrides + metadata from the original row.

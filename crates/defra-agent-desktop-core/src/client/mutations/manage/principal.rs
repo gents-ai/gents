@@ -4,11 +4,25 @@ use defra_agent_protocol::row::AgentPrincipalRow;
 use defra_node::EmbeddedNode;
 
 use super::super::graphql::{
-    escape_graphql_string, execute_mutation, graphql_optional_bool_field, graphql_string_field,
-    join_fields, normalize_required,
+    escape_graphql_string, execute_mutation, execute_remote_mutation, graphql_optional_bool_field,
+    graphql_string_field, join_fields, normalize_required,
 };
 
 pub async fn upsert_agent_principal(node: &EmbeddedNode, row: &AgentPrincipalRow) -> Result<()> {
+    let mutation = build_upsert_agent_principal_mutation(row)?;
+    execute_mutation(node, &mutation, "upsert_agent_principal").await
+}
+
+pub async fn upsert_agent_principal_to_graphql(
+    graphql: &str,
+    row: &AgentPrincipalRow,
+) -> Result<()> {
+    let graphql = normalize_required("graphql", graphql)?;
+    let mutation = build_upsert_agent_principal_mutation(row)?;
+    execute_remote_mutation(graphql, &mutation, "upsert_agent_principal").await
+}
+
+fn build_upsert_agent_principal_mutation(row: &AgentPrincipalRow) -> Result<String> {
     let agent_did = normalize_required("agent_did", &row.agent_did)?;
     let created_at = row
         .created_at
@@ -52,7 +66,7 @@ pub async fn upsert_agent_principal(node: &EmbeddedNode, row: &AgentPrincipalRow
         Some(graphql_optional_bool_field("enabled", row.enabled)),
     ];
 
-    let mutation = format!(
+    Ok(format!(
         r#"mutation {{
             upsert_AgentPrincipal(
                 filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
@@ -67,6 +81,5 @@ pub async fn upsert_agent_principal(node: &EmbeddedNode, row: &AgentPrincipalRow
         agent_did = escape_graphql_string(agent_did),
         add_fields = join_fields(&add_fields),
         update_fields = join_fields(&update_fields),
-    );
-    execute_mutation(node, &mutation, "upsert_agent_principal").await
+    ))
 }

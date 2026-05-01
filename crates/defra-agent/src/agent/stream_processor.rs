@@ -103,8 +103,8 @@ impl<'a> StreamProcessor<'a> {
                 Ok(StreamAction::Continue)
             }
             Ok(MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
-                tool_result: _tool_result,
-                ..
+                tool_result,
+                internal_call_id,
             })) => {
                 let _ = self.stream_writer.flush_pending(self.doc_id).await?;
                 self.lifecycle.advance().await?;
@@ -117,6 +117,12 @@ impl<'a> StreamProcessor<'a> {
                         "persist streamed assistant turn",
                     )?;
                 }
+                self.persistence_hook.apply_persistence_policy(
+                    self.persistence_hook
+                        .persist_stream_tool_result_message(&tool_result, &internal_call_id)
+                        .await,
+                    "persist streamed tool result",
+                )?;
                 Ok(StreamAction::Continue)
             }
             Ok(MultiTurnStreamItem::FinalResponse(response)) => {

@@ -17,6 +17,19 @@ export function displayConversationTitle(value?: string | null) {
   return trimmed && trimmed.length > 0 ? trimmed : "untitled";
 }
 
+export function displayGraphqlEndpoint(value?: string | null) {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const url = new URL(trimmed);
+    return `${url.host}${url.pathname.replace(/\/$/, "")}`;
+  } catch {
+    return trimmed;
+  }
+}
+
 export function formatBytes(value: number) {
   if (value < 1024) {
     return `${value} B`;

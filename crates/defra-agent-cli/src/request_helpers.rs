@@ -418,7 +418,6 @@ pub(crate) fn parse_valid_until_flag(raw: Option<&str>) -> Result<Option<DateTim
 /// dropping them would silently change model behavior on retry.
 #[derive(Debug, Clone)]
 pub(crate) struct StaleRequestView {
-    pub(crate) session_id: String,
     pub(crate) agent_did: String,
     pub(crate) behavior_id: Option<String>,
     pub(crate) content: String,
@@ -442,7 +441,6 @@ pub(crate) async fn fetch_request_view(
                 filter: {{ request_id: {{ _eq: "{request_id}" }} }},
                 limit: 1
             ) {{
-                session_id
                 agent_did
                 behavior_id
                 content
@@ -480,7 +478,6 @@ pub(crate) async fn fetch_request_view(
     let as_optional_f64 = |key: &str| row.get(key).and_then(|v| v.as_f64());
     let as_optional_i64 = |key: &str| row.get(key).and_then(|v| v.as_i64());
     Ok(StaleRequestView {
-        session_id: as_string("session_id"),
         agent_did: as_string("agent_did"),
         behavior_id: as_optional("behavior_id"),
         content: as_string("content"),

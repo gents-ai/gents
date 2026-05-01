@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -30,14 +31,77 @@ struct HookCounters {
     successes: AtomicU64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TranscriptTurnState {
+    Idle,
+    AssistantBuilding { sequence: u32 },
+    AssistantPersisted { sequence: u32 },
+}
+
 struct SessionState {
     session_id: Option<String>,
     current_request_id: Option<String>,
     agent_name: String,
     sequence: u32,
-    assistant_turn_sequence: Option<u32>,
-    assistant_turn_saved: bool,
+    transcript_turn: TranscriptTurnState,
+    persisted_tool_result_ids: HashSet<String>,
     initialized: bool,
+}
+
+impl SessionState {
+    fn reset_after_user_message(&mut self) {
+        self.transcript_turn = TranscriptTurnState::Idle;
+    }
+
+    fn begin_or_continue_assistant_turn(&mut self) -> u32 {
+        match self.transcript_turn {
+            TranscriptTurnState::AssistantBuilding { sequence } => sequence,
+            TranscriptTurnState::Idle | TranscriptTurnState::AssistantPersisted { .. } => {
+                self.sequence += 1;
+                let sequence = self.sequence;
+                self.transcript_turn = TranscriptTurnState::AssistantBuilding { sequence };
+                sequence
+            }
+        }
+    }
+
+    fn persist_assistant_turn(&mut self) -> anyhow::Result<u32> {
+        let sequence = match self.transcript_turn {
+            TranscriptTurnState::AssistantBuilding { sequence } => sequence,
+            TranscriptTurnState::Idle => {
+                self.sequence += 1;
+                self.sequence
+            }
+            TranscriptTurnState::AssistantPersisted { sequence } => {
+                anyhow::bail!("assistant turn for sequence {sequence} already persisted");
+            }
+        };
+        self.transcript_turn = TranscriptTurnState::AssistantPersisted { sequence };
+        Ok(sequence)
+    }
+
+    fn mark_tool_result_seen_for_persisted_turn(&mut self, internal_call_id: &str) -> bool {
+        matches!(
+            self.transcript_turn,
+            TranscriptTurnState::AssistantPersisted { .. }
+        ) && self
+            .persisted_tool_result_ids
+            .insert(internal_call_id.to_string())
+    }
+
+    fn mark_stream_tool_result_seen(&mut self, internal_call_id: &str) -> anyhow::Result<bool> {
+        if !matches!(
+            self.transcript_turn,
+            TranscriptTurnState::AssistantPersisted { .. }
+        ) {
+            anyhow::bail!(
+                "cannot persist streamed tool result before its assistant turn is persisted"
+            );
+        }
+        Ok(self
+            .persisted_tool_result_ids
+            .insert(internal_call_id.to_string()))
+    }
 }
 
 #[derive(Clone)]
@@ -76,8 +140,8 @@ impl DefraSessionHook {
                 current_request_id: None,
                 agent_name: agent_name.to_string(),
                 sequence: 0,
-                assistant_turn_sequence: None,
-                assistant_turn_saved: false,
+                transcript_turn: TranscriptTurnState::Idle,
+                persisted_tool_result_ids: HashSet::new(),
                 initialized: false,
             })),
         }
@@ -107,8 +171,8 @@ impl DefraSessionHook {
                 current_request_id: None,
                 agent_name: agent_name.to_string(),
                 sequence: max_seq,
-                assistant_turn_sequence: None,
-                assistant_turn_saved: false,
+                transcript_turn: TranscriptTurnState::Idle,
+                persisted_tool_result_ids: HashSet::new(),
                 initialized: true,
             })),
         })

@@ -27,6 +27,7 @@ export {
   displayAgentIdentity,
   displayBehaviorLabel,
   displayConversationTitle,
+  displayGraphqlEndpoint,
   formatBytes,
 } from "./types/display";
 export type {

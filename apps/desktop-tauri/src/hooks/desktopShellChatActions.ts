@@ -10,7 +10,9 @@ import type { DeploymentView, DesktopSessionSnapshot } from "../lib/types";
 type ChatActionParams = {
   draft: string;
   newConversationAgentRef: MutableRefObject<string | null>;
-  refreshSession: (nextSessionId: string | null) => Promise<void>;
+  refreshSession: (
+    nextSessionId: string | null,
+  ) => Promise<DesktopSessionSnapshot | null>;
   refreshSnapshot: () => Promise<void>;
   selectedBehaviorId: string | null;
   selectedDeployment: DeploymentView | null;
@@ -77,8 +79,6 @@ export function createDesktopShellChatActions({
         sessionId: result.sessionId,
         requestId: result.requestId,
       });
-      await refreshSnapshot();
-      await refreshSession(result.sessionId);
     } catch (err) {
       setLocalWorkflow({ kind: "ready" });
       setError(String(err));

@@ -4,6 +4,7 @@ import type { ChatWorkflowState } from "../lib/chat-shell";
 import type {
   DeploymentView,
   DesktopClientSnapshot,
+  DesktopSessionSnapshot,
   P2PHealth,
 } from "../lib/types";
 import {
@@ -21,7 +22,7 @@ type DesktopShellEffectsArgs = {
   lastP2PAutoRestartAt: MutableRefObject<number | null>;
   localWorkflow: ChatWorkflowState;
   newConversationAgentRef: MutableRefObject<string | null>;
-  refreshSession: (sessionId: string | null) => Promise<void>;
+  refreshSession: (sessionId: string | null) => Promise<DesktopSessionSnapshot | null>;
   refreshSnapshot: () => Promise<void>;
   restartDesktopClient: (reason: string) => Promise<void>;
   runtimeHealth: P2PHealth | null;
@@ -41,6 +42,15 @@ type DesktopShellEffectsArgs = {
   stopping: boolean;
   onStartClient: () => Promise<void>;
 };
+
+function isTerminalTurnState(turnState?: string | null) {
+  return (
+    turnState === "completed" ||
+    turnState === "failed" ||
+    turnState === "superseded" ||
+    turnState === "interrupted"
+  );
+}
 
 export function useDesktopShellEffects({
   autoRestartInFlight,
@@ -144,8 +154,17 @@ export function useDesktopShellEffects({
     let disposed = false;
     let unlisten: (() => void) | undefined;
 
-    void listenToDesktopClientUpdates(async () => {
+    void listenToDesktopClientUpdates(async (event) => {
       if (disposed) {
+        return;
+      }
+      if (event.reason === "store" && selectedAgentDid) {
+        if (selectedSessionId) {
+          const nextSession = await refreshSession(selectedSessionId);
+          if (isTerminalTurnState(nextSession?.turnState)) {
+            await refreshSnapshot();
+          }
+        }
         return;
       }
       await refreshSnapshot();
@@ -164,7 +183,7 @@ export function useDesktopShellEffects({
       disposed = true;
       unlisten?.();
     };
-  }, [selectedSessionId, selectedTrackedRequestId]);
+  }, [selectedAgentDid, selectedSessionId, selectedTrackedRequestId]);
 
   useEffect(() => {
     if (!deployments.length) {
@@ -206,9 +225,11 @@ export function useDesktopShellEffects({
 
     if (
       selectedSessionId &&
-      selectedDeployment.conversations.some(
+      (selectedDeployment.conversations.some(
         (conversation) => conversation.sessionId === selectedSessionId,
-      )
+      ) ||
+        (localWorkflow.kind === "awaitingObservation" &&
+          localWorkflow.sessionId === selectedSessionId))
     ) {
       newConversationAgentRef.current = null;
       return;
@@ -223,6 +244,7 @@ export function useDesktopShellEffects({
 
     setSelectedSessionId(selectedDeployment.conversations[0]?.sessionId ?? null);
   }, [
+    localWorkflow,
     newConversationAgentRef,
     selectedBehaviorId,
     selectedDeployment,

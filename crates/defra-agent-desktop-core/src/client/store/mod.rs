@@ -133,6 +133,166 @@ impl Default for ClientStore {
 }
 
 impl ClientStore {
+    pub fn merge_snapshot(&self, snapshot: ClientStore) -> Self {
+        let mut rows = self.to_rows();
+        let incoming = snapshot.to_rows();
+
+        upsert_rows_by_key(
+            &mut rows.agent_principals,
+            incoming.agent_principals,
+            |row| row.agent_did.clone(),
+        );
+        upsert_rows_by_key(&mut rows.behaviors, incoming.behaviors, behavior_merge_key);
+        upsert_rows_by_key(&mut rows.runtimes, incoming.runtimes, |row| {
+            row.agent_did.clone()
+        });
+        upsert_rows_by_key(
+            &mut rows.conversations,
+            incoming.conversations,
+            conversation_merge_key,
+        );
+        upsert_rows_by_key(&mut rows.requests, incoming.requests, request_merge_key);
+        upsert_rows_by_key(&mut rows.responses, incoming.responses, response_merge_key);
+        upsert_rows_with_sources_by_key(
+            &mut rows.messages,
+            &mut rows.message_source_agent_dids,
+            incoming.messages,
+            incoming.message_source_agent_dids,
+            message_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.sessions,
+            &mut rows.session_source_agent_dids,
+            incoming.sessions,
+            incoming.session_source_agent_dids,
+            session_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.tool_calls,
+            &mut rows.tool_call_source_agent_dids,
+            incoming.tool_calls,
+            incoming.tool_call_source_agent_dids,
+            tool_call_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.tool_results,
+            &mut rows.tool_result_source_agent_dids,
+            incoming.tool_results,
+            incoming.tool_result_source_agent_dids,
+            tool_result_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.compaction_entries,
+            &mut rows.compaction_entry_source_agent_dids,
+            incoming.compaction_entries,
+            incoming.compaction_entry_source_agent_dids,
+            compaction_entry_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.tasks,
+            &mut rows.task_source_agent_dids,
+            incoming.tasks,
+            incoming.task_source_agent_dids,
+            task_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.schedules,
+            &mut rows.schedule_source_agent_dids,
+            incoming.schedules,
+            incoming.schedule_source_agent_dids,
+            schedule_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.event_triggers,
+            &mut rows.event_trigger_source_agent_dids,
+            incoming.event_triggers,
+            incoming.event_trigger_source_agent_dids,
+            event_trigger_merge_key,
+        );
+        upsert_rows_by_key(
+            &mut rows.tool_selections,
+            incoming.tool_selections,
+            tool_selection_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.inference_backends,
+            &mut rows.inference_backend_source_agent_dids,
+            incoming.inference_backends,
+            incoming.inference_backend_source_agent_dids,
+            inference_backend_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.inference_profiles,
+            &mut rows.inference_profile_source_agent_dids,
+            incoming.inference_profiles,
+            incoming.inference_profile_source_agent_dids,
+            inference_profile_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.tool_service_registries,
+            &mut rows.tool_service_registry_source_agent_dids,
+            incoming.tool_service_registries,
+            incoming.tool_service_registry_source_agent_dids,
+            tool_service_registry_merge_key,
+        );
+
+        ClientStore::from_rows(rows)
+    }
+
+    pub fn merge_chat_patch(&self, patch: ClientStore) -> Self {
+        let mut rows = self.to_rows();
+        let patch_rows = patch.to_rows();
+
+        upsert_rows_by_key(
+            &mut rows.conversations,
+            patch_rows.conversations,
+            conversation_merge_key,
+        );
+        upsert_rows_by_key(&mut rows.requests, patch_rows.requests, request_merge_key);
+        upsert_rows_by_key(
+            &mut rows.responses,
+            patch_rows.responses,
+            response_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.messages,
+            &mut rows.message_source_agent_dids,
+            patch_rows.messages,
+            patch_rows.message_source_agent_dids,
+            message_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.sessions,
+            &mut rows.session_source_agent_dids,
+            patch_rows.sessions,
+            patch_rows.session_source_agent_dids,
+            session_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.tool_calls,
+            &mut rows.tool_call_source_agent_dids,
+            patch_rows.tool_calls,
+            patch_rows.tool_call_source_agent_dids,
+            tool_call_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.tool_results,
+            &mut rows.tool_result_source_agent_dids,
+            patch_rows.tool_results,
+            patch_rows.tool_result_source_agent_dids,
+            tool_result_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.compaction_entries,
+            &mut rows.compaction_entry_source_agent_dids,
+            patch_rows.compaction_entries,
+            patch_rows.compaction_entry_source_agent_dids,
+            compaction_entry_merge_key,
+        );
+
+        ClientStore::from_rows(rows)
+    }
+
     pub fn stamp_source_agent_did(&mut self, agent_did: &str) {
         let source = Some(agent_did.to_string());
         self.message_source_agent_dids = vec![source.clone(); self.messages.len()];
@@ -603,6 +763,200 @@ fn source_agent_matches(sources: &[Option<String>], row_index: usize, agent_did:
         .get(row_index)
         .and_then(|source| source.as_deref())
         .map_or(true, |source_agent_did| source_agent_did == agent_did)
+}
+
+fn upsert_rows_by_key<T>(target: &mut Vec<T>, incoming: Vec<T>, key_fn: impl Fn(&T) -> String) {
+    let mut indexes = target
+        .iter()
+        .enumerate()
+        .map(|(index, row)| (key_fn(row), index))
+        .collect::<HashMap<_, _>>();
+
+    for row in incoming {
+        let key = key_fn(&row);
+        if let Some(index) = indexes.get(&key).copied() {
+            target[index] = row;
+        } else {
+            indexes.insert(key, target.len());
+            target.push(row);
+        }
+    }
+}
+
+fn upsert_rows_with_sources_by_key<T>(
+    target: &mut Vec<T>,
+    target_sources: &mut Vec<Option<String>>,
+    incoming: Vec<T>,
+    incoming_sources: Vec<Option<String>>,
+    key_fn: impl Fn(&T, Option<&str>) -> String,
+) {
+    normalize_sources(target_sources, target.len());
+    let mut incoming_sources = incoming_sources;
+    normalize_sources(&mut incoming_sources, incoming.len());
+
+    let mut indexes = target
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let source = target_sources.get(index).and_then(|value| value.as_deref());
+            (key_fn(row, source), index)
+        })
+        .collect::<HashMap<_, _>>();
+
+    for (row, source) in incoming.into_iter().zip(incoming_sources.into_iter()) {
+        let key = key_fn(&row, source.as_deref());
+        if let Some(index) = indexes.get(&key).copied() {
+            target[index] = row;
+            target_sources[index] = source;
+        } else {
+            indexes.insert(key, target.len());
+            target.push(row);
+            target_sources.push(source);
+        }
+    }
+}
+
+fn normalize_sources(sources: &mut Vec<Option<String>>, row_count: usize) {
+    sources.truncate(row_count);
+    sources.resize_with(row_count, || None);
+}
+
+fn conversation_merge_key(row: &AgentConversationRow) -> String {
+    format!(
+        "{}\0{}",
+        row.agent_did.as_deref().unwrap_or_default(),
+        row.session_id
+    )
+}
+
+fn behavior_merge_key(row: &AgentBehaviorRow) -> String {
+    format!(
+        "{}\0{}",
+        row.agent_did.as_deref().unwrap_or_default(),
+        row.behavior_id
+    )
+}
+
+fn request_merge_key(row: &AgentRequestRow) -> String {
+    format!(
+        "{}\0{}",
+        row.agent_did.as_deref().unwrap_or_default(),
+        row.request_id
+    )
+}
+
+fn response_merge_key(row: &AgentResponseRow) -> String {
+    format!(
+        "{}\0{}",
+        row.agent_did.as_deref().unwrap_or_default(),
+        row.response_key
+    )
+}
+
+fn message_merge_key(row: &AgentMessageRow, source_agent_did: Option<&str>) -> String {
+    format!(
+        "{}\0{}",
+        source_agent_did.unwrap_or_default(),
+        row.message_key
+    )
+}
+
+fn session_merge_key(row: &AgentSessionRow, source_agent_did: Option<&str>) -> String {
+    format!(
+        "{}\0{}",
+        source_agent_did.unwrap_or_default(),
+        row.session_id
+    )
+}
+
+fn tool_call_merge_key(row: &AgentToolCallRow, source_agent_did: Option<&str>) -> String {
+    format!(
+        "{}\0{}",
+        source_agent_did.unwrap_or_default(),
+        row.tool_call_key
+    )
+}
+
+fn tool_result_merge_key(row: &AgentToolResultRow, source_agent_did: Option<&str>) -> String {
+    format!(
+        "{}\0{}\0{}\0{}\0{}\0{}\0{}",
+        source_agent_did.unwrap_or_default(),
+        row.agent_did.as_deref().unwrap_or_default(),
+        row.session_id.as_deref().unwrap_or_default(),
+        row.tool_name.as_deref().unwrap_or_default(),
+        row.tool_input.as_deref().unwrap_or_default(),
+        row.conversation_doc_id.as_deref().unwrap_or_default(),
+        row.created_at.as_deref().unwrap_or_default()
+    )
+}
+
+fn compaction_entry_merge_key(row: &CompactionEntryRow, source_agent_did: Option<&str>) -> String {
+    format!(
+        "{}\0{}",
+        source_agent_did.unwrap_or_default(),
+        row.compaction_key
+    )
+}
+
+fn task_merge_key(row: &TaskRow, source_agent_did: Option<&str>) -> String {
+    format!("{}\0{}", source_agent_did.unwrap_or_default(), row.task_id)
+}
+
+fn schedule_merge_key(row: &ScheduleRow, source_agent_did: Option<&str>) -> String {
+    format!(
+        "{}\0{}",
+        source_agent_did.unwrap_or_default(),
+        row.schedule_id
+    )
+}
+
+fn event_trigger_merge_key(row: &EventTriggerRow, source_agent_did: Option<&str>) -> String {
+    format!(
+        "{}\0{}",
+        source_agent_did.unwrap_or_default(),
+        row.trigger_id
+    )
+}
+
+fn tool_selection_merge_key(row: &ToolSelectionRow) -> String {
+    format!(
+        "{}\0{}",
+        row.agent_did.as_deref().unwrap_or_default(),
+        row.selection_id
+    )
+}
+
+fn inference_backend_merge_key(
+    row: &InferenceBackendRow,
+    source_agent_did: Option<&str>,
+) -> String {
+    format!(
+        "{}\0{}",
+        source_agent_did.unwrap_or_default(),
+        row.backend_id
+    )
+}
+
+fn inference_profile_merge_key(
+    row: &InferenceProfileRow,
+    source_agent_did: Option<&str>,
+) -> String {
+    format!(
+        "{}\0{}",
+        source_agent_did.unwrap_or_default(),
+        row.profile_id
+    )
+}
+
+fn tool_service_registry_merge_key(
+    row: &ToolServiceRegistryRow,
+    source_agent_did: Option<&str>,
+) -> String {
+    format!(
+        "{}\0{}",
+        source_agent_did.unwrap_or_default(),
+        row.service_id
+    )
 }
 
 #[cfg(test)]
