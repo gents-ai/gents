@@ -91,12 +91,20 @@ impl Tool for UnrestrictedBashTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Run a command under the configured writable root.".to_string(),
+            description: "Run a command under the configured writable root. If args is empty, command may be a shell command string; if args is present, command is treated as an executable name or path."
+                .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "command": { "type": "string" },
-                    "args": { "type": "array", "items": { "type": "string" } },
+                    "command": {
+                        "type": "string",
+                        "description": "Executable name/path, or a shell command string when args is empty."
+                    },
+                    "args": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Arguments for exec-style invocation. Leave empty to run command through /bin/sh -lc."
+                    },
                     "cwd": { "type": "string" },
                     "timeout_secs": { "type": "integer" }
                 },
@@ -106,10 +114,16 @@ impl Tool for UnrestrictedBashTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let (command, command_args) = if args.args.is_empty() {
+            ("/bin/sh", vec!["-lc".to_string(), args.command.clone()])
+        } else {
+            (args.command.as_str(), args.args.clone())
+        };
+
         run_command(
             &self.context,
-            &args.command,
-            &args.args,
+            command,
+            &command_args,
             args.cwd.as_deref(),
             Duration::from_secs(args.timeout_secs.max(1)).min(self.default_timeout),
         )

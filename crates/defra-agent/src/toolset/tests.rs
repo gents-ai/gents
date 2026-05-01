@@ -4,7 +4,10 @@ use std::time::Duration;
 
 use defra_node::EmbeddedNode;
 
-use super::args::{EditFileArgs, GlobArgs, GrepArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs};
+use super::args::{
+    BashArgs, EditFileArgs, GlobArgs, GrepArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs,
+};
+use super::bash_tools::UnrestrictedBashTool;
 use super::delegate::DelegateToAgentArgs;
 use super::file_tools::{
     EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool,
@@ -262,6 +265,32 @@ fn read_only_bash_rejects_write_commands() {
         &default_read_only_commands()
     )
     .is_err());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unrestricted_bash_runs_shell_command_strings() {
+    let root = temp_root("defra-agent-unrestricted-shell");
+    let tool = UnrestrictedBashTool::new(
+        ToolContext::new(root, false).unwrap(),
+        Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+    );
+
+    let output = rig::tool::Tool::call(
+        &tool,
+        BashArgs {
+            command: "printf OK && printf ERR >&2".to_string(),
+            args: Vec::new(),
+            cwd: None,
+            timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(output.contains("command: /bin/sh -lc printf OK && printf ERR >&2"));
+    assert!(output.contains("stdout:\nOK"));
+    assert!(output.contains("stderr:\nERR"));
 }
 
 #[test]

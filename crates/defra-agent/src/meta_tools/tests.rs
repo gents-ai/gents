@@ -1,4 +1,4 @@
-use super::shared::{escape_graphql, extract_text, lookup_service_query};
+use super::shared::{escape_graphql, extract_text, lookup_service_query, MetaToolError};
 
 fn make_call_result(texts: &[&str]) -> rmcp::model::CallToolResult {
     use rmcp::model::CallToolResult;
@@ -67,4 +67,13 @@ fn extract_text_single_item() {
 fn extract_text_multiple_items_joined_with_newline() {
     let result = make_call_result(&["first", "second", "third"]);
     assert_eq!(extract_text(&result), "first\nsecond\nthird");
+}
+
+#[test]
+fn meta_tool_error_display_includes_context_chain() {
+    let error = anyhow::anyhow!("missing field 'host'").context("MCP call_tool");
+    let display = MetaToolError::from(error).to_string();
+
+    assert!(display.contains("MCP call_tool"), "{display}");
+    assert!(display.contains("missing field 'host'"), "{display}");
 }
