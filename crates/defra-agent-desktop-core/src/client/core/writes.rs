@@ -1,3 +1,8 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use anyhow::{Context, Result};
 use defra_agent_protocol::row::{
     AgentBehaviorRow, AgentPrincipalRow, AgentRequestRow, EventTriggerRow, InferenceBackendRow,
@@ -7,13 +12,38 @@ use defra_agent_protocol::row::{
 use super::super::mutations::{
     self, CreatedConversation, PeerMutationResult, SubmitRequestOptions, SubmittedRequest,
 };
+use super::super::peer_directory::PeerRecord;
+use super::super::query::load_chat_patch_from_graphql;
 use super::super::schema::subscribed_collection_names;
+use super::super::store::ClientStore;
 use super::bootstrap::{
     add_replicator_with_retry_until, branchable_pair_sync_enabled, connect_peer_with_retry_until,
     normalize_required, p2p_pairing_enabled_for_graphql, sync_branchable_collections_with_retry,
     BRANCHABLE_PAIR_SYNC_ENV, REMOTE_P2P_PAIRING_ENV,
 };
 use super::{ClientCore, ClientPeerStatus, PEER_ADD_OPERATION_TIMEOUT};
+
+const REMOTE_REQUEST_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const REMOTE_REQUEST_REFRESH_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+fn is_terminal_lifecycle_state(value: Option<&str>) -> bool {
+    matches!(
+        value,
+        Some("completed" | "failed" | "superseded" | "dead" | "interrupted")
+    )
+}
+
+fn chat_patch_signature(patch: &ClientStore) -> (usize, usize, u64) {
+    let rows = patch.row_count();
+    match serde_json::to_vec(&patch.to_rows()) {
+        Ok(bytes) => {
+            let mut hasher = DefaultHasher::new();
+            bytes.hash(&mut hasher);
+            (rows, bytes.len(), hasher.finish())
+        }
+        Err(_) => (rows, 0, 0),
+    }
+}
 
 impl ClientCore {
     pub async fn create_conversation(
@@ -98,6 +128,191 @@ impl ClientCore {
             }
             Err(error) => Err(self.record_mutation_error("submit request", error)),
         }
+    }
+
+    pub async fn submit_remote_graphql_request_with_options(
+        &self,
+        graphql: &str,
+        session_id: &str,
+        agent_did: &str,
+        content: &str,
+        behavior_id: Option<&str>,
+        options: SubmitRequestOptions,
+    ) -> Result<SubmittedRequest> {
+        let snapshot = self.store.snapshot();
+        let peer_record = self.peer_record_for_agent(agent_did).await;
+        match mutations::submit_request_to_graphql(
+            graphql,
+            snapshot.as_ref(),
+            session_id,
+            agent_did,
+            content,
+            behavior_id,
+            options,
+        )
+        .await
+        {
+            Ok(result) => {
+                self.store
+                    .set_focused_request_id(Some(result.request_id.clone()));
+                self.spawn_remote_request_refresh(
+                    graphql.to_string(),
+                    agent_did.to_string(),
+                    result.request_id.clone(),
+                    session_id.to_string(),
+                    peer_record.clone(),
+                );
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "defra_agent_desktop_core::writes",
+                    action = "chat_submit_remote_graphql",
+                    row_id = %result.request_id,
+                    agent_did,
+                    session_id,
+                    peer_id = %peer_record.as_ref().map(|record| record.peer_id.as_str()).unwrap_or(""),
+                    peer_label = %peer_record.as_ref().map(|record| record.label.as_str()).unwrap_or(""),
+                    peer_addr = %peer_record.as_ref().map(|record| record.addr.as_str()).unwrap_or(""),
+                    graphql,
+                    "desktop remote write saved"
+                );
+                Ok(result)
+            }
+            Err(error) => Err(self.record_mutation_error("submit remote GraphQL request", error)),
+        }
+    }
+
+    fn spawn_remote_request_refresh(
+        &self,
+        graphql: String,
+        agent_did: String,
+        request_id: String,
+        session_id: String,
+        peer_record: Option<PeerRecord>,
+    ) {
+        let store = Arc::clone(&self.store);
+
+        tokio::spawn(async move {
+            let peer_id = peer_record
+                .as_ref()
+                .map(|record| record.peer_id.clone())
+                .unwrap_or_default();
+            let peer_label = peer_record
+                .as_ref()
+                .map(|record| record.label.clone())
+                .unwrap_or_default();
+            let peer_addr = peer_record
+                .as_ref()
+                .map(|record| record.addr.clone())
+                .unwrap_or_default();
+            let started = Instant::now();
+            let mut last_patch_signature: Option<(usize, usize, u64)> = None;
+            loop {
+                if started.elapsed() >= REMOTE_REQUEST_REFRESH_TIMEOUT {
+                    tracing::warn!(
+                        target: "defra_agent_desktop_core::writes",
+                        request_id = %request_id,
+                        agent_did = %agent_did,
+                        session_id = %session_id,
+                        peer_id = %peer_id,
+                        peer_label = %peer_label,
+                        peer_addr = %peer_addr,
+                        graphql = %graphql,
+                        "desktop remote request refresh timed out before terminal state"
+                    );
+                    break;
+                }
+
+                tokio::time::sleep(REMOTE_REQUEST_REFRESH_INTERVAL).await;
+                match load_chat_patch_from_graphql(&graphql, &request_id).await {
+                    Ok(mut patch) => {
+                        patch.stamp_source_agent_did(&agent_did);
+                        let terminal = patch.request_row(&request_id).is_some_and(|row| {
+                            is_terminal_lifecycle_state(row.lifecycle_state.as_deref())
+                        });
+                        let patch_signature = chat_patch_signature(&patch);
+                        let (rows, bytes, _hash) = patch_signature;
+
+                        if !terminal && last_patch_signature == Some(patch_signature) {
+                            tracing::debug!(
+                                target: "defra_agent_desktop_core::writes",
+                                request_id = %request_id,
+                                agent_did = %agent_did,
+                                session_id = %session_id,
+                                peer_id = %peer_id,
+                                peer_label = %peer_label,
+                                peer_addr = %peer_addr,
+                                graphql = %graphql,
+                                rows,
+                                bytes,
+                                "desktop remote request patch unchanged"
+                            );
+                            continue;
+                        }
+
+                        last_patch_signature = Some(patch_signature);
+                        let version = store.merge_chat_patch(patch);
+                        tracing::info!(
+                            target: "defra_agent_desktop_core::writes",
+                            request_id = %request_id,
+                            agent_did = %agent_did,
+                            session_id = %session_id,
+                            peer_id = %peer_id,
+                            peer_label = %peer_label,
+                            peer_addr = %peer_addr,
+                            graphql = %graphql,
+                            version,
+                            rows,
+                            bytes,
+                            terminal,
+                            "desktop remote request patch merged"
+                        );
+                        if terminal {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            target: "defra_agent_desktop_core::writes",
+                            request_id = %request_id,
+                            agent_did = %agent_did,
+                            session_id = %session_id,
+                            peer_id = %peer_id,
+                            peer_label = %peer_label,
+                            peer_addr = %peer_addr,
+                            graphql = %graphql,
+                            error = %error,
+                            "desktop could not load remote request patch"
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    pub async fn graphql_for_agent(&self, agent_did: &str) -> Option<String> {
+        self.peer_record_for_agent(agent_did)
+            .await
+            .and_then(|record| {
+                record
+                    .graphql
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+            })
+    }
+
+    pub async fn peer_record_for_agent(&self, agent_did: &str) -> Option<PeerRecord> {
+        let agent_did = agent_did.trim();
+        if agent_did.is_empty() {
+            return None;
+        }
+        let peer_directory = self.peer_directory.read().await;
+        peer_directory
+            .records()
+            .iter()
+            .find(|record| record.agent_did == agent_did)
+            .cloned()
     }
 
     pub async fn rename_conversation(&self, session_id: &str, title: &str) -> Result<()> {
@@ -325,7 +540,16 @@ impl ClientCore {
                     "skipping automatic reverse P2P pairing for GraphQL-managed peer"
                 );
             }
-            if let Err(error) = self.refresh_store().await {
+            let refresh_result = if record
+                .graphql
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                self.refresh_remote_peer_record(&record).await.map(|_| ())
+            } else {
+                self.refresh_store().await.map(|_| ())
+            };
+            if let Err(error) = refresh_result {
                 append_warning(
                     &mut warning,
                     format!("deployment saved but remote snapshot refresh failed: {error}"),
@@ -411,9 +635,25 @@ impl ClientCore {
     }
 
     pub async fn save_behavior(&self, row: &AgentBehaviorRow) -> Result<()> {
-        match mutations::upsert_agent_behavior(self.node.as_ref(), row).await {
+        let remote_graphql = match row.agent_did.as_deref() {
+            Some(agent_did) => self.graphql_for_agent(agent_did).await,
+            None => None,
+        };
+        let result = match remote_graphql.as_deref() {
+            Some(graphql) => mutations::upsert_agent_behavior_to_graphql(graphql, row).await,
+            None => mutations::upsert_agent_behavior(self.node.as_ref(), row).await,
+        };
+        match result {
             Ok(()) => {
-                self.refresh_store().await?;
+                if let Some(agent_did) = row.agent_did.as_deref() {
+                    if remote_graphql.is_some() {
+                        self.refresh_remote_agent(agent_did).await?;
+                    } else {
+                        self.refresh_store().await?;
+                    }
+                } else {
+                    self.refresh_store().await?;
+                }
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "defra_agent_desktop_core::writes",
@@ -428,9 +668,18 @@ impl ClientCore {
     }
 
     pub async fn save_agent_principal(&self, row: &AgentPrincipalRow) -> Result<()> {
-        match mutations::upsert_agent_principal(self.node.as_ref(), row).await {
+        let remote_graphql = self.graphql_for_agent(&row.agent_did).await;
+        let result = match remote_graphql.as_deref() {
+            Some(graphql) => mutations::upsert_agent_principal_to_graphql(graphql, row).await,
+            None => mutations::upsert_agent_principal(self.node.as_ref(), row).await,
+        };
+        match result {
             Ok(()) => {
-                self.refresh_store().await?;
+                if remote_graphql.is_some() {
+                    self.refresh_remote_agent(&row.agent_did).await?;
+                } else {
+                    self.refresh_store().await?;
+                }
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "defra_agent_desktop_core::writes",
@@ -462,9 +711,25 @@ impl ClientCore {
     }
 
     pub async fn save_tool_selection(&self, row: &ToolSelectionRow) -> Result<()> {
-        match mutations::upsert_tool_selection(self.node.as_ref(), row).await {
+        let remote_graphql = match row.agent_did.as_deref() {
+            Some(agent_did) => self.graphql_for_agent(agent_did).await,
+            None => None,
+        };
+        let result = match remote_graphql.as_deref() {
+            Some(graphql) => mutations::upsert_tool_selection_to_graphql(graphql, row).await,
+            None => mutations::upsert_tool_selection(self.node.as_ref(), row).await,
+        };
+        match result {
             Ok(()) => {
-                self.refresh_store().await?;
+                if let Some(agent_did) = row.agent_did.as_deref() {
+                    if remote_graphql.is_some() {
+                        self.refresh_remote_agent(agent_did).await?;
+                    } else {
+                        self.refresh_store().await?;
+                    }
+                } else {
+                    self.refresh_store().await?;
+                }
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "defra_agent_desktop_core::writes",

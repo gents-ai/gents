@@ -4,11 +4,22 @@ use defra_agent_protocol::row::AgentBehaviorRow;
 use defra_node::EmbeddedNode;
 
 use super::super::graphql::{
-    escape_graphql_string, execute_mutation, graphql_optional_bool_field,
+    escape_graphql_string, execute_mutation, execute_remote_mutation, graphql_optional_bool_field,
     graphql_optional_float_field, graphql_string_field, join_fields, normalize_required,
 };
 
 pub async fn upsert_agent_behavior(node: &EmbeddedNode, row: &AgentBehaviorRow) -> Result<()> {
+    let mutation = build_upsert_agent_behavior_mutation(row)?;
+    execute_mutation(node, &mutation, "upsert_agent_behavior").await
+}
+
+pub async fn upsert_agent_behavior_to_graphql(graphql: &str, row: &AgentBehaviorRow) -> Result<()> {
+    let graphql = normalize_required("graphql", graphql)?;
+    let mutation = build_upsert_agent_behavior_mutation(row)?;
+    execute_remote_mutation(graphql, &mutation, "upsert_agent_behavior").await
+}
+
+fn build_upsert_agent_behavior_mutation(row: &AgentBehaviorRow) -> Result<String> {
     let behavior_id = normalize_required("behavior_id", &row.behavior_id)?;
     let agent_did = normalize_required(
         "agent_did",
@@ -109,7 +120,7 @@ pub async fn upsert_agent_behavior(node: &EmbeddedNode, row: &AgentBehaviorRow) 
         Some(graphql_optional_bool_field("enabled", row.enabled)),
     ];
 
-    let mutation = format!(
+    Ok(format!(
         r#"mutation {{
             upsert_AgentBehavior(
                 filter: {{ behavior_id: {{ _eq: "{behavior_id}" }} }},
@@ -124,6 +135,5 @@ pub async fn upsert_agent_behavior(node: &EmbeddedNode, row: &AgentBehaviorRow) 
         behavior_id = escape_graphql_string(behavior_id),
         add_fields = join_fields(&add_fields),
         update_fields = join_fields(&update_fields),
-    );
-    execute_mutation(node, &mutation, "upsert_agent_behavior").await
+    ))
 }

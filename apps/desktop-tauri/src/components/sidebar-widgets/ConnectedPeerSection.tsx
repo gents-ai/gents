@@ -1,5 +1,5 @@
 import type { DeploymentView } from "../../lib/types";
-import { displayAgentIdentity } from "../../lib/types";
+import { displayAgentIdentity, displayGraphqlEndpoint } from "../../lib/types";
 
 export type ConnectedPeerSectionProps = {
   deployments: DeploymentView[];
@@ -18,6 +18,7 @@ export function ConnectedPeerSection({
     deployments.find((deployment) => deployment.agentDid === selectedAgentDid) ??
     null;
   const agentIdentity = displayAgentIdentity(selectedDeployment?.agentDid);
+  const graphqlEndpoint = displayGraphqlEndpoint(selectedDeployment?.graphql);
 
   return (
     <section className="sidebar-section connected-peer-section">
@@ -37,8 +38,14 @@ export function ConnectedPeerSection({
         {agentIdentity ? (
           <span className="connected-peer-identity">{agentIdentity}</span>
         ) : null}
-        {selectedDeployment?.graphql ? (
-          <span className="connected-peer-endpoint">{selectedDeployment.graphql}</span>
+        {graphqlEndpoint ? (
+          <span
+            className="connected-peer-detail"
+            title={`GraphQL endpoint: ${selectedDeployment?.graphql ?? ""}`}
+          >
+            <span className="connected-peer-detail-label">GraphQL</span>
+            <span className="connected-peer-endpoint">{graphqlEndpoint}</span>
+          </span>
         ) : null}
 
         <div className="connected-peer-actions">

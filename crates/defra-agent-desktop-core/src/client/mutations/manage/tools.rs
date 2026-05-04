@@ -3,12 +3,23 @@ use defra_agent_protocol::row::{ToolSelectionRow, ToolServiceRegistryRow};
 use defra_node::EmbeddedNode;
 
 use super::super::graphql::{
-    escape_graphql_string, execute_mutation, graphql_optional_bool_field,
+    escape_graphql_string, execute_mutation, execute_remote_mutation, graphql_optional_bool_field,
     graphql_optional_int_field, graphql_string_field, graphql_string_list_field, join_fields,
     normalize_required,
 };
 
 pub async fn upsert_tool_selection(node: &EmbeddedNode, row: &ToolSelectionRow) -> Result<()> {
+    let mutation = build_upsert_tool_selection_mutation(row)?;
+    execute_mutation(node, &mutation, "upsert_tool_selection").await
+}
+
+pub async fn upsert_tool_selection_to_graphql(graphql: &str, row: &ToolSelectionRow) -> Result<()> {
+    let graphql = normalize_required("graphql", graphql)?;
+    let mutation = build_upsert_tool_selection_mutation(row)?;
+    execute_remote_mutation(graphql, &mutation, "upsert_tool_selection").await
+}
+
+fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String> {
     let selection_id = normalize_required("selection_id", &row.selection_id)?;
     let agent_did = normalize_required(
         "agent_did",
@@ -88,7 +99,7 @@ pub async fn upsert_tool_selection(node: &EmbeddedNode, row: &ToolSelectionRow) 
         Some(graphql_string_list_field("delegate_to", &row.delegate_to)),
     ];
 
-    let mutation = format!(
+    Ok(format!(
         r#"mutation {{
             upsert_ToolSelection(
                 filter: {{ selection_id: {{ _eq: "{selection_id}" }} }},
@@ -103,8 +114,7 @@ pub async fn upsert_tool_selection(node: &EmbeddedNode, row: &ToolSelectionRow) 
         selection_id = escape_graphql_string(selection_id),
         add_fields = join_fields(&add_fields),
         update_fields = join_fields(&update_fields),
-    );
-    execute_mutation(node, &mutation, "upsert_tool_selection").await
+    ))
 }
 
 pub async fn upsert_tool_service_registry(

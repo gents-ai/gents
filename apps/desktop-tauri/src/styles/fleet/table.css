@@ -75,6 +75,10 @@
     white-space: nowrap;
   }
 
+  .fleet-agent-endpoint {
+    color: var(--color-accent);
+  }
+
   .fleet-agent-name {
     width: fit-content;
     max-width: 100%;

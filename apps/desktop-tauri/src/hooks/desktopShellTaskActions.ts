@@ -9,6 +9,7 @@ import {
 } from "../lib/desktop-api";
 import type {
   DesktopClientSnapshot,
+  DesktopSessionSnapshot,
   EventTriggerSaveRequest,
   ScheduleRunRequest,
   ScheduleSaveRequest,
@@ -18,7 +19,9 @@ import type {
 } from "../lib/types";
 
 type TaskActionParams = {
-  refreshSession: (nextSessionId: string | null) => Promise<void>;
+  refreshSession: (
+    nextSessionId: string | null,
+  ) => Promise<DesktopSessionSnapshot | null>;
   refreshSnapshot: () => Promise<void>;
   setError: Dispatch<SetStateAction<string | null>>;
   setRunningTask: Dispatch<SetStateAction<boolean>>;

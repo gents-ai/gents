@@ -1,6 +1,10 @@
 import { isTerminalTurnState } from "../../lib/chat-shell";
 import type { BootstrapSummary, DeploymentView, P2PHealth } from "../../lib/types";
-import { displayAgentIdentity, displayBehaviorLabel } from "../../lib/types";
+import {
+  displayAgentIdentity,
+  displayBehaviorLabel,
+  displayGraphqlEndpoint,
+} from "../../lib/types";
 import { ChatIcon, ConfigIcon, RepairIcon, ToolIconGlyph } from "./FleetIcons";
 import { deploymentStatus, formatRelativeTime, inferenceBackendTitle, toolCeilingIcons, type ToolIcon } from "./fleetMetrics";
 
@@ -45,6 +49,7 @@ export function FleetRow({
     bootstrap?.initToolCeiling,
   );
   const agentIdentity = displayAgentIdentity(deployment.agentDid);
+  const graphqlEndpoint = displayGraphqlEndpoint(deployment.graphql);
   const defaultBehaviorLabel = displayBehaviorLabel(
     deployment.defaultBehaviorId ?? deployment.agentPrincipal.defaultBehaviorId,
   );
@@ -77,6 +82,14 @@ export function FleetRow({
                 .filter(Boolean)
                 .join(" | ")}
             </span>
+            {graphqlEndpoint ? (
+              <span
+                className="fleet-agent-endpoint mono"
+                title={`GraphQL endpoint: ${deployment.graphql ?? ""}`}
+              >
+                GraphQL {graphqlEndpoint}
+              </span>
+            ) : null}
           </div>
         </div>
       </td>

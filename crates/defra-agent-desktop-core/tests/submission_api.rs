@@ -253,7 +253,8 @@ async fn retry_request_writes_retry_chain_and_updates_conversation_summary() -> 
     assert_eq!(request.request_id, retried.request_id);
     assert_eq!(request.agent_did, "did:defra:amy");
     assert_eq!(request.behavior_id, "amy-code");
-    assert_eq!(request.session_id, created.session_id);
+    assert_eq!(request.session_id, retried.session_id);
+    assert_ne!(request.session_id, created.session_id);
     assert_eq!(request.content, "first attempt");
     assert_eq!(request.status, "pending");
     assert_eq!(request.lifecycle_state, "pending");
@@ -263,7 +264,7 @@ async fn retry_request_writes_retry_chain_and_updates_conversation_summary() -> 
     assert_eq!(request.retry_count, 1);
     assert_eq!(request.max_retries, 3);
 
-    let conversation: ConversationRow = query_single(
+    let original_conversation: ConversationRow = query_single(
         core.node(),
         &format!(
             r#"{{
@@ -283,9 +284,34 @@ async fn retry_request_writes_retry_chain_and_updates_conversation_summary() -> 
         "AgentConversation",
     )
     .await?;
-    assert_eq!(conversation.preview_text, "first attempt");
-    assert_eq!(conversation.status, "active");
-    assert_eq!(conversation.latest_request_id, retried.request_id);
+    assert_eq!(original_conversation.preview_text, "first attempt");
+    assert_eq!(original_conversation.status, "active");
+    assert_eq!(original_conversation.latest_request_id, original.request_id);
+
+    let retry_conversation: ConversationRow = query_single(
+        core.node(),
+        &format!(
+            r#"{{
+                AgentConversation(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    session_id
+                    agent_name
+                    agent_did
+                    behavior_id
+                    title
+                    preview_text
+                    status
+                    latest_request_id
+                }}
+            }}"#,
+            retried.session_id
+        ),
+        "AgentConversation",
+    )
+    .await?;
+    assert_eq!(retry_conversation.session_id, retried.session_id);
+    assert_eq!(retry_conversation.preview_text, "first attempt");
+    assert_eq!(retry_conversation.status, "active");
+    assert_eq!(retry_conversation.latest_request_id, retried.request_id);
     assert_eq!(core.store().focused_request_id(), Some(retried.request_id));
 
     core.shutdown().await?;
@@ -293,10 +319,10 @@ async fn retry_request_writes_retry_chain_and_updates_conversation_summary() -> 
 }
 
 /// Regression test for the "resend drops overrides" bug. Previously,
-/// `fetch_request_view` only queried `session_id`, `agent_did`, `behavior_id`,
-/// `content`, `lifecycle_state`, `failure_reason` — so `resend_request`
-/// silently rebuilt the new row without the original sampling overrides or
-/// metadata. Resend must preserve submitter intent across the retry chain.
+/// `fetch_request_view` only queried routing/content state fields, so
+/// `resend_request` silently rebuilt the new row without the original sampling
+/// overrides or metadata. Resend must preserve submitter intent across the
+/// retry chain.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn resend_preserves_request_overrides_and_metadata() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
@@ -358,6 +384,7 @@ async fn resend_preserves_request_overrides_and_metadata() -> Result<()> {
             r#"{{
                 AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
                     request_id
+                    session_id
                     retry_parent_request
                     retry_root_request
                     temperature
@@ -373,6 +400,8 @@ async fn resend_preserves_request_overrides_and_metadata() -> Result<()> {
     )
     .await?;
     assert_eq!(new_row.request_id, resent.request_id);
+    assert_eq!(new_row.session_id, resent.session_id);
+    assert_ne!(new_row.session_id, original.session_id);
     assert_eq!(new_row.retry_parent_request, original.request_id);
     // Root should chain back to the original (this was the root of its own chain).
     assert_eq!(new_row.retry_root_request, original.request_id);
@@ -389,6 +418,7 @@ async fn resend_preserves_request_overrides_and_metadata() -> Result<()> {
 #[derive(Debug, Deserialize)]
 struct RequestWithOverridesRow {
     request_id: String,
+    session_id: String,
     retry_parent_request: String,
     retry_root_request: String,
     temperature: Option<f64>,

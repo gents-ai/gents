@@ -1,6 +1,5 @@
 use tauri::{AppHandle, Emitter, State};
 
-use super::emit_config_update_and_snapshot;
 use super::super::commands::{
     run_schedule_config, run_task_config, save_event_trigger_config, save_schedule_config,
     save_task_config,
@@ -10,6 +9,7 @@ use super::super::types::{
     ClientUpdateEvent, DesktopClientSnapshot, EventTriggerSaveRequest, ScheduleRunRequest,
     ScheduleSaveRequest, TaskRunRequest, TaskRunResult, TaskSaveRequest,
 };
+use super::emit_config_update_and_snapshot;
 
 #[tauri::command]
 pub(crate) fn desktop_task_save(

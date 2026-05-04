@@ -3,10 +3,10 @@ use std::time::Duration;
 use defra_agent_desktop_core::local_runtime::fetch_runtime_connection_payload;
 use tauri::{AppHandle, State};
 
-use super::emit_config_update_and_snapshot;
 use super::super::commands::{add_peer, repair_p2p};
 use super::super::state::{current_core, DesktopAppState};
 use super::super::types::{DesktopClientSnapshot, PeerAddRequest, PeerStatusFetchRequest};
+use super::emit_config_update_and_snapshot;
 
 #[tauri::command]
 pub(crate) fn desktop_peer_add(

@@ -39,6 +39,8 @@ use live_fixture::{LiveBackendOverride, LiveBridgeFixture};
 #[derive(Debug, Parser)]
 struct RunnerArgs {
     #[arg(long)]
+    desktop_only: bool,
+    #[arg(long)]
     inference_url: Option<String>,
     #[arg(long)]
     model_name: Option<String>,
@@ -62,15 +64,20 @@ struct ReadyMessage {
 
 fn main() -> Result<()> {
     let args = RunnerArgs::parse();
-    let backend_override = LiveBackendOverride {
-        inference_url: args.inference_url,
-        model_name: args.model_name,
-        provider: args.provider,
-        api_key: args.api_key,
-        api_key_env_var: args.api_key_env_var,
+    let fixture = if args.desktop_only {
+        std::panic::catch_unwind(LiveBridgeFixture::start_desktop_only)
+            .map_err(|_| anyhow!("bridge runner panicked during desktop-only startup"))??
+    } else {
+        let backend_override = LiveBackendOverride {
+            inference_url: args.inference_url,
+            model_name: args.model_name,
+            provider: args.provider,
+            api_key: args.api_key,
+            api_key_env_var: args.api_key_env_var,
+        };
+        std::panic::catch_unwind(|| LiveBridgeFixture::start(Some(backend_override)))
+            .map_err(|_| anyhow!("bridge runner panicked during startup"))??
     };
-    let fixture = std::panic::catch_unwind(|| LiveBridgeFixture::start(Some(backend_override)))
-        .map_err(|_| anyhow!("bridge runner panicked during startup"))??;
     let server = BridgeRunnerServer::start(Arc::clone(&fixture))?;
     let ready = ReadyMessage {
         kind: "ready",

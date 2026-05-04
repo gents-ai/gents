@@ -1,6 +1,5 @@
 use tauri::{AppHandle, State};
 
-use super::emit_config_update_and_snapshot;
 use super::super::commands::{
     save_agent_config, save_backend_config, save_behavior_config, save_inference_profile_config,
     save_tool_selection_config, save_tool_service_config, test_tool_service_config,
@@ -11,6 +10,7 @@ use super::super::types::{
     InferenceProfileSaveRequest, ToolSelectionSaveRequest, ToolServiceSaveRequest,
     ToolServiceTestRequest, ToolServiceTestResult,
 };
+use super::emit_config_update_and_snapshot;
 
 #[tauri::command]
 pub(crate) fn desktop_agent_config_save(

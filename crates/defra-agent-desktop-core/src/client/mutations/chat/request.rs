@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_agent_protocol::row::AgentRequestRow;
 use defra_node::EmbeddedNode;
@@ -7,7 +7,8 @@ use uuid::Uuid;
 use crate::client::store::ClientStore;
 
 use super::super::graphql::{
-    escape_graphql_string, execute_mutation, normalize_optional_string, normalize_required,
+    escape_graphql_string, execute_mutation, execute_remote_mutation, normalize_optional_string,
+    normalize_required,
 };
 use super::binding::resolve_agent_binding;
 use super::conversation::{build_upsert_conversation_field, build_upsert_session_field};
@@ -120,13 +121,79 @@ pub async fn submit_request(
     })
 }
 
+pub async fn submit_request_to_graphql(
+    graphql: &str,
+    store: &ClientStore,
+    session_id: &str,
+    agent_did: &str,
+    content: &str,
+    behavior_id: Option<&str>,
+    options: SubmitRequestOptions,
+) -> Result<SubmittedRequest> {
+    let graphql = normalize_required("graphql", graphql)?;
+    let session_id = normalize_required("session_id", session_id)?;
+    let agent_did = normalize_required("agent_did", agent_did)?;
+    let content = normalize_required("content", content)?;
+    if options.retry_parent_request.is_some() {
+        bail!("remote GraphQL chat submission does not yet support retry threading");
+    }
+
+    let request_id = Uuid::new_v4().to_string();
+    let created_at = Utc::now().to_rfc3339();
+    let binding = resolve_agent_binding(store, agent_did, behavior_id, Some(session_id))?;
+    let session_field = build_upsert_session_field(
+        "session",
+        store,
+        session_id,
+        &binding.agent_name,
+        &binding.behavior_id,
+        &created_at,
+    );
+    let request_field = build_add_agent_request_field(
+        "request",
+        &request_id,
+        agent_did,
+        binding.behavior_id.as_deref().unwrap_or(""),
+        session_id,
+        "",
+        &request_id,
+        content,
+        &created_at,
+        0,
+        i64::from(DEFAULT_REQUEST_MAX_RETRIES),
+        &submit_request_extra_fields(&options),
+    );
+    let conversation_field = build_upsert_conversation_field(
+        "conversation",
+        store,
+        session_id,
+        agent_did,
+        &binding.agent_name,
+        &binding.behavior_id,
+        &request_id,
+        content,
+        "active",
+        &created_at,
+    );
+    let mutation =
+        build_coalesced_submit_mutation(&[session_field, request_field, conversation_field]);
+    execute_remote_mutation(graphql, &mutation, "submit_request").await?;
+
+    Ok(SubmittedRequest {
+        request_id,
+        session_id: session_id.to_string(),
+        agent_did: agent_did.to_string(),
+        behavior_id: binding.behavior_id,
+    })
+}
+
 pub async fn retry_request(
     node: &EmbeddedNode,
     store: &ClientStore,
     parent: &AgentRequestRow,
 ) -> Result<SubmittedRequest> {
     let parent_request_id = normalize_required("request_id", &parent.request_id)?;
-    let session_id = normalize_required(
+    let parent_session_id = normalize_required(
         "session_id",
         parent
             .session_id
@@ -155,13 +222,14 @@ pub async fn retry_request(
         .max_retries
         .unwrap_or(i64::from(DEFAULT_REQUEST_MAX_RETRIES));
     let request_id = Uuid::new_v4().to_string();
+    let session_id = Uuid::new_v4().to_string();
     let created_at = Utc::now().to_rfc3339();
-    let binding = resolve_agent_binding(store, agent_did, behavior_id, Some(session_id))?;
+    let binding = resolve_agent_binding(store, agent_did, behavior_id, Some(parent_session_id))?;
 
     let session_field = build_upsert_session_field(
         "session",
         store,
-        session_id,
+        &session_id,
         &binding.agent_name,
         &binding.behavior_id,
         &created_at,
@@ -171,7 +239,7 @@ pub async fn retry_request(
         &request_id,
         agent_did,
         binding.behavior_id.as_deref().unwrap_or(""),
-        session_id,
+        &session_id,
         parent_request_id,
         retry_root_request,
         content,
@@ -183,7 +251,7 @@ pub async fn retry_request(
     let conversation_field = build_upsert_conversation_field(
         "conversation",
         store,
-        session_id,
+        &session_id,
         agent_did,
         &binding.agent_name,
         &binding.behavior_id,
@@ -198,7 +266,7 @@ pub async fn retry_request(
 
     Ok(SubmittedRequest {
         request_id,
-        session_id: session_id.to_string(),
+        session_id,
         agent_did: agent_did.to_string(),
         behavior_id: binding.behavior_id,
     })
@@ -323,10 +391,11 @@ pub async fn resend_request(
             stale.failure_reason
         );
     }
+    let retry_session_id = Uuid::new_v4().to_string();
     submit_request(
         node,
         store,
-        &stale.session_id,
+        &retry_session_id,
         &stale.agent_did,
         &stale.content,
         stale.behavior_id.as_deref(),
@@ -348,7 +417,6 @@ pub async fn resend_request(
 /// Minimal projection of an AgentRequest used by resend to copy over inputs.
 /// Carries sampling overrides + metadata so resend preserves submitter intent.
 struct StaleRequestView {
-    session_id: String,
     agent_did: String,
     behavior_id: Option<String>,
     content: String,
@@ -369,7 +437,6 @@ async fn fetch_request_view(node: &EmbeddedNode, request_id: &str) -> Result<Sta
                 filter: {{ request_id: {{ _eq: "{escaped}" }} }},
                 limit: 1
             ) {{
-                session_id
                 agent_did
                 behavior_id
                 content
@@ -395,11 +462,6 @@ async fn fetch_request_view(node: &EmbeddedNode, request_id: &str) -> Result<Sta
         .and_then(|arr| arr.first())
         .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))?;
     Ok(StaleRequestView {
-        session_id: row
-            .get("session_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
         agent_did: row
             .get("agent_did")
             .and_then(|v| v.as_str())

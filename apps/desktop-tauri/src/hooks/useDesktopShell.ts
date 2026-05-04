@@ -36,6 +36,9 @@ export function useDesktopShell() {
   const lastP2PAutoRestartAt = useRef<number | null>(null);
   const lastObservedP2PHealth = useRef<P2PHealth | null>(null);
   const selectedSessionIdRef = useRef<string | null>(null);
+  const selectedAgentDidRef = useRef<string | null>(null);
+  const selectedTrackedRequestIdRef = useRef<string | null>(null);
+  const sessionRefreshSeq = useRef(0);
   const newConversationAgentRef = useRef<string | null>(null);
   const [snapshot, setSnapshot] = useState<DesktopClientSnapshot | null>(null);
   const [session, setSession] = useState<DesktopSessionSnapshot | null>(null);
@@ -93,6 +96,9 @@ export function useDesktopShell() {
     selectedSessionId,
     shellProjection.workflow,
   );
+  selectedAgentDidRef.current = selectedAgentDid;
+  selectedSessionIdRef.current = selectedSessionId;
+  selectedTrackedRequestIdRef.current = selectedTrackedRequestId;
 
   async function refreshSnapshot() {
     setLoading(true);
@@ -107,21 +113,34 @@ export function useDesktopShell() {
     }
   }
 
-  async function refreshSession(nextSessionId: string | null) {
+  async function refreshSession(
+    nextSessionId: string | null,
+  ): Promise<DesktopSessionSnapshot | null> {
+    const refreshSeq = sessionRefreshSeq.current + 1;
+    sessionRefreshSeq.current = refreshSeq;
+
     if (!nextSessionId) {
-      setSession(null);
-      return;
+      if (sessionRefreshSeq.current === refreshSeq) {
+        setSession(null);
+      }
+      return null;
     }
 
     try {
       const next = await fetchSessionSnapshot(
         nextSessionId,
-        selectedAgentDid,
-        trackedRequestIdForSession(nextSessionId, shellProjection.workflow),
+        selectedAgentDidRef.current,
+        selectedTrackedRequestIdRef.current,
       );
-      setSession(next);
+      if (sessionRefreshSeq.current === refreshSeq) {
+        setSession(next);
+      }
+      return next;
     } catch (err) {
-      setError(String(err));
+      if (sessionRefreshSeq.current === refreshSeq) {
+        setError(String(err));
+      }
+      return null;
     }
   }
 

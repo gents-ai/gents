@@ -248,13 +248,106 @@ impl LiveBridgeFixture {
         }))
     }
 
+    pub(crate) fn start_desktop_only() -> Result<Arc<Self>> {
+        init_live_runner_tracing();
+
+        let runtime = live_runtime()?;
+        let tempdir = tempfile::tempdir()?;
+        let remote_paths = DesktopPaths::from_root(tempdir.path().join("remote-empty"));
+        let desktop_paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
+        let agent_home = tempdir.path().join("agent-home");
+        std::fs::create_dir_all(&agent_home)?;
+
+        let remote_core = Arc::new(runtime.block_on(ClientCore::start_with_paths_and_options(
+            remote_paths,
+            live_core_options(),
+        ))?);
+        let desktop_core = Arc::new(runtime.block_on(ClientCore::start_with_paths_and_options(
+            desktop_paths.clone(),
+            live_core_options(),
+        ))?);
+        let p2p_listen_address = desktop_core
+            .listen_addresses()
+            .first()
+            .cloned()
+            .unwrap_or_default();
+
+        let init_summary = DesktopInitSummary {
+            status: "initialized",
+            source: "bridge-runner-desktop-only",
+            status_endpoint: None,
+            agent_home: agent_home.display().to_string(),
+            desktop_home: desktop_paths.root().display().to_string(),
+            peer_directory: desktop_paths.peer_directory_path().display().to_string(),
+            label: "Desktop Only".to_string(),
+            agent_name: String::new(),
+            agent_did: String::new(),
+            graphql: String::new(),
+            p2p_transport: "iroh".to_string(),
+            p2p_peer_id: desktop_core.local_peer_id().to_string(),
+            p2p_listen_address,
+            peer_record_id: String::new(),
+            next_steps: vec![],
+        };
+
+        tracing::info!("desktop-only bridge fixture ready");
+
+        let update_version = Arc::new(AtomicU64::new(1));
+        let update_task = {
+            let desktop_core = Arc::clone(&desktop_core);
+            let update_version = Arc::clone(&update_version);
+            runtime.spawn(async move {
+                let mut store_updates = desktop_core.store_updates();
+                let mut health_updates = desktop_core.p2p_health_updates();
+                loop {
+                    tokio::select! {
+                        changed = store_updates.changed() => {
+                            if changed.is_err() {
+                                break;
+                            }
+                            update_version.fetch_add(1, Ordering::SeqCst);
+                        }
+                        changed = health_updates.changed() => {
+                            if changed.is_err() {
+                                break;
+                            }
+                            update_version.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                }
+            })
+        };
+
+        Ok(Arc::new(Self {
+            runtime,
+            _tempdir: tempdir,
+            desktop_paths,
+            agent_home,
+            desktop_core,
+            remote_core,
+            deployment_label: "Desktop Only".to_string(),
+            agent_did: String::new(),
+            tool_root: PathBuf::new(),
+            init_summary,
+            bootstrap_saved_peers: Vec::new(),
+            update_version,
+            update_task: Mutex::new(Some(update_task)),
+            running_agent: Mutex::new(None),
+            shutdown_started: AtomicBool::new(false),
+        }))
+    }
+
     pub(crate) async fn build_bootstrap_summary(&self) -> DesktopBootstrapSummary {
         DesktopBootstrapSummary {
             default_agent_home: self.agent_home.display().to_string(),
-            init_agent_name: Some(DEFAULT_AGENT_NAME.to_string()),
-            init_agent_did: Some(self.init_summary.agent_did.clone()),
+            init_agent_name: non_empty_clone(&self.init_summary.agent_name),
+            init_agent_did: non_empty_clone(&self.init_summary.agent_did),
             init_tool_ceiling: Some("Readwrite".to_string()),
-            init_tool_root: Some(self.tool_root.display().to_string()),
+            init_tool_root: self
+                .tool_root
+                .to_str()
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
             desktop_home: self.desktop_paths.root().display().to_string(),
             peer_directory_path: self
                 .desktop_paths
@@ -269,6 +362,10 @@ impl LiveBridgeFixture {
             saved_peers: self.bootstrap_saved_peers.clone(),
         }
     }
+}
+
+fn non_empty_clone(value: &str) -> Option<String> {
+    (!value.trim().is_empty()).then(|| value.to_string())
 }
 
 fn live_runtime() -> Result<Arc<Runtime>> {

@@ -22,27 +22,11 @@ impl DefraSessionHook {
                 Message::User { .. } => {
                     state.sequence += 1;
                     let sequence = state.sequence;
-                    state.assistant_turn_sequence = None;
-                    state.assistant_turn_saved = false;
+                    state.reset_after_user_message();
                     (session_id, sequence, "user")
                 }
                 Message::Assistant { .. } => {
-                    let sequence = match state.assistant_turn_sequence {
-                        Some(sequence) if !state.assistant_turn_saved => sequence,
-                        Some(sequence) => {
-                            anyhow::bail!(
-                                "assistant turn for sequence {} already persisted",
-                                sequence
-                            );
-                        }
-                        None => {
-                            state.sequence += 1;
-                            let sequence = state.sequence;
-                            state.assistant_turn_sequence = Some(sequence);
-                            sequence
-                        }
-                    };
-                    state.assistant_turn_saved = true;
+                    let sequence = state.persist_assistant_turn()?;
                     (session_id, sequence, "assistant")
                 }
                 Message::System { .. } => {
@@ -59,6 +43,7 @@ impl DefraSessionHook {
     pub async fn persist_stream_tool_result_message(
         &self,
         tool_result: &ToolResult,
+        internal_call_id: &str,
     ) -> anyhow::Result<()> {
         let session_id = self
             .state
@@ -68,20 +53,28 @@ impl DefraSessionHook {
             .clone()
             .ok_or_else(|| anyhow::anyhow!("session hook missing session id"))?;
 
-        let tool_call_id = &tool_result.id;
-        let stored_result = session::load_tool_call_result(&self.node, &session_id, tool_call_id)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!(
-                    error = %e,
-                    tool_call_id = %tool_call_id,
-                    "failed to load stored tool result, falling back to stream payload"
-                );
-                let raw = render_tool_result_text(tool_result);
-                let (text, _, _) =
-                    truncate_text(&raw, TruncationMode::Head, &self.truncation_limits);
-                text
-            });
+        let should_persist = {
+            let mut state = self.state.lock().await;
+            state.mark_stream_tool_result_seen(internal_call_id)?
+        };
+        if !should_persist {
+            return Ok(());
+        }
+
+        let stored_result =
+            session::load_tool_call_result(&self.node, &session_id, internal_call_id)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(
+                        error = %e,
+                        tool_call_id = %internal_call_id,
+                        "failed to load stored tool result, falling back to stream payload"
+                    );
+                    let raw = render_tool_result_text(tool_result);
+                    let (text, _, _) =
+                        truncate_text(&raw, TruncationMode::Head, &self.truncation_limits);
+                    text
+                });
 
         let persisted_result = ToolResult {
             id: tool_result.id.clone(),
@@ -105,16 +98,7 @@ impl DefraSessionHook {
             .clone()
             .ok_or_else(|| anyhow::anyhow!("session hook missing session id"))?;
 
-        let sequence = match state.assistant_turn_sequence {
-            Some(sequence) => sequence,
-            None => {
-                state.sequence += 1;
-                let sequence = state.sequence;
-                state.assistant_turn_sequence = Some(sequence);
-                state.assistant_turn_saved = false;
-                sequence
-            }
-        };
+        let sequence = state.begin_or_continue_assistant_turn();
 
         Ok((session_id, sequence))
     }
@@ -131,8 +115,7 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                 state.initialized = true;
             }
 
-            state.assistant_turn_sequence = None;
-            state.assistant_turn_saved = false;
+            state.reset_after_user_message();
             drop(state);
 
             self.persist_message(prompt).await?;
@@ -223,12 +206,14 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
     ) -> HookAction {
         let persist_result: anyhow::Result<()> = async {
             let (session_id, should_persist_message) = {
-                let state = self.state.lock().await;
+                let mut state = self.state.lock().await;
                 let session_id = state
                     .session_id
                     .clone()
                     .ok_or_else(|| anyhow::anyhow!("session hook missing session id"))?;
-                (session_id, state.assistant_turn_saved)
+                let should_persist_message =
+                    state.mark_tool_result_seen_for_persisted_turn(internal_call_id);
+                (session_id, should_persist_message)
             };
 
             let truncator =
