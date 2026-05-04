@@ -13,6 +13,7 @@ use crate::{
     CONFIG_IMPORT_AFTER_HELP, DEFAULT_INIT_ENDPOINT, DIAGNOSE_AFTER_HELP, INIT_AFTER_HELP,
     P2P_AFTER_HELP, PROVISION_AFTER_HELP, REQUEST_AFTER_HELP, RESET_AFTER_HELP,
     RESPONSE_AFTER_HELP, SERVER_AFTER_HELP, SESSION_AFTER_HELP, SHOW_AFTER_HELP, STATUS_AFTER_HELP,
+    TRACE_AFTER_HELP,
 };
 
 use crate::default_backend_max_queue_depth;
@@ -58,6 +59,14 @@ pub(crate) enum Command {
     Show {
         #[command(subcommand)]
         command: ShowCommand,
+    },
+    #[command(
+        about = "Export persisted tool-call traces for measurement",
+        after_help = TRACE_AFTER_HELP
+    )]
+    Trace {
+        #[command(subcommand)]
+        command: TraceCommand,
     },
     #[command(about = "Show the current local runtime status", after_help = STATUS_AFTER_HELP)]
     Status(StatusArgs),
@@ -460,6 +469,36 @@ pub(crate) struct RuntimeShowArgs {
     pub(crate) graphql: Option<String>,
     #[arg(long)]
     pub(crate) agent_did: Option<String>,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum TraceCommand {
+    #[command(name = "export", about = "Export Amy-style tool-call JSONL")]
+    Export(TraceExportArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct TraceExportArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.defra-agent")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, help = "Restrict export to one session_id")]
+    pub(crate) session_id: Option<String>,
+    #[arg(long, help = "Restrict export to one inferred request_id")]
+    pub(crate) request_id: Option<String>,
+    #[arg(long, help = "Run id to stamp on exported JSONL records")]
+    pub(crate) run_id: Option<String>,
+    #[arg(long, help = "Case id to stamp on exported JSONL records")]
+    pub(crate) case_id: Option<String>,
+    #[arg(
+        long,
+        default_value_t = 500,
+        help = "Maximum recent AgentToolCall rows to export"
+    )]
+    pub(crate) limit: usize,
+    #[arg(long = "output-file", help = "Write JSONL to a file instead of stdout")]
+    pub(crate) output_file: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]

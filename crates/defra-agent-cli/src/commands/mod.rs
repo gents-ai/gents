@@ -12,3 +12,4 @@ pub(crate) mod serve;
 pub(crate) mod session;
 pub(crate) mod show;
 pub(crate) mod status;
+pub(crate) mod trace;

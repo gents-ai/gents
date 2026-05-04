@@ -156,6 +156,16 @@ Examples:
   defra-agent show runtime
   defra-agent show request REQUEST_ID
   defra-agent show response REQUEST_ID";
+const TRACE_AFTER_HELP: &str = "\
+Exports one JSON object per persisted AgentToolCall row. The command reads
+AgentSession, AgentRequest, AgentResponse, AgentMessage, AgentBehavior, and
+AgentToolCall rows, then infers Amy baseline fields without mutating runtime
+state.
+
+Examples:
+  defra-agent trace export --home /path/to/home
+  defra-agent trace export --graphql http://127.0.0.1:9191/api/v0/graphql
+  defra-agent trace export --graphql http://100.69.4.79:9191/api/v0/graphql --run-id amy-readonly-001 --limit 200 > amy-tool-calls.jsonl";
 const CONFIG_AFTER_HELP: &str = "\
 Examples:
   defra-agent config validate --root infra/agents/default
@@ -273,6 +283,7 @@ async fn main() -> Result<()> {
         Command::Chat(args) => commands::chat::chat(args).await,
         Command::P2p { command } => commands::p2p::dispatch(command).await,
         Command::Show { command } => commands::show::dispatch(command).await,
+        Command::Trace { command } => commands::trace::dispatch(command).await,
         Command::Status(args) => commands::status::status(args).await,
         Command::Diagnose(args) => commands::diagnose::diagnose(args).await,
         Command::Config { command } => commands::config::dispatch(command).await,
