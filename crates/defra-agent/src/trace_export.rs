@@ -10,6 +10,7 @@ pub enum ToolFailureClass {
     ToolNotFound,
     ResourceNotFound,
     ServiceSchemaDrift,
+    InvalidToolArguments,
     InvalidJsonArguments,
     ArgumentsNotObject,
     ToolRuntimeError,
@@ -31,6 +32,7 @@ pub enum ArgumentParseResult {
 #[serde(rename_all = "snake_case")]
 pub enum SchemaValidationResult {
     NotEvaluated,
+    Failed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +59,14 @@ pub struct ToolCallTraceAnalysis {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TraceToolError {
     pub failure_class: ToolFailureClass,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
     pub retryable: Option<bool>,
     pub raw_error_text: String,
 }
@@ -113,7 +123,21 @@ pub fn analyze_tool_call(
     status: &str,
 ) -> ToolCallTraceAnalysis {
     let mut analysis = analyze_arguments(tool_name, raw_args);
-    if analysis.tool_failure_class.is_none() {
+    let structured_tool_error = structured_tool_error_from_result(result);
+    if let Some(error) = &structured_tool_error {
+        analysis.tool_failure_class = Some(error.failure_class);
+        if error.failure_class == ToolFailureClass::InvalidToolArguments {
+            analysis.schema_validation_result = SchemaValidationResult::Failed;
+        }
+        if let (Some(path), Some(message)) = (&error.path, &error.message) {
+            analysis.validation_errors.push(TraceValidationError {
+                code: failure_class_code(error.failure_class).to_string(),
+                path: path.clone(),
+                message: message.clone(),
+                retryable: error.retryable.unwrap_or(false),
+            });
+        }
+    } else if analysis.tool_failure_class.is_none() {
         analysis.tool_failure_class = classify_result_text(result);
     }
 
@@ -123,13 +147,25 @@ pub fn analyze_tool_call(
     }
 
     analysis.tool_result_ok = completed && analysis.tool_failure_class.is_none();
-    analysis.tool_error = analysis
-        .tool_failure_class
-        .map(|failure_class| TraceToolError {
-            failure_class,
-            retryable: retryable_for_failure_class(failure_class),
-            raw_error_text: raw_tool_error_text(result, &analysis),
-        });
+    analysis.tool_error = structured_tool_error.or_else(|| {
+        analysis
+            .tool_failure_class
+            .map(|failure_class| TraceToolError {
+                failure_class,
+                service_id: analysis.selected_service_id.clone(),
+                tool_name: analysis.selected_tool_name.clone(),
+                path: analysis
+                    .validation_errors
+                    .first()
+                    .map(|error| error.path.clone()),
+                message: analysis
+                    .validation_errors
+                    .first()
+                    .map(|error| error.message.clone()),
+                retryable: retryable_for_failure_class(failure_class),
+                raw_error_text: raw_tool_error_text(result, &analysis),
+            })
+    });
     analysis
 }
 
@@ -195,6 +231,7 @@ fn analyze_arguments(tool_name: &str, raw_args: &str) -> ToolCallTraceAnalysis {
         Ok(value) => value,
         Err(error) => {
             analysis.argument_parse_result = ArgumentParseResult::InvalidJson;
+            analysis.schema_validation_result = SchemaValidationResult::Failed;
             analysis.tool_failure_class = Some(ToolFailureClass::InvalidJsonArguments);
             analysis.validation_errors.push(TraceValidationError {
                 code: "invalid_json_arguments".to_string(),
@@ -208,6 +245,7 @@ fn analyze_arguments(tool_name: &str, raw_args: &str) -> ToolCallTraceAnalysis {
 
     let Some(object) = parsed.as_object() else {
         analysis.argument_parse_result = ArgumentParseResult::ArgumentsNotObject;
+        analysis.schema_validation_result = SchemaValidationResult::Failed;
         analysis.tool_failure_class = Some(ToolFailureClass::ArgumentsNotObject);
         analysis.validation_errors.push(TraceValidationError {
             code: "arguments_not_object".to_string(),
@@ -257,6 +295,7 @@ fn apply_call_tool_argument_analysis(
             }
             Ok(parsed) => {
                 analysis.argument_parse_result = ArgumentParseResult::ArgumentsNotObject;
+                analysis.schema_validation_result = SchemaValidationResult::Failed;
                 analysis.tool_failure_class = Some(ToolFailureClass::ArgumentsNotObject);
                 analysis.final_arguments_sent = Some(json!({ "input": parsed }));
                 analysis.validation_errors.push(TraceValidationError {
@@ -268,6 +307,7 @@ fn apply_call_tool_argument_analysis(
             }
             Err(error) => {
                 analysis.argument_parse_result = ArgumentParseResult::InvalidJson;
+                analysis.schema_validation_result = SchemaValidationResult::Failed;
                 analysis.tool_failure_class = Some(ToolFailureClass::InvalidJsonArguments);
                 analysis.final_arguments_sent = Some(json!({ "input": raw }));
                 analysis.validation_errors.push(TraceValidationError {
@@ -280,6 +320,7 @@ fn apply_call_tool_argument_analysis(
         },
         Value::Null => {
             analysis.argument_parse_result = ArgumentParseResult::ArgumentsNotObject;
+            analysis.schema_validation_result = SchemaValidationResult::Failed;
             analysis.tool_failure_class = Some(ToolFailureClass::ArgumentsNotObject);
             analysis.final_arguments_sent = None;
             analysis.validation_errors.push(TraceValidationError {
@@ -291,6 +332,7 @@ fn apply_call_tool_argument_analysis(
         }
         other => {
             analysis.argument_parse_result = ArgumentParseResult::ArgumentsNotObject;
+            analysis.schema_validation_result = SchemaValidationResult::Failed;
             analysis.tool_failure_class = Some(ToolFailureClass::ArgumentsNotObject);
             analysis.final_arguments_sent = Some(json!({ "input": other }));
             analysis.validation_errors.push(TraceValidationError {
@@ -300,6 +342,68 @@ fn apply_call_tool_argument_analysis(
                 retryable: true,
             });
         }
+    }
+}
+
+fn structured_tool_error_from_result(result: &str) -> Option<TraceToolError> {
+    let trimmed = result.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let value = serde_json::from_str::<Value>(trimmed).ok()?;
+    let object = value.as_object()?;
+    if object.get("ok").and_then(Value::as_bool) != Some(false) {
+        return None;
+    }
+
+    let failure_class = object
+        .get("failure_class")
+        .and_then(Value::as_str)
+        .and_then(failure_class_from_str)?;
+    let retryable = object.get("retryable").and_then(Value::as_bool);
+
+    Some(TraceToolError {
+        failure_class,
+        service_id: object
+            .get("service_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        tool_name: object
+            .get("tool_name")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        path: object
+            .get("path")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        message: object
+            .get("message")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        retryable,
+        raw_error_text: trimmed.to_string(),
+    })
+}
+
+fn failure_class_from_str(raw: &str) -> Option<ToolFailureClass> {
+    serde_json::from_value(Value::String(raw.to_string())).ok()
+}
+
+fn failure_class_code(failure_class: ToolFailureClass) -> &'static str {
+    match failure_class {
+        ToolFailureClass::ServiceUnavailable => "service_unavailable",
+        ToolFailureClass::ToolNotFound => "tool_not_found",
+        ToolFailureClass::ResourceNotFound => "resource_not_found",
+        ToolFailureClass::ServiceSchemaDrift => "service_schema_drift",
+        ToolFailureClass::InvalidToolArguments => "invalid_tool_arguments",
+        ToolFailureClass::InvalidJsonArguments => "invalid_json_arguments",
+        ToolFailureClass::ArgumentsNotObject => "arguments_not_object",
+        ToolFailureClass::ToolRuntimeError => "tool_runtime_error",
+        ToolFailureClass::ToolTimeout => "tool_timeout",
+        ToolFailureClass::NonzeroCommandExit => "nonzero_command_exit",
+        ToolFailureClass::DeadlineOrInferenceFailure => "deadline_or_inference_failure",
+        ToolFailureClass::Unclassified => "unclassified",
     }
 }
 
@@ -318,6 +422,9 @@ fn classify_result_text(result: &str) -> Option<ToolFailureClass> {
     }
     if looks_like_service_schema_drift(&lower) {
         return Some(ToolFailureClass::ServiceSchemaDrift);
+    }
+    if looks_like_invalid_tool_arguments(&lower) {
+        return Some(ToolFailureClass::InvalidToolArguments);
     }
     if looks_like_resource_not_found(&lower) {
         return Some(ToolFailureClass::ResourceNotFound);
@@ -389,6 +496,16 @@ fn looks_like_service_schema_drift(lower: &str) -> bool {
         || lower.contains("field is not defined")
 }
 
+fn looks_like_invalid_tool_arguments(lower: &str) -> bool {
+    lower.contains("invalid_tool_arguments")
+        || lower.contains("invalid tool arguments")
+        || lower.contains("invalid arguments")
+        || lower.contains("invalid params")
+        || lower.contains("missing field")
+        || lower.contains("arguments must")
+        || (lower.contains("failed to deserialize") && lower.contains("parameter"))
+}
+
 fn looks_like_service_unavailable(lower: &str) -> bool {
     lower.contains("currently unreachable")
         || lower.contains("probe timed out")
@@ -431,7 +548,8 @@ fn retryable_for_failure_class(failure_class: ToolFailureClass) -> Option<bool> 
         ToolFailureClass::ServiceUnavailable
         | ToolFailureClass::ToolTimeout
         | ToolFailureClass::DeadlineOrInferenceFailure => Some(true),
-        ToolFailureClass::InvalidJsonArguments
+        ToolFailureClass::InvalidToolArguments
+        | ToolFailureClass::InvalidJsonArguments
         | ToolFailureClass::ArgumentsNotObject
         | ToolFailureClass::ToolNotFound => Some(true),
         ToolFailureClass::ResourceNotFound
@@ -533,6 +651,67 @@ mod tests {
         assert_eq!(
             analysis.tool_failure_class,
             Some(ToolFailureClass::ToolNotFound)
+        );
+    }
+
+    #[test]
+    fn structured_invalid_argument_envelope_marks_completed_tool_call_failed() {
+        let result = json!({
+            "ok": false,
+            "failure_class": "invalid_tool_arguments",
+            "path": "/arguments/query",
+            "message": "missing required argument 'query'",
+            "retryable": true,
+            "service_id": "x-data",
+            "tool_name": "search_bookmarks"
+        })
+        .to_string();
+        let analysis = analyze_tool_call(
+            "call_tool",
+            r#"{"service_id":"x-data","tool_name":"search_bookmarks","arguments":{}}"#,
+            &result,
+            "completed",
+        );
+
+        assert!(!analysis.tool_result_ok);
+        assert_eq!(
+            analysis.tool_failure_class,
+            Some(ToolFailureClass::InvalidToolArguments)
+        );
+        assert_eq!(
+            analysis.schema_validation_result,
+            SchemaValidationResult::Failed
+        );
+        assert_eq!(analysis.validation_errors[0].path, "/arguments/query");
+        let error = analysis.tool_error.as_ref().expect("tool error");
+        assert_eq!(error.failure_class, ToolFailureClass::InvalidToolArguments);
+        assert_eq!(error.service_id.as_deref(), Some("x-data"));
+        assert_eq!(error.tool_name.as_deref(), Some("search_bookmarks"));
+        assert_eq!(error.path.as_deref(), Some("/arguments/query"));
+        assert_eq!(error.retryable, Some(true));
+    }
+
+    #[test]
+    fn classifies_legacy_mcp_missing_field_text_as_invalid_arguments() {
+        let result = "Toolset error: ToolCallError: ToolCallError: MCP call_tool: JsonRpcError { code: -32602, message: \"missing field `query`\" }";
+        let analysis = analyze_tool_call(
+            "call_tool",
+            r#"{"service_id":"x-data","tool_name":"search_bookmarks","arguments":{}}"#,
+            result,
+            "completed",
+        );
+
+        assert!(!analysis.tool_result_ok);
+        assert_eq!(
+            analysis.tool_failure_class,
+            Some(ToolFailureClass::InvalidToolArguments)
+        );
+        assert_eq!(
+            analysis
+                .tool_error
+                .as_ref()
+                .and_then(|error| error.retryable),
+            Some(true)
         );
     }
 
