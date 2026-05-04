@@ -420,11 +420,11 @@ fn classify_result_text(result: &str) -> Option<ToolFailureClass> {
     if looks_like_service_unavailable(&lower) {
         return Some(ToolFailureClass::ServiceUnavailable);
     }
-    if looks_like_service_schema_drift(&lower) {
-        return Some(ToolFailureClass::ServiceSchemaDrift);
-    }
     if looks_like_invalid_tool_arguments(&lower) {
         return Some(ToolFailureClass::InvalidToolArguments);
+    }
+    if looks_like_service_schema_drift(&lower) {
+        return Some(ToolFailureClass::ServiceSchemaDrift);
     }
     if looks_like_resource_not_found(&lower) {
         return Some(ToolFailureClass::ResourceNotFound);
@@ -697,6 +697,30 @@ mod tests {
         let analysis = analyze_tool_call(
             "call_tool",
             r#"{"service_id":"x-data","tool_name":"search_bookmarks","arguments":{}}"#,
+            result,
+            "completed",
+        );
+
+        assert!(!analysis.tool_result_ok);
+        assert_eq!(
+            analysis.tool_failure_class,
+            Some(ToolFailureClass::InvalidToolArguments)
+        );
+        assert_eq!(
+            analysis
+                .tool_error
+                .as_ref()
+                .and_then(|error| error.retryable),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn classifies_mcp_unknown_field_deserialize_error_as_invalid_arguments() {
+        let result = "Toolset error: ToolCallError: ToolCallError: MCP call_tool: call_tool: Mcp error: -32602: failed to deserialize parameters: unknown field `limit`, expected one of `repo_name`, `path_contains`, `top_n`";
+        let analysis = analyze_tool_call(
+            "call_tool",
+            r#"{"service_id":"coding-session-store","tool_name":"coding_overview","arguments":{"limit":2}}"#,
             result,
             "completed",
         );

@@ -320,6 +320,19 @@ fn validate_arguments_against_schema(
         return Ok(());
     };
 
+    if schema.get("additionalProperties").and_then(Value::as_bool) == Some(false) {
+        for field in arguments.keys() {
+            if !properties.contains_key(field) {
+                return Err(StructuredToolError::invalid_tool_arguments(
+                    service_id,
+                    tool_name,
+                    format!("/arguments/{field}"),
+                    format!("unknown argument '{field}'"),
+                ));
+            }
+        }
+    }
+
     for (field, field_schema) in properties {
         let Some(value) = arguments.get(field) else {
             continue;
@@ -462,6 +475,36 @@ mod tests {
         assert_eq!(error.failure_class, "invalid_tool_arguments");
         assert_eq!(error.path, "/arguments/limit");
         assert!(error.message.contains("integer"));
+    }
+
+    #[test]
+    fn rejects_unknown_arguments_when_schema_disallows_additional_properties() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "repo_name": { "type": "string" },
+                "top_n": { "type": "integer" }
+            },
+            "additionalProperties": false
+        })
+        .as_object()
+        .expect("object schema")
+        .clone();
+        let arguments = json!({ "limit": 2 })
+            .as_object()
+            .expect("arguments")
+            .clone();
+        let error = validate_arguments_against_schema(
+            "coding-session-store",
+            "coding_overview",
+            &arguments,
+            &schema,
+        )
+        .expect_err("unknown field should fail");
+
+        assert_eq!(error.failure_class, "invalid_tool_arguments");
+        assert_eq!(error.path, "/arguments/limit");
+        assert!(error.message.contains("unknown argument"));
     }
 
     #[test]
