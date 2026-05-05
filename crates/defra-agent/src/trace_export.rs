@@ -516,9 +516,12 @@ fn looks_like_resource_not_found(lower: &str) -> bool {
 fn looks_like_service_schema_drift(lower: &str) -> bool {
     (lower.contains("parse error") && lower.contains("cannot query field"))
         || lower.contains("cannot query field")
-        || lower.contains("unknown field")
-        || lower.contains("unknown argument")
         || lower.contains("field is not defined")
+        || ((lower.contains("unknown field") || lower.contains("unknown argument"))
+            && (lower.contains("graphql")
+                || lower.contains("query failed")
+                || lower.contains(" on type ")
+                || lower.contains("validation error")))
 }
 
 fn looks_like_invalid_tool_arguments(lower: &str) -> bool {
@@ -619,6 +622,21 @@ mod tests {
             analysis.argument_parse_result,
             ArgumentParseResult::ValidObject
         );
+    }
+
+    #[test]
+    fn compact_contract_text_that_mentions_unknown_fields_is_successful() {
+        let result = "## coding_overview\n\nInput contract:\n- Unknown top-level fields: rejected (`additionalProperties: false`)\n\nCommon mistakes:\n- Do not add unlisted top-level fields; this schema rejects unknown arguments.";
+        let result = format!("{result}\n- Use the exact field names and JSON types shown above.");
+        let analysis = analyze_tool_call(
+            "describe_tool",
+            r#"{"service_id":"coding-session-store","tool_name":"coding_overview"}"#,
+            &result,
+            "completed",
+        );
+
+        assert!(analysis.tool_result_ok);
+        assert_eq!(analysis.tool_failure_class, None);
     }
 
     #[test]

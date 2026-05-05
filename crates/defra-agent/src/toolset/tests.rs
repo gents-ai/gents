@@ -29,6 +29,72 @@ fn toolset_presets_have_expected_counts() {
     assert_eq!(ToolSet::meta_only().native_tools().len(), 0);
 }
 
+#[tokio::test]
+async fn native_tool_definitions_include_model_facing_defaults_and_constraints() {
+    let root = temp_root("defra-agent-tool-definitions");
+    let context = ToolContext::new(root.clone(), false).unwrap();
+
+    let list_tool = ListFilesTool::new(context.clone(), DEFAULT_MAX_LIST_ENTRIES);
+    let list_def = rig::tool::Tool::definition(&list_tool, String::new()).await;
+    assert!(list_def.parameters.get("required").is_none());
+    assert_eq!(list_def.parameters["properties"]["path"]["default"], ".");
+    assert_eq!(
+        list_def.parameters["properties"]["recursive"]["default"],
+        false
+    );
+    assert_eq!(
+        list_def.parameters["properties"]["max_entries"]["maximum"],
+        DEFAULT_MAX_LIST_ENTRIES
+    );
+    assert!(
+        list_def.parameters["properties"]["max_entries"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("capped by the tool")
+    );
+
+    let read_tool = ReadFileTool::new(context.clone(), DEFAULT_MAX_FILE_CHARS);
+    let read_def = rig::tool::Tool::definition(&read_tool, String::new()).await;
+    assert_eq!(read_def.parameters["required"], serde_json::json!(["path"]));
+    assert_eq!(
+        read_def.parameters["properties"]["start_line"]["default"],
+        1
+    );
+    assert_eq!(
+        read_def.parameters["properties"]["max_chars"]["maximum"],
+        DEFAULT_MAX_FILE_CHARS
+    );
+
+    let write_tool = WriteFileTool::new(context.clone());
+    let write_def = rig::tool::Tool::definition(&write_tool, String::new()).await;
+    assert_eq!(
+        write_def.parameters["required"],
+        serde_json::json!(["path", "content"])
+    );
+    assert!(write_def.parameters["properties"]["content"]["description"]
+        .as_str()
+        .unwrap()
+        .contains("Existing file contents are replaced"));
+
+    let bash_tool = UnrestrictedBashTool::new(
+        ToolContext::new(root, false).unwrap(),
+        Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+    );
+    let bash_def = rig::tool::Tool::definition(&bash_tool, String::new()).await;
+    assert_eq!(
+        bash_def.parameters["required"],
+        serde_json::json!(["command"])
+    );
+    assert_eq!(
+        bash_def.parameters["properties"]["args"]["default"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        bash_def.parameters["properties"]["timeout_secs"]["maximum"],
+        DEFAULT_COMMAND_TIMEOUT_SECS
+    );
+}
+
 fn temp_root(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("{name}-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&path).unwrap();

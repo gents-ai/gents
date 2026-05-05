@@ -36,16 +36,21 @@ const TITLE_GENERATION_SUFFIX: &str =
 const TOOL_DISCOVERY_GUIDANCE: &str = "\
 ## Tool Discovery
 
-You have access to data service tools via three meta-tools:
+You have access to MCP data service tools via three meta-tools. These meta-tools \
+are only for MCP data services; native direct tools such as file and bash tools \
+are already present in your direct tool list and should not be described or \
+called through a synthetic `native` service.
 
 1. **discover_tools** — Browse or search available data services. Call with no \
 arguments to see all services, or provide a query to filter. Returns service \
 names, descriptions, and tool listings.
 
-2. **describe_tool** — Get the full input schema for a specific tool. Call this \
-before using call_tool so you know the required arguments.
+2. **describe_tool** — Get a compact contract for a specific MCP data-service tool. Call this \
+before using call_tool so you know required arguments, optional arguments, \
+defaults, constraints, examples, and unknown-field behavior. Set raw_schema=true \
+only when you need the exact JSON Schema.
 
-3. **call_tool** — Invoke a tool on a data service. Pass the service_id, \
+3. **call_tool** — Invoke a tool on an MCP data service. Pass the service_id, \
 tool_name, and arguments object.
 
 Workflow: discover_tools -> describe_tool -> call_tool
