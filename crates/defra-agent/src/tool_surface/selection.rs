@@ -7,11 +7,14 @@ use super::modes::{BashMode, FileToolMode};
 
 use std::path::PathBuf;
 
+use crate::toolset::CommandExecutionPolicy;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolSelection {
     pub file_tools: FileToolMode,
     pub file_tool_root: Option<PathBuf>,
     pub bash: BashMode,
+    pub command_policy: Option<CommandExecutionPolicy>,
     pub cli_tool_names: Vec<String>,
     pub enable_meta_tools: bool,
     pub delegate_to: Vec<String>,
@@ -23,6 +26,7 @@ impl Default for ToolSelection {
             file_tools: FileToolMode::Off,
             file_tool_root: None,
             bash: BashMode::Off,
+            command_policy: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: true,
             delegate_to: Vec::new(),

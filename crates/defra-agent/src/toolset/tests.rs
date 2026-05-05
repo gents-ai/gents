@@ -7,12 +7,15 @@ use defra_node::EmbeddedNode;
 use super::args::{
     BashArgs, EditFileArgs, GlobArgs, GrepArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs,
 };
-use super::bash_tools::UnrestrictedBashTool;
+use super::bash_tools::{ReadOnlyBashTool, UnrestrictedBashTool};
 use super::delegate::DelegateToAgentArgs;
 use super::file_tools::{
     EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool,
 };
-use super::shared::{validate_read_only_command, ToolContext};
+use super::shared::{
+    build_shell_env_from_vars, validate_command_policy, validate_read_only_command,
+    CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode, ToolContext,
+};
 use super::*;
 use crate::ensure_schemas;
 use crate::lifecycle::DEFAULT_REQUEST_MAX_RETRIES;
@@ -101,8 +104,24 @@ fn temp_root(name: &str) -> PathBuf {
     path
 }
 
+fn compact_meta(output: &str) -> serde_json::Value {
+    let first_line = output.lines().next().expect("metadata line");
+    let raw = first_line
+        .strip_prefix("defra_fs: ")
+        .unwrap_or_else(|| panic!("missing defra_fs metadata line in output:\n{output}"));
+    serde_json::from_str(raw).expect("metadata json")
+}
+
+fn compact_exec_meta(output: &str) -> serde_json::Value {
+    let first_line = output.lines().next().expect("metadata line");
+    let raw = first_line
+        .strip_prefix("defra_exec: ")
+        .unwrap_or_else(|| panic!("missing defra_exec metadata line in output:\n{output}"));
+    serde_json::from_str(raw).expect("metadata json")
+}
+
 #[tokio::test]
-async fn read_file_returns_numbered_contents() {
+async fn read_file_returns_compact_numbered_contents() {
     let root = temp_root("defra-agent-read-file");
     let file = root.join("notes.txt");
     std::fs::write(&file, "alpha\nbeta\ngamma\n").unwrap();
@@ -118,17 +137,48 @@ async fn read_file_returns_numbered_contents() {
             start_line: Some(2),
             end_line: Some(3),
             max_chars: DEFAULT_MAX_FILE_CHARS,
+            raw_json: false,
         },
     )
     .await
     .unwrap();
 
-    let value: serde_json::Value = serde_json::from_str(&output).unwrap();
-    assert_eq!(value["path"], "notes.txt");
-    assert_eq!(value["start_line"], 2);
-    assert_eq!(value["end_line"], 3);
-    assert_eq!(value["returned_lines"], 2);
-    assert_eq!(value["content"], "2: beta\n3: gamma");
+    let meta = compact_meta(&output);
+    assert_eq!(meta["ok"], true);
+    assert_eq!(meta["status"], "success");
+    assert_eq!(meta["tool"], "read_file");
+    assert_eq!(meta["path"], "notes.txt");
+    assert_eq!(meta["start_line"], 2);
+    assert_eq!(meta["end_line"], 3);
+    assert_eq!(meta["returned_count"], 2);
+    assert_eq!(meta["total_count"], 3);
+    assert!(output.contains("content:\nL2: beta\nL3: gamma"), "{output}");
+}
+
+#[tokio::test]
+async fn read_file_reports_truncation_in_compact_metadata() {
+    let root = temp_root("defra-agent-read-file-truncate");
+    std::fs::write(root.join("notes.txt"), "alpha\nbeta\ngamma\n").unwrap();
+    let tool = ReadFileTool::new(ToolContext::new(root, false).unwrap(), 12);
+
+    let output = rig::tool::Tool::call(
+        &tool,
+        ReadFileArgs {
+            path: "notes.txt".to_string(),
+            start_line: None,
+            end_line: None,
+            max_chars: 12,
+            raw_json: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let meta = compact_meta(&output);
+    assert_eq!(meta["truncated"], true);
+    assert_eq!(meta["returned_count"], 3);
+    assert_eq!(meta["total_count"], 3);
+    assert!(output.contains("[truncated to 12 chars]"), "{output}");
 }
 
 #[tokio::test]
@@ -149,6 +199,7 @@ async fn read_file_rejects_paths_outside_root() {
             start_line: None,
             end_line: None,
             max_chars: DEFAULT_MAX_FILE_CHARS,
+            raw_json: false,
         },
     )
     .await
@@ -167,29 +218,75 @@ async fn write_and_edit_file_work_under_root() {
     let writer = WriteFileTool::new(context.clone());
     let editor = EditFileTool::new(context);
 
-    rig::tool::Tool::call(
+    let write_output = rig::tool::Tool::call(
         &writer,
         WriteFileArgs {
             path: "nested/file.txt".to_string(),
             content: "hello world".to_string(),
+            raw_json: false,
         },
     )
     .await
     .unwrap();
-    rig::tool::Tool::call(
+    let write_meta = compact_meta(&write_output);
+    assert_eq!(write_meta["tool"], "write_file");
+    assert_eq!(write_meta["path"], "nested/file.txt");
+    assert_eq!(write_meta["bytes_written"], 11);
+    assert_eq!(write_meta["created"], true);
+    assert!(write_output.contains("write_file: wrote 11 bytes"));
+
+    let edit_output = rig::tool::Tool::call(
         &editor,
         EditFileArgs {
             path: "nested/file.txt".to_string(),
             old_text: "world".to_string(),
             new_text: "amy".to_string(),
             replace_all: false,
+            raw_json: false,
+        },
+    )
+    .await
+    .unwrap();
+    let edit_meta = compact_meta(&edit_output);
+    assert_eq!(edit_meta["tool"], "edit_file");
+    assert_eq!(edit_meta["path"], "nested/file.txt");
+    assert_eq!(edit_meta["replacements_applied"], 1);
+    assert_eq!(edit_meta["total_count"], 1);
+    assert!(edit_output.contains("edit_file: edited nested/file.txt"));
+
+    let content = std::fs::read_to_string(root.join("nested/file.txt")).unwrap();
+    assert_eq!(content, "hello amy");
+}
+
+#[tokio::test]
+async fn raw_json_escape_hatch_returns_structured_output() {
+    let root = temp_root("defra-agent-raw-json");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/lib.rs"), "pub fn hi() {}\n").unwrap();
+    let tool = ListFilesTool::new(ToolContext::new(root.clone(), false).unwrap(), 100);
+
+    let output = rig::tool::Tool::call(
+        &tool,
+        ListFilesArgs {
+            path: Some(".".to_string()),
+            recursive: true,
+            max_entries: 100,
+            raw_json: true,
         },
     )
     .await
     .unwrap();
 
-    let content = std::fs::read_to_string(root.join("nested/file.txt")).unwrap();
-    assert_eq!(content, "hello amy");
+    let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["tool"], "list_files");
+    assert_eq!(value["returned_count"], 2);
+    assert_eq!(value["total_count"], 2);
+    let entries = value["entries"].as_array().unwrap();
+    assert!(
+        entries.iter().any(|entry| entry["path"] == "src/lib.rs"),
+        "{output}"
+    );
 }
 
 #[cfg(unix)]
@@ -211,6 +308,7 @@ async fn list_files_skips_permission_denied_subtrees() {
             path: Some(".".to_string()),
             recursive: true,
             max_entries: 100,
+            raw_json: true,
         },
     )
     .await
@@ -241,25 +339,24 @@ async fn list_files_ignores_common_generated_directories_by_default() {
             path: Some(".".to_string()),
             recursive: true,
             max_entries: 100,
+            raw_json: false,
         },
     )
     .await
     .unwrap();
 
-    let value: serde_json::Value = serde_json::from_str(&output).unwrap();
-    let entries = value["entries"].as_array().unwrap();
-    assert!(
-        entries.iter().any(|entry| entry["path"] == "src"),
-        "{output}"
-    );
-    assert!(
-        entries.iter().all(|entry| entry["path"] != "target"),
-        "{output}"
-    );
+    let meta = compact_meta(&output);
+    assert_eq!(meta["tool"], "list_files");
+    assert_eq!(meta["returned_count"], 2);
+    assert_eq!(meta["truncated"], false);
+    assert!(output.contains("\ndirectory src"), "{output}");
+    assert!(output.contains("\nfile src/lib.rs"), "{output}");
+    assert!(!output.contains("\ndirectory target"), "{output}");
+    assert!(!output.contains("target/debug/app"), "{output}");
 }
 
 #[tokio::test]
-async fn glob_returns_structured_json_matches() {
+async fn glob_returns_compact_matches() {
     let root = temp_root("defra-agent-glob");
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::create_dir_all(root.join("target/debug")).unwrap();
@@ -273,24 +370,23 @@ async fn glob_returns_structured_json_matches() {
             pattern: "**/*.rs".to_string(),
             path: Some(".".to_string()),
             max_matches: 100,
+            raw_json: false,
         },
     )
     .await
     .unwrap();
 
-    let value: serde_json::Value = serde_json::from_str(&output).unwrap();
-    let matches = value["matches"].as_array().unwrap();
-    assert!(
-        matches.iter().any(|entry| entry["path"] == "src/main.rs"),
-        "{output}"
-    );
-    assert!(matches
-        .iter()
-        .all(|entry| entry["path"] != "target/debug/main.rs"));
+    let meta = compact_meta(&output);
+    assert_eq!(meta["tool"], "glob");
+    assert_eq!(meta["pattern"], "**/*.rs");
+    assert_eq!(meta["returned_count"], 1);
+    assert_eq!(meta["total_count"], 1);
+    assert!(output.contains("\nfile src/main.rs"), "{output}");
+    assert!(!output.contains("target/debug/main.rs"), "{output}");
 }
 
 #[tokio::test]
-async fn grep_returns_structured_json_matches() {
+async fn grep_returns_compact_line_numbered_matches() {
     let root = temp_root("defra-agent-grep");
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(
@@ -307,20 +403,65 @@ async fn grep_returns_structured_json_matches() {
             path: Some(".".to_string()),
             case_sensitive: true,
             max_matches: 100,
+            raw_json: false,
         },
     )
     .await
     .unwrap();
 
-    let value: serde_json::Value = serde_json::from_str(&output).unwrap();
-    assert_eq!(value["files_with_matches"], 1);
-    let matches = value["matches"].as_array().unwrap();
-    assert_eq!(matches[0]["path"], "src/main.rs");
-    assert_eq!(matches[0]["line_number"], 2);
-    assert!(matches[0]["preview"]
-        .as_str()
-        .unwrap()
-        .contains("println!(\"hello\")"));
+    let meta = compact_meta(&output);
+    assert_eq!(meta["tool"], "grep");
+    assert_eq!(meta["files_with_matches"], 1);
+    assert_eq!(meta["returned_count"], 1);
+    assert!(
+        output.contains("src/main.rs:L2:     println!(\"hello\");"),
+        "{output}"
+    );
+}
+
+#[tokio::test]
+async fn compact_list_output_is_smaller_than_representative_pretty_json() {
+    let root = temp_root("defra-agent-list-files-smaller");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("README.md"), "hello\n").unwrap();
+    std::fs::write(root.join("src/lib.rs"), "pub fn hi() {}\n").unwrap();
+    let tool = ListFilesTool::new(ToolContext::new(root, false).unwrap(), 100);
+
+    let output = rig::tool::Tool::call(
+        &tool,
+        ListFilesArgs {
+            path: Some(".".to_string()),
+            recursive: true,
+            max_entries: 100,
+            raw_json: false,
+        },
+    )
+    .await
+    .unwrap();
+    let old_pretty_json = serde_json::to_string_pretty(&serde_json::json!({
+        "path": ".",
+        "recursive": true,
+        "returned_entries": 3,
+        "truncated": false,
+        "default_ignored": [".cache", ".direnv", ".git", ".next", ".turbo", ".venv", "dist", "node_modules", "target", "venv"],
+        "summary": {
+            "files": 2,
+            "directories": 1
+        },
+        "entries": [
+            {"path": "README.md", "entry_type": "file"},
+            {"path": "src", "entry_type": "directory"},
+            {"path": "src/lib.rs", "entry_type": "file"}
+        ]
+    }))
+    .unwrap();
+
+    assert!(
+        output.len() < old_pretty_json.len(),
+        "compact output should be smaller than old pretty JSON\ncompact={}\nold={}",
+        output.len(),
+        old_pretty_json.len()
+    );
 }
 
 #[test]
@@ -331,6 +472,115 @@ fn read_only_bash_rejects_write_commands() {
         &default_read_only_commands()
     )
     .is_err());
+}
+
+#[test]
+fn shell_environment_filters_secrets_and_forces_noninteractive_values() {
+    let env = build_shell_env_from_vars([
+        ("PATH".to_string(), "/custom/bin".to_string()),
+        ("HOME".to_string(), "/tmp/home".to_string()),
+        ("OPENAI_API_KEY".to_string(), "secret".to_string()),
+        ("SESSION_TOKEN".to_string(), "secret".to_string()),
+        ("DATABASE_SECRET".to_string(), "secret".to_string()),
+        ("UNRELATED".to_string(), "drop".to_string()),
+        ("PAGER".to_string(), "less".to_string()),
+        ("TERM".to_string(), "xterm-256color".to_string()),
+    ]);
+
+    assert_eq!(env.get("PATH").map(String::as_str), Some("/custom/bin"));
+    assert_eq!(env.get("HOME").map(String::as_str), Some("/tmp/home"));
+    assert!(!env.contains_key("OPENAI_API_KEY"));
+    assert!(!env.contains_key("SESSION_TOKEN"));
+    assert!(!env.contains_key("DATABASE_SECRET"));
+    assert!(!env.contains_key("UNRELATED"));
+    assert_eq!(env.get("PAGER").map(String::as_str), Some("cat"));
+    assert_eq!(env.get("GIT_PAGER").map(String::as_str), Some("cat"));
+    assert_eq!(env.get("NO_COLOR").map(String::as_str), Some("1"));
+    assert_eq!(env.get("CLICOLOR").map(String::as_str), Some("0"));
+    assert_eq!(env.get("TERM").map(String::as_str), Some("dumb"));
+}
+
+#[test]
+fn read_only_bash_rejects_codex_style_unsafe_flags() {
+    let allowlist = default_read_only_commands();
+    assert!(validate_read_only_command(
+        "git",
+        &[
+            String::from("status"),
+            String::from("--output=/tmp/git-status.txt")
+        ],
+        &allowlist,
+    )
+    .is_err());
+    assert!(validate_read_only_command(
+        "git",
+        &[
+            String::from("-C"),
+            String::from("."),
+            String::from("status")
+        ],
+        &allowlist,
+    )
+    .is_err());
+    assert!(validate_read_only_command(
+        "rg",
+        &[String::from("--pre"), String::from("touch /tmp/nope")],
+        &allowlist,
+    )
+    .is_err());
+    assert!(validate_read_only_command(
+        "find",
+        &[
+            String::from("."),
+            String::from("-fprint0"),
+            String::from("out")
+        ],
+        &allowlist,
+    )
+    .is_err());
+}
+
+#[test]
+fn command_policy_applies_forbidden_and_allowed_prefixes() {
+    let policy = CommandExecutionPolicy::read_only(vec!["git".to_string()])
+        .with_allowed_argv_prefixes(vec![vec!["git".to_string(), "status".to_string()]])
+        .with_forbidden_argv_prefixes(vec![vec![
+            "git".to_string(),
+            "status".to_string(),
+            "--short".to_string(),
+        ]]);
+
+    validate_command_policy("git", &[String::from("status")], &policy).unwrap();
+    assert!(validate_command_policy("git", &[String::from("diff")], &policy).is_err());
+    assert!(validate_command_policy(
+        "git",
+        &[String::from("status"), String::from("--short")],
+        &policy
+    )
+    .is_err());
+}
+
+#[test]
+fn command_policy_disabled_network_fails_closed_when_not_enforced() {
+    let read_only = CommandExecutionPolicy::read_only(vec!["curl".to_string()])
+        .with_network_mode(CommandNetworkMode::Disabled);
+    assert!(
+        validate_command_policy("curl", &[String::from("https://example.com")], &read_only)
+            .is_err()
+    );
+
+    let unrestricted = CommandExecutionPolicy::write_capable()
+        .with_mode(CommandExecutionMode::Unrestricted)
+        .with_network_mode(CommandNetworkMode::Disabled);
+    assert!(validate_command_policy("printf", &[String::from("ok")], &unrestricted).is_err());
+}
+
+#[test]
+fn managed_write_policy_spelling_is_workspace_write_alias() {
+    assert_eq!(
+        CommandExecutionMode::parse("managed_write").unwrap(),
+        CommandExecutionMode::WorkspaceWrite
+    );
 }
 
 #[cfg(unix)]
@@ -349,14 +599,123 @@ async fn unrestricted_bash_runs_shell_command_strings() {
             args: Vec::new(),
             cwd: None,
             timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
+            raw_json: false,
         },
     )
     .await
     .unwrap();
 
-    assert!(output.contains("command: /bin/sh -lc printf OK && printf ERR >&2"));
+    let meta = compact_exec_meta(&output);
+    assert_eq!(meta["ok"], true);
+    assert_eq!(meta["exit_code"], 0);
+    assert_eq!(meta["timed_out"], false);
+    assert_eq!(meta["argv"][0], "/bin/sh");
+    assert_eq!(meta["stdout_truncation"]["total_chars"], 2);
+    assert_eq!(meta["stderr_truncation"]["total_chars"], 3);
     assert!(output.contains("stdout:\nOK"));
     assert!(output.contains("stderr:\nERR"));
+}
+
+#[tokio::test]
+async fn bash_output_supports_raw_json_escape_hatch() {
+    let root = temp_root("defra-agent-bash-raw-json");
+    let tool = ReadOnlyBashTool::new(
+        ToolContext::new(root, false).unwrap(),
+        Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+        vec!["printf".to_string()],
+    );
+
+    let output = rig::tool::Tool::call(
+        &tool,
+        BashArgs {
+            command: "printf".to_string(),
+            args: vec!["json".to_string()],
+            cwd: None,
+            timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
+            raw_json: true,
+        },
+    )
+    .await
+    .unwrap();
+
+    let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["command"], "printf json");
+    assert_eq!(value["stdout"], "json");
+    assert_eq!(value["stderr"], "");
+}
+
+#[tokio::test]
+async fn bash_timeout_reports_metadata_instead_of_error() {
+    let root = temp_root("defra-agent-bash-timeout");
+    let tool = ReadOnlyBashTool::new(
+        ToolContext::new(root, false).unwrap(),
+        Duration::from_secs(1),
+        vec!["sleep".to_string()],
+    );
+
+    let output = rig::tool::Tool::call(
+        &tool,
+        BashArgs {
+            command: "sleep".to_string(),
+            args: vec!["2".to_string()],
+            cwd: None,
+            timeout_secs: 1,
+            raw_json: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let meta = compact_exec_meta(&output);
+    assert_eq!(meta["ok"], false);
+    assert_eq!(meta["status"], "timeout");
+    assert_eq!(meta["timed_out"], true);
+    assert!(meta["exit_code"].is_null());
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn workspace_write_bash_contains_writes_to_tool_root() {
+    if !std::path::Path::new("/usr/bin/sandbox-exec").exists() {
+        return;
+    }
+
+    let root = temp_root("defra-agent-bash-seatbelt");
+    let outside = std::env::temp_dir().join(format!(
+        "defra-agent-bash-seatbelt-outside-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let tool = UnrestrictedBashTool::new(
+        ToolContext::new(root.clone(), false).unwrap(),
+        Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+    );
+    let shell = format!(
+        "printf inside > inside.txt; printf outside > {}",
+        outside.display()
+    );
+
+    let output = rig::tool::Tool::call(
+        &tool,
+        BashArgs {
+            command: shell,
+            args: Vec::new(),
+            cwd: None,
+            timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
+            raw_json: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let meta = compact_exec_meta(&output);
+    assert_eq!(meta["sandbox"], "macos_seatbelt");
+    assert_ne!(meta["exit_code"].as_i64(), Some(0));
+    assert_eq!(
+        std::fs::read_to_string(root.join("inside.txt")).unwrap(),
+        "inside"
+    );
+    assert!(!outside.exists(), "sandbox should deny writes outside root");
 }
 
 #[test]

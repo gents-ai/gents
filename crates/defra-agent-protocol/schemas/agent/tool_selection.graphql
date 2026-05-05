@@ -7,6 +7,10 @@ type ToolSelection {
     file_tool_root: String
     enable_bash: Boolean
     bash_mode: String
+    command_execution_policy: String
+    command_allowed_argv_prefixes: [String]
+    command_forbidden_argv_prefixes: [String]
+    command_network_mode: String
     cli_tool_names: [String]
     enable_meta_tools: Boolean
     delegate_to: [String]

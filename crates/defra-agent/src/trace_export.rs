@@ -51,6 +51,7 @@ pub struct ToolCallTraceAnalysis {
     pub schema_validation_result: SchemaValidationResult,
     pub validation_errors: Vec<TraceValidationError>,
     pub final_arguments_sent: Option<Value>,
+    pub native_tool_output: Option<NativeToolOutputTrace>,
     pub tool_result_ok: bool,
     pub tool_failure_class: Option<ToolFailureClass>,
     pub tool_error: Option<TraceToolError>,
@@ -73,6 +74,25 @@ pub struct TraceToolError {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub available_tools: Option<Vec<String>>,
     pub raw_error_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeToolOutputTrace {
+    pub ok: bool,
+    pub status: Option<String>,
+    pub tool: Option<String>,
+    pub path: Option<String>,
+    pub pattern: Option<String>,
+    pub command: Option<String>,
+    pub exit_code: Option<i64>,
+    pub timed_out: Option<bool>,
+    pub execution_mode: Option<String>,
+    pub network_mode: Option<String>,
+    pub sandbox: Option<String>,
+    pub returned_count: Option<usize>,
+    pub total_count: Option<usize>,
+    pub truncated: Option<bool>,
+    pub default_ignored: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -106,6 +126,7 @@ pub struct AmyToolCallTraceRecord {
     pub repair_attempt: Option<Value>,
     pub final_arguments_sent: Option<Value>,
     pub tool_result: String,
+    pub native_tool_output: Option<NativeToolOutputTrace>,
     pub tool_result_ok: bool,
     pub tool_call_completed: bool,
     pub tool_status: String,
@@ -127,6 +148,7 @@ pub fn analyze_tool_call(
     status: &str,
 ) -> ToolCallTraceAnalysis {
     let mut analysis = analyze_arguments(tool_name, raw_args);
+    analysis.native_tool_output = native_tool_output_from_result(tool_name, result);
     let structured_tool_error = structured_tool_error_from_result(result);
     if let Some(error) = &structured_tool_error {
         analysis.tool_failure_class = Some(error.failure_class);
@@ -141,11 +163,24 @@ pub fn analyze_tool_call(
                 retryable: error.retryable.unwrap_or(false),
             });
         }
+    } else if let Some(native) = analysis.native_tool_output.as_ref() {
+        if !native.ok {
+            analysis.tool_failure_class =
+                native_tool_failure_class(native).or_else(|| classify_result_text(result));
+        }
     } else if analysis.tool_failure_class.is_none() {
         analysis.tool_failure_class = classify_result_text(result);
     }
 
     let completed = status.trim().eq_ignore_ascii_case("completed");
+    if analysis.tool_failure_class.is_none()
+        && analysis
+            .native_tool_output
+            .as_ref()
+            .is_some_and(|output| !output.ok)
+    {
+        analysis.tool_failure_class = Some(ToolFailureClass::ToolRuntimeError);
+    }
     if analysis.tool_failure_class.is_none() && !completed {
         analysis.tool_failure_class = Some(ToolFailureClass::Unclassified);
     }
@@ -228,6 +263,7 @@ fn analyze_arguments(tool_name: &str, raw_args: &str) -> ToolCallTraceAnalysis {
         schema_validation_result: SchemaValidationResult::NotEvaluated,
         validation_errors: Vec::new(),
         final_arguments_sent: None,
+        native_tool_output: None,
         tool_result_ok: false,
         tool_failure_class: None,
         tool_error: None,
@@ -398,6 +434,115 @@ fn structured_tool_error_from_result(result: &str) -> Option<TraceToolError> {
         available_tools: string_array_field(object, "available_tools"),
         raw_error_text: trimmed.to_string(),
     })
+}
+
+fn native_tool_output_from_result(tool_name: &str, result: &str) -> Option<NativeToolOutputTrace> {
+    if !is_native_structured_output_tool(tool_name) {
+        return None;
+    }
+
+    let object = native_tool_output_object(tool_name, result)?;
+    let ok = object.get("ok").and_then(Value::as_bool)?;
+    Some(NativeToolOutputTrace {
+        ok,
+        status: object
+            .get("status")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        tool: object
+            .get("tool")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        path: object
+            .get("path")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        pattern: object
+            .get("pattern")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        command: object
+            .get("command")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        exit_code: object.get("exit_code").and_then(Value::as_i64),
+        timed_out: object.get("timed_out").and_then(Value::as_bool),
+        execution_mode: object
+            .get("execution_mode")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        network_mode: object
+            .get("network_mode")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        sandbox: object
+            .get("sandbox")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        returned_count: usize_field(&object, "returned_count"),
+        total_count: usize_field(&object, "total_count"),
+        truncated: object.get("truncated").and_then(Value::as_bool),
+        default_ignored: string_array_field(&object, "default_ignored"),
+    })
+}
+
+fn native_tool_output_object(
+    tool_name: &str,
+    result: &str,
+) -> Option<serde_json::Map<String, Value>> {
+    let trimmed = result.trim_start();
+    let prefix = if is_native_filesystem_tool(tool_name) {
+        "defra_fs: "
+    } else if is_native_command_tool(tool_name) {
+        "defra_exec: "
+    } else {
+        return None;
+    };
+    let metadata = trimmed
+        .lines()
+        .next()
+        .and_then(|line| line.trim().strip_prefix(prefix))
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
+
+    let value = metadata.or_else(|| serde_json::from_str::<Value>(trimmed).ok())?;
+    let Value::Object(object) = value else {
+        return None;
+    };
+    Some(object)
+}
+
+fn native_tool_failure_class(output: &NativeToolOutputTrace) -> Option<ToolFailureClass> {
+    if output.timed_out == Some(true) || output.status.as_deref() == Some("timeout") {
+        return Some(ToolFailureClass::ToolTimeout);
+    }
+    if output.exit_code.is_some_and(|code| code != 0)
+        || output.status.as_deref() == Some("exit_nonzero")
+    {
+        return Some(ToolFailureClass::NonzeroCommandExit);
+    }
+    (!output.ok).then_some(ToolFailureClass::ToolRuntimeError)
+}
+
+fn is_native_structured_output_tool(tool_name: &str) -> bool {
+    is_native_filesystem_tool(tool_name) || is_native_command_tool(tool_name)
+}
+
+fn is_native_filesystem_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "read_file" | "list_files" | "glob" | "grep" | "write_file" | "edit_file"
+    )
+}
+
+fn is_native_command_tool(tool_name: &str) -> bool {
+    matches!(tool_name, "bash" | "bash_unrestricted")
+}
+
+fn usize_field(object: &serde_json::Map<String, Value>, field: &str) -> Option<usize> {
+    object
+        .get(field)?
+        .as_u64()
+        .and_then(|value| usize::try_from(value).ok())
 }
 
 fn string_array_field(object: &serde_json::Map<String, Value>, field: &str) -> Option<Vec<String>> {
@@ -655,6 +800,168 @@ mod tests {
                 .as_ref()
                 .and_then(|error| error.retryable),
             Some(false)
+        );
+    }
+
+    #[test]
+    fn native_bash_output_metadata_drives_success_classification() {
+        let result = concat!(
+            "defra_exec: {\"ok\":true,\"status\":\"success\",\"command\":\"printf ok\",",
+            "\"argv\":[\"printf\",\"ok\"],\"cwd\":\".\",\"exit_code\":0,",
+            "\"timed_out\":false,\"duration_ms\":4,\"timeout_ms\":10000,",
+            "\"execution_mode\":\"read_only\",\"network_mode\":\"inherit\",",
+            "\"sandbox\":\"policy_read_only\",\"stdout_truncation\":{\"returned_chars\":2,",
+            "\"total_chars\":2,\"max_chars\":16000,\"truncated\":false},",
+            "\"stderr_truncation\":{\"returned_chars\":0,\"total_chars\":0,",
+            "\"max_chars\":16000,\"truncated\":false}}\n",
+            "stdout:\n",
+            "ok\n",
+            "stderr:\n",
+            "(empty)"
+        );
+        let analysis = analyze_tool_call(
+            "bash",
+            r#"{"command":"printf","args":["ok"]}"#,
+            result,
+            "completed",
+        );
+
+        assert!(analysis.tool_result_ok);
+        assert_eq!(analysis.tool_failure_class, None);
+        let native = analysis.native_tool_output.expect("native output");
+        assert!(native.ok);
+        assert_eq!(native.command.as_deref(), Some("printf ok"));
+        assert_eq!(native.exit_code, Some(0));
+        assert_eq!(native.timed_out, Some(false));
+        assert_eq!(native.execution_mode.as_deref(), Some("read_only"));
+        assert_eq!(native.network_mode.as_deref(), Some("inherit"));
+        assert_eq!(native.sandbox.as_deref(), Some("policy_read_only"));
+    }
+
+    #[test]
+    fn native_bash_nonzero_metadata_is_not_successful() {
+        let result = concat!(
+            "defra_exec: {\"ok\":false,\"status\":\"exit_nonzero\",",
+            "\"command\":\"grep -P foo README.md\",\"argv\":[\"grep\",\"-P\",\"foo\",\"README.md\"],",
+            "\"cwd\":\".\",\"exit_code\":2,\"timed_out\":false,\"duration_ms\":4,",
+            "\"timeout_ms\":10000,\"execution_mode\":\"read_only\",",
+            "\"network_mode\":\"inherit\",\"sandbox\":\"policy_read_only\",",
+            "\"stdout_truncation\":{\"returned_chars\":0,\"total_chars\":0,",
+            "\"max_chars\":16000,\"truncated\":false},",
+            "\"stderr_truncation\":{\"returned_chars\":24,\"total_chars\":24,",
+            "\"max_chars\":16000,\"truncated\":false}}\n",
+            "stdout:\n",
+            "(empty)\n",
+            "stderr:\n",
+            "grep: invalid option -- P"
+        );
+        let analysis = analyze_tool_call("bash", r#"{"command":"grep"}"#, result, "completed");
+
+        assert!(!analysis.tool_result_ok);
+        assert_eq!(
+            analysis.tool_failure_class,
+            Some(ToolFailureClass::NonzeroCommandExit)
+        );
+        let native = analysis.native_tool_output.expect("native output");
+        assert!(!native.ok);
+        assert_eq!(native.status.as_deref(), Some("exit_nonzero"));
+        assert_eq!(native.exit_code, Some(2));
+    }
+
+    #[test]
+    fn native_bash_timeout_metadata_is_retryable_timeout() {
+        let result = concat!(
+            "defra_exec: {\"ok\":false,\"status\":\"timeout\",\"command\":\"sleep 2\",",
+            "\"argv\":[\"sleep\",\"2\"],\"cwd\":\".\",\"exit_code\":null,",
+            "\"timed_out\":true,\"duration_ms\":1000,\"timeout_ms\":1000,",
+            "\"execution_mode\":\"read_only\",\"network_mode\":\"inherit\",",
+            "\"sandbox\":\"policy_read_only\",\"stdout_truncation\":{\"returned_chars\":0,",
+            "\"total_chars\":0,\"max_chars\":16000,\"truncated\":false},",
+            "\"stderr_truncation\":{\"returned_chars\":0,\"total_chars\":0,",
+            "\"max_chars\":16000,\"truncated\":false}}\n",
+            "stdout:\n",
+            "(empty)\n",
+            "stderr:\n",
+            "(empty)"
+        );
+        let analysis = analyze_tool_call("bash", r#"{"command":"sleep"}"#, result, "completed");
+
+        assert!(!analysis.tool_result_ok);
+        assert_eq!(
+            analysis.tool_failure_class,
+            Some(ToolFailureClass::ToolTimeout)
+        );
+        assert_eq!(
+            analysis
+                .tool_error
+                .as_ref()
+                .and_then(|error| error.retryable),
+            Some(true)
+        );
+        assert_eq!(
+            analysis
+                .native_tool_output
+                .as_ref()
+                .and_then(|native| native.timed_out),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn native_file_output_metadata_prevents_false_positive_text_classification() {
+        let result = concat!(
+            "defra_fs: {\"ok\":true,\"status\":\"success\",\"tool\":\"read_file\",",
+            "\"path\":\"notes.txt\",\"returned_count\":1,\"total_count\":1,",
+            "\"truncated\":false}\n",
+            "content:\n",
+            "L1: no such file or directory is just file content"
+        );
+        let analysis =
+            analyze_tool_call("read_file", r#"{"path":"notes.txt"}"#, result, "completed");
+
+        assert!(analysis.tool_result_ok);
+        assert_eq!(analysis.tool_failure_class, None);
+        let native = analysis.native_tool_output.expect("native output");
+        assert!(native.ok);
+        assert_eq!(native.tool.as_deref(), Some("read_file"));
+        assert_eq!(native.path.as_deref(), Some("notes.txt"));
+        assert_eq!(native.returned_count, Some(1));
+        assert_eq!(native.total_count, Some(1));
+    }
+
+    #[test]
+    fn native_file_raw_json_output_is_parsed_for_trace_export() {
+        let result = json!({
+            "ok": true,
+            "status": "success",
+            "tool": "grep",
+            "path": ".",
+            "pattern": "println",
+            "returned_count": 1,
+            "total_count": 1,
+            "truncated": false,
+            "default_ignored": [".git", "target"],
+            "matches": [{
+                "path": "src/main.rs",
+                "line_number": 2,
+                "preview": "println!(\"hello\")"
+            }]
+        })
+        .to_string();
+        let analysis = analyze_tool_call(
+            "grep",
+            r#"{"pattern":"println","path":"."}"#,
+            &result,
+            "completed",
+        );
+
+        assert!(analysis.tool_result_ok);
+        let native = analysis.native_tool_output.expect("native output");
+        assert_eq!(native.tool.as_deref(), Some("grep"));
+        assert_eq!(native.pattern.as_deref(), Some("println"));
+        assert_eq!(
+            native.default_ignored,
+            Some(vec![".git".into(), "target".into()])
         );
     }
 

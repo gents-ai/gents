@@ -17,6 +17,10 @@ use crate::mcp_pool::McpPool;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::tool_surface::{BashMode, BehaviorToolConfig, FileToolMode, ToolCeiling, ToolSelection};
+use crate::toolset::{
+    default_read_only_command_policy, parse_argv_prefixes, CommandExecutionMode,
+    CommandExecutionPolicy, CommandNetworkMode,
+};
 use crate::trigger_engine::manual_source::ManualTriggerHandle;
 
 mod builder;
@@ -278,6 +282,11 @@ fn normalize_optional_string(value: Option<&str>) -> Option<&str> {
 pub(crate) fn tool_selection_from_document(
     selection: &crate::document_config::ToolSelectionDocument,
 ) -> anyhow::Result<ToolSelection> {
+    let bash = if selection.enable_bash.unwrap_or(false) {
+        BashMode::parse(selection.bash_mode.as_deref().unwrap_or("ReadOnly"))?
+    } else {
+        BashMode::Off
+    };
     Ok(ToolSelection {
         file_tools: if selection.enable_file_tools.unwrap_or(false) {
             FileToolMode::parse(selection.file_tools_mode.as_deref().unwrap_or("ReadOnly"))?
@@ -286,13 +295,87 @@ pub(crate) fn tool_selection_from_document(
         },
         file_tool_root: normalize_optional_string(selection.file_tool_root.as_deref())
             .map(std::path::PathBuf::from),
-        bash: if selection.enable_bash.unwrap_or(false) {
-            BashMode::parse(selection.bash_mode.as_deref().unwrap_or("ReadOnly"))?
-        } else {
-            BashMode::Off
-        },
+        bash,
+        command_policy: command_policy_from_document(selection, bash)?,
         cli_tool_names: selection.cli_tool_names.clone().unwrap_or_default(),
         enable_meta_tools: selection.enable_meta_tools.unwrap_or(true),
         delegate_to: selection.delegate_to.clone().unwrap_or_default(),
     })
+}
+
+fn command_policy_from_document(
+    selection: &crate::document_config::ToolSelectionDocument,
+    bash: BashMode,
+) -> anyhow::Result<Option<CommandExecutionPolicy>> {
+    let has_policy = selection
+        .command_execution_policy
+        .as_deref()
+        .and_then(|value| normalize_optional_string(Some(value)))
+        .is_some()
+        || selection
+            .command_network_mode
+            .as_deref()
+            .and_then(|value| normalize_optional_string(Some(value)))
+            .is_some()
+        || selection
+            .command_allowed_argv_prefixes
+            .as_ref()
+            .is_some_and(|prefixes| !prefixes.is_empty())
+        || selection
+            .command_forbidden_argv_prefixes
+            .as_ref()
+            .is_some_and(|prefixes| !prefixes.is_empty());
+    if !has_policy {
+        return Ok(None);
+    }
+
+    let requested_mode = selection
+        .command_execution_policy
+        .as_deref()
+        .and_then(|value| normalize_optional_string(Some(value)))
+        .map(CommandExecutionMode::parse)
+        .transpose()?;
+    let mode = match bash {
+        BashMode::Off => CommandExecutionMode::ReadOnly,
+        BashMode::ReadOnly => CommandExecutionMode::ReadOnly,
+        BashMode::Unrestricted => requested_mode.unwrap_or_else(|| {
+            if cfg!(target_os = "macos") {
+                CommandExecutionMode::WorkspaceWrite
+            } else {
+                CommandExecutionMode::Unrestricted
+            }
+        }),
+    };
+
+    let allowed = parse_argv_prefixes(
+        selection
+            .command_allowed_argv_prefixes
+            .as_deref()
+            .unwrap_or(&[]),
+    )?;
+    let forbidden = parse_argv_prefixes(
+        selection
+            .command_forbidden_argv_prefixes
+            .as_deref()
+            .unwrap_or(&[]),
+    )?;
+    let network_mode = selection
+        .command_network_mode
+        .as_deref()
+        .and_then(|value| normalize_optional_string(Some(value)))
+        .map(CommandNetworkMode::parse)
+        .transpose()?
+        .unwrap_or(CommandNetworkMode::Inherit);
+
+    let base = if matches!(mode, CommandExecutionMode::ReadOnly) {
+        default_read_only_command_policy()
+    } else {
+        CommandExecutionPolicy::write_capable()
+    };
+    Ok(Some(
+        base.with_mode(mode)
+            .with_allowed_argv_prefixes(allowed)
+            .with_forbidden_argv_prefixes(forbidden)
+            .with_network_mode(network_mode),
+    ))
 }

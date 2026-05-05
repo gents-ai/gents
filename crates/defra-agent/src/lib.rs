@@ -95,7 +95,8 @@ pub use tool_surface::{
     ToolRuntimeContext, ToolSelection, ToolSurface,
 };
 pub use toolset::{
-    build_delegate_tool, build_native_tools, CliToolConfig, NativeTool, ToolSet, ToolSetBuilder,
+    build_delegate_tool, build_native_tools, CliToolConfig, CommandExecutionMode,
+    CommandExecutionPolicy, CommandNetworkMode, NativeTool, ToolSet, ToolSetBuilder,
     DELEGATE_TOOL_NAME,
 };
 pub use truncation::{DefraSpillTruncator, TruncationLimits, TruncationMode, Truncator};

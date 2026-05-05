@@ -16,6 +16,18 @@ pub struct ToolSelectionDocument {
     pub file_tool_root: Option<String>,
     pub enable_bash: Option<bool>,
     pub bash_mode: Option<String>,
+    pub command_execution_policy: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
+    )]
+    pub command_allowed_argv_prefixes: Option<Vec<String>>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
+    )]
+    pub command_forbidden_argv_prefixes: Option<Vec<String>>,
+    pub command_network_mode: Option<String>,
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
@@ -62,6 +74,10 @@ pub(crate) async fn load_tool_selection_record(
                 file_tool_root
                 enable_bash
                 bash_mode
+                command_execution_policy
+                command_allowed_argv_prefixes
+                command_forbidden_argv_prefixes
+                command_network_mode
                 cli_tool_names
                 enable_meta_tools
                 delegate_to
@@ -100,6 +116,10 @@ pub(crate) async fn load_tool_selection_by_doc_id(
                 file_tool_root
                 enable_bash
                 bash_mode
+                command_execution_policy
+                command_allowed_argv_prefixes
+                command_forbidden_argv_prefixes
+                command_network_mode
                 cli_tool_names
                 enable_meta_tools
                 delegate_to
@@ -138,6 +158,10 @@ pub(crate) async fn list_tool_selection_records(
                 file_tool_root
                 enable_bash
                 bash_mode
+                command_execution_policy
+                command_allowed_argv_prefixes
+                command_forbidden_argv_prefixes
+                command_network_mode
                 cli_tool_names
                 enable_meta_tools
                 delegate_to
@@ -170,6 +194,10 @@ pub(crate) async fn list_all_tool_selection_records(
                 file_tool_root
                 enable_bash
                 bash_mode
+                command_execution_policy
+                command_allowed_argv_prefixes
+                command_forbidden_argv_prefixes
+                command_network_mode
                 cli_tool_names
                 enable_meta_tools
                 delegate_to
@@ -212,6 +240,22 @@ pub async fn upsert_tool_selection(
         )),
         graphql_fields::graphql_optional_bool_field("enable_bash", selection.enable_bash),
         graphql_fields::graphql_string_field("bash_mode", selection.bash_mode.as_deref()),
+        graphql_fields::graphql_string_field(
+            "command_execution_policy",
+            selection.command_execution_policy.as_deref(),
+        ),
+        graphql_fields::graphql_string_list_field(
+            "command_allowed_argv_prefixes",
+            selection.command_allowed_argv_prefixes.as_deref(),
+        ),
+        graphql_fields::graphql_string_list_field(
+            "command_forbidden_argv_prefixes",
+            selection.command_forbidden_argv_prefixes.as_deref(),
+        ),
+        graphql_fields::graphql_string_field(
+            "command_network_mode",
+            selection.command_network_mode.as_deref(),
+        ),
         graphql_fields::graphql_string_list_field(
             "cli_tool_names",
             selection.cli_tool_names.as_deref(),
@@ -244,6 +288,22 @@ pub async fn upsert_tool_selection(
         )),
         graphql_fields::graphql_optional_bool_field("enable_bash", selection.enable_bash),
         graphql_fields::graphql_string_field("bash_mode", selection.bash_mode.as_deref()),
+        graphql_fields::graphql_string_field(
+            "command_execution_policy",
+            selection.command_execution_policy.as_deref(),
+        ),
+        graphql_fields::graphql_string_list_field(
+            "command_allowed_argv_prefixes",
+            selection.command_allowed_argv_prefixes.as_deref(),
+        ),
+        graphql_fields::graphql_string_list_field(
+            "command_forbidden_argv_prefixes",
+            selection.command_forbidden_argv_prefixes.as_deref(),
+        ),
+        graphql_fields::graphql_string_field(
+            "command_network_mode",
+            selection.command_network_mode.as_deref(),
+        ),
         graphql_fields::graphql_string_list_field(
             "cli_tool_names",
             selection.cli_tool_names.as_deref(),

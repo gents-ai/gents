@@ -55,6 +55,22 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
         )),
         Some(graphql_optional_bool_field("enable_bash", row.enable_bash)),
         Some(graphql_string_field("bash_mode", row.bash_mode.as_deref())),
+        Some(graphql_string_field(
+            "command_execution_policy",
+            row.command_execution_policy.as_deref(),
+        )),
+        Some(graphql_string_list_field(
+            "command_allowed_argv_prefixes",
+            &row.command_allowed_argv_prefixes,
+        )),
+        Some(graphql_string_list_field(
+            "command_forbidden_argv_prefixes",
+            &row.command_forbidden_argv_prefixes,
+        )),
+        Some(graphql_string_field(
+            "command_network_mode",
+            row.command_network_mode.as_deref(),
+        )),
         Some(graphql_string_list_field(
             "cli_tool_names",
             &row.cli_tool_names,
@@ -88,6 +104,22 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
         )),
         Some(graphql_optional_bool_field("enable_bash", row.enable_bash)),
         Some(graphql_string_field("bash_mode", row.bash_mode.as_deref())),
+        Some(graphql_string_field(
+            "command_execution_policy",
+            row.command_execution_policy.as_deref(),
+        )),
+        Some(graphql_string_list_field(
+            "command_allowed_argv_prefixes",
+            &row.command_allowed_argv_prefixes,
+        )),
+        Some(graphql_string_list_field(
+            "command_forbidden_argv_prefixes",
+            &row.command_forbidden_argv_prefixes,
+        )),
+        Some(graphql_string_field(
+            "command_network_mode",
+            row.command_network_mode.as_deref(),
+        )),
         Some(graphql_string_list_field(
             "cli_tool_names",
             &row.cli_tool_names,

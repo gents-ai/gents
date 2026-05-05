@@ -23,6 +23,13 @@ use delegate::DelegateToAgentTool;
 use file_tools::{EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool};
 use shared::ToolContext;
 
+pub(crate) use shared::parse_argv_prefixes;
+pub use shared::{CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode};
+
+pub(crate) fn default_read_only_command_policy() -> CommandExecutionPolicy {
+    CommandExecutionPolicy::read_only(default_read_only_commands())
+}
+
 const DEFAULT_MAX_FILE_CHARS: usize = 32_000;
 const DEFAULT_MAX_COMMAND_CHARS: usize = 16_000;
 const DEFAULT_MAX_LIST_ENTRIES: usize = 200;
@@ -68,6 +75,7 @@ impl ToolSet {
                 NativeTool::BashReadOnly {
                     timeout: Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
                     allowlist: default_read_only_commands(),
+                    policy: CommandExecutionPolicy::read_only(default_read_only_commands()),
                 },
             ],
             read_root: None,
@@ -93,12 +101,14 @@ impl ToolSet {
                 NativeTool::BashReadOnly {
                     timeout: Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
                     allowlist: default_read_only_commands(),
+                    policy: CommandExecutionPolicy::read_only(default_read_only_commands()),
                 },
                 NativeTool::WriteFile { root: root.clone() },
                 NativeTool::EditFile { root: root.clone() },
                 NativeTool::BashUnrestricted {
                     timeout: Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
                     root: root.clone(),
+                    policy: CommandExecutionPolicy::write_capable(),
                 },
             ],
             read_root: Some(root),
@@ -153,12 +163,22 @@ impl ToolSet {
                 NativeTool::EditFile { root } => built.push(Box::new(EditFileTool::new(
                     ToolContext::new(root.clone(), true)?,
                 ))),
-                NativeTool::BashReadOnly { timeout, allowlist } => built.push(Box::new(
-                    ReadOnlyBashTool::new(read_context.clone(), *timeout, allowlist.clone()),
-                )),
-                NativeTool::BashUnrestricted { timeout, root } => built.push(Box::new(
-                    UnrestrictedBashTool::new(ToolContext::new(root.clone(), true)?, *timeout),
-                )),
+                NativeTool::BashReadOnly {
+                    timeout, policy, ..
+                } => built.push(Box::new(ReadOnlyBashTool::with_policy(
+                    read_context.clone(),
+                    *timeout,
+                    policy.clone(),
+                ))),
+                NativeTool::BashUnrestricted {
+                    timeout,
+                    root,
+                    policy,
+                } => built.push(Box::new(UnrestrictedBashTool::with_policy(
+                    ToolContext::new(root.clone(), true)?,
+                    *timeout,
+                    policy.clone(),
+                ))),
                 NativeTool::Cli(tool) => built.push(Box::new(CliTool::new(tool.clone()))),
             }
         }
@@ -200,10 +220,12 @@ pub enum NativeTool {
     BashReadOnly {
         timeout: Duration,
         allowlist: Vec<String>,
+        policy: CommandExecutionPolicy,
     },
     BashUnrestricted {
         timeout: Duration,
         root: PathBuf,
+        policy: CommandExecutionPolicy,
     },
     Cli(CliToolConfig),
 }
@@ -278,6 +300,16 @@ impl ToolSetBuilder {
         self.tools.push(NativeTool::BashReadOnly {
             timeout: Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
             allowlist: default_read_only_commands(),
+            policy: CommandExecutionPolicy::read_only(default_read_only_commands()),
+        });
+        self
+    }
+
+    pub fn bash_read_only_with_policy(mut self, policy: CommandExecutionPolicy) -> Self {
+        self.tools.push(NativeTool::BashReadOnly {
+            timeout: Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+            allowlist: default_read_only_commands(),
+            policy,
         });
         self
     }
@@ -286,6 +318,20 @@ impl ToolSetBuilder {
         self.tools.push(NativeTool::BashUnrestricted {
             timeout: Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
             root: root.into(),
+            policy: CommandExecutionPolicy::write_capable(),
+        });
+        self
+    }
+
+    pub fn bash_unrestricted_with_policy(
+        mut self,
+        root: impl Into<PathBuf>,
+        policy: CommandExecutionPolicy,
+    ) -> Self {
+        self.tools.push(NativeTool::BashUnrestricted {
+            timeout: Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+            root: root.into(),
+            policy,
         });
         self
     }

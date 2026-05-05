@@ -472,6 +472,14 @@ pub struct ToolSelectionRow {
     pub enable_bash: Option<bool>,
     #[serde(default)]
     pub bash_mode: Option<String>,
+    #[serde(default)]
+    pub command_execution_policy: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_string_vec")]
+    pub command_allowed_argv_prefixes: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_string_vec")]
+    pub command_forbidden_argv_prefixes: Vec<String>,
+    #[serde(default)]
+    pub command_network_mode: Option<String>,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub cli_tool_names: Vec<String>,
     #[serde(default)]
