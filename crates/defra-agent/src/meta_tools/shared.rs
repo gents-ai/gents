@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context as _};
 use defra_node::EmbeddedNode;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::health_checker::{HealthStatus, ServiceHealth, ServiceHealthMap};
 use crate::mcp_pool::resolve_mcp_url;
@@ -35,6 +35,119 @@ impl std::error::Error for MetaToolError {
 impl From<anyhow::Error> for MetaToolError {
     fn from(error: anyhow::Error) -> Self {
         Self(error)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct StructuredToolError {
+    pub(super) ok: bool,
+    pub(super) failure_class: &'static str,
+    pub(super) path: String,
+    pub(super) message: String,
+    pub(super) retryable: bool,
+    pub(super) service_id: String,
+    pub(super) tool_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) requested_tool_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) available_tools: Option<Vec<String>>,
+}
+
+impl StructuredToolError {
+    pub(super) fn invalid_tool_arguments(
+        service_id: &str,
+        tool_name: &str,
+        path: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            ok: false,
+            failure_class: "invalid_tool_arguments",
+            path: path.into(),
+            message: message.into(),
+            retryable: true,
+            service_id: service_id.to_string(),
+            tool_name: tool_name.to_string(),
+            requested_tool_name: None,
+            available_tools: None,
+        }
+    }
+
+    pub(super) fn tool_not_found(
+        service_id: &str,
+        tool_name: &str,
+        available_tools: Vec<String>,
+    ) -> Self {
+        Self {
+            ok: false,
+            failure_class: "tool_not_found",
+            path: "/tool_name".to_string(),
+            message: format!("tool '{tool_name}' was not found on service '{service_id}'"),
+            retryable: true,
+            service_id: service_id.to_string(),
+            tool_name: tool_name.to_string(),
+            requested_tool_name: None,
+            available_tools: Some(available_tools),
+        }
+    }
+
+    pub(super) fn describe_tool_not_found(
+        service_id: &str,
+        requested_tool_name: &str,
+        available_tools: Vec<String>,
+    ) -> Self {
+        let alternatives = if available_tools.is_empty() {
+            "no tools are currently advertised".to_string()
+        } else {
+            format!("available tools: {}", available_tools.join(", "))
+        };
+
+        Self {
+            ok: false,
+            failure_class: "tool_not_found",
+            path: "/tool_name".to_string(),
+            message: format!(
+                "tool '{requested_tool_name}' was not found on service '{service_id}'; {alternatives}"
+            ),
+            retryable: true,
+            service_id: service_id.to_string(),
+            tool_name: requested_tool_name.to_string(),
+            requested_tool_name: Some(requested_tool_name.to_string()),
+            available_tools: Some(available_tools),
+        }
+    }
+
+    pub(super) fn service_unavailable(
+        service_id: &str,
+        requested_tool_name: &str,
+        message: impl Into<String>,
+        retryable: bool,
+    ) -> Self {
+        Self {
+            ok: false,
+            failure_class: "service_unavailable",
+            path: "/service_id".to_string(),
+            message: message.into(),
+            retryable,
+            service_id: service_id.to_string(),
+            tool_name: requested_tool_name.to_string(),
+            requested_tool_name: Some(requested_tool_name.to_string()),
+            available_tools: None,
+        }
+    }
+
+    pub(super) fn to_result_text(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_else(|_| {
+            format!(
+                r#"{{"ok":false,"failure_class":"{}","path":"{}","message":"{}","retryable":{},"service_id":"{}","tool_name":"{}"}}"#,
+                self.failure_class,
+                self.path,
+                self.message,
+                self.retryable,
+                self.service_id,
+                self.tool_name
+            )
+        })
     }
 }
 
