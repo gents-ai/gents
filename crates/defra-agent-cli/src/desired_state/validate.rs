@@ -1,7 +1,9 @@
 use std::collections::{BTreeSet, HashSet};
 
 use anyhow::Result;
-use defra_agent::{parse_template_for_validation, VariableRef};
+use defra_agent::{
+    parse_template_for_validation, CommandExecutionMode, CommandNetworkMode, VariableRef,
+};
 
 use super::DesiredStateManifest;
 
@@ -89,6 +91,35 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                 selection.selection_id, selection.agent_did, manifest.agent_principal.agent_did
             ));
         }
+
+        if let Some(mode) = selection.command_execution_policy.as_deref() {
+            if let Err(error) = CommandExecutionMode::parse(mode) {
+                errors.push(format!(
+                    "tool selection {} has invalid command_execution_policy: {error}",
+                    selection.selection_id
+                ));
+            }
+        }
+        if let Some(mode) = selection.command_network_mode.as_deref() {
+            if let Err(error) = CommandNetworkMode::parse(mode) {
+                errors.push(format!(
+                    "tool selection {} has invalid command_network_mode: {error}",
+                    selection.selection_id
+                ));
+            }
+        }
+        validate_argv_prefixes(
+            &selection.selection_id,
+            "command_allowed_argv_prefixes",
+            &selection.command_allowed_argv_prefixes,
+            errors,
+        );
+        validate_argv_prefixes(
+            &selection.selection_id,
+            "command_forbidden_argv_prefixes",
+            &selection.command_forbidden_argv_prefixes,
+            errors,
+        );
     }
 
     for profile in &manifest.inference_profiles {
@@ -520,6 +551,36 @@ fn format_variable_ref(var: &VariableRef) -> String {
         String::new()
     } else {
         var.path.join(".")
+    }
+}
+
+fn validate_argv_prefixes(
+    selection_id: &str,
+    field: &str,
+    prefixes: &[String],
+    errors: &mut Vec<String>,
+) {
+    for prefix in prefixes {
+        let trimmed = prefix.trim();
+        if trimmed.is_empty() {
+            errors.push(format!(
+                "tool selection {selection_id} has an empty {field} entry"
+            ));
+            continue;
+        }
+
+        if trimmed.starts_with('[') {
+            match serde_json::from_str::<Vec<String>>(trimmed) {
+                Ok(tokens)
+                    if !tokens.is_empty() && tokens.iter().all(|token| !token.trim().is_empty()) => {}
+                Ok(_) => errors.push(format!(
+                    "tool selection {selection_id} {field} JSON entry must contain non-empty argv tokens"
+                )),
+                Err(error) => errors.push(format!(
+                    "tool selection {selection_id} {field} JSON entry is invalid: {error}"
+                )),
+            }
+        }
     }
 }
 

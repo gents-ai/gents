@@ -119,6 +119,33 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
         Some("bash")
     );
     assert_eq!(failed.get("latency_ms").and_then(Value::as_i64), Some(1500));
+    let native_output = failed
+        .get("native_tool_output")
+        .unwrap_or_else(|| panic!("missing native_tool_output in {failed:#}"));
+    assert_eq!(
+        native_output.get("ok").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        native_output.get("status").and_then(Value::as_str),
+        Some("exit_nonzero")
+    );
+    assert_eq!(
+        native_output.get("command").and_then(Value::as_str),
+        Some("grep -P amy README.md")
+    );
+    assert_eq!(
+        native_output.get("exit_code").and_then(Value::as_i64),
+        Some(2)
+    );
+    assert_eq!(
+        native_output.get("execution_mode").and_then(Value::as_str),
+        Some("read_only")
+    );
+    assert_eq!(
+        native_output.get("sandbox").and_then(Value::as_str),
+        Some("policy_read_only")
+    );
 
     assert_eq!(
         missing_tool.get("tool_result_ok").and_then(Value::as_bool),
@@ -310,6 +337,35 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         "bash",
         json!({"command":"grep","args":["-P","amy","README.md"]}),
     )?;
+    let failed_result = format!(
+        "defra_exec: {}\nstdout:\n(empty)\nstderr:\ngrep: invalid option -- P",
+        json!({
+            "ok": false,
+            "status": "exit_nonzero",
+            "command": "grep -P amy README.md",
+            "argv": ["grep", "-P", "amy", "README.md"],
+            "cwd": "/repo",
+            "exit_code": 2,
+            "timed_out": false,
+            "duration_ms": 1500,
+            "timeout_ms": 10000,
+            "execution_mode": "read_only",
+            "network_mode": "inherit",
+            "sandbox": "policy_read_only",
+            "stdout_truncation": {
+                "returned_chars": 0,
+                "total_chars": 0,
+                "max_chars": 16000,
+                "truncated": false
+            },
+            "stderr_truncation": {
+                "returned_chars": 24,
+                "total_chars": 24,
+                "max_chars": 16000,
+                "truncated": false
+            }
+        })
+    );
     let missing_tool_message = assistant_tool_message(
         "call-missing-tool",
         "describe_tool",
@@ -386,20 +442,23 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
     .await?;
     exec(
         node,
-        r#"mutation {
-            create_AgentToolCall(input: {
+        &format!(
+            r#"mutation {{
+            create_AgentToolCall(input: {{
                 tool_call_key: "session-1:call-fail",
                 session_id: "session-1",
                 message_sequence: 3,
                 tool_name: "bash",
                 tool_call_id: "call-fail",
-                args: "{\"command\":\"grep\",\"args\":[\"-P\",\"amy\",\"README.md\"]}",
-                result: "cwd: /repo\ncommand: grep -P amy README.md\nexit_code: 2\nstdout:\n(empty)\nstderr:\ngrep: invalid option -- P",
+                args: "{{\"command\":\"grep\",\"args\":[\"-P\",\"amy\",\"README.md\"]}}",
+                result: "{}",
                 status: "completed",
                 started_at: "2026-05-04T12:00:03Z",
                 completed_at: "2026-05-04T12:00:04.500Z"
-            }) { _docID }
-        }"#,
+            }}) {{ _docID }}
+        }}"#,
+            escape_graphql_string(&failed_result)
+        ),
     )
     .await?;
 

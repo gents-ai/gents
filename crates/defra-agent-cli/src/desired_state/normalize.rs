@@ -43,6 +43,12 @@ pub(crate) fn normalize_manifest(manifest: &mut DesiredStateManifest) {
     for selection in &mut manifest.tool_selections {
         normalize_optional_string(&mut selection.display_name);
         normalize_optional_string(&mut selection.file_tool_root);
+        normalize_optional_string(&mut selection.command_execution_policy);
+        normalize_optional_string(&mut selection.command_network_mode);
+        selection.command_allowed_argv_prefixes.sort();
+        selection.command_allowed_argv_prefixes.dedup();
+        selection.command_forbidden_argv_prefixes.sort();
+        selection.command_forbidden_argv_prefixes.dedup();
         selection.cli_tool_names.sort();
         selection.cli_tool_names.dedup();
         selection.delegate_to.sort();

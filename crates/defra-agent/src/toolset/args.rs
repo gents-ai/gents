@@ -13,6 +13,8 @@ pub(super) struct ListFilesArgs {
     pub recursive: bool,
     #[serde(default = "default_max_list_entries")]
     pub max_entries: usize,
+    #[serde(default)]
+    pub raw_json: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -24,6 +26,8 @@ pub(super) struct ReadFileArgs {
     pub end_line: Option<usize>,
     #[serde(default = "default_max_file_chars")]
     pub max_chars: usize,
+    #[serde(default)]
+    pub raw_json: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -33,6 +37,8 @@ pub(super) struct GlobArgs {
     pub path: Option<String>,
     #[serde(default = "default_max_matches")]
     pub max_matches: usize,
+    #[serde(default)]
+    pub raw_json: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,12 +50,16 @@ pub(super) struct GrepArgs {
     pub case_sensitive: bool,
     #[serde(default = "default_max_matches")]
     pub max_matches: usize,
+    #[serde(default)]
+    pub raw_json: bool,
 }
 
 #[derive(Debug, Deserialize)]
 pub(super) struct WriteFileArgs {
     pub path: String,
     pub content: String,
+    #[serde(default)]
+    pub raw_json: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,6 +69,8 @@ pub(super) struct EditFileArgs {
     pub new_text: String,
     #[serde(default)]
     pub replace_all: bool,
+    #[serde(default)]
+    pub raw_json: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,6 +82,8 @@ pub(super) struct BashArgs {
     pub cwd: Option<String>,
     #[serde(default = "default_command_timeout_secs")]
     pub timeout_secs: u64,
+    #[serde(default)]
+    pub raw_json: bool,
 }
 
 #[derive(Debug, Deserialize)]

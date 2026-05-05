@@ -126,7 +126,7 @@ pub(crate) fn render_file_contents(
         if line_number < start_line || line_number > end_line {
             continue;
         }
-        rendered.push(format!("{line_number}: {line}"));
+        rendered.push(format!("L{line_number}: {line}"));
     }
 
     let content = if rendered.is_empty() && text.is_empty() {

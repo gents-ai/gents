@@ -203,6 +203,7 @@ fn build_records(
                 repair_attempt: None,
                 final_arguments_sent: analysis.final_arguments_sent,
                 tool_result: tool_call.result.clone(),
+                native_tool_output: analysis.native_tool_output,
                 tool_result_ok: analysis.tool_result_ok,
                 tool_call_completed: tool_call.status.eq_ignore_ascii_case("completed"),
                 tool_status: tool_call.status.clone(),

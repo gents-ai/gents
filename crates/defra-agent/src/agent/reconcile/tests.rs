@@ -342,6 +342,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
                 file_tools: FileToolMode::ReadOnly,
                 file_tool_root: None,
                 bash: crate::tool_surface::BashMode::Off,
+                command_policy: None,
                 cli_tool_names: Vec::new(),
                 enable_meta_tools: false,
                 delegate_to: Vec::new(),

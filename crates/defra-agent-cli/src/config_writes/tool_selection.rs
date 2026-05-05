@@ -54,6 +54,22 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
             )),
             optional_bool_field("enable_bash", selection.enable_bash),
             optional_string_field("bash_mode", selection.bash_mode.as_deref()),
+            optional_string_field(
+                "command_execution_policy",
+                selection.command_execution_policy.as_deref(),
+            ),
+            selection
+                .command_allowed_argv_prefixes
+                .as_ref()
+                .and_then(|values| string_list_field("command_allowed_argv_prefixes", values)),
+            selection
+                .command_forbidden_argv_prefixes
+                .as_ref()
+                .and_then(|values| string_list_field("command_forbidden_argv_prefixes", values)),
+            optional_string_field(
+                "command_network_mode",
+                selection.command_network_mode.as_deref(),
+            ),
             selection
                 .cli_tool_names
                 .as_ref()

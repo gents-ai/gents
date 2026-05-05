@@ -220,6 +220,10 @@ pub(crate) async fn save_tool_selection_config(
             file_tool_root: None,
             enable_bash: Some(false),
             bash_mode: None,
+            command_execution_policy: None,
+            command_allowed_argv_prefixes: Vec::new(),
+            command_forbidden_argv_prefixes: Vec::new(),
+            command_network_mode: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: Some(false),
             delegate_to: Vec::new(),
@@ -231,6 +235,20 @@ pub(crate) async fn save_tool_selection_config(
     row.file_tool_root = trim_optional(request.file_tool_root);
     row.enable_bash = request.enable_bash.or(row.enable_bash);
     row.bash_mode = trim_optional(request.bash_mode);
+    row.command_execution_policy = trim_optional(request.command_execution_policy);
+    row.command_allowed_argv_prefixes = request
+        .command_allowed_argv_prefixes
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect();
+    row.command_forbidden_argv_prefixes = request
+        .command_forbidden_argv_prefixes
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect();
+    row.command_network_mode = trim_optional(request.command_network_mode);
     row.cli_tool_names = request
         .cli_tool_names
         .into_iter()

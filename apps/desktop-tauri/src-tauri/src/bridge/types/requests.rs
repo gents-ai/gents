@@ -108,6 +108,14 @@ pub(crate) struct ToolSelectionSaveRequest {
     pub file_tool_root: Option<String>,
     pub enable_bash: Option<bool>,
     pub bash_mode: Option<String>,
+    #[serde(default)]
+    pub command_execution_policy: Option<String>,
+    #[serde(default)]
+    pub command_allowed_argv_prefixes: Vec<String>,
+    #[serde(default)]
+    pub command_forbidden_argv_prefixes: Vec<String>,
+    #[serde(default)]
+    pub command_network_mode: Option<String>,
     pub cli_tool_names: Vec<String>,
     pub enable_meta_tools: Option<bool>,
     pub delegate_to: Vec<String>,

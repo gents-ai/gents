@@ -17,6 +17,7 @@ use super::shared::{
 };
 
 const DEFAULT_GREP_PREVIEW_CHARS: usize = 240;
+const OUTPUT_META_PREFIX: &str = "defra_fs: ";
 
 #[derive(Clone)]
 pub(super) struct ListFilesTool {
@@ -111,7 +112,7 @@ impl Tool for ListFilesTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: format!(
-                "List files and directories under the allowed root ({}). Returns concise JSON and skips common generated directories by default.",
+                "List files and directories under the allowed root ({}). Returns compact text with stable defra_fs metadata and skips common generated directories by default. Set raw_json=true for structured JSON.",
                 self.context.root().display()
             ),
             parameters: serde_json::json!({
@@ -133,6 +134,11 @@ impl Tool for ListFilesTool {
                         "minimum": 1,
                         "maximum": self.default_max_entries,
                         "description": "Maximum entries to return; higher values are capped by the tool."
+                    },
+                    "raw_json": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "When true, return structured JSON instead of the compact default text."
                     }
                 }
             }),
@@ -148,15 +154,29 @@ impl Tool for ListFilesTool {
             args.max_entries.max(1).min(self.default_max_entries.max(1)),
         )?;
 
-        Ok(render_json(&ListFilesOutput {
+        let metadata = ListFilesMetadata {
+            ok: true,
+            status: "success",
+            tool: Self::NAME,
             path: self.context.display_path(&dir),
             recursive: args.recursive,
-            returned_entries: entries.items.len(),
+            returned_count: entries.items.len(),
+            total_count: total_count(entries.items.len(), entries.truncated),
             truncated: entries.truncated,
             default_ignored: default_ignored_names(),
             summary: summarize_entries(&entries.items),
+        };
+        let output = ListFilesOutput {
+            metadata,
             entries: entries.items,
-        })?)
+        };
+
+        Ok(render_tool_output(
+            &output.metadata,
+            format_entries("entries", &output.entries),
+            &output,
+            args.raw_json,
+        )?)
     }
 }
 
@@ -171,7 +191,7 @@ impl Tool for ReadFileTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: format!(
-                "Read a UTF-8 text file under the allowed root ({}). Returns concise JSON with line metadata.",
+                "Read a UTF-8 text file under the allowed root ({}). Returns compact line-numbered text with stable defra_fs metadata. Set raw_json=true for structured JSON.",
                 self.context.root().display()
             ),
             parameters: serde_json::json!({
@@ -198,6 +218,11 @@ impl Tool for ReadFileTool {
                         "minimum": 1,
                         "maximum": self.default_max_chars,
                         "description": "Maximum characters to return; higher values are capped by the tool."
+                    },
+                    "raw_json": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "When true, return structured JSON instead of the compact default text."
                     }
                 },
                 "required": ["path"]
@@ -211,16 +236,29 @@ impl Tool for ReadFileTool {
         let text = String::from_utf8_lossy(&bytes).into_owned();
         let rendered = render_file_contents(&text, args.start_line, args.end_line);
         let max_chars = args.max_chars.min(self.default_max_chars).max(1);
+        let content = truncate_text(&rendered.content, max_chars);
 
-        Ok(render_json(&ReadFileOutput {
-            path: self.context.display_path(&path),
-            start_line: rendered.start_line,
-            end_line: rendered.end_line,
-            total_lines: rendered.total_lines,
-            returned_lines: rendered.returned_lines,
-            truncated: rendered.content.chars().count() > max_chars,
-            content: truncate_text(&rendered.content, max_chars),
-        })?)
+        let output = ReadFileOutput {
+            metadata: ReadFileMetadata {
+                ok: true,
+                status: "success",
+                tool: Self::NAME,
+                path: self.context.display_path(&path),
+                returned_count: rendered.returned_lines,
+                total_count: Some(rendered.total_lines),
+                truncated: rendered.content.chars().count() > max_chars,
+                start_line: rendered.start_line,
+                end_line: rendered.end_line,
+            },
+            content,
+        };
+
+        Ok(render_tool_output(
+            &output.metadata,
+            format!("content:\n{}", output.content),
+            &output,
+            args.raw_json,
+        )?)
     }
 }
 
@@ -234,7 +272,7 @@ impl Tool for GlobTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Find files matching a glob pattern under the allowed root. Returns concise JSON and skips common generated directories by default.".to_string(),
+            description: "Find files matching a glob pattern under the allowed root. Returns compact text with stable defra_fs metadata and skips common generated directories by default. Set raw_json=true for structured JSON.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -253,6 +291,11 @@ impl Tool for GlobTool {
                         "minimum": 1,
                         "maximum": self.default_max_matches,
                         "description": "Maximum matching paths to return; higher values are capped by the tool."
+                    },
+                    "raw_json": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "When true, return structured JSON instead of the compact default text."
                     }
                 },
                 "required": ["pattern"]
@@ -271,14 +314,27 @@ impl Tool for GlobTool {
             args.max_matches.min(self.default_max_matches).max(1),
         )?;
 
-        Ok(render_json(&GlobOutput {
-            pattern: args.pattern,
-            path: self.context.display_path(&dir),
-            returned_matches: matches.items.len(),
-            truncated: matches.truncated,
-            default_ignored: default_ignored_names(),
+        let output = GlobOutput {
+            metadata: GlobMetadata {
+                ok: true,
+                status: "success",
+                tool: Self::NAME,
+                pattern: args.pattern,
+                path: self.context.display_path(&dir),
+                returned_count: matches.items.len(),
+                total_count: total_count(matches.items.len(), matches.truncated),
+                truncated: matches.truncated,
+                default_ignored: default_ignored_names(),
+            },
             matches: matches.items,
-        })?)
+        };
+
+        Ok(render_tool_output(
+            &output.metadata,
+            format_entries("matches", &output.matches),
+            &output,
+            args.raw_json,
+        )?)
     }
 }
 
@@ -292,7 +348,7 @@ impl Tool for GrepTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Search text files under the allowed root for a substring. Returns concise JSON and skips common generated directories by default.".to_string(),
+            description: "Search text files under the allowed root for a substring. Returns compact path:Lline matches with stable defra_fs metadata and skips common generated directories by default. Set raw_json=true for structured JSON.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -316,6 +372,11 @@ impl Tool for GrepTool {
                         "minimum": 1,
                         "maximum": self.default_max_matches,
                         "description": "Maximum matching lines to return; higher values are capped by the tool."
+                    },
+                    "raw_json": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "When true, return structured JSON instead of the compact default text."
                     }
                 },
                 "required": ["pattern"]
@@ -348,16 +409,29 @@ impl Tool for GrepTool {
             })
             .collect::<Vec<_>>();
 
-        Ok(render_json(&GrepOutput {
-            pattern: args.pattern,
-            path: self.context.display_path(&dir),
-            case_sensitive: args.case_sensitive,
-            returned_matches: matches.len(),
-            files_with_matches: files_with_matches.len(),
-            truncated: collected.truncated,
-            default_ignored: default_ignored_names(),
+        let output = GrepOutput {
+            metadata: GrepMetadata {
+                ok: true,
+                status: "success",
+                tool: Self::NAME,
+                pattern: args.pattern,
+                path: self.context.display_path(&dir),
+                case_sensitive: args.case_sensitive,
+                returned_count: matches.len(),
+                total_count: total_count(matches.len(), collected.truncated),
+                files_with_matches: files_with_matches.len(),
+                truncated: collected.truncated,
+                default_ignored: default_ignored_names(),
+            },
             matches,
-        })?)
+        };
+
+        Ok(render_tool_output(
+            &output.metadata,
+            format_grep_matches(&output.matches),
+            &output,
+            args.raw_json,
+        )?)
     }
 }
 
@@ -371,7 +445,7 @@ impl Tool for WriteFileTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Write full file contents under the configured root.".to_string(),
+            description: "Write full file contents under the configured root. Returns compact success metadata by default. Set raw_json=true for structured JSON.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -382,6 +456,11 @@ impl Tool for WriteFileTool {
                     "content": {
                         "type": "string",
                         "description": "Complete file contents to write. Existing file contents are replaced."
+                    },
+                    "raw_json": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "When true, return structured JSON instead of the compact default text."
                     }
                 },
                 "required": ["path", "content"]
@@ -391,16 +470,35 @@ impl Tool for WriteFileTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let path = self.context.resolve_path_allow_create(&args.path)?;
+        let created = !path.exists();
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
         tokio::fs::write(&path, args.content.as_bytes()).await?;
 
-        Ok(format!(
-            "wrote {} bytes to {}",
-            args.content.len(),
-            self.context.display_path(&path)
-        ))
+        let output = WriteFileOutput {
+            metadata: WriteFileMetadata {
+                ok: true,
+                status: "success",
+                tool: Self::NAME,
+                path: self.context.display_path(&path),
+                returned_count: 0,
+                total_count: Some(0),
+                truncated: false,
+                bytes_written: args.content.len(),
+                created,
+            },
+        };
+
+        Ok(render_tool_output(
+            &output.metadata,
+            format!(
+                "write_file: wrote {} bytes to {}",
+                output.metadata.bytes_written, output.metadata.path
+            ),
+            &output,
+            args.raw_json,
+        )?)
     }
 }
 
@@ -494,7 +592,7 @@ impl Tool for EditFileTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Replace text in an existing file under the configured root.".to_string(),
+            description: "Replace text in an existing file under the configured root. Returns compact success metadata by default. Set raw_json=true for structured JSON.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -514,6 +612,11 @@ impl Tool for EditFileTool {
                         "type": "boolean",
                         "default": false,
                         "description": "When false, replace only the first occurrence. When true, replace every occurrence."
+                    },
+                    "raw_json": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "When true, return structured JSON instead of the compact default text."
                     }
                 },
                 "required": ["path", "old_text", "new_text"]
@@ -540,16 +643,37 @@ impl Tool for EditFileTool {
         };
         tokio::fs::write(&path, updated.as_bytes()).await?;
 
-        Ok(format!(
-            "edited {} ({} replacement{})",
-            self.context.display_path(&path),
-            if args.replace_all { replacements } else { 1 },
-            if args.replace_all && replacements != 1 {
-                "s"
-            } else {
-                ""
-            }
-        ))
+        let replacements_applied = if args.replace_all { replacements } else { 1 };
+        let output = EditFileOutput {
+            metadata: EditFileMetadata {
+                ok: true,
+                status: "success",
+                tool: Self::NAME,
+                path: self.context.display_path(&path),
+                returned_count: replacements_applied,
+                total_count: Some(replacements),
+                truncated: false,
+                replacements_applied,
+                replace_all: args.replace_all,
+                bytes_written: updated.len(),
+            },
+        };
+
+        Ok(render_tool_output(
+            &output.metadata,
+            format!(
+                "edit_file: edited {} ({} replacement{})",
+                output.metadata.path,
+                output.metadata.replacements_applied,
+                if output.metadata.replacements_applied != 1 {
+                    "s"
+                } else {
+                    ""
+                }
+            ),
+            &output,
+            args.raw_json,
+        )?)
     }
 }
 
@@ -560,46 +684,85 @@ struct EntrySummary {
 }
 
 #[derive(Serialize)]
-struct ListFilesOutput {
+struct ListFilesMetadata {
+    ok: bool,
+    status: &'static str,
+    tool: &'static str,
     path: String,
     recursive: bool,
-    returned_entries: usize,
+    returned_count: usize,
+    total_count: Option<usize>,
     truncated: bool,
     default_ignored: &'static [&'static str],
     summary: EntrySummary,
+}
+
+#[derive(Serialize)]
+struct ListFilesOutput {
+    #[serde(flatten)]
+    metadata: ListFilesMetadata,
     entries: Vec<FilesystemEntry>,
 }
 
 #[derive(Serialize)]
-struct ReadFileOutput {
+struct ReadFileMetadata {
+    ok: bool,
+    status: &'static str,
+    tool: &'static str,
     path: String,
+    returned_count: usize,
+    total_count: Option<usize>,
+    truncated: bool,
     start_line: usize,
     end_line: usize,
-    total_lines: usize,
-    returned_lines: usize,
-    truncated: bool,
+}
+
+#[derive(Serialize)]
+struct ReadFileOutput {
+    #[serde(flatten)]
+    metadata: ReadFileMetadata,
     content: String,
 }
 
 #[derive(Serialize)]
-struct GlobOutput {
+struct GlobMetadata {
+    ok: bool,
+    status: &'static str,
+    tool: &'static str,
     pattern: String,
     path: String,
-    returned_matches: usize,
+    returned_count: usize,
+    total_count: Option<usize>,
     truncated: bool,
     default_ignored: &'static [&'static str],
+}
+
+#[derive(Serialize)]
+struct GlobOutput {
+    #[serde(flatten)]
+    metadata: GlobMetadata,
     matches: Vec<FilesystemEntry>,
 }
 
 #[derive(Serialize)]
-struct GrepOutput {
+struct GrepMetadata {
+    ok: bool,
+    status: &'static str,
+    tool: &'static str,
     pattern: String,
     path: String,
     case_sensitive: bool,
-    returned_matches: usize,
+    returned_count: usize,
+    total_count: Option<usize>,
     files_with_matches: usize,
     truncated: bool,
     default_ignored: &'static [&'static str],
+}
+
+#[derive(Serialize)]
+struct GrepOutput {
+    #[serde(flatten)]
+    metadata: GrepMetadata,
     matches: Vec<GrepOutputMatch>,
 }
 
@@ -608,6 +771,45 @@ struct GrepOutputMatch {
     path: String,
     line_number: usize,
     preview: String,
+}
+
+#[derive(Serialize)]
+struct WriteFileMetadata {
+    ok: bool,
+    status: &'static str,
+    tool: &'static str,
+    path: String,
+    returned_count: usize,
+    total_count: Option<usize>,
+    truncated: bool,
+    bytes_written: usize,
+    created: bool,
+}
+
+#[derive(Serialize)]
+struct WriteFileOutput {
+    #[serde(flatten)]
+    metadata: WriteFileMetadata,
+}
+
+#[derive(Serialize)]
+struct EditFileMetadata {
+    ok: bool,
+    status: &'static str,
+    tool: &'static str,
+    path: String,
+    returned_count: usize,
+    total_count: Option<usize>,
+    truncated: bool,
+    replacements_applied: usize,
+    replace_all: bool,
+    bytes_written: usize,
+}
+
+#[derive(Serialize)]
+struct EditFileOutput {
+    #[serde(flatten)]
+    metadata: EditFileMetadata,
 }
 
 fn summarize_entries(entries: &[FilesystemEntry]) -> EntrySummary {
@@ -623,6 +825,64 @@ fn summarize_entries(entries: &[FilesystemEntry]) -> EntrySummary {
     EntrySummary { files, directories }
 }
 
+fn total_count(returned_count: usize, truncated: bool) -> Option<usize> {
+    (!truncated).then_some(returned_count)
+}
+
+fn format_entries(label: &str, entries: &[FilesystemEntry]) -> String {
+    let mut out = String::from(label);
+    out.push(':');
+    if entries.is_empty() {
+        out.push_str("\n(none)");
+        return out;
+    }
+
+    for entry in entries {
+        out.push('\n');
+        out.push_str(entry.entry_type);
+        out.push(' ');
+        out.push_str(&entry.path);
+    }
+    out
+}
+
+fn format_grep_matches(matches: &[GrepOutputMatch]) -> String {
+    let mut out = String::from("matches:");
+    if matches.is_empty() {
+        out.push_str("\n(none)");
+        return out;
+    }
+
+    for entry in matches {
+        out.push('\n');
+        out.push_str(&entry.path);
+        out.push_str(":L");
+        out.push_str(&entry.line_number.to_string());
+        out.push_str(": ");
+        out.push_str(&entry.preview);
+    }
+    out
+}
+
+fn render_tool_output(
+    metadata: &impl Serialize,
+    body: String,
+    raw_value: &impl Serialize,
+    raw_json: bool,
+) -> Result<String> {
+    if raw_json {
+        return render_json(raw_value);
+    }
+
+    let mut out = String::from(OUTPUT_META_PREFIX);
+    out.push_str(&render_json(metadata)?);
+    if !body.is_empty() {
+        out.push('\n');
+        out.push_str(&body);
+    }
+    Ok(out)
+}
+
 fn render_json(value: &impl Serialize) -> Result<String> {
-    serde_json::to_string_pretty(value).context("serializing tool output")
+    serde_json::to_string(value).context("serializing tool output")
 }

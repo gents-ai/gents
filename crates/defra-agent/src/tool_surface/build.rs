@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
 
-use crate::toolset::{ToolSet, ToolSetBuilder};
+use crate::toolset::{CommandExecutionPolicy, ToolSet, ToolSetBuilder};
 
 use super::modes::{BashMode, FileToolMode, ToolCeiling};
 
@@ -48,6 +48,7 @@ pub(super) fn build_host_tools(
     behavior_name: &str,
     file_tools: FileToolMode,
     bash: BashMode,
+    command_policy: Option<CommandExecutionPolicy>,
     file_tool_root: Option<&Path>,
     cli_tool_names: &[String],
     ceiling: &ToolCeiling,
@@ -78,13 +79,19 @@ pub(super) fn build_host_tools(
     match bash {
         BashMode::Off => {}
         BashMode::ReadOnly => {
-            builder = builder.bash_read_only();
+            builder = match command_policy.clone() {
+                Some(policy) => builder.bash_read_only_with_policy(policy),
+                None => builder.bash_read_only(),
+            };
         }
         BashMode::Unrestricted => {
             let root = effective_root
                 .clone()
                 .ok_or_else(|| anyhow!("unrestricted bash requires a configured tool root"))?;
-            builder = builder.bash_unrestricted(root);
+            builder = match command_policy.clone() {
+                Some(policy) => builder.bash_unrestricted_with_policy(root, policy),
+                None => builder.bash_unrestricted(root),
+            };
         }
     }
 

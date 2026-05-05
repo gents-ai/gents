@@ -159,6 +159,12 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     file_tool_root: normalize_optional(row.file_tool_root.as_deref()),
                     enable_bash: row.enable_bash,
                     bash_mode: normalize_optional(row.bash_mode.as_deref()),
+                    command_execution_policy: normalize_optional(
+                        row.command_execution_policy.as_deref(),
+                    ),
+                    command_allowed_argv_prefixes: row.command_allowed_argv_prefixes.clone(),
+                    command_forbidden_argv_prefixes: row.command_forbidden_argv_prefixes.clone(),
+                    command_network_mode: normalize_optional(row.command_network_mode.as_deref()),
                     cli_tool_names: row.cli_tool_names.clone(),
                     enable_meta_tools: row.enable_meta_tools,
                     delegate_to: row.delegate_to.clone(),
