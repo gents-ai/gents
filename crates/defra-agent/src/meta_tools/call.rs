@@ -3,13 +3,14 @@ use std::time::Duration;
 use anyhow::{anyhow, Context as _};
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::health_checker::HealthStatus;
 
 use super::shared::{
     enforce_health_gate, extract_text, lookup_service, MetaToolContext, MetaToolError,
+    StructuredToolError,
 };
 
 #[derive(Debug, Deserialize)]
@@ -17,19 +18,6 @@ pub struct CallToolArgs {
     service_id: String,
     tool_name: String,
     arguments: serde_json::Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct StructuredToolError {
-    ok: bool,
-    failure_class: &'static str,
-    path: String,
-    message: String,
-    retryable: bool,
-    service_id: String,
-    tool_name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    available_tools: Option<Vec<String>>,
 }
 
 #[derive(Clone)]
@@ -210,48 +198,6 @@ impl CallToolTool {
             tool.input_schema.as_ref(),
         )
         .err()
-    }
-}
-
-impl StructuredToolError {
-    fn invalid_tool_arguments(
-        service_id: &str,
-        tool_name: &str,
-        path: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
-        Self {
-            ok: false,
-            failure_class: "invalid_tool_arguments",
-            path: path.into(),
-            message: message.into(),
-            retryable: true,
-            service_id: service_id.to_string(),
-            tool_name: tool_name.to_string(),
-            available_tools: None,
-        }
-    }
-
-    fn tool_not_found(service_id: &str, tool_name: &str, available_tools: Vec<String>) -> Self {
-        Self {
-            ok: false,
-            failure_class: "tool_not_found",
-            path: "/tool_name".to_string(),
-            message: format!("tool '{tool_name}' was not found on service '{service_id}'"),
-            retryable: true,
-            service_id: service_id.to_string(),
-            tool_name: tool_name.to_string(),
-            available_tools: Some(available_tools),
-        }
-    }
-
-    fn to_result_text(&self) -> String {
-        serde_json::to_string_pretty(self).unwrap_or_else(|_| {
-            format!(
-                r#"{{"ok":false,"failure_class":"{}","path":"{}","message":"{}","retryable":true,"service_id":"{}","tool_name":"{}"}}"#,
-                self.failure_class, self.path, self.message, self.service_id, self.tool_name
-            )
-        })
     }
 }
 

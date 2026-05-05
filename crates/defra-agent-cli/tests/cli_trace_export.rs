@@ -52,7 +52,7 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
             .to_string()
     });
 
-    assert_eq!(records.len(), 3, "export output:\n{output}");
+    assert_eq!(records.len(), 4, "export output:\n{output}");
     let find_record = |tool_call_id: &str| {
         records
             .iter()
@@ -61,6 +61,7 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
     };
     let deadline = find_record("call-deadline");
     let failed = find_record("call-fail");
+    let missing_tool = find_record("call-missing-tool");
     let succeeded = find_record("call-success");
 
     assert_eq!(
@@ -118,6 +119,30 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
         Some("bash")
     );
     assert_eq!(failed.get("latency_ms").and_then(Value::as_i64), Some(1500));
+
+    assert_eq!(
+        missing_tool.get("tool_result_ok").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        missing_tool
+            .get("tool_failure_class")
+            .and_then(Value::as_str),
+        Some("tool_not_found")
+    );
+    assert_eq!(
+        missing_tool
+            .get("tool_error")
+            .and_then(|value| value.get("available_tools")),
+        Some(&json!(["search_posts"]))
+    );
+    assert_eq!(
+        missing_tool
+            .get("tool_error")
+            .and_then(|value| value.get("requested_tool_name"))
+            .and_then(Value::as_str),
+        Some("search_post")
+    );
 
     assert_eq!(
         succeeded.get("tool_call_id").and_then(Value::as_str),
@@ -285,6 +310,11 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         "bash",
         json!({"command":"grep","args":["-P","amy","README.md"]}),
     )?;
+    let missing_tool_message = assistant_tool_message(
+        "call-missing-tool",
+        "describe_tool",
+        json!({"service_id":"x-data","tool_name":"search_post"}),
+    )?;
     exec(
         node,
         &format!(
@@ -316,6 +346,23 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 }}) {{ _docID }}
             }}"#,
             escape_graphql_string(&failed_message)
+        ),
+    )
+    .await?;
+    exec(
+        node,
+        &format!(
+            r#"mutation {{
+                create_AgentMessage(input: {{
+                    message_key: "session-1:4",
+                    session_id: "session-1",
+                    sequence: 4,
+                    role: "assistant",
+                    content: "{}",
+                    timestamp: "2026-05-04T12:00:04Z"
+                }}) {{ _docID }}
+            }}"#,
+            escape_graphql_string(&missing_tool_message)
         ),
     )
     .await?;
@@ -353,6 +400,40 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 completed_at: "2026-05-04T12:00:04.500Z"
             }) { _docID }
         }"#,
+    )
+    .await?;
+
+    let missing_tool_result = json!({
+        "ok": false,
+        "failure_class": "tool_not_found",
+        "path": "/tool_name",
+        "message": "tool 'search_post' was not found on service 'x-data'; available tools: search_posts",
+        "retryable": true,
+        "service_id": "x-data",
+        "tool_name": "search_post",
+        "requested_tool_name": "search_post",
+        "available_tools": ["search_posts"]
+    })
+    .to_string();
+    exec(
+        node,
+        &format!(
+            r#"mutation {{
+                create_AgentToolCall(input: {{
+                    tool_call_key: "session-1:call-missing-tool",
+                    session_id: "session-1",
+                    message_sequence: 4,
+                    tool_name: "describe_tool",
+                    tool_call_id: "call-missing-tool",
+                    args: "{{\"service_id\":\"x-data\",\"tool_name\":\"search_post\"}}",
+                    result: "{}",
+                    status: "completed",
+                    started_at: "2026-05-04T12:00:04Z",
+                    completed_at: "2026-05-04T12:00:04.250Z"
+                }}) {{ _docID }}
+            }}"#,
+            escape_graphql_string(&missing_tool_result)
+        ),
     )
     .await?;
 

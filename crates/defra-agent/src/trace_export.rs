@@ -64,10 +64,14 @@ pub struct TraceToolError {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_tool_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     pub retryable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub available_tools: Option<Vec<String>>,
     pub raw_error_text: String,
 }
 
@@ -154,6 +158,7 @@ pub fn analyze_tool_call(
                 failure_class,
                 service_id: analysis.selected_service_id.clone(),
                 tool_name: analysis.selected_tool_name.clone(),
+                requested_tool_name: None,
                 path: analysis
                     .validation_errors
                     .first()
@@ -163,6 +168,7 @@ pub fn analyze_tool_call(
                     .first()
                     .map(|error| error.message.clone()),
                 retryable: retryable_for_failure_class(failure_class),
+                available_tools: None,
                 raw_error_text: raw_tool_error_text(result, &analysis),
             })
     });
@@ -362,6 +368,15 @@ fn structured_tool_error_from_result(result: &str) -> Option<TraceToolError> {
         .and_then(Value::as_str)
         .and_then(failure_class_from_str)?;
     let retryable = object.get("retryable").and_then(Value::as_bool);
+    let requested_tool_name = object
+        .get("requested_tool_name")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let tool_name = object
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| requested_tool_name.clone());
 
     Some(TraceToolError {
         failure_class,
@@ -369,10 +384,8 @@ fn structured_tool_error_from_result(result: &str) -> Option<TraceToolError> {
             .get("service_id")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
-        tool_name: object
-            .get("tool_name")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
+        tool_name,
+        requested_tool_name,
         path: object
             .get("path")
             .and_then(Value::as_str)
@@ -382,8 +395,20 @@ fn structured_tool_error_from_result(result: &str) -> Option<TraceToolError> {
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
         retryable,
+        available_tools: string_array_field(object, "available_tools"),
         raw_error_text: trimmed.to_string(),
     })
+}
+
+fn string_array_field(object: &serde_json::Map<String, Value>, field: &str) -> Option<Vec<String>> {
+    let values = object.get(field)?.as_array()?;
+    Some(
+        values
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToOwned::to_owned)
+            .collect(),
+    )
 }
 
 fn failure_class_from_str(raw: &str) -> Option<ToolFailureClass> {
@@ -689,6 +714,46 @@ mod tests {
         assert_eq!(error.tool_name.as_deref(), Some("search_bookmarks"));
         assert_eq!(error.path.as_deref(), Some("/arguments/query"));
         assert_eq!(error.retryable, Some(true));
+    }
+
+    #[test]
+    fn structured_describe_tool_missing_tool_preserves_available_tools() {
+        let result = json!({
+            "ok": false,
+            "failure_class": "tool_not_found",
+            "path": "/tool_name",
+            "message": "tool 'search_post' was not found on service 'x-data'; available tools: search_posts",
+            "retryable": true,
+            "service_id": "x-data",
+            "tool_name": "search_post",
+            "requested_tool_name": "search_post",
+            "available_tools": ["search_posts"]
+        })
+        .to_string();
+        let analysis = analyze_tool_call(
+            "describe_tool",
+            r#"{"service_id":"x-data","tool_name":"search_post"}"#,
+            &result,
+            "completed",
+        );
+
+        assert!(!analysis.tool_result_ok);
+        assert_eq!(
+            analysis.tool_failure_class,
+            Some(ToolFailureClass::ToolNotFound)
+        );
+        assert_eq!(analysis.validation_errors[0].code, "tool_not_found");
+        assert_eq!(analysis.validation_errors[0].path, "/tool_name");
+        let error = analysis.tool_error.as_ref().expect("tool error");
+        assert_eq!(error.failure_class, ToolFailureClass::ToolNotFound);
+        assert_eq!(error.service_id.as_deref(), Some("x-data"));
+        assert_eq!(error.tool_name.as_deref(), Some("search_post"));
+        assert_eq!(error.requested_tool_name.as_deref(), Some("search_post"));
+        assert_eq!(error.retryable, Some(true));
+        assert_eq!(
+            error.available_tools,
+            Some(vec!["search_posts".to_string()])
+        );
     }
 
     #[test]
