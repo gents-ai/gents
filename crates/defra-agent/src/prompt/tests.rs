@@ -43,6 +43,8 @@ fn preamble_combines_prompt_and_behavior_name() {
     assert!(preamble.contains("discover_tools"));
     assert!(preamble.contains("describe_tool"));
     assert!(preamble.contains("call_tool"));
+    assert!(preamble.contains("native direct tools"));
+    assert!(preamble.contains("synthetic `native` service"));
     assert!(preamble.contains("list_files"));
 }
 

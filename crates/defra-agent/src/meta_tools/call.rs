@@ -41,16 +41,17 @@ impl Tool for CallToolTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Invoke a tool on a data service via MCP. Use discover_tools to \
-                find available services and tools, then describe_tool to get the input \
-                schema, then call_tool with the correct arguments."
+            description: "Invoke a tool on an MCP data service. Use discover_tools to \
+                find available services and tools, then describe_tool to get the compact \
+                input contract, then call_tool with the exact argument object. Native direct \
+                tools such as file or bash tools are called directly, not through call_tool."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "service_id": {
                         "type": "string",
-                        "description": "The service_id of the data service."
+                        "description": "The service_id of the MCP data service; not a native tool namespace."
                     },
                     "tool_name": {
                         "type": "string",
@@ -58,7 +59,7 @@ impl Tool for CallToolTool {
                     },
                     "arguments": {
                         "type": "object",
-                        "description": "The arguments to pass to the tool (see describe_tool for schema)."
+                        "description": "The exact tool arguments object from describe_tool's contract. Required fields appear as /arguments/<field> paths."
                     }
                 },
                 "required": ["service_id", "tool_name", "arguments"]

@@ -34,10 +34,13 @@ impl Tool for DiscoverToolsTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Browse or search available data service tools. Returns a compact \
+            description: "Browse or search available MCP data service tools. Returns a compact \
                 index of services and their tools (name + one-line description). Call with \
                 no query to list all services, or provide a search query to filter. Use \
-                describe_tool to get full input schema before calling a tool."
+                describe_tool to get the compact required/optional argument contract before \
+                calling a tool; request raw_schema only when exact JSON Schema is needed. \
+                Native direct tools such as file or bash tools are not data services and are \
+                described by their own tool definitions."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -198,6 +201,9 @@ impl Tool for DiscoverToolsTool {
             for (tn, td) in &tool_names {
                 out.push_str(&format!("  - {tn}: {td}\n"));
             }
+            out.push_str(
+                "Next: call describe_tool with this service_id and a tool_name before call_tool.\n",
+            );
             out.push('\n');
         }
 

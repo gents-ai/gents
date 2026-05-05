@@ -57,10 +57,28 @@ impl Tool for ReadOnlyBashTool {
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "command": { "type": "string" },
-                    "args": { "type": "array", "items": { "type": "string" } },
-                    "cwd": { "type": "string" },
-                    "timeout_secs": { "type": "integer" }
+                    "command": {
+                        "type": "string",
+                        "description": "Executable name or path from the read-only command allowlist."
+                    },
+                    "args": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "default": [],
+                        "description": "Exec-style arguments. Do not include the executable name here."
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "default": ".",
+                        "description": "Working directory under the allowed root. Omit for the root."
+                    },
+                    "timeout_secs": {
+                        "type": "integer",
+                        "default": self.default_timeout.as_secs(),
+                        "minimum": 1,
+                        "maximum": self.default_timeout.as_secs(),
+                        "description": "Timeout in seconds; higher values are capped by the tool."
+                    }
                 },
                 "required": ["command"]
             }),
@@ -103,10 +121,21 @@ impl Tool for UnrestrictedBashTool {
                     "args": {
                         "type": "array",
                         "items": { "type": "string" },
+                        "default": [],
                         "description": "Arguments for exec-style invocation. Leave empty to run command through /bin/sh -lc."
                     },
-                    "cwd": { "type": "string" },
-                    "timeout_secs": { "type": "integer" }
+                    "cwd": {
+                        "type": "string",
+                        "default": ".",
+                        "description": "Working directory under the configured writable root. Omit for the root."
+                    },
+                    "timeout_secs": {
+                        "type": "integer",
+                        "default": self.default_timeout.as_secs(),
+                        "minimum": 1,
+                        "maximum": self.default_timeout.as_secs(),
+                        "description": "Timeout in seconds; higher values are capped by the tool."
+                    }
                 },
                 "required": ["command"]
             }),

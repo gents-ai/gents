@@ -117,9 +117,23 @@ impl Tool for ListFilesTool {
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string" },
-                    "recursive": { "type": "boolean" },
-                    "max_entries": { "type": "integer" }
+                    "path": {
+                        "type": "string",
+                        "default": ".",
+                        "description": "Directory to list, relative to the allowed root. Omit or pass an empty string for the root."
+                    },
+                    "recursive": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "When true, walk subdirectories while still skipping common generated directories."
+                    },
+                    "max_entries": {
+                        "type": "integer",
+                        "default": self.default_max_entries,
+                        "minimum": 1,
+                        "maximum": self.default_max_entries,
+                        "description": "Maximum entries to return; higher values are capped by the tool."
+                    }
                 }
             }),
         }
@@ -163,10 +177,28 @@ impl Tool for ReadFileTool {
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string" },
-                    "start_line": { "type": "integer" },
-                    "end_line": { "type": "integer" },
-                    "max_chars": { "type": "integer" }
+                    "path": {
+                        "type": "string",
+                        "description": "File to read, relative to the allowed root unless an allowed absolute path is provided."
+                    },
+                    "start_line": {
+                        "type": "integer",
+                        "default": 1,
+                        "minimum": 1,
+                        "description": "First 1-based line to return."
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Last 1-based line to return. Omit to read through the file end."
+                    },
+                    "max_chars": {
+                        "type": "integer",
+                        "default": self.default_max_chars,
+                        "minimum": 1,
+                        "maximum": self.default_max_chars,
+                        "description": "Maximum characters to return; higher values are capped by the tool."
+                    }
                 },
                 "required": ["path"]
             }),
@@ -206,9 +238,22 @@ impl Tool for GlobTool {
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "pattern": { "type": "string" },
-                    "path": { "type": "string" },
-                    "max_matches": { "type": "integer" }
+                    "pattern": {
+                        "type": "string",
+                        "description": "Glob pattern matched against paths displayed relative to the allowed root."
+                    },
+                    "path": {
+                        "type": "string",
+                        "default": ".",
+                        "description": "Directory to search, relative to the allowed root. Omit or pass an empty string for the root."
+                    },
+                    "max_matches": {
+                        "type": "integer",
+                        "default": self.default_max_matches,
+                        "minimum": 1,
+                        "maximum": self.default_max_matches,
+                        "description": "Maximum matching paths to return; higher values are capped by the tool."
+                    }
                 },
                 "required": ["pattern"]
             }),
@@ -251,10 +296,27 @@ impl Tool for GrepTool {
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "pattern": { "type": "string" },
-                    "path": { "type": "string" },
-                    "case_sensitive": { "type": "boolean" },
-                    "max_matches": { "type": "integer" }
+                    "pattern": {
+                        "type": "string",
+                        "description": "Literal substring to search for in UTF-8 text files."
+                    },
+                    "path": {
+                        "type": "string",
+                        "default": ".",
+                        "description": "Directory to search, relative to the allowed root. Omit or pass an empty string for the root."
+                    },
+                    "case_sensitive": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "When false, match case-insensitively."
+                    },
+                    "max_matches": {
+                        "type": "integer",
+                        "default": self.default_max_matches,
+                        "minimum": 1,
+                        "maximum": self.default_max_matches,
+                        "description": "Maximum matching lines to return; higher values are capped by the tool."
+                    }
                 },
                 "required": ["pattern"]
             }),
@@ -313,8 +375,14 @@ impl Tool for WriteFileTool {
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string" },
-                    "content": { "type": "string" }
+                    "path": {
+                        "type": "string",
+                        "description": "File to create or overwrite, relative to the configured writable root unless an allowed absolute path is provided."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Complete file contents to write. Existing file contents are replaced."
+                    }
                 },
                 "required": ["path", "content"]
             }),
@@ -430,10 +498,23 @@ impl Tool for EditFileTool {
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string" },
-                    "old_text": { "type": "string" },
-                    "new_text": { "type": "string" },
-                    "replace_all": { "type": "boolean" }
+                    "path": {
+                        "type": "string",
+                        "description": "Existing file to edit, relative to the configured writable root unless an allowed absolute path is provided."
+                    },
+                    "old_text": {
+                        "type": "string",
+                        "description": "Exact text to replace. The call fails if this text is not found."
+                    },
+                    "new_text": {
+                        "type": "string",
+                        "description": "Replacement text."
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "When false, replace only the first occurrence. When true, replace every occurrence."
+                    }
                 },
                 "required": ["path", "old_text", "new_text"]
             }),
