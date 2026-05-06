@@ -189,9 +189,11 @@ fn resolve_behavior_id(default_behavior_id: &str, requested_behavior_id: Option<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lean_vocab_test::lean_to_defradb_values;
+    use crate::lean_vocab_test::{assert_lean_to_defradb_vocabulary_matches, LeanVocabulary};
 
+    const LEAN_REQUEST_STATE_FILE: &str = "crates/defra-agent/proofs/Proofs/Request/State.lean";
     const LEAN_REQUEST_STATE_MODEL: &str = include_str!("../proofs/Proofs/Request/State.lean");
+    const LEAN_SCHEDULING_FILE: &str = "crates/defra-agent/proofs/Proofs/Scheduling.lean";
     const LEAN_SCHEDULING_MODEL: &str = include_str!("../proofs/Proofs/Scheduling.lean");
 
     #[test]
@@ -201,11 +203,13 @@ mod tests {
             .copied()
             .map(PersistedLifecycleState::as_str)
             .collect::<Vec<_>>();
-        assert_eq!(
-            rust_states,
-            lean_to_defradb_values(LEAN_REQUEST_STATE_MODEL, "RequestState"),
-            "Rust AgentRequest.lifecycle_state vocabulary must match Proofs.Request.State"
-        );
+        assert_lean_to_defradb_vocabulary_matches(LeanVocabulary {
+            lean_file: LEAN_REQUEST_STATE_FILE,
+            model: LEAN_REQUEST_STATE_MODEL,
+            namespace: "RequestState",
+            rust_source: "PersistedLifecycleState::ALL",
+            rust_values: &rust_states,
+        });
     }
 
     #[test]
@@ -214,11 +218,13 @@ mod tests {
             ExecutionOrigin::Interactive.as_str(),
             ExecutionOrigin::Scheduled.as_str(),
         ];
-        assert_eq!(
-            rust_origins,
-            lean_to_defradb_values(LEAN_SCHEDULING_MODEL, "ExecutionOrigin"),
-            "Rust AgentRequest.execution_origin vocabulary must match Proofs.Scheduling"
-        );
+        assert_lean_to_defradb_vocabulary_matches(LeanVocabulary {
+            lean_file: LEAN_SCHEDULING_FILE,
+            model: LEAN_SCHEDULING_MODEL,
+            namespace: "ExecutionOrigin",
+            rust_source: "ExecutionOrigin::{Interactive, Scheduled}",
+            rust_values: &rust_origins,
+        });
     }
 
     #[test]

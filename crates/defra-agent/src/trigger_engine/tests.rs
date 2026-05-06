@@ -18,7 +18,7 @@ use crate::document_config::{
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
 use crate::identity::KeyIdentity;
-use crate::lean_vocab_test::lean_to_defradb_values;
+use crate::lean_vocab_test::{assert_lean_to_defradb_vocabulary_matches, LeanVocabulary};
 use crate::runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot,
     ResolvedSchedule, ResolvedTask,
@@ -37,6 +37,7 @@ type MaterializeCall = (Option<String>, TriggerKind, String);
 type SupersedeCall = (String, TriggerKind);
 
 const LEAN_TRIGGER_TYPES_MODEL: &str = include_str!("../../proofs/Proofs/Triggers/Types.lean");
+const LEAN_TRIGGER_TYPES_FILE: &str = "crates/defra-agent/proofs/Proofs/Triggers/Types.lean";
 
 #[test]
 fn rust_trigger_kind_vocabulary_matches_lean_model() {
@@ -45,11 +46,13 @@ fn rust_trigger_kind_vocabulary_matches_lean_model() {
         TriggerKind::Event.as_str(),
         TriggerKind::Manual.as_str(),
     ];
-    assert_eq!(
-        rust_kinds,
-        lean_to_defradb_values(LEAN_TRIGGER_TYPES_MODEL, "TriggerKind"),
-        "Rust trigger-kind vocabulary must match Proofs.Triggers.Types"
-    );
+    assert_lean_to_defradb_vocabulary_matches(LeanVocabulary {
+        lean_file: LEAN_TRIGGER_TYPES_FILE,
+        model: LEAN_TRIGGER_TYPES_MODEL,
+        namespace: "TriggerKind",
+        rust_source: "TriggerKind::{Schedule, Event, Manual}",
+        rust_values: &rust_kinds,
+    });
 }
 
 /// Spy `MaterializerHandle` used by the engine tests. Records every

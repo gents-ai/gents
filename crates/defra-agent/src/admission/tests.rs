@@ -11,7 +11,9 @@ use super::{
     scope_call, scope_call_with_token, scope_request, AdmissionCallContext, AdmissionRegistry,
     BackendAdmissionConfig, CallKind,
 };
-use crate::lean_vocab_test::lean_to_defradb_values;
+use crate::lean_vocab_test::{
+    assert_lean_to_defradb_vocabulary_matches, lean_to_defradb_values, LeanVocabulary,
+};
 use crate::schema::ensure_schemas;
 use crate::watcher::AgentRequest;
 
@@ -62,6 +64,8 @@ const RUST_INFERENCE_CALL_TERMINAL_REASONS: &[&str] = &[
     "QueueFull",
     "StreamDroppedBeforeTerminalResponse",
 ];
+const LEAN_INFERENCE_CALL_STATE_FILE: &str =
+    "crates/defra-agent/proofs/Proofs/InferenceCall/State.lean";
 const LEAN_INFERENCE_CALL_STATE_MODEL: &str =
     include_str!("../../proofs/Proofs/InferenceCall/State.lean");
 const ADMISSION_TERMINAL_REASON_SOURCES: &[&str] = &[
@@ -71,13 +75,10 @@ const ADMISSION_TERMINAL_REASON_SOURCES: &[&str] = &[
 ];
 
 fn lean_inference_call_states() -> Vec<&'static str> {
-    lean_to_defradb_values(LEAN_INFERENCE_CALL_STATE_MODEL, "InferenceCallState")
-}
-
-fn lean_inference_call_terminal_reasons() -> Vec<&'static str> {
     lean_to_defradb_values(
+        LEAN_INFERENCE_CALL_STATE_FILE,
         LEAN_INFERENCE_CALL_STATE_MODEL,
-        "InferenceCallTerminalReason",
+        "InferenceCallState",
     )
 }
 
@@ -224,21 +225,24 @@ async fn wait_for_request_call_state(
 
 #[test]
 fn rust_inference_call_state_vocabulary_matches_lean_model() {
-    let lean_states = lean_inference_call_states();
-    assert_eq!(
-        lean_states.as_slice(),
-        RUST_INFERENCE_CALL_STATES,
-        "Rust InferenceCall.call_state vocabulary must match Proofs.InferenceCall.State"
-    );
+    assert_lean_to_defradb_vocabulary_matches(LeanVocabulary {
+        lean_file: LEAN_INFERENCE_CALL_STATE_FILE,
+        model: LEAN_INFERENCE_CALL_STATE_MODEL,
+        namespace: "InferenceCallState",
+        rust_source: "RUST_INFERENCE_CALL_STATES",
+        rust_values: RUST_INFERENCE_CALL_STATES,
+    });
 }
 
 #[test]
 fn rust_inference_call_terminal_reason_vocabulary_matches_lean_model() {
-    assert_eq!(
-        lean_inference_call_terminal_reasons().as_slice(),
-        RUST_INFERENCE_CALL_TERMINAL_REASONS,
-        "Rust system-generated InferenceCall.failure_reason vocabulary must match Proofs.InferenceCall.State"
-    );
+    assert_lean_to_defradb_vocabulary_matches(LeanVocabulary {
+        lean_file: LEAN_INFERENCE_CALL_STATE_FILE,
+        model: LEAN_INFERENCE_CALL_STATE_MODEL,
+        namespace: "InferenceCallTerminalReason",
+        rust_source: "RUST_INFERENCE_CALL_TERMINAL_REASONS",
+        rust_values: RUST_INFERENCE_CALL_TERMINAL_REASONS,
+    });
 
     let mut expected = RUST_INFERENCE_CALL_TERMINAL_REASONS.to_vec();
     expected.sort_unstable();

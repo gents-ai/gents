@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 use super::*;
 use crate::ensure_runtime_schemas;
-use crate::lean_vocab_test::lean_to_defradb_values;
+use crate::lean_vocab_test::{assert_lean_to_defradb_vocabulary_matches, LeanVocabulary};
 
 #[derive(Debug, Deserialize)]
 struct AgentRuntimeRow {
@@ -60,6 +60,7 @@ async fn fetch_runtime_row(node: &defra_node::EmbeddedNode, agent_did: &str) -> 
 
 #[test]
 fn rust_process_state_vocabulary_matches_lean_model() {
+    const LEAN_PROCESS_FILE: &str = "crates/defra-agent/proofs/Proofs/Process.lean";
     const LEAN_PROCESS_MODEL: &str = include_str!("../../proofs/Proofs/Process.lean");
     let rust_states = vec![
         ProcessLifecycleState::Uninitialized.as_str(),
@@ -69,15 +70,20 @@ fn rust_process_state_vocabulary_matches_lean_model() {
         ProcessLifecycleState::Shutdown.as_str(),
     ];
 
-    assert_eq!(
-        rust_states,
-        lean_to_defradb_values(LEAN_PROCESS_MODEL, "ProcessState"),
-        "Rust AgentRuntime.process_state vocabulary must match Proofs.Process"
-    );
+    assert_lean_to_defradb_vocabulary_matches(LeanVocabulary {
+        lean_file: LEAN_PROCESS_FILE,
+        model: LEAN_PROCESS_MODEL,
+        namespace: "ProcessState",
+        rust_source:
+            "ProcessLifecycleState::{Uninitialized, Recovering, Ready, ShuttingDown, Shutdown}",
+        rust_values: &rust_states,
+    });
 }
 
 #[test]
 fn rust_reconcile_phase_vocabulary_matches_lean_model() {
+    const LEAN_RUNTIME_RECONCILE_FILE: &str =
+        "crates/defra-agent/proofs/Proofs/RuntimeReconcile/State.lean";
     const LEAN_RUNTIME_RECONCILE_MODEL: &str =
         include_str!("../../proofs/Proofs/RuntimeReconcile/State.lean");
     let rust_phases = vec![
@@ -88,11 +94,13 @@ fn rust_reconcile_phase_vocabulary_matches_lean_model() {
         ReconcilePhase::Applying.as_str(),
     ];
 
-    assert_eq!(
-        rust_phases,
-        lean_to_defradb_values(LEAN_RUNTIME_RECONCILE_MODEL, "ReconcilePhase"),
-        "Rust AgentRuntime.reconcile_phase vocabulary must match Proofs.RuntimeReconcile.State"
-    );
+    assert_lean_to_defradb_vocabulary_matches(LeanVocabulary {
+        lean_file: LEAN_RUNTIME_RECONCILE_FILE,
+        model: LEAN_RUNTIME_RECONCILE_MODEL,
+        namespace: "ReconcilePhase",
+        rust_source: "ReconcilePhase::{Idle, Debouncing, Resolving, Diffing, Applying}",
+        rust_values: &rust_phases,
+    });
 }
 
 #[tokio::test]
