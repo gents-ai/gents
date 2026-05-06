@@ -189,12 +189,10 @@ fn resolve_behavior_id(default_behavior_id: &str, requested_behavior_id: Option<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lean_vocab_test::{assert_lean_to_defradb_vocabulary_matches, LeanVocabulary};
-
-    const LEAN_REQUEST_STATE_FILE: &str = "crates/defra-agent/proofs/Proofs/Request/State.lean";
-    const LEAN_REQUEST_STATE_MODEL: &str = include_str!("../proofs/Proofs/Request/State.lean");
-    const LEAN_SCHEDULING_FILE: &str = "crates/defra-agent/proofs/Proofs/Scheduling.lean";
-    const LEAN_SCHEDULING_MODEL: &str = include_str!("../proofs/Proofs/Scheduling.lean");
+    use crate::lean_vocab_test::{
+        assert_lean_contract_vocabulary_matches, assert_state_machine_contract_is_complete,
+        lean_state_machine_contract, LeanContractVocabulary,
+    };
 
     #[test]
     fn rust_request_lifecycle_state_vocabulary_matches_lean_model() {
@@ -203,10 +201,8 @@ mod tests {
             .copied()
             .map(PersistedLifecycleState::as_str)
             .collect::<Vec<_>>();
-        assert_lean_to_defradb_vocabulary_matches(LeanVocabulary {
-            lean_file: LEAN_REQUEST_STATE_FILE,
-            model: LEAN_REQUEST_STATE_MODEL,
-            namespace: "RequestState",
+        assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
+            domain: "RequestState",
             rust_source: "PersistedLifecycleState::ALL",
             rust_values: &rust_states,
         });
@@ -218,17 +214,21 @@ mod tests {
             ExecutionOrigin::Interactive.as_str(),
             ExecutionOrigin::Scheduled.as_str(),
         ];
-        assert_lean_to_defradb_vocabulary_matches(LeanVocabulary {
-            lean_file: LEAN_SCHEDULING_FILE,
-            model: LEAN_SCHEDULING_MODEL,
-            namespace: "ExecutionOrigin",
+        assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
+            domain: "ExecutionOrigin",
             rust_source: "ExecutionOrigin::{Interactive, Scheduled}",
             rust_values: &rust_origins,
         });
     }
 
     #[test]
-    fn persisted_lifecycle_terminal_partition_matches_trigger_bridge() {
+    fn request_state_machine_contract_is_complete() {
+        assert_state_machine_contract_is_complete("Request");
+    }
+
+    #[test]
+    fn persisted_lifecycle_terminal_partition_matches_lean_contract() {
+        let request_machine = lean_state_machine_contract("Request");
         let nonterminal = PersistedLifecycleState::ALL
             .iter()
             .copied()
@@ -244,17 +244,34 @@ mod tests {
 
         assert_eq!(
             nonterminal,
-            vec!["pending", "claimed", "processing", "inputRequired"]
+            request_machine
+                .nonterminal_states
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
         );
         assert_eq!(
             terminal,
-            vec!["completed", "failed", "superseded", "dead", "interrupted"]
+            request_machine
+                .terminal_states
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
         );
         assert!(PersistedLifecycleState::InputRequired.is_nonterminal());
         assert!(PersistedLifecycleState::Interrupted.is_terminal());
+        let expected_nonterminal_graphql_list = format!(
+            "[{}]",
+            request_machine
+                .nonterminal_states
+                .iter()
+                .map(|state| format!(r#""{state}""#))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
         assert_eq!(
             nonterminal_lifecycle_state_graphql_list(),
-            r#"["pending", "claimed", "processing", "inputRequired"]"#
+            expected_nonterminal_graphql_list
         );
         assert_eq!(
             ExecutionOrigin::from_persisted(Some("scheduled")),

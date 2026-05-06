@@ -4,8 +4,14 @@ use defra_agent::graphql::escape_graphql_string;
 use defra_agent::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
 use defra_agent::{write_manual_agent_request, DefraStreamWriter, RequestLifecycle};
 
+#[path = "../src/lean_vocab_test.rs"]
+mod lean_vocab_test;
 mod support;
 
+use lean_vocab_test::{
+    assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
+    assert_state_machine_contract_is_complete, lean_contract_snapshot, lean_vocabulary_values,
+};
 use support::snapshots::{
     fetch_conversation_snapshot, fetch_request_lineage_snapshot,
     fetch_request_lineage_snapshot_by_tuple, fetch_request_snapshot, fetch_request_snapshot_raw,
@@ -18,6 +24,34 @@ use support::{
     create_response_with_status, set_interrupt_requested_at, set_request_lifecycle_state,
     set_valid_until, test_db, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
 };
+
+#[test]
+fn lean_executable_contracts_cover_initial_domains() {
+    for domain in [
+        "Request",
+        "Process",
+        "Persistence.failClosed",
+        "Persistence.failOpen",
+        "SessionRecovery",
+        "InferenceCall",
+    ] {
+        assert_state_machine_contract_is_complete(domain);
+    }
+
+    assert_lean_transition_is_legal("Persistence.failClosed", "committing", "uncommitted");
+    assert_lean_transition_is_legal("Persistence.failOpen", "committing", "lost");
+    assert_lean_transition_is_legal("SessionRecovery", "failed", "pending");
+    assert_lean_transition_is_legal("InferenceCall", "queued", "running");
+    assert_lean_transition_is_legal("InferenceCall", "running", "completed");
+    assert_lean_transition_is_legal("InferenceCall", "running", "failed");
+    assert!(
+        lean_contract_snapshot()
+            .follow_up_hooks
+            .iter()
+            .any(|hook| hook.contains("RuntimeReconcile")),
+        "RuntimeReconcile executable follow-up hook should remain visible"
+    );
+}
 
 #[tokio::test]
 async fn interactive_claim_snapshot_matches_claimed_waiting() {
@@ -44,6 +78,7 @@ async fn interactive_claim_snapshot_matches_claimed_waiting() {
     );
 
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    assert_lean_transition_is_legal("Request", "pending", "claimed");
 
     assert_eq!(
         fetch_request_snapshot(&db.node, &doc_id).await,
@@ -145,6 +180,7 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     lifecycle.prepare_session_with_identity().await.unwrap();
     lifecycle.begin_execution().await.unwrap();
+    assert_lean_transition_is_legal("Request", "claimed", "processing");
     let response_doc_id = create_response_with_status(
         &db.node,
         &format!("resp-{request_id}"),
@@ -155,6 +191,7 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
     .await;
     lifecycle.set_response_doc_id(&response_doc_id);
     lifecycle.advance().await.unwrap();
+    assert_lean_transition_is_legal("Request", "processing", "processing");
 
     assert_eq!(
         fetch_request_snapshot(&db.node, &doc_id).await,
@@ -231,6 +268,7 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     lifecycle.prepare_session_with_identity().await.unwrap();
     lifecycle.fail().await.unwrap();
+    assert_lean_transition_is_legal("Request", "claimed", "failed");
 
     assert_eq!(
         fetch_request_snapshot(&db.node, &doc_id).await,
@@ -1158,6 +1196,7 @@ async fn pending_interrupted_via_interrupt_before_claim() {
     );
 
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Interrupted);
+    assert_lean_transition_is_legal("Request", "pending", "interrupted");
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(snap.lifecycle_state, "interrupted");
@@ -1192,6 +1231,7 @@ async fn pending_dead_stale_via_expire() {
     );
 
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Expired);
+    assert_lean_transition_is_legal("Request", "pending", "dead");
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(snap.lifecycle_state, "dead");
@@ -1231,6 +1271,7 @@ async fn transition_to_interrupted_from_claimed() {
     let interrupt_at = chrono::Utc::now().to_rfc3339();
     set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
     lifecycle.transition_to_interrupted().await.unwrap();
+    assert_lean_transition_is_legal("Request", "claimed", "interrupted");
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(snap.status, "interrupted");
@@ -1291,6 +1332,7 @@ async fn processing_interrupted_preserves_partial_response() {
     assert!(stamped, "expected interrupted_at to be stamped");
 
     lifecycle.transition_to_interrupted().await.unwrap();
+    assert_lean_transition_is_legal("Request", "processing", "interrupted");
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(snap.status, "interrupted");
@@ -1342,6 +1384,10 @@ async fn input_required_interrupted() {
     let interrupt_at = chrono::Utc::now().to_rfc3339();
     set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
     lifecycle.transition_to_interrupted().await.unwrap();
+    // Core Lean Request semantics reserve inputRequired and have no active
+    // transition out of it; Rust keeps this repair path as a product boundary
+    // for replicated rows that already contain the reserved state.
+    assert_lean_transition_is_illegal("Request", "inputRequired", "interrupted");
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(snap.status, "interrupted");
@@ -1378,6 +1424,7 @@ async fn pending_tie_break_prefers_interrupt_over_expire() {
     );
 
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Interrupted);
+    assert_lean_transition_is_legal("Request", "pending", "interrupted");
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(snap.lifecycle_state, "interrupted");
@@ -1423,6 +1470,7 @@ async fn transition_to_interrupted_from_processing() {
 
     // Interrupt arm wins: transition_to_interrupted succeeds from processing.
     lifecycle.transition_to_interrupted().await.unwrap();
+    assert_lean_transition_is_legal("Request", "processing", "interrupted");
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(snap.status, "interrupted");
@@ -1785,6 +1833,9 @@ async fn s1_interrupted_is_terminal_subsequent_transitions_are_no_ops() {
     let snap0 = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(snap0.lifecycle_state, "interrupted");
     assert_eq!(snap0.status, "interrupted");
+    assert_lean_transition_is_illegal("Request", "interrupted", "completed");
+    assert_lean_transition_is_illegal("Request", "interrupted", "failed");
+    assert_lean_transition_is_illegal("Request", "interrupted", "processing");
 
     // Idempotent: calling transition_to_interrupted again is a no-op because
     // the `status._nin` filter excludes terminal rows.
@@ -1900,29 +1951,22 @@ fn conformance_mapping_all_9_lifecycle_states_round_trip() {
     // Per `Proofs/Conformance/DefraAgent.lean::toIdeal`, every
     // `DefraLifecycleState` maps to a specific `RequestState`. The Rust
     // `RequestLifecycleState` enum in `defra-agent-protocol::client_protocol`
-    // mirrors this. Assert all 9 string forms parse to the expected enum
-    // variant, that `as_str` round-trips, and that unknown strings reject.
+    // mirrors the Lean-generated RequestState vocabulary. Assert every Lean
+    // string form parses and round-trips, and that unknown strings reject.
     use defra_agent_protocol::client_protocol::RequestLifecycleState;
 
-    let cases = &[
-        ("pending", RequestLifecycleState::Pending),
-        ("claimed", RequestLifecycleState::Claimed),
-        ("processing", RequestLifecycleState::Processing),
-        ("inputRequired", RequestLifecycleState::InputRequired),
-        ("completed", RequestLifecycleState::Completed),
-        ("failed", RequestLifecycleState::Failed),
-        ("superseded", RequestLifecycleState::Superseded),
-        ("dead", RequestLifecycleState::Dead),
-        ("interrupted", RequestLifecycleState::Interrupted),
-    ];
-
-    for (s, expected) in cases {
-        let parsed = RequestLifecycleState::try_from(*s)
+    let lean_states = lean_vocabulary_values("RequestState");
+    assert_eq!(
+        lean_states.len(),
+        9,
+        "RequestState contract should be finite"
+    );
+    for s in lean_states {
+        let parsed = RequestLifecycleState::try_from(s)
             .unwrap_or_else(|e| panic!("failed to parse '{}': {:?}", s, e));
-        assert_eq!(parsed, *expected, "round-trip mismatch for '{}'", s);
         assert_eq!(
             parsed.as_str(),
-            *s,
+            s,
             "as_str must round-trip to the source string"
         );
     }
@@ -2145,6 +2189,7 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
         ClaimOutcome::Claimed,
         "manual pending row must be claimable exactly once"
     );
+    assert_lean_transition_is_legal("Request", "pending", "claimed");
 
     // Post-claim: lifecycle_state flips to claimed; claimed_at / deadline
     // are stamped; lineage and execution origin are UNCHANGED.
