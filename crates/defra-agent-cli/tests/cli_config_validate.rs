@@ -65,6 +65,10 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
                 "file_tools_mode": "ReadOnly",
                 "enable_bash": true,
                 "bash_mode": "ReadOnly",
+                "command_execution_policy": "read_only",
+                "command_network_mode": "disabled",
+                "command_allowed_argv_prefixes": ["[\"git\",\"status\"]"],
+                "command_forbidden_argv_prefixes": ["git commit"],
                 "cli_tool_names": [],
                 "enable_meta_tools": true,
                 "delegate_to": []
@@ -226,6 +230,92 @@ async fn config_validate_reports_reference_errors_and_fails_nonzero() -> Result<
     assert!(
         messages.contains("missing inference_profile_id missing-profile"),
         "expected missing profile validation error, got:\n{messages}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_validate_reports_command_policy_errors() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir
+        .path()
+        .join("infra")
+        .join("agents")
+        .join("policy-errors");
+    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&root)?;
+
+    let agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
+    write_json_file(
+        &root.join("agent-principal.json"),
+        &serde_json::json!({
+            "agent_did": agent_did.clone(),
+            "display_name": "Policy Agent",
+            "default_behavior_id": "missing-behavior",
+            "enabled": true
+        }),
+    )?;
+
+    let dir = root.join("tool-selections").join("policy-tools");
+    fs::create_dir_all(&dir)?;
+    write_json_file(
+        &dir.join("object.json"),
+        &serde_json::json!({
+            "selection_id": "policy-tools",
+            "agent_did": agent_did,
+            "display_name": "Policy Tools",
+            "enable_file_tools": true,
+            "file_tools_mode": "ReadOnly",
+            "enable_bash": true,
+            "bash_mode": "ReadOnly",
+            "command_execution_policy": "side_effects",
+            "command_network_mode": "maybe",
+            "command_allowed_argv_prefixes": ["[\"git\", \"\"]"],
+            "command_forbidden_argv_prefixes": ["["],
+            "cli_tool_names": [],
+            "enable_meta_tools": true,
+            "delegate_to": []
+        }),
+    )?;
+
+    let output = run_cli_failure_stdout_json(
+        &home_dir,
+        &[
+            "config",
+            "validate",
+            "--root",
+            root.to_str().expect("utf-8 manifest root"),
+        ],
+    )?;
+
+    let errors = output
+        .get("errors")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("validate output missing errors array: {output}"))?;
+    let messages = errors
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        messages.contains("invalid command_execution_policy"),
+        "expected invalid command_execution_policy rejection, got:\n{messages}"
+    );
+    assert!(
+        messages.contains("invalid command_network_mode"),
+        "expected invalid command_network_mode rejection, got:\n{messages}"
+    );
+    assert!(
+        messages.contains(
+            "command_allowed_argv_prefixes JSON entry must contain non-empty argv tokens"
+        ),
+        "expected invalid allowed-prefix JSON rejection, got:\n{messages}"
+    );
+    assert!(
+        messages.contains("command_forbidden_argv_prefixes JSON entry is invalid"),
+        "expected invalid forbidden-prefix JSON rejection, got:\n{messages}"
     );
 
     Ok(())

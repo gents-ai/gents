@@ -617,6 +617,37 @@ async fn unrestricted_bash_runs_shell_command_strings() {
 }
 
 #[tokio::test]
+async fn command_policy_explicit_unrestricted_reports_unsandboxed_metadata() {
+    let root = temp_root("defra-agent-unrestricted-policy");
+    let policy =
+        CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::Unrestricted);
+    let tool = UnrestrictedBashTool::with_policy(
+        ToolContext::new(root, false).unwrap(),
+        Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+        policy,
+    );
+
+    let output = rig::tool::Tool::call(
+        &tool,
+        BashArgs {
+            command: "printf".to_string(),
+            args: vec!["ok".to_string()],
+            cwd: None,
+            timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
+            raw_json: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let meta = compact_exec_meta(&output);
+    assert_eq!(meta["ok"], true);
+    assert_eq!(meta["execution_mode"], "unrestricted");
+    assert_eq!(meta["sandbox"], "unsandboxed_unrestricted");
+    assert_eq!(meta["stdout_truncation"]["total_chars"], 2);
+}
+
+#[tokio::test]
 async fn bash_output_supports_raw_json_escape_hatch() {
     let root = temp_root("defra-agent-bash-raw-json");
     let tool = ReadOnlyBashTool::new(
