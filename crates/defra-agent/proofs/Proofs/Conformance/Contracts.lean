@@ -49,13 +49,10 @@ def jsonArray (values : List String) : String :=
 def jsonStringArray (values : List String) : String :=
   jsonArray (values.map jsonString)
 
-def dedup {α : Type} [DecidableEq α] : List α → List α
-  | [] => []
-  | x :: xs =>
-      if x ∈ xs then
-        dedup xs
-      else
-        x :: dedup xs
+def dedup {α : Type} [DecidableEq α] (values : List α) : List α :=
+  values.foldl
+    (fun seen value => if value ∈ seen then seen else seen ++ [value])
+    []
 
 def without {α : Type} [DecidableEq α] (values excluded : List α) : List α :=
   values.filter fun value => if value ∈ excluded then false else true
@@ -379,8 +376,16 @@ def snapshotJson : String :=
       ++ "]"
     ++ "}"
 
-def main : IO Unit :=
+def contractJsonBegin : String :=
+  "---BEGIN DEFRA LEAN CONTRACT JSON---"
+
+def contractJsonEnd : String :=
+  "---END DEFRA LEAN CONTRACT JSON---"
+
+def main : IO Unit := do
+  IO.println contractJsonBegin
   IO.println snapshotJson
+  IO.println contractJsonEnd
 
 end Conformance.Contracts
 

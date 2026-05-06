@@ -67,6 +67,8 @@ enum LeanVocabularyParseError<'a> {
 }
 
 static LEAN_CONTRACT_SNAPSHOT: OnceLock<LeanContractSnapshot> = OnceLock::new();
+const CONTRACT_JSON_BEGIN: &str = "---BEGIN DEFRA LEAN CONTRACT JSON---";
+const CONTRACT_JSON_END: &str = "---END DEFRA LEAN CONTRACT JSON---";
 
 pub(crate) fn lean_contract_snapshot() -> &'static LeanContractSnapshot {
     LEAN_CONTRACT_SNAPSHOT.get_or_init(load_lean_contract_snapshot)
@@ -277,7 +279,7 @@ fn load_lean_contract_snapshot() -> LeanContractSnapshot {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let json = extract_json_object(&stdout);
+    let json = extract_contract_json(&stdout);
     serde_json::from_str(json).unwrap_or_else(|error| {
         panic!(
             "failed to parse Lean conformance contract JSON: {error}\n  stdout:\n{}",
@@ -313,14 +315,36 @@ fn proofs_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("proofs")
 }
 
-fn extract_json_object(stdout: &str) -> &str {
-    let start = stdout
-        .find('{')
-        .unwrap_or_else(|| panic!("Lean contract generator stdout did not contain JSON: {stdout}"));
-    let end = stdout
-        .rfind('}')
-        .unwrap_or_else(|| panic!("Lean contract generator stdout did not contain JSON: {stdout}"));
-    &stdout[start..=end]
+fn extract_contract_json(stdout: &str) -> &str {
+    let begin = unique_marker_position(stdout, CONTRACT_JSON_BEGIN);
+    let end = unique_marker_position(stdout, CONTRACT_JSON_END);
+    assert!(
+        begin < end,
+        "Lean contract JSON sentinel order is invalid\n  stdout:\n{}",
+        stdout
+    );
+
+    let json = stdout[begin + CONTRACT_JSON_BEGIN.len()..end].trim();
+    assert!(
+        !json.is_empty(),
+        "Lean contract JSON sentinel block was empty\n  stdout:\n{}",
+        stdout
+    );
+    json
+}
+
+fn unique_marker_position(stdout: &str, marker: &str) -> usize {
+    let positions = stdout
+        .match_indices(marker)
+        .map(|(position, _)| position)
+        .collect::<Vec<_>>();
+    match positions.as_slice() {
+        [position] => *position,
+        [] => panic!("Lean contract generator stdout did not contain {marker:?}: {stdout}"),
+        _ => panic!(
+            "Lean contract generator stdout contained duplicate {marker:?} sentinels: {stdout}"
+        ),
+    }
 }
 
 pub(crate) fn lean_to_defradb_values<'a>(
@@ -618,6 +642,15 @@ end Sample
             parse_lean_to_defradb_values(lean, "Sample").unwrap(),
             vec!["sample"]
         );
+    }
+
+    #[test]
+    fn extracts_contract_json_between_sentinels() {
+        let stdout = format!(
+            "debug {{noise}}\n{CONTRACT_JSON_BEGIN}\n{{\"ok\":true}}\n{CONTRACT_JSON_END}\nmore {{noise}}\n"
+        );
+
+        assert_eq!(extract_contract_json(&stdout), "{\"ok\":true}");
     }
 
     #[test]

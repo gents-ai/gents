@@ -64,6 +64,13 @@ The service-local proof and tests cover the consequence of an observed backend
 configuration: reconstructed running call rows do not exceed that backend's
 `max_concurrent`.
 
+The generated `SessionRecovery` conformance contract currently covers the
+finite failed-latest-request reissue witness (`failed -> pending`) instead of
+the full request lifecycle vocabulary. It is a smoke contract for the executable
+session boundary, not a complete request-state coverage claim. Future
+session-recovery executable witnesses should widen that contract before Rust
+depends on broader transition coverage from it.
+
 ## Closed Historical Items
 
 These were previous conformance gaps and are now closed product/spec behavior:

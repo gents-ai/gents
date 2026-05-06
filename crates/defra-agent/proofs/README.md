@@ -141,9 +141,11 @@ lake build Proofs.Conformance.Contracts
 lake env lean --run Proofs/Conformance/Contracts.lean
 ```
 
-The emitted JSON is generated from Lean constructors, `toDefraDB` functions,
-terminal predicates, executable `step?` functions, and finite witness contexts.
-It currently covers:
+The emitted JSON is printed between `---BEGIN DEFRA LEAN CONTRACT JSON---` and
+`---END DEFRA LEAN CONTRACT JSON---` sentinel lines so Rust can reject unrelated
+stdout. It is generated from Lean constructors, `toDefraDB` functions, terminal
+predicates, executable `step?` functions, and finite witness contexts. It
+currently covers:
 
 - `Request`
 - `Process`
@@ -151,6 +153,12 @@ It currently covers:
 - `Persistence.failOpen`
 - `SessionRecovery`
 - `InferenceCall`
+
+The current `SessionRecovery` contract is intentionally narrow: it covers the
+executable failed-latest-request reissue witness (`failed -> pending`) rather
+than the whole request lifecycle vocabulary. Widen this contract when the
+session-recovery executable model grows enough finite witnesses to represent the
+larger space directly.
 
 When a Lean vocabulary, terminal partition, action, or legal transition changes,
 the generated JSON changes on the next Rust test run. The Rust tests then fail
