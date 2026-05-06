@@ -330,11 +330,13 @@ failure refine the existing `PersistenceState` transitions
 `failure_failOpen_refines_persistence`).
 
 Local observation theorems also record the daemon assumptions Rust relies on:
-`success_acknowledged_committed`, `mutation_failed_not_committed`,
+`success_acknowledged_committed`, `mutation_failed_uncommitted`,
+`mutation_failed_ne_committed`,
 `stale_observation_preserves_success_commit`,
 `terminal_write_observed_committed`,
-`readYourWrites_visibility_path`, `staleRead_eventual_visibility_path`, and
-`staleEvent_eventual_visibility_path`.
+`readYourWrites_visibility_path`, `successful_mutation_eventual_visibility_path`,
+`failClosed_failed_mutation_retry_path`, `failOpen_failed_mutation_lost_path`,
+`staleRead_eventual_visibility_path`, and `staleEvent_eventual_visibility_path`.
 
 ### Request/Process Liveness
 

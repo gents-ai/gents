@@ -79,6 +79,10 @@ mutations; it does not persist a per-token `PersistenceState` or
 global CRDT convergence, and event-bus delivery correctness remain external
 DefraDB/environment assumptions.
 
+This section is the modeled part of the former broad storage assumption; the
+following section keeps the still-external DefraDB/environment assumptions
+separate.
+
 ## External Assumptions
 
 Backend health and availability observations are only as fresh as the backend

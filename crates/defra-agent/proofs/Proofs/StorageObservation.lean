@@ -80,6 +80,9 @@ def toPersistence : StorageObservation -> PersistenceState
   | .inFlight => .committing
   | .successAcknowledged => .committed
   | .mutationFailed => .uncommitted
+  -- Stale observations only occur after a success ack in this model, so they
+  -- preserve the daemon's committed observation instead of proving storage
+  -- engine visibility.
   | .staleObserved => .committed
   | .readVisible => .committed
   | .lostAcknowledged => .lost
@@ -175,13 +178,18 @@ theorem failure_failOpen_refines_persistence :
 theorem success_acknowledged_committed :
     toPersistence .successAcknowledged = .committed := rfl
 
-theorem mutation_failed_not_committed :
+theorem mutation_failed_uncommitted :
     toPersistence .mutationFailed = .uncommitted := rfl
+
+theorem mutation_failed_ne_committed :
+    toPersistence .mutationFailed ≠ .committed := by
+  decide
 
 theorem stale_observation_preserves_success_commit :
     toPersistence .staleObserved = toPersistence .successAcknowledged := rfl
 
-/-- A terminal response write may rely on the success ack or a visible read. -/
+/-- Downstream bridge predicate: a terminal response write may rely on either
+    the local success ack or a later visible read observation. -/
 def terminalWriteObserved (obs : StorageObservation) : Prop :=
   obs = .successAcknowledged ∨ obs = .readVisible
 
@@ -204,6 +212,46 @@ theorem readYourWrites_visibility_path
   exact
     ⟨ .readVisible
     , Trace.step (Transition.read_your_writes (policy := policy)) Trace.refl
+    , rfl
+    ⟩
+
+theorem successful_mutation_eventual_visibility_path
+    {policy : PersistenceState.FailurePolicy} :
+    ∃ post : StorageObservation,
+      Trace policy .noMutation post ∧ post = .readVisible := by
+  exact
+    ⟨ .readVisible
+    , Trace.step
+        (Transition.begin_mutation (policy := policy))
+        (Trace.step
+          (Transition.mutation_success (policy := policy))
+          (Trace.step (Transition.read_your_writes (policy := policy)) Trace.refl))
+    , rfl
+    ⟩
+
+theorem failClosed_failed_mutation_retry_path :
+    ∃ post : StorageObservation,
+      Trace .failClosed .noMutation post ∧ post = .noMutation := by
+  exact
+    ⟨ .noMutation
+    , Trace.step
+        (Transition.begin_mutation (policy := .failClosed))
+        (Trace.step
+          (Transition.mutation_failure (policy := .failClosed))
+          (Trace.step (Transition.retry_fail_closed rfl) Trace.refl))
+    , rfl
+    ⟩
+
+theorem failOpen_failed_mutation_lost_path :
+    ∃ post : StorageObservation,
+      Trace .failOpen .noMutation post ∧ post = .lostAcknowledged := by
+  exact
+    ⟨ .lostAcknowledged
+    , Trace.step
+        (Transition.begin_mutation (policy := .failOpen))
+        (Trace.step
+          (Transition.mutation_failure (policy := .failOpen))
+          (Trace.step (Transition.acknowledge_lost rfl) Trace.refl))
     , rfl
     ⟩
 
