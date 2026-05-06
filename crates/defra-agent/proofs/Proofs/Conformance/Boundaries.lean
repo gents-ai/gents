@@ -48,6 +48,15 @@ and terminal rows (`cancelled`, `completed`, `failed`) have released any permit.
 There is intentionally no denormalized persisted `FleetState` document that
 must carry the aggregate invariant.
 
+The command-policy model covers local validation and selection logic for
+`CommandExecutionMode`, `CommandNetworkMode`, argv allowed/forbidden prefixes,
+read-only command allowlisting, sandbox labels, and filtered shell environment
+keys. It does not prove that an invoked external binary is semantically
+read-only, nor does it prove the host kernel's sandbox implementation. Rust
+tests cover the parser/validator boundary and command metadata emitted by
+`toolset/shared/command.rs`; the Lean model covers the fail-closed policy
+ordering and sandbox/env invariants that those tests exercise.
+
 ## External Assumptions
 
 The `PersistenceState` model abstracts the storage commit boundary. Rust uses

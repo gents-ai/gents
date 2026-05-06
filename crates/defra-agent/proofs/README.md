@@ -20,9 +20,11 @@ The proofs are strongest where the runtime is a state machine:
 - desired-state apply ordering and field ownership
 - task, schedule, and event-trigger dispatch
 - client turn projection and desktop shell workflow state
+- command/tool execution policy for bash argv, network, sandbox, and shell env
 
 They do not prove storage guarantees, network delivery, provider behavior, UI
-rendering, or external tool behavior. Those are explicit model boundaries.
+rendering, external tool behavior, or host sandbox implementation details. Those
+are explicit model boundaries.
 
 ## Quick Start
 
@@ -37,7 +39,7 @@ lake build
 
 ## What Is Proven
 
-The current proof suite covers nine practical areas:
+The current proof suite covers ten practical areas:
 
 1. Request/process/persistence state transitions
 2. Inference-call lifecycle, request linkage, and cancellation terminality
@@ -48,6 +50,8 @@ The current proof suite covers nine practical areas:
 7. Trigger dispatch for manual, schedule, and event-driven tasks
 8. Client turn-state derivation from replicated request/response documents
 9. Client-shell workflow rules for selection, submission, and transport decoupling
+10. Command/tool execution policy: argv prefixes, read-only allowlists,
+    disabled-network fail-closed behavior, sandbox selection, and filtered env
 
 The proof boundary matters:
 
@@ -94,6 +98,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Triggers.lean` | Barrel for trigger types, dispatch, reachability, serial, latest-only, and lineage proofs |
 | `Proofs/Client.lean` | Barrel for client turn-state derivation and client theorems |
 | `Proofs/ClientShell.lean` | Barrel for multi-session shell workflow modules |
+| `Proofs/CommandPolicy.lean` | Barrel for command/tool execution policy validation, sandbox, env, and safety proofs |
 | `Proofs/Properties/Safety.lean` | Request/process/persistence safety properties S1-S6 |
 | `Proofs/Properties/Liveness.lean` | Request/process liveness properties L1-L3 |
 | `Proofs/Properties/SchedulingSafety.lean` | Scheduler/fleet safety properties S7-S9 |
@@ -117,6 +122,7 @@ Semantic submodules:
 | `Proofs.Triggers.SerialSupport` | `Counting`, `Preservation` |
 | `Proofs.Client` | `Types`, `Lifecycle`, `Terminal`, `Replacement` |
 | `Proofs.ClientShell` | `Types`, `Submission`, `Transition`, `Projection`, `Theorems` |
+| `Proofs.CommandPolicy` | `Types`, `Validation`, `Sandbox`, `Env`, `Theorems` |
 | `Proofs.Conformance.Triggers` | `Lifecycle`, `Materialization`, `Trace` |
 
 The top-level barrel imports remain the stable entry points for downstream code.
