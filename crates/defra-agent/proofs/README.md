@@ -33,6 +33,10 @@ curl https://elan.lean-lang.org/elan-init.sh -sSf | sh -s -- -y
 # Build all proofs.
 cd crates/defra-agent/proofs
 lake build
+
+# Print the Rust conformance contract JSON used by Rust tests.
+lake build Proofs.Conformance.Contracts
+lake env lean --run Proofs/Conformance/Contracts.lean
 ```
 
 ## What Is Proven
@@ -103,6 +107,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Conformance/Boundaries.lean` | Intentional product policies and external assumptions at the Rust/Lean boundary |
 | `Proofs/Conformance/Deviations.lean` | Active unresolved Rust/spec mismatches; currently empty |
 | `Proofs/Conformance/SchedulerConformance.lean` | Scheduler-specific conformance notes |
+| `Proofs/Conformance/Contracts.lean` | Test-time JSON extraction surface for Rust vocabularies, finite state counts, transition tables, and legal/illegal transition pairs |
 | `Proofs/Conformance/Triggers.lean` | Barrel for trigger lifecycle/materialization conformance |
 
 Semantic submodules:
@@ -110,7 +115,7 @@ Semantic submodules:
 | Barrel | Submodules |
 |--------|------------|
 | `Proofs.Request` | `State`, `Transition`, `Executable`, `Properties` |
-| `Proofs.InferenceCall` | `State`, `Transition`, `Properties`, `SlotAccounting` |
+| `Proofs.InferenceCall` | `State`, `Transition`, `Executable`, `Properties`, `SlotAccounting` |
 | `Proofs.RuntimeReconcile` | `State`, `Transition` |
 | `Proofs.ApplyReconcile` | `Collections`, `Manifest`, `Diff`, `Apply`, `ApplyProperties`, `RuntimeBridge`, `Convergence` |
 | `Proofs.Triggers` | `Types`, `Dispatch`, `Reachability`, `SerialSupport`, `Serial`, `LatestOnly`, `Lineage` |
@@ -124,6 +129,38 @@ The top-level barrel imports remain the stable entry points for downstream code.
 Related implementation-facing doc:
 
 - `client-state-machine.md`: client turn observation protocol for app implementers
+
+## Rust Conformance Extraction
+
+Rust conformance tests do not hand-maintain separate Lean parity tables for the
+core executable machines. The test helper in `src/lean_vocab_test.rs` runs:
+
+```bash
+cd crates/defra-agent/proofs
+lake build Proofs.Conformance.Contracts
+lake env lean --run Proofs/Conformance/Contracts.lean
+```
+
+The emitted JSON is generated from Lean constructors, `toDefraDB` functions,
+terminal predicates, executable `step?` functions, and finite witness contexts.
+It currently covers:
+
+- `Request`
+- `Process`
+- `Persistence.failClosed`
+- `Persistence.failOpen`
+- `SessionRecovery`
+- `InferenceCall`
+
+When a Lean vocabulary, terminal partition, action, or legal transition changes,
+the generated JSON changes on the next Rust test run. The Rust tests then fail
+unless the runtime behavior or the documented product-boundary assertions are
+updated to match.
+
+`RuntimeReconcile` is intentionally exposed only as a follow-up hook in the JSON
+until its executable state-machine contract lands. Add it to
+`Proofs/Conformance/Contracts.lean` as another `StateMachineContract` once that
+PR is merged.
 
 ## Core Model
 

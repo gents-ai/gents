@@ -5,7 +5,11 @@ use serde::Deserialize;
 
 use super::*;
 use crate::ensure_runtime_schemas;
-use crate::lean_vocab_test::{assert_lean_to_defradb_vocabulary_matches, LeanVocabulary};
+use crate::lean_vocab_test::{
+    assert_lean_contract_vocabulary_matches, assert_lean_to_defradb_vocabulary_matches,
+    assert_lean_transition_is_legal, assert_state_machine_contract_is_complete,
+    LeanContractVocabulary, LeanVocabulary,
+};
 
 #[derive(Debug, Deserialize)]
 struct AgentRuntimeRow {
@@ -60,8 +64,6 @@ async fn fetch_runtime_row(node: &defra_node::EmbeddedNode, agent_did: &str) -> 
 
 #[test]
 fn rust_process_state_vocabulary_matches_lean_model() {
-    const LEAN_PROCESS_FILE: &str = "crates/defra-agent/proofs/Proofs/Process.lean";
-    const LEAN_PROCESS_MODEL: &str = include_str!("../../proofs/Proofs/Process.lean");
     let rust_states = vec![
         ProcessLifecycleState::Uninitialized.as_str(),
         ProcessLifecycleState::Recovering.as_str(),
@@ -70,14 +72,22 @@ fn rust_process_state_vocabulary_matches_lean_model() {
         ProcessLifecycleState::Shutdown.as_str(),
     ];
 
-    assert_lean_to_defradb_vocabulary_matches(LeanVocabulary {
-        lean_file: LEAN_PROCESS_FILE,
-        model: LEAN_PROCESS_MODEL,
-        namespace: "ProcessState",
+    assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
+        domain: "ProcessState",
         rust_source:
             "ProcessLifecycleState::{Uninitialized, Recovering, Ready, ShuttingDown, Shutdown}",
         rust_values: &rust_states,
     });
+}
+
+#[test]
+fn rust_process_state_transitions_match_lean_contract() {
+    assert_state_machine_contract_is_complete("Process");
+    assert_lean_transition_is_legal("Process", "uninitialized", "recovering");
+    assert_lean_transition_is_legal("Process", "uninitialized", "ready");
+    assert_lean_transition_is_legal("Process", "recovering", "ready");
+    assert_lean_transition_is_legal("Process", "ready", "shuttingDown");
+    assert_lean_transition_is_legal("Process", "shuttingDown", "shutdown");
 }
 
 #[test]

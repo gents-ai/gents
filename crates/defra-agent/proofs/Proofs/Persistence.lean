@@ -18,6 +18,25 @@ inductive PersistenceState where
 
 namespace PersistenceState
 
+/-- String vocabulary for the persistence lifecycle contract. -/
+def toDefraDB : PersistenceState → String
+  | .uncommitted => "uncommitted"
+  | .committing => "committing"
+  | .committed => "committed"
+  | .lost => "lost"
+
+/-- Parse the persistence lifecycle contract vocabulary. -/
+def fromDefraDB? : String → Option PersistenceState
+  | "uncommitted" => some .uncommitted
+  | "committing" => some .committing
+  | "committed" => some .committed
+  | "lost" => some .lost
+  | _ => none
+
+theorem fromDefraDB_toDefraDB (s : PersistenceState) :
+    fromDefraDB? s.toDefraDB = some s := by
+  cases s <;> rfl
+
 instance : HasTerminal PersistenceState where
   isTerminal s := s = .committed ∨ s = .lost
   isTerminal_dec s :=
@@ -32,6 +51,25 @@ inductive FailurePolicy where
   | failOpen
   | failClosed
   deriving DecidableEq, Repr
+
+namespace FailurePolicy
+
+/-- String vocabulary for persistence failure-policy contracts. -/
+def toDefraDB : FailurePolicy → String
+  | .failOpen => "failOpen"
+  | .failClosed => "failClosed"
+
+/-- Parse the persistence failure-policy contract vocabulary. -/
+def fromDefraDB? : String → Option FailurePolicy
+  | "failOpen" => some .failOpen
+  | "failClosed" => some .failClosed
+  | _ => none
+
+theorem fromDefraDB_toDefraDB (policy : FailurePolicy) :
+    fromDefraDB? policy.toDefraDB = some policy := by
+  cases policy <;> rfl
+
+end FailurePolicy
 
 /-- Persistence transitions parameterized by failure policy. -/
 inductive Transition (policy : FailurePolicy) :

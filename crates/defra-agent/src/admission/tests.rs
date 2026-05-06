@@ -12,7 +12,9 @@ use super::{
     BackendAdmissionConfig, CallKind,
 };
 use crate::lean_vocab_test::{
-    assert_lean_to_defradb_vocabulary_matches, lean_to_defradb_values, LeanVocabulary,
+    assert_lean_contract_vocabulary_set_matches, assert_lean_transition_is_illegal,
+    assert_lean_transition_is_legal, assert_state_machine_contract_is_complete,
+    lean_vocabulary_values, LeanContractVocabulary,
 };
 use crate::schema::ensure_schemas;
 use crate::watcher::AgentRequest;
@@ -56,41 +58,29 @@ fn request(request_id: &str) -> AgentRequest {
     }
 }
 
-const RUST_INFERENCE_CALL_STATES: &[&str] =
-    &["queued", "running", "cancelled", "completed", "failed"];
-const RUST_INFERENCE_CALL_TERMINAL_REASONS: &[&str] = &[
-    "Cancelled",
-    "BackendGone",
-    "QueueFull",
-    "StreamDroppedBeforeTerminalResponse",
-];
-const LEAN_INFERENCE_CALL_STATE_FILE: &str =
-    "crates/defra-agent/proofs/Proofs/InferenceCall/State.lean";
-const LEAN_INFERENCE_CALL_STATE_MODEL: &str =
-    include_str!("../../proofs/Proofs/InferenceCall/State.lean");
 const ADMISSION_TERMINAL_REASON_SOURCES: &[&str] = &[
     include_str!("controller.rs"),
     include_str!("permit.rs"),
     include_str!("registry.rs"),
 ];
+const ADMISSION_CALL_STATE_SOURCES: &[&str] = &[
+    include_str!("controller.rs"),
+    include_str!("permit.rs"),
+    include_str!("persistence.rs"),
+    include_str!("registry.rs"),
+];
 
 fn lean_inference_call_states() -> Vec<&'static str> {
-    lean_to_defradb_values(
-        LEAN_INFERENCE_CALL_STATE_FILE,
-        LEAN_INFERENCE_CALL_STATE_MODEL,
-        "InferenceCallState",
-    )
+    lean_vocabulary_values("InferenceCallState")
 }
 
-fn some_string_literals(source: &'static str) -> Vec<&'static str> {
+fn string_literals_after(source: &'static str, needle: &str) -> Vec<&'static str> {
     let mut rest = source;
     let mut values = Vec::new();
-    while let Some(start) = rest.find("Some(\"") {
-        let value_start = start + "Some(\"".len();
+    while let Some(start) = rest.find(needle) {
+        let value_start = start + needle.len();
         let after_start = &rest[value_start..];
-        let value_end = after_start
-            .find('"')
-            .expect("Some string literal must close");
+        let value_end = after_start.find('"').expect("string literal must close");
         values.push(&after_start[..value_end]);
         rest = &after_start[value_end + 1..];
     }
@@ -100,7 +90,29 @@ fn some_string_literals(source: &'static str) -> Vec<&'static str> {
 fn rust_literal_terminal_reasons_from_admission_sources() -> Vec<&'static str> {
     let mut values = ADMISSION_TERMINAL_REASON_SOURCES
         .iter()
-        .flat_map(|source| some_string_literals(source))
+        .flat_map(|source| string_literals_after(source, "Some(\""))
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    values.sort_unstable();
+    values.dedup();
+    values
+}
+
+fn rust_literal_call_states_from_admission_sources() -> Vec<&'static str> {
+    let patterns = [
+        "call_state: \"",
+        "add_call_mutation(call, \"",
+        "persist_terminal_call(node, call, \"",
+        "persist_existing_call_terminal(node, &call, \"",
+    ];
+    let mut values = ADMISSION_CALL_STATE_SOURCES
+        .iter()
+        .flat_map(|source| {
+            patterns
+                .iter()
+                .flat_map(|pattern| string_literals_after(source, pattern))
+        })
+        .filter(|value| !value.contains('{'))
         .collect::<Vec<_>>();
     values.sort_unstable();
     values.dedup();
@@ -225,32 +237,34 @@ async fn wait_for_request_call_state(
 
 #[test]
 fn rust_inference_call_state_vocabulary_matches_lean_model() {
-    assert_lean_to_defradb_vocabulary_matches(LeanVocabulary {
-        lean_file: LEAN_INFERENCE_CALL_STATE_FILE,
-        model: LEAN_INFERENCE_CALL_STATE_MODEL,
-        namespace: "InferenceCallState",
-        rust_source: "RUST_INFERENCE_CALL_STATES",
-        rust_values: RUST_INFERENCE_CALL_STATES,
+    let rust_states = rust_literal_call_states_from_admission_sources();
+    assert_lean_contract_vocabulary_set_matches(LeanContractVocabulary {
+        domain: "InferenceCallState",
+        rust_source: "admission source call_state literals",
+        rust_values: &rust_states,
     });
 }
 
 #[test]
 fn rust_inference_call_terminal_reason_vocabulary_matches_lean_model() {
-    assert_lean_to_defradb_vocabulary_matches(LeanVocabulary {
-        lean_file: LEAN_INFERENCE_CALL_STATE_FILE,
-        model: LEAN_INFERENCE_CALL_STATE_MODEL,
-        namespace: "InferenceCallTerminalReason",
-        rust_source: "RUST_INFERENCE_CALL_TERMINAL_REASONS",
-        rust_values: RUST_INFERENCE_CALL_TERMINAL_REASONS,
+    let rust_reasons = rust_literal_terminal_reasons_from_admission_sources();
+    assert_lean_contract_vocabulary_set_matches(LeanContractVocabulary {
+        domain: "InferenceCallTerminalReason",
+        rust_source: "admission system terminal reason literals",
+        rust_values: &rust_reasons,
     });
+}
 
-    let mut expected = RUST_INFERENCE_CALL_TERMINAL_REASONS.to_vec();
-    expected.sort_unstable();
-    assert_eq!(
-        rust_literal_terminal_reasons_from_admission_sources(),
-        expected,
-        "admission source literals for system terminal reasons must stay in the Lean parity contract"
-    );
+#[test]
+fn rust_inference_call_transition_table_matches_lean_contract() {
+    assert_state_machine_contract_is_complete("InferenceCall");
+    assert_lean_transition_is_legal("InferenceCall", "queued", "running");
+    assert_lean_transition_is_legal("InferenceCall", "queued", "cancelled");
+    assert_lean_transition_is_legal("InferenceCall", "running", "completed");
+    assert_lean_transition_is_legal("InferenceCall", "running", "failed");
+    assert_lean_transition_is_legal("InferenceCall", "running", "cancelled");
+    assert_lean_transition_is_illegal("InferenceCall", "queued", "completed");
+    assert_lean_transition_is_illegal("InferenceCall", "completed", "running");
 }
 
 #[tokio::test]
