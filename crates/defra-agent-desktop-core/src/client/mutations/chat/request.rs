@@ -221,8 +221,14 @@ pub async fn retry_request(
     let max_retries = parent
         .max_retries
         .unwrap_or(i64::from(DEFAULT_REQUEST_MAX_RETRIES));
+    ensure_retry_parent_eligible(parent, retry_count - 1, max_retries)?;
+    // Lean checks `isLatest` inside one session-state transition. The desktop
+    // GraphQL API does not expose a transactional conditional create+update
+    // primitive here, so Rust enforces the same predicate as a database-backed
+    // preflight immediately before the coalesced write.
+    ensure_latest_retry_parent(node, parent_session_id, parent_request_id).await?;
     let request_id = Uuid::new_v4().to_string();
-    let session_id = Uuid::new_v4().to_string();
+    let session_id = parent_session_id.to_string();
     let created_at = Utc::now().to_rfc3339();
     let binding = resolve_agent_binding(store, agent_did, behavior_id, Some(parent_session_id))?;
 
@@ -270,6 +276,101 @@ pub async fn retry_request(
         agent_did: agent_did.to_string(),
         behavior_id: binding.behavior_id,
     })
+}
+
+fn ensure_retry_parent_eligible(
+    parent: &AgentRequestRow,
+    parent_retry_count: i64,
+    max_retries: i64,
+) -> Result<()> {
+    // The Lean `.released` admission predicate is not persisted on
+    // `AgentRequestRow`; on this desktop surface it is represented by requiring
+    // the parent to be terminal failed/error. Non-terminal rows, including rows
+    // still waiting on admission, fail this lifecycle/status gate.
+    let lifecycle_state = normalize_required(
+        "lifecycle_state",
+        parent
+            .lifecycle_state
+            .as_deref()
+            .context("retry parent request must have a lifecycle_state")?,
+    )?;
+    let status = normalize_required(
+        "status",
+        parent
+            .status
+            .as_deref()
+            .context("retry parent request must have a status")?,
+    )?;
+
+    if lifecycle_state != "failed" || status != "error" {
+        bail!(
+            "retry parent request must be failed/error, got lifecycle_state={lifecycle_state} status={status}"
+        );
+    }
+    if parent_retry_count >= max_retries {
+        bail!(
+            "retry parent request exhausted retry budget: retry_count={parent_retry_count} max_retries={max_retries}"
+        );
+    }
+    if let Some(deadline) = normalize_optional_string(parent.deadline.as_deref()) {
+        let deadline = DateTime::parse_from_rfc3339(deadline)
+            .with_context(|| format!("retry parent request has invalid deadline {deadline:?}"))?
+            .with_timezone(&Utc);
+        if Utc::now() > deadline {
+            bail!(
+                "retry parent request deadline is closed: deadline={}",
+                deadline.to_rfc3339()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+async fn ensure_latest_retry_parent(
+    node: &EmbeddedNode,
+    session_id: &str,
+    parent_request_id: &str,
+) -> Result<()> {
+    let escaped_session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentConversation(
+                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                limit: 1
+            ) {{ latest_request_id }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        bail!(
+            "querying retry parent conversation failed: {:?}",
+            resp.errors
+        );
+    }
+    let latest_request_id = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentConversation"))
+        .and_then(|rows| rows.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("latest_request_id"))
+        .and_then(|value| value.as_str());
+
+    let Some(latest_request_id) = latest_request_id else {
+        bail!("retry parent conversation not found for session {session_id}");
+    };
+    let Some(latest_request_id) = normalize_optional_string(Some(latest_request_id)) else {
+        bail!("retry parent conversation for session {session_id} has no latest_request_id");
+    };
+
+    if latest_request_id != parent_request_id {
+        bail!(
+            "retry parent request must be latest for session {session_id}, got latest_request_id={latest_request_id}"
+        );
+    }
+
+    Ok(())
 }
 
 fn submit_request_extra_fields(options: &SubmitRequestOptions) -> String {

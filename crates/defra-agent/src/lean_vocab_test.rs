@@ -27,6 +27,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) generated_by: String,
     pub(crate) vocabularies: Vec<LeanVocabularyContract>,
     pub(crate) state_machines: Vec<LeanStateMachineContract>,
+    pub(crate) runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
+    pub(crate) session_recovery_cases: Vec<LeanSessionRecoveryCase>,
     pub(crate) follow_up_hooks: Vec<String>,
 }
 
@@ -52,6 +54,62 @@ pub(crate) struct LeanStateMachineContract {
 pub(crate) struct LeanTransitionPair {
     pub(crate) from: String,
     pub(crate) to: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanRuntimeReconcileCase {
+    pub(crate) name: String,
+    pub(crate) action: String,
+    pub(crate) legal: bool,
+    pub(crate) pre_phase: String,
+    pub(crate) post_phase: String,
+    pub(crate) pre_active_generation: usize,
+    pub(crate) post_active_generation: usize,
+    pub(crate) pre_router_generation: usize,
+    pub(crate) post_router_generation: usize,
+    pub(crate) pre_ready_generation_count: usize,
+    pub(crate) post_ready_generation_count: usize,
+    pub(crate) pre_live_generation_count: usize,
+    pub(crate) post_live_generation_count: usize,
+    pub(crate) pre_in_flight_count: usize,
+    pub(crate) post_in_flight_count: usize,
+    pub(crate) tracked_request_id: usize,
+    pub(crate) tracked_session_id: usize,
+    pub(crate) tracked_request_generation: usize,
+    pub(crate) tracked_request_session: usize,
+    pub(crate) tracked_request_behavior: usize,
+    pub(crate) tracked_session_behavior: usize,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanSessionRecoveryCase {
+    pub(crate) name: String,
+    pub(crate) action: String,
+    pub(crate) legal: bool,
+    pub(crate) pre_latest_state: String,
+    pub(crate) post_latest_state: String,
+    pub(crate) failed_id: usize,
+    pub(crate) new_id: usize,
+    pub(crate) pre_latest_id: usize,
+    pub(crate) post_latest_id: usize,
+    pub(crate) pre_session_id: usize,
+    pub(crate) post_session_id: usize,
+    pub(crate) pre_behavior_id: usize,
+    pub(crate) post_behavior_id: usize,
+    pub(crate) pre_request_count: usize,
+    pub(crate) post_request_count: usize,
+    pub(crate) pre_retry_count: usize,
+    pub(crate) post_retry_count: usize,
+    pub(crate) max_retries: usize,
+    pub(crate) pre_deadline_exceeded: bool,
+    pub(crate) post_deadline_exceeded: bool,
+    pub(crate) pre_failed_is_latest: bool,
+    pub(crate) post_failed_is_latest: bool,
+    pub(crate) post_new_is_latest: bool,
+    pub(crate) old_request_retained: bool,
+    pub(crate) new_request_inserted: bool,
+    pub(crate) origin_preserved: bool,
+    pub(crate) backend_preserved: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -88,6 +146,22 @@ pub(crate) fn lean_state_machine_contract(domain: &str) -> &'static LeanStateMac
         .iter()
         .find(|contract| contract.domain == domain)
         .unwrap_or_else(|| panic!("Lean state-machine contract {domain:?} was not emitted"))
+}
+
+pub(crate) fn lean_runtime_reconcile_case(name: &str) -> &'static LeanRuntimeReconcileCase {
+    lean_contract_snapshot()
+        .runtime_reconcile_cases
+        .iter()
+        .find(|case| case.name == name)
+        .unwrap_or_else(|| panic!("Lean runtime-reconcile case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_session_recovery_case(name: &str) -> &'static LeanSessionRecoveryCase {
+    lean_contract_snapshot()
+        .session_recovery_cases
+        .iter()
+        .find(|case| case.name == name)
+        .unwrap_or_else(|| panic!("Lean session-recovery case {name:?} was not emitted"))
 }
 
 pub(crate) fn lean_vocabulary_values(domain: &str) -> Vec<&'static str> {
@@ -312,7 +386,16 @@ fn run_lake_build(proofs_dir: &Path) {
 }
 
 fn proofs_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("proofs")
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let direct = manifest_dir.join("proofs");
+    if direct.exists() {
+        return direct;
+    }
+    manifest_dir
+        .parent()
+        .map(|parent| parent.join("defra-agent/proofs"))
+        .filter(|candidate| candidate.exists())
+        .unwrap_or(direct)
 }
 
 fn extract_contract_json(stdout: &str) -> &str {

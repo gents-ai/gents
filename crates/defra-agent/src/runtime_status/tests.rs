@@ -6,9 +6,8 @@ use serde::Deserialize;
 use super::*;
 use crate::ensure_runtime_schemas;
 use crate::lean_vocab_test::{
-    assert_lean_contract_vocabulary_matches, assert_lean_to_defradb_vocabulary_matches,
-    assert_lean_transition_is_legal, assert_state_machine_contract_is_complete,
-    LeanContractVocabulary, LeanVocabulary,
+    assert_lean_contract_vocabulary_matches, assert_lean_transition_is_legal,
+    assert_state_machine_contract_is_complete, lean_runtime_reconcile_case, LeanContractVocabulary,
 };
 
 #[derive(Debug, Deserialize)]
@@ -92,10 +91,6 @@ fn rust_process_state_transitions_match_lean_contract() {
 
 #[test]
 fn rust_reconcile_phase_vocabulary_matches_lean_model() {
-    const LEAN_RUNTIME_RECONCILE_FILE: &str =
-        "crates/defra-agent/proofs/Proofs/RuntimeReconcile/State.lean";
-    const LEAN_RUNTIME_RECONCILE_MODEL: &str =
-        include_str!("../../proofs/Proofs/RuntimeReconcile/State.lean");
     let rust_phases = vec![
         ReconcilePhase::Idle.as_str(),
         ReconcilePhase::Debouncing.as_str(),
@@ -104,13 +99,13 @@ fn rust_reconcile_phase_vocabulary_matches_lean_model() {
         ReconcilePhase::Applying.as_str(),
     ];
 
-    assert_lean_to_defradb_vocabulary_matches(LeanVocabulary {
-        lean_file: LEAN_RUNTIME_RECONCILE_FILE,
-        model: LEAN_RUNTIME_RECONCILE_MODEL,
-        namespace: "ReconcilePhase",
+    assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
+        domain: "ReconcilePhase",
         rust_source: "ReconcilePhase::{Idle, Debouncing, Resolving, Diffing, Applying}",
         rust_values: &rust_phases,
     });
+    assert_state_machine_contract_is_complete("RuntimeReconcile");
+    assert_lean_transition_is_legal("RuntimeReconcile", "applying", "idle");
 }
 
 #[tokio::test]
@@ -208,4 +203,62 @@ async fn runtime_status_serializes_persisted_generation_updates() {
     assert_eq!(row.active_generation, 2);
     assert_eq!(row.router_generation, 2);
     assert_eq!(row.last_reconcile_result, "applied");
+}
+
+#[tokio::test]
+async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() {
+    let publish = lean_runtime_reconcile_case("publish_changed_snapshot");
+    let router = lean_runtime_reconcile_case("router_observe_published_generation");
+    assert!(publish.legal);
+    assert!(router.legal);
+
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let status = RuntimeStatusHandle::new(node.clone(), "did:defra-agent:runtime-contract");
+    let startup = ActiveRuntimeSnapshot {
+        generation: publish.pre_active_generation as u64,
+        default_behavior_id: "general".to_string(),
+        behaviors: HashMap::new(),
+        tool_surfaces: HashMap::new(),
+        backend_admission_configs: HashMap::new(),
+        unavailable_behaviors: HashMap::new(),
+        active_schedules: HashMap::new(),
+        unavailable_schedules: HashSet::new(),
+        active_event_triggers: HashMap::new(),
+        unavailable_event_triggers: HashSet::new(),
+        active_tasks: HashMap::new(),
+        dispatchers: HashMap::new(),
+    };
+    let applied = ActiveRuntimeSnapshot {
+        generation: publish.post_active_generation as u64,
+        default_behavior_id: "general".to_string(),
+        behaviors: HashMap::new(),
+        tool_surfaces: HashMap::new(),
+        backend_admission_configs: HashMap::new(),
+        unavailable_behaviors: HashMap::new(),
+        active_schedules: HashMap::new(),
+        unavailable_schedules: HashSet::new(),
+        active_event_triggers: HashMap::new(),
+        unavailable_event_triggers: HashSet::new(),
+        active_tasks: HashMap::new(),
+        dispatchers: HashMap::new(),
+    };
+
+    status.publish_startup_snapshot(&startup).await;
+    status.set_reconcile_phase(ReconcilePhase::Applying).await;
+    status.publish_applied(&applied).await;
+    let row = fetch_runtime_row(node.as_ref(), "did:defra-agent:runtime-contract").await;
+    assert_eq!(row.reconcile_phase, publish.post_phase.as_str());
+    assert_eq!(row.active_generation, publish.post_active_generation as i64);
+    assert_eq!(row.router_generation, publish.post_router_generation as i64);
+    assert_eq!(row.last_reconcile_result, "applied");
+
+    status
+        .publish_router_generation(router.post_router_generation as u64)
+        .await;
+    let row = fetch_runtime_row(node.as_ref(), "did:defra-agent:runtime-contract").await;
+    assert_eq!(row.reconcile_phase, router.post_phase.as_str());
+    assert_eq!(row.active_generation, router.post_active_generation as i64);
+    assert_eq!(row.router_generation, router.post_router_generation as i64);
 }
