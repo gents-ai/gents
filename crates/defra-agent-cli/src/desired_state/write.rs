@@ -69,8 +69,6 @@ fn validate_handles(manifest: &DesiredStateManifest) -> Result<(), String> {
 }
 
 /// Write a `DesiredStateManifest` to `root` as a manifest root directory.
-/// See `docs/superpowers/specs/2026-04-22-per-agent-manifest-roots-design.md`
-/// for the on-disk layout contract.
 pub(crate) fn write_manifest_root(
     root: &Path,
     manifest: &DesiredStateManifest,

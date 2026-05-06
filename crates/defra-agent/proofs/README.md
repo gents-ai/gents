@@ -274,8 +274,7 @@ not cover crash-mid-apply. Operators must retry `apply` after a failure
 and should treat a partial-apply state as manually inconsistent until
 resolved.
 
-Tracking issue: I-2 (make apply transactional); see
-`docs/superpowers/specs/2026-04-14-apply-reconcile-lean.md`.
+Tracking issue: I-2 (make apply transactional).
 
 ## What Is Not Proven
 
@@ -289,8 +288,3 @@ These proofs do not establish:
 
 Those are handled through explicit assumptions, Rust integration tests, or
 operational diagnostics.
-
-## Design Spec
-
-See `docs/superpowers/specs/2026-04-07-lean-formal-verification-design.md`
-for the design rationale and prior-art survey.

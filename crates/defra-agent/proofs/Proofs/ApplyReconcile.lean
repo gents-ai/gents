@@ -11,8 +11,7 @@ Models the operator/CLI apply path (manifest → diff → ordered apply-steps)
 composed with `RuntimeReconcile` to yield the end-to-end convergence
 theorem **T-Conv**.
 
-See `docs/superpowers/specs/2026-04-14-apply-reconcile-lean.md` for the
-design rationale. The Rust counterparts live in:
+The Rust counterparts live in:
 
 - `crates/defra-agent-cli/src/collection.rs` — `enum Collection`
 - `crates/defra-agent/src/desired_fields.rs` — `DesiredFields`/`LiveFields`
