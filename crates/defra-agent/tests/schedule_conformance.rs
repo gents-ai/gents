@@ -47,8 +47,8 @@
 //! which consumes finite cases emitted by
 //! `Proofs/Conformance/Triggers/Contracts.lean`. That generated contract
 //! covers schedule reachability, serial gating, latest-only supersession, and
-//! tuple-sensitive lineage without relying on the control watcher's debounce
-//! or the schedule source tick as the only correctness oracle.
+//! parallel bypass of in-flight gates without relying on the control watcher's
+//! debounce or the schedule source tick as the only correctness oracle.
 //!
 //! This file still boots `DefraAgent::run` only where the observable under
 //! test is operational reconfiguration (`active_generation` bumps). The other

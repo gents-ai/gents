@@ -374,6 +374,8 @@ def snapshotJson : String :=
       ++ jsonArray (vocabularies.map VocabularyContract.toJson) ++ ","
     ++ "\"state_machines\":"
       ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
+    ++ "\"trigger_dispatch_case_count\":"
+      ++ toString Conformance.TriggerContracts.triggerDispatchCaseCount ++ ","
     ++ "\"trigger_dispatch_cases\":"
       ++ Conformance.TriggerContracts.triggerDispatchCasesJson ++ ","
     ++ "\"follow_up_hooks\":["

@@ -27,6 +27,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) generated_by: String,
     pub(crate) vocabularies: Vec<LeanVocabularyContract>,
     pub(crate) state_machines: Vec<LeanStateMachineContract>,
+    pub(crate) trigger_dispatch_case_count: usize,
     pub(crate) trigger_dispatch_cases: Vec<LeanTriggerDispatchCase>,
     pub(crate) follow_up_hooks: Vec<String>,
 }
@@ -130,6 +131,10 @@ pub(crate) fn lean_vocabulary_values(domain: &str) -> Vec<&'static str> {
 
 pub(crate) fn lean_trigger_dispatch_cases() -> &'static [LeanTriggerDispatchCase] {
     &lean_contract_snapshot().trigger_dispatch_cases
+}
+
+pub(crate) fn lean_trigger_dispatch_case_count() -> usize {
+    lean_contract_snapshot().trigger_dispatch_case_count
 }
 
 pub(crate) fn assert_lean_contract_vocabulary_matches(spec: LeanContractVocabulary<'_>) {

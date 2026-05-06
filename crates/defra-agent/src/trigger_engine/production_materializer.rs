@@ -83,6 +83,13 @@ impl ProductionMaterializer {
     }
 }
 
+pub(crate) fn execution_origin_for_trigger_kind(trigger_kind: TriggerKind) -> ExecutionOrigin {
+    match trigger_kind {
+        TriggerKind::Manual => ExecutionOrigin::Interactive,
+        TriggerKind::Schedule | TriggerKind::Event => ExecutionOrigin::Scheduled,
+    }
+}
+
 impl MaterializerHandle for ProductionMaterializer {
     fn materialize(
         &self,
@@ -116,10 +123,7 @@ impl MaterializerHandle for ProductionMaterializer {
         // fires keep `Scheduled`. Keep the mapping local to the trait impl so
         // callers (who already decided the `TriggerKind`) don't need to know
         // the lifecycle-layer vocabulary.
-        let execution_origin = match trigger_kind {
-            TriggerKind::Manual => ExecutionOrigin::Interactive,
-            TriggerKind::Schedule | TriggerKind::Event => ExecutionOrigin::Scheduled,
-        };
+        let execution_origin = execution_origin_for_trigger_kind(trigger_kind);
 
         Box::pin(async move {
             let (behavior_name, behavior_did, _deadline_secs, _backend_id) = resolved?;

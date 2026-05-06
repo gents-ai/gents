@@ -118,6 +118,8 @@ def expectedSkipReason (scenario : TriggerScenario) : Option String :=
     | some _ =>
       match scenario.intent.concurrency with
       | .serial => some "serial: prior fire still in-flight"
+      -- Defensive for future skipped cases; current executable skips are
+      -- disabled triggers or serial gates.
       | .parallel | .latestOnly => none
 
 def expectedSupersedeCallKeys (scenario : TriggerScenario) : List TriggerKey :=
@@ -176,9 +178,9 @@ def contractJson (scenario : TriggerScenario) : String :=
           else
             "null") ++ ","
     ++ "\"expected_request_caused_by_id\":"
-      ++ (materialized.map causedById? |>.join |> jsonOptionString) ++ ","
+      ++ (materialized.bind causedById? |> jsonOptionString) ++ ","
     ++ "\"expected_request_caused_by_kind\":"
-      ++ (materialized.map causedByKind? |>.join |> jsonOptionString) ++ ","
+      ++ (materialized.bind causedByKind? |> jsonOptionString) ++ ","
     ++ "\"expected_execution_origin\":"
       ++ (materialized.map (fun request => request.executionOrigin.toDefraDB)
           |> jsonOptionString) ++ ","
@@ -233,6 +235,11 @@ def triggerDispatchScenarios : List TriggerScenario :=
     , before := { requests := [request "prior-event" "event-a" .event .serial false] }
     , intent := intent (some "event-a") .event .serial
     }
+  , { name := "schedule_parallel_ignores_prior_inflight"
+    , snap := snapshot ["sched-a"] []
+    , before := { requests := [request "prior-schedule" "sched-a" .schedule .serial false] }
+    , intent := intent (some "sched-a") .schedule .parallel
+    }
   , { name := "schedule_latest_only_clear_fires_with_supersede_call"
     , snap := snapshot ["sched-a"] []
     , before := SystemState.empty
@@ -243,12 +250,20 @@ def triggerDispatchScenarios : List TriggerScenario :=
     , before := { requests := [request "prior-schedule" "sched-a" .schedule .latestOnly false] }
     , intent := intent (some "sched-a") .schedule .latestOnly
     }
+  , { name := "event_latest_only_supersedes_prior"
+    , snap := snapshot [] ["event-a"]
+    , before := { requests := [request "prior-event" "event-a" .event .latestOnly false] }
+    , intent := intent (some "event-a") .event .latestOnly
+    }
   , { name := "manual_latest_only_without_key_fires_without_supersede"
     , snap := snapshot [] []
     , before := { requests := [request "prior-schedule" "sched-a" .schedule .latestOnly false] }
     , intent := intent none .manual .latestOnly
     }
   ]
+
+def triggerDispatchCaseCount : Nat :=
+  triggerDispatchScenarios.length
 
 def triggerDispatchCasesJson : String :=
   jsonArray (triggerDispatchScenarios.map contractJson)

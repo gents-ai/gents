@@ -41,8 +41,8 @@
 //! which consumes finite cases emitted by
 //! `Proofs/Conformance/Triggers/Contracts.lean`. That Lean-generated contract
 //! covers manual dispatch, schedule/event reachability, tuple-sensitive serial
-//! gating, latest-only supersession, and lineage shape without depending on
-//! wall-clock debounce.
+//! gating, latest-only supersession, parallel bypass of in-flight gates, and
+//! lineage shape without depending on wall-clock debounce.
 //!
 //! Cases 6, 7, 8 remain asserted here at the persistence-layer contract (seed
 //! an in-flight `AgentRequest` with the right lineage tuple + simulate the
