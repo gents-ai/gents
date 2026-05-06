@@ -67,6 +67,17 @@ tests cover the parser/validator boundary and command metadata emitted by
 `toolset/shared/command.rs`; the Lean model covers the fail-closed policy
 ordering and sandbox/env invariants that those tests exercise.
 
+The trigger-engine contract now has two layers. Lean emits finite executable
+dispatch cases from `Proofs.Conformance.Triggers.Contracts`; Rust consumes them
+in `trigger_engine::tests::trigger_engine_dispatch_matches_lean_generated_contract_cases`.
+That generated contract covers manual fires with null trigger ids, schedule and
+event enabled-gate reachability, tuple-sensitive serial gating, latest-only
+supersession, parallel bypass of in-flight gates, manual latest-only without a
+trigger key, materialized lineage, and the interactive/scheduled
+execution-origin projection. A separate
+deterministic Rust lock test covers the latest-only critical section without
+using elapsed time as the only oracle.
+
 ## Modeled Storage Observation Boundary
 
 `PersistenceState` remains the abstract committed/uncommitted lifecycle. The
@@ -101,6 +112,14 @@ behavior are environmental assumptions, not service-local state-machine facts.
 The service-local proof and tests cover the consequence of an observed backend
 configuration: reconstructed running call rows do not exceed that backend's
 `max_concurrent`.
+
+Trigger source delivery remains operational. Lean does not model the DefraDB
+event bus, control-watcher debounce, schedule tick cadence, subscription
+reconciliation timing, template-language parser behavior, or storage-engine
+delivery guarantees. Rust conformance tests cover those surfaces with bounded
+waits and persistence-shape assertions; the Lean-generated trigger contract
+covers the pure dispatch/reachability/concurrency semantics once a source has
+produced a `FireIntent`.
 
 The generated `SessionRecovery` conformance contract currently covers the
 finite failed-latest-request reissue witness (`failed -> pending`) instead of

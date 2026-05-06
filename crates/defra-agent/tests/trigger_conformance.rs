@@ -34,15 +34,22 @@
 //!   — two triggers on the same `source_collection` apply their own filters
 //!   independently; only the trigger whose filter matches fires.
 //!
-//! # Pragmatic split: fully engine-driven vs. persistence-contract
+//! # Pragmatic split: engine semantics vs. persistence/operational surfaces
 //!
-//! Cases 6, 7, 8 are asserted at the persistence-layer contract (seed an
-//! in-flight `AgentRequest` with the right lineage tuple + simulate the exact
-//! mutation / writeback the engine produces), mirroring PR 1's
-//! `schedule_conformance.rs::latest_only_supersedes_prior_fire` pattern. This
-//! is the same contract the engine wraps at runtime but sidesteps the control
-//! watcher's 5s debounce and the engine tick scheduling. Full-pipeline
-//! coverage for these transitions lives in `event_trigger_e2e.rs`.
+//! The pure trigger-engine branch matrix is pinned in-crate by
+//! `trigger_engine::tests::trigger_engine_dispatch_matches_lean_generated_contract_cases`,
+//! which consumes finite cases emitted by
+//! `Proofs/Conformance/Triggers/Contracts.lean`. That Lean-generated contract
+//! covers manual dispatch, schedule/event reachability, tuple-sensitive serial
+//! gating, latest-only supersession, parallel bypass of in-flight gates, and
+//! lineage shape without depending on wall-clock debounce.
+//!
+//! Cases 6, 7, 8 remain asserted here at the persistence-layer contract (seed
+//! an in-flight `AgentRequest` with the right lineage tuple + simulate the
+//! exact mutation / writeback the production materializer/source produces).
+//! They are still valuable because they pin the DefraDB query/mutation shape
+//! the engine delegates to at runtime, but they are no longer the only
+//! correctness oracle for serial/latest-only trigger behavior.
 //!
 //! Cases 1, 2, 3, 4, 5, 9 boot a real `DefraAgent` so the EventSource loop
 //! actually observes DefraDB events; these are the tests where the
