@@ -331,11 +331,15 @@ async fn retry_request_rejects_generated_illegal_session_recovery_cases() -> Res
     let budget_exhausted = lean_session_recovery_case("illegal_retry_budget_exhausted");
     let deadline_closed = lean_session_recovery_case("illegal_deadline_closed");
     let non_latest = lean_session_recovery_case("illegal_non_latest_failed_request");
+    let duplicate_new_id = lean_session_recovery_case("illegal_new_request_id_already_exists");
+    let source_not_released = lean_session_recovery_case("illegal_source_not_released");
     for case in [
         source_not_failed,
         budget_exhausted,
         deadline_closed,
         non_latest,
+        duplicate_new_id,
+        source_not_released,
     ] {
         assert!(!case.legal, "{} should be illegal", case.name.as_str());
     }
@@ -366,6 +370,14 @@ async fn retry_request_rejects_generated_illegal_session_recovery_cases() -> Res
     assert!(
         err.contains("failed/error"),
         "source-not-failed guard should reject pending parent: {err}"
+    );
+
+    parent.status = Some("processing".to_string());
+    parent.lifecycle_state = Some(source_not_released.pre_latest_state.clone());
+    let err = core.retry_request(&parent).await.unwrap_err().to_string();
+    assert!(
+        err.contains("failed/error"),
+        "source-not-released guard should reject non-terminal parent status: {err}"
     );
 
     let past_deadline = chrono::Utc::now() - chrono::Duration::seconds(1);
@@ -613,16 +625,18 @@ async fn force_retry_parent_state(
     max_retries: i64,
     deadline: &str,
 ) -> Result<()> {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let escaped_deadline = escape_graphql_string(deadline);
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
                 input: {{
                     status: "error",
                     lifecycle_state: "failed",
                     retry_count: {retry_count},
                     max_retries: {max_retries},
-                    deadline: "{deadline}"
+                    deadline: "{escaped_deadline}"
                 }}
             ) {{ _docID }}
         }}"#
@@ -640,6 +654,15 @@ async fn force_retry_parent_state(
         );
     }
     Ok(())
+}
+
+fn escape_graphql_string(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
 }
 
 async fn wait_for_connectable_iroh_addr(core: &ClientCore) -> Result<String> {
