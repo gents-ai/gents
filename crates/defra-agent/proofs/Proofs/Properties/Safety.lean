@@ -279,7 +279,7 @@ theorem deadline_structural_bound
     ¬post.deadlineExceeded ∨ post.persistence = .committed := by
   exact Or.inr (persistence_before_completion h_trans h_completed)
 
-/-- S7: Interrupt field monotonicity — once `interruptRequestedAt` is set on
+/-- R-Int: request-local interrupt field monotonicity — once `interruptRequestedAt` is set on
     a request, no subsequent transition may clear or change it. The runtime
     treats this field as read-only; it is submitter-owned.
 
@@ -293,7 +293,7 @@ theorem interrupt_monotonicity
     post.interruptRequestedAt = pre.interruptRequestedAt := by
   cases h_trans <;> simp_all
 
-/-- S8: TTL field monotonicity — `validUntil` is submitter-owned and never
+/-- R-TTL: request-local TTL field monotonicity — `validUntil` is submitter-owned and never
     rewritten by any runtime transition, regardless of whether it was set. -/
 theorem valid_until_monotonicity
     {pre post : RequestContext}

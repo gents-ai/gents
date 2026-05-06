@@ -43,4 +43,11 @@
   slot-accounting invariants alongside call-level admission state
 - **defra-agent:** call-level admission is persisted through `InferenceCall`
 - **Classification:** Resolved for backend HTTP-call admission
+
+## Deviation 8: Inference-call cancellation is outside the composed model
+- **Ideal:** An interrupted request would be composed with an `InferenceCall`
+  state machine proving queued/running calls eventually reach `cancelled`
+- **defra-agent:** runtime cancellation is implemented by pre-stream token
+  checks and mid-stream permit-drop handling
+- **Classification:** Runtime-implemented behavior, proof-model gap
 -/

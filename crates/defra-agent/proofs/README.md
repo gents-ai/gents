@@ -66,7 +66,7 @@ practice:
 - broken retry/reissue semantics
 - reconcile publication races
 - apply operations clobbering runtime-owned fields
-- disabled or serial triggers admitting work incorrectly
+- disabled or serial triggers accepting work incorrectly
 - "ready" or "completed" states that were not actually earned
 - clients repairing replicated state from the render path
 
@@ -79,17 +79,17 @@ either tested at the Rust boundary or treated as an external assumption.
 |------|----------|
 | `Proofs/Basic.lean` | Shared opaque ids, `Time`, and terminal-state helpers |
 | `Proofs/Process.lean` | Process lifecycle model plus executable `Action`, `step?`, and `replay?` |
-| `Proofs/Request.lean` | Request lifecycle, admission state, retry/deadline/progress fields, executable `Action`, `step?`, and `replay?` |
+| `Proofs/Request.lean` | Barrel for request state, transitions, executable semantics, and local properties |
 | `Proofs/Persistence.lean` | Persistence lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/Composed.lean` | Cross-layer composition and guards |
 | `Proofs/Scheduling.lean` | Scheduler/backend slot state |
 | `Proofs/Fleet.lean` | Fleet-level scheduling and slot accounting |
 | `Proofs/SessionRecovery.lean` | Retry/reissue model for session-linked requests |
-| `Proofs/RuntimeReconcile.lean` | Generation publication, session binding, and retire/drain invariants |
-| `Proofs/ApplyReconcile.lean` | Desired-state apply model, collection ordering, reference closure, and field ownership |
-| `Proofs/Triggers.lean` | Trigger dispatch model for manual, schedule, and event triggers |
-| `Proofs/Client.lean` | Client turn-state derivation from request/response observations |
-| `Proofs/ClientShell.lean` | Multi-session shell workflow above the client turn projection |
+| `Proofs/RuntimeReconcile.lean` | Barrel for runtime reconcile state and transitions |
+| `Proofs/ApplyReconcile.lean` | Barrel for desired-state apply, runtime bridge, and convergence |
+| `Proofs/Triggers.lean` | Barrel for trigger types, dispatch, reachability, serial, latest-only, and lineage proofs |
+| `Proofs/Client.lean` | Barrel for client turn-state derivation and client theorems |
+| `Proofs/ClientShell.lean` | Barrel for multi-session shell workflow modules |
 | `Proofs/Properties/Safety.lean` | Request/process/persistence safety properties S1-S6 |
 | `Proofs/Properties/Liveness.lean` | Request/process liveness properties L1-L3 |
 | `Proofs/Properties/SchedulingSafety.lean` | Scheduler/fleet safety properties S7-S9 |
@@ -99,6 +99,19 @@ either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Conformance/Deviations.lean` | Known gaps between ideal model and implementation |
 | `Proofs/Conformance/SchedulerConformance.lean` | Scheduler-specific conformance notes |
 | `Proofs/Conformance/Triggers.lean` | Trigger-specific conformance notes |
+
+Semantic submodules:
+
+| Barrel | Submodules |
+|--------|------------|
+| `Proofs.Request` | `State`, `Transition`, `Executable`, `Properties` |
+| `Proofs.RuntimeReconcile` | `State`, `Transition` |
+| `Proofs.ApplyReconcile` | `Collections`, `Manifest`, `Diff`, `Apply`, `ApplyProperties`, `RuntimeBridge`, `Convergence` |
+| `Proofs.Triggers` | `Types`, `Dispatch`, `Reachability`, `SerialSupport`, `Serial`, `LatestOnly`, `Lineage` |
+| `Proofs.Client` | `Types`, `Lifecycle`, `Terminal`, `Replacement` |
+| `Proofs.ClientShell` | `Types`, `Submission`, `Transition`, `Projection`, `Theorems` |
+
+The top-level barrel imports remain the stable entry points for downstream code.
 
 Related implementation-facing doc:
 
@@ -118,8 +131,8 @@ States:
 
 Operational meaning:
 
-- `recovering` means the runtime is not yet allowed to admit fresh work
-- `ready` means the runtime passed startup validation and can admit work
+- `recovering` means the runtime is not yet allowed to accept fresh work
+- `ready` means the runtime passed startup validation and can accept work
 - `shuttingDown` means no new work should enter and existing work is draining
 
 ### Layer 2: Request Lifecycle
@@ -170,12 +183,16 @@ Total single-execution composed state space: `9 x 5 x 4 = 180` states.
 | S1 | Terminal requests stay terminal | A completed, failed, superseded, dead, or interrupted request cannot silently re-enter processing | `terminal_irreversibility` |
 | S3 | `progressSeq` never decreases | Clients can treat progress as monotonic and avoid rewind bugs | `progress_monotonic` |
 | S4 | Completion cannot be a hidden deadline violation | A request that reaches `completed` did not get there through deadline expiry | `completed_not_deadline_expired`, `deadline_structural_bound` |
-| S5 | Recovery blocks claims | New work is not admitted while recovery is still repairing stuck state | `recovery_blocks_claims` |
+| S5 | Recovery blocks claims | New work is not accepted while recovery is still repairing stuck state | `recovery_blocks_claims` |
 | S6 | Completion implies persistence | The model does not allow `completed` without a committed durable state | `persistence_before_completion` |
 
 The historical numbering skips `S2` in the current Lean files. There is no
 separate theorem labeled `S2` today; the gap is intentional rather than a
 missing build artifact.
+
+Request-local field monotonicity uses local labels instead of scheduler safety
+numbers: `R-Int` for `interrupt_monotonicity` and `R-TTL` for
+`valid_until_monotonicity`.
 
 ### Request/Process Liveness
 
@@ -191,9 +208,14 @@ missing build artifact.
 |----|----------|----------------|---------|
 | S7 | Capacity invariants are preserved | Running-slot counts stay within backend limits | `capacity_invariant_preserved` |
 | S8 | Slot accounting is preserved | Scheduler running counts stay aligned with per-request admission state | `slot_accounting_preserved` |
-| S9 | Terminal work releases capacity; unavailable backends cannot acquire | Slots are not leaked and unrunnable backends do not admit new work | `terminal_implies_released`, `unavailable_blocks_acquire` |
+| S9 | Terminal work releases capacity; unavailable backends cannot acquire | Slots are not leaked and unrunnable backends do not accept new work | `terminal_implies_released`, `unavailable_blocks_acquire` |
 | L | Capacity-available work can acquire | A waiting request is not artificially blocked when slots exist | `acquire_when_capacity_available` |
-| L | Admitted work eventually releases | The model has a constructive path from admitted work to released capacity | `admitted_work_eventually_releases` |
+| L | Accepted work eventually releases | The model has a constructive path from accepted work to released capacity | `accepted_work_eventually_releases` |
+
+The scheduling-liveness theorem was intentionally renamed to
+`accepted_work_eventually_releases`; the old name used the previous acceptance
+vocabulary and is not kept as an alias so the proof-tree hygiene search stays
+unambiguous.
 
 ### Session Recovery
 
@@ -231,7 +253,10 @@ snapshots.
 - desired-state references must be closed and point to earlier apply ranks
 - apply steps write only `DesiredFields`
 - runtime-owned `LiveFields` are structurally untouched by apply
-- `T-Conv` composes a completed apply pass with runtime reconcile publication
+- `t_conv_runnable` is the apply-sensitive result: after a well-formed apply,
+  every manifest behavior id is runnable
+- `t_conv` and `t_conv_published` are coverage corollaries over the resolved and
+  published snapshot carrier sets
 
 This is the formal contract behind manifest diff/apply and per-agent manifest
 roots.
@@ -240,9 +265,11 @@ roots.
 
 `Proofs/Triggers.lean` models the trigger engine and proves:
 
-- disabled triggers cannot admit work
-- serial triggers admit at most one active request
-- `latest_only` converges to the latest fire
+- disabled triggers cannot accept work
+- serial triggers accept at most one active request
+- `T3_latest_only_convergence` proves latest-only supersession directly from
+  `dispatchStep`; `latestOnlyFireTransition_convergence` is only the abstract
+  relation unwrapping lemma
 - materialized requests carry complete trigger lineage
 
 `Proofs/Conformance/Triggers.lean` records the Rust/DefraDB shape used by the
@@ -349,11 +376,11 @@ state as manually inconsistent until resolved.
 
 ### Interrupted Inference Calls
 
-`Proofs/Composed.lean` contains a `True` placeholder documenting the intended
-cross-layer property that an interrupted request eventually cancels linked
-inference calls. Rust has cancellation paths for pre-stream and mid-stream
-interrupts, but the Lean proof needs a first-class `InferenceCall` state machine
-before that property can be closed formally.
+`Proofs/Composed.lean` documents an open proof boundary: the composed request
+model does not yet include a first-class `InferenceCall` state machine. Rust has
+cancellation paths for pre-stream and mid-stream interrupts, but the formal
+request-to-call cancellation proof remains a documented deviation rather than a
+theorem.
 
 ## What Is Not Proven
 

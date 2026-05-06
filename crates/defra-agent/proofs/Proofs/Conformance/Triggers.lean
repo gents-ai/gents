@@ -379,7 +379,7 @@ satisfies the same boundary predicate, and `dispatch` materializes a seed, then:
 
 * the next trigger state stays on the same admissible trace
 * the materialized seed/origin pair satisfies `consistentLineage`
-* the created request shape admits the canonical claimed lifecycle embedding
+* the created request shape has the canonical claimed lifecycle embedding
 -/
 theorem reachableUnder_dispatch_materializedTriggerRequest_conforms
     (P : FireIntent → Prop)

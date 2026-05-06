@@ -16,7 +16,7 @@ theorem capacity_invariant_preserved
   | materialize_scheduled _ _ _ _ _ h_sched =>
     rw [h_sched]
     exact h_inv bid
-  | admit_existing _ _ _ _ _ _ h_sched =>
+  | accept_existing _ _ _ _ _ _ h_sched =>
     rw [h_sched]
     exact h_inv bid
   | acquire_slot wid touched h_guard _ _ h_backends h_running =>
@@ -80,7 +80,7 @@ theorem slot_accounting_preserved
         simp [newCtx, AdmissionState.holdsSlot]
       · simp [newCtx, h_backend, AdmissionState.holdsSlot]
     rw [h_zero, zero_add]
-  | admit_existing wid h_fresh _ h_wait h_ids h_ctx h_sched =>
+  | accept_existing wid h_fresh _ h_wait h_ids h_ctx h_sched =>
     have h_post :
         post =
           { activeIds := insert wid pre.activeIds

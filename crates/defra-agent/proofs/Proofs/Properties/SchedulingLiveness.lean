@@ -25,7 +25,7 @@ theorem acquire_when_capacity_available
   · exact FleetState.Transition.acquire_slot wid bid h_can rfl rfl rfl rfl
   · simp [post]
 
-theorem admitted_work_eventually_releases
+theorem accepted_work_eventually_releases
     {pre : FleetState} {wid : Nat} {bid : BackendId}
     (hmem : wid ∈ pre.activeIds)
     (h_state : (pre.ctx wid).state = .claimed)

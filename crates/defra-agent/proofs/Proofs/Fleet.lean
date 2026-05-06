@@ -109,7 +109,7 @@ inductive Transition : FleetState → FleetState → Prop where
         } →
       post.scheduler = pre.scheduler →
       Transition pre post
-  | admit_existing {pre post : FleetState} (wid : Nat) :
+  | accept_existing {pre post : FleetState} (wid : Nat) :
       wid ∉ pre.activeIds →
       (pre.ctx wid).state = .claimed →
       (pre.ctx wid).admission = .waiting →
@@ -145,7 +145,7 @@ inductive Transition : FleetState → FleetState → Prop where
 /-- Executable fleet actions mirroring `Transition`. -/
 inductive Action where
   | materializeScheduled (wid : Nat) (bid : BackendId)
-  | admitExisting (wid : Nat)
+  | acceptExisting (wid : Nat)
   | acquireSlot (wid : Nat) (bid : BackendId)
   | beginExecution (wid : Nat)
   | releaseOnTerminal (wid : Nat) (bid : BackendId) (terminal : RequestState)
@@ -176,8 +176,8 @@ def step? (pre : FleetState) : Action → Option FleetState
           }
       else
         none
-  | .admitExisting wid =>
-      if _h_admit :
+  | .acceptExisting wid =>
+      if _h_accept :
           wid ∉ pre.activeIds ∧
           (pre.ctx wid).state = .claimed ∧
           (pre.ctx wid).admission = .waiting then
@@ -249,12 +249,12 @@ theorem step_sound
       rcases h_step with ⟨h_not, h_post⟩
       subst post
       exact Transition.materialize_scheduled wid bid h_not rfl rfl rfl
-  | admitExisting wid =>
+  | acceptExisting wid =>
       simp [step?] at h_step
-      rcases h_step with ⟨h_admit, h_post⟩
-      rcases h_admit with ⟨h_not, h_state, h_admission⟩
+      rcases h_step with ⟨h_accept, h_post⟩
+      rcases h_accept with ⟨h_not, h_state, h_admission⟩
       subst post
-      exact Transition.admit_existing wid h_not h_state h_admission rfl rfl rfl
+      exact Transition.accept_existing wid h_not h_state h_admission rfl rfl rfl
   | acquireSlot wid bid =>
       simp [step?] at h_step
       rcases h_step with ⟨h_acquire, h_post⟩
@@ -301,7 +301,7 @@ theorem transition_complete
         · exact h_ctx.symm
         · exact h_scheduler.symm
       exact ⟨.materializeScheduled wid bid, by simp [step?, h_not, h_post]⟩
-  | admit_existing wid h_not h_state h_admission h_activeIds h_ctx h_scheduler =>
+  | accept_existing wid h_not h_state h_admission h_activeIds h_ctx h_scheduler =>
       have h_post :
           { activeIds := insert wid pre.activeIds
           , ctx := pre.ctx
@@ -311,7 +311,7 @@ theorem transition_complete
         · exact h_activeIds.symm
         · exact h_ctx.symm
         · exact h_scheduler.symm
-      exact ⟨.admitExisting wid, by simp [step?, h_not, h_state, h_admission, h_post]⟩
+      exact ⟨.acceptExisting wid, by simp [step?, h_not, h_state, h_admission, h_post]⟩
   | acquire_slot wid bid h_acquire h_activeIds h_ctx h_backends h_running =>
       have h_scheduler :
           { backends := pre.scheduler.backends
