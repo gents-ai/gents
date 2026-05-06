@@ -14,19 +14,13 @@ inductive Action where
   | dedupLose
   | beginInference
   | advance
-  | needInput
-  | inputReceived
   | finish
   | fail
   | failBeforeStream
-  | inputTimeout
-  | exhaust
-  | deadlineExpire
   | expire
   | interruptBeforeClaim
   | interruptClaimed
   | interruptProcessing
-  | interruptInputRequired
   deriving DecidableEq, Repr
 
 /-- Executable transition function for the request layer. -/
@@ -51,16 +45,6 @@ def step? (pre : RequestContext) : Action → Option RequestContext
         some { pre with progressSeq := pre.progressSeq + 1 }
       else
         none
-  | .needInput =>
-      if pre.state = .processing ∧ pre.admission = .executing then
-        some { pre with state := .inputRequired }
-      else
-        none
-  | .inputReceived =>
-      if pre.state = .inputRequired ∧ pre.admission = .executing then
-        some { pre with state := .processing, progressSeq := pre.progressSeq + 1 }
-      else
-        none
   | .finish =>
       if pre.state = .processing ∧ pre.admission = .executing then
         some { pre with state := .completed, admission := .released, persistence := .committed }
@@ -74,21 +58,6 @@ def step? (pre : RequestContext) : Action → Option RequestContext
   | .failBeforeStream =>
       if pre.state = .claimed ∧ (pre.admission = .waiting ∨ pre.admission = .acquired) then
         some { pre with state := .failed, admission := .released }
-      else
-        none
-  | .inputTimeout =>
-      if pre.state = .inputRequired ∧ pre.admission = .executing ∧ pre.deadlineExceeded then
-        some { pre with state := .failed, admission := .released }
-      else
-        none
-  | .exhaust =>
-      if pre.state = .failed ∧ (pre.retriesExhausted ∨ pre.deadlineExceeded) then
-        some { pre with state := .dead, admission := .released }
-      else
-        none
-  | .deadlineExpire =>
-      if pre.state = .processing ∧ pre.admission = .executing ∧ pre.deadlineExceeded then
-        some { pre with state := .dead, admission := .released }
       else
         none
   | .expire =>
@@ -112,12 +81,6 @@ def step? (pre : RequestContext) : Action → Option RequestContext
         none
   | .interruptProcessing =>
       if pre.state = .processing ∧ pre.admission = .executing
-         ∧ pre.interruptRequestedAt.isSome then
-        some { pre with state := .interrupted, admission := .released }
-      else
-        none
-  | .interruptInputRequired =>
-      if pre.state = .inputRequired ∧ pre.admission = .executing
          ∧ pre.interruptRequestedAt.isSome then
         some { pre with state := .interrupted, admission := .released }
       else
@@ -163,16 +126,6 @@ theorem step_sound
       rcases h_step with ⟨h_advance, h_post⟩
       rcases h_advance with ⟨h_state, h_admission⟩
       exact Transition.advance h_state h_admission h_post.symm
-  | needInput =>
-      simp [step?] at h_step
-      rcases h_step with ⟨h_need, h_post⟩
-      rcases h_need with ⟨h_state, h_admission⟩
-      exact Transition.need_input h_state h_admission h_post.symm
-  | inputReceived =>
-      simp [step?] at h_step
-      rcases h_step with ⟨h_input, h_post⟩
-      rcases h_input with ⟨h_state, h_admission⟩
-      exact Transition.input_received h_state h_admission h_post.symm
   | finish =>
       simp [step?] at h_step
       rcases h_step with ⟨h_finish, h_post⟩
@@ -188,21 +141,6 @@ theorem step_sound
       rcases h_step with ⟨h_fail, h_post⟩
       rcases h_fail with ⟨h_state, h_admission⟩
       exact Transition.fail_before_stream h_state h_admission h_post.symm
-  | inputTimeout =>
-      simp [step?] at h_step
-      rcases h_step with ⟨h_timeout, h_post⟩
-      rcases h_timeout with ⟨h_state, h_admission, h_deadline⟩
-      exact Transition.input_timeout h_state h_admission h_deadline h_post.symm
-  | exhaust =>
-      simp [step?] at h_step
-      rcases h_step with ⟨h_exhaust, h_post⟩
-      rcases h_exhaust with ⟨h_state, h_reason⟩
-      exact Transition.exhaust h_state h_reason h_post.symm
-  | deadlineExpire =>
-      simp [step?] at h_step
-      rcases h_step with ⟨h_dead, h_post⟩
-      rcases h_dead with ⟨h_state, h_admission, h_deadline⟩
-      exact Transition.deadline_expire h_state h_admission h_deadline h_post.symm
   | expire =>
       simp only [step?] at h_step
       match h_valid : pre.validUntil with
@@ -228,10 +166,6 @@ theorem step_sound
       simp [step?] at h_step
       rcases h_step with ⟨⟨h_state, h_admission, h_int⟩, h_post⟩
       exact Transition.interrupt_processing h_state h_admission h_int h_post.symm
-  | interruptInputRequired =>
-      simp [step?] at h_step
-      rcases h_step with ⟨⟨h_state, h_admission, h_int⟩, h_post⟩
-      exact Transition.interrupt_input_required h_state h_admission h_int h_post.symm
 
 theorem transition_complete
     {pre post : RequestContext}
@@ -246,22 +180,12 @@ theorem transition_complete
       exact ⟨.beginInference, by simp [step?, h_state, h_admission, h_post]⟩
   | advance h_state h_admission h_post =>
       exact ⟨.advance, by simp [step?, h_state, h_admission, h_post]⟩
-  | need_input h_state h_admission h_post =>
-      exact ⟨.needInput, by simp [step?, h_state, h_admission, h_post]⟩
-  | input_received h_state h_admission h_post =>
-      exact ⟨.inputReceived, by simp [step?, h_state, h_admission, h_post]⟩
   | finish h_state h_admission h_post =>
       exact ⟨.finish, by simp [step?, h_state, h_admission, h_post]⟩
   | fail h_state h_admission h_post =>
       exact ⟨.fail, by simp [step?, h_state, h_admission, h_post]⟩
   | fail_before_stream h_state h_admission h_post =>
       exact ⟨.failBeforeStream, by simp [step?, h_state, h_admission, h_post]⟩
-  | input_timeout h_state h_admission h_deadline h_post =>
-      exact ⟨.inputTimeout, by simp [step?, h_state, h_admission, h_deadline, h_post]⟩
-  | exhaust h_state h_reason h_post =>
-      exact ⟨.exhaust, by simp [step?, h_state, h_reason, h_post]⟩
-  | deadline_expire h_state h_admission h_deadline h_post =>
-      exact ⟨.deadlineExpire, by simp [step?, h_state, h_admission, h_deadline, h_post]⟩
   | expire h_state h_admission h_valid h_time h_post =>
       refine ⟨.expire, ?_⟩
       simp only [step?]
@@ -273,8 +197,6 @@ theorem transition_complete
       exact ⟨.interruptClaimed, by simp [step?, h_state, h_admission, h_int, h_post]⟩
   | interrupt_processing h_state h_admission h_int h_post =>
       exact ⟨.interruptProcessing, by simp [step?, h_state, h_admission, h_int, h_post]⟩
-  | interrupt_input_required h_state h_admission h_int h_post =>
-      exact ⟨.interruptInputRequired, by simp [step?, h_state, h_admission, h_int, h_post]⟩
 
 theorem replay_sound
     {pre post : RequestContext}

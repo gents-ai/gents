@@ -11,7 +11,7 @@ Equivalence between terminal client views and effectively terminal request/respo
     The client view is terminal iff the server request is effectively
     terminal. "Effectively terminal" means:
     - The request is superseded (isSuperseded = true), OR
-    - The lifecycle state is terminal (completed/failed/superseded/dead), OR
+    - The lifecycle state is terminal (completed/failed/superseded/dead/interrupted), OR
     - The response status is terminal (complete/error)
 
     The third disjunct captures replication-lag tolerance: when the

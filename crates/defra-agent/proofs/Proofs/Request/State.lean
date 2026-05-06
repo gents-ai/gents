@@ -5,10 +5,13 @@ import Proofs.Scheduling
 /-!
 # Request State
 
-State vocabulary and per-request context shared by the relational and executable request semantics.
+State vocabulary and per-request context shared by the relational and executable
+request semantics. The persisted vocabulary includes `inputRequired` for
+protocol compatibility, but the current core transition machine treats it as a
+reserved non-terminal state rather than a state Rust emits today.
 -/
 
-/-- The 9 states of the request lifecycle. -/
+/-- The 9 persisted states of the request lifecycle. -/
 inductive RequestState where
   | pending
   | claimed

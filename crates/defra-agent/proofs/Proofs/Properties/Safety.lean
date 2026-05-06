@@ -86,12 +86,6 @@ theorem terminal_irreversibility
   | advance h_pre _ _ =>
     rw [h_pre] at h_terminal
     exact (processing_not_terminal h_terminal).elim
-  | need_input h_pre _ _ =>
-    rw [h_pre] at h_terminal
-    exact (processing_not_terminal h_terminal).elim
-  | input_received h_pre _ _ =>
-    rw [h_pre] at h_terminal
-    exact (inputRequired_not_terminal h_terminal).elim
   | finish h_pre _ _ =>
     rw [h_pre] at h_terminal
     exact (processing_not_terminal h_terminal).elim
@@ -101,15 +95,6 @@ theorem terminal_irreversibility
   | fail_before_stream h_pre _ _ =>
     rw [h_pre] at h_terminal
     exact (claimed_not_terminal h_terminal).elim
-  | input_timeout h_pre _ _ _ =>
-    rw [h_pre] at h_terminal
-    exact (inputRequired_not_terminal h_terminal).elim
-  | exhaust h_pre _ h_post =>
-    rw [h_post]
-    exact Or.inr (Or.inr (Or.inr (Or.inl rfl)))
-  | deadline_expire h_pre _ _ h_post =>
-    rw [h_pre] at h_terminal
-    exact (processing_not_terminal h_terminal).elim
   | expire h_pre _ _ _ h_post =>
     rw [h_pre] at h_terminal
     exact (pending_not_terminal h_terminal).elim
@@ -122,9 +107,6 @@ theorem terminal_irreversibility
   | interrupt_processing h_pre _ _ _ =>
     rw [h_pre] at h_terminal
     exact (processing_not_terminal h_terminal).elim
-  | interrupt_input_required h_pre _ _ _ =>
-    rw [h_pre] at h_terminal
-    exact (inputRequired_not_terminal h_terminal).elim
 
 theorem progress_monotonic
     {pre post : RequestContext}
@@ -139,21 +121,11 @@ theorem progress_monotonic
     simp [h_post]
   | advance _ _ h_post =>
     simp [h_post]
-  | need_input _ _ h_post =>
-    simp [h_post]
-  | input_received _ _ h_post =>
-    simp [h_post]
   | finish _ _ h_post =>
     simp [h_post]
   | fail _ _ h_post =>
     simp [h_post]
   | fail_before_stream _ _ h_post =>
-    simp [h_post]
-  | input_timeout _ _ _ h_post =>
-    simp [h_post]
-  | exhaust _ _ h_post =>
-    simp [h_post]
-  | deadline_expire _ _ _ h_post =>
     simp [h_post]
   | expire _ _ _ _ h_post =>
     simp [h_post]
@@ -162,8 +134,6 @@ theorem progress_monotonic
   | interrupt_claimed _ _ _ h_post =>
     simp [h_post]
   | interrupt_processing _ _ _ h_post =>
-    simp [h_post]
-  | interrupt_input_required _ _ _ h_post =>
     simp [h_post]
 
 theorem completed_not_deadline_expired
@@ -182,19 +152,9 @@ theorem completed_not_deadline_expired
     simp [h_post] at h_completed
   | advance h_pre _ h_post =>
     exact h_pre
-  | need_input _ _ h_post =>
-    simp [h_post] at h_completed
-  | input_received _ _ h_post =>
-    simp [h_post] at h_completed
   | fail _ _ h_post =>
     simp [h_post] at h_completed
   | fail_before_stream _ _ h_post =>
-    simp [h_post] at h_completed
-  | input_timeout _ _ _ h_post =>
-    simp [h_post] at h_completed
-  | exhaust _ _ h_post =>
-    simp [h_post] at h_completed
-  | deadline_expire _ _ _ h_post =>
     simp [h_post] at h_completed
   | expire _ _ _ _ h_post =>
     simp [h_post] at h_completed
@@ -203,8 +163,6 @@ theorem completed_not_deadline_expired
   | interrupt_claimed _ _ _ h_post =>
     simp [h_post] at h_completed
   | interrupt_processing _ _ _ h_post =>
-    simp [h_post] at h_completed
-  | interrupt_input_required _ _ _ h_post =>
     simp [h_post] at h_completed
 
 theorem recovery_blocks_claims
@@ -252,19 +210,9 @@ theorem persistence_before_completion
     simp [h_post] at h_completed
   | advance h_pre _ h_post =>
     simp [h_post, h_pre] at h_completed
-  | need_input _ _ h_post =>
-    simp [h_post] at h_completed
-  | input_received _ _ h_post =>
-    simp [h_post] at h_completed
   | fail _ _ h_post =>
     simp [h_post] at h_completed
   | fail_before_stream _ _ h_post =>
-    simp [h_post] at h_completed
-  | input_timeout _ _ _ h_post =>
-    simp [h_post] at h_completed
-  | exhaust _ _ h_post =>
-    simp [h_post] at h_completed
-  | deadline_expire _ _ _ h_post =>
     simp [h_post] at h_completed
   | expire _ _ _ _ h_post =>
     simp [h_post] at h_completed
@@ -273,8 +221,6 @@ theorem persistence_before_completion
   | interrupt_claimed _ _ _ h_post =>
     simp [h_post] at h_completed
   | interrupt_processing _ _ _ h_post =>
-    simp [h_post] at h_completed
-  | interrupt_input_required _ _ _ h_post =>
     simp [h_post] at h_completed
 
 theorem deadline_structural_bound

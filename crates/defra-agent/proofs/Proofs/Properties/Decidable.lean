@@ -44,18 +44,27 @@ instance : Fintype AdmissionState :=
     [.released, .waiting, .acquired, .executing]
     (fun s => by cases s <;> simp)
 
-theorem request_no_deadlocks (s : RequestState) (h : ¬isTerminal s) :
+/-- Current-product non-terminal request states have at least one distinct
+    successor state. Reserved vocabulary such as `inputRequired` is intentionally
+    excluded because the Rust product does not emit it today. -/
+def activeCoreRequestState : RequestState → Prop
+  | .pending => True
+  | .claimed => True
+  | .processing => True
+  | _ => False
+
+theorem active_request_no_deadlocks (s : RequestState) (h : activeCoreRequestState s) :
     ∃ s' : RequestState, s ≠ s' := by
   cases s with
   | pending => exact ⟨.claimed, by decide⟩
   | claimed => exact ⟨.processing, by decide⟩
   | processing => exact ⟨.completed, by decide⟩
-  | inputRequired => exact ⟨.processing, by decide⟩
-  | completed => exact absurd (Or.inl rfl) h
-  | failed => exact absurd (Or.inr (Or.inl rfl)) h
-  | superseded => exact absurd (Or.inr (Or.inr (Or.inl rfl))) h
-  | dead => exact absurd (Or.inr (Or.inr (Or.inr (Or.inl rfl)))) h
-  | interrupted => exact absurd (Or.inr (Or.inr (Or.inr (Or.inr rfl)))) h
+  | inputRequired => cases h
+  | completed => cases h
+  | failed => cases h
+  | superseded => cases h
+  | dead => cases h
+  | interrupted => cases h
 
 theorem process_no_deadlocks (s : ProcessState) (h : ¬isTerminal s) :
     ∃ s' : ProcessState, s ≠ s' := by

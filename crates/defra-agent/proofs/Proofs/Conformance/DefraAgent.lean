@@ -17,8 +17,12 @@ These are implementation-local states. The persisted DefraDB request view now
 carries the lifecycle refinement via `AgentRequest.lifecycle_state`; call-level
 admission state lives on `InferenceCall`.
 
-Ideal model states:
+Lean persisted vocabulary:
   pending, claimed, processing, inputRequired, completed, failed, superseded, dead, interrupted
+
+`inputRequired` is reserved vocabulary only in the current product: Rust parses
+and preserves the string for client/protocol parity, but the core request
+transition machine has no writer path into that state today.
 -/
 
 /-- defra-agent's local lifecycle states (from lifecycle.rs). -/

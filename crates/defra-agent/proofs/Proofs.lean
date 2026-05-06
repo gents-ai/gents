@@ -17,6 +17,7 @@ import Proofs.Properties.Liveness
 import Proofs.Properties.SchedulingSafety
 import Proofs.Properties.SchedulingLiveness
 import Proofs.Conformance.DefraAgent
+import Proofs.Conformance.Boundaries
 import Proofs.Conformance.Deviations
 import Proofs.Conformance.SchedulerConformance
 import Proofs.ApplyReconcile

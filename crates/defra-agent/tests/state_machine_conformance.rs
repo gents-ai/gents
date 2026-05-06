@@ -1308,10 +1308,10 @@ async fn processing_interrupted_preserves_partial_response() {
 
 #[tokio::test]
 async fn input_required_interrupted() {
-    // Simulates an interrupt arriving while the request is parked in inputRequired.
-    // The lifecycle enum has an InputRequired state but no public transition helper
-    // yet, so we set the DB lifecycle_state directly and rely on the _nin filter in
-    // `transition_to_interrupted` to allow the move.
+    // Simulates an interrupt arriving for a reserved `inputRequired` row. The
+    // current product preserves this vocabulary for protocol parity but does
+    // not emit it, so this test sets the DB lifecycle_state directly and relies
+    // on the _nin filter in `transition_to_interrupted` to allow the move.
     let db = test_db("input-required-interrupted").await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();

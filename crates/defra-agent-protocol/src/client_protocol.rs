@@ -46,6 +46,10 @@ impl ClientTurnState {
 }
 
 /// Persisted request lifecycle state, distinct from request `status`.
+///
+/// `InputRequired` is reserved protocol vocabulary. The current agent runtime
+/// parses it for forward compatibility but does not emit it as an active
+/// lifecycle transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestLifecycleState {
     Pending,

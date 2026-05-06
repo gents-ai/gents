@@ -7,7 +7,8 @@ state machines explicit enough that:
 
 - lifecycle invariants are written down once
 - Rust changes can be checked against an executable model
-- failure modes are documented as deviations instead of hiding in code paths
+- unresolved Rust/spec mismatches are isolated as deviations, while intentional
+  product boundaries are documented explicitly
 
 The proofs are strongest where the runtime is a state machine:
 
@@ -99,7 +100,8 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Properties/SchedulingLiveness.lean` | Scheduler/fleet liveness properties |
 | `Proofs/Properties/Decidable.lean` | Finite-state exhaustive checks |
 | `Proofs/Conformance/DefraAgent.lean` | Mapping from Lean state to Rust/DefraDB state |
-| `Proofs/Conformance/Deviations.lean` | Classified conformance boundaries between ideal model and implementation |
+| `Proofs/Conformance/Boundaries.lean` | Intentional product policies and external assumptions at the Rust/Lean boundary |
+| `Proofs/Conformance/Deviations.lean` | Active unresolved Rust/spec mismatches; currently empty |
 | `Proofs/Conformance/SchedulerConformance.lean` | Scheduler-specific conformance notes |
 | `Proofs/Conformance/Triggers.lean` | Barrel for trigger lifecycle/materialization conformance |
 
@@ -162,6 +164,9 @@ Operational meaning:
 - `processing` is actively executing
 - `inputRequired` is reserved for a blocked external-input cycle; current Rust
   runtime code does not emit it because autonomous tool calls run inline
+- `dead` is persisted only for stale pre-claim TTL expiry; post-claim provider
+  failure, retry exhaustion, tool failure, and deadline expiry are terminal
+  `failed`
 - `interrupted` models operator cancellation and releases admission
 - terminal states are `completed`, `failed`, `superseded`, `dead`, and `interrupted`
 
@@ -228,13 +233,15 @@ requires `ttlOpen` before claim (`claim_requires_ttl_open`,
 request deadline to remain open (`reissue_source_deadline_open`,
 `reissue_latest_deadline_open`). Rust mirrors this by converting stale
 pre-claim requests to `dead/Stale` and by bounding inference retry sleeps and
-stream waits by the claimed deadline.
+stream waits by the claimed deadline. Once work is claimed, retry exhaustion
+and deadline expiry remain ordinary terminal `failed` outcomes rather than
+being reclassified as `dead`.
 
 ### Request/Process Liveness
 
 | ID | Property | Why it matters | Theorem |
 |----|----------|----------------|---------|
-| L1 | Real phase changes decrease a termination measure | The model rules out endless phase churn that never gets closer to terminal state | `phase_change_decreases_measure` |
+| L1 | Real current-product phase changes decrease a termination measure | The model rules out endless phase churn that never gets closer to terminal state | `phase_change_decreases_measure` |
 | L2 | Claimed work has a constructive path to terminal state | A claimed request is not modeled as stuck forever before inference begins | `claimed_eventually_terminal` |
 | L3 | Recovery converges | A finite set of stuck requests can be driven to terminal outcomes in finite steps | `recovery_convergence` |
 
@@ -365,6 +372,7 @@ The main conformance files are:
 - `crates/defra-agent-protocol/src/client_protocol/tests.rs`
 - `crates/defra-agent-cli/src/desired_state/tests.rs`
 - `Proofs/Conformance/DefraAgent.lean`
+- `Proofs/Conformance/Boundaries.lean`
 - `Proofs/Conformance/SchedulerConformance.lean`
 - `Proofs/Conformance/Triggers.lean`
 - `Proofs/Conformance/Deviations.lean`
@@ -379,7 +387,8 @@ terminal reasons.
 
 The finite-state checks currently establish:
 
-- every non-terminal request state has at least one successor
+- every active current-product non-terminal request state has at least one
+  successor; reserved `inputRequired` remains vocabulary-only
 - every non-terminal process state has at least one successor
 - every non-terminal persistence state has at least one successor
 - every non-terminal inference-call state has at least one successor
@@ -390,31 +399,28 @@ The finite-state checks currently establish:
 These checks are useful because they catch structural model regressions quickly,
 even before theorem-level reasoning matters.
 
-## Current Deviations
+## Boundaries And Deviations
 
-`Proofs/Conformance/Deviations.lean` classifies every boundary explicitly as
-`Closed`, `Model adjusted`, `Intentional design choice`,
-`External/operational boundary`, or `Unresolved implementation gap`.
+`Proofs/Conformance/Boundaries.lean` records intentional product policies,
+reserved vocabulary, closed historical items, and external assumptions. These
+are not deviations.
 
-Current classifications:
+Current boundaries:
 
-- `Closed`: recovering process state, deadline/TTL-bounded claim and retry
-  behavior, and inference-call cancellation coverage
-- `Model adjusted`: aggregate `FleetState` slot counts are reconstructed from
-  `InferenceCall.call_state = "running"` rows rather than persisted as one
-  document
-- `Intentional design choice`: `dead` is persisted for stale pre-claim TTL
-  expiry while provider/retry exhaustion remains terminal `failed`;
-  `inputRequired` is reserved protocol vocabulary until an approval feature
-  exists; tool failures are permanent until tools expose retry-safe
-  health/idempotency metadata
-- `External/operational boundary`: persistence lifecycle proofs abstract over
-  DefraDB durable-write behavior instead of claiming a persisted
-  `PersistenceState` row exists
+- `inputRequired` is reserved persisted/client vocabulary. Rust parses it and
+  treats it as non-terminal if observed, but the runtime does not emit it today.
+- `dead` is current product behavior only for stale pre-claim TTL expiry.
+  Post-claim provider failure, retry exhaustion, tool failure, and deadline
+  expiry remain terminal `failed`.
+- Tool failures are permanent until tools expose retry-safe health,
+  idempotency, and side-effect metadata.
+- Fleet aggregate slot state is reconstructed from `InferenceCall` rows rather
+  than persisted as a single `FleetState` document.
+- `PersistenceState` is a proof abstraction over durable writes; DefraDB
+  successful-mutation durability is an external storage assumption.
 
-That file should stay honest. If the implementation diverges from the model,
-the deviation should be named and classified there instead of silently
-tolerated.
+`Proofs/Conformance/Deviations.lean` is now reserved only for real unresolved
+Rust/spec mismatches. There are currently no known active spec deviations.
 
 ## Known Limitations
 

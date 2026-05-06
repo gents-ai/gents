@@ -299,18 +299,27 @@ fn request_lifecycle_state_rejects_response_status_strings() {
 
 // ── Monotonicity spot checks (T2) ───────────────────────────────
 
-/// All valid server lifecycle transition pairs and their expected
-/// rank relationship.
+/// Current-product server lifecycle transition pairs and their expected rank
+/// relationship. `inputRequired` is intentionally absent here: it is reserved
+/// persisted/client vocabulary, not a state the runtime emits today.
 const LIFECYCLE_TRANSITIONS: &[(&str, &str)] = &[
-    ("pending", "claimed"),      // claim
-    ("pending", "superseded"),   // dedup_lose
-    ("claimed", "processing"),   // begin_inference
-    ("processing", "completed"), // finish
-    ("processing", "failed"),    // fail
-    ("claimed", "failed"),       // fail_before_stream
-    ("processing", "dead"),      // deadline_expire
-    ("failed", "dead"),          // exhaust
+    ("pending", "claimed"),        // claim
+    ("pending", "superseded"),     // dedup_lose
+    ("claimed", "processing"),     // begin_inference
+    ("processing", "processing"),  // advance
+    ("processing", "completed"),   // finish
+    ("processing", "failed"),      // fail
+    ("claimed", "failed"),         // fail_before_stream
+    ("pending", "dead"),           // expire stale pre-claim TTL
+    ("pending", "interrupted"),    // interrupt_before_claim
+    ("claimed", "interrupted"),    // interrupt_claimed
+    ("processing", "interrupted"), // interrupt_processing
 ];
+
+#[test]
+fn lifecycle_transition_pair_count_matches_current_product_model() {
+    assert_eq!(LIFECYCLE_TRANSITIONS.len(), 11);
+}
 
 #[test]
 fn monotonicity_no_response() {

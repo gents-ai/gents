@@ -72,8 +72,8 @@ These override any response because terminal lifecycle states are irreversible.
 ### 3. Non-Terminal Lifecycle Plus Response
 
 If the request is in a non-terminal state (`pending`, `claimed`, `processing`,
-`inputRequired`), the response may be more current than the request under P2P
-replication lag. Trust the response.
+or reserved `inputRequired`), the response may be more current than the request
+under P2P replication lag. Trust the response.
 
 | `AgentResponse.status` | Client state |
 |---|---|
@@ -89,18 +89,18 @@ In Rust, `lifecycle_state` is parsed into the closed
 `RequestLifecycleState` enum before derivation so persisted request lifecycle
 values cannot be confused with request or response `status` strings.
 
-## Implementation Deviations Inherited From The Server Model
+## Reserved Vocabulary And Boundaries
 
-See `Proofs/Conformance/Deviations.lean` for the server-side gaps that affect
-what clients may observe.
+See `Proofs/Conformance/Boundaries.lean` for server-side product boundaries.
+`Proofs/Conformance/Deviations.lean` is only for active unresolved mismatches
+and currently has none.
 
 | Server state | Client mapping | Note |
 |---|---|---|
-| `inputRequired` | `waitingForClaim` unless a response exists | The ideal model has `inputRequired`, but Rust does not yet expose a first-class human-input flow |
-| `dead` | `failed` | Rust currently persists retry exhaustion as failure-shaped state; clients can derive exhaustion externally |
+| `inputRequired` | `waitingForClaim` unless a response exists | Reserved protocol vocabulary. Rust parses it for compatibility but does not emit it today. |
+| `dead` | `failed` | Real persisted state for stale pre-claim TTL expiry. Post-claim provider failure, retry exhaustion, tool failure, and deadline expiry remain `failed`. |
 
-`interrupted` is no longer a client-doc gap: both Lean and Rust model it as a
-terminal client state.
+`interrupted` is a terminal client state in both Lean and Rust.
 
 ## Stall Detection
 
@@ -204,7 +204,7 @@ on an already normalized attempt list.
 | Property | Statement |
 |---|---|
 | T1 Merge assumption | Equivalent merged observations are expected to converge before derivation; Lean records only `deriveTurn` determinism |
-| T2 Monotonicity | Valid server transitions never decrease client rank |
+| T2 Monotonicity | The 11 current-product server lifecycle state pairs never decrease client rank; `inputRequired` is vocabulary-only and not an active transition pair |
 | T3 Terminal coherence | Client terminal iff the server observation is effectively terminal |
 | T4 Totality | Defined for every observation with at least one attempt |
 | T5 Turn replacement | Chain extension derives from the new tip; supersession is monotonic; retry restart is the one allowed rank decrease |

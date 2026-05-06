@@ -70,24 +70,18 @@ def LifecycleTransition : RequestState → RequestState → Prop
   | .pending,        .superseded      => True  -- dedup_lose
   | .claimed,        .processing      => True  -- begin_inference
   | .processing,     .processing      => True  -- advance (progressSeq++)
-  | .processing,     .inputRequired   => True  -- need_input
-  | .inputRequired,  .processing      => True  -- input_received
   | .processing,     .completed       => True  -- finish
   | .processing,     .failed          => True  -- fail
   | .claimed,        .failed          => True  -- fail_before_stream
-  | .inputRequired,  .failed          => True  -- input_timeout
-  | .failed,         .dead            => True  -- exhaust
-  | .processing,     .dead            => True  -- deadline_expire
   | .pending,        .dead            => True  -- expire (TTL)
   | .pending,        .interrupted     => True  -- interrupt_before_claim
   | .claimed,        .interrupted     => True  -- interrupt_claimed
   | .processing,     .interrupted     => True  -- interrupt_processing
-  | .inputRequired,  .interrupted     => True  -- interrupt_input_required
   | _,               _                => False
 
 /-- Project RequestContext.Transition to a LifecycleTransition at the state level.
 
-    Every server transition induces exactly one of the 17 pre/post state pairs
+    Every server transition induces exactly one of the 11 pre/post state pairs
     enumerated in LifecycleTransition. -/
 theorem transition_implies_lifecycle
     {pre post : RequestContext}
@@ -102,21 +96,11 @@ theorem transition_implies_lifecycle
     subst h_post; simp [LifecycleTransition, h_state]
   | advance h_state _ h_post =>
     subst h_post; simp [LifecycleTransition, h_state]
-  | need_input h_state _ h_post =>
-    subst h_post; simp [LifecycleTransition, h_state]
-  | input_received h_state _ h_post =>
-    subst h_post; simp [LifecycleTransition, h_state]
   | finish h_state _ h_post =>
     subst h_post; simp [LifecycleTransition, h_state]
   | fail h_state _ h_post =>
     subst h_post; simp [LifecycleTransition, h_state]
   | fail_before_stream h_state _ h_post =>
-    subst h_post; simp [LifecycleTransition, h_state]
-  | input_timeout h_state _ _ h_post =>
-    subst h_post; simp [LifecycleTransition, h_state]
-  | exhaust h_state _ h_post =>
-    subst h_post; simp [LifecycleTransition, h_state]
-  | deadline_expire h_state _ _ h_post =>
     subst h_post; simp [LifecycleTransition, h_state]
   | expire h_state _ _ _ h_post =>
     subst h_post; simp [LifecycleTransition, h_state]
@@ -126,40 +110,26 @@ theorem transition_implies_lifecycle
     subst h_post; simp [LifecycleTransition, h_state]
   | interrupt_processing h_state _ _ h_post =>
     subst h_post; simp [LifecycleTransition, h_state]
-  | interrupt_input_required h_state _ _ h_post =>
-    subst h_post; simp [LifecycleTransition, h_state]
 
 /-- T2: A valid server lifecycle state transition never decreases the client rank
     when the response and supersession flag are held fixed.
 
-    Structured as an explicit 17-arm case analysis matching the constructors of
-    `LifecycleTransition`, in the same style as `transition_implies_lifecycle`
-    above and the `Transition` case-splits in `Request.lean`. The 64 invalid
-    `(pre_state, post_state)` combinations are discharged up front by reducing
-    `h_trans` to `False`; the 17 valid arms are then closed one at a time.
-
-    Writing each arm explicitly keeps future breakage (changes to
-    `deriveAttempt` or `LifecycleTransition`) localized to a specific arm
-    rather than surfacing as a confusing failure inside an `all_goals` block.
-
-    The 17 valid (pre_state, post_state) pairs:
+    The 11 valid current-product (pre_state, post_state) pairs:
       pending → claimed (claim): rank 0→0 (both non-terminal, response-driven)
       pending → superseded (dedup_lose): rank 0→2
       claimed → processing (begin_inference): rank 0→0 (both non-terminal)
       processing → processing (advance): identity (0→0 or 1→1)
-      processing → inputRequired (need_input): rank 0→0 (both non-terminal)
-      inputRequired → processing (input_received): rank 0→0 (both non-terminal)
       processing → completed (finish): rank ≤1 → 2
       processing → failed (fail): rank ≤1 → 2
       claimed → failed (fail_before_stream): rank 0→2
-      inputRequired → failed (input_timeout): rank ≤1 → 2
-      failed → dead (exhaust): rank 2→2 (dead maps to .failed)
-      processing → dead (deadline_expire): rank ≤1 → 2
       pending → dead (expire): rank 0→2
       pending → interrupted (interrupt_before_claim): rank 0→2
       claimed → interrupted (interrupt_claimed): rank 0→2
       processing → interrupted (interrupt_processing): rank ≤1→2
-      inputRequired → interrupted (interrupt_input_required): rank ≤1→2
+
+    `inputRequired` remains valid persisted vocabulary but has no current
+    product transition in `LifecycleTransition`; clients still parse it and
+    derive a non-terminal view if they encounter a reserved row.
 -/
 theorem lifecycle_transition_monotonic
     {pre_state post_state : RequestState}
@@ -168,144 +138,9 @@ theorem lifecycle_transition_monotonic
     (resp : Option ResponseSnapshot) :
     (deriveAttempt ⟨⟨post_state, isSuperseded⟩, resp⟩).rank ≥
     (deriveAttempt ⟨⟨pre_state, isSuperseded⟩, resp⟩).rank := by
-  -- First dispose of the 64 invalid `(pre_state, post_state)` combinations
-  -- by reducing `h_trans` to `False`. The 17 valid arms remain as named
-  -- cases and are closed one by one below. Each arm uses the same tactic
-  -- shape — split on `isSuperseded`, then on `resp` (and if `resp = some r`,
-  -- on `r.status`) — but written explicitly so that future changes to
-  -- `deriveAttempt` or `LifecycleTransition` produce a localized failure
-  -- at the specific arm, not a confusing `all_goals` error.
   cases pre_state <;> cases post_state <;>
     try (simp [LifecycleTransition] at h_trans)
-  case pending.claimed =>
-    cases isSuperseded
-    · cases resp with
-      | none => simp [deriveAttempt, ClientTurnState.rank]
-      | some r =>
-        obtain ⟨status⟩ := r
-        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
-    · simp [deriveAttempt, ClientTurnState.rank]
-  case pending.superseded =>
-    cases isSuperseded
-    · cases resp with
-      | none => simp [deriveAttempt, ClientTurnState.rank]
-      | some r =>
-        obtain ⟨status⟩ := r
-        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
-    · simp [deriveAttempt, ClientTurnState.rank]
-  case claimed.processing =>
-    cases isSuperseded
-    · cases resp with
-      | none => simp [deriveAttempt, ClientTurnState.rank]
-      | some r =>
-        obtain ⟨status⟩ := r
-        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
-    · simp [deriveAttempt, ClientTurnState.rank]
-  case claimed.failed =>
-    cases isSuperseded
-    · cases resp with
-      | none => simp [deriveAttempt, ClientTurnState.rank]
-      | some r =>
-        obtain ⟨status⟩ := r
-        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
-    · simp [deriveAttempt, ClientTurnState.rank]
-  case processing.processing =>
-    cases isSuperseded
-    · cases resp with
-      | none => simp [deriveAttempt, ClientTurnState.rank]
-      | some r =>
-        obtain ⟨status⟩ := r
-        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
-    · simp [deriveAttempt, ClientTurnState.rank]
-  case processing.inputRequired =>
-    cases isSuperseded
-    · cases resp with
-      | none => simp [deriveAttempt, ClientTurnState.rank]
-      | some r =>
-        obtain ⟨status⟩ := r
-        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
-    · simp [deriveAttempt, ClientTurnState.rank]
-  case processing.completed =>
-    cases isSuperseded
-    · cases resp with
-      | none => simp [deriveAttempt, ClientTurnState.rank]
-      | some r =>
-        obtain ⟨status⟩ := r
-        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
-    · simp [deriveAttempt, ClientTurnState.rank]
-  case processing.failed =>
-    cases isSuperseded
-    · cases resp with
-      | none => simp [deriveAttempt, ClientTurnState.rank]
-      | some r =>
-        obtain ⟨status⟩ := r
-        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
-    · simp [deriveAttempt, ClientTurnState.rank]
-  case processing.dead =>
-    cases isSuperseded
-    · cases resp with
-      | none => simp [deriveAttempt, ClientTurnState.rank]
-      | some r =>
-        obtain ⟨status⟩ := r
-        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
-    · simp [deriveAttempt, ClientTurnState.rank]
-  case inputRequired.processing =>
-    cases isSuperseded
-    · cases resp with
-      | none => simp [deriveAttempt, ClientTurnState.rank]
-      | some r =>
-        obtain ⟨status⟩ := r
-        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
-    · simp [deriveAttempt, ClientTurnState.rank]
-  case inputRequired.failed =>
-    cases isSuperseded
-    · cases resp with
-      | none => simp [deriveAttempt, ClientTurnState.rank]
-      | some r =>
-        obtain ⟨status⟩ := r
-        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
-    · simp [deriveAttempt, ClientTurnState.rank]
-  case failed.dead =>
-    cases isSuperseded
-    · cases resp with
-      | none => simp [deriveAttempt, ClientTurnState.rank]
-      | some r =>
-        obtain ⟨status⟩ := r
-        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
-    · simp [deriveAttempt, ClientTurnState.rank]
-  case pending.dead =>
-    cases isSuperseded
-    · cases resp with
-      | none => simp [deriveAttempt, ClientTurnState.rank]
-      | some r =>
-        obtain ⟨status⟩ := r
-        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
-    · simp [deriveAttempt, ClientTurnState.rank]
-  case pending.interrupted =>
-    cases isSuperseded
-    · cases resp with
-      | none => simp [deriveAttempt, ClientTurnState.rank]
-      | some r =>
-        obtain ⟨status⟩ := r
-        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
-    · simp [deriveAttempt, ClientTurnState.rank]
-  case claimed.interrupted =>
-    cases isSuperseded
-    · cases resp with
-      | none => simp [deriveAttempt, ClientTurnState.rank]
-      | some r =>
-        obtain ⟨status⟩ := r
-        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
-    · simp [deriveAttempt, ClientTurnState.rank]
-  case processing.interrupted =>
-    cases isSuperseded
-    · cases resp with
-      | none => simp [deriveAttempt, ClientTurnState.rank]
-      | some r =>
-        obtain ⟨status⟩ := r
-        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
-    · simp [deriveAttempt, ClientTurnState.rank]
-  case inputRequired.interrupted =>
+  all_goals
     cases isSuperseded
     · cases resp with
       | none => simp [deriveAttempt, ClientTurnState.rank]

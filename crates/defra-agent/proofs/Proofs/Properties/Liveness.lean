@@ -12,7 +12,7 @@ Liveness modeled as constructive reachability to terminal states.
 def terminationMeasure (r : RequestContext) : Nat :=
   match r.state with
   | .completed => 0
-  | .failed => (r.maxRetries - r.retryCount) + 1
+  | .failed => 0
   | .superseded => 0
   | .dead => 0
   | .interrupted => 0
@@ -24,9 +24,7 @@ def terminationMeasure (r : RequestContext) : Nat :=
 theorem phase_change_decreases_measure
     {pre post : RequestContext}
     (h_trans : RequestContext.Transition pre post)
-    (h_phase_change : pre.state ≠ post.state)
-    (h_not_input_cycle : ¬(pre.state = .processing ∧ post.state = .inputRequired) ∧
-                         ¬(pre.state = .inputRequired ∧ post.state = .processing)) :
+    (h_phase_change : pre.state ≠ post.state) :
     terminationMeasure post < terminationMeasure pre := by
   cases h_trans with
   | claim h_pre _ _ h_post =>
@@ -42,10 +40,6 @@ theorem phase_change_decreases_measure
   | advance h_pre _ h_post =>
     rw [h_post] at h_phase_change
     exact (h_phase_change rfl).elim
-  | need_input h_pre _ h_post =>
-    exact absurd ⟨h_pre, by rw [h_post]⟩ h_not_input_cycle.1
-  | input_received h_pre _ h_post =>
-    exact absurd ⟨h_pre, by rw [h_post]⟩ h_not_input_cycle.2
   | finish h_pre _ h_post =>
     rw [h_post]
     simp [terminationMeasure, h_pre]
@@ -53,16 +47,6 @@ theorem phase_change_decreases_measure
     rw [h_post]
     simp [terminationMeasure, h_pre]
   | fail_before_stream h_pre _ h_post =>
-    rw [h_post]
-    simp [terminationMeasure, h_pre]
-    omega
-  | input_timeout h_pre _ _ h_post =>
-    rw [h_post]
-    simp [terminationMeasure, h_pre]
-  | exhaust h_pre _ h_post =>
-    rw [h_post]
-    simp [terminationMeasure, h_pre]
-  | deadline_expire h_pre _ _ h_post =>
     rw [h_post]
     simp [terminationMeasure, h_pre]
   | expire h_pre _ _ _ h_post =>
@@ -75,9 +59,6 @@ theorem phase_change_decreases_measure
     rw [h_post]
     simp [terminationMeasure, h_pre]
   | interrupt_processing h_pre _ _ h_post =>
-    rw [h_post]
-    simp [terminationMeasure, h_pre]
-  | interrupt_input_required h_pre _ _ h_post =>
     rw [h_post]
     simp [terminationMeasure, h_pre]
 

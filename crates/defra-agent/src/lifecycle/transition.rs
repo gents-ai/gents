@@ -166,7 +166,9 @@ impl RequestLifecycle {
         Ok(())
     }
 
-    /// Mark a claimed/processing/inputRequired request as interrupted.
+    /// Mark a non-terminal request as interrupted. This includes reserved
+    /// `inputRequired` rows if one already exists, but the runtime does not
+    /// currently emit `inputRequired` itself.
     /// Writes `lifecycle_state="interrupted"` and `status="interrupted"` and
     /// sets the in-memory state. Idempotent via the `_nin` filter on terminal
     /// statuses: if the row is already terminal (completed/interrupted/dead/
