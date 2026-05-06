@@ -157,24 +157,19 @@ currently covers:
 - `Process`
 - `Persistence.failClosed`
 - `Persistence.failOpen`
+- `RuntimeReconcile`
 - `SessionRecovery`
 - `InferenceCall`
 
-The current `SessionRecovery` contract is intentionally narrow: it covers the
-executable failed-latest-request reissue witness (`failed -> pending`) rather
-than the whole request lifecycle vocabulary. Widen this contract when the
-session-recovery executable model grows enough finite witnesses to represent the
-larger space directly.
+`RuntimeReconcile` and `SessionRecovery` also emit deterministic witness rows.
+Those rows keep the JSON small while pinning generation publication/router
+observation/request admission, and session retry guards for deadline closure,
+retry budget, latest-request status, and identity preservation.
 
 When a Lean vocabulary, terminal partition, action, or legal transition changes,
 the generated JSON changes on the next Rust test run. The Rust tests then fail
 unless the runtime behavior or the documented product-boundary assertions are
 updated to match.
-
-`RuntimeReconcile` is intentionally exposed only as a follow-up hook in the JSON
-so this extraction stays scoped to the initial executable domains above. Add it
-to `Proofs/Conformance/Contracts.lean` as another `StateMachineContract` when
-the runtime-reconcile contract is ready to join the Rust conformance gate.
 
 ## Core Model
 

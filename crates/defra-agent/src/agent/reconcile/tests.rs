@@ -11,6 +11,7 @@ use crate::config::BehaviorConfig;
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
 use crate::identity::KeyIdentity;
+use crate::lean_vocab_test::lean_runtime_reconcile_case;
 use crate::runtime_status::RuntimeStatusHandle;
 use crate::tool_surface::{
     BehaviorToolConfig, FileToolMode, ToolCeiling, ToolSelection, ToolSurface,
@@ -86,6 +87,9 @@ async fn fetch_runtime_status(
 
 #[tokio::test]
 async fn generation_supervisor_rotates_dispatcher_on_behavior_change() {
+    let publish = lean_runtime_reconcile_case("publish_changed_snapshot");
+    assert!(publish.legal);
+
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let agent_did = "did:defra-agent:reconcile-test";
@@ -149,6 +153,10 @@ async fn generation_supervisor_rotates_dispatcher_on_behavior_change() {
     )
     .unwrap();
     let active_snapshot = supervisor.current_snapshot();
+    assert_eq!(
+        active_snapshot.generation,
+        publish.pre_active_generation as u64
+    );
     assert!(active_snapshot.dispatchers.contains_key("general"));
     let (active_tx, mut active_rx) = watch::channel(active_snapshot);
     let (proposal_tx, proposal_rx) = mpsc::channel(4);
@@ -161,7 +169,10 @@ async fn generation_supervisor_rotates_dispatcher_on_behavior_change() {
         .expect("generation update should publish")
         .unwrap();
     let updated_active = active_rx.borrow().clone();
-    assert_eq!(updated_active.generation, 2);
+    assert_eq!(
+        updated_active.generation,
+        publish.post_active_generation as u64
+    );
     assert_eq!(
         updated_active
             .behaviors
@@ -171,8 +182,11 @@ async fn generation_supervisor_rotates_dispatcher_on_behavior_change() {
         "updated prompt"
     );
     let status = fetch_runtime_status(node.as_ref(), agent_did).await;
-    assert_eq!(status.reconcile_phase, "idle");
-    assert_eq!(status.active_generation, 2);
+    assert_eq!(status.reconcile_phase, publish.post_phase.as_str());
+    assert_eq!(
+        status.active_generation,
+        publish.post_active_generation as i64
+    );
     assert_eq!(status.last_reconcile_result, "applied");
     assert!(status.last_reconcile_error.is_empty());
 
@@ -204,6 +218,9 @@ async fn generation_supervisor_rotates_dispatcher_on_behavior_change() {
 
 #[tokio::test]
 async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
+    let apply_failed = lean_runtime_reconcile_case("apply_failed_clears_pending");
+    assert!(apply_failed.legal);
+
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let agent_did = "did:defra-agent:reconcile-failure-test";
@@ -268,9 +285,15 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
     proposal_tx.send(invalid_snapshot).await.unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(!active_rx.has_changed().unwrap());
-    assert_eq!(active_rx.borrow().generation, 1);
+    assert_eq!(
+        active_rx.borrow().generation,
+        apply_failed.post_active_generation as u64
+    );
     let failed_status = fetch_runtime_status(node.as_ref(), agent_did).await;
-    assert_eq!(failed_status.reconcile_phase, "idle");
+    assert_eq!(
+        failed_status.reconcile_phase,
+        apply_failed.post_phase.as_str()
+    );
     assert_eq!(failed_status.active_generation, 0);
     assert_eq!(failed_status.last_reconcile_result, "error");
     assert!(!failed_status.last_reconcile_error.is_empty());

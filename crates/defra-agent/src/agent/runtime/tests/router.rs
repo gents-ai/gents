@@ -1,8 +1,12 @@
 use super::support::*;
 use super::*;
+use crate::lean_vocab_test::lean_runtime_reconcile_case;
 
 #[tokio::test]
 async fn router_dispatches_first_request_after_snapshot_change_to_latest_generation() {
+    let accept = lean_runtime_reconcile_case("accept_request_after_router_observe");
+    assert!(accept.legal);
+
     let agent_did = "did:defra-agent:router-latest-snapshot";
     let initial_snapshot = Arc::new(crate::runtime_snapshot::ActiveRuntimeSnapshot {
         generation: 1,
@@ -69,12 +73,18 @@ async fn router_dispatches_first_request_after_snapshot_change_to_latest_generat
     .expect("request should be returned");
 
     assert_eq!(request.request_id, "req-router");
-    assert_eq!(active_snapshot.generation, 2);
+    assert_eq!(
+        active_snapshot.generation,
+        accept.post_router_generation as u64
+    );
     assert_eq!(active_snapshot.default_behavior_id, "code");
 }
 
 #[tokio::test(start_paused = true)]
 async fn router_publishes_observed_generation_without_waiting_for_request() {
+    let router = lean_runtime_reconcile_case("router_observe_published_generation");
+    assert!(router.legal);
+
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let agent_did = "did:defra-agent:router-observed-generation";
@@ -124,7 +134,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
     tokio::task::yield_now().await;
 
     let row = fetch_runtime_status(node.as_ref(), agent_did).await;
-    assert_eq!(row.active_generation, 1);
+    assert_eq!(row.active_generation, router.pre_router_generation as i64);
     assert_eq!(row.last_reconcile_result, "startup");
 
     let query = format!(
@@ -152,12 +162,13 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
             .and_then(|row| row.get("router_generation"))
             .and_then(Value::as_i64)
             .unwrap_or_default();
-        if router_generation == 2 {
+        if router_generation == router.post_router_generation as i64 {
             break;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "router generation did not advance to 2; last value={router_generation}"
+            "router generation did not advance to {}; last value={router_generation}",
+            router.post_router_generation
         );
         tokio::task::yield_now().await;
         tokio::time::advance(Duration::from_millis(10)).await;
