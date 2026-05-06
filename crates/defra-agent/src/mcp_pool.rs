@@ -111,6 +111,9 @@ impl McpPool {
     /// `list_tools`, this does not retry after a dispatch failure: repeating an
     /// MCP tool call can repeat side effects until services advertise
     /// idempotency metadata that `Proofs.ToolExecution` can model.
+    /// A dead cached connection can therefore keep failing `call_tool` until
+    /// `list_tools` or explicit removal evicts it; this keeps recovery from
+    /// retransmitting a possibly mutating call.
     pub async fn call_tool(
         &self,
         service_id: &str,

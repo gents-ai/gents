@@ -68,6 +68,16 @@ def toDefraDB : RetryDisposition → String
   | .retrySafeRead => "retrySafeRead"
   | .retryIdempotentToolCall => "retryIdempotentToolCall"
 
+/-- Exhaustive constructor list used by the Rust conformance vocabulary. -/
+def all : List RetryDisposition :=
+  [ .doNotRetry, .retrySafeRead, .retryIdempotentToolCall ]
+
+/-- Adding a retry disposition constructor must update `all`. -/
+theorem all_complete
+    (disposition : RetryDisposition) :
+    disposition ∈ all := by
+  cases disposition <;> simp [all]
+
 end RetryDisposition
 
 /-- Health/schema preflight. Stale services are allowed through with a longer

@@ -6,6 +6,8 @@ use crate::lean_vocab_test::{assert_lean_contract_vocabulary_matches, LeanContra
 
 #[test]
 fn tool_retry_disposition_contract_matches_mcp_pool_policy() {
+    // TODO(idempotency): replace this shape pin with a Rust producer contract
+    // once MCP services advertise retry dispositions/idempotency metadata.
     assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
         domain: "ToolRetryDisposition",
         rust_source: "Proofs.ToolExecution retryDisposition / mcp_pool::call_tool",

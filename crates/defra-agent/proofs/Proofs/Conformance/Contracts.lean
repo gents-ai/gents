@@ -312,7 +312,7 @@ def inferenceCallMachine : StateMachineContract :=
       (fun call => call.state.toDefraDB))
 
 def toolRetryDispositions : List ToolExecution.RetryDisposition :=
-  [ .doNotRetry, .retrySafeRead, .retryIdempotentToolCall ]
+  ToolExecution.RetryDisposition.all
 
 def toolRetryDispositionNames : List String :=
   toolRetryDispositions.map ToolExecution.RetryDisposition.toDefraDB
