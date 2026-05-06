@@ -23,9 +23,15 @@ inductive NetworkMode where
   | enabled
   deriving DecidableEq, Repr
 
-/-- A command request after bash tool argument normalization. -/
+/-- A command request after bash tool argument normalization.
+
+`command` is the raw argv[0] used by allowed/forbidden argv-prefix checks.
+`lookupCommand` is the Rust `executable_name_lookup_key` result used by
+read-only command and network gates: the executable basename when available,
+otherwise the raw command string. -/
 structure CommandRequest where
   command : String
+  lookupCommand : String
   args : List String
   deriving DecidableEq, Repr
 

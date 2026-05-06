@@ -39,17 +39,17 @@ theorem readOnly_validator_rejects_unallowlisted
     (allowlist : List String)
     (request : CommandRequest)
     (hunallowlisted :
-      commandAllowlisted request.command allowlist = false) :
+      commandAllowlisted request.lookupCommand allowlist = false) :
     validateReadOnlyCommand allowlist request =
-      .deny (.readOnlyCommandNotAllowlisted request.command) := by
+      .deny (.readOnlyCommandNotAllowlisted request.lookupCommand) := by
   simp [validateReadOnlyCommand, hunallowlisted]
 
 theorem readOnly_validator_allows_only_allowlisted
     (allowlist : List String)
     (request : CommandRequest)
     (hallow : validateReadOnlyCommand allowlist request = .allow) :
-    commandAllowlisted request.command allowlist = true := by
-  cases hlisted : commandAllowlisted request.command allowlist with
+    commandAllowlisted request.lookupCommand allowlist = true := by
+  cases hlisted : commandAllowlisted request.lookupCommand allowlist with
   | false =>
       simp [validateReadOnlyCommand, hlisted] at hallow
   | true =>
@@ -64,8 +64,30 @@ theorem disabled_network_unrestricted_fails_closed
 theorem disabled_network_readOnly_curl_denies
     (args : List String) :
     validateNetworkMode .readOnly .disabled
-        { command := "curl", args := args } =
+        { command := "curl", lookupCommand := "curl", args := args } =
       .deny (.disabledNetworkCommand "curl") := by
+  rfl
+
+theorem disabled_network_readOnly_lookup_curl_denies
+    (command : String)
+    (args : List String) :
+    validateNetworkMode .readOnly .disabled
+        { command := command, lookupCommand := "curl", args := args } =
+      .deny (.disabledNetworkCommand "curl") := by
+  rfl
+
+theorem disabled_network_readOnly_tailscale_ping_denies
+    (rest : List String) :
+    validateNetworkMode .readOnly .disabled
+        { command := "tailscale", lookupCommand := "tailscale", args := "ping" :: rest } =
+      .deny (.disabledNetworkCommand "tailscale") := by
+  rfl
+
+theorem disabled_network_readOnly_tailscale_netcheck_denies
+    (rest : List String) :
+    validateNetworkMode .readOnly .disabled
+        { command := "tailscale", lookupCommand := "tailscale", args := "netcheck" :: rest } =
+      .deny (.disabledNetworkCommand "tailscale") := by
   rfl
 
 theorem workspaceWrite_requires_enforced_sandbox

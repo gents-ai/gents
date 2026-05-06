@@ -569,6 +569,9 @@ fn validate_argv_prefixes(
             continue;
         }
 
+        // Bare prefixes are split with `split_ascii_whitespace` at runtime;
+        // after the non-empty trim check above, that cannot create empty
+        // tokens. JSON prefixes can contain empty strings, so validate them.
         if trimmed.starts_with('[') {
             match serde_json::from_str::<Vec<String>>(trimmed) {
                 Ok(tokens)

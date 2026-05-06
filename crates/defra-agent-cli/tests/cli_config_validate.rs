@@ -65,6 +65,10 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
                 "file_tools_mode": "ReadOnly",
                 "enable_bash": true,
                 "bash_mode": "ReadOnly",
+                "command_execution_policy": "read_only",
+                "command_network_mode": "disabled",
+                "command_allowed_argv_prefixes": ["[\"git\",\"status\"]"],
+                "command_forbidden_argv_prefixes": ["git commit"],
                 "cli_tool_names": [],
                 "enable_meta_tools": true,
                 "delegate_to": []

@@ -32,7 +32,8 @@ inductive EnvKey where
   | other
   deriving DecidableEq, Repr
 
-/-- Values preserved or forced by the filtered shell environment. -/
+/-- Symbolic values preserved or forced by the filtered shell environment.
+    The forced tags correspond to Rust constants: `cat`, `1`, `0`, and `dumb`. -/
 inductive EnvValue where
   | inherited
   | fallbackPath
