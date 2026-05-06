@@ -15,6 +15,27 @@ inductive TriggerKind where
   | manual
   deriving DecidableEq, Repr
 
+namespace TriggerKind
+
+/-- String vocabulary persisted in `AgentRequest.caused_by_trigger_kind`. -/
+def toDefraDB : TriggerKind → String
+  | .schedule => "schedule"
+  | .event => "event"
+  | .manual => "manual"
+
+/-- Parse the persisted `AgentRequest.caused_by_trigger_kind` vocabulary. -/
+def fromDefraDB? : String → Option TriggerKind
+  | "schedule" => some .schedule
+  | "event" => some .event
+  | "manual" => some .manual
+  | _ => none
+
+theorem fromDefraDB_toDefraDB (kind : TriggerKind) :
+    fromDefraDB? kind.toDefraDB = some kind := by
+  cases kind <;> rfl
+
+end TriggerKind
+
 /-- Concurrency policy declared on a task definition. -/
 inductive ConcurrencyMode where
   | parallel

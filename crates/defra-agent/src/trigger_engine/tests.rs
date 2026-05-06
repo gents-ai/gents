@@ -35,6 +35,68 @@ type MaterializeCall = (Option<String>, TriggerKind, String);
 /// Recorded `supersede` invocation: `(trigger_id, trigger_kind)`.
 type SupersedeCall = (String, TriggerKind);
 
+const LEAN_TRIGGER_TYPES_MODEL: &str = include_str!("../../proofs/Proofs/Triggers/Types.lean");
+
+fn lean_to_defradb_values(model: &'static str, namespace: &str) -> Vec<&'static str> {
+    let mut in_namespace = false;
+    let mut in_to_defradb = false;
+    let mut values = Vec::new();
+
+    for line in model.lines() {
+        let trimmed = line.trim();
+        if trimmed == format!("namespace {namespace}") {
+            in_namespace = true;
+            continue;
+        }
+        if in_namespace && trimmed == format!("end {namespace}") {
+            break;
+        }
+        if in_namespace && trimmed.starts_with("def toDefraDB") {
+            in_to_defradb = true;
+            continue;
+        }
+        if !in_to_defradb {
+            continue;
+        }
+        let Some(rest) = trimmed.strip_prefix("| .") else {
+            if !values.is_empty() && !trimmed.is_empty() {
+                break;
+            }
+            continue;
+        };
+        let (_constructor, value) = rest
+            .split_once("=>")
+            .expect("Lean toDefraDB arm must contain =>");
+        values.push(
+            value
+                .trim()
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .expect("Lean toDefraDB arm must return a string literal"),
+        );
+    }
+
+    assert!(
+        !values.is_empty(),
+        "missing Lean toDefraDB values for namespace {namespace}"
+    );
+    values
+}
+
+#[test]
+fn rust_trigger_kind_vocabulary_matches_lean_model() {
+    let rust_kinds = vec![
+        TriggerKind::Schedule.as_str(),
+        TriggerKind::Event.as_str(),
+        TriggerKind::Manual.as_str(),
+    ];
+    assert_eq!(
+        rust_kinds,
+        lean_to_defradb_values(LEAN_TRIGGER_TYPES_MODEL, "TriggerKind"),
+        "Rust trigger-kind vocabulary must match Proofs.Triggers.Types"
+    );
+}
+
 /// Spy `MaterializerHandle` used by the engine tests. Records every
 /// `materialize` call it sees and hands back sequentially-numbered request ids
 /// so assertions can check both the call count and the rendered prompt that

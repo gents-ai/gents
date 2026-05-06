@@ -54,18 +54,100 @@ fn request(request_id: &str) -> AgentRequest {
 
 const RUST_INFERENCE_CALL_STATES: &[&str] =
     &["queued", "running", "cancelled", "completed", "failed"];
+const RUST_INFERENCE_CALL_TERMINAL_REASONS: &[&str] = &[
+    "Cancelled",
+    "BackendGone",
+    "QueueFull",
+    "StreamDroppedBeforeTerminalResponse",
+];
 const LEAN_INFERENCE_CALL_STATE_MODEL: &str =
     include_str!("../../proofs/Proofs/InferenceCall/State.lean");
+const ADMISSION_TERMINAL_REASON_SOURCES: &[&str] = &[
+    include_str!("controller.rs"),
+    include_str!("permit.rs"),
+    include_str!("registry.rs"),
+];
+
+fn lean_to_defradb_values(model: &'static str, namespace: &str) -> Vec<&'static str> {
+    let mut in_namespace = false;
+    let mut in_to_defradb = false;
+    let mut values = Vec::new();
+
+    for line in model.lines() {
+        let trimmed = line.trim();
+        if trimmed == format!("namespace {namespace}") {
+            in_namespace = true;
+            continue;
+        }
+        if in_namespace && trimmed == format!("end {namespace}") {
+            break;
+        }
+        if in_namespace && trimmed.starts_with("def toDefraDB") {
+            in_to_defradb = true;
+            continue;
+        }
+        if !in_to_defradb {
+            continue;
+        }
+        let Some(rest) = trimmed.strip_prefix("| .") else {
+            if !values.is_empty() && !trimmed.is_empty() {
+                break;
+            }
+            continue;
+        };
+        let (_constructor, value) = rest
+            .split_once("=>")
+            .expect("Lean toDefraDB arm must contain =>");
+        values.push(
+            value
+                .trim()
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .expect("Lean toDefraDB arm must return a string literal"),
+        );
+    }
+
+    assert!(
+        !values.is_empty(),
+        "missing Lean toDefraDB values for namespace {namespace}"
+    );
+    values
+}
 
 fn lean_inference_call_states() -> Vec<&'static str> {
-    LEAN_INFERENCE_CALL_STATE_MODEL
-        .lines()
-        .filter_map(|line| {
-            let rest = line.trim().strip_prefix("| .")?;
-            let (_constructor, value) = rest.split_once("=>")?;
-            value.trim().strip_prefix('"')?.strip_suffix('"')
-        })
-        .collect()
+    lean_to_defradb_values(LEAN_INFERENCE_CALL_STATE_MODEL, "InferenceCallState")
+}
+
+fn lean_inference_call_terminal_reasons() -> Vec<&'static str> {
+    lean_to_defradb_values(
+        LEAN_INFERENCE_CALL_STATE_MODEL,
+        "InferenceCallTerminalReason",
+    )
+}
+
+fn some_string_literals(source: &'static str) -> Vec<&'static str> {
+    let mut rest = source;
+    let mut values = Vec::new();
+    while let Some(start) = rest.find("Some(\"") {
+        let value_start = start + "Some(\"".len();
+        let after_start = &rest[value_start..];
+        let value_end = after_start
+            .find('"')
+            .expect("Some string literal must close");
+        values.push(&after_start[..value_end]);
+        rest = &after_start[value_end + 1..];
+    }
+    values
+}
+
+fn rust_literal_terminal_reasons_from_admission_sources() -> Vec<&'static str> {
+    let mut values = ADMISSION_TERMINAL_REASON_SOURCES
+        .iter()
+        .flat_map(|source| some_string_literals(source))
+        .collect::<Vec<_>>();
+    values.sort_unstable();
+    values.dedup();
+    values
 }
 
 fn assert_inference_call_rows_use_lean_vocabulary(rows: &[Value]) {
@@ -118,6 +200,23 @@ fn rust_inference_call_state_vocabulary_matches_lean_model() {
         lean_states.as_slice(),
         RUST_INFERENCE_CALL_STATES,
         "Rust InferenceCall.call_state vocabulary must match Proofs.InferenceCall.State"
+    );
+}
+
+#[test]
+fn rust_inference_call_terminal_reason_vocabulary_matches_lean_model() {
+    assert_eq!(
+        lean_inference_call_terminal_reasons().as_slice(),
+        RUST_INFERENCE_CALL_TERMINAL_REASONS,
+        "Rust system-generated InferenceCall.failure_reason vocabulary must match Proofs.InferenceCall.State"
+    );
+
+    let mut expected = RUST_INFERENCE_CALL_TERMINAL_REASONS.to_vec();
+    expected.sort_unstable();
+    assert_eq!(
+        rust_literal_terminal_reasons_from_admission_sources(),
+        expected,
+        "admission source literals for system terminal reasons must stay in the Lean parity contract"
     );
 }
 

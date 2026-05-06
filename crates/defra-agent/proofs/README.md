@@ -101,7 +101,7 @@ either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Conformance/DefraAgent.lean` | Mapping from Lean state to Rust/DefraDB state |
 | `Proofs/Conformance/Deviations.lean` | Known gaps between ideal model and implementation |
 | `Proofs/Conformance/SchedulerConformance.lean` | Scheduler-specific conformance notes |
-| `Proofs/Conformance/Triggers.lean` | Trigger-specific conformance notes |
+| `Proofs/Conformance/Triggers.lean` | Barrel for trigger lifecycle/materialization conformance |
 
 Semantic submodules:
 
@@ -112,8 +112,10 @@ Semantic submodules:
 | `Proofs.RuntimeReconcile` | `State`, `Transition` |
 | `Proofs.ApplyReconcile` | `Collections`, `Manifest`, `Diff`, `Apply`, `ApplyProperties`, `RuntimeBridge`, `Convergence` |
 | `Proofs.Triggers` | `Types`, `Dispatch`, `Reachability`, `SerialSupport`, `Serial`, `LatestOnly`, `Lineage` |
+| `Proofs.Triggers.SerialSupport` | `Counting`, `Preservation` |
 | `Proofs.Client` | `Types`, `Lifecycle`, `Terminal`, `Replacement` |
 | `Proofs.ClientShell` | `Types`, `Submission`, `Transition`, `Projection`, `Theorems` |
+| `Proofs.Conformance.Triggers` | `Lifecycle`, `Materialization`, `Trace` |
 
 The top-level barrel imports remain the stable entry points for downstream code.
 
@@ -357,6 +359,11 @@ The main conformance files are:
 - `Proofs/Conformance/Triggers.lean`
 - `Proofs/Conformance/Deviations.lean`
 
+The Rust/Lean vocabulary checks compare Rust-visible strings against Lean
+`toDefraDB` definitions for request lifecycle states, execution origins,
+trigger kinds, inference-call states, and the closed set of system-generated
+inference-call terminal reasons.
+
 ## Decidable Exhaustive Checks
 
 The finite-state checks currently establish:
@@ -383,7 +390,8 @@ Examples:
 - no explicit persisted `dead` state
 - no first-class persisted persistence-lifecycle tracking
 - deadline accounting does not yet bound retries
-- fleet scheduler persistence remains partly observational
+- exact aggregate `FleetState` slot accounting is not persisted as one document;
+  call-level backend admission is covered by `InferenceCall`
 
 That file should stay honest. If the implementation diverges from the model,
 the deviation should be named there instead of silently tolerated.
@@ -417,6 +425,10 @@ Rust covers this bridge at the admission/permit level and with a full
 `BehaviorDaemon` mock-stream fixture: mid-stream interruption preserves partial
 response content, persists the linked inference call as `cancelled`, and leaves
 unrelated concurrent calls live.
+
+System-generated `InferenceCall.failure_reason` values used by admission and
+interrupt/drop paths are mirrored by `InferenceCallTerminalReason`; provider
+error strings remain open and are not treated as a closed Lean vocabulary.
 
 ## What Is Not Proven
 

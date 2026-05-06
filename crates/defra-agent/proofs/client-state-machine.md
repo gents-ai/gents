@@ -169,6 +169,10 @@ state, independent of request interruption. Rust currently checks the admission
 and permit-drop paths, plus full daemon-stream interruption with a local
 mock-stream backend.
 
+The closed, system-generated `failure_reason` strings for admission and
+interrupt/drop paths are checked against the Lean
+`InferenceCallTerminalReason` vocabulary. Provider errors remain open strings.
+
 ## Subscription Model
 
 A compliant client should observe these collections with these filters:

@@ -38,11 +38,14 @@
 - **defra-agent:** All tool errors → PermanentFailure
 - **Classification:** Design choice
 
-## Deviation 7: Fleet scheduler state persistence
+## Deviation 7: Fleet scheduler aggregate state persistence
 - **Ideal:** FleetState exposes exact backend running counts and
   slot-accounting invariants alongside call-level admission state
-- **defra-agent:** call-level admission is persisted through `InferenceCall`
-- **Classification:** Resolved for backend HTTP-call admission
+- **defra-agent:** call-level backend HTTP admission is persisted through
+  `InferenceCall` and covered by the inference-call model; there is still no
+  single persisted `FleetState` document carrying the exact aggregate
+  slot-accounting invariant
+- **Classification:** Partial conformance / observability boundary
 
 ## Resolved: Inference-call cancellation end-to-end coverage
 - **Ideal:** An interrupted request is composed with an `InferenceCall`

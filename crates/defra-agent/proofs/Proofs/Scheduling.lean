@@ -12,6 +12,25 @@ inductive ExecutionOrigin where
   | scheduled
   deriving DecidableEq, Repr
 
+namespace ExecutionOrigin
+
+/-- String vocabulary persisted in `AgentRequest.execution_origin`. -/
+def toDefraDB : ExecutionOrigin → String
+  | .interactive => "interactive"
+  | .scheduled => "scheduled"
+
+/-- Parse the persisted `AgentRequest.execution_origin` vocabulary. -/
+def fromDefraDB? : String → Option ExecutionOrigin
+  | "interactive" => some .interactive
+  | "scheduled" => some .scheduled
+  | _ => none
+
+theorem fromDefraDB_toDefraDB (origin : ExecutionOrigin) :
+    fromDefraDB? origin.toDefraDB = some origin := by
+  cases origin <;> rfl
+
+end ExecutionOrigin
+
 /-- Backend identifier. Opaque — we only need equality. -/
 structure BackendId where
   val : String

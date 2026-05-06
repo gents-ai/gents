@@ -190,6 +190,82 @@ fn resolve_behavior_id(default_behavior_id: &str, requested_behavior_id: Option<
 mod tests {
     use super::*;
 
+    const LEAN_REQUEST_STATE_MODEL: &str = include_str!("../proofs/Proofs/Request/State.lean");
+    const LEAN_SCHEDULING_MODEL: &str = include_str!("../proofs/Proofs/Scheduling.lean");
+
+    fn lean_to_defradb_values(model: &'static str, namespace: &str) -> Vec<&'static str> {
+        let mut in_namespace = false;
+        let mut in_to_defradb = false;
+        let mut values = Vec::new();
+
+        for line in model.lines() {
+            let trimmed = line.trim();
+            if trimmed == format!("namespace {namespace}") {
+                in_namespace = true;
+                continue;
+            }
+            if in_namespace && trimmed == format!("end {namespace}") {
+                break;
+            }
+            if in_namespace && trimmed.starts_with("def toDefraDB") {
+                in_to_defradb = true;
+                continue;
+            }
+            if !in_to_defradb {
+                continue;
+            }
+            let Some(rest) = trimmed.strip_prefix("| .") else {
+                if !values.is_empty() && !trimmed.is_empty() {
+                    break;
+                }
+                continue;
+            };
+            let (_constructor, value) = rest
+                .split_once("=>")
+                .expect("Lean toDefraDB arm must contain =>");
+            values.push(
+                value
+                    .trim()
+                    .strip_prefix('"')
+                    .and_then(|value| value.strip_suffix('"'))
+                    .expect("Lean toDefraDB arm must return a string literal"),
+            );
+        }
+
+        assert!(
+            !values.is_empty(),
+            "missing Lean toDefraDB values for namespace {namespace}"
+        );
+        values
+    }
+
+    #[test]
+    fn rust_request_lifecycle_state_vocabulary_matches_lean_model() {
+        let rust_states = PersistedLifecycleState::ALL
+            .iter()
+            .copied()
+            .map(PersistedLifecycleState::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rust_states,
+            lean_to_defradb_values(LEAN_REQUEST_STATE_MODEL, "RequestState"),
+            "Rust AgentRequest.lifecycle_state vocabulary must match Proofs.Request.State"
+        );
+    }
+
+    #[test]
+    fn rust_execution_origin_vocabulary_matches_lean_model() {
+        let rust_origins = vec![
+            ExecutionOrigin::Interactive.as_str(),
+            ExecutionOrigin::Scheduled.as_str(),
+        ];
+        assert_eq!(
+            rust_origins,
+            lean_to_defradb_values(LEAN_SCHEDULING_MODEL, "ExecutionOrigin"),
+            "Rust AgentRequest.execution_origin vocabulary must match Proofs.Scheduling"
+        );
+    }
+
     #[test]
     fn persisted_lifecycle_terminal_partition_matches_trigger_bridge() {
         let nonterminal = PersistedLifecycleState::ALL

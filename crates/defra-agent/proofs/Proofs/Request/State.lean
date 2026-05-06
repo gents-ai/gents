@@ -23,6 +23,35 @@ inductive RequestState where
 
 namespace RequestState
 
+/-- String vocabulary persisted in `AgentRequest.lifecycle_state`. -/
+def toDefraDB : RequestState → String
+  | .pending => "pending"
+  | .claimed => "claimed"
+  | .processing => "processing"
+  | .inputRequired => "inputRequired"
+  | .completed => "completed"
+  | .failed => "failed"
+  | .superseded => "superseded"
+  | .dead => "dead"
+  | .interrupted => "interrupted"
+
+/-- Parse the persisted `AgentRequest.lifecycle_state` vocabulary. -/
+def fromDefraDB? : String → Option RequestState
+  | "pending" => some .pending
+  | "claimed" => some .claimed
+  | "processing" => some .processing
+  | "inputRequired" => some .inputRequired
+  | "completed" => some .completed
+  | "failed" => some .failed
+  | "superseded" => some .superseded
+  | "dead" => some .dead
+  | "interrupted" => some .interrupted
+  | _ => none
+
+theorem fromDefraDB_toDefraDB (s : RequestState) :
+    fromDefraDB? s.toDefraDB = some s := by
+  cases s <;> rfl
+
 instance : HasTerminal RequestState where
   isTerminal s :=
     s = .completed ∨ s = .failed ∨ s = .superseded ∨ s = .dead ∨ s = .interrupted

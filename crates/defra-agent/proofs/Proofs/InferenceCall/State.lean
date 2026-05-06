@@ -68,6 +68,43 @@ theorem terminal_iff (s : InferenceCallState) :
 
 end InferenceCallState
 
+/--
+Closed set of system-generated `InferenceCall.failure_reason` values emitted
+by backend admission and interrupt/drop paths.
+
+Provider errors remain open strings and are intentionally outside this
+vocabulary.
+-/
+inductive InferenceCallTerminalReason where
+  | cancelled
+  | backendGone
+  | queueFull
+  | streamDroppedBeforeTerminalResponse
+  deriving DecidableEq, Repr
+
+namespace InferenceCallTerminalReason
+
+/-- String vocabulary persisted in `InferenceCall.failure_reason` for system reasons. -/
+def toDefraDB : InferenceCallTerminalReason → String
+  | .cancelled => "Cancelled"
+  | .backendGone => "BackendGone"
+  | .queueFull => "QueueFull"
+  | .streamDroppedBeforeTerminalResponse => "StreamDroppedBeforeTerminalResponse"
+
+/-- Parse system-generated `InferenceCall.failure_reason` values. -/
+def fromDefraDB? : String → Option InferenceCallTerminalReason
+  | "Cancelled" => some .cancelled
+  | "BackendGone" => some .backendGone
+  | "QueueFull" => some .queueFull
+  | "StreamDroppedBeforeTerminalResponse" => some .streamDroppedBeforeTerminalResponse
+  | _ => none
+
+theorem fromDefraDB_toDefraDB (reason : InferenceCallTerminalReason) :
+    fromDefraDB? reason.toDefraDB = some reason := by
+  cases reason <;> rfl
+
+end InferenceCallTerminalReason
+
 /-- A single persisted inference call, linked to its request by request id. -/
 structure InferenceCall where
   callId : Nat
