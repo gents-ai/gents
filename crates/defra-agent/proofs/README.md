@@ -13,6 +13,7 @@ state machines explicit enough that:
 The proofs are strongest where the runtime is a state machine:
 
 - request, process, and persistence lifecycle transitions
+- daemon-visible storage observation assumptions at the persistence boundary
 - inference-call lifecycle, cancellation transitions, and slot reconstruction
 - scheduler and fleet slot accounting from persisted call rows
 - session retry/reissue
@@ -21,10 +22,12 @@ The proofs are strongest where the runtime is a state machine:
 - task, schedule, and event-trigger dispatch
 - client turn projection and desktop shell workflow state
 - command/tool execution policy for bash argv, network, sandbox, and shell env
+- MCP/tool execution preflight and retry eligibility boundaries
 
-They do not prove storage guarantees, network delivery, provider behavior, UI
-rendering, external tool behavior, or host sandbox implementation details. Those
-are explicit model boundaries.
+They model daemon storage observations, but do not prove DefraDB storage-engine
+correctness, network delivery, provider behavior, UI rendering, external tool
+behavior, or host sandbox implementation details. Those are explicit model
+boundaries.
 
 ## Quick Start
 
@@ -43,19 +46,22 @@ lake env lean --run Proofs/Conformance/Contracts.lean
 
 ## What Is Proven
 
-The current proof suite covers ten practical areas:
+The current proof suite covers eleven practical areas:
 
 1. Request/process/persistence state transitions
-2. Inference-call lifecycle, request linkage, and cancellation terminality
-3. Scheduler slot accounting and admission/release
-4. Session recovery and retry/reissue semantics
-5. Runtime reconcile generation publication and visibility
-6. Desired-state apply ordering, reference closure, and apply/runtime field separation
-7. Trigger dispatch for manual, schedule, and event-driven tasks
-8. Client turn-state derivation from replicated request/response documents
-9. Client-shell workflow rules for selection, submission, and transport decoupling
-10. Command/tool execution policy: argv prefixes, read-only allowlists,
+2. Daemon storage-observation assumptions that refine persistence
+3. Inference-call lifecycle, request linkage, and cancellation terminality
+4. Scheduler slot accounting and admission/release
+5. Session recovery and retry/reissue semantics
+6. Runtime reconcile generation publication and visibility
+7. Desired-state apply ordering, reference closure, and apply/runtime field separation
+8. Trigger dispatch for manual, schedule, and event-driven tasks
+9. Client turn-state derivation from replicated request/response documents
+10. Client-shell workflow rules for selection, submission, and transport decoupling
+11. Command/tool execution policy: argv prefixes, read-only allowlists,
     disabled-network fail-closed behavior, sandbox selection, and filtered env
+11. Tool execution boundary rules: schema/health preflight and MCP retry
+    eligibility before future idempotent tool retries are enabled
 
 The proof boundary matters:
 
@@ -63,8 +69,8 @@ The proof boundary matters:
   model.
 - Rust conformance tests check that persisted DefraDB-visible states refine
   that model.
-- External assumptions such as "DefraDB event arrived" or "provider streamed
-  bytes" are not proven here.
+- External assumptions such as "DefraDB eventually makes an acked mutation
+  visible" or "provider streamed bytes" are not proven here.
 
 ## Why This Matters
 
@@ -93,6 +99,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Request.lean` | Barrel for request state, transitions, executable semantics, and local properties |
 | `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, slot accounting, and cancellation properties |
 | `Proofs/Persistence.lean` | Persistence lifecycle model plus executable `Action`, `step?`, and `replay?` |
+| `Proofs/StorageObservation.lean` | Daemon-visible storage observation model and persistence bridge |
 | `Proofs/Composed.lean` | Cross-layer composition and guards |
 | `Proofs/Scheduling.lean` | Scheduler/backend slot state |
 | `Proofs/Fleet.lean` | Fleet-level scheduling and slot accounting |
@@ -103,6 +110,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Client.lean` | Barrel for client turn-state derivation and client theorems |
 | `Proofs/ClientShell.lean` | Barrel for multi-session shell workflow modules |
 | `Proofs/CommandPolicy.lean` | Barrel for command/tool execution policy validation, sandbox, env, and safety proofs |
+| `Proofs/ToolExecution.lean` | MCP/tool preflight and retry eligibility boundary model |
 | `Proofs/Properties/Safety.lean` | Request/process/persistence safety properties S1-S6 |
 | `Proofs/Properties/Liveness.lean` | Request/process liveness properties L1-L3 |
 | `Proofs/Properties/SchedulingSafety.lean` | Scheduler/fleet safety properties S7-S9 |
@@ -128,6 +136,7 @@ Semantic submodules:
 | `Proofs.Client` | `Types`, `Lifecycle`, `Terminal`, `Replacement` |
 | `Proofs.ClientShell` | `Types`, `Submission`, `Transition`, `Projection`, `Theorems` |
 | `Proofs.CommandPolicy` | `Types`, `Validation`, `Sandbox`, `Env`, `Theorems` |
+| `Proofs.ToolExecution` | standalone health/schema preflight and retry eligibility model |
 | `Proofs.Conformance.Triggers` | `Lifecycle`, `Materialization`, `Trace` |
 
 The top-level barrel imports remain the stable entry points for downstream code.
@@ -157,25 +166,30 @@ currently covers:
 - `Process`
 - `Persistence.failClosed`
 - `Persistence.failOpen`
+- `StorageObservation.failClosed`
+- `StorageObservation.failOpen`
+- `RuntimeReconcile`
 - `SessionRecovery`
 - `InferenceCall`
 
-The current `SessionRecovery` contract is intentionally narrow: it covers the
-executable failed-latest-request reissue witness (`failed -> pending`) rather
-than the whole request lifecycle vocabulary. Widen this contract when the
-session-recovery executable model grows enough finite witnesses to represent the
-larger space directly.
+`RuntimeReconcile` and `SessionRecovery` also emit deterministic witness rows.
+Those rows keep the JSON small while pinning generation publication/router
+observation/request admission, and session retry guards for deadline closure,
+retry budget, latest-request status, and identity preservation.
+
+It also emits the `ToolRetryDisposition` vocabulary from
+`Proofs.ToolExecution` so Rust tests can reject accidental MCP `call_tool`
+retry drift before idempotency metadata exists.
 
 When a Lean vocabulary, terminal partition, action, or legal transition changes,
 the generated JSON changes on the next Rust test run. The Rust tests then fail
 unless the runtime behavior or the documented product-boundary assertions are
 updated to match.
 
-`RuntimeReconcile` is intentionally exposed only as a follow-up hook in the JSON
-so this extraction stays scoped to the initial executable domains above. Add it
-to `Proofs/Conformance/Contracts.lean` as another `StateMachineContract` when
-the runtime-reconcile contract is ready to join the Rust conformance gate.
-
+`ToolExecution` currently exports only retry disposition vocabulary and theorems.
+Before adding idempotent MCP retries, extend that Lean model first with the
+metadata source, retry budget, and replay/idempotency assumptions, then add a
+Rust contract that ties advertised MCP metadata to the widened retry rule.
 ## Core Model
 
 ### Layer 1: Process Lifecycle
@@ -236,6 +250,28 @@ Operational meaning:
   outcomes are considered valid; Rust currently treats this as an operational
   storage boundary rather than a persisted per-token state document
 
+### Layer 3b: Storage Observation Boundary
+
+States:
+
+- `noMutation`
+- `inFlight`
+- `successAcknowledged`
+- `mutationFailed`
+- `staleObserved`
+- `readVisible`
+- `lostAcknowledged`
+
+Operational meaning:
+
+- this layer models only what the daemon observed around storage writes and
+  follow-up reads/events
+- a successful mutation ack refines to `PersistenceState.committed`
+- a failed mutation does not refine to committed; fail-closed retries from
+  uncommitted, while fail-open acknowledges lost output
+- stale reads or stale/missing events can happen after a success ack, but the
+  model keeps that separate from DefraDB's internal correctness
+
 ### Layer 4: Inference Call Lifecycle
 
 States:
@@ -290,6 +326,25 @@ pre-claim requests to `dead/Stale` and by bounding inference retry sleeps and
 stream waits by the claimed deadline. Once work is claimed, retry exhaustion
 and deadline expiry remain ordinary terminal `failed` outcomes rather than
 being reclassified as `dead`.
+
+### Storage Observation Safety
+
+`Proofs/StorageObservation.lean` separates daemon-observed storage facts from
+DefraDB correctness. The bridge theorems state that starting a mutation,
+observing mutation success, and observing fail-open/fail-closed mutation
+failure refine the existing `PersistenceState` transitions
+(`begin_refines_persistence`, `success_refines_persistence`,
+`failure_failClosed_refines_persistence`, and
+`failure_failOpen_refines_persistence`).
+
+Local observation theorems also record the daemon assumptions Rust relies on:
+`success_acknowledged_committed`, `mutation_failed_uncommitted`,
+`mutation_failed_ne_committed`,
+`stale_observation_preserves_success_commit`,
+`terminal_write_observed_committed`,
+`readYourWrites_visibility_path`, `successful_mutation_eventual_visibility_path`,
+`failClosed_failed_mutation_retry_path`, `failOpen_failed_mutation_lost_path`,
+`staleRead_eventual_visibility_path`, and `staleEvent_eventual_visibility_path`.
 
 ### Request/Process Liveness
 
@@ -431,7 +486,8 @@ state.
 ## Executable Model
 
 The core Lean layers are executable, not just relational. This includes
-request, process, persistence, session recovery, fleet, and runtime reconcile:
+request, process, persistence, storage observation, session recovery, fleet,
+and runtime reconcile:
 
 - `Action`: legal transition vocabulary
 - `step?`: executable one-step transition
@@ -487,10 +543,11 @@ The finite-state checks currently establish:
   successor; reserved `inputRequired` remains vocabulary-only
 - every non-terminal process state has at least one successor
 - every non-terminal persistence state has at least one successor
+- every non-terminal storage-observation state has at least one successor
 - every non-terminal inference-call state has at least one successor
 - admission-state invariants line up with request state
-- state counts stay as expected: 9 request, 5 process, 4 persistence, 5 call,
-  180 core composed
+- state counts stay as expected: 9 request, 5 process, 4 persistence,
+  7 storage-observation, 5 call, 180 core composed
 
 These checks are useful because they catch structural model regressions quickly,
 even before theorem-level reasoning matters.
@@ -513,8 +570,9 @@ Current boundaries:
 - Fleet aggregate slot state is reconstructed from `InferenceCall` rows rather
   than persisted as a single `FleetState` document. Only rows with
   `call_state = "running"` hold slots; queued and terminal rows do not.
-- `PersistenceState` is a proof abstraction over durable writes; DefraDB
-  successful-mutation durability is an external storage assumption.
+- `StorageObservation` records daemon-level storage assumptions: success acks,
+  failed mutations, stale reads/events, and minimum visibility paths. DefraDB
+  storage-engine correctness remains external.
 
 `Proofs/Conformance/Deviations.lean` is now reserved only for real unresolved
 Rust/spec mismatches. There are currently no known active spec deviations.
@@ -559,8 +617,8 @@ error strings remain open and are not treated as a closed Lean vocabulary.
 
 These proofs do not establish:
 
-- DefraDB read-your-writes semantics
-- DefraDB CRDT merge or event-delivery guarantees
+- DefraDB read-your-writes semantics beyond the modeled daemon assumption
+- DefraDB CRDT merge or event-delivery correctness
 - network reliability
 - provider/model correctness
 - MCP or external tool availability

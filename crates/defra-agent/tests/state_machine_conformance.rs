@@ -10,7 +10,8 @@ mod support;
 
 use lean_vocab_test::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
-    assert_state_machine_contract_is_complete, lean_contract_snapshot, lean_vocabulary_values,
+    assert_state_machine_contract_is_complete, lean_contract_snapshot, lean_runtime_reconcile_case,
+    lean_session_recovery_case, lean_vocabulary_values,
 };
 use support::snapshots::{
     fetch_conversation_snapshot, fetch_request_lineage_snapshot,
@@ -32,25 +33,183 @@ fn lean_executable_contracts_cover_initial_domains() {
         "Process",
         "Persistence.failClosed",
         "Persistence.failOpen",
+        "StorageObservation.failClosed",
+        "StorageObservation.failOpen",
+        "RuntimeReconcile",
         "SessionRecovery",
         "InferenceCall",
     ] {
         assert_state_machine_contract_is_complete(domain);
     }
 
+    assert_lean_transition_is_legal("RuntimeReconcile", "applying", "idle");
+    assert_lean_transition_is_legal("RuntimeReconcile", "idle", "debouncing");
     assert_lean_transition_is_legal("Persistence.failClosed", "committing", "uncommitted");
     assert_lean_transition_is_legal("Persistence.failOpen", "committing", "lost");
+    assert_lean_transition_is_legal("StorageObservation.failClosed", "noMutation", "inFlight");
+    assert_lean_transition_is_legal(
+        "StorageObservation.failClosed",
+        "inFlight",
+        "successAcknowledged",
+    );
+    assert_lean_transition_is_legal(
+        "StorageObservation.failClosed",
+        "inFlight",
+        "mutationFailed",
+    );
+    assert_lean_transition_is_legal(
+        "StorageObservation.failClosed",
+        "mutationFailed",
+        "noMutation",
+    );
+    assert_lean_transition_is_legal(
+        "StorageObservation.failOpen",
+        "mutationFailed",
+        "lostAcknowledged",
+    );
+    assert_lean_transition_is_legal(
+        "StorageObservation.failClosed",
+        "successAcknowledged",
+        "staleObserved",
+    );
+    assert_lean_transition_is_legal(
+        "StorageObservation.failClosed",
+        "successAcknowledged",
+        "readVisible",
+    );
+    assert_lean_transition_is_legal(
+        "StorageObservation.failClosed",
+        "staleObserved",
+        "readVisible",
+    );
+    assert_lean_transition_is_illegal(
+        "StorageObservation.failClosed",
+        "mutationFailed",
+        "lostAcknowledged",
+    );
+    assert_lean_transition_is_illegal(
+        "StorageObservation.failOpen",
+        "mutationFailed",
+        "noMutation",
+    );
     assert_lean_transition_is_legal("SessionRecovery", "failed", "pending");
     assert_lean_transition_is_legal("InferenceCall", "queued", "running");
     assert_lean_transition_is_legal("InferenceCall", "running", "completed");
     assert_lean_transition_is_legal("InferenceCall", "running", "failed");
+    let follow_up_hooks = &lean_contract_snapshot().follow_up_hooks;
     assert!(
-        lean_contract_snapshot()
-            .follow_up_hooks
+        !follow_up_hooks
             .iter()
             .any(|hook| hook.contains("RuntimeReconcile")),
-        "RuntimeReconcile executable follow-up hook should remain visible"
+        "RuntimeReconcile should be emitted as generated contract output, not a follow-up hook"
     );
+    assert!(
+        follow_up_hooks
+            .iter()
+            .any(|hook| hook.contains("ToolExecution")),
+        "ToolExecution remains a follow-up until idempotency metadata is modeled"
+    );
+    assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 6);
+    assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 8);
+}
+
+#[test]
+fn generated_runtime_reconcile_cases_pin_generation_and_admission_contract() {
+    let publish = lean_runtime_reconcile_case("publish_changed_snapshot");
+    assert!(publish.legal);
+    assert_eq!(publish.action.as_str(), "publish");
+    assert_eq!(publish.pre_phase.as_str(), "applying");
+    assert_eq!(publish.post_phase.as_str(), "idle");
+    assert_eq!(
+        publish.pre_active_generation + 1,
+        publish.post_active_generation
+    );
+    assert_eq!(
+        publish.pre_router_generation,
+        publish.post_router_generation
+    );
+    assert_eq!(
+        publish.pre_ready_generation_count + 1,
+        publish.post_ready_generation_count
+    );
+    assert_eq!(
+        publish.pre_live_generation_count + 1,
+        publish.post_live_generation_count
+    );
+
+    let router = lean_runtime_reconcile_case("router_observe_published_generation");
+    assert!(router.legal);
+    assert_eq!(router.pre_phase.as_str(), "idle");
+    assert_eq!(router.post_phase.as_str(), "idle");
+    assert_eq!(router.pre_active_generation, router.post_active_generation);
+    assert_eq!(router.post_router_generation, router.post_active_generation);
+
+    let accept = lean_runtime_reconcile_case("accept_request_after_router_observe");
+    assert!(accept.legal);
+    assert_eq!(accept.pre_phase.as_str(), "idle");
+    assert_eq!(accept.post_phase.as_str(), "idle");
+    assert_eq!(accept.pre_in_flight_count + 1, accept.post_in_flight_count);
+    assert_eq!(accept.tracked_request_id, 500);
+    assert_eq!(accept.tracked_session_id, 100);
+    assert_eq!(
+        accept.tracked_request_generation,
+        accept.post_router_generation
+    );
+    assert_eq!(accept.tracked_request_session, accept.tracked_session_id);
+    assert_eq!(
+        accept.tracked_request_behavior,
+        accept.tracked_session_behavior
+    );
+
+    let retire = lean_runtime_reconcile_case("retire_unobserved_generation");
+    assert!(retire.legal);
+    assert_eq!(
+        retire.pre_live_generation_count - 1,
+        retire.post_live_generation_count
+    );
+    assert_eq!(
+        retire.pre_ready_generation_count - 1,
+        retire.post_ready_generation_count
+    );
+}
+
+#[test]
+fn generated_session_recovery_cases_cover_retry_guards_and_preservation() {
+    let legal = lean_session_recovery_case("legal_open_budget_latest");
+    assert!(legal.legal);
+    assert_eq!(legal.action.as_str(), "reissueFailed");
+    assert_eq!(legal.pre_latest_state.as_str(), "failed");
+    assert_eq!(legal.post_latest_state.as_str(), "pending");
+    assert_eq!(legal.pre_retry_count + 1, legal.post_retry_count);
+    assert!(legal.post_retry_count <= legal.max_retries);
+    assert_eq!(legal.pre_session_id, legal.post_session_id);
+    assert_eq!(legal.pre_behavior_id, legal.post_behavior_id);
+    assert_eq!(legal.pre_request_count + 1, legal.post_request_count);
+    assert_eq!(legal.post_latest_id, legal.new_id);
+    assert!(legal.pre_failed_is_latest);
+    assert!(!legal.post_failed_is_latest);
+    assert!(legal.post_new_is_latest);
+    assert!(legal.old_request_retained);
+    assert!(legal.new_request_inserted);
+    assert!(legal.origin_preserved);
+    assert!(legal.backend_preserved);
+
+    let last_slot = lean_session_recovery_case("legal_last_retry_slot");
+    assert!(last_slot.legal);
+    assert_eq!(last_slot.post_retry_count, last_slot.max_retries);
+
+    for name in [
+        "illegal_retry_budget_exhausted",
+        "illegal_deadline_closed",
+        "illegal_non_latest_failed_request",
+        "illegal_new_request_id_already_exists",
+        "illegal_source_not_failed",
+        "illegal_source_not_released",
+    ] {
+        let case = lean_session_recovery_case(name);
+        assert!(!case.legal, "{name} must be rejected by Lean");
+        assert!(case.post_latest_state.is_empty());
+    }
 }
 
 #[tokio::test]

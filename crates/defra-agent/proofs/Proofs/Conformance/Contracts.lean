@@ -1,119 +1,32 @@
 import Proofs.Request
 import Proofs.Process
 import Proofs.Persistence
+import Proofs.StorageObservation
 import Proofs.SessionRecovery
 import Proofs.InferenceCall
+import Proofs.Conformance.ContractTypes
 import Proofs.Conformance.Triggers.Contracts
+import Proofs.RuntimeReconcile
+import Proofs.Conformance.ContractCases
+import Proofs.ToolExecution
 
 /-!
 # Rust Conformance Contracts
 
 This module is the Lean-owned extraction surface for Rust conformance tests.
 Rust runs this file with `lake env lean --run` and consumes the JSON emitted by
-`main`. State vocabularies and transition tables are evaluated from the Lean
-constructors, `toDefraDB` functions, executable `step?` functions, and finite
-witness contexts below.
-
-`RuntimeReconcile` is intentionally exposed only as a follow-up hook here so
-this extraction stays scoped to the initial executable domains below. Add it as
-another `StateMachineContract` when the runtime-reconcile contract is ready to
-join the Rust conformance gate.
+`main`. State vocabularies, transition tables, and finite witness rows are
+evaluated from the Lean constructors, `toDefraDB` functions, and executable
+`step?` functions below.
 -/
 
 namespace Conformance.Contracts
 
-structure TransitionPair where
-  source : String
-  target : String
-  deriving DecidableEq, Repr
-
-structure VocabularyContract where
-  domain : String
-  values : List String
-  deriving Repr
-
-structure StateMachineContract where
-  domain : String
-  states : List String
-  stateCount : Nat
-  terminalStates : List String
-  nonterminalStates : List String
-  actions : List String
-  legalTransitions : List TransitionPair
-  illegalTransitions : List TransitionPair
-  deriving Repr
-
-def jsonString (s : String) : String :=
-  "\"" ++ s ++ "\""
-
-def jsonArray (values : List String) : String :=
-  "[" ++ String.intercalate "," values ++ "]"
-
-def jsonStringArray (values : List String) : String :=
-  jsonArray (values.map jsonString)
-
-def dedup {α : Type} [DecidableEq α] (values : List α) : List α :=
-  values.foldl
-    (fun seen value => if value ∈ seen then seen else seen ++ [value])
-    []
-
-def without {α : Type} [DecidableEq α] (values excluded : List α) : List α :=
-  values.filter fun value => if value ∈ excluded then false else true
-
-def allPairs (states : List String) : List TransitionPair :=
-  states.flatMap fun source =>
-    states.map fun target => { source := source, target := target }
-
-def illegalPairs (states : List String) (legal : List TransitionPair) : List TransitionPair :=
-  without (allPairs states) legal
-
-def terminalNames {α : Type} [HasTerminal α]
-    (states : List α)
-    (name : α → String) : List String :=
-  states.filterMap fun state =>
-    if isTerminal state then some (name state) else none
-
-def actionNames {α : Type} (actions : List (String × α)) : List String :=
-  actions.map Prod.fst
-
-def transitionPairsFromSamples {σ α : Type}
-    (samples : List σ)
-    (actions : List (String × α))
-    (step : σ → α → Option σ)
-    (stateName : σ → String) : List TransitionPair :=
-  dedup <|
-    samples.flatMap fun pre =>
-      actions.filterMap fun action =>
-        match step pre action.snd with
-        | some post => some { source := stateName pre, target := stateName post }
-        | none => none
-
-def machineContract
-    (domain : String)
-    (states terminalStates actions : List String)
-    (legalTransitions : List TransitionPair) : StateMachineContract :=
-  let legalTransitions := dedup legalTransitions
-  { domain := domain
-  , states := states
-  , stateCount := states.length
-  , terminalStates := terminalStates
-  , nonterminalStates := without states terminalStates
-  , actions := actions
-  , legalTransitions := legalTransitions
-  , illegalTransitions := illegalPairs states legalTransitions
-  }
+open Conformance.ContractCases
 
 def requestStates : List RequestState :=
-  [ .pending
-  , .claimed
-  , .processing
-  , .inputRequired
-  , .completed
-  , .failed
-  , .superseded
-  , .dead
-  , .interrupted
-  ]
+  [ .pending, .claimed, .processing, .inputRequired, .completed
+  , .failed, .superseded, .dead, .interrupted ]
 
 def requestStateNames : List String :=
   requestStates.map RequestState.toDefraDB
@@ -241,35 +154,122 @@ def persistenceMachine
       (fun state action => PersistenceState.step? policy state action)
       PersistenceState.toDefraDB)
 
-def sessionRecoveryFailedId : RequestId := 1
+def storageObservationStates : List StorageObservation :=
+  [ .noMutation
+  , .inFlight
+  , .successAcknowledged
+  , .mutationFailed
+  , .staleObserved
+  , .readVisible
+  , .lostAcknowledged
+  ]
 
-def sessionRecoveryNewId : RequestId := 2
+def storageObservationStateNames : List String :=
+  storageObservationStates.map StorageObservation.toContract
 
-def sessionRecoveryFailedContext : RequestContext :=
-  requestContext .failed .released
+def storageObservationActions : List (String × StorageObservation.Action) :=
+  [ ("beginMutation", .beginMutation)
+  , ("mutationSuccess", .mutationSuccess)
+  , ("mutationFailure", .mutationFailure)
+  , ("staleRead", .staleRead)
+  , ("staleEvent", .staleEvent)
+  , ("readYourWrites", .readYourWrites)
+  , ("eventArrives", .eventArrives)
+  , ("retryFailClosed", .retryFailClosed)
+  , ("acknowledgeLost", .acknowledgeLost)
+  ]
 
-def sessionRecoveryPre : SessionState :=
-  { sessionId := 1
-  , behaviorId := 1
-  , requestIds := {sessionRecoveryFailedId}
-  , ctx := fun rid =>
-      if rid = sessionRecoveryFailedId then
-        sessionRecoveryFailedContext
-      else
-        requestContext .pending .released
-  , latest := sessionRecoveryFailedId
+def storageObservationMachine
+    (domain : String)
+    (policy : PersistenceState.FailurePolicy) : StateMachineContract :=
+  machineContract
+    domain
+    storageObservationStateNames
+    (terminalNames storageObservationStates StorageObservation.toContract)
+    (actionNames storageObservationActions)
+    (transitionPairsFromSamples
+      storageObservationStates
+      storageObservationActions
+      (fun state action => StorageObservation.step? policy state action)
+      StorageObservation.toContract)
+
+def runtimeReconcileStates : List ReconcilePhase :=
+  [ .idle, .debouncing, .resolving, .diffing, .applying ]
+
+def runtimeReconcileStateNames : List String :=
+  runtimeReconcileStates.map ReconcilePhase.toDefraDB
+
+def runtimeAckedChanged : RuntimeState :=
+  { runtimeBoot with ackedResolved := some runtimeResolvedB }
+
+def runtimeDebouncingChanged : RuntimeState :=
+  { runtimeAckedChanged with
+    phase := .debouncing
+  , observedResolved := some runtimeResolvedB
   }
 
+def runtimeResolvingChanged : RuntimeState :=
+  { runtimeDebouncingChanged with phase := .resolving }
+
+def runtimeDiffingNoop : RuntimeState :=
+  { runtimeBoot with
+    phase := .diffing
+  , observedResolved := some runtimeResolvedA
+  , pendingResolved := some runtimeResolvedA
+  }
+
+def runtimeDiffingChanged : RuntimeState :=
+  { runtimeResolvingChanged with
+    phase := .diffing
+  , pendingResolved := some runtimeResolvedB
+  }
+
+def runtimeReconcileSamples : List RuntimeState :=
+  [ runtimeBoot
+  , runtimeAckedChanged
+  , runtimeDebouncingChanged
+  , runtimeResolvingChanged
+  , runtimeDiffingNoop
+  , runtimeDiffingChanged
+  , runtimeApplyingChanged
+  , runtimePublishedBeforeRouter
+  , runtimeRouterObserved
+  , runtimeWithInFlight
+  ]
+
+def runtimeReconcileActions : List (String × RuntimeState.Action) :=
+  [ ("ackWrite", .ackWrite runtimeResolvedB)
+  , ("observeDoc", .observeDoc runtimeResolvedB)
+  , ("startResolve", .startResolve)
+  , ("resolveVisible", .resolveVisible runtimeResolvedB)
+  , ("diffNoop", .diffNoop runtimeResolvedA)
+  , ("beginApply", .beginApply runtimeResolvedB)
+  , ("publish", .publish runtimeResolvedB)
+  , ("applyFailed", .applyFailed)
+  , ("routerObserve", .routerObserve)
+  , ("acceptRequest", .acceptRequest 100 500)
+  , ("finishRequest", .finishRequest 500)
+  , ("retireGeneration", .retireGeneration 1)
+  ]
+
+def runtimeReconcileMachine : StateMachineContract :=
+  machineContract
+    "RuntimeReconcile"
+    runtimeReconcileStateNames
+    []
+    (actionNames runtimeReconcileActions)
+    (transitionPairsFromSamples
+      runtimeReconcileSamples
+      runtimeReconcileActions
+      RuntimeState.step?
+      (fun state => state.phase.toDefraDB))
+
 def sessionRecoveryLegalTransitions : List TransitionPair :=
-  match SessionState.step?
-      sessionRecoveryPre
-      (.reissueFailed sessionRecoveryFailedId sessionRecoveryNewId) with
-  | some post =>
-      [ { source := (sessionRecoveryPre.ctx sessionRecoveryPre.latest).state.toDefraDB
-        , target := (post.ctx post.latest).state.toDefraDB
-        }
-      ]
-  | none => []
+  sessionRecoveryCases.filterMap fun witness =>
+    if witness.legal then
+      some { source := witness.preLatestState, target := witness.postLatestState }
+    else
+      none
 
 def sessionRecoveryMachine : StateMachineContract :=
   machineContract
@@ -311,6 +311,12 @@ def inferenceCallMachine : StateMachineContract :=
       InferenceCall.step?
       (fun call => call.state.toDefraDB))
 
+def toolRetryDispositions : List ToolExecution.RetryDisposition :=
+  ToolExecution.RetryDisposition.all
+
+def toolRetryDispositionNames : List String :=
+  toolRetryDispositions.map ToolExecution.RetryDisposition.toDefraDB
+
 def vocabularies : List VocabularyContract :=
   [ { domain := "RequestState", values := requestStateNames }
   , { domain := "ExecutionOrigin", values :=
@@ -319,6 +325,8 @@ def vocabularies : List VocabularyContract :=
   , { domain := "PersistenceState", values := persistenceStateNames }
   , { domain := "PersistenceFailurePolicy", values :=
         [.failOpen, .failClosed].map PersistenceState.FailurePolicy.toDefraDB }
+  , { domain := "ReconcilePhase", values := runtimeReconcileStateNames }
+  , { domain := "StorageObservation", values := storageObservationStateNames }
   , { domain := "SessionRecoveryLatestRequestState"
     , values := [RequestState.failed.toDefraDB, RequestState.pending.toDefraDB]
     }
@@ -330,6 +338,7 @@ def vocabularies : List VocabularyContract :=
         , .streamDroppedBeforeTerminalResponse
         ].map InferenceCallTerminalReason.toDefraDB
     }
+  , { domain := "ToolRetryDisposition", values := toolRetryDispositionNames }
   ]
 
 def stateMachines : List StateMachineContract :=
@@ -337,34 +346,67 @@ def stateMachines : List StateMachineContract :=
   , processMachine
   , persistenceMachine "Persistence.failClosed" .failClosed
   , persistenceMachine "Persistence.failOpen" .failOpen
+  , storageObservationMachine "StorageObservation.failClosed" .failClosed
+  , storageObservationMachine "StorageObservation.failOpen" .failOpen
+  , runtimeReconcileMachine
   , sessionRecoveryMachine
   , inferenceCallMachine
   ]
 
-def TransitionPair.toJson (pair : TransitionPair) : String :=
+def runtimeReconcileCaseJson (witness : RuntimeReconcileCase) : String :=
   "{"
-    ++ "\"from\":" ++ jsonString pair.source ++ ","
-    ++ "\"to\":" ++ jsonString pair.target
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"action\":" ++ jsonString witness.action ++ ","
+    ++ "\"legal\":" ++ boolString witness.legal ++ ","
+    ++ "\"pre_phase\":" ++ jsonString witness.prePhase ++ ","
+    ++ "\"post_phase\":" ++ jsonString witness.postPhase ++ ","
+    ++ "\"pre_active_generation\":" ++ toString witness.preActiveGeneration ++ ","
+    ++ "\"post_active_generation\":" ++ toString witness.postActiveGeneration ++ ","
+    ++ "\"pre_router_generation\":" ++ toString witness.preRouterGeneration ++ ","
+    ++ "\"post_router_generation\":" ++ toString witness.postRouterGeneration ++ ","
+    ++ "\"pre_ready_generation_count\":" ++ toString witness.preReadyGenerationCount ++ ","
+    ++ "\"post_ready_generation_count\":" ++ toString witness.postReadyGenerationCount ++ ","
+    ++ "\"pre_live_generation_count\":" ++ toString witness.preLiveGenerationCount ++ ","
+    ++ "\"post_live_generation_count\":" ++ toString witness.postLiveGenerationCount ++ ","
+    ++ "\"pre_in_flight_count\":" ++ toString witness.preInFlightCount ++ ","
+    ++ "\"post_in_flight_count\":" ++ toString witness.postInFlightCount ++ ","
+    ++ "\"tracked_request_id\":" ++ toString witness.trackedRequestId ++ ","
+    ++ "\"tracked_session_id\":" ++ toString witness.trackedSessionId ++ ","
+    ++ "\"tracked_request_generation\":" ++ toString witness.trackedRequestGeneration ++ ","
+    ++ "\"tracked_request_session\":" ++ toString witness.trackedRequestSession ++ ","
+    ++ "\"tracked_request_behavior\":" ++ toString witness.trackedRequestBehavior ++ ","
+    ++ "\"tracked_session_behavior\":" ++ toString witness.trackedSessionBehavior
     ++ "}"
 
-def VocabularyContract.toJson (contract : VocabularyContract) : String :=
+def sessionRecoveryCaseJson (witness : SessionRecoveryCase) : String :=
   "{"
-    ++ "\"domain\":" ++ jsonString contract.domain ++ ","
-    ++ "\"values\":" ++ jsonStringArray contract.values
-    ++ "}"
-
-def StateMachineContract.toJson (contract : StateMachineContract) : String :=
-  "{"
-    ++ "\"domain\":" ++ jsonString contract.domain ++ ","
-    ++ "\"states\":" ++ jsonStringArray contract.states ++ ","
-    ++ "\"state_count\":" ++ toString contract.stateCount ++ ","
-    ++ "\"terminal_states\":" ++ jsonStringArray contract.terminalStates ++ ","
-    ++ "\"nonterminal_states\":" ++ jsonStringArray contract.nonterminalStates ++ ","
-    ++ "\"actions\":" ++ jsonStringArray contract.actions ++ ","
-    ++ "\"legal_transitions\":"
-      ++ jsonArray (contract.legalTransitions.map TransitionPair.toJson) ++ ","
-    ++ "\"illegal_transitions\":"
-      ++ jsonArray (contract.illegalTransitions.map TransitionPair.toJson)
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"action\":" ++ jsonString witness.action ++ ","
+    ++ "\"legal\":" ++ boolString witness.legal ++ ","
+    ++ "\"pre_latest_state\":" ++ jsonString witness.preLatestState ++ ","
+    ++ "\"post_latest_state\":" ++ jsonString witness.postLatestState ++ ","
+    ++ "\"failed_id\":" ++ toString witness.failedId ++ ","
+    ++ "\"new_id\":" ++ toString witness.newId ++ ","
+    ++ "\"pre_latest_id\":" ++ toString witness.preLatestId ++ ","
+    ++ "\"post_latest_id\":" ++ toString witness.postLatestId ++ ","
+    ++ "\"pre_session_id\":" ++ toString witness.preSessionId ++ ","
+    ++ "\"post_session_id\":" ++ toString witness.postSessionId ++ ","
+    ++ "\"pre_behavior_id\":" ++ toString witness.preBehaviorId ++ ","
+    ++ "\"post_behavior_id\":" ++ toString witness.postBehaviorId ++ ","
+    ++ "\"pre_request_count\":" ++ toString witness.preRequestCount ++ ","
+    ++ "\"post_request_count\":" ++ toString witness.postRequestCount ++ ","
+    ++ "\"pre_retry_count\":" ++ toString witness.preRetryCount ++ ","
+    ++ "\"post_retry_count\":" ++ toString witness.postRetryCount ++ ","
+    ++ "\"max_retries\":" ++ toString witness.maxRetries ++ ","
+    ++ "\"pre_deadline_exceeded\":" ++ boolString witness.preDeadlineExceeded ++ ","
+    ++ "\"post_deadline_exceeded\":" ++ boolString witness.postDeadlineExceeded ++ ","
+    ++ "\"pre_failed_is_latest\":" ++ boolString witness.preFailedIsLatest ++ ","
+    ++ "\"post_failed_is_latest\":" ++ boolString witness.postFailedIsLatest ++ ","
+    ++ "\"post_new_is_latest\":" ++ boolString witness.postNewIsLatest ++ ","
+    ++ "\"old_request_retained\":" ++ boolString witness.oldRequestRetained ++ ","
+    ++ "\"new_request_inserted\":" ++ boolString witness.newRequestInserted ++ ","
+    ++ "\"origin_preserved\":" ++ boolString witness.originPreserved ++ ","
+    ++ "\"backend_preserved\":" ++ boolString witness.backendPreserved
     ++ "}"
 
 def snapshotJson : String :=
@@ -378,8 +420,12 @@ def snapshotJson : String :=
       ++ toString Conformance.TriggerContracts.triggerDispatchCaseCount ++ ","
     ++ "\"trigger_dispatch_cases\":"
       ++ Conformance.TriggerContracts.triggerDispatchCasesJson ++ ","
+    ++ "\"runtime_reconcile_cases\":"
+      ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
+    ++ "\"session_recovery_cases\":"
+      ++ jsonArray (sessionRecoveryCases.map sessionRecoveryCaseJson) ++ ","
     ++ "\"follow_up_hooks\":["
-      ++ jsonString "RuntimeReconcile executable state machine contract"
+      ++ jsonString "ToolExecution idempotent MCP call retry contract"
       ++ "]"
     ++ "}"
 
