@@ -89,7 +89,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Scheduling.lean` | Scheduler/backend slot state |
 | `Proofs/Fleet.lean` | Fleet-level scheduling and slot accounting |
 | `Proofs/SessionRecovery.lean` | Retry/reissue model for session-linked requests |
-| `Proofs/RuntimeReconcile.lean` | Barrel for runtime reconcile state and transitions |
+| `Proofs/RuntimeReconcile.lean` | Barrel for runtime reconcile state, relational transitions, and executable semantics |
 | `Proofs/ApplyReconcile.lean` | Barrel for desired-state apply, runtime bridge, and convergence |
 | `Proofs/Triggers.lean` | Barrel for trigger types, dispatch, reachability, serial, latest-only, and lineage proofs |
 | `Proofs/Client.lean` | Barrel for client turn-state derivation and client theorems |
@@ -111,7 +111,7 @@ Semantic submodules:
 |--------|------------|
 | `Proofs.Request` | `State`, `Transition`, `Executable`, `Properties` |
 | `Proofs.InferenceCall` | `State`, `Transition`, `Properties`, `SlotAccounting` |
-| `Proofs.RuntimeReconcile` | `State`, `Transition` |
+| `Proofs.RuntimeReconcile` | `State`, `Transition`, `Executable` |
 | `Proofs.ApplyReconcile` | `Collections`, `Manifest`, `Diff`, `Apply`, `ApplyProperties`, `RuntimeBridge`, `Convergence` |
 | `Proofs.Triggers` | `Types`, `Dispatch`, `Reachability`, `SerialSupport`, `Serial`, `LatestOnly`, `Lineage` |
 | `Proofs.Triggers.SerialSupport` | `Counting`, `Preservation` |
@@ -285,6 +285,12 @@ session history."
 ### Runtime Reconcile
 
 `Proofs/RuntimeReconcile.lean` is the model for live runtime generation swaps.
+It is executable in Lean through `Proofs/RuntimeReconcile/Executable.lean`,
+which defines `Action`, `step?`, `replay?`, `step_sound`,
+`transition_complete`, `replay_sound`, and `trace_complete`.
+The same module exposes executable helper corollaries for generation
+monotonicity, coherent preservation, publish well-formedness, request binding,
+router observed-generation readiness/liveness, and in-flight retirement safety.
 
 The key guarantees are:
 
@@ -356,7 +362,8 @@ state.
 
 ## Executable Model
 
-The core Lean layers are executable, not just relational:
+The core Lean layers are executable, not just relational. This includes
+request, process, persistence, session recovery, fleet, and runtime reconcile:
 
 - `Action`: legal transition vocabulary
 - `step?`: executable one-step transition
