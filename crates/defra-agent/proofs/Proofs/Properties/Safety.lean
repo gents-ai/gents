@@ -74,7 +74,7 @@ theorem terminal_irreversibility
     (h_trans : RequestContext.Transition pre post) :
     isTerminal post.state := by
   cases h_trans with
-  | claim h_pre _ _ =>
+  | claim h_pre _ _ _ =>
     rw [h_pre] at h_terminal
     exact (pending_not_terminal h_terminal).elim
   | dedup_lose h_pre _ _ =>
@@ -131,7 +131,7 @@ theorem progress_monotonic
     (h_trans : RequestContext.Transition pre post) :
     post.progressSeq ≥ pre.progressSeq := by
   cases h_trans with
-  | claim _ _ h_post =>
+  | claim _ _ _ h_post =>
     simp [h_post]
   | dedup_lose _ _ h_post =>
     simp [h_post]
@@ -174,7 +174,7 @@ theorem completed_not_deadline_expired
   cases h_trans with
   | finish h_pre _ h_post =>
     exact h_pre
-  | claim _ _ h_post =>
+  | claim _ _ _ h_post =>
     simp [h_post] at h_completed
   | dedup_lose _ _ h_post =>
     simp [h_post] at h_completed
@@ -244,7 +244,7 @@ theorem persistence_before_completion
   cases h_trans with
   | finish _ _ h_post =>
     simp [h_post]
-  | claim _ _ h_post =>
+  | claim _ _ _ h_post =>
     simp [h_post] at h_completed
   | dedup_lose _ _ h_post =>
     simp [h_post] at h_completed

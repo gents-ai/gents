@@ -10,6 +10,7 @@ use super::{
     scope_call, scope_call_with_token, scope_request, AdmissionCallContext, AdmissionRegistry,
     BackendAdmissionConfig, CallKind,
 };
+use crate::lean_vocab_test::lean_to_defradb_values;
 use crate::schema::ensure_schemas;
 use crate::watcher::AgentRequest;
 
@@ -67,52 +68,6 @@ const ADMISSION_TERMINAL_REASON_SOURCES: &[&str] = &[
     include_str!("permit.rs"),
     include_str!("registry.rs"),
 ];
-
-fn lean_to_defradb_values(model: &'static str, namespace: &str) -> Vec<&'static str> {
-    let mut in_namespace = false;
-    let mut in_to_defradb = false;
-    let mut values = Vec::new();
-
-    for line in model.lines() {
-        let trimmed = line.trim();
-        if trimmed == format!("namespace {namespace}") {
-            in_namespace = true;
-            continue;
-        }
-        if in_namespace && trimmed == format!("end {namespace}") {
-            break;
-        }
-        if in_namespace && trimmed.starts_with("def toDefraDB") {
-            in_to_defradb = true;
-            continue;
-        }
-        if !in_to_defradb {
-            continue;
-        }
-        let Some(rest) = trimmed.strip_prefix("| .") else {
-            if !values.is_empty() && !trimmed.is_empty() {
-                break;
-            }
-            continue;
-        };
-        let (_constructor, value) = rest
-            .split_once("=>")
-            .expect("Lean toDefraDB arm must contain =>");
-        values.push(
-            value
-                .trim()
-                .strip_prefix('"')
-                .and_then(|value| value.strip_suffix('"'))
-                .expect("Lean toDefraDB arm must return a string literal"),
-        );
-    }
-
-    assert!(
-        !values.is_empty(),
-        "missing Lean toDefraDB values for namespace {namespace}"
-    );
-    values
-}
 
 fn lean_inference_call_states() -> Vec<&'static str> {
     lean_to_defradb_values(LEAN_INFERENCE_CALL_STATE_MODEL, "InferenceCallState")
@@ -191,6 +146,15 @@ async fn call_rows(node: &EmbeddedNode) -> Vec<Value> {
         .unwrap_or_default();
     assert_inference_call_rows_use_lean_vocabulary(&rows);
     rows
+}
+
+fn running_slot_count_for_backend(rows: &[Value], backend_id: &str) -> usize {
+    rows.iter()
+        .filter(|row| {
+            row.get("backend_id").and_then(Value::as_str) == Some(backend_id)
+                && row.get("call_state").and_then(Value::as_str) == Some("running")
+        })
+        .count()
 }
 
 #[test]
@@ -301,6 +265,11 @@ async fn queued_calls_start_in_tokio_registration_order_after_permit_release() {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0]["call_state"], "running");
         assert_eq!(rows[1]["call_state"], "queued");
+        assert_eq!(
+            running_slot_count_for_backend(&rows, "backend-a"),
+            1,
+            "the aggregate slot count is reconstructed from running InferenceCall rows; queued rows do not hold slots"
+        );
 
         first.finish_success(None).await;
         drop(first);
@@ -314,6 +283,11 @@ async fn queued_calls_start_in_tokio_registration_order_after_permit_release() {
     assert_eq!(rows[0]["call_state"], "completed");
     assert_eq!(rows[1]["call_state"], "completed");
     assert_eq!(rows[1]["queue_depth_at_enqueue"], 1);
+    assert_eq!(
+        running_slot_count_for_backend(&rows, "backend-a"),
+        0,
+        "terminal InferenceCall rows reconstruct zero held scheduler slots"
+    );
 }
 
 #[tokio::test]

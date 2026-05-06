@@ -154,6 +154,16 @@ def deadlineExceeded (r : RequestContext) : Prop :=
 instance (r : RequestContext) : Decidable r.deadlineExceeded :=
   Nat.decLt r.deadline r.currentTime
 
+/-- Submitter TTL is open exactly when no TTL exists or current time is at/before it. -/
+def ttlOpen (r : RequestContext) : Prop :=
+  match r.validUntil with
+  | none => True
+  | some t => r.currentTime ≤ t
+
+instance (r : RequestContext) : Decidable r.ttlOpen := by
+  unfold ttlOpen
+  cases r.validUntil <;> infer_instance
+
 /-- Whether retries are exhausted. -/
 def retriesExhausted (r : RequestContext) : Prop :=
   r.retryCount ≥ r.maxRetries

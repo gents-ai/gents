@@ -72,8 +72,8 @@ practice:
 - "ready" or "completed" states that were not actually earned
 - clients repairing replicated state from the render path
 
-When the model cannot cover something, that gap should be named explicitly and
-either tested at the Rust boundary or treated as an external assumption.
+When the model cannot cover something, that boundary should be named explicitly
+and either tested at the Rust boundary or treated as an external assumption.
 
 ## Structure
 
@@ -99,7 +99,7 @@ either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Properties/SchedulingLiveness.lean` | Scheduler/fleet liveness properties |
 | `Proofs/Properties/Decidable.lean` | Finite-state exhaustive checks |
 | `Proofs/Conformance/DefraAgent.lean` | Mapping from Lean state to Rust/DefraDB state |
-| `Proofs/Conformance/Deviations.lean` | Known gaps between ideal model and implementation |
+| `Proofs/Conformance/Deviations.lean` | Classified conformance boundaries between ideal model and implementation |
 | `Proofs/Conformance/SchedulerConformance.lean` | Scheduler-specific conformance notes |
 | `Proofs/Conformance/Triggers.lean` | Barrel for trigger lifecycle/materialization conformance |
 
@@ -160,7 +160,8 @@ Operational meaning:
 - `pending` has not been claimed by a backend slot yet
 - `claimed` owns admission but has not started inference
 - `processing` is actively executing
-- `inputRequired` models a blocked external-input cycle
+- `inputRequired` is reserved for a blocked external-input cycle; current Rust
+  runtime code does not emit it because autonomous tool calls run inline
 - `interrupted` models operator cancellation and releases admission
 - terminal states are `completed`, `failed`, `superseded`, `dead`, and `interrupted`
 
@@ -176,7 +177,8 @@ States:
 Operational meaning:
 
 - this layer models whether durable state is actually recorded before terminal
-  outcomes are considered valid
+  outcomes are considered valid; Rust currently treats this as an operational
+  storage boundary rather than a persisted per-token state document
 
 ### Layer 4: Inference Call Lifecycle
 
@@ -219,6 +221,14 @@ missing build artifact.
 Request-local field monotonicity uses local labels instead of scheduler safety
 numbers: `R-Int` for `interrupt_monotonicity` and `R-TTL` for
 `valid_until_monotonicity`.
+
+Deadline and TTL conformance is now explicit on both sides: the request model
+requires `ttlOpen` before claim (`claim_requires_ttl_open`,
+`claim_with_ttl_bounds_time`), and session retry/reissue requires the source
+request deadline to remain open (`reissue_source_deadline_open`,
+`reissue_latest_deadline_open`). Rust mirrors this by converting stale
+pre-claim requests to `dead/Stale` and by bounding inference retry sleeps and
+stream waits by the claimed deadline.
 
 ### Request/Process Liveness
 
@@ -361,8 +371,9 @@ The main conformance files are:
 
 The Rust/Lean vocabulary checks compare Rust-visible strings against Lean
 `toDefraDB` definitions for request lifecycle states, execution origins,
-trigger kinds, inference-call states, and the closed set of system-generated
-inference-call terminal reasons.
+process lifecycle states, runtime reconcile phases, trigger kinds,
+inference-call states, and the closed set of system-generated inference-call
+terminal reasons.
 
 ## Decidable Exhaustive Checks
 
@@ -381,20 +392,29 @@ even before theorem-level reasoning matters.
 
 ## Current Deviations
 
-Known gaps are documented in `Proofs/Conformance/Deviations.lean`.
+`Proofs/Conformance/Deviations.lean` classifies every boundary explicitly as
+`Closed`, `Model adjusted`, `Intentional design choice`,
+`External/operational boundary`, or `Unresolved implementation gap`.
 
-Examples:
+Current classifications:
 
-- no explicit `recovering` process state in Rust startup
-- no explicit `inputRequired` feature in the Rust runtime yet
-- no explicit persisted `dead` state
-- no first-class persisted persistence-lifecycle tracking
-- deadline accounting does not yet bound retries
-- exact aggregate `FleetState` slot accounting is not persisted as one document;
-  call-level backend admission is covered by `InferenceCall`
+- `Closed`: recovering process state, deadline/TTL-bounded claim and retry
+  behavior, and inference-call cancellation coverage
+- `Model adjusted`: aggregate `FleetState` slot counts are reconstructed from
+  `InferenceCall.call_state = "running"` rows rather than persisted as one
+  document
+- `Intentional design choice`: `dead` is persisted for stale pre-claim TTL
+  expiry while provider/retry exhaustion remains terminal `failed`;
+  `inputRequired` is reserved protocol vocabulary until an approval feature
+  exists; tool failures are permanent until tools expose retry-safe
+  health/idempotency metadata
+- `External/operational boundary`: persistence lifecycle proofs abstract over
+  DefraDB durable-write behavior instead of claiming a persisted
+  `PersistenceState` row exists
 
 That file should stay honest. If the implementation diverges from the model,
-the deviation should be named there instead of silently tolerated.
+the deviation should be named and classified there instead of silently
+tolerated.
 
 ## Known Limitations
 

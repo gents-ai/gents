@@ -5,8 +5,7 @@ import Proofs.Basic
 
 Models the agent process: startup, recovery, normal operation, shutdown.
 The key insight is that `recovering` is an explicit state where claims
-are blocked, preventing the recovery/claim race condition found in
-defra-agent.
+are blocked until startup recovery and runtime publication are complete.
 -/
 
 /-- The 5 states of the agent process lifecycle. -/
@@ -19,6 +18,27 @@ inductive ProcessState where
   deriving DecidableEq, Repr
 
 namespace ProcessState
+
+/-- String vocabulary persisted in `AgentRuntime.process_state`. -/
+def toDefraDB : ProcessState → String
+  | .uninitialized => "uninitialized"
+  | .recovering => "recovering"
+  | .ready => "ready"
+  | .shuttingDown => "shuttingDown"
+  | .shutdown => "shutdown"
+
+/-- Parse the persisted `AgentRuntime.process_state` vocabulary. -/
+def fromDefraDB? : String → Option ProcessState
+  | "uninitialized" => some .uninitialized
+  | "recovering" => some .recovering
+  | "ready" => some .ready
+  | "shuttingDown" => some .shuttingDown
+  | "shutdown" => some .shutdown
+  | _ => none
+
+theorem fromDefraDB_toDefraDB (s : ProcessState) :
+    fromDefraDB? s.toDefraDB = some s := by
+  cases s <;> rfl
 
 instance : HasTerminal ProcessState where
   isTerminal s := s = .shutdown

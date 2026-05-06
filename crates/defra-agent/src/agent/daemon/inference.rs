@@ -425,6 +425,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retry_backoff_wait_is_cut_off_by_request_deadline() {
+        let deadline = chrono::Utc::now() + chrono::Duration::milliseconds(20);
+        let started = std::time::Instant::now();
+
+        let result = await_with_request_deadline(
+            Some(deadline),
+            tokio::time::sleep(Duration::from_secs(5)),
+            "waiting for inference retry backoff",
+        )
+        .await;
+
+        let error = result.expect_err("backoff wait should be bounded by request deadline");
+        assert!(error
+            .to_string()
+            .contains("waiting for inference retry backoff"));
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "deadline-bounded retry backoff must not wait for the full retry delay"
+        );
+    }
+
+    #[tokio::test]
     async fn await_with_request_deadline_allows_fast_work() {
         let deadline = chrono::Utc::now() + chrono::Duration::seconds(1);
 

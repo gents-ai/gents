@@ -29,7 +29,7 @@ theorem phase_change_decreases_measure
                          ¬(pre.state = .inputRequired ∧ post.state = .processing)) :
     terminationMeasure post < terminationMeasure pre := by
   cases h_trans with
-  | claim h_pre _ h_post =>
+  | claim h_pre _ _ h_post =>
     rw [h_post]
     simp [terminationMeasure, h_pre]
   | dedup_lose h_pre _ h_post =>

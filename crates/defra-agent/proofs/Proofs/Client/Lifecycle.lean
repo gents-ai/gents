@@ -94,7 +94,7 @@ theorem transition_implies_lifecycle
     (h : RequestContext.Transition pre post) :
     LifecycleTransition pre.state post.state := by
   cases h with
-  | claim h_state _ h_post =>
+  | claim h_state _ _ h_post =>
     subst h_post; simp [LifecycleTransition, h_state]
   | dedup_lose h_state _ h_post =>
     subst h_post; simp [LifecycleTransition, h_state]

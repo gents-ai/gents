@@ -10,8 +10,8 @@ import Proofs.Conformance.Triggers
 Maps defra-agent's actual states and transitions to the ideal
 agent state machine.
 
-defra-agent states (from lifecycle.rs):
-  Pending, Claimed, Streaming, Completed, Failed, Superseded
+defra-agent local request states (from lifecycle.rs):
+  Pending, Claimed, Streaming, Completed, Failed, Superseded, Dead, Interrupted
 
 These are implementation-local states. The persisted DefraDB request view now
 carries the lifecycle refinement via `AgentRequest.lifecycle_state`; call-level
@@ -54,11 +54,46 @@ theorem toIdeal_preserves_terminal (s : DefraLifecycleState) :
     (s = .completed ∨ s = .failed ∨ s = .superseded ∨ s = .dead ∨ s = .interrupted) := by
   cases s <;> simp [toIdeal, HasTerminal.isTerminal, RequestState.instHasTerminal]
 
-/-- defra-agent has no recovering process state. -/
-def defraProcessToIdeal (hasRecovered : Bool) : ProcessState :=
-  if hasRecovered then .ready else .uninitialized
-
 end DefraLifecycleState
+
+/-- defra-agent's persisted `AgentRuntime.process_state` values. -/
+inductive DefraProcessState where
+  | uninitialized
+  | recovering
+  | ready
+  | shuttingDown
+  | shutdown
+  deriving DecidableEq, Repr
+
+namespace DefraProcessState
+
+/-- Map persisted Rust runtime states to the Lean process state vocabulary. -/
+def toIdeal : DefraProcessState → ProcessState
+  | .uninitialized => .uninitialized
+  | .recovering => .recovering
+  | .ready => .ready
+  | .shuttingDown => .shuttingDown
+  | .shutdown => .shutdown
+
+/-- Persisted string values for `AgentRuntime.process_state`. -/
+def toDefraDB : DefraProcessState → String
+  | .uninitialized => "uninitialized"
+  | .recovering => "recovering"
+  | .ready => "ready"
+  | .shuttingDown => "shuttingDown"
+  | .shutdown => "shutdown"
+
+/-- The Rust/DefraDB mapping preserves process terminal status. -/
+theorem toIdeal_preserves_terminal (s : DefraProcessState) :
+    isTerminal s.toIdeal ↔ s = .shutdown := by
+  cases s <;> simp [toIdeal, HasTerminal.isTerminal, ProcessState.instHasTerminal]
+
+/-- Recovery is an explicit non-work-accepting startup state. -/
+theorem recovering_blocks_work :
+    ¬ (toIdeal .recovering).acceptsWork := by
+  simp [toIdeal, ProcessState.acceptsWork]
+
+end DefraProcessState
 
 /-- defra-agent's persisted `InferenceCall.call_state` values. -/
 inductive DefraInferenceCallState where

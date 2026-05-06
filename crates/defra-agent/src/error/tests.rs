@@ -35,6 +35,24 @@ fn inference_error_retryability() {
 }
 
 #[test]
+fn tool_streaming_errors_are_permanent_until_retry_metadata_exists() {
+    let error = rig::agent::StreamingError::Tool(rig::tool::ToolSetError::ToolNotFoundError(
+        "missing_tool".into(),
+    ));
+
+    let classified = classify_completion_error(&error);
+
+    assert!(matches!(
+        classified,
+        InferenceError::PermanentFailure { .. }
+    ));
+    assert!(
+        !classified.is_retryable(),
+        "tool failures stay permanent until tools expose retry-safe health/idempotency metadata"
+    );
+}
+
+#[test]
 fn daemon_error_from_variants() {
     let config_err: DaemonError = ConfigError::Missing {
         key: "backend_endpoint".into(),

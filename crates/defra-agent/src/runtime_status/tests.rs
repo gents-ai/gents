@@ -5,6 +5,7 @@ use serde::Deserialize;
 
 use super::*;
 use crate::ensure_runtime_schemas;
+use crate::lean_vocab_test::lean_to_defradb_values;
 
 #[derive(Debug, Deserialize)]
 struct AgentRuntimeRow {
@@ -55,6 +56,43 @@ async fn fetch_runtime_row(node: &defra_node::EmbeddedNode, agent_did: &str) -> 
         .cloned()
         .expect("AgentRuntime row");
     serde_json::from_value(value).expect("decode AgentRuntime row")
+}
+
+#[test]
+fn rust_process_state_vocabulary_matches_lean_model() {
+    const LEAN_PROCESS_MODEL: &str = include_str!("../../proofs/Proofs/Process.lean");
+    let rust_states = vec![
+        ProcessLifecycleState::Uninitialized.as_str(),
+        ProcessLifecycleState::Recovering.as_str(),
+        ProcessLifecycleState::Ready.as_str(),
+        ProcessLifecycleState::ShuttingDown.as_str(),
+        ProcessLifecycleState::Shutdown.as_str(),
+    ];
+
+    assert_eq!(
+        rust_states,
+        lean_to_defradb_values(LEAN_PROCESS_MODEL, "ProcessState"),
+        "Rust AgentRuntime.process_state vocabulary must match Proofs.Process"
+    );
+}
+
+#[test]
+fn rust_reconcile_phase_vocabulary_matches_lean_model() {
+    const LEAN_RUNTIME_RECONCILE_MODEL: &str =
+        include_str!("../../proofs/Proofs/RuntimeReconcile/State.lean");
+    let rust_phases = vec![
+        ReconcilePhase::Idle.as_str(),
+        ReconcilePhase::Debouncing.as_str(),
+        ReconcilePhase::Resolving.as_str(),
+        ReconcilePhase::Diffing.as_str(),
+        ReconcilePhase::Applying.as_str(),
+    ];
+
+    assert_eq!(
+        rust_phases,
+        lean_to_defradb_values(LEAN_RUNTIME_RECONCILE_MODEL, "ReconcilePhase"),
+        "Rust AgentRuntime.reconcile_phase vocabulary must match Proofs.RuntimeReconcile.State"
+    );
 }
 
 #[tokio::test]

@@ -30,6 +30,31 @@ inductive ReconcilePhase where
   | applying
   deriving DecidableEq, Repr
 
+namespace ReconcilePhase
+
+/-- String vocabulary persisted in `AgentRuntime.reconcile_phase`. -/
+def toDefraDB : ReconcilePhase → String
+  | .idle => "idle"
+  | .debouncing => "debouncing"
+  | .resolving => "resolving"
+  | .diffing => "diffing"
+  | .applying => "applying"
+
+/-- Parse the persisted `AgentRuntime.reconcile_phase` vocabulary. -/
+def fromDefraDB? : String → Option ReconcilePhase
+  | "idle" => some .idle
+  | "debouncing" => some .debouncing
+  | "resolving" => some .resolving
+  | "diffing" => some .diffing
+  | "applying" => some .applying
+  | _ => none
+
+theorem fromDefraDB_toDefraDB (phase : ReconcilePhase) :
+    fromDefraDB? phase.toDefraDB = some phase := by
+  cases phase <;> rfl
+
+end ReconcilePhase
+
 /-- Desired runtime state resolved from DefraDB documents. -/
 structure ResolvedSnapshot where
   defaultBehavior : BehaviorId

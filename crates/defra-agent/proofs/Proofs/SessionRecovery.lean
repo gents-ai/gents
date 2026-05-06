@@ -71,6 +71,7 @@ def CanReissue (pre : SessionState) (failedId newId : RequestId) : Prop :=
     (pre.ctx failedId).state = .failed ∧
     (pre.ctx failedId).admission = .released ∧
     (pre.ctx failedId).retryCount < (pre.ctx failedId).maxRetries ∧
+    ¬ (pre.ctx failedId).deadlineExceeded ∧
     (pre.ctx failedId).isLatest = true
 
 instance (pre : SessionState) (failedId newId : RequestId) :
@@ -230,6 +231,11 @@ theorem reissuedContext_retryBound
     (reissuedContext ctx).retryCount ≤ (reissuedContext ctx).maxRetries := by
   simpa [reissuedContext] using Nat.succ_le_of_lt h_budget
 
+theorem reissuedContext_deadline_open
+    (ctx : RequestContext) :
+    ¬ (reissuedContext ctx).deadlineExceeded := by
+  simp [RequestContext.deadlineExceeded, reissuedContext]
+
 theorem reissuedContext_coherent
     (ctx : RequestContext) :
     (reissuedContext ctx).coherent := by
@@ -282,7 +288,7 @@ theorem reissue_latest_origin_preserved
     (post.ctx post.latest).origin = (pre.ctx pre.latest).origin := by
   cases h_trans with
   | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
-      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _⟩
+      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _, _⟩
       rw [h_latest, h_ctx, h_failed_latest]
       simp [reissuedContext]
 
@@ -292,7 +298,7 @@ theorem reissue_latest_backend_preserved
     (post.ctx post.latest).backend = (pre.ctx pre.latest).backend := by
   cases h_trans with
   | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
-      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _⟩
+      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _, _⟩
       rw [h_latest, h_ctx, h_failed_latest]
       simp [reissuedContext]
 
@@ -302,7 +308,7 @@ theorem reissue_latest_retryCount_succ
     (post.ctx post.latest).retryCount = (pre.ctx pre.latest).retryCount + 1 := by
   cases h_trans with
   | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
-      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _⟩
+      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _, _⟩
       rw [h_latest, h_ctx, h_failed_latest]
       simp [reissuedContext]
 
@@ -312,11 +318,30 @@ theorem reissue_latest_retryBound
     (post.ctx post.latest).retryCount ≤ (post.ctx post.latest).maxRetries := by
   cases h_trans with
   | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
-      rcases h_can with ⟨h_failed_latest, _, _, _, _, h_budget, _⟩
+      rcases h_can with ⟨h_failed_latest, _, _, _, _, h_budget, _, _⟩
       have h_budget_latest : (pre.ctx pre.latest).retryCount < (pre.ctx pre.latest).maxRetries := by
         simpa [← h_failed_latest] using h_budget
       rw [h_latest, h_ctx, h_failed_latest]
       simpa [reissuedContext] using reissuedContext_retryBound h_budget_latest
+
+theorem reissue_source_deadline_open
+    {pre post : SessionState}
+    (h_trans : Transition pre post) :
+    ¬ (pre.ctx pre.latest).deadlineExceeded := by
+  cases h_trans with
+  | reissue_failed _ _ h_can _ _ _ _ _ =>
+      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, h_deadline, _⟩
+      rw [h_failed_latest] at h_deadline
+      exact h_deadline
+
+theorem reissue_latest_deadline_open
+    {pre post : SessionState}
+    (h_trans : Transition pre post) :
+    ¬ (post.ctx post.latest).deadlineExceeded := by
+  cases h_trans with
+  | reissue_failed failedId newId _ _ _ _ h_latest h_ctx =>
+      rw [h_latest, h_ctx]
+      simpa [Function.update_self] using reissuedContext_deadline_open (pre.ctx failedId)
 
 theorem reissue_demotes_previous_latest
     {pre post : SessionState}
@@ -324,7 +349,7 @@ theorem reissue_demotes_previous_latest
     (post.ctx pre.latest).isLatest = false := by
   cases h_trans with
   | reissue_failed failedId newId h_can _ _ _ _ h_ctx =>
-      rcases h_can with ⟨h_failed_latest, h_failed_mem, h_new, _, _, _, _⟩
+      rcases h_can with ⟨h_failed_latest, h_failed_mem, h_new, _, _, _, _, _⟩
       have h_distinct : newId ≠ pre.latest := by
         intro h_eq
         have h_latest_mem : pre.latest ∈ pre.requestIds := by
@@ -344,7 +369,7 @@ theorem reissue_preserves_latestFlagInvariant
   cases h_trans with
   | reissue_failed failedId newId h_can _ _ h_requestIds h_latest h_ctx =>
       rcases h_pre with ⟨h_pre_latest_mem, h_pre_latest_flag, h_pre_others⟩
-      rcases h_can with ⟨h_failed_latest, h_failed_mem, h_new, _, _, _, _⟩
+      rcases h_can with ⟨h_failed_latest, h_failed_mem, h_new, _, _, _, _, _⟩
       constructor
       · rw [h_latest, h_requestIds]
         exact Finset.mem_insert_self _ _

@@ -17,11 +17,11 @@ slot accounting. It does not model transport endpoint URLs or the service that
 updates backend documents; those are external assumptions supplied to this
 service via DefraDB.
 
-Known deviations in the current Rust implementation:
+Implementation boundaries:
 
-1. aggregate scheduler counts are persisted as `InferenceCall` rows, so the
-   fleet-level `running` view used in `slotAccountingInvariant` is inspectable
-   from DefraDB state
+1. aggregate scheduler counts are reconstructed from `InferenceCall` rows; the
+   fleet-level `running` view used in `slotAccountingInvariant` is a derived
+   proof view, not a separate persisted `FleetState` document
 2. backend health / availability facts are only as current as the backend
    documents observed at admission time; backend document freshness is an
    environmental assumption rather than a service-local proof obligation
@@ -33,3 +33,16 @@ binding and request history. The runtime now stages explicit
 `retry_parent_request`, `retry_root_request`, and `superseded_by_request` writes,
 and those fields now round-trip through DefraDB for DB-only debugging.
 -/
+
+namespace FleetState
+
+/-- The aggregate `running` count in the proof is exactly the reconstructed
+    count of active slot-holding work, not a second persisted Rust document. -/
+theorem slotAccountingInvariant_reconstructs_running
+    {s : FleetState}
+    (h : s.slotAccountingInvariant)
+    (bid : BackendId) :
+    s.scheduler.running bid = s.slotCountFor bid :=
+  h bid
+
+end FleetState

@@ -48,7 +48,7 @@ theorem backend_binding_preserved
     (h_trans : Transition pre post) :
     post.backend = pre.backend := by
   cases h_trans with
-  | claim _ _ h_post => rw [h_post]
+  | claim _ _ _ h_post => rw [h_post]
   | dedup_lose _ _ h_post => rw [h_post]
   | begin_inference _ _ h_post => rw [h_post]
   | advance _ _ h_post => rw [h_post]
@@ -71,7 +71,7 @@ theorem origin_preserved
     (h_trans : Transition pre post) :
     post.origin = pre.origin := by
   cases h_trans with
-  | claim _ _ h_post => rw [h_post]
+  | claim _ _ _ h_post => rw [h_post]
   | dedup_lose _ _ h_post => rw [h_post]
   | begin_inference _ _ h_post => rw [h_post]
   | advance _ _ h_post => rw [h_post]
@@ -94,7 +94,7 @@ theorem transition_produces_coherent
     (h_trans : Transition pre post) :
     post.coherent := by
   cases h_trans with
-  | claim _ _ h_post =>
+  | claim _ _ _ h_post =>
     rw [coherent, h_post]
     simp [coherentStateAdmission]
   | dedup_lose _ h_release h_post =>
@@ -156,5 +156,58 @@ theorem claimed_coherent_cases
     cases h_state
     cases admission <;> simp [coherent, coherentStateAdmission] at h_coherent ⊢
 
+/-- A Pending → Claimed transition is only legal while the submitter TTL is open.
+    This is the proof-side mirror of Rust checking `valid_until` before claim. -/
+theorem claim_requires_ttl_open
+    {pre post : RequestContext}
+    (h_trans : Transition pre post)
+    (h_claimed : post.state = .claimed) :
+    pre.ttlOpen := by
+  cases h_trans with
+  | claim _ _ h_ttl _ =>
+      exact h_ttl
+  | dedup_lose _ _ h_post =>
+      simp [h_post] at h_claimed
+  | begin_inference _ _ h_post =>
+      simp [h_post] at h_claimed
+  | advance h_state _ h_post =>
+      simp [h_post, h_state] at h_claimed
+  | need_input _ _ h_post =>
+      simp [h_post] at h_claimed
+  | input_received _ _ h_post =>
+      simp [h_post] at h_claimed
+  | finish _ _ h_post =>
+      simp [h_post] at h_claimed
+  | fail _ _ h_post =>
+      simp [h_post] at h_claimed
+  | fail_before_stream _ _ h_post =>
+      simp [h_post] at h_claimed
+  | input_timeout _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | exhaust _ _ h_post =>
+      simp [h_post] at h_claimed
+  | deadline_expire _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | expire _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_before_claim _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_claimed _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_processing _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_input_required _ _ _ h_post =>
+      simp [h_post] at h_claimed
+
+theorem claim_with_ttl_bounds_time
+    {pre post : RequestContext}
+    {t : Time}
+    (h_trans : Transition pre post)
+    (h_claimed : post.state = .claimed)
+    (h_ttl : pre.validUntil = some t) :
+    pre.currentTime ≤ t := by
+  have h_open := claim_requires_ttl_open h_trans h_claimed
+  unfold ttlOpen at h_open
+  simpa [h_ttl] using h_open
 
 end RequestContext

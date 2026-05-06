@@ -32,7 +32,7 @@ inductive Action where
 /-- Executable transition function for the request layer. -/
 def step? (pre : RequestContext) : Action → Option RequestContext
   | .claim =>
-      if pre.state = .pending ∧ pre.admission = .released then
+      if pre.state = .pending ∧ pre.admission = .released ∧ pre.ttlOpen then
         some { pre with state := .claimed, admission := .waiting, claimTime := pre.currentTime, deadline := pre.currentTime + 1 }
       else
         none
@@ -146,8 +146,8 @@ theorem step_sound
   | claim =>
       simp [step?] at h_step
       rcases h_step with ⟨h_claim, h_post⟩
-      rcases h_claim with ⟨h_state, h_admission⟩
-      exact Transition.claim h_state h_admission h_post.symm
+      rcases h_claim with ⟨h_state, h_admission, h_ttl⟩
+      exact Transition.claim h_state h_admission h_ttl h_post.symm
   | dedupLose =>
       simp [step?] at h_step
       rcases h_step with ⟨h_claim, h_post⟩
@@ -238,8 +238,8 @@ theorem transition_complete
     (h_trans : Transition pre post) :
     ∃ action : Action, step? pre action = some post := by
   cases h_trans with
-  | claim h_state h_admission h_post =>
-      exact ⟨.claim, by simp [step?, h_state, h_admission, h_post]⟩
+  | claim h_state h_admission h_ttl h_post =>
+      exact ⟨.claim, by simp [step?, h_state, h_admission, h_ttl, h_post]⟩
   | dedup_lose h_state h_admission h_post =>
       exact ⟨.dedupLose, by simp [step?, h_state, h_admission, h_post]⟩
   | begin_inference h_state h_admission h_post =>

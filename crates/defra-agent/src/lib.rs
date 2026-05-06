@@ -20,6 +20,8 @@ pub mod health_checker;
 pub mod hook;
 pub mod identity;
 pub mod interrupt;
+#[cfg(test)]
+pub(crate) mod lean_vocab_test;
 pub mod lifecycle;
 pub mod mcp_pool;
 pub mod meta_tools;
