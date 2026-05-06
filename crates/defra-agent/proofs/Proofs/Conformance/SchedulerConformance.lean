@@ -1,4 +1,5 @@
 import Proofs.Fleet
+import Proofs.InferenceCall.SlotAccounting
 
 /-!
 # Conformance Mapping: Rust Scheduler → Ideal Model
@@ -9,8 +10,11 @@ The intended ideal model is:
 - scheduled work is materialized into the same lifecycle at `claimed`
 - call-level admission in `InferenceCall` corresponds to `FleetState.CanAcquire`
   plus the `acquire_slot` transition
+- persisted `InferenceCall.call_state = "running"` is the production source of
+  held backend slots
+- queued and terminal `InferenceCall` rows do not hold backend slots
 - inference start corresponds to `begin_execution`
-- terminal completion/failure corresponds to `release_on_terminal`
+- terminal completion/failure/cancellation corresponds to `release_on_terminal`
 
 The proof model treats `BackendId` as an opaque binding used for admission and
 slot accounting. It does not model transport endpoint URLs or the service that
@@ -46,3 +50,31 @@ theorem slotAccountingInvariant_reconstructs_running
   h bid
 
 end FleetState
+
+namespace InferenceCall
+
+/-- Production scheduler counts are reconstructed from persisted
+    `InferenceCall` rows, where only `running` rows contribute. -/
+theorem scheduler_running_reconstructed_from_inference_calls
+    {callIds : Finset Nat}
+    {row : Nat → InferenceCall}
+    {scheduler : SchedulerState}
+    (h_reconstruct : ReconstructsSchedulerRunning callIds row scheduler)
+    (bid : BackendId) :
+    scheduler.running bid = reconstructedSlotCount callIds row bid :=
+  h_reconstruct bid
+
+/-- If the reconstructed running view satisfies the scheduler capacity
+    invariant, then the persisted running-row count cannot exceed backend
+    `max_concurrent`. -/
+theorem reconstructed_counts_respect_scheduler_capacity
+    {callIds : Finset Nat}
+    {row : Nat → InferenceCall}
+    {scheduler : SchedulerState}
+    (h_reconstruct : ReconstructsSchedulerRunning callIds row scheduler)
+    (h_capacity : SchedulerState.capacityInvariant scheduler)
+    (bid : BackendId) :
+    reconstructedSlotCount callIds row bid ≤ (scheduler.backends bid).max_concurrent :=
+  reconstructedSlotCount_bounded_by_max_concurrent h_reconstruct h_capacity bid
+
+end InferenceCall

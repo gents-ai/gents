@@ -43,8 +43,10 @@ permanent failure.
 
 The scheduler's aggregate fleet slot state is reconstructed from
 `InferenceCall` rows. A backend's held slot count is the derived count of rows
-with `call_state = "running"`; there is intentionally no denormalized persisted
-`FleetState` document that must carry the aggregate invariant.
+with `call_state = "running"`; queued rows are waiting for a semaphore permit
+and terminal rows (`cancelled`, `completed`, `failed`) have released any permit.
+There is intentionally no denormalized persisted `FleetState` document that
+must carry the aggregate invariant.
 
 ## External Assumptions
 
@@ -58,6 +60,9 @@ CRDT/event-delivery guarantees are outside the core request proof.
 Backend health and availability observations are only as fresh as the backend
 documents visible at admission time. Endpoint freshness and network/provider
 behavior are environmental assumptions, not service-local state-machine facts.
+The service-local proof and tests cover the consequence of an observed backend
+configuration: reconstructed running call rows do not exceed that backend's
+`max_concurrent`.
 
 ## Closed Historical Items
 

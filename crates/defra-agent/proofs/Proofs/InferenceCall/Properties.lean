@@ -28,6 +28,26 @@ theorem transition_preserves_requestId
           rw [h_post]
           exact cancel_preserves_requestId pre
 
+theorem transition_preserves_backend
+    {pre post : InferenceCall}
+    (h_trans : Transition pre post) :
+    post.backend = pre.backend := by
+  cases h_trans with
+  | start _ h_post =>
+      rw [h_post]
+  | complete _ h_post =>
+      rw [h_post]
+  | fail _ h_post =>
+      rw [h_post]
+  | cancel h_cancel =>
+      cases h_cancel with
+      | cancel_before_stream _ h_post =>
+          rw [h_post]
+          exact cancel_preserves_backend pre
+      | cancel_during_stream _ h_post =>
+          rw [h_post]
+          exact cancel_preserves_backend pre
+
 theorem cancellation_transition_to_cancelled
     {pre post : InferenceCall}
     (h_cancel : CancellationTransition pre post) :
@@ -96,5 +116,15 @@ theorem trace_preserves_requestId
       rfl
   | step h_step _ ih =>
       exact Eq.trans ih (transition_preserves_requestId h_step)
+
+theorem trace_preserves_backend
+    {pre post : InferenceCall}
+    (h_trace : Trace pre post) :
+    post.backend = pre.backend := by
+  induction h_trace with
+  | refl =>
+      rfl
+  | step h_step _ ih =>
+      exact Eq.trans ih (transition_preserves_backend h_step)
 
 end InferenceCall

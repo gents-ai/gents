@@ -78,6 +78,7 @@ def initial : ComposedState :=
   , call :=
     { callId := 0
     , requestId := 0
+    , backend := { val := "initial-backend" }
     , state := .queued
     }
   }

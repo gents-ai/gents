@@ -1,4 +1,4 @@
-import Proofs.Basic
+import Proofs.Scheduling
 
 /-!
 # Inference Call State
@@ -109,6 +109,7 @@ end InferenceCallTerminalReason
 structure InferenceCall where
   callId : Nat
   requestId : RequestId
+  backend : BackendId
   state : InferenceCallState
   deriving Repr
 
@@ -140,6 +141,10 @@ theorem cancel_state (call : InferenceCall) :
 
 theorem cancel_preserves_requestId (call : InferenceCall) :
     call.cancel.requestId = call.requestId := by
+  rfl
+
+theorem cancel_preserves_backend (call : InferenceCall) :
+    call.cancel.backend = call.backend := by
   rfl
 
 end InferenceCall

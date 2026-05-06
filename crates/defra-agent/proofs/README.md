@@ -13,8 +13,8 @@ state machines explicit enough that:
 The proofs are strongest where the runtime is a state machine:
 
 - request, process, and persistence lifecycle transitions
-- inference-call lifecycle and cancellation transitions
-- scheduler and fleet slot accounting
+- inference-call lifecycle, cancellation transitions, and slot reconstruction
+- scheduler and fleet slot accounting from persisted call rows
 - session retry/reissue
 - runtime reconcile generation publication
 - desired-state apply ordering and field ownership
@@ -83,7 +83,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Basic.lean` | Shared opaque ids, `Time`, and terminal-state helpers |
 | `Proofs/Process.lean` | Process lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/Request.lean` | Barrel for request state, transitions, executable semantics, and local properties |
-| `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, and cancellation properties |
+| `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, slot accounting, and cancellation properties |
 | `Proofs/Persistence.lean` | Persistence lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/Composed.lean` | Cross-layer composition and guards |
 | `Proofs/Scheduling.lean` | Scheduler/backend slot state |
@@ -110,7 +110,7 @@ Semantic submodules:
 | Barrel | Submodules |
 |--------|------------|
 | `Proofs.Request` | `State`, `Transition`, `Executable`, `Properties` |
-| `Proofs.InferenceCall` | `State`, `Transition`, `Properties` |
+| `Proofs.InferenceCall` | `State`, `Transition`, `Properties`, `SlotAccounting` |
 | `Proofs.RuntimeReconcile` | `State`, `Transition` |
 | `Proofs.ApplyReconcile` | `Collections`, `Manifest`, `Diff`, `Apply`, `ApplyProperties`, `RuntimeBridge`, `Convergence` |
 | `Proofs.Triggers` | `Types`, `Dispatch`, `Reachability`, `SerialSupport`, `Serial`, `LatestOnly`, `Lineage` |
@@ -198,14 +198,17 @@ States:
 Operational meaning:
 
 - `queued` is persisted before a backend semaphore permit is available
-- `running` owns a backend permit and is waiting for or consuming provider work
+- `queued` does not hold a backend slot
+- `running` owns exactly one backend permit and is waiting for or consuming provider work
 - `cancelled` records terminal cancellation without provider completion,
   including request interrupts and backend lifecycle cancellation
+- `cancelled`, `completed`, and `failed` release backend capacity and do not
+  contribute to reconstructed slot counts
 - terminal call states are `cancelled`, `completed`, and `failed`
 
 The core request/process/persistence state space remains `9 x 5 x 4 = 180`
 states. The call layer adds a separate 5-state persisted lifecycle linked to a
-request by `request_id`.
+request by `request_id` and bound to a backend by `backend_id`.
 
 ## Plain-English Property Summary
 
@@ -249,9 +252,9 @@ being reclassified as `dead`.
 
 | ID | Property | Why it matters | Theorem |
 |----|----------|----------------|---------|
-| S7 | Capacity invariants are preserved | Running-slot counts stay within backend limits | `capacity_invariant_preserved` |
-| S8 | Slot accounting is preserved | Scheduler running counts stay aligned with per-request admission state | `slot_accounting_preserved` |
-| S9 | Terminal work releases capacity; unavailable backends cannot acquire | Slots are not leaked and unrunnable backends do not accept new work | `terminal_implies_released`, `unavailable_blocks_acquire` |
+| S7 | Capacity invariants are preserved | Running-slot counts stay within backend limits | `capacity_invariant_preserved`, `reconstructedSlotCount_bounded_by_max_concurrent` |
+| S8 | Slot accounting is preserved | Scheduler running counts stay aligned with per-request admission state and persisted running call rows | `slot_accounting_preserved`, `scheduler_running_reconstructed_from_inference_calls` |
+| S9 | Terminal work releases capacity; unavailable backends cannot acquire | Slots are not leaked and unrunnable backends do not accept new work | `terminal_implies_released`, `permitDrop_terminalization_not_counted`, `unavailable_blocks_acquire` |
 | L | Capacity-available work can acquire | A waiting request is not artificially blocked when slots exist | `acquire_when_capacity_available` |
 | L | Accepted work eventually releases | The model has a constructive path from accepted work to released capacity | `accepted_work_eventually_releases` |
 
@@ -259,6 +262,12 @@ The scheduling-liveness theorem was intentionally renamed to
 `accepted_work_eventually_releases`; the old name used the previous acceptance
 vocabulary and is not kept as an alias so the proof-tree hygiene search stays
 unambiguous.
+
+`Proofs/InferenceCall/SlotAccounting.lean` is the production-facing slot model:
+queued rows contribute zero slots, running rows contribute one slot on their
+`backend_id`, terminal rows contribute zero slots, permit-drop terminalization
+cannot leave a row counted, and live linked queued/running calls have a model
+path to a non-slot-holding terminal state.
 
 ### Session Recovery
 
@@ -383,6 +392,12 @@ process lifecycle states, runtime reconcile phases, trigger kinds,
 inference-call states, and the closed set of system-generated inference-call
 terminal reasons.
 
+Admission tests also reconstruct held backend slots from persisted
+`InferenceCall` rows during contention, queueing, completion, failure,
+cancellation, permit-drop, backend-gone, and queue-full paths. These tests
+assert that only `call_state = "running"` holds capacity and that the
+reconstructed count never exceeds backend `max_concurrent`.
+
 ## Decidable Exhaustive Checks
 
 The finite-state checks currently establish:
@@ -415,7 +430,8 @@ Current boundaries:
 - Tool failures are permanent until tools expose retry-safe health,
   idempotency, and side-effect metadata.
 - Fleet aggregate slot state is reconstructed from `InferenceCall` rows rather
-  than persisted as a single `FleetState` document.
+  than persisted as a single `FleetState` document. Only rows with
+  `call_state = "running"` hold slots; queued and terminal rows do not.
 - `PersistenceState` is a proof abstraction over durable writes; DefraDB
   successful-mutation durability is an external storage assumption.
 
