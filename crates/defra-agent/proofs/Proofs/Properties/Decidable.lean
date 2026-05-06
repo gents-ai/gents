@@ -1,6 +1,7 @@
 import Proofs.Request
 import Proofs.Process
 import Proofs.Persistence
+import Proofs.StorageObservation
 import Proofs.InferenceCall
 import Proofs.Scheduling
 import Mathlib.Data.Fintype.Card
@@ -11,7 +12,7 @@ import Mathlib.Data.Fintype.Card
 Finite enumeration and simple coherence checks over the ideal state space.
 -/
 
-open RequestState ProcessState PersistenceState InferenceCallState ExecutionOrigin AdmissionState
+open RequestState ProcessState PersistenceState StorageObservation InferenceCallState ExecutionOrigin AdmissionState
 
 instance : Fintype RequestState :=
   Fintype.ofList
@@ -27,6 +28,12 @@ instance : Fintype ProcessState :=
 instance : Fintype PersistenceState :=
   Fintype.ofList
     [.uncommitted, .committing, .committed, .lost]
+    (fun s => by cases s <;> simp)
+
+instance : Fintype StorageObservation :=
+  Fintype.ofList
+    [.noMutation, .inFlight, .successAcknowledged, .mutationFailed,
+     .staleObserved, .readVisible, .lostAcknowledged]
     (fun s => by cases s <;> simp)
 
 instance : Fintype InferenceCallState :=
@@ -83,6 +90,19 @@ theorem persistence_no_deadlocks (s : PersistenceState) (h : ¬isTerminal s) :
   | committed => exact absurd (Or.inl rfl) h
   | lost => exact absurd (Or.inr rfl) h
 
+theorem storage_observation_no_deadlocks
+    (s : StorageObservation)
+    (h : ¬isTerminal s) :
+    ∃ s' : StorageObservation, s ≠ s' := by
+  cases s with
+  | noMutation => exact ⟨.inFlight, by decide⟩
+  | inFlight => exact ⟨.successAcknowledged, by decide⟩
+  | successAcknowledged => exact ⟨.readVisible, by decide⟩
+  | mutationFailed => exact ⟨.noMutation, by decide⟩
+  | staleObserved => exact ⟨.readVisible, by decide⟩
+  | readVisible => exact absurd (Or.inl rfl) h
+  | lostAcknowledged => exact absurd (Or.inr rfl) h
+
 theorem inference_call_no_deadlocks (s : InferenceCallState) (h : ¬isTerminal s) :
     ∃ s' : InferenceCallState, s ≠ s' := by
   cases s with
@@ -133,6 +153,7 @@ theorem terminal_requires_released (s : RequestState) (a : AdmissionState)
 #eval Fintype.card RequestState
 #eval Fintype.card ProcessState
 #eval Fintype.card PersistenceState
+#eval Fintype.card StorageObservation
 #eval Fintype.card InferenceCallState
 #eval Fintype.card RequestState * Fintype.card ProcessState * Fintype.card PersistenceState
 #eval Fintype.card ExecutionOrigin

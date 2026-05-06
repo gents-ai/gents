@@ -33,6 +33,8 @@ fn lean_executable_contracts_cover_initial_domains() {
         "Process",
         "Persistence.failClosed",
         "Persistence.failOpen",
+        "StorageObservation.failClosed",
+        "StorageObservation.failOpen",
         "RuntimeReconcile",
         "SessionRecovery",
         "InferenceCall",
@@ -44,13 +46,68 @@ fn lean_executable_contracts_cover_initial_domains() {
     assert_lean_transition_is_legal("RuntimeReconcile", "idle", "debouncing");
     assert_lean_transition_is_legal("Persistence.failClosed", "committing", "uncommitted");
     assert_lean_transition_is_legal("Persistence.failOpen", "committing", "lost");
+    assert_lean_transition_is_legal("StorageObservation.failClosed", "noMutation", "inFlight");
+    assert_lean_transition_is_legal(
+        "StorageObservation.failClosed",
+        "inFlight",
+        "successAcknowledged",
+    );
+    assert_lean_transition_is_legal(
+        "StorageObservation.failClosed",
+        "inFlight",
+        "mutationFailed",
+    );
+    assert_lean_transition_is_legal(
+        "StorageObservation.failClosed",
+        "mutationFailed",
+        "noMutation",
+    );
+    assert_lean_transition_is_legal(
+        "StorageObservation.failOpen",
+        "mutationFailed",
+        "lostAcknowledged",
+    );
+    assert_lean_transition_is_legal(
+        "StorageObservation.failClosed",
+        "successAcknowledged",
+        "staleObserved",
+    );
+    assert_lean_transition_is_legal(
+        "StorageObservation.failClosed",
+        "successAcknowledged",
+        "readVisible",
+    );
+    assert_lean_transition_is_legal(
+        "StorageObservation.failClosed",
+        "staleObserved",
+        "readVisible",
+    );
+    assert_lean_transition_is_illegal(
+        "StorageObservation.failClosed",
+        "mutationFailed",
+        "lostAcknowledged",
+    );
+    assert_lean_transition_is_illegal(
+        "StorageObservation.failOpen",
+        "mutationFailed",
+        "noMutation",
+    );
     assert_lean_transition_is_legal("SessionRecovery", "failed", "pending");
     assert_lean_transition_is_legal("InferenceCall", "queued", "running");
     assert_lean_transition_is_legal("InferenceCall", "running", "completed");
     assert_lean_transition_is_legal("InferenceCall", "running", "failed");
+    let follow_up_hooks = &lean_contract_snapshot().follow_up_hooks;
     assert!(
-        lean_contract_snapshot().follow_up_hooks.is_empty(),
+        !follow_up_hooks
+            .iter()
+            .any(|hook| hook.contains("RuntimeReconcile")),
         "RuntimeReconcile should be emitted as generated contract output, not a follow-up hook"
+    );
+    assert!(
+        follow_up_hooks
+            .iter()
+            .any(|hook| hook.contains("ToolExecution")),
+        "ToolExecution remains a follow-up until idempotency metadata is modeled"
     );
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 6);
     assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 8);

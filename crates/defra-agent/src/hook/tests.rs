@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use rig::agent::{HookAction, PromptHook, ToolCallHookAction};
@@ -67,6 +68,13 @@ fn session_state_for_test() -> SessionState {
     }
 }
 
+fn hook_counters_for_test() -> HookCounters {
+    HookCounters {
+        failures: AtomicU64::new(0),
+        successes: AtomicU64::new(0),
+    }
+}
+
 #[test]
 fn transcript_turn_state_allocates_new_assistant_after_saved_turn() {
     let mut state = session_state_for_test();
@@ -91,6 +99,47 @@ fn transcript_turn_state_rejects_stream_result_before_assistant_is_saved() {
     assert!(state.mark_stream_tool_result_seen("call-1").is_err());
     assert_eq!(state.persist_assistant_turn().unwrap(), 1);
     assert!(state.mark_stream_tool_result_seen("call-1").unwrap());
+}
+
+#[test]
+fn fail_closed_persistence_policy_terminates_and_records_failure() {
+    let counters = hook_counters_for_test();
+    let error = anyhow::anyhow!("synthetic persistence failure");
+
+    let decision = decide_persistence_outcome(
+        FailurePolicy::FailClosed,
+        &counters,
+        "unit-test failure",
+        &error,
+    );
+
+    assert!(matches!(
+        decision,
+        PolicyDecision::Terminate(reason) if reason.contains("synthetic persistence failure")
+    ));
+    assert_eq!(counters.failures.load(Ordering::Relaxed), 1);
+    assert_eq!(counters.successes.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn fail_open_persistence_policy_continues_without_success_ack() {
+    let counters = hook_counters_for_test();
+    let error = anyhow::anyhow!("synthetic persistence failure");
+
+    let decision = decide_persistence_outcome(
+        FailurePolicy::FailOpen,
+        &counters,
+        "unit-test failure",
+        &error,
+    );
+
+    assert!(matches!(decision, PolicyDecision::Continue));
+    assert_eq!(counters.failures.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        counters.successes.load(Ordering::Relaxed),
+        0,
+        "fail-open continuation must not count as a successful storage ack"
+    );
 }
 
 async fn create_streaming_response(

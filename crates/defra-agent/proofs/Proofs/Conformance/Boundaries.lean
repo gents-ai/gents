@@ -37,9 +37,19 @@ deadline expiry remain terminal `failed`.
 
 Tool-call failures are classified as permanent until tool metadata can prove
 retry safety. Retrying tool calls without health, idempotency, and side-effect
-metadata can repeat side effects, so the model leaves tool retry eligibility out
-of the request transition system and Rust treats `StreamingError::Tool(_)` as a
-permanent failure.
+metadata can repeat side effects, so the request transition system does not
+model tool retries and Rust treats `StreamingError::Tool(_)` as a permanent
+failure.
+
+`Proofs.ToolExecution` is the initial local model for future MCP/tool execution
+semantics. It currently proves only the service-local boundary Rust enforces:
+unreachable services and invalid preflight schemas block dispatch, `list_tools`
+transport retries are safe-read retries, and `call_tool` transport retries
+require explicit idempotency evidence. Rust does not currently persist or
+consume idempotency metadata for MCP tools, so `McpPool::call_tool` must not
+implicitly retry after dispatch failure. Future tool retries should first extend
+`ToolExecution.IdempotencyEvidence`, add a Rust contract for the advertised
+metadata, and only then widen `McpPool::call_tool` retry behavior.
 
 The scheduler's aggregate fleet slot state is reconstructed from
 `InferenceCall` rows. A backend's held slot count is the derived count of rows
@@ -57,14 +67,33 @@ tests cover the parser/validator boundary and command metadata emitted by
 `toolset/shared/command.rs`; the Lean model covers the fail-closed policy
 ordering and sandbox/env invariants that those tests exercise.
 
-## External Assumptions
+## Modeled Storage Observation Boundary
 
-The `PersistenceState` model abstracts the storage commit boundary. Rust uses
+`PersistenceState` remains the abstract committed/uncommitted lifecycle. The
+separate `StorageObservation` model records the daemon-visible storage facts
+that justify moving through that lifecycle:
+
+* an awaited mutation that returns success is treated as a committed write;
+* a mutation error is not treated as committed;
+* fail-closed storage errors return to retryable uncommitted state;
+* fail-open storage errors acknowledge the output as lost;
+* stale reads or missing/stale events may occur after a success ack, but they do
+  not invalidate the commit assumption; and
+* the daemon assumes a minimum visibility path: read-your-writes for local
+  confirmation paths, or eventual observation after a stale read/event.
+
+These are daemon storage assumptions, not proofs of DefraDB internals. Rust uses
 `StreamBuffer`, `DefraSessionHook`, and hook failure policy around DefraDB
-mutations; it does not persist a per-token `PersistenceState` document. The
-assumption is: DefraDB mutations that return success are durable for the modeled
-stream/session writes. Storage-engine crash windows, transport delivery, and
-CRDT/event-delivery guarantees are outside the core request proof.
+mutations; it does not persist a per-token `PersistenceState` or
+`StorageObservation` document. Storage-engine crash windows, transport delivery,
+global CRDT convergence, and event-bus delivery correctness remain external
+DefraDB/environment assumptions.
+
+This section is the modeled part of the former broad storage assumption; the
+following section keeps the still-external DefraDB/environment assumptions
+separate.
+
+## External Assumptions
 
 Backend health and availability observations are only as fresh as the backend
 documents visible at admission time. Endpoint freshness and network/provider

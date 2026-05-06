@@ -1,10 +1,12 @@
 import Proofs.Request
 import Proofs.Process
 import Proofs.Persistence
+import Proofs.StorageObservation
 import Proofs.SessionRecovery
 import Proofs.InferenceCall
 import Proofs.RuntimeReconcile
 import Proofs.Conformance.ContractCases
+import Proofs.ToolExecution
 
 /-!
 # Rust Conformance Contracts
@@ -231,6 +233,45 @@ def persistenceMachine
       (fun state action => PersistenceState.step? policy state action)
       PersistenceState.toDefraDB)
 
+def storageObservationStates : List StorageObservation :=
+  [ .noMutation
+  , .inFlight
+  , .successAcknowledged
+  , .mutationFailed
+  , .staleObserved
+  , .readVisible
+  , .lostAcknowledged
+  ]
+
+def storageObservationStateNames : List String :=
+  storageObservationStates.map StorageObservation.toContract
+
+def storageObservationActions : List (String × StorageObservation.Action) :=
+  [ ("beginMutation", .beginMutation)
+  , ("mutationSuccess", .mutationSuccess)
+  , ("mutationFailure", .mutationFailure)
+  , ("staleRead", .staleRead)
+  , ("staleEvent", .staleEvent)
+  , ("readYourWrites", .readYourWrites)
+  , ("eventArrives", .eventArrives)
+  , ("retryFailClosed", .retryFailClosed)
+  , ("acknowledgeLost", .acknowledgeLost)
+  ]
+
+def storageObservationMachine
+    (domain : String)
+    (policy : PersistenceState.FailurePolicy) : StateMachineContract :=
+  machineContract
+    domain
+    storageObservationStateNames
+    (terminalNames storageObservationStates StorageObservation.toContract)
+    (actionNames storageObservationActions)
+    (transitionPairsFromSamples
+      storageObservationStates
+      storageObservationActions
+      (fun state action => StorageObservation.step? policy state action)
+      StorageObservation.toContract)
+
 def runtimeReconcileStates : List ReconcilePhase :=
   [ .idle, .debouncing, .resolving, .diffing, .applying ]
 
@@ -349,6 +390,12 @@ def inferenceCallMachine : StateMachineContract :=
       InferenceCall.step?
       (fun call => call.state.toDefraDB))
 
+def toolRetryDispositions : List ToolExecution.RetryDisposition :=
+  ToolExecution.RetryDisposition.all
+
+def toolRetryDispositionNames : List String :=
+  toolRetryDispositions.map ToolExecution.RetryDisposition.toDefraDB
+
 def vocabularies : List VocabularyContract :=
   [ { domain := "RequestState", values := requestStateNames }
   , { domain := "ExecutionOrigin", values :=
@@ -358,6 +405,7 @@ def vocabularies : List VocabularyContract :=
   , { domain := "PersistenceFailurePolicy", values :=
         [.failOpen, .failClosed].map PersistenceState.FailurePolicy.toDefraDB }
   , { domain := "ReconcilePhase", values := runtimeReconcileStateNames }
+  , { domain := "StorageObservation", values := storageObservationStateNames }
   , { domain := "SessionRecoveryLatestRequestState"
     , values := [RequestState.failed.toDefraDB, RequestState.pending.toDefraDB]
     }
@@ -369,6 +417,7 @@ def vocabularies : List VocabularyContract :=
         , .streamDroppedBeforeTerminalResponse
         ].map InferenceCallTerminalReason.toDefraDB
     }
+  , { domain := "ToolRetryDisposition", values := toolRetryDispositionNames }
   ]
 
 def stateMachines : List StateMachineContract :=
@@ -376,6 +425,8 @@ def stateMachines : List StateMachineContract :=
   , processMachine
   , persistenceMachine "Persistence.failClosed" .failClosed
   , persistenceMachine "Persistence.failOpen" .failOpen
+  , storageObservationMachine "StorageObservation.failClosed" .failClosed
+  , storageObservationMachine "StorageObservation.failOpen" .failOpen
   , runtimeReconcileMachine
   , sessionRecoveryMachine
   , inferenceCallMachine
@@ -474,7 +525,9 @@ def snapshotJson : String :=
       ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
     ++ "\"session_recovery_cases\":"
       ++ jsonArray (sessionRecoveryCases.map sessionRecoveryCaseJson) ++ ","
-    ++ "\"follow_up_hooks\":[]"
+    ++ "\"follow_up_hooks\":["
+      ++ jsonString "ToolExecution idempotent MCP call retry contract"
+      ++ "]"
     ++ "}"
 
 def contractJsonBegin : String :=

@@ -91,6 +91,64 @@ describe("projectChatShell", () => {
     expect(projection.sendStatus.kind).toBe("disabled");
   });
 
+  test("keeps awaiting observation until the matching request is observed", () => {
+    const projection = projectChatShell({
+      clientAvailable: true,
+      selectedAgentDid: "did:defra:amy",
+      selectedSessionId: "session-1",
+      draft: "follow up",
+      sending: false,
+      selectedConversation: conversation({ latestRequestId: "req-old", turnState: "completed" }),
+      session: session({ latestRequestId: "req-old", turnState: "completed" }),
+      localWorkflow: {
+        kind: "awaitingObservation",
+        sessionId: "session-1",
+        requestId: "req-new",
+      },
+    });
+
+    expect(projection.workflow).toEqual({
+      kind: "awaitingObservation",
+      sessionId: "session-1",
+      requestId: "req-new",
+    });
+    expect(projection.sendStatus).toEqual({
+      kind: "disabled",
+      reason: "waitingForRequestObservation",
+      hint: "Waiting for request observation",
+    });
+  });
+
+  test("ignores stale tracked workflow after user switches sessions", () => {
+    const projection = projectChatShell({
+      clientAvailable: true,
+      selectedAgentDid: "did:defra:amy",
+      selectedSessionId: "session-2",
+      draft: "new session follow up",
+      sending: false,
+      selectedConversation: conversation({
+        sessionId: "session-2",
+        latestRequestId: "req-2",
+        turnState: "completed",
+      }),
+      session: session({
+        sessionId: "session-2",
+        latestRequestId: "req-2",
+        turnState: "completed",
+      }),
+      localWorkflow: {
+        kind: "turnInProgress",
+        sessionId: "session-1",
+        requestId: "req-1",
+        turnState: "streaming",
+      },
+    });
+
+    expect(projection.workflow).toEqual({ kind: "ready" });
+    expect(projection.activeRequestId).toBe("req-2");
+    expect(projection.sendStatus).toEqual({ kind: "ready" });
+  });
+
   test("blocks inconsistent observation when latest request is missing", () => {
     const projection = projectChatShell({
       clientAvailable: true,

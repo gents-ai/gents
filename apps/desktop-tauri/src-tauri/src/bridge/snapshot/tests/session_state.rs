@@ -183,6 +183,69 @@ fn session_snapshot_prefers_tracked_request_over_stale_conversation_latest_reque
 }
 
 #[test]
+fn session_snapshot_does_not_report_unobserved_preferred_request() {
+    let store = ClientStore::from_rows(ClientStoreRows {
+        conversations: vec![AgentConversationRow {
+            session_id: "session-1".to_string(),
+            agent_name: Some("Amy".to_string()),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            title: Some("conversation".to_string()),
+            title_source: Some("generated".to_string()),
+            preview_text: Some("turn one".to_string()),
+            status: Some("active".to_string()),
+            created_at: Some("2026-04-21T12:00:00Z".to_string()),
+            updated_at: Some("2026-04-21T12:00:01Z".to_string()),
+            latest_request_id: Some("req-old".to_string()),
+        }],
+        requests: vec![AgentRequestRow {
+            request_id: "req-old".to_string(),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            session_id: Some("session-1".to_string()),
+            retry_parent_request: None,
+            retry_root_request: None,
+            superseded_by_request: None,
+            content: Some("turn one".to_string()),
+            status: Some("completed".to_string()),
+            lifecycle_state: Some("completed".to_string()),
+            backend_id: None,
+            execution_origin: Some("interactive".to_string()),
+            failure_reason: None,
+            created_at: Some("2026-04-21T12:00:00Z".to_string()),
+            claimed_at: None,
+            deadline: None,
+            retry_count: Some(0),
+            max_retries: Some(3),
+            caused_by_trigger_id: None,
+            caused_by_trigger_kind: None,
+            interrupt_requested_at: None,
+            valid_until: None,
+        }],
+        messages: vec![AgentMessageRow {
+            message_key: "msg-1".to_string(),
+            session_id: Some("session-1".to_string()),
+            sequence: Some(1),
+            role: Some("user".to_string()),
+            content: Some(user_message_json("turn one")),
+            timestamp: Some("2026-04-21T12:00:00Z".to_string()),
+        }],
+        ..ClientStoreRows::default()
+    });
+
+    let snapshot = build_session_snapshot_from_store(&store, "session-1", Some("req-new"))
+        .expect("session snapshot");
+
+    assert_eq!(
+        snapshot.latest_request_id.as_deref(),
+        Some("req-old"),
+        "Proofs.ClientShell.C9: an awaiting request retires only after the matching request is observed"
+    );
+    assert_eq!(snapshot.turn_state.as_deref(), Some("completed"));
+    assert!(snapshot.pending_turn.is_none());
+}
+
+#[test]
 fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
     let submitted = ClientStore::from_rows(ClientStoreRows {
         conversations: vec![AgentConversationRow {
