@@ -115,8 +115,10 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
     : null;
 
   const trackedRequestId =
-    input.localWorkflow.kind === "awaitingObservation" ||
-    input.localWorkflow.kind === "turnInProgress"
+    (input.localWorkflow.kind === "awaitingObservation" ||
+      input.localWorkflow.kind === "turnInProgress") &&
+    (input.selectedSessionId === input.localWorkflow.sessionId ||
+      input.session?.sessionId === input.localWorkflow.sessionId)
       ? input.localWorkflow.requestId ?? null
       : null;
 
@@ -154,7 +156,13 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
       workflow = { kind: "ready" };
     }
   } else if (input.localWorkflow.kind === "turnInProgress") {
-    if (
+    const selectedMatches =
+      input.selectedSessionId === input.localWorkflow.sessionId ||
+      input.session?.sessionId === input.localWorkflow.sessionId;
+
+    if (!selectedMatches) {
+      workflow = { kind: "ready" };
+    } else if (
       observedTurnState &&
       activeRequestId === (input.localWorkflow.requestId ?? activeRequestId)
     ) {

@@ -12,6 +12,7 @@ import Proofs.Triggers
 import Proofs.Client
 import Proofs.ClientShell
 import Proofs.CommandPolicy
+import Proofs.ToolExecution
 import Proofs.Properties.Safety
 import Proofs.Properties.Decidable
 import Proofs.Properties.Liveness

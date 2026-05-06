@@ -21,6 +21,7 @@ The proofs are strongest where the runtime is a state machine:
 - task, schedule, and event-trigger dispatch
 - client turn projection and desktop shell workflow state
 - command/tool execution policy for bash argv, network, sandbox, and shell env
+- MCP/tool execution preflight and retry eligibility boundaries
 
 They do not prove storage guarantees, network delivery, provider behavior, UI
 rendering, external tool behavior, or host sandbox implementation details. Those
@@ -43,7 +44,7 @@ lake env lean --run Proofs/Conformance/Contracts.lean
 
 ## What Is Proven
 
-The current proof suite covers ten practical areas:
+The current proof suite covers eleven practical areas:
 
 1. Request/process/persistence state transitions
 2. Inference-call lifecycle, request linkage, and cancellation terminality
@@ -56,6 +57,8 @@ The current proof suite covers ten practical areas:
 9. Client-shell workflow rules for selection, submission, and transport decoupling
 10. Command/tool execution policy: argv prefixes, read-only allowlists,
     disabled-network fail-closed behavior, sandbox selection, and filtered env
+11. Tool execution boundary rules: schema/health preflight and MCP retry
+    eligibility before future idempotent tool retries are enabled
 
 The proof boundary matters:
 
@@ -103,6 +106,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Client.lean` | Barrel for client turn-state derivation and client theorems |
 | `Proofs/ClientShell.lean` | Barrel for multi-session shell workflow modules |
 | `Proofs/CommandPolicy.lean` | Barrel for command/tool execution policy validation, sandbox, env, and safety proofs |
+| `Proofs/ToolExecution.lean` | MCP/tool preflight and retry eligibility boundary model |
 | `Proofs/Properties/Safety.lean` | Request/process/persistence safety properties S1-S6 |
 | `Proofs/Properties/Liveness.lean` | Request/process liveness properties L1-L3 |
 | `Proofs/Properties/SchedulingSafety.lean` | Scheduler/fleet safety properties S7-S9 |
@@ -128,6 +132,7 @@ Semantic submodules:
 | `Proofs.Client` | `Types`, `Lifecycle`, `Terminal`, `Replacement` |
 | `Proofs.ClientShell` | `Types`, `Submission`, `Transition`, `Projection`, `Theorems` |
 | `Proofs.CommandPolicy` | `Types`, `Validation`, `Sandbox`, `Env`, `Theorems` |
+| `Proofs.ToolExecution` | standalone health/schema preflight and retry eligibility model |
 | `Proofs.Conformance.Triggers` | `Lifecycle`, `Materialization`, `Trace` |
 
 The top-level barrel imports remain the stable entry points for downstream code.
@@ -160,6 +165,10 @@ currently covers:
 - `SessionRecovery`
 - `InferenceCall`
 
+It also emits the `ToolRetryDisposition` vocabulary from
+`Proofs.ToolExecution` so Rust tests can reject accidental MCP `call_tool`
+retry drift before idempotency metadata exists.
+
 The current `SessionRecovery` contract is intentionally narrow: it covers the
 executable failed-latest-request reissue witness (`failed -> pending`) rather
 than the whole request lifecycle vocabulary. Widen this contract when the
@@ -175,6 +184,11 @@ updated to match.
 so this extraction stays scoped to the initial executable domains above. Add it
 to `Proofs/Conformance/Contracts.lean` as another `StateMachineContract` when
 the runtime-reconcile contract is ready to join the Rust conformance gate.
+
+`ToolExecution` currently exports only retry disposition vocabulary and theorems.
+Before adding idempotent MCP retries, extend that Lean model first with the
+metadata source, retry budget, and replay/idempotency assumptions, then add a
+Rust contract that ties advertised MCP metadata to the widened retry rule.
 
 ## Core Model
 

@@ -107,7 +107,10 @@ impl McpPool {
 
     /// Call a tool on the MCP server at `endpoint`.
     ///
-    /// Connects lazily, same as [`list_tools`](Self::list_tools).
+    /// Connects lazily, same as [`list_tools`](Self::list_tools). Unlike
+    /// `list_tools`, this does not retry after a dispatch failure: repeating an
+    /// MCP tool call can repeat side effects until services advertise
+    /// idempotency metadata that `Proofs.ToolExecution` can model.
     pub async fn call_tool(
         &self,
         service_id: &str,
@@ -116,29 +119,8 @@ impl McpPool {
         arguments: serde_json::Value,
     ) -> Result<CallToolResult> {
         self.get_or_connect(service_id, endpoint).await?;
-        let retry_arguments = arguments.clone();
-
-        match self
-            .call_tool_once(service_id, build_call_tool_params(tool_name, arguments))
+        self.call_tool_once(service_id, build_call_tool_params(tool_name, arguments))
             .await
-        {
-            Ok(result) => Ok(result),
-            Err(error) => {
-                tracing::warn!(
-                    service_id = %service_id,
-                    tool_name = %tool_name,
-                    error = %error,
-                    "MCP call_tool failed, evicting connection and retrying"
-                );
-                self.remove(service_id).await;
-                self.get_or_connect(service_id, endpoint).await?;
-                self.call_tool_once(
-                    service_id,
-                    build_call_tool_params(tool_name, retry_arguments),
-                )
-                .await
-            }
-        }
     }
 
     pub async fn remove(&self, service_id: &str) {
