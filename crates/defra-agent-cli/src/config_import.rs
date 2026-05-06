@@ -21,6 +21,12 @@ use crate::{
 
 const CONFIG_IMPORT_BATCH_SIZE: usize = 50;
 
+// Topological desired-state write order. Every prefix is safe to observe: a
+// written document may only reference documents in earlier apply ranks, and a
+// retry recomputes diff against the partial state before continuing. Production
+// realizes the Lean retry model by rebuilding the live diff at the start of
+// each `config apply` attempt, then applying selected documents with
+// unique-field upserts or equivalent override writers.
 const CONFIG_APPLY_ORDER: [Collection; 9] = [
     Collection::InferenceBackend,
     Collection::InferenceProfile,
@@ -32,6 +38,9 @@ const CONFIG_APPLY_ORDER: [Collection; 9] = [
     Collection::EventTrigger,
     Collection::AgentPrincipal,
 ];
+
+#[cfg(test)]
+pub(crate) const CONFIG_APPLY_ORDER_FOR_TESTS: &[Collection] = &CONFIG_APPLY_ORDER;
 
 #[derive(Debug, Clone)]
 struct PreparedImportDocument {
@@ -217,6 +226,10 @@ fn generic_import_mutation_field(
     let alias = format!("doc_{index}");
     let add_literal = graphql_input_literal(&doc.add_doc)?;
     let field = if override_existing {
+        // This is the generic production bridge for apply retry convergence:
+        // after a partial prefix, rerunning `config apply` recomputes live diff
+        // and uses unique-field upsert so already-written rows are updated with
+        // the same desired payload while missing rows are created.
         let update_literal =
             graphql_input_literal(doc.update_doc.as_ref().ok_or_else(|| {
                 anyhow::anyhow!("missing update document for {collection_name}")
@@ -244,6 +257,9 @@ async fn apply_generic_import_document(
 ) -> Result<()> {
     let add_literal = graphql_input_literal(&doc.add_doc)?;
     let mutation = if override_existing {
+        // Per-document fallback preserves the same retry property as the batch
+        // path: the unique-field filter makes repeated successful writes land
+        // on the same logical document.
         let update_literal =
             graphql_input_literal(doc.update_doc.as_ref().ok_or_else(|| {
                 anyhow::anyhow!("missing update document for {collection_name}")
@@ -621,6 +637,37 @@ fn select_apply_docs_for_collection(
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn config_apply_order_contains_each_collection_once() {
+        let actual = CONFIG_APPLY_ORDER_FOR_TESTS
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let expected = Collection::ALL.into_iter().collect::<BTreeSet<_>>();
+
+        assert_eq!(actual, expected);
+        assert_eq!(CONFIG_APPLY_ORDER_FOR_TESTS.len(), Collection::ALL.len());
+    }
+
+    #[test]
+    fn config_apply_order_has_retry_safe_prefixes() {
+        for prefix_len in 0..=CONFIG_APPLY_ORDER_FOR_TESTS.len() {
+            let prefix = &CONFIG_APPLY_ORDER_FOR_TESTS[..prefix_len];
+            let suffix = &CONFIG_APPLY_ORDER_FOR_TESTS[prefix_len..];
+            for written in prefix {
+                for pending in suffix {
+                    assert!(
+                        written.apply_order() <= pending.apply_order(),
+                        "prefix {prefix_len} writes {:?} before lower-rank {:?}",
+                        written,
+                        pending,
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn build_aliased_mutation_wraps_all_fields() {

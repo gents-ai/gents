@@ -7,8 +7,9 @@
 //! reason about without running proptest.
 
 use defra_agent::apply_model::{
-    apply_all, diff, references_of, ApplyStep, Collection, DesiredFields, DocRef, LiveState,
-    Manifest,
+    apply_all, apply_prefix, desired_references_closed, diff, manifest_realized,
+    prefix_referrers_closed, references_of, retry_after_prefix, ApplyStep, Collection,
+    DesiredFields, DocRef, LiveState, Manifest,
 };
 use std::collections::BTreeMap;
 
@@ -229,4 +230,67 @@ fn manifest_with_principal_referencing_behavior_orders_behavior_first() {
             r,
         );
     }
+}
+
+#[test]
+fn retry_from_every_prefix_converges_to_complete_apply() {
+    let backend = r(Collection::InferenceBackend, "b1");
+    let behavior = r(Collection::AgentBehavior, "a1");
+    let task = r(Collection::Task, "t1");
+    let m = Manifest {
+        docs: {
+            let mut docs = BTreeMap::new();
+            docs.insert(backend.clone(), DesiredFields::opaque("b1-desired"));
+            docs.insert(
+                behavior.clone(),
+                DesiredFields::with_refs("a1-desired", vec![backend.clone()]),
+            );
+            docs.insert(
+                task.clone(),
+                DesiredFields::with_refs("t1-desired", vec![behavior.clone()]),
+            );
+            docs
+        },
+    };
+    let l = live(&[], &[(behavior.clone(), "runtime-owned")]);
+
+    let steps = diff(&m, &l).into_steps();
+    let complete = apply_all(&l, &steps);
+    assert!(manifest_realized(&m, &complete));
+    for prefix_len in 0..=steps.len() {
+        let prefix = apply_prefix(&l, &steps, prefix_len);
+        assert_eq!(
+            prefix.live, l.live,
+            "prefix {prefix_len} must preserve runtime/live fields",
+        );
+        assert!(
+            desired_references_closed(&prefix),
+            "prefix {prefix_len} should keep the full desired projection reference-closed",
+        );
+        assert!(
+            prefix_referrers_closed(&steps[..prefix_len], &prefix),
+            "prefix {prefix_len} should not leave already-written referrers dangling",
+        );
+        assert_eq!(
+            retry_after_prefix(&m, &l, prefix_len),
+            complete,
+            "retry after prefix {prefix_len} must converge to complete apply",
+        );
+    }
+}
+
+#[test]
+fn complete_apply_is_idempotent_after_convergence() {
+    let backend = r(Collection::InferenceBackend, "b1");
+    let m = manifest(&[(backend.clone(), "b1-new")]);
+    let l = live(
+        &[(backend.clone(), "b1-old")],
+        &[(backend.clone(), "runtime")],
+    );
+
+    let converged = apply_all(&l, &diff(&m, &l).into_steps());
+    assert!(manifest_realized(&m, &converged));
+    let reapplied = apply_all(&converged, &diff(&m, &converged).into_steps());
+
+    assert_eq!(reapplied, converged);
 }
