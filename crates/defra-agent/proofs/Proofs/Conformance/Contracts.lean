@@ -13,8 +13,10 @@ Rust runs this file with `lake env lean --run` and consumes the JSON emitted by
 constructors, `toDefraDB` functions, executable `step?` functions, and finite
 witness contexts below.
 
-`RuntimeReconcile` is intentionally not included yet: its executable conformance
-contract should be added here after the executable runtime-reconcile PR lands.
+`RuntimeReconcile` is intentionally exposed only as a follow-up hook here so
+this extraction stays scoped to the initial executable domains below. Add it as
+another `StateMachineContract` when the runtime-reconcile contract is ready to
+join the Rust conformance gate.
 -/
 
 namespace Conformance.Contracts

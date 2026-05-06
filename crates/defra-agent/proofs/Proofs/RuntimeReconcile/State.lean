@@ -1,5 +1,6 @@
 import Proofs.Basic
 import Mathlib.Data.Finset.Basic
+import Mathlib.Data.Finset.Card
 
 /-!
 # Runtime Reconciliation Model
@@ -62,6 +63,12 @@ structure ResolvedSnapshot where
   unavailable : Finset BehaviorId
   deriving DecidableEq
 
+instance : Repr ResolvedSnapshot where
+  reprPrec s _ :=
+    "{ defaultBehavior := " ++ repr s.defaultBehavior ++
+      ", runnableCard := " ++ repr s.runnable.card ++
+      ", unavailableCard := " ++ repr s.unavailable.card ++ " }"
+
 namespace ResolvedSnapshot
 
 /-- Runnable and unavailable behavior sets must not overlap. -/
@@ -82,6 +89,14 @@ structure ActiveRuntimeSnapshot where
   unavailable : Finset BehaviorId
   dispatchers : Finset BehaviorId
   deriving DecidableEq
+
+instance : Repr ActiveRuntimeSnapshot where
+  reprPrec s _ :=
+    "{ generation := " ++ repr s.generation ++
+      ", defaultBehavior := " ++ repr s.defaultBehavior ++
+      ", runnableCard := " ++ repr s.runnable.card ++
+      ", unavailableCard := " ++ repr s.unavailable.card ++
+      ", dispatchersCard := " ++ repr s.dispatchers.card ++ " }"
 
 namespace ActiveRuntimeSnapshot
 
