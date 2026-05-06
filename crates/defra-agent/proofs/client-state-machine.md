@@ -166,8 +166,8 @@ The formal call-state vocabulary is `queued`, `running`, `cancelled`,
 requests, queued or running linked calls have a model path to `cancelled`.
 Backend-gone/controller-drain paths also use `cancelled` as a terminal call
 state, independent of request interruption. Rust currently checks the admission
-and permit-drop paths, while full daemon-stream interruption remains an
-integration-fixture boundary.
+and permit-drop paths, plus full daemon-stream interruption with a local
+mock-stream backend.
 
 ## Subscription Model
 

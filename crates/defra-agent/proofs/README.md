@@ -383,8 +383,6 @@ Examples:
 - no explicit persisted `dead` state
 - no first-class persisted persistence-lifecycle tracking
 - deadline accounting does not yet bound retries
-- inference-call cancellation is modeled, but the full live-daemon interrupt
-  fixture is still a Rust integration-test boundary
 - fleet scheduler persistence remains partly observational
 
 That file should stay honest. If the implementation diverges from the model,
@@ -415,10 +413,10 @@ The broader `cancelled` call state is not interrupt-only. Rust also uses it for
 backend-gone and controller-drain cases; those are modeled as ordinary terminal
 call transitions rather than request-interrupt composition.
 
-The remaining boundary is mechanical coverage of the full live-daemon stream
-fixture: Rust tests cover the admission and permit-drop paths, but the ignored
-`BehaviorDaemon` mid-stream interrupt fixture still needs real mock-stream
-plumbing.
+Rust covers this bridge at the admission/permit level and with a full
+`BehaviorDaemon` mock-stream fixture: mid-stream interruption preserves partial
+response content, persists the linked inference call as `cancelled`, and leaves
+unrelated concurrent calls live.
 
 ## What Is Not Proven
 
