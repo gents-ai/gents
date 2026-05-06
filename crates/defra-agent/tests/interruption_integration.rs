@@ -4,8 +4,10 @@
 //! `RequestLifecycle` instances and the resend chain. Tests that require
 //! a running `BehaviorDaemon` with a mock streaming backend (mid-stream
 //! interrupt, concurrent-request isolation) are stubbed with `#[ignore]`
-//! until that fixture infrastructure exists — see the `todo!()` stubs
-//! at the bottom of this file for pointers.
+//! until that fixture infrastructure exists. The Lean model now proves the
+//! linked-call cancellation path, and admission unit tests cover the persisted
+//! `InferenceCall` cancellation branches; these ignored tests are the remaining
+//! full-daemon fixture gap.
 
 mod support;
 
@@ -191,8 +193,9 @@ async fn resend_from_stale_populates_retry_chain() {
 // streaming backend so we can observe the `tokio::select!` race between the
 // inference stream and the interrupt watch channel. Building that fixture is
 // an independent infrastructure task (see the Task 11 follow-up notes); the
-// state-level transitions these would verify are already covered piecewise
-// by `state_machine_conformance.rs`.
+// state-level transitions these would verify are covered piecewise by
+// `state_machine_conformance.rs`, `src/admission/tests.rs`, and
+// `Proofs/Composed.lean::interrupted_request_cancels_live_linked_call`.
 
 #[tokio::test]
 #[ignore = "requires mock streaming backend fixture; follow-up after Task 11"]

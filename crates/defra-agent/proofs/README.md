@@ -12,6 +12,7 @@ state machines explicit enough that:
 The proofs are strongest where the runtime is a state machine:
 
 - request, process, and persistence lifecycle transitions
+- inference-call lifecycle and cancellation transitions
 - scheduler and fleet slot accounting
 - session retry/reissue
 - runtime reconcile generation publication
@@ -35,16 +36,17 @@ lake build
 
 ## What Is Proven
 
-The current proof suite covers eight practical areas:
+The current proof suite covers nine practical areas:
 
 1. Request/process/persistence state transitions
-2. Scheduler slot accounting and admission/release
-3. Session recovery and retry/reissue semantics
-4. Runtime reconcile generation publication and visibility
-5. Desired-state apply ordering, reference closure, and apply/runtime field separation
-6. Trigger dispatch for manual, schedule, and event-driven tasks
-7. Client turn-state derivation from replicated request/response documents
-8. Client-shell workflow rules for selection, submission, and transport decoupling
+2. Inference-call lifecycle, request linkage, and cancellation terminality
+3. Scheduler slot accounting and admission/release
+4. Session recovery and retry/reissue semantics
+5. Runtime reconcile generation publication and visibility
+6. Desired-state apply ordering, reference closure, and apply/runtime field separation
+7. Trigger dispatch for manual, schedule, and event-driven tasks
+8. Client turn-state derivation from replicated request/response documents
+9. Client-shell workflow rules for selection, submission, and transport decoupling
 
 The proof boundary matters:
 
@@ -80,6 +82,7 @@ either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Basic.lean` | Shared opaque ids, `Time`, and terminal-state helpers |
 | `Proofs/Process.lean` | Process lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/Request.lean` | Barrel for request state, transitions, executable semantics, and local properties |
+| `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, and cancellation properties |
 | `Proofs/Persistence.lean` | Persistence lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/Composed.lean` | Cross-layer composition and guards |
 | `Proofs/Scheduling.lean` | Scheduler/backend slot state |
@@ -105,6 +108,7 @@ Semantic submodules:
 | Barrel | Submodules |
 |--------|------------|
 | `Proofs.Request` | `State`, `Transition`, `Executable`, `Properties` |
+| `Proofs.InferenceCall` | `State`, `Transition`, `Properties` |
 | `Proofs.RuntimeReconcile` | `State`, `Transition` |
 | `Proofs.ApplyReconcile` | `Collections`, `Manifest`, `Diff`, `Apply`, `ApplyProperties`, `RuntimeBridge`, `Convergence` |
 | `Proofs.Triggers` | `Types`, `Dispatch`, `Reachability`, `SerialSupport`, `Serial`, `LatestOnly`, `Lineage` |
@@ -172,7 +176,27 @@ Operational meaning:
 - this layer models whether durable state is actually recorded before terminal
   outcomes are considered valid
 
-Total single-execution composed state space: `9 x 5 x 4 = 180` states.
+### Layer 4: Inference Call Lifecycle
+
+States:
+
+- `queued`
+- `running`
+- `cancelled`
+- `completed`
+- `failed`
+
+Operational meaning:
+
+- `queued` is persisted before a backend semaphore permit is available
+- `running` owns a backend permit and is waiting for or consuming provider work
+- `cancelled` records terminal cancellation without provider completion,
+  including request interrupts and backend lifecycle cancellation
+- terminal call states are `cancelled`, `completed`, and `failed`
+
+The core request/process/persistence state space remains `9 x 5 x 4 = 180`
+states. The call layer adds a separate 5-state persisted lifecycle linked to a
+request by `request_id`.
 
 ## Plain-English Property Summary
 
@@ -325,6 +349,7 @@ must refine them through DB-visible state updates.
 The main conformance files are:
 
 - `crates/defra-agent/tests/state_machine_conformance.rs`
+- `crates/defra-agent/src/admission/tests.rs`
 - `crates/defra-agent-protocol/src/client_protocol/tests.rs`
 - `crates/defra-agent-cli/src/desired_state/tests.rs`
 - `Proofs/Conformance/DefraAgent.lean`
@@ -339,8 +364,10 @@ The finite-state checks currently establish:
 - every non-terminal request state has at least one successor
 - every non-terminal process state has at least one successor
 - every non-terminal persistence state has at least one successor
+- every non-terminal inference-call state has at least one successor
 - admission-state invariants line up with request state
-- state counts stay as expected: 9 request, 5 process, 4 persistence, 180 composed
+- state counts stay as expected: 9 request, 5 process, 4 persistence, 5 call,
+  180 core composed
 
 These checks are useful because they catch structural model regressions quickly,
 even before theorem-level reasoning matters.
@@ -356,6 +383,8 @@ Examples:
 - no explicit persisted `dead` state
 - no first-class persisted persistence-lifecycle tracking
 - deadline accounting does not yet bound retries
+- inference-call cancellation is modeled, but the full live-daemon interrupt
+  fixture is still a Rust integration-test boundary
 - fleet scheduler persistence remains partly observational
 
 That file should stay honest. If the implementation diverges from the model,
@@ -376,11 +405,20 @@ state as manually inconsistent until resolved.
 
 ### Interrupted Inference Calls
 
-`Proofs/Composed.lean` documents an open proof boundary: the composed request
-model does not yet include a first-class `InferenceCall` state machine. Rust has
-cancellation paths for pre-stream and mid-stream interrupts, but the formal
-request-to-call cancellation proof remains a documented deviation rather than a
-theorem.
+`Proofs/InferenceCall.lean` models queued, running, cancelled, completed, and
+failed call states. `Proofs/Composed.lean` proves
+`ComposedState.interrupted_request_cancels_live_linked_call`: when a request is
+interrupted, any queued or running call linked by `request_id` has a valid model
+path to `cancelled`.
+
+The broader `cancelled` call state is not interrupt-only. Rust also uses it for
+backend-gone and controller-drain cases; those are modeled as ordinary terminal
+call transitions rather than request-interrupt composition.
+
+The remaining boundary is mechanical coverage of the full live-daemon stream
+fixture: Rust tests cover the admission and permit-drop paths, but the ignored
+`BehaviorDaemon` mid-stream interrupt fixture still needs real mock-stream
+plumbing.
 
 ## What Is Not Proven
 

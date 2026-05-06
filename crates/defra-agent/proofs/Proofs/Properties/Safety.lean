@@ -214,20 +214,25 @@ theorem recovery_blocks_claims
     (h_trans : ComposedState.Transition s s') :
     s'.request.state = .pending ∨ isTerminal s'.request.state := by
   cases h_trans with
-  | process_step _ h_req_eq =>
+  | process_step _ h_req_eq _ _ =>
     left
     have : s'.request.state = s.request.state := congrArg RequestContext.state h_req_eq
     rw [this]
     exact h_pending
-  | request_step _ _ h_guard =>
+  | request_step _ _ _ _ h_guard =>
     have h_accepts := h_guard h_pending
     rw [h_recovering] at h_accepts
     exact absurd h_accepts (fun h => h)
-  | persistence_step _ nextPersistence _ h_req_eq _ =>
+  | persistence_step _ nextPersistence _ h_req_eq _ _ _ =>
     left
     have : s'.request.state = ({ s.request with persistence := nextPersistence }).state := by
       exact congrArg RequestContext.state h_req_eq
     simp at this
+    rw [this]
+    exact h_pending
+  | call_step _ h_req_eq _ _ =>
+    left
+    have : s'.request.state = s.request.state := congrArg RequestContext.state h_req_eq
     rw [this]
     exact h_pending
 

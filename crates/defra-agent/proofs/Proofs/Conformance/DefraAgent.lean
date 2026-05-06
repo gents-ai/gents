@@ -1,5 +1,6 @@
 import Proofs.Request
 import Proofs.Process
+import Proofs.InferenceCall
 import Proofs.Persistence
 import Proofs.Conformance.Triggers
 
@@ -17,7 +18,7 @@ carries the lifecycle refinement via `AgentRequest.lifecycle_state`; call-level
 admission state lives on `InferenceCall`.
 
 Ideal model states:
-  pending, claimed, processing, inputRequired, completed, failed, superseded, dead
+  pending, claimed, processing, inputRequired, completed, failed, superseded, dead, interrupted
 -/
 
 /-- defra-agent's local lifecycle states (from lifecycle.rs). -/
@@ -58,3 +59,38 @@ def defraProcessToIdeal (hasRecovered : Bool) : ProcessState :=
   if hasRecovered then .ready else .uninitialized
 
 end DefraLifecycleState
+
+/-- defra-agent's persisted `InferenceCall.call_state` values. -/
+inductive DefraInferenceCallState where
+  | queued
+  | running
+  | cancelled
+  | completed
+  | failed
+  deriving DecidableEq, Repr
+
+namespace DefraInferenceCallState
+
+/-- Map persisted Rust call states to the Lean call state vocabulary. -/
+def toIdeal : DefraInferenceCallState → InferenceCallState
+  | .queued => .queued
+  | .running => .running
+  | .cancelled => .cancelled
+  | .completed => .completed
+  | .failed => .failed
+
+/-- Persisted string values for `InferenceCall.call_state`. -/
+def toDefraDB : DefraInferenceCallState → String
+  | .queued => "queued"
+  | .running => "running"
+  | .cancelled => "cancelled"
+  | .completed => "completed"
+  | .failed => "failed"
+
+/-- The Rust/DefraDB mapping preserves terminal call states. -/
+theorem toIdeal_preserves_terminal (s : DefraInferenceCallState) :
+    isTerminal s.toIdeal ↔
+    (s = .cancelled ∨ s = .completed ∨ s = .failed) := by
+  cases s <;> simp [toIdeal, HasTerminal.isTerminal, InferenceCallState.instHasTerminal]
+
+end DefraInferenceCallState

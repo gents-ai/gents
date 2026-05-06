@@ -44,10 +44,16 @@
 - **defra-agent:** call-level admission is persisted through `InferenceCall`
 - **Classification:** Resolved for backend HTTP-call admission
 
-## Deviation 8: Inference-call cancellation is outside the composed model
-- **Ideal:** An interrupted request would be composed with an `InferenceCall`
-  state machine proving queued/running calls eventually reach `cancelled`
-- **defra-agent:** runtime cancellation is implemented by pre-stream token
-  checks and mid-stream permit-drop handling
-- **Classification:** Runtime-implemented behavior, proof-model gap
+## Deviation 8: Inference-call cancellation end-to-end fixture gap
+- **Ideal:** An interrupted request is composed with an `InferenceCall`
+  state machine proving queued/running linked calls have a valid path to
+  `cancelled`
+- **defra-agent:** the model now proves this path in
+  `ComposedState.interrupted_request_cancels_live_linked_call`; Rust unit tests
+  cover pre-stream token cancellation, queued-call cancellation, and mid-stream
+  permit-drop cancellation
+- **Remaining gap:** a full `BehaviorDaemon` integration fixture that interrupts
+  a live mock stream and asserts response partial preservation plus linked
+  `InferenceCall.call_state = "cancelled"` is still not mechanical
+- **Classification:** Downgraded to integration-fixture coverage gap
 -/

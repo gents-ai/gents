@@ -52,6 +52,36 @@ fn request(request_id: &str) -> AgentRequest {
     }
 }
 
+const RUST_INFERENCE_CALL_STATES: &[&str] =
+    &["queued", "running", "cancelled", "completed", "failed"];
+const LEAN_INFERENCE_CALL_STATE_MODEL: &str =
+    include_str!("../../proofs/Proofs/InferenceCall/State.lean");
+
+fn lean_inference_call_states() -> Vec<&'static str> {
+    LEAN_INFERENCE_CALL_STATE_MODEL
+        .lines()
+        .filter_map(|line| {
+            let rest = line.trim().strip_prefix("| .")?;
+            let (_constructor, value) = rest.split_once("=>")?;
+            value.trim().strip_prefix('"')?.strip_suffix('"')
+        })
+        .collect()
+}
+
+fn assert_inference_call_rows_use_lean_vocabulary(rows: &[Value]) {
+    let lean_states = lean_inference_call_states();
+    for row in rows {
+        let state = row
+            .get("call_state")
+            .and_then(Value::as_str)
+            .expect("InferenceCall row must include call_state");
+        assert!(
+            lean_states.contains(&state),
+            "InferenceCall.call_state={state:?} is not in the Lean InferenceCallState vocabulary"
+        );
+    }
+}
+
 async fn call_rows(node: &EmbeddedNode) -> Vec<Value> {
     let response = node
         .execute(
@@ -70,13 +100,49 @@ async fn call_rows(node: &EmbeddedNode) -> Vec<Value> {
         )
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    response
+    let rows = response
         .data
         .as_ref()
         .and_then(|data| data.get("InferenceCall"))
         .and_then(Value::as_array)
         .cloned()
-        .unwrap_or_default()
+        .unwrap_or_default();
+    assert_inference_call_rows_use_lean_vocabulary(&rows);
+    rows
+}
+
+#[test]
+fn rust_inference_call_state_vocabulary_matches_lean_model() {
+    let lean_states = lean_inference_call_states();
+    assert_eq!(
+        lean_states.as_slice(),
+        RUST_INFERENCE_CALL_STATES,
+        "Rust InferenceCall.call_state vocabulary must match Proofs.InferenceCall.State"
+    );
+}
+
+#[tokio::test]
+async fn missing_backend_persists_backend_gone_cancelled_terminal() {
+    let node = test_node().await;
+    let registry = AdmissionRegistry::new(node.clone());
+    let context =
+        AdmissionCallContext::for_request(&request("req-backend-gone"), "default", "missing");
+
+    scope_request(context, async {
+        let error = match registry.acquire_current_call().await {
+            Ok(_) => panic!("missing backend should reject without a permit"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("BackendGone"));
+    })
+    .await;
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let rows = call_rows(node.as_ref()).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["backend_id"], "missing");
+    assert_eq!(rows[0]["call_state"], "cancelled");
+    assert_eq!(rows[0]["failure_reason"], "BackendGone");
 }
 
 #[tokio::test]
@@ -254,7 +320,7 @@ async fn scoped_oneoff_calls_are_persisted_with_oneoff_kind() {
 
 #[tokio::test]
 async fn dropped_permit_with_cancelled_token_persists_cancelled_terminal() {
-    // Validates the Composed.lean::interrupted_request_cancels_calls_PLACEHOLDER
+    // Validates the ComposedState::interrupted_request_cancels_live_linked_call
     // runtime bridge for the mid-stream path: if the inference_token is cancelled
     // at permit Drop time (e.g. daemon dropped the stream future because
     // the request was interrupted), the persisted InferenceCall row lands

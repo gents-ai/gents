@@ -10,7 +10,7 @@ use super::super::graphql::{
 };
 use super::binding::resolve_agent_binding;
 
-const CONVERSATION_TITLE_SOURCE_PLACEHOLDER: &str = "placeholder";
+const CONVERSATION_TITLE_SOURCE_FALLBACK: &str = "placeholder";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreatedConversation {
@@ -224,7 +224,7 @@ pub(super) fn build_upsert_conversation_field(
         });
     let title_source = existing
         .and_then(|row| normalize_optional_string(row.title_source.as_deref()))
-        .unwrap_or(CONVERSATION_TITLE_SOURCE_PLACEHOLDER);
+        .unwrap_or(CONVERSATION_TITLE_SOURCE_FALLBACK);
     let preview_text = if content.is_empty() {
         existing
             .and_then(|row| row.preview_text.as_deref())

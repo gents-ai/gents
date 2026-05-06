@@ -153,6 +153,22 @@ Rendering: ordered transcript for scroll-back history. The streaming bubble
 reads from `AgentResponse.content`; `AgentMessage` is the persisted transcript
 surface.
 
+### InferenceCall
+
+Filter: `request_id = <active request>`
+
+Key fields: `call_kind`, `call_state`, `queued_at`, `started_at`, `ended_at`,
+`failure_reason`
+
+Rendering: debug or operations surfaces can show backend-admission progress.
+The formal call-state vocabulary is `queued`, `running`, `cancelled`,
+`completed`, and `failed` in `Proofs/InferenceCall.lean`. For interrupted
+requests, queued or running linked calls have a model path to `cancelled`.
+Backend-gone/controller-drain paths also use `cancelled` as a terminal call
+state, independent of request interruption. Rust currently checks the admission
+and permit-drop paths, while full daemon-stream interruption remains an
+integration-fixture boundary.
+
 ## Subscription Model
 
 A compliant client should observe these collections with these filters:
@@ -164,6 +180,7 @@ A compliant client should observe these collections with these filters:
 | `AgentToolCall` | `session_id = <session>` | Inline tool cards |
 | `AgentToolResult` | `session_id = <session>` | Full tool output |
 | `AgentMessage` | `session_id = <session>` | Scroll-back transcript |
+| `InferenceCall` | `request_id = <active request>` | Backend-call progress/debug state |
 | `AgentConversation` | `agent_did = <agent>` | Conversation list |
 
 For turn-scoped observation, filter `AgentRequest` by

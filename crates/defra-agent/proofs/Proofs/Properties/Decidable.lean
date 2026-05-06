@@ -1,6 +1,7 @@
 import Proofs.Request
 import Proofs.Process
 import Proofs.Persistence
+import Proofs.InferenceCall
 import Proofs.Scheduling
 import Mathlib.Data.Fintype.Card
 
@@ -10,7 +11,7 @@ import Mathlib.Data.Fintype.Card
 Finite enumeration and simple coherence checks over the ideal state space.
 -/
 
-open RequestState ProcessState PersistenceState ExecutionOrigin AdmissionState
+open RequestState ProcessState PersistenceState InferenceCallState ExecutionOrigin AdmissionState
 
 instance : Fintype RequestState :=
   Fintype.ofList
@@ -26,6 +27,11 @@ instance : Fintype ProcessState :=
 instance : Fintype PersistenceState :=
   Fintype.ofList
     [.uncommitted, .committing, .committed, .lost]
+    (fun s => by cases s <;> simp)
+
+instance : Fintype InferenceCallState :=
+  Fintype.ofList
+    [.queued, .running, .cancelled, .completed, .failed]
     (fun s => by cases s <;> simp)
 
 instance : Fintype ExecutionOrigin :=
@@ -68,6 +74,15 @@ theorem persistence_no_deadlocks (s : PersistenceState) (h : ¬isTerminal s) :
   | committed => exact absurd (Or.inl rfl) h
   | lost => exact absurd (Or.inr rfl) h
 
+theorem inference_call_no_deadlocks (s : InferenceCallState) (h : ¬isTerminal s) :
+    ∃ s' : InferenceCallState, s ≠ s' := by
+  cases s with
+  | queued => exact ⟨.running, by decide⟩
+  | running => exact ⟨.completed, by decide⟩
+  | cancelled => exact absurd (Or.inl rfl) h
+  | completed => exact absurd (Or.inr (Or.inl rfl)) h
+  | failed => exact absurd (Or.inr (Or.inr rfl)) h
+
 theorem pending_requires_released (a : AdmissionState) :
     RequestContext.coherentStateAdmission .pending a ↔ a = .released := by
   cases a <;> simp [RequestContext.coherentStateAdmission]
@@ -109,6 +124,7 @@ theorem terminal_requires_released (s : RequestState) (a : AdmissionState)
 #eval Fintype.card RequestState
 #eval Fintype.card ProcessState
 #eval Fintype.card PersistenceState
+#eval Fintype.card InferenceCallState
 #eval Fintype.card RequestState * Fintype.card ProcessState * Fintype.card PersistenceState
 #eval Fintype.card ExecutionOrigin
 #eval Fintype.card AdmissionState

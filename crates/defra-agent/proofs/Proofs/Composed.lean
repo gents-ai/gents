@@ -1,5 +1,6 @@
 import Proofs.Process
 import Proofs.Request
+import Proofs.InferenceCall
 import Proofs.Persistence
 
 /-!
@@ -11,8 +12,10 @@ single-execution composed state.
 
 /-- The composed state of all single-execution layers. -/
 structure ComposedState where
+  requestId : RequestId
   process : ProcessState
   request : RequestContext
+  call : InferenceCall
   deriving Repr
 
 namespace ComposedState
@@ -22,10 +25,14 @@ inductive Transition : ComposedState → ComposedState → Prop where
   | process_step {pre post : ComposedState} :
       ProcessState.Transition pre.process post.process →
       post.request = pre.request →
+      post.call = pre.call →
+      post.requestId = pre.requestId →
       Transition pre post
   | request_step {pre post : ComposedState} :
       RequestContext.Transition pre.request post.request →
       post.process = pre.process →
+      post.call = pre.call →
+      post.requestId = pre.requestId →
       (pre.request.state = .pending → pre.process.acceptsWork) →
       Transition pre post
   | persistence_step {pre post : ComposedState} (policy : PersistenceState.FailurePolicy)
@@ -33,6 +40,14 @@ inductive Transition : ComposedState → ComposedState → Prop where
       PersistenceState.Transition policy pre.request.persistence nextPersistence →
       post.request = { pre.request with persistence := nextPersistence } →
       post.process = pre.process →
+      post.call = pre.call →
+      post.requestId = pre.requestId →
+      Transition pre post
+  | call_step {pre post : ComposedState} :
+      InferenceCall.Transition pre.call post.call →
+      post.request = pre.request →
+      post.process = pre.process →
+      post.requestId = pre.requestId →
       Transition pre post
 
 /-- A trace is a sequence of valid composed transitions. -/
@@ -43,7 +58,8 @@ inductive Trace : ComposedState → ComposedState → Prop where
 
 /-- The initial state of the system. -/
 def initial : ComposedState :=
-  { process := .uninitialized
+  { requestId := 0
+  , process := .uninitialized
   , request :=
     { state := .pending
     , origin := .interactive
@@ -59,17 +75,53 @@ def initial : ComposedState :=
     , isLatest := true
     , persistence := .uncommitted
     }
+  , call :=
+    { callId := 0
+    , requestId := 0
+    , state := .queued
+    }
   }
 
 /-!
-## Open limitation: interrupted requests and inference-call cancellation
+## Interrupted requests and inference-call cancellation
 
-This composed model proves that request interruption releases scheduler state,
-but it does not model `InferenceCall` as a separate state machine. The stronger
-runtime claim is that every queued or running call linked to an interrupted
-request is eventually persisted with `call_state = "cancelled"`. That boundary
-is documented in `Proofs.Conformance.Deviations` rather than stated here as a
-theorem.
+The composed model includes a first-class `InferenceCall` state machine.
 -/
+
+/--
+If a request is already interrupted, every live `InferenceCall` linked by
+`request_id` has a valid composed trace to persisted `cancelled`.
+-/
+theorem interrupted_request_cancels_live_linked_call
+    {pre : ComposedState}
+    (h_interrupted : pre.request.state = .interrupted)
+    (h_linked : pre.call.linkedTo pre.requestId)
+    (h_live : pre.call.cancellable) :
+    ∃ post : ComposedState,
+      Trace pre post ∧
+      post.request = pre.request ∧
+      post.request.state = .interrupted ∧
+      post.call.linkedTo pre.requestId ∧
+      post.call.state = .cancelled ∧
+      InferenceCall.Trace pre.call post.call := by
+  let postCall := pre.call.cancel
+  let post : ComposedState := { pre with call := postCall }
+  have h_call_trace : InferenceCall.Trace pre.call postCall :=
+    InferenceCall.live_trace_to_cancelled pre.call h_live
+  have h_call_step : InferenceCall.Transition pre.call postCall := by
+    cases h_live with
+    | inl h_queued =>
+        exact InferenceCall.cancel_before_stream_transition h_queued rfl
+    | inr h_running =>
+        exact InferenceCall.cancel_during_stream_transition h_running rfl
+  have h_step : Transition pre post := by
+    exact Transition.call_step h_call_step rfl rfl rfl
+  refine ⟨post, Trace.step h_step Trace.refl, rfl, ?_, ?_, ?_, h_call_trace⟩
+  · exact h_interrupted
+  · unfold InferenceCall.linkedTo
+    change (pre.call.cancel).requestId = pre.requestId
+    rw [InferenceCall.cancel_preserves_requestId pre.call]
+    exact h_linked
+  · exact InferenceCall.cancel_state pre.call
 
 end ComposedState

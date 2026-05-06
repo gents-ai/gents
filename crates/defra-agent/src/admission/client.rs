@@ -110,15 +110,11 @@ where
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
         let mut permit = self.admission.acquire_current_call().await?;
         let token = current_context().ok().and_then(|c| c.inference_token);
-        // NOTE: the token here only covers *pre-stream* cancellation (i.e.
-        // cancellation observed before the HTTP request returns and the
-        // stream handle is produced). Once `hold_stream_guard` takes
-        // ownership of the permit below, mid-stream interrupts are handled
-        // at the daemon level (see `run_inference`'s select arms): the
-        // daemon drops the stream, which fires the permit's `Drop` with
-        // the default "failed" terminal. Promoting mid-stream interrupts
-        // to `cancelled` would require teaching the stream guard itself
-        // to observe this token and is out of scope for Task 9.
+        // The token here covers pre-stream cancellation while the provider
+        // future is producing a stream handle. After `hold_stream_guard`
+        // owns the permit, mid-stream interrupts are handled by the daemon:
+        // it cancels the request token and drops the stream, so the permit's
+        // Drop path observes the cancelled token and persists `cancelled`.
         match token {
             Some(token) => {
                 tokio::select! {

@@ -3,6 +3,7 @@ import Proofs.Process
 import Proofs.Persistence
 import Proofs.Scheduling
 import Proofs.Request
+import Proofs.InferenceCall
 import Proofs.Composed
 import Proofs.Fleet
 import Proofs.SessionRecovery

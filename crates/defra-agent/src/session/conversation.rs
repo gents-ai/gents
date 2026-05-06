@@ -4,7 +4,7 @@ use super::retry::execute_mutation_with_retry;
 use super::rows::ConversationDocument;
 use super::*;
 
-pub(crate) const CONVERSATION_TITLE_SOURCE_PLACEHOLDER: &str = "placeholder";
+pub(crate) const CONVERSATION_TITLE_SOURCE_FALLBACK: &str = "placeholder";
 pub(crate) const CONVERSATION_TITLE_SOURCE_GENERATED: &str = "generated";
 pub(crate) const CONVERSATION_TITLE_SOURCE_TASK: &str = "task";
 
@@ -125,7 +125,7 @@ pub(crate) async fn update_conversation_status_with_identity(
     let title_source = existing
         .as_ref()
         .and_then(|conversation| normalize_optional_string(conversation.title_source.as_deref()))
-        .unwrap_or(CONVERSATION_TITLE_SOURCE_PLACEHOLDER);
+        .unwrap_or(CONVERSATION_TITLE_SOURCE_FALLBACK);
     let preview_text = existing
         .as_ref()
         .map(|conversation| conversation.preview_text.clone())
@@ -218,7 +218,7 @@ pub(crate) async fn update_conversation_status_if_latest_with_identity(
         existing
             .title_source
             .as_deref()
-            .unwrap_or(CONVERSATION_TITLE_SOURCE_PLACEHOLDER),
+            .unwrap_or(CONVERSATION_TITLE_SOURCE_FALLBACK),
     );
     let escaped_preview_text = escape_graphql_string(&existing.preview_text);
     let escaped_created_at = escape_graphql_string(&existing.created_at);
@@ -341,9 +341,9 @@ pub(crate) async fn conversation_needs_generated_title(
 
     let title = existing.title.trim();
     let title_source = normalize_optional_string(existing.title_source.as_deref())
-        .unwrap_or(CONVERSATION_TITLE_SOURCE_PLACEHOLDER);
+        .unwrap_or(CONVERSATION_TITLE_SOURCE_FALLBACK);
 
-    Ok(title.is_empty() || title_source == CONVERSATION_TITLE_SOURCE_PLACEHOLDER)
+    Ok(title.is_empty() || title_source == CONVERSATION_TITLE_SOURCE_FALLBACK)
 }
 
 fn resolve_behavior_id(
@@ -386,9 +386,8 @@ fn existing_title_state(
         Some(existing) => {
             let existing_title = existing.title.trim();
             let existing_source = normalize_optional_string(existing.title_source.as_deref())
-                .unwrap_or(CONVERSATION_TITLE_SOURCE_PLACEHOLDER);
-            if existing_title.is_empty() || existing_source == CONVERSATION_TITLE_SOURCE_PLACEHOLDER
-            {
+                .unwrap_or(CONVERSATION_TITLE_SOURCE_FALLBACK);
+            if existing_title.is_empty() || existing_source == CONVERSATION_TITLE_SOURCE_FALLBACK {
                 if let Some((title, source)) = normalized_override.as_ref() {
                     return (title.clone(), source.clone());
                 }
@@ -399,7 +398,7 @@ fn existing_title_state(
         None => normalized_override.unwrap_or_else(|| {
             (
                 String::new(),
-                CONVERSATION_TITLE_SOURCE_PLACEHOLDER.to_string(),
+                CONVERSATION_TITLE_SOURCE_FALLBACK.to_string(),
             )
         }),
     }
