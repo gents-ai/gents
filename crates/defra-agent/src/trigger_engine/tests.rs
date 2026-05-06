@@ -343,7 +343,7 @@ fn snapshot_from_trigger_contract(
 async fn trigger_engine_dispatch_matches_lean_generated_contract_cases() {
     let cases = lean_trigger_dispatch_cases();
     assert!(
-        cases.len() >= 10,
+        cases.len() >= 11,
         "Lean trigger dispatch contract should cover the branch matrix; got {cases:?}"
     );
 
@@ -466,10 +466,9 @@ async fn trigger_engine_dispatch_matches_lean_generated_contract_cases() {
             "Lean case {} supersede calls drifted",
             case.name
         );
-        assert_eq!(
-            case.superseded_prior_ids.is_empty(),
-            expected_supersede_calls.is_empty(),
-            "Lean case {} should only supersede prior ids when Rust calls supersede",
+        assert!(
+            case.superseded_prior_ids.is_empty() || !supersede_calls.is_empty(),
+            "Lean case {} cannot supersede prior ids without a Rust supersede call",
             case.name
         );
 

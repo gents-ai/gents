@@ -233,6 +233,11 @@ def triggerDispatchScenarios : List TriggerScenario :=
     , before := { requests := [request "prior-event" "event-a" .event .serial false] }
     , intent := intent (some "event-a") .event .serial
     }
+  , { name := "schedule_latest_only_clear_fires_with_supersede_call"
+    , snap := snapshot ["sched-a"] []
+    , before := SystemState.empty
+    , intent := intent (some "sched-a") .schedule .latestOnly
+    }
   , { name := "schedule_latest_only_supersedes_prior"
     , snap := snapshot ["sched-a"] []
     , before := { requests := [request "prior-schedule" "sched-a" .schedule .latestOnly false] }
