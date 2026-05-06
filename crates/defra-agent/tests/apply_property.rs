@@ -1,5 +1,7 @@
 use defra_agent::apply_model::{
-    apply_all, diff, references_of, Collection, DesiredFields, DocRef, LiveState, Manifest,
+    apply_all, apply_prefix, desired_references_closed, diff, manifest_realized,
+    prefix_referrers_closed, references_of, retry_after_prefix, Collection, DesiredFields, DocRef,
+    LiveState, Manifest,
 };
 use proptest::prelude::*;
 use std::collections::BTreeMap;
@@ -16,6 +18,7 @@ fn collection_strategy() -> impl Strategy<Value = Collection> {
         Just(Collection::ToolServiceRegistry),
         Just(Collection::Task),
         Just(Collection::Schedule),
+        Just(Collection::EventTrigger),
     ]
 }
 
@@ -228,7 +231,21 @@ proptest! {
     ) {
         let steps = diff(&m, &l).into_steps();
         let after = apply_all(&l, &steps);
-        prop_assert_eq!(after.live, l.live);
+        prop_assert_eq!(&after.live, &l.live);
+    }
+
+    /// P4b (prefix apply preserves live): every durable prefix of an apply pass
+    /// preserves runtime/live-owned fields.
+    #[test]
+    fn every_apply_prefix_preserves_live(
+        m in manifest_strategy(),
+        l in live_state_strategy(),
+    ) {
+        let steps = diff(&m, &l).into_steps();
+        for prefix_len in 0..=steps.len() {
+            let after_prefix = apply_prefix(&l, &steps, prefix_len);
+            prop_assert_eq!(&after_prefix.live, &l.live);
+        }
     }
 
     /// P2b (referential version of apply-ordering-preserves-references):
@@ -289,6 +306,61 @@ proptest! {
                 }
             }
         }
+    }
+
+    /// P6 (prefix reference closure): for manifests carrying real references,
+    /// every prefix keeps the full desired projection reference-closed. The
+    /// scoped already-written-referrer predicate is asserted as the
+    /// product-facing corollary.
+    #[test]
+    fn every_apply_prefix_closes_written_referrers(
+        m in referential_manifest_strategy_with_principal(),
+    ) {
+        let l = LiveState {
+            desired: BTreeMap::new(),
+            live: BTreeMap::new(),
+        };
+        let steps = diff(&m, &l).into_steps();
+        for prefix_len in 0..=steps.len() {
+            let after_prefix = apply_prefix(&l, &steps, prefix_len);
+            prop_assert!(
+                desired_references_closed(&after_prefix),
+                "prefix {prefix_len} left a dangling reference in the desired projection",
+            );
+            prop_assert!(
+                prefix_referrers_closed(&steps[..prefix_len], &after_prefix),
+                "prefix {prefix_len} left an already-written referrer dangling",
+            );
+        }
+    }
+
+    /// P7 (retry convergence): recomputing diff after any prefix and applying
+    /// to completion reaches exactly the same model state as a complete first
+    /// pass.
+    #[test]
+    fn retry_after_any_prefix_matches_complete_apply(
+        m in manifest_strategy(),
+        l in live_state_strategy(),
+    ) {
+        let steps = diff(&m, &l).into_steps();
+        let complete = apply_all(&l, &steps);
+        for prefix_len in 0..=steps.len() {
+            let retried = retry_after_prefix(&m, &l, prefix_len);
+            prop_assert_eq!(&retried, &complete);
+        }
+    }
+
+    /// P8 (idempotence): once apply has converged, a second diff/apply pass is
+    /// a no-op.
+    #[test]
+    fn apply_is_idempotent_after_convergence(
+        m in manifest_strategy(),
+        l in live_state_strategy(),
+    ) {
+        let converged = apply_all(&l, &diff(&m, &l).into_steps());
+        prop_assert!(manifest_realized(&m, &converged));
+        let reapplied = apply_all(&converged, &diff(&m, &converged).into_steps());
+        prop_assert_eq!(reapplied, converged);
     }
 }
 

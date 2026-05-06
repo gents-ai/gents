@@ -5,7 +5,8 @@
 //! exercise it, but production apply lives in `defra-agent-cli`.
 //! Conformance cases (`tests/apply_conformance.rs`) anchor the production
 //! code to the semantics pinned here; property tests (`tests/apply_property.rs`)
-//! exercise `diff`, `apply_one`, `apply_all` at generator scale.
+//! exercise `diff`, `apply_one`, `apply_prefix`, `retry_after_prefix`, and
+//! `apply_all` at generator scale.
 //!
 //! Variants, apply-order ranks, and `diff` ordering MUST agree with
 //! both the Lean `ApplyReconcile` module and the Rust
@@ -155,6 +156,53 @@ pub fn apply_all(l: &LiveState, steps: &[ApplyStep]) -> LiveState {
     steps.iter().fold(l.clone(), |acc, s| apply_one(&acc, s))
 }
 
+/// Apply the first `prefix_len` steps from a previously computed diff.
+/// This is the Rust analog of Lean `ApplyPrefix.state`: it models a crash or
+/// interruption after a durable prefix of the ordered write sequence.
+pub fn apply_prefix(l: &LiveState, steps: &[ApplyStep], prefix_len: usize) -> LiveState {
+    debug_assert!(
+        prefix_len <= steps.len(),
+        "apply prefix length must not exceed the diff length",
+    );
+    let len = prefix_len.min(steps.len());
+    apply_all(l, &steps[..len])
+}
+
+/// Recompute diff after an applied prefix and run the retry pass to completion.
+pub fn retry_after_prefix(m: &Manifest, l: &LiveState, prefix_len: usize) -> LiveState {
+    let initial_steps = diff(m, l).into_steps();
+    let prefix_state = apply_prefix(l, &initial_steps, prefix_len);
+    let retry_steps = diff(m, &prefix_state).into_steps();
+    apply_all(&prefix_state, &retry_steps)
+}
+
+/// Manifest-realized predicate mirrored from Lean:
+/// every manifest document is present with the requested desired payload.
+pub fn manifest_realized(m: &Manifest, l: &LiveState) -> bool {
+    m.docs
+        .iter()
+        .all(|(doc, desired)| l.desired.get(doc) == Some(desired))
+}
+
+/// Full desired-projection reference closure.
+pub fn desired_references_closed(l: &LiveState) -> bool {
+    l.desired
+        .values()
+        .flat_map(references_of)
+        .all(|r| l.desired.contains_key(&r))
+}
+
+/// Product-facing corollary scoped to documents already written by a prefix.
+pub fn prefix_referrers_closed(prefix: &[ApplyStep], l: &LiveState) -> bool {
+    prefix.iter().all(|step| {
+        l.desired
+            .get(step.target())
+            .into_iter()
+            .flat_map(references_of)
+            .all(|r| l.desired.contains_key(&r))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,5 +226,44 @@ mod tests {
             out.desired.get(&d).map(|f| f.content.as_str()),
             Some("desired-payload"),
         );
+    }
+
+    #[test]
+    fn retry_after_prefix_converges_and_is_idempotent() {
+        let backend = DocRef {
+            collection: Collection::InferenceBackend,
+            id: "b1".into(),
+        };
+        let behavior = DocRef {
+            collection: Collection::AgentBehavior,
+            id: "a1".into(),
+        };
+        let mut docs = BTreeMap::new();
+        docs.insert(backend.clone(), DesiredFields::opaque("backend"));
+        docs.insert(
+            behavior.clone(),
+            DesiredFields::with_refs("behavior", vec![backend.clone()]),
+        );
+        let m = Manifest { docs };
+        let mut live = BTreeMap::new();
+        live.insert(behavior.clone(), "runtime-live".to_string());
+        let l = LiveState {
+            desired: BTreeMap::new(),
+            live,
+        };
+
+        let steps = diff(&m, &l).into_steps();
+        let prefix = apply_prefix(&l, &steps, 1);
+        assert_eq!(prefix.live, l.live);
+        assert!(desired_references_closed(&prefix));
+        assert!(prefix_referrers_closed(&steps[..1], &prefix));
+
+        let retried = retry_after_prefix(&m, &l, 1);
+        let full = apply_all(&l, &steps);
+        assert_eq!(retried, full);
+        assert!(manifest_realized(&m, &retried));
+
+        let rediff = diff(&m, &retried).into_steps();
+        assert_eq!(apply_all(&retried, &rediff), retried);
     }
 }

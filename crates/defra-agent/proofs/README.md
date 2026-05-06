@@ -98,7 +98,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Fleet.lean` | Fleet-level scheduling and slot accounting |
 | `Proofs/SessionRecovery.lean` | Retry/reissue model for session-linked requests |
 | `Proofs/RuntimeReconcile.lean` | Barrel for runtime reconcile state, relational transitions, and executable semantics |
-| `Proofs/ApplyReconcile.lean` | Barrel for desired-state apply, runtime bridge, and convergence |
+| `Proofs/ApplyReconcile.lean` | Barrel for desired-state apply, prefix safety, runtime bridge, and convergence |
 | `Proofs/Triggers.lean` | Barrel for trigger types, dispatch, reachability, serial, latest-only, and lineage proofs |
 | `Proofs/Client.lean` | Barrel for client turn-state derivation and client theorems |
 | `Proofs/ClientShell.lean` | Barrel for multi-session shell workflow modules |
@@ -122,7 +122,7 @@ Semantic submodules:
 | `Proofs.Request` | `State`, `Transition`, `Executable`, `Properties` |
 | `Proofs.InferenceCall` | `State`, `Transition`, `Executable`, `Properties`, `SlotAccounting` |
 | `Proofs.RuntimeReconcile` | `State`, `Transition`, `Executable` |
-| `Proofs.ApplyReconcile` | `Collections`, `Manifest`, `Diff`, `Apply`, `ApplyProperties`, `RuntimeBridge`, `Convergence` |
+| `Proofs.ApplyReconcile` | `Collections`, `Manifest`, `Diff`, `Apply`, `ApplyProperties`, `Prefix`, `RuntimeBridge`, `Convergence` |
 | `Proofs.Triggers` | `Types`, `Dispatch`, `Reachability`, `SerialSupport`, `Serial`, `LatestOnly`, `Lineage` |
 | `Proofs.Triggers.SerialSupport` | `Counting`, `Preservation` |
 | `Proofs.Client` | `Types`, `Lifecycle`, `Terminal`, `Replacement` |
@@ -362,6 +362,13 @@ snapshots.
 - desired-state references must be closed and point to earlier apply ranks
 - apply steps write only `DesiredFields`
 - runtime-owned `LiveFields` are structurally untouched by apply
+- partial apply is modeled as any prefix of the sorted diff
+- every well-formed prefix preserves live-owned fields and keeps the full
+  desired projection reference-closed; an explicit corollary scopes that to
+  already-written referrers
+- retrying from any prefix by recomputing diff converges to the same manifest
+  desired projection
+- after convergence, another diff/apply pass is idempotent
 - `t_conv_runnable` is the apply-sensitive result: after a well-formed apply,
   every manifest behavior id is runnable
 - `t_conv` and `t_conv_published` are coverage corollaries over the resolved and
@@ -498,16 +505,18 @@ Rust/spec mismatches. There are currently no known active spec deviations.
 
 ## Known Limitations
 
-### Apply Atomicity
+### Apply Storage Atomicity
 
 `defra-agent-cli config apply` today is best-effort: if a write fails partway
-through the ordered apply sequence, the database is left in a partially updated
-state and there is no rollback. The `T-Conv` theorem in
-`Proofs/ApplyReconcile.lean` assumes apply runs to completion. It does not cover
-crash-mid-apply.
-
-Operators must retry `apply` after a failure and should treat a partial-apply
-state as manually inconsistent until resolved.
+through the ordered apply sequence, the database is left in a durable prefix and
+there is no rollback. `Proofs/ApplyReconcile/Prefix.lean` covers this non-atomic
+case: every prefix preserves runtime/live-owned fields, already-written
+referrers remain reference-closed, and rerunning `apply` from the prefix
+converges to the same manifest desired projection. Production realizes the
+model's "recompute diff after a prefix" retry step by rebuilding the live diff
+at the start of each `config apply` attempt and applying selected documents via
+unique-field upserts or equivalent override writers. The storage assumption is
+only that a reported successful mutation is durable before the next retry.
 
 ### Interrupted Inference Calls
 
