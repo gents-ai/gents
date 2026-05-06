@@ -395,3 +395,7 @@ Good entry points:
 `Proofs/RuntimeReconcile/Executable.lean`, which defines `Action`, `step?`,
 `replay?`, and soundness/completeness theorems against the relational
 `Transition` semantics.
+It also exports helper lemmas for executable generation monotonicity, coherent
+preservation, publish well-formedness, accept-time binding and router
+readiness/liveness, and denial of generation retirement while in-flight work
+depends on that generation.

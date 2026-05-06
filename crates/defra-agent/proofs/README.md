@@ -288,6 +288,9 @@ session history."
 It is executable in Lean through `Proofs/RuntimeReconcile/Executable.lean`,
 which defines `Action`, `step?`, `replay?`, `step_sound`,
 `transition_complete`, `replay_sound`, and `trace_complete`.
+The same module exposes executable helper corollaries for generation
+monotonicity, coherent preservation, publish well-formedness, request binding,
+router observed-generation readiness/liveness, and in-flight retirement safety.
 
 The key guarantees are:
 

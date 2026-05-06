@@ -23,7 +23,7 @@ inductive Action where
   | acceptRequest (sessionId : SessionId) (requestId : RequestId)
   | finishRequest (requestId : RequestId)
   | retireGeneration (generation : Generation)
-  deriving DecidableEq
+  deriving DecidableEq, Repr
 
 /-- Finite guard for safe generation retirement. -/
 def noInFlightDependsOn (s : RuntimeState) (generation : Generation) : Prop :=
