@@ -27,6 +27,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) generated_by: String,
     pub(crate) vocabularies: Vec<LeanVocabularyContract>,
     pub(crate) state_machines: Vec<LeanStateMachineContract>,
+    pub(crate) trigger_dispatch_cases: Vec<LeanTriggerDispatchCase>,
     pub(crate) follow_up_hooks: Vec<String>,
 }
 
@@ -52,6 +53,35 @@ pub(crate) struct LeanStateMachineContract {
 pub(crate) struct LeanTransitionPair {
     pub(crate) from: String,
     pub(crate) to: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanTriggerKeyContract {
+    pub(crate) trigger_id: String,
+    pub(crate) trigger_kind: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanTriggerDispatchCase {
+    pub(crate) name: String,
+    pub(crate) trigger_id: Option<String>,
+    pub(crate) trigger_kind: String,
+    pub(crate) concurrency: String,
+    pub(crate) active_schedule_ids: Vec<String>,
+    pub(crate) active_event_trigger_ids: Vec<String>,
+    pub(crate) prior_nonterminal_keys: Vec<LeanTriggerKeyContract>,
+    pub(crate) expected_result: String,
+    pub(crate) expected_skip_reason: Option<String>,
+    pub(crate) expected_materialize_trigger_id: Option<String>,
+    pub(crate) expected_materialize_trigger_kind: Option<String>,
+    pub(crate) expected_request_caused_by_id: Option<String>,
+    pub(crate) expected_request_caused_by_kind: Option<String>,
+    pub(crate) expected_execution_origin: Option<String>,
+    pub(crate) expected_supersede_call_keys: Vec<LeanTriggerKeyContract>,
+    pub(crate) superseded_prior_ids: Vec<String>,
+    pub(crate) target_nonterminal_count_after: Option<usize>,
+    pub(crate) request_count_before: usize,
+    pub(crate) request_count_after: usize,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -96,6 +126,10 @@ pub(crate) fn lean_vocabulary_values(domain: &str) -> Vec<&'static str> {
         .iter()
         .map(String::as_str)
         .collect()
+}
+
+pub(crate) fn lean_trigger_dispatch_cases() -> &'static [LeanTriggerDispatchCase] {
+    &lean_contract_snapshot().trigger_dispatch_cases
 }
 
 pub(crate) fn assert_lean_contract_vocabulary_matches(spec: LeanContractVocabulary<'_>) {

@@ -389,7 +389,17 @@ roots.
 - materialized requests carry complete trigger lineage
 
 `Proofs/Conformance/Triggers.lean` records the Rust/DefraDB shape used by the
-runtime trigger implementation.
+runtime trigger implementation. `Proofs/Conformance/Triggers/Contracts.lean`
+also emits finite trigger dispatch cases into the Rust conformance JSON. The
+in-crate Rust trigger-engine test consumes those generated cases and checks
+manual dispatch, schedule/event reachability, tuple-sensitive serial behavior,
+latest-only supersession, lineage, and execution-origin projection against the
+real `TriggerEngine::dispatch` path.
+
+Operational trigger-source behavior remains covered in Rust: DefraDB event
+delivery, control-watcher debounce, schedule tick cadence, subscription
+reconciliation timing, template parser failures, and persistence writeback
+shapes are integration/persistence concerns rather than Lean dispatch facts.
 
 ### Client Turn Projection
 
@@ -456,6 +466,12 @@ The Rust/Lean vocabulary checks compare Rust-visible strings against Lean
 process lifecycle states, runtime reconcile phases, trigger kinds,
 inference-call states, and the closed set of system-generated inference-call
 terminal reasons.
+
+Trigger conformance additionally consumes generated Lean dispatch cases. These
+cases are not a second hand-written table: Lean computes the pre/post request
+counts, expected materialization, supersede calls, lineage, and target
+non-terminal counts from `dispatch`/`dispatchStep`, and Rust checks the live
+engine against those values.
 
 Admission tests also reconstruct held backend slots from persisted
 `InferenceCall` rows during contention, queueing, completion, failure,

@@ -3,6 +3,7 @@ import Proofs.Process
 import Proofs.Persistence
 import Proofs.SessionRecovery
 import Proofs.InferenceCall
+import Proofs.Conformance.Triggers.Contracts
 
 /-!
 # Rust Conformance Contracts
@@ -373,6 +374,8 @@ def snapshotJson : String :=
       ++ jsonArray (vocabularies.map VocabularyContract.toJson) ++ ","
     ++ "\"state_machines\":"
       ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
+    ++ "\"trigger_dispatch_cases\":"
+      ++ Conformance.TriggerContracts.triggerDispatchCasesJson ++ ","
     ++ "\"follow_up_hooks\":["
       ++ jsonString "RuntimeReconcile executable state machine contract"
       ++ "]"

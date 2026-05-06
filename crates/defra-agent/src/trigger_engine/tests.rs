@@ -3,10 +3,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch, Notify};
 use tokio_util::sync::CancellationToken;
 
 use super::*;
@@ -18,7 +19,10 @@ use crate::document_config::{
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
 use crate::identity::KeyIdentity;
-use crate::lean_vocab_test::{assert_lean_to_defradb_vocabulary_matches, LeanVocabulary};
+use crate::lean_vocab_test::{
+    assert_lean_to_defradb_vocabulary_matches, lean_trigger_dispatch_cases,
+    LeanTriggerDispatchCase, LeanTriggerKeyContract, LeanVocabulary,
+};
 use crate::runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot,
     ResolvedSchedule, ResolvedTask,
@@ -55,15 +59,23 @@ fn rust_trigger_kind_vocabulary_matches_lean_model() {
     });
 }
 
+#[derive(Clone)]
+struct MaterializeGate {
+    entered_tx: mpsc::UnboundedSender<()>,
+    release: Arc<Notify>,
+}
+
 /// Spy `MaterializerHandle` used by the engine tests. Records every
 /// `materialize` call it sees and hands back sequentially-numbered request ids
 /// so assertions can check both the call count and the rendered prompt that
 /// reached the materializer.
 ///
-/// `nonterminal_for` pre-populates the set of `(trigger_id, trigger_kind)`
-/// tuples that `has_nonterminal_request_for_trigger` should report as having
-/// an in-flight request. The concurrency gate tests insert tuples here to
-/// simulate a prior fire that has not yet reached a terminal state.
+/// `nonterminal_for` tracks `(trigger_id, trigger_kind)` tuples that
+/// `has_nonterminal_request_for_trigger` should report as having an in-flight
+/// request. Tests can pre-populate it to simulate prior fires; successful
+/// materializations with a trigger id also insert their tuple so sequential
+/// dispatches observe the same non-terminal state the production materializer
+/// persists.
 ///
 /// `materialize_delay` optionally pauses inside `materialize` before recording
 /// the call. Used by the `LatestOnly` serialization tests to widen the window
@@ -75,6 +87,7 @@ struct SpyMaterializer {
     nonterminal_for: Arc<Mutex<HashSet<(String, TriggerKind)>>>,
     supersede_calls: Arc<Mutex<Vec<SupersedeCall>>>,
     materialize_delay: Mutex<Option<Duration>>,
+    materialize_gate: Mutex<Option<MaterializeGate>>,
 }
 
 impl SpyMaterializer {
@@ -85,6 +98,7 @@ impl SpyMaterializer {
             nonterminal_for: Arc::new(Mutex::new(HashSet::new())),
             supersede_calls: Arc::new(Mutex::new(Vec::new())),
             materialize_delay: Mutex::new(None),
+            materialize_gate: Mutex::new(None),
         })
     }
 
@@ -94,6 +108,15 @@ impl SpyMaterializer {
 
     fn supersede_calls(&self) -> Vec<SupersedeCall> {
         self.supersede_calls.lock().unwrap().clone()
+    }
+
+    fn nonterminal_count_for(&self, trigger_id: &str, trigger_kind: TriggerKind) -> usize {
+        self.nonterminal_for
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(id, kind)| id == trigger_id && *kind == trigger_kind)
+            .count()
     }
 
     /// Pre-populate the in-flight set with `(trigger_id, trigger_kind)` so the
@@ -114,6 +137,15 @@ impl SpyMaterializer {
     fn set_materialize_delay(&self, delay: Duration) {
         *self.materialize_delay.lock().unwrap() = Some(delay);
     }
+
+    /// Block materialization until `release` is notified, sending one message
+    /// on `entered_tx` each time a materialize call reaches the gate.
+    fn set_materialize_gate(&self, entered_tx: mpsc::UnboundedSender<()>, release: Arc<Notify>) {
+        *self.materialize_gate.lock().unwrap() = Some(MaterializeGate {
+            entered_tx,
+            release,
+        });
+    }
 }
 
 impl MaterializerHandle for SpyMaterializer {
@@ -130,13 +162,23 @@ impl MaterializerHandle for SpyMaterializer {
             rendered_prompt.to_owned(),
         );
         let calls = self.materialize_calls.clone();
+        let nonterminal_for = self.nonterminal_for.clone();
+        let nonterminal_key = trigger_id.map(|id| (id.to_owned(), trigger_kind));
         let id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
         let delay = *self.materialize_delay.lock().unwrap();
+        let gate = self.materialize_gate.lock().unwrap().clone();
         Box::pin(async move {
+            if let Some(gate) = gate {
+                let _ = gate.entered_tx.send(());
+                gate.release.notified().await;
+            }
             if let Some(d) = delay {
                 tokio::time::sleep(d).await;
             }
             calls.lock().unwrap().push(entry);
+            if let Some(key) = nonterminal_key {
+                nonterminal_for.lock().unwrap().insert(key);
+            }
             Ok(format!("req-{id}"))
         })
     }
@@ -204,6 +246,241 @@ fn resolved_schedule(schedule_id: &str, task: ResolvedTask) -> ResolvedSchedule 
         interval_secs: 60,
         enabled: true,
         concurrency: ConcurrencyMode::Serial,
+    }
+}
+
+fn resolved_schedule_with_concurrency(
+    schedule_id: &str,
+    task: ResolvedTask,
+    concurrency: ConcurrencyMode,
+) -> ResolvedSchedule {
+    ResolvedSchedule {
+        schedule_id: schedule_id.to_string(),
+        task_id: task.task_id.clone(),
+        task,
+        interval_secs: 60,
+        enabled: true,
+        concurrency,
+    }
+}
+
+fn resolved_event_trigger_with_concurrency(
+    trigger_id: &str,
+    task: ResolvedTask,
+    concurrency: ConcurrencyMode,
+) -> ResolvedEventTrigger {
+    ResolvedEventTrigger {
+        trigger_id: trigger_id.to_string(),
+        task_id: task.task_id.clone(),
+        task,
+        source_collection: "WebhookEvent".to_string(),
+        event_kind: "created".to_string(),
+        filter: None,
+        enabled: true,
+        concurrency,
+    }
+}
+
+fn trigger_kind_from_lean(value: &str) -> TriggerKind {
+    match value {
+        "schedule" => TriggerKind::Schedule,
+        "event" => TriggerKind::Event,
+        "manual" => TriggerKind::Manual,
+        other => panic!("unknown Lean trigger kind {other:?}"),
+    }
+}
+
+fn concurrency_from_lean(value: &str) -> ConcurrencyMode {
+    ConcurrencyMode::parse(value)
+        .unwrap_or_else(|| panic!("unknown Lean concurrency mode {value:?}"))
+}
+
+fn trigger_key_from_lean(key: &LeanTriggerKeyContract) -> (String, TriggerKind) {
+    (
+        key.trigger_id.clone(),
+        trigger_kind_from_lean(&key.trigger_kind),
+    )
+}
+
+fn snapshot_from_trigger_contract(
+    case: &LeanTriggerDispatchCase,
+    task: &ResolvedTask,
+    concurrency: ConcurrencyMode,
+) -> Arc<ActiveRuntimeSnapshot> {
+    let active_schedules = case
+        .active_schedule_ids
+        .iter()
+        .map(|id| {
+            (
+                id.clone(),
+                resolved_schedule_with_concurrency(id, task.clone(), concurrency),
+            )
+        })
+        .collect();
+    let active_event_triggers = case
+        .active_event_trigger_ids
+        .iter()
+        .map(|id| {
+            (
+                id.clone(),
+                resolved_event_trigger_with_concurrency(id, task.clone(), concurrency),
+            )
+        })
+        .collect();
+    let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
+        "general".to_string(),
+        Vec::new(),
+        HashMap::new(),
+        HashMap::new(),
+        HashMap::new(),
+    )
+    .with_schedules(active_schedules, HashSet::new())
+    .with_event_triggers(active_event_triggers, HashSet::new());
+    Arc::new(resolved.activate(1, HashMap::new()))
+}
+
+#[tokio::test]
+async fn trigger_engine_dispatch_matches_lean_generated_contract_cases() {
+    let cases = lean_trigger_dispatch_cases();
+    assert!(
+        cases.len() >= 10,
+        "Lean trigger dispatch contract should cover the branch matrix; got {cases:?}"
+    );
+
+    for case in cases {
+        let trigger_kind = trigger_kind_from_lean(&case.trigger_kind);
+        let concurrency = concurrency_from_lean(&case.concurrency);
+        let task = resolved_task(&format!("lean case {}", case.name));
+        let snapshot = snapshot_from_trigger_contract(case, &task, concurrency);
+        let (_tx, rx) = watch::channel(snapshot);
+        let materializer = SpyMaterializer::new();
+        for key in &case.prior_nonterminal_keys {
+            let (trigger_id, trigger_kind) = trigger_key_from_lean(key);
+            materializer.mark_nonterminal(&trigger_id, trigger_kind);
+        }
+        let engine = TriggerEngine::new(rx, materializer.clone());
+
+        let intent = FireIntent {
+            trigger_id: case.trigger_id.clone(),
+            trigger_kind,
+            task,
+            concurrency,
+            event_vars: serde_json::json!({}),
+            doc_vars: None,
+            args_vars: None,
+            on_result: Box::new(|_| {}),
+        };
+
+        let result = engine.dispatch(intent).await;
+        let expected_delta = case
+            .request_count_after
+            .checked_sub(case.request_count_before)
+            .unwrap_or_else(|| panic!("Lean case {} shrank request count", case.name));
+
+        match (case.expected_result.as_str(), result) {
+            ("fired", FireResult::Fired { .. }) => {}
+            ("skipped", FireResult::Skipped { reason }) => assert_eq!(
+                Some(reason.as_str()),
+                case.expected_skip_reason.as_deref(),
+                "Lean case {} skip reason drifted",
+                case.name
+            ),
+            (expected, other) => panic!(
+                "Lean case {} expected {expected}, but TriggerEngine returned {other:?}",
+                case.name
+            ),
+        }
+
+        let calls = materializer.calls();
+        assert_eq!(
+            calls.len(),
+            expected_delta,
+            "Lean case {} materialize delta drifted",
+            case.name
+        );
+        if expected_delta == 1 {
+            let (trigger_id, kind, rendered) = &calls[0];
+            assert_eq!(
+                trigger_id.as_deref(),
+                case.expected_materialize_trigger_id.as_deref(),
+                "Lean case {} materialize trigger_id drifted",
+                case.name
+            );
+            assert_eq!(
+                kind.as_str(),
+                case.expected_materialize_trigger_kind.as_deref().unwrap(),
+                "Lean case {} materialize trigger_kind drifted",
+                case.name
+            );
+            assert_eq!(
+                rendered,
+                &format!("lean case {}", case.name),
+                "Lean case {} rendered prompt drifted",
+                case.name
+            );
+            let expected_origin = match kind {
+                TriggerKind::Manual => "interactive",
+                TriggerKind::Schedule | TriggerKind::Event => "scheduled",
+            };
+            assert_eq!(
+                case.expected_execution_origin.as_deref(),
+                Some(expected_origin),
+                "Lean case {} execution-origin contract no longer matches runtime kind mapping",
+                case.name
+            );
+            let expected_request_kind = if trigger_id.is_some() {
+                Some(kind.as_str())
+            } else {
+                None
+            };
+            assert_eq!(
+                case.expected_request_caused_by_id.as_deref(),
+                trigger_id.as_deref(),
+                "Lean case {} request caused_by id drifted",
+                case.name
+            );
+            assert_eq!(
+                case.expected_request_caused_by_kind.as_deref(),
+                expected_request_kind,
+                "Lean case {} request caused_by kind drifted",
+                case.name
+            );
+        } else {
+            assert!(
+                case.expected_materialize_trigger_id.is_none()
+                    && case.expected_materialize_trigger_kind.is_none()
+                    && case.expected_execution_origin.is_none(),
+                "Lean case {} should not carry materialization fields when skipped",
+                case.name
+            );
+        }
+
+        let supersede_calls = materializer.supersede_calls();
+        let expected_supersede_calls = case
+            .expected_supersede_call_keys
+            .iter()
+            .map(trigger_key_from_lean)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            supersede_calls, expected_supersede_calls,
+            "Lean case {} supersede calls drifted",
+            case.name
+        );
+        assert_eq!(
+            case.superseded_prior_ids.is_empty(),
+            expected_supersede_calls.is_empty(),
+            "Lean case {} should only supersede prior ids when Rust calls supersede",
+            case.name
+        );
+
+        if let Some(trigger_id) = case.trigger_id.as_deref() {
+            assert_eq!(
+                materializer.nonterminal_count_for(trigger_id, trigger_kind),
+                case.target_nonterminal_count_after.unwrap_or(0),
+                "Lean case {} target non-terminal count drifted",
+                case.name
+            );
+        }
     }
 }
 
@@ -475,6 +752,100 @@ async fn dispatch_latest_only_supersedes_prior_and_fires_new() {
     let (trigger_id, kind, _rendered) = &calls[0];
     assert_eq!(trigger_id.as_deref(), Some("sched-1"));
     assert_eq!(*kind, TriggerKind::Schedule);
+}
+
+#[tokio::test]
+async fn dispatch_latest_only_lock_blocks_second_supersede_until_first_materialize_finishes() {
+    let task = resolved_task("tick");
+    let schedule = resolved_schedule("sched-1", task.clone());
+    let snapshot = snapshot_with_schedules(HashMap::from([("sched-1".to_string(), schedule)]));
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = SpyMaterializer::new();
+    let (entered_tx, mut entered_rx) = mpsc::unbounded_channel();
+    let release = Arc::new(Notify::new());
+    materializer.set_materialize_gate(entered_tx, release.clone());
+    let engine = Arc::new(TriggerEngine::new(rx, materializer.clone()));
+
+    let make_intent = || FireIntent {
+        trigger_id: Some("sched-1".to_string()),
+        trigger_kind: TriggerKind::Schedule,
+        task: task.clone(),
+        concurrency: ConcurrencyMode::LatestOnly,
+        event_vars: serde_json::json!({}),
+        doc_vars: None,
+        args_vars: None,
+        on_result: Box::new(|_| {}),
+    };
+
+    let engine1 = engine.clone();
+    let first_intent = make_intent();
+    let first = tokio::spawn(async move { engine1.dispatch(first_intent).await });
+    entered_rx
+        .recv()
+        .await
+        .expect("first LatestOnly dispatch should enter materialize gate");
+    assert_eq!(
+        materializer.supersede_calls(),
+        vec![("sched-1".to_string(), TriggerKind::Schedule)],
+        "first LatestOnly dispatch should supersede before materializing"
+    );
+
+    let second = engine.dispatch(make_intent());
+    tokio::pin!(second);
+    std::future::poll_fn(|cx| match second.as_mut().poll(cx) {
+        Poll::Pending => Poll::Ready(()),
+        Poll::Ready(result) => panic!(
+            "second LatestOnly dispatch completed while the first held the per-trigger lock: {result:?}"
+        ),
+    })
+    .await;
+
+    assert_eq!(
+        materializer.supersede_calls().len(),
+        1,
+        "second LatestOnly dispatch must block on the per-trigger lock before superseding"
+    );
+    assert!(
+        entered_rx.try_recv().is_err(),
+        "second LatestOnly dispatch must not enter materialize while first is gated"
+    );
+
+    release.notify_waiters();
+    let first_result = first.await.unwrap();
+    assert!(
+        matches!(first_result, FireResult::Fired { .. }),
+        "first LatestOnly dispatch should finish after release, got {first_result:?}"
+    );
+
+    std::future::poll_fn(|cx| match second.as_mut().poll(cx) {
+        Poll::Pending => Poll::Ready(()),
+        Poll::Ready(result) => panic!(
+            "second LatestOnly dispatch completed before its materialize gate was released: {result:?}"
+        ),
+    })
+    .await;
+    entered_rx
+        .try_recv()
+        .expect("second dispatch should enter materialize after the first releases the lock");
+    release.notify_waiters();
+    let second_result = second.await;
+    assert!(
+        matches!(second_result, FireResult::Fired { .. }),
+        "second LatestOnly dispatch should fire after the first releases, got {second_result:?}"
+    );
+    assert_eq!(
+        materializer.supersede_calls(),
+        vec![
+            ("sched-1".to_string(), TriggerKind::Schedule),
+            ("sched-1".to_string(), TriggerKind::Schedule),
+        ],
+        "the second supersede must occur only after the first materialize completes"
+    );
+    assert_eq!(
+        materializer.calls().len(),
+        2,
+        "both LatestOnly dispatches should materialize after serialized critical sections"
+    );
 }
 
 #[tokio::test]

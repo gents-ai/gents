@@ -40,17 +40,21 @@
 //!   toggling `enabled = false` after that drives another bump, matching the
 //!   behavior the engine relies on to stop firing disabled schedules.
 //!
-//! # Why not boot `DefraAgent::run`?
+//! # Engine semantics vs. operational timing
 //!
-//! The full bootstrap works for `schedule_insert_bumps_active_generation`
-//! (which just asserts the gen bump), but driving the engine to materialize
-//! an `AgentRequest` through the full startup → reconcile → engine tick loop
-//! is timing-sensitive: the control watcher has a 5s debounce, the schedule
-//! source ticks at 1s, and the backend health check must succeed before the
-//! behavior is admitted. The dedicated in-crate test already covers this end
-//! to end; duplicating it through a slower, more flaky integration surface
-//! adds no signal. These tests instead pin the persistence-layer contract
-//! the engine delegates to.
+//! The trigger-engine branch semantics are now pinned in-crate by
+//! `trigger_engine::tests::trigger_engine_dispatch_matches_lean_generated_contract_cases`,
+//! which consumes finite cases emitted by
+//! `Proofs/Conformance/Triggers/Contracts.lean`. That generated contract
+//! covers schedule reachability, serial gating, latest-only supersession, and
+//! tuple-sensitive lineage without relying on the control watcher's debounce
+//! or the schedule source tick as the only correctness oracle.
+//!
+//! This file still boots `DefraAgent::run` only where the observable under
+//! test is operational reconfiguration (`active_generation` bumps). The other
+//! cases pin the persistence-layer contract the engine delegates to: DefraDB
+//! materialization lineage, non-terminal gating queries, supersede mutations,
+//! and source writeback shape.
 
 use std::sync::Arc;
 use std::time::Duration;
