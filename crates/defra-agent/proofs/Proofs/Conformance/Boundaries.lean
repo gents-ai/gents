@@ -37,9 +37,19 @@ deadline expiry remain terminal `failed`.
 
 Tool-call failures are classified as permanent until tool metadata can prove
 retry safety. Retrying tool calls without health, idempotency, and side-effect
-metadata can repeat side effects, so the model leaves tool retry eligibility out
-of the request transition system and Rust treats `StreamingError::Tool(_)` as a
-permanent failure.
+metadata can repeat side effects, so the request transition system does not
+model tool retries and Rust treats `StreamingError::Tool(_)` as a permanent
+failure.
+
+`Proofs.ToolExecution` is the initial local model for future MCP/tool execution
+semantics. It currently proves only the service-local boundary Rust enforces:
+unreachable services and invalid preflight schemas block dispatch, `list_tools`
+transport retries are safe-read retries, and `call_tool` transport retries
+require explicit idempotency evidence. Rust does not currently persist or
+consume idempotency metadata for MCP tools, so `McpPool::call_tool` must not
+implicitly retry after dispatch failure. Future tool retries should first extend
+`ToolExecution.IdempotencyEvidence`, add a Rust contract for the advertised
+metadata, and only then widen `McpPool::call_tool` retry behavior.
 
 The scheduler's aggregate fleet slot state is reconstructed from
 `InferenceCall` rows. A backend's held slot count is the derived count of rows

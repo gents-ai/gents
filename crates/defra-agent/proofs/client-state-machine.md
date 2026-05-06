@@ -214,6 +214,27 @@ projection. It proves that selection changes are local and transport-independent
 that transport input does not mutate shell state, and that awaiting submission
 state retires only after observing the matching request tip.
 
+## Desktop Shell Conformance Map
+
+The desktop shell is split across Rust snapshot construction and TypeScript
+local UI state. Lean models the intended shell machine; the current runtime
+enforces these parts:
+
+| Lean property | Runtime enforcement today | Coverage |
+|---|---|---|
+| C2 snapshot preserves selection | React selection state is separate from snapshot refresh. `projectChatShell` is pure and receives selection as input rather than writing it. | TypeScript projection tests cover stale tracked workflow after user session switch. |
+| C3 transport input is non-mutating | P2P health lives in `DesktopRuntimeSnapshot.p2pHealth`; it is projected separately from selected session/chat state. Auto-restart refreshes the selected session by id instead of rewriting selection from transport health. | Desktop shell effects rely on refs for selected session during restart. |
+| C4/C4' session selection is local | `onSelectSession` latches the clicked session and clears the loaded session snapshot if it belongs to another session. Store presence affects projection only. | TypeScript projection tests cover switching away from stale in-flight workflow. |
+| C6 start-submit is gated | `onSendMessage` checks `shellProjection.sendStatus === ready` before calling `sendChatMessage`; Rust submission APIs still validate required agent/session fields. | Existing chat-shell tests cover empty/missing/in-flight terminality gates. |
+| C9 awaiting retires only on matching request | Rust `build_session_snapshot_from_store(..., preferred_request_id)` reports a preferred request only if that request is actually in the observed store; TypeScript keeps `awaitingObservation` while latest/pending request ids do not match. | Rust snapshot test and TypeScript projection test cover missing/stale observed request ids. |
+
+The remaining Lean-only surface is a generated executable ClientShell contract:
+there is no Rust or TypeScript consumer of `step` yet. Future shell changes that
+add workflow states, blocker reasons, behavior-mismatch handling, or transport
+coupling should extend `Proofs/ClientShell` first, then either emit a
+`Proofs.Conformance.Contracts` vocabulary/state-machine contract or add a
+proof-linked runtime test that names the theorem it protects.
+
 ## Reference Pseudocode
 
 ### Swift

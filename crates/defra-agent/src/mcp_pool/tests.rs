@@ -1,4 +1,19 @@
 use super::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
+use crate::lean_vocab_test::{assert_lean_contract_vocabulary_matches, LeanContractVocabulary};
+
+#[test]
+fn tool_retry_disposition_contract_matches_mcp_pool_policy() {
+    // TODO(idempotency): replace this shape pin with a Rust producer contract
+    // once MCP services advertise retry dispositions/idempotency metadata.
+    assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
+        domain: "ToolRetryDisposition",
+        rust_source: "Proofs.ToolExecution retryDisposition / mcp_pool::call_tool",
+        rust_values: &["doNotRetry", "retrySafeRead", "retryIdempotentToolCall"],
+    });
+}
 
 #[test]
 fn resolve_mcp_url_same_host_uses_localhost() {
@@ -68,4 +83,51 @@ fn resolve_mcp_url_no_subnet_uses_tailscale() {
         None,
     );
     assert_eq!(url, "http://100.76.203.120:9200/mcp");
+}
+
+#[tokio::test]
+async fn call_tool_does_not_retry_cached_dispatch_failure_without_idempotency_metadata() {
+    let pool = McpPool::new();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_for_fn = Arc::clone(&calls);
+    let endpoint = "http://mcp.test/mcp";
+
+    {
+        let mut guard = pool.inner.write().await;
+        guard.insert(
+            "mutating-service".to_string(),
+            McpConnection {
+                endpoint: endpoint.to_string(),
+                list_tools_fn: Box::new(|| Box::pin(async { Ok(ListToolsResult::default()) })),
+                call_tool_fn: Box::new(move |_params| {
+                    let calls = Arc::clone(&calls_for_fn);
+                    Box::pin(async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        anyhow::bail!("transport dropped after dispatch")
+                    })
+                }),
+            },
+        );
+    }
+
+    let error = pool
+        .call_tool(
+            "mutating-service",
+            endpoint,
+            "write_record",
+            serde_json::json!({ "id": 1 }),
+        )
+        .await
+        .expect_err("dispatch failure should propagate");
+
+    assert!(error.to_string().contains("transport dropped"));
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "Proofs.ToolExecution.mcp_call_without_idempotency_metadata_does_not_retry"
+    );
+    assert!(
+        pool.inner.read().await.contains_key("mutating-service"),
+        "a failed call_tool must not evict and reconnect without idempotency evidence"
+    );
 }

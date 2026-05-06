@@ -4,6 +4,7 @@ import Proofs.Persistence
 import Proofs.StorageObservation
 import Proofs.SessionRecovery
 import Proofs.InferenceCall
+import Proofs.ToolExecution
 
 /-!
 # Rust Conformance Contracts
@@ -350,6 +351,12 @@ def inferenceCallMachine : StateMachineContract :=
       InferenceCall.step?
       (fun call => call.state.toDefraDB))
 
+def toolRetryDispositions : List ToolExecution.RetryDisposition :=
+  ToolExecution.RetryDisposition.all
+
+def toolRetryDispositionNames : List String :=
+  toolRetryDispositions.map ToolExecution.RetryDisposition.toDefraDB
+
 def vocabularies : List VocabularyContract :=
   [ { domain := "RequestState", values := requestStateNames }
   , { domain := "ExecutionOrigin", values :=
@@ -370,6 +377,7 @@ def vocabularies : List VocabularyContract :=
         , .streamDroppedBeforeTerminalResponse
         ].map InferenceCallTerminalReason.toDefraDB
     }
+  , { domain := "ToolRetryDisposition", values := toolRetryDispositionNames }
   ]
 
 def stateMachines : List StateMachineContract :=
@@ -418,6 +426,8 @@ def snapshotJson : String :=
       ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
     ++ "\"follow_up_hooks\":["
       ++ jsonString "RuntimeReconcile executable state machine contract"
+      ++ ","
+      ++ jsonString "ToolExecution idempotent MCP call retry contract"
       ++ "]"
     ++ "}"
 
