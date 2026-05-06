@@ -268,6 +268,64 @@ async fn finalize_removes_buffer_after_successful_mutation() {
 }
 
 #[tokio::test]
+async fn finalize_treats_matching_terminal_observation_as_idempotent() {
+    let (node, data_path) = build_test_node("finalize-idempotent-terminal").await;
+    let writer = DefraStreamWriter::new(
+        node.clone(),
+        "did:defra-agent:test",
+        Duration::from_secs(60),
+    );
+    let request_id = uuid::Uuid::new_v4().to_string();
+    create_processing_request(&node, &request_id, "session-1").await;
+    let doc_id = writer
+        .begin("session-1", &request_id, "general")
+        .await
+        .unwrap();
+
+    writer.write_tokens(&doc_id, "final answer").await.unwrap();
+    let first = writer
+        .finalize(&doc_id, StreamStatus::Complete)
+        .await
+        .unwrap();
+    assert_eq!(first.content, "final answer");
+    assert!(!writer.buffers.lock().await.contains_key(&doc_id));
+
+    let second = writer
+        .finalize(&doc_id, StreamStatus::Complete)
+        .await
+        .unwrap();
+
+    assert_eq!(second.status, StreamStatus::Complete);
+    assert_eq!(second.content, "final answer");
+    assert_eq!(second.token_count, 2);
+    assert!(!writer.buffers.lock().await.contains_key(&doc_id));
+
+    let row = load_response(&node, &doc_id).await;
+    assert_eq!(
+        row.get("content").and_then(|value| value.as_str()),
+        Some("final answer")
+    );
+    assert_eq!(
+        row.get("status").and_then(|value| value.as_str()),
+        Some("complete")
+    );
+
+    let request_row = load_request(&node, &request_id).await;
+    assert_eq!(
+        request_row.get("status").and_then(|value| value.as_str()),
+        Some("completed")
+    );
+    assert_eq!(
+        request_row
+            .get("lifecycle_state")
+            .and_then(|value| value.as_str()),
+        Some("completed")
+    );
+
+    let _ = fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
 async fn finalize_keeps_buffer_when_mutation_fails() {
     let (node, data_path) = build_test_node("finalize-failure").await;
     let writer = DefraStreamWriter::new(

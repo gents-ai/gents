@@ -93,6 +93,79 @@ fn transcript_turn_state_rejects_stream_result_before_assistant_is_saved() {
     assert!(state.mark_stream_tool_result_seen("call-1").unwrap());
 }
 
+#[tokio::test]
+async fn fail_closed_persistence_policy_returns_error_and_records_failure() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-hook-fail-closed-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    let hook = DefraSessionHook::with_identity(
+        node,
+        "general",
+        "did:defra-agent:general",
+        FailurePolicy::FailClosed,
+    );
+
+    let error = hook
+        .apply_persistence_policy(
+            Err(anyhow::anyhow!("synthetic persistence failure")),
+            "unit-test failure",
+        )
+        .unwrap_err();
+
+    assert!(error.to_string().contains("synthetic persistence failure"));
+    let stats = hook.stats();
+    assert_eq!(stats.persistence_failures, 1);
+    assert_eq!(stats.persistence_successes, 0);
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn fail_open_persistence_policy_continues_without_success_ack() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-hook-fail-open-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    let hook = DefraSessionHook::with_identity(
+        node,
+        "general",
+        "did:defra-agent:general",
+        FailurePolicy::FailOpen,
+    );
+
+    hook.apply_persistence_policy(
+        Err(anyhow::anyhow!("synthetic persistence failure")),
+        "unit-test failure",
+    )
+    .unwrap();
+
+    let stats = hook.stats();
+    assert_eq!(stats.persistence_failures, 1);
+    assert_eq!(
+        stats.persistence_successes, 0,
+        "fail-open continuation must not count as a successful storage ack"
+    );
+
+    hook.apply_persistence_policy(Ok(()), "unit-test success")
+        .unwrap();
+    let stats = hook.stats();
+    assert_eq!(stats.persistence_failures, 1);
+    assert_eq!(stats.persistence_successes, 1);
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
 async fn create_streaming_response(
     node: &defra_node::EmbeddedNode,
     request_id: &str,
