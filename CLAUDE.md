@@ -34,13 +34,15 @@ This distinction matters: `amy-general` and `amy-code` should be two behaviors o
 
 ### State Machines
 
-Three formal state machines modeled in Lean 4 and implemented in Rust:
+Core formal state machines modeled in Lean 4 and implemented in Rust:
 
 1. **Process Lifecycle** (5 states): `Uninitialized -> Recovering -> Ready -> ShuttingDown -> Shutdown`
 2. **Request Lifecycle** (9 states): `Pending -> Claimed -> Processing -> {Completed, Failed, Superseded, Dead, Interrupted}` (plus `InputRequired`)
 3. **Persistence Lifecycle** (4 states): DB commit tracking
 
 Key proven properties: terminal irreversibility (S1), monotonic progress (S3), deadline bounding (S4), recovery exclusivity (S5), persistence before completion (S6), bounded termination (L1), recovery convergence (L3).
+
+Additional Lean models cover scheduler/fleet slot accounting, session retry/reissue, runtime reconcile, desired-state apply ordering, trigger dispatch, client turn projection, and the desktop shell workflow. See `crates/defra-agent/proofs/README.md`.
 
 ### Document-Driven Control Plane
 

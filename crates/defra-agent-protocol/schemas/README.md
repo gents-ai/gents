@@ -34,8 +34,9 @@ Interactive execution:
                -> CompactionEntry
 
 Scheduled and event-driven execution:
-  Task     -> behavior_id -> AgentBehavior
-  Schedule -> task_id     -> Task
+  Task         -> behavior_id -> AgentBehavior
+  Schedule     -> task_id     -> Task
+  EventTrigger -> task_id     -> Task
 
 Remote tool discovery:
   ToolServiceRegistry
@@ -51,7 +52,7 @@ These documents describe what the agent is and how it should run.
 |------------|------------|------------|------------|---------|
 | `AgentPrincipal` | `agent_did`, `default_behavior_id`, `enabled` | `default_behavior_id -> AgentBehavior.behavior_id` | `init`, config/bootstrap code | document boot, reconcile, scheduler/task defaulting |
 | `AgentBehavior` | `behavior_id`, `agent_did`, `backend_id`, `model_name`, `tool_selection_id`, `inference_profile_id`, `enabled` | `backend_id -> InferenceBackend.backend_id`, `tool_selection_id -> ToolSelection.selection_id`, `inference_profile_id -> InferenceProfile.profile_id` | `init`, `config behavior set`, library builder/document bootstrap | runtime resolution, request routing, scheduler |
-| `ToolSelection` | `selection_id`, `agent_did`, file/bash/meta/delegate fields | selected by `AgentBehavior.tool_selection_id` | `init`, `config tools set` | tool-surface resolution |
+| `ToolSelection` | `selection_id`, `agent_did`, file/bash/meta/delegate fields, command execution policy fields | selected by `AgentBehavior.tool_selection_id` | `init`, `config tools set` | tool-surface resolution |
 | `InferenceBackend` | `backend_id`, `provider_kind`, `endpoint`, `api_key`, `api_key_env_var`, `max_concurrent`, `max_queue_depth`, `enabled`, `models`, `probe_status` | selected by `AgentBehavior.backend_id` | `init`, `config backend set`, desired-state manifests, health/probe updates | startup readiness, runtime execution, scheduler execution |
 | `InferenceProfile` | `profile_id`, context/output/temperature/deadline fields | selected by `AgentBehavior.inference_profile_id` | `config profile set` | runtime resolution |
 
@@ -79,16 +80,22 @@ These documents record user requests, assistant output, and conversation history
 | `AgentToolResult` | `agent_did`, `session_id`, `tool_name`, `tool_input`, `output_text`, `truncated`, `discarded_because_interrupted` | normalized tool result persistence | tool persistence hook | compaction and later inspection |
 | `CompactionEntry` | `compaction_key`, `session_id`, `summary`, `messages_compacted`, token counts | persisted compaction summaries | compaction layer | session reconstruction and debugging |
 
-### Tasks and Schedules
+### Tasks, Schedules, and Event Triggers
 
 | Collection | Key fields | References | Written by | Read by |
 |------------|------------|------------|------------|---------|
 | `Task` | `task_id`, `name`, `behavior_id`, `prompt_template`, `enabled`, `output_schema_ref` | `behavior_id -> AgentBehavior.behavior_id` | desired-state apply | trigger engine |
 | `Schedule` | `schedule_id`, `task_id`, `interval_secs`, `enabled`, `concurrency`, `next_run_at`, `last_attempt_at`, `last_status`, `fire_count` | `task_id -> Task.task_id` | desired-state apply, trigger engine status updates | trigger engine |
+| `EventTrigger` | `trigger_id`, `task_id`, `source_collection`, `event_kind`, `filter`, `enabled`, `concurrency`, `last_attempt_at`, `last_fired_source_doc_id`, `last_status`, `fire_count` | `task_id -> Task.task_id` | desired-state apply, trigger engine status updates | event source / trigger engine |
 
 `Task.behavior_id` is concrete and mandatory. A `Schedule` references the `Task`
 it fires; the trigger engine materializes `AgentRequest` rows from due
 `Schedule`s.
+
+An `EventTrigger` also references a `Task`, but fires from document events on a
+declared `source_collection`. Desired-state validation probes the live DefraDB
+schema for the source collection, validates the trigger filter, and resolves
+`doc.*` template references in the target task before apply succeeds.
 
 ### Tool Service Discovery
 
@@ -182,6 +189,12 @@ Some boundaries are deliberate:
 - `ToolSelection` is the behavior-selected tool surface.
 - `ToolCeiling` is not stored here; it is an operator safety cap applied at
   runtime.
+- Command execution policy lives on `ToolSelection`: `command_execution_policy`
+  accepts `read_only`, `workspace_write`/`managed_write`, or `unrestricted`;
+  `command_allowed_argv_prefixes` and `command_forbidden_argv_prefixes` refine
+  argv-level allow/deny behavior; `command_network_mode` is an optional network
+  policy hint. Runtime enforcement still depends on the selected bash mode and
+  host platform.
 - backend credentials may currently be stored either directly in
   `InferenceBackend.api_key` or indirectly via `InferenceBackend.api_key_env_var`.
 - backend capability metadata is not stored in `InferenceBackend`; provider

@@ -78,7 +78,10 @@ If you want write-capable local tools for a demo, opt in explicitly:
 $AGENT init --write-tools
 ```
 
-With `--write-tools`, the same tool root also caps write/edit and unrestricted bash access.
+With `--write-tools`, the same tool root also caps write/edit and write-capable
+bash access. On macOS, the default write-capable bash policy uses
+`sandbox-exec` to contain writes to that root. An explicit `unrestricted`
+command execution policy is unsandboxed.
 
 If you want to wipe and recreate the configured agent home from scratch:
 
@@ -205,6 +208,16 @@ That means a fresh demo can immediately inspect the local filesystem after `init
 
 If you want write-capable tools instead, rerun `init` with `--write-tools`.
 
+Bash outputs are model-readable by default: the first line is a `defra_exec:`
+JSON metadata envelope containing command, cwd, exit code, timeout status,
+duration, sandbox/policy mode, and stdout/stderr truncation metadata. The tool
+also supports `raw_json=true` for a fully structured response.
+
+Bash commands inherit a small core environment only. Variables containing
+`KEY`, `SECRET`, or `TOKEN` are stripped by default, and pager/color variables
+are forced for non-interactive output (`PAGER=cat`, `GIT_PAGER=cat`,
+`NO_COLOR=1`, `TERM=dumb`).
+
 `init` writes the default backend, behavior, and tool-selection documents through the same upsert code used by `config backend set`, `config behavior set`, and `config tools set`.
 
 The remaining `init.json` file stores only filesystem-local context that is not represented in DefraDB documents: the home path, agent name, agent DID, key path, operator tool ceiling, and tool root. Runtime configuration itself lives in DefraDB documents.
@@ -319,6 +332,7 @@ That flow already has a mocked end-to-end harness in [crates/defra-agent-cli/tes
 
 - Schema/data model: `crates/defra-agent-protocol/schemas/README.md`
 - Lean proof guide: `crates/defra-agent/proofs/README.md`
+- Client turn observation protocol: `crates/defra-agent/proofs/client-state-machine.md`
 - macOS release signing: `docs/macos-signing.md`
 
 Run the mocked binary-flow suite locally with:
@@ -360,6 +374,10 @@ The mocked binary-flow suite is what CI should gate on. The live smoke test is f
   runtime library, schemas, state-machine conformance tests, and Lean proofs
 - `crates/defra-agent-cli`
   compiled CLI used in the demo flow above
+- `crates/defra-agent-protocol`
+  shared schema, row, and client protocol types
+- `apps/desktop-tauri`
+  Tauri desktop shell
 
 ## Proofs
 
@@ -367,6 +385,8 @@ The Lean proof tree lives under `crates/defra-agent/proofs`.
 
 Good entry points:
 
+- `crates/defra-agent/proofs/Proofs/Client.lean`
+- `crates/defra-agent/proofs/Proofs/ClientShell.lean`
 - `crates/defra-agent/proofs/Proofs/SessionRecovery.lean`
 - `crates/defra-agent/proofs/Proofs/RuntimeReconcile.lean`
 - `crates/defra-agent/proofs/README.md`
