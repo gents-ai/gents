@@ -390,3 +390,8 @@ Good entry points:
 - `crates/defra-agent/proofs/Proofs/SessionRecovery.lean`
 - `crates/defra-agent/proofs/Proofs/RuntimeReconcile.lean`
 - `crates/defra-agent/proofs/README.md`
+
+`RuntimeReconcile` is executable in Lean: its barrel imports
+`Proofs/RuntimeReconcile/Executable.lean`, which defines `Action`, `step?`,
+`replay?`, and soundness/completeness theorems against the relational
+`Transition` semantics.
