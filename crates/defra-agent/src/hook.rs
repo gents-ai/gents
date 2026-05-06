@@ -190,17 +190,7 @@ impl DefraSessionHook {
     }
 
     fn decide_persistence_outcome(&self, context: &str, error: &anyhow::Error) -> PolicyDecision {
-        self.counters.failures.fetch_add(1, Ordering::Relaxed);
-        match self.failure_policy {
-            FailurePolicy::FailOpen => {
-                tracing::warn!(error = %error, context = %context, "persistence failed (fail-open)");
-                PolicyDecision::Continue
-            }
-            FailurePolicy::FailClosed => {
-                tracing::error!(error = %error, context = %context, "persistence failed (fail-closed) — terminating");
-                PolicyDecision::Terminate(format!("persistence failed: {error}"))
-            }
-        }
+        decide_persistence_outcome(self.failure_policy, &self.counters, context, error)
     }
 
     fn on_persistence_error(&self, context: &str, error: &anyhow::Error) -> HookAction {
@@ -270,6 +260,25 @@ impl DefraSessionHook {
                 PolicyDecision::Continue => Ok(()),
                 PolicyDecision::Terminate(_) => Err(e),
             },
+        }
+    }
+}
+
+fn decide_persistence_outcome(
+    failure_policy: FailurePolicy,
+    counters: &HookCounters,
+    context: &str,
+    error: &anyhow::Error,
+) -> PolicyDecision {
+    counters.failures.fetch_add(1, Ordering::Relaxed);
+    match failure_policy {
+        FailurePolicy::FailOpen => {
+            tracing::warn!(error = %error, context = %context, "persistence failed (fail-open)");
+            PolicyDecision::Continue
+        }
+        FailurePolicy::FailClosed => {
+            tracing::error!(error = %error, context = %context, "persistence failed (fail-closed) — terminating");
+            PolicyDecision::Terminate(format!("persistence failed: {error}"))
         }
     }
 }

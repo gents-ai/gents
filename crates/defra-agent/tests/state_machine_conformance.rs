@@ -32,6 +32,8 @@ fn lean_executable_contracts_cover_initial_domains() {
         "Process",
         "Persistence.failClosed",
         "Persistence.failOpen",
+        "StorageObservation.failClosed",
+        "StorageObservation.failOpen",
         "SessionRecovery",
         "InferenceCall",
     ] {
@@ -40,6 +42,52 @@ fn lean_executable_contracts_cover_initial_domains() {
 
     assert_lean_transition_is_legal("Persistence.failClosed", "committing", "uncommitted");
     assert_lean_transition_is_legal("Persistence.failOpen", "committing", "lost");
+    assert_lean_transition_is_legal("StorageObservation.failClosed", "noMutation", "inFlight");
+    assert_lean_transition_is_legal(
+        "StorageObservation.failClosed",
+        "inFlight",
+        "successAcknowledged",
+    );
+    assert_lean_transition_is_legal(
+        "StorageObservation.failClosed",
+        "inFlight",
+        "mutationFailed",
+    );
+    assert_lean_transition_is_legal(
+        "StorageObservation.failClosed",
+        "mutationFailed",
+        "noMutation",
+    );
+    assert_lean_transition_is_legal(
+        "StorageObservation.failOpen",
+        "mutationFailed",
+        "lostAcknowledged",
+    );
+    assert_lean_transition_is_legal(
+        "StorageObservation.failClosed",
+        "successAcknowledged",
+        "staleObserved",
+    );
+    assert_lean_transition_is_legal(
+        "StorageObservation.failClosed",
+        "successAcknowledged",
+        "readVisible",
+    );
+    assert_lean_transition_is_legal(
+        "StorageObservation.failClosed",
+        "staleObserved",
+        "readVisible",
+    );
+    assert_lean_transition_is_illegal(
+        "StorageObservation.failClosed",
+        "mutationFailed",
+        "lostAcknowledged",
+    );
+    assert_lean_transition_is_illegal(
+        "StorageObservation.failOpen",
+        "mutationFailed",
+        "noMutation",
+    );
     assert_lean_transition_is_legal("SessionRecovery", "failed", "pending");
     assert_lean_transition_is_legal("InferenceCall", "queued", "running");
     assert_lean_transition_is_legal("InferenceCall", "running", "completed");

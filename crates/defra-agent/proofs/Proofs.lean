@@ -1,6 +1,7 @@
 import Proofs.Basic
 import Proofs.Process
 import Proofs.Persistence
+import Proofs.StorageObservation
 import Proofs.Scheduling
 import Proofs.Request
 import Proofs.InferenceCall

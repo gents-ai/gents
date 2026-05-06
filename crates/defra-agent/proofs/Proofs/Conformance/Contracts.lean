@@ -1,6 +1,7 @@
 import Proofs.Request
 import Proofs.Process
 import Proofs.Persistence
+import Proofs.StorageObservation
 import Proofs.SessionRecovery
 import Proofs.InferenceCall
 
@@ -240,6 +241,45 @@ def persistenceMachine
       (fun state action => PersistenceState.step? policy state action)
       PersistenceState.toDefraDB)
 
+def storageObservationStates : List StorageObservation :=
+  [ .noMutation
+  , .inFlight
+  , .successAcknowledged
+  , .mutationFailed
+  , .staleObserved
+  , .readVisible
+  , .lostAcknowledged
+  ]
+
+def storageObservationStateNames : List String :=
+  storageObservationStates.map StorageObservation.toContract
+
+def storageObservationActions : List (String × StorageObservation.Action) :=
+  [ ("beginMutation", .beginMutation)
+  , ("mutationSuccess", .mutationSuccess)
+  , ("mutationFailure", .mutationFailure)
+  , ("staleRead", .staleRead)
+  , ("staleEvent", .staleEvent)
+  , ("readYourWrites", .readYourWrites)
+  , ("eventArrives", .eventArrives)
+  , ("retryFailClosed", .retryFailClosed)
+  , ("acknowledgeLost", .acknowledgeLost)
+  ]
+
+def storageObservationMachine
+    (domain : String)
+    (policy : PersistenceState.FailurePolicy) : StateMachineContract :=
+  machineContract
+    domain
+    storageObservationStateNames
+    (terminalNames storageObservationStates StorageObservation.toContract)
+    (actionNames storageObservationActions)
+    (transitionPairsFromSamples
+      storageObservationStates
+      storageObservationActions
+      (fun state action => StorageObservation.step? policy state action)
+      StorageObservation.toContract)
+
 def sessionRecoveryFailedId : RequestId := 1
 
 def sessionRecoveryNewId : RequestId := 2
@@ -318,6 +358,7 @@ def vocabularies : List VocabularyContract :=
   , { domain := "PersistenceState", values := persistenceStateNames }
   , { domain := "PersistenceFailurePolicy", values :=
         [.failOpen, .failClosed].map PersistenceState.FailurePolicy.toDefraDB }
+  , { domain := "StorageObservation", values := storageObservationStateNames }
   , { domain := "SessionRecoveryLatestRequestState"
     , values := [RequestState.failed.toDefraDB, RequestState.pending.toDefraDB]
     }
@@ -336,6 +377,8 @@ def stateMachines : List StateMachineContract :=
   , processMachine
   , persistenceMachine "Persistence.failClosed" .failClosed
   , persistenceMachine "Persistence.failOpen" .failOpen
+  , storageObservationMachine "StorageObservation.failClosed" .failClosed
+  , storageObservationMachine "StorageObservation.failOpen" .failOpen
   , sessionRecoveryMachine
   , inferenceCallMachine
   ]
