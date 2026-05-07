@@ -22,7 +22,7 @@
 //! * `subscription_reconciles_on_generation_bump` — re-pointing a trigger from
 //!   collection A to collection B bumps `active_generation` and only B-side
 //!   writes fire afterwards.
-//! * `serial_skips_when_prior_non_terminal` — the engine's gating query sees an
+//! * `serial_skips_when_prior_active_runtime` — the engine's gating query sees an
 //!   active runtime `(trigger_id, "event")` tuple and the serial trigger skips.
 //! * `latest_only_supersedes_prior_fire` — the supersede mutation the engine
 //!   would run transitions the in-flight event-kind request to
@@ -1032,7 +1032,7 @@ async fn subscription_reconciles_on_generation_bump() {
 /// No second `AgentRequest` materializes for the same tuple. Asserted at the
 /// persistence-layer contract (PR 1 pattern).
 #[tokio::test]
-async fn serial_skips_when_prior_non_terminal() {
+async fn serial_skips_when_prior_active_runtime() {
     let db = test_db("trigger-conformance-event-serial-skip").await;
 
     let lineage = TriggerLineage {

@@ -8,14 +8,19 @@ use anyhow::Context;
 use super::rows::{DedupRow, RequestStatusTransition, RequestViewRow};
 use super::*;
 
-fn request_view_is_terminal(view: &RequestViewRow) -> bool {
+fn request_status_is_terminal(status: &str) -> bool {
     matches!(
-        view.lifecycle_state.as_deref(),
-        Some("completed" | "failed" | "superseded" | "dead" | "interrupted")
-    ) || matches!(
-        view.status.as_str(),
+        status,
         "completed" | "error" | "superseded" | "dead" | "interrupted"
     )
+}
+
+fn request_view_is_terminal(view: &RequestViewRow) -> bool {
+    view.lifecycle_state
+        .as_deref()
+        .and_then(PersistedLifecycleState::from_persisted)
+        .is_some_and(PersistedLifecycleState::is_terminal)
+        || request_status_is_terminal(&view.status)
 }
 
 impl RequestLifecycle {
@@ -165,7 +170,8 @@ impl RequestLifecycle {
             RequestStatusTransition::ConflictingTerminal(current) => {
                 tracing::info!(
                     request_id = %self.request.request_id,
-                    current_status = %current,
+                    current_status = %current.status,
+                    current_lifecycle_state = %current.lifecycle_state.as_deref().unwrap_or("missing"),
                     "skipping completion because request is already terminal"
                 );
             }
@@ -189,6 +195,8 @@ impl RequestLifecycle {
     pub async fn transition_to_interrupted(&mut self) -> Result<()> {
         let doc_id = &self.request.doc_id;
         let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
+        // Keep the status guard as a defensive check for replicated rows whose
+        // status/lifecycle_state fields are temporarily divergent.
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(
@@ -312,7 +320,8 @@ impl RequestLifecycle {
             RequestStatusTransition::ConflictingTerminal(current) => {
                 tracing::info!(
                     request_id = %self.request.request_id,
-                    current_status = %current,
+                    current_status = %current.status,
+                    current_lifecycle_state = %current.lifecycle_state.as_deref().unwrap_or("missing"),
                     "skipping failure because request is already terminal"
                 );
             }
@@ -327,6 +336,10 @@ impl RequestLifecycle {
         Ok(())
     }
 
+    /// Transition a request status/lifecycle pair through a modeled terminal
+    /// edge. `from_lifecycle_states` is part of the transition precondition:
+    /// callers must pass only Lean-modeled source states for the requested
+    /// transition, not the broader persisted nonterminal vocabulary.
     pub(super) async fn transition_request_status(
         &self,
         from_status: &str,
@@ -387,22 +400,24 @@ impl RequestLifecycle {
             return Ok(RequestStatusTransition::Updated);
         }
 
-        match self.request_status().await? {
-            Some(current) if current == target_status => Ok(RequestStatusTransition::AlreadyTarget),
+        match self.request_view().await? {
             Some(current)
-                if matches!(
-                    current.as_str(),
-                    "completed" | "error" | "superseded" | "dead" | "interrupted"
-                ) =>
+                if current.status == target_status
+                    && current.lifecycle_state.as_deref()
+                        == Some(target_lifecycle_state.as_str()) =>
             {
+                Ok(RequestStatusTransition::AlreadyTarget)
+            }
+            Some(current) if request_view_is_terminal(&current) => {
                 Ok(RequestStatusTransition::ConflictingTerminal(current))
             }
             Some(current) => anyhow::bail!(
-                "request {} could not transition {} -> {}; current status={}",
+                "request {} could not transition {} -> {}; current status={} lifecycle_state={}",
                 self.request.request_id,
                 from_status,
                 target_status,
-                current
+                current.status,
+                current.lifecycle_state.as_deref().unwrap_or("missing")
             ),
             None => anyhow::bail!(
                 "request {} disappeared while transitioning {} -> {}",

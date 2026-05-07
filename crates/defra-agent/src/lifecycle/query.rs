@@ -53,7 +53,7 @@ impl RequestLifecycle {
                 request_id = %self.request.request_id,
                 session_id = %self.request.session_id,
                 is_earliest,
-                non_terminal_count = rows.len(),
+                active_runtime_count = rows.len(),
                 duplicate_pending_count = duplicates_to_suppress.len(),
                 "deduplication check found multiple active runtime requests"
             );

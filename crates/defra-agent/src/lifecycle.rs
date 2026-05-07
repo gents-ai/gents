@@ -120,12 +120,26 @@ impl PersistedLifecycleState {
         }
     }
 
-    #[cfg(test)]
     const fn is_terminal(self) -> bool {
         matches!(
             self,
             Self::Completed | Self::Failed | Self::Superseded | Self::Dead | Self::Interrupted
         )
+    }
+
+    fn from_persisted(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "claimed" => Some(Self::Claimed),
+            "processing" => Some(Self::Processing),
+            "inputRequired" => Some(Self::InputRequired),
+            "completed" => Some(Self::Completed),
+            "failed" => Some(Self::Failed),
+            "superseded" => Some(Self::Superseded),
+            "dead" => Some(Self::Dead),
+            "interrupted" => Some(Self::Interrupted),
+            _ => None,
+        }
     }
 
     #[cfg(test)]

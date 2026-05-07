@@ -1918,8 +1918,8 @@ async fn input_required_interrupt_is_rejected_without_transition() {
         .await
         .expect_err("inputRequired must not complete through a status-only transition");
     assert!(
-        complete_err.to_string().contains("processing"),
-        "complete error should describe the persisted status: {complete_err:?}"
+        complete_err.to_string().contains("inputRequired"),
+        "complete error should describe the persisted lifecycle_state: {complete_err:?}"
     );
     assert_lean_transition_is_illegal("Request", "inputRequired", "completed");
 
@@ -1928,8 +1928,8 @@ async fn input_required_interrupt_is_rejected_without_transition() {
         .await
         .expect_err("inputRequired must not fail through a status-only transition");
     assert!(
-        fail_err.to_string().contains("processing"),
-        "fail error should describe the persisted status: {fail_err:?}"
+        fail_err.to_string().contains("inputRequired"),
+        "fail error should describe the persisted lifecycle_state: {fail_err:?}"
     );
     assert_lean_transition_is_illegal("Request", "inputRequired", "failed");
 

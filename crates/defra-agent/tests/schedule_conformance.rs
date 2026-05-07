@@ -24,7 +24,7 @@
 //! * `template_render_failure_records_error_status` — the `Schedule` runtime
 //!   writeback path (`update_Schedule` with `last_status = "error"`) mirrors
 //!   what `ScheduleSource::on_result` writes on a render failure.
-//! * `serial_skips_when_prior_non_terminal` — the engine's
+//! * `serial_skips_when_prior_active_runtime` — the engine's
 //!   `has_active_runtime_request_for_trigger` query returns `true` exactly when a
 //!   request carrying the `(trigger_id, trigger_kind)` tuple is in an active
 //!   runtime lifecycle state.
@@ -859,7 +859,7 @@ async fn template_render_failure_records_error_status() {
 /// 3. Asserting `true`; then simulating the Skipped writeback and asserting
 ///    no second AgentRequest is created.
 #[tokio::test]
-async fn serial_skips_when_prior_non_terminal() {
+async fn serial_skips_when_prior_active_runtime() {
     let db = test_db("schedule-conformance-serial-skip").await;
 
     let lineage = TriggerLineage {
