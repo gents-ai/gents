@@ -217,7 +217,8 @@ pub fn analyze_request_failure(text: Option<&str>) -> Option<ToolFailureClass> {
 pub fn latency_ms(started_at: Option<&str>, completed_at: Option<&str>) -> Option<i64> {
     let started = parse_rfc3339(started_at?)?;
     let completed = parse_rfc3339(completed_at?)?;
-    Some(completed.signed_duration_since(started).num_milliseconds())
+    let latency = completed.signed_duration_since(started).num_milliseconds();
+    (latency >= 0).then_some(latency)
 }
 
 pub fn raw_message_json(content: &str) -> Value {
@@ -1342,6 +1343,14 @@ mod tests {
                 Some("2026-05-04T12:00:01.250Z")
             ),
             Some(1250)
+        );
+    }
+
+    #[test]
+    fn ignores_negative_latency_from_rfc3339_timestamps() {
+        assert_eq!(
+            latency_ms(Some("2026-05-04T12:00:01Z"), Some("2026-05-04T12:00:00Z")),
+            None
         );
     }
 }

@@ -307,6 +307,14 @@ pub struct AgentToolCallRow {
     pub started_at: Option<String>,
     #[serde(default)]
     pub completed_at: Option<String>,
+    #[serde(default)]
+    pub selected_service_id: Option<String>,
+    #[serde(default)]
+    pub selected_tool_name: Option<String>,
+    #[serde(default)]
+    pub tool_failure_class: Option<String>,
+    #[serde(default)]
+    pub latency_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
