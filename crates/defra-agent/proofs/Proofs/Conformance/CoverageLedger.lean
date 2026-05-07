@@ -151,6 +151,10 @@ def caseCoverage : List CoverageEntry :=
       "session_recovery_cases"
       "SessionRecoveryCases"
       "state_machine_conformance::generated_session_recovery_cases_cover_retry_guards_and_preservation"
+  , consumerCoverage
+      "client_shell_cases"
+      "ClientShellCases"
+      "state_machine_conformance::generated_client_shell_cases_cover_shell_projection_contracts"
   ]
 
 def followUpHookCoverage : List CoverageEntry :=
