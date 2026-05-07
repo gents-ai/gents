@@ -1,3 +1,4 @@
+mod collection_resolver;
 mod core;
 mod mutations;
 mod observe;
@@ -8,6 +9,7 @@ mod query;
 mod schema;
 mod store;
 
+pub use collection_resolver::CollectionResolver;
 pub use core::{ClientCore, ClientCoreOptions, ClientPeerStatus, P2PHealth, P2PHealthStatus};
 pub use mutations::{
     CreatedConversation, PeerMutationResult, SubmitRequestOptions, SubmittedRequest,
