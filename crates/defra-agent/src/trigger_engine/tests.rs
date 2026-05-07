@@ -136,7 +136,7 @@ impl SpyMaterializer {
     /// transitions) so LatestOnly tests can assert the count plumbed through.
     fn mark_nonterminal(&self, trigger_id: &str, trigger_kind: TriggerKind) {
         let next_index = self.nonterminal_count_for(trigger_id, trigger_kind);
-        let request_id = format!("prior-{}-{next_index}", trigger_kind.as_str());
+        let request_id = format!("spy-prior-{}-{next_index}", trigger_kind.as_str());
         self.mark_nonterminal_request(trigger_id, trigger_kind, request_id);
     }
 
@@ -414,10 +414,23 @@ async fn trigger_engine_dispatch_matches_lean_generated_contract_cases() {
             .trigger_id
             .as_ref()
             .map(|trigger_id| (trigger_id.clone(), trigger_kind));
+        let expects_target_supersede = target_key.as_ref().map_or(false, |(trigger_id, kind)| {
+            case.expected_supersede_call_keys.iter().any(|key| {
+                key.trigger_id == *trigger_id && trigger_kind_from_lean(&key.trigger_kind) == *kind
+            })
+        });
+        // Lean emits both lists by scanning `before.requests` in order; consume
+        // superseded ids as we seed matching prior target keys to preserve that
+        // request-id alignment.
         let mut superseded_prior_ids = case.superseded_prior_ids.iter();
         for key in &case.prior_nonterminal_keys {
             let (prior_trigger_id, prior_trigger_kind) = trigger_key_from_lean(key);
-            if target_key.as_ref() == Some(&(prior_trigger_id.clone(), prior_trigger_kind)) {
+            if target_key
+                .as_ref()
+                .map_or(false, |(target_id, target_kind)| {
+                    target_id == &prior_trigger_id && *target_kind == prior_trigger_kind
+                })
+            {
                 if let Some(request_id) = superseded_prior_ids.next() {
                     materializer.mark_nonterminal_request(
                         &prior_trigger_id,
@@ -425,6 +438,11 @@ async fn trigger_engine_dispatch_matches_lean_generated_contract_cases() {
                         request_id.clone(),
                     );
                 } else {
+                    assert!(
+                        !expects_target_supersede,
+                        "Lean case {} emitted fewer superseded_prior_ids than prior target keys",
+                        case.name
+                    );
                     materializer.mark_nonterminal(&prior_trigger_id, prior_trigger_kind);
                 }
             } else {
