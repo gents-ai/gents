@@ -4,6 +4,8 @@ mod controller;
 mod permit;
 mod persistence;
 mod registry;
+#[allow(dead_code)]
+mod slot_accounting;
 pub(crate) mod stream_guard;
 
 pub(crate) use client::{

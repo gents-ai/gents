@@ -33,6 +33,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) client_shell_cases: Vec<LeanClientShellCase>,
     pub(crate) runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
     pub(crate) session_recovery_cases: Vec<LeanSessionRecoveryCase>,
+    pub(crate) inference_slot_accounting_cases: Vec<LeanInferenceSlotAccountingCase>,
+    pub(crate) fleet_slot_accounting_cases: Vec<LeanFleetSlotAccountingCase>,
     pub(crate) tool_preflight_cases: Vec<LeanToolPreflightCase>,
     pub(crate) tool_retry_cases: Vec<LeanToolRetryCase>,
     pub(crate) boundaries: Vec<LeanBoundary>,
@@ -218,6 +220,43 @@ pub(crate) struct LeanSessionRecoveryCase {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct LeanInferenceSlotAccountingCase {
+    pub(crate) name: String,
+    pub(crate) property: String,
+    pub(crate) backend_id: String,
+    pub(crate) pre_state: String,
+    pub(crate) post_state: String,
+    pub(crate) contribution: usize,
+    pub(crate) expected_contribution: usize,
+    pub(crate) pre_contribution: usize,
+    pub(crate) post_contribution: usize,
+    pub(crate) released_slot: bool,
+    pub(crate) permit_drop_terminalization: bool,
+    pub(crate) row_states: Vec<String>,
+    pub(crate) row_backend_ids: Vec<String>,
+    pub(crate) reconstructed_running_count: usize,
+    pub(crate) max_concurrent: usize,
+    pub(crate) bounded_by_max_concurrent: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanFleetSlotAccountingCase {
+    pub(crate) name: String,
+    pub(crate) property: String,
+    pub(crate) backend_id: String,
+    pub(crate) request_state: String,
+    pub(crate) admission_state: String,
+    pub(crate) contribution: usize,
+    pub(crate) expected_contribution: usize,
+    pub(crate) active_count: usize,
+    pub(crate) scheduler_running: usize,
+    pub(crate) slot_count: usize,
+    pub(crate) max_concurrent: usize,
+    pub(crate) bounded_by_max_concurrent: bool,
+    pub(crate) aggregate_reconstructed_not_persisted: bool,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct LeanToolPreflightCase {
     pub(crate) name: String,
     pub(crate) health: String,
@@ -293,6 +332,32 @@ pub(crate) fn lean_client_shell_case(name: &str) -> &'static LeanClientShellCase
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean ClientShell case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_inference_slot_accounting_cases() -> &'static [LeanInferenceSlotAccountingCase] {
+    &lean_contract_snapshot().inference_slot_accounting_cases
+}
+
+pub(crate) fn lean_inference_slot_accounting_case(
+    name: &str,
+) -> &'static LeanInferenceSlotAccountingCase {
+    lean_contract_snapshot()
+        .inference_slot_accounting_cases
+        .iter()
+        .find(|case| case.name == name)
+        .unwrap_or_else(|| panic!("Lean inference slot-accounting case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_fleet_slot_accounting_cases() -> &'static [LeanFleetSlotAccountingCase] {
+    &lean_contract_snapshot().fleet_slot_accounting_cases
+}
+
+pub(crate) fn lean_fleet_slot_accounting_case(name: &str) -> &'static LeanFleetSlotAccountingCase {
+    lean_contract_snapshot()
+        .fleet_slot_accounting_cases
+        .iter()
+        .find(|case| case.name == name)
+        .unwrap_or_else(|| panic!("Lean fleet slot-accounting case {name:?} was not emitted"))
 }
 
 pub(crate) fn lean_tool_preflight_cases() -> &'static [LeanToolPreflightCase] {

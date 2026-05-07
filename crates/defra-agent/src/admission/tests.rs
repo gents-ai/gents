@@ -8,13 +8,14 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use super::{
-    scope_call, scope_call_with_token, scope_request, AdmissionCallContext, AdmissionRegistry,
-    BackendAdmissionConfig, CallKind,
+    scope_call, scope_call_with_token, scope_request,
+    slot_accounting::{reconstructed_running_slot_count, slot_contribution, InferenceCallSlotRow},
+    AdmissionCallContext, AdmissionRegistry, BackendAdmissionConfig, CallKind,
 };
 use crate::lean_vocab_test::{
     assert_lean_contract_vocabulary_set_matches, assert_lean_transition_is_illegal,
     assert_lean_transition_is_legal, assert_state_machine_contract_is_complete,
-    lean_vocabulary_values, LeanContractVocabulary,
+    lean_inference_slot_accounting_cases, lean_vocabulary_values, LeanContractVocabulary,
 };
 use crate::schema::ensure_schemas;
 use crate::watcher::AgentRequest;
@@ -163,12 +164,18 @@ async fn call_rows(node: &EmbeddedNode) -> Vec<Value> {
 }
 
 fn running_slot_count_for_backend(rows: &[Value], backend_id: &str) -> usize {
-    rows.iter()
-        .filter(|row| {
-            row.get("backend_id").and_then(Value::as_str) == Some(backend_id)
-                && row.get("call_state").and_then(Value::as_str) == Some("running")
-        })
-        .count()
+    reconstructed_running_slot_count(rows.iter().map(slot_row_from_value), backend_id)
+}
+
+fn slot_row_from_value(row: &Value) -> InferenceCallSlotRow<'_> {
+    InferenceCallSlotRow::new(
+        row.get("backend_id")
+            .and_then(Value::as_str)
+            .expect("InferenceCall row must include backend_id"),
+        row.get("call_state")
+            .and_then(Value::as_str)
+            .expect("InferenceCall row must include call_state"),
+    )
 }
 
 fn state_count_for_backend(rows: &[Value], backend_id: &str, call_state: &str) -> usize {
@@ -265,6 +272,77 @@ fn rust_inference_call_transition_table_matches_lean_contract() {
     assert_lean_transition_is_legal("InferenceCall", "running", "cancelled");
     assert_lean_transition_is_illegal("InferenceCall", "queued", "completed");
     assert_lean_transition_is_illegal("InferenceCall", "completed", "running");
+}
+
+#[test]
+fn generated_inference_slot_accounting_cases_match_admission_reconstruction_logic() {
+    let cases = lean_inference_slot_accounting_cases();
+    assert_eq!(
+        cases.len(),
+        11,
+        "Lean should emit the finite InferenceCall slot-accounting cases"
+    );
+
+    for case in cases {
+        assert_eq!(
+            case.row_backend_ids.len(),
+            case.row_states.len(),
+            "Lean case {} emitted mismatched row arrays",
+            case.name
+        );
+
+        if case.row_states.len() == 1 {
+            let row = InferenceCallSlotRow::new(
+                case.row_backend_ids[0].as_str(),
+                case.row_states[0].as_str(),
+            );
+            assert_eq!(
+                slot_contribution(row, &case.backend_id),
+                case.expected_contribution,
+                "generated case {} drifted from admission slot contribution",
+                case.name
+            );
+            assert_eq!(
+                case.contribution, case.expected_contribution,
+                "Lean case {} should compute its expected contribution",
+                case.name
+            );
+        }
+
+        let reconstructed = reconstructed_running_slot_count(
+            case.row_backend_ids
+                .iter()
+                .zip(&case.row_states)
+                .map(|(backend_id, state)| {
+                    InferenceCallSlotRow::new(backend_id.as_str(), state.as_str())
+                }),
+            &case.backend_id,
+        );
+        assert_eq!(
+            reconstructed, case.reconstructed_running_count,
+            "generated case {} drifted from admission reconstructed running count",
+            case.name
+        );
+        assert_eq!(
+            case.bounded_by_max_concurrent,
+            reconstructed <= case.max_concurrent,
+            "generated case {} drifted from max_concurrent bound",
+            case.name
+        );
+
+        if matches!(
+            case.property.as_str(),
+            "terminal_release" | "permit_drop_terminalization"
+        ) {
+            assert_eq!(case.pre_state.as_str(), "running", "{}", case.name);
+            assert_eq!(case.pre_contribution, 1, "{}", case.name);
+            assert_eq!(case.post_contribution, 0, "{}", case.name);
+            assert!(case.released_slot, "{}", case.name);
+        }
+        if case.property == "permit_drop_terminalization" {
+            assert!(case.permit_drop_terminalization, "{}", case.name);
+        }
+    }
 }
 
 #[tokio::test]

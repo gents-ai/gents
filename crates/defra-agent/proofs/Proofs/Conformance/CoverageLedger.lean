@@ -153,6 +153,14 @@ def caseCoverage : List CoverageEntry :=
       "SessionRecoveryCases"
       "state_machine_conformance::generated_session_recovery_cases_cover_retry_guards_and_preservation"
   , consumerCoverage
+      "slot_cases"
+      "InferenceCallSlotAccounting"
+      "admission::tests::generated_inference_slot_accounting_cases_match_admission_reconstruction_logic"
+  , consumerCoverage
+      "fleet_cases"
+      "FleetSlotAccounting"
+      "state_machine_conformance::generated_slot_accounting_cases_pin_inference_and_fleet_contracts"
+  , consumerCoverage
       "client_shell_cases"
       "ClientShellCases"
       "state_machine_conformance::generated_client_shell_cases_cover_shell_projection_contracts"

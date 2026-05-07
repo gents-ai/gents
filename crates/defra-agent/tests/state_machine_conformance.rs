@@ -12,6 +12,7 @@ mod support;
 use lean_vocab_test::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
     assert_state_machine_contract_is_complete, lean_client_shell_case, lean_contract_snapshot,
+    lean_fleet_slot_accounting_case, lean_inference_slot_accounting_case,
     lean_runtime_reconcile_case, lean_session_recovery_case, lean_tool_preflight_case,
     lean_tool_retry_case, lean_vocabulary_values,
 };
@@ -113,6 +114,16 @@ fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 6);
     assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 10);
+    assert_eq!(
+        lean_contract_snapshot()
+            .inference_slot_accounting_cases
+            .len(),
+        11
+    );
+    assert_eq!(
+        lean_contract_snapshot().fleet_slot_accounting_cases.len(),
+        5
+    );
     assert_eq!(
         lean_contract_snapshot().client_shell_case_count,
         lean_contract_snapshot().client_shell_cases.len()
@@ -292,6 +303,15 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "SessionRecoveryCases".to_string(),
         ));
     }
+    if !snapshot.inference_slot_accounting_cases.is_empty() {
+        emitted.insert((
+            "slot_cases".to_string(),
+            "InferenceCallSlotAccounting".to_string(),
+        ));
+    }
+    if !snapshot.fleet_slot_accounting_cases.is_empty() {
+        emitted.insert(("fleet_cases".to_string(), "FleetSlotAccounting".to_string()));
+    }
     assert_eq!(
         snapshot.client_shell_case_count,
         snapshot.client_shell_cases.len(),
@@ -323,6 +343,8 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "trigger_cases",
         "runtime_cases",
         "session_recovery_cases",
+        "slot_cases",
+        "fleet_cases",
         "client_shell_cases",
         "tool_cases",
         "follow_up_hook",
@@ -627,6 +649,101 @@ fn generated_tool_execution_cases_cover_preflight_and_retry_contracts() {
         let case = lean_tool_retry_case(name);
         assert_eq!(case.disposition, "doNotRetry", "{name}");
     }
+}
+
+#[test]
+fn generated_slot_accounting_cases_pin_inference_and_fleet_contracts() {
+    let queued = lean_inference_slot_accounting_case("queued_contributes_zero");
+    assert_eq!(queued.property.as_str(), "state_contribution");
+    assert_eq!(queued.pre_state.as_str(), "queued");
+    assert_eq!(queued.contribution, 0);
+    assert_eq!(queued.reconstructed_running_count, 0);
+
+    let running = lean_inference_slot_accounting_case("running_contributes_one");
+    assert_eq!(running.pre_state.as_str(), "running");
+    assert_eq!(running.contribution, 1);
+    assert_eq!(running.expected_contribution, 1);
+
+    for name in [
+        "cancelled_terminal_contributes_zero",
+        "completed_terminal_contributes_zero",
+        "failed_terminal_contributes_zero",
+    ] {
+        let case = lean_inference_slot_accounting_case(name);
+        assert_eq!(case.property.as_str(), "state_contribution");
+        assert_eq!(case.contribution, 0, "{name}");
+        assert_eq!(case.reconstructed_running_count, 0, "{name}");
+    }
+
+    for name in [
+        "cancelled_releases_slot",
+        "completed_releases_slot",
+        "failed_releases_slot",
+    ] {
+        let case = lean_inference_slot_accounting_case(name);
+        assert_eq!(case.property.as_str(), "terminal_release", "{name}");
+        assert_eq!(case.pre_state.as_str(), "running", "{name}");
+        assert_eq!(case.pre_contribution, 1, "{name}");
+        assert_eq!(case.post_contribution, 0, "{name}");
+        assert!(case.released_slot, "{name}");
+    }
+
+    for name in [
+        "permit_drop_failed_terminalization_not_counted",
+        "permit_drop_cancelled_terminalization_not_counted",
+    ] {
+        let case = lean_inference_slot_accounting_case(name);
+        assert_eq!(
+            case.property.as_str(),
+            "permit_drop_terminalization",
+            "{name}"
+        );
+        assert!(case.permit_drop_terminalization, "{name}");
+        assert_eq!(case.post_contribution, 0, "{name}");
+    }
+
+    let bounded = lean_inference_slot_accounting_case(
+        "reconstructed_running_count_bounded_by_max_concurrent",
+    );
+    assert_eq!(bounded.reconstructed_running_count, 1);
+    assert_eq!(bounded.max_concurrent, 1);
+    assert!(bounded.bounded_by_max_concurrent);
+    assert_eq!(
+        bounded.row_states,
+        vec![
+            "running".to_string(),
+            "queued".to_string(),
+            "completed".to_string(),
+            "running".to_string()
+        ]
+    );
+
+    let waiting = lean_fleet_slot_accounting_case("fleet_waiting_contributes_zero");
+    assert_eq!(waiting.admission_state.as_str(), "waiting");
+    assert_eq!(waiting.contribution, 0);
+    assert!(waiting.aggregate_reconstructed_not_persisted);
+
+    let acquired = lean_fleet_slot_accounting_case("fleet_acquired_contributes_one");
+    assert_eq!(acquired.admission_state.as_str(), "acquired");
+    assert_eq!(acquired.contribution, 1);
+
+    let executing = lean_fleet_slot_accounting_case("fleet_executing_contributes_one");
+    assert_eq!(executing.admission_state.as_str(), "executing");
+    assert_eq!(executing.contribution, 1);
+
+    let released = lean_fleet_slot_accounting_case("fleet_released_terminal_contributes_zero");
+    assert_eq!(released.request_state.as_str(), "completed");
+    assert_eq!(released.admission_state.as_str(), "released");
+    assert_eq!(released.contribution, 0);
+
+    let fleet_bound = lean_fleet_slot_accounting_case(
+        "fleet_reconstructed_running_count_bounded_by_max_concurrent",
+    );
+    assert_eq!(fleet_bound.slot_count, fleet_bound.scheduler_running);
+    assert_eq!(fleet_bound.slot_count, 2);
+    assert_eq!(fleet_bound.max_concurrent, 2);
+    assert!(fleet_bound.bounded_by_max_concurrent);
+    assert!(fleet_bound.aggregate_reconstructed_not_persisted);
 }
 
 #[tokio::test]
