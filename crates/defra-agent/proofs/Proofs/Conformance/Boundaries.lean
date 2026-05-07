@@ -136,20 +136,23 @@ depends on broader transition coverage from it.
 
 `Proofs.Conformance.CoverageLedger` is the checked index for the
 `Proofs.Conformance.Contracts` JSON. Rust asserts that every emitted vocabulary,
-state machine, trigger-case group, runtime witness group, session-recovery
-witness group, command-policy witness group, and follow-up hook appears in that
-ledger exactly once.
+state machine, trigger dispatch case group, runtime-reconcile witness group,
+session-recovery witness group, inference-slot witness group, fleet-slot witness
+group, client-shell witness group, tool-execution witness group, command-policy
+validation/sandbox/env witness group, and follow-up hook appears in that ledger
+exactly once.
 Boundary and deviation metadata is emitted as structured review metadata and is
 shape-checked separately; ledger `accepted_boundary` fields reference the stable
 boundary ids emitted by this file.
 
 A ledger entry is acceptable only when it names a Rust/TypeScript consumer, an
 intentional product boundary recorded in this file, or an accepted follow-up.
-Future executable `ClientShell`, `ToolExecution`, or `CommandPolicy` contracts
-should therefore add both the emitted contract domain and its runtime consumer
-in the same change. If the runtime consumer is deliberately deferred, the
-ledger entry must point here to describe the boundary or carry a follow-up
-hook; otherwise Rust will reject the generated contract as advisory-only.
+Future executable trigger, runtime, session-recovery, slot/fleet,
+`ClientShell`, `ToolExecution`, or `CommandPolicy` contracts should therefore
+add both the emitted contract domain and its runtime consumer in the same
+change. If the runtime consumer is deliberately deferred, the ledger entry must
+point here to describe the boundary or carry a follow-up hook; otherwise Rust
+will reject the generated contract as advisory-only.
 
 ## Closed Historical Items
 

@@ -19,8 +19,9 @@ structure CoverageEntry where
   acceptedFollowUp : String
   deriving Repr
 
--- Consumer strings are documentation pointers; Rust checks domain coverage,
--- not that these names resolve to test symbols.
+-- Consumer strings are review-acknowledged Rust/TypeScript test pointers.
+-- Rust does not perform symbol resolution, but it rejects consumer strings
+-- missing from the state_machine_conformance acknowledgement list.
 def consumerCoverage
     (category domain consumer : String) : CoverageEntry :=
   { category := category
@@ -81,7 +82,7 @@ def vocabularyCoverage : List CoverageEntry :=
   , consumerCoverage
       "vocabulary"
       "SessionRecoveryLatestRequestState"
-      "state_machine_conformance::generated_session_recovery_cases_cover_retry_guards_and_preservation"
+      "state_machine_conformance::lean_executable_contracts_cover_initial_domains"
   , consumerCoverage
       "vocabulary"
       "InferenceCallState"
@@ -132,7 +133,7 @@ def stateMachineCoverage : List CoverageEntry :=
   , consumerCoverage
       "state_machine"
       "SessionRecovery"
-      "state_machine_conformance::generated_session_recovery_cases_cover_retry_guards_and_preservation"
+      "state_machine_conformance::lean_executable_contracts_cover_initial_domains"
   , consumerCoverage
       "state_machine"
       "InferenceCall"
