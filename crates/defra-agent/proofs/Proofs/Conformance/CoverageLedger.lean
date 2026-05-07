@@ -142,6 +142,14 @@ def stateMachineCoverage : List CoverageEntry :=
 
 def caseCoverage : List CoverageEntry :=
   [ consumerCoverage
+      "lifecycle_transition_cases"
+      "RequestTransitions"
+      "state_machine_conformance::generated_request_transition_cases_cover_lifecycle_policy"
+  , consumerCoverage
+      "lifecycle_transition_cases"
+      "ProcessTransitions"
+      "runtime_status::tests::generated_process_transition_cases_match_runtime_status_policy"
+  , consumerCoverage
       "trigger_cases"
       "TriggerDispatch"
       "trigger_engine::tests::trigger_engine_dispatch_matches_lean_generated_contract_cases"

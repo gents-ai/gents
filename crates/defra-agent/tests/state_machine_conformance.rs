@@ -18,11 +18,12 @@ use admission_slot_accounting::{
 };
 use lean_vocab_test::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
-    assert_state_machine_contract_is_complete, lean_client_shell_case, lean_command_env_case,
-    lean_command_policy_case, lean_command_sandbox_case, lean_contract_snapshot,
-    lean_fleet_slot_accounting_case, lean_inference_slot_accounting_case,
+    assert_lifecycle_transition_cases_partition, assert_state_machine_contract_is_complete,
+    lean_client_shell_case, lean_command_env_case, lean_command_policy_case,
+    lean_command_sandbox_case, lean_contract_snapshot, lean_fleet_slot_accounting_case,
+    lean_inference_slot_accounting_case, lean_request_transition_cases,
     lean_runtime_reconcile_case, lean_session_recovery_case, lean_tool_preflight_case,
-    lean_tool_retry_case, lean_vocabulary_values,
+    lean_tool_retry_case, lean_vocabulary_values, LeanLifecycleTransitionCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
@@ -119,6 +120,11 @@ fn lean_executable_contracts_cover_initial_domains() {
             "interrupted"
         ]
     );
+    assert_lifecycle_transition_cases_partition(
+        "Request",
+        &lean_vocabulary_values("RequestState"),
+        lean_request_transition_cases(),
+    );
     assert_lean_transition_is_legal("SessionRecovery", "failed", "pending");
     assert_lean_transition_is_illegal("SessionRecovery", "dead", "pending");
     assert_lean_transition_is_illegal("SessionRecovery", "superseded", "pending");
@@ -147,6 +153,8 @@ fn lean_executable_contracts_cover_initial_domains() {
         "CommandPolicy should be emitted as generated contract output, not a follow-up hook"
     );
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 6);
+    assert_eq!(lean_contract_snapshot().request_transition_cases.len(), 81);
+    assert_eq!(lean_contract_snapshot().process_transition_cases.len(), 25);
     assert_eq!(lean_contract_snapshot().apply_reconcile_cases.len(), 6);
     assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 18);
     assert_eq!(
@@ -351,6 +359,18 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     for machine in &snapshot.state_machines {
         emitted.insert(("state_machine".to_string(), machine.domain.clone()));
     }
+    if !snapshot.request_transition_cases.is_empty() {
+        emitted.insert((
+            "lifecycle_transition_cases".to_string(),
+            "RequestTransitions".to_string(),
+        ));
+    }
+    if !snapshot.process_transition_cases.is_empty() {
+        emitted.insert((
+            "lifecycle_transition_cases".to_string(),
+            "ProcessTransitions".to_string(),
+        ));
+    }
     assert_eq!(
         snapshot.trigger_dispatch_case_count,
         snapshot.trigger_dispatch_cases.len(),
@@ -461,6 +481,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     let valid_categories = [
         "vocabulary",
         "state_machine",
+        "lifecycle_transition_cases",
         "trigger_cases",
         "runtime_cases",
         "apply_reconcile_cases",
@@ -1660,6 +1681,233 @@ fn generated_command_policy_cases_cover_policy_sandbox_and_env_contracts() {
     assert_eq!(pager.expected_output_value.as_deref(), Some("cat"));
     let pager_absent = lean_command_env_case("env_pager_absent_still_forced_cat");
     assert_eq!(pager_absent.expected_output_value.as_deref(), Some("cat"));
+}
+
+fn rust_request_transition_action(from: &str, to: &str) -> Option<&'static str> {
+    match (from, to) {
+        ("pending", "claimed") => Some("claim"),
+        ("pending", "superseded") => Some("dedupLose"),
+        ("claimed", "processing") => Some("beginInference"),
+        ("processing", "processing") => Some("advance"),
+        ("processing", "completed") => Some("finish"),
+        ("processing", "failed") => Some("fail"),
+        ("claimed", "failed") => Some("failBeforeStream"),
+        ("pending", "dead") => Some("expire"),
+        ("pending", "interrupted") => Some("interruptBeforeClaim"),
+        ("claimed", "interrupted") => Some("interruptClaimed"),
+        ("processing", "interrupted") => Some("interruptProcessing"),
+        _ => None,
+    }
+}
+
+fn rust_request_transition_classification(from: &str, to: &str) -> &'static str {
+    if rust_request_transition_action(from, to).is_some() {
+        "legal"
+    } else if from == "inputRequired" || to == "inputRequired" {
+        "productUnreachable"
+    } else {
+        "illegal"
+    }
+}
+
+fn request_lifecycle_for_case(
+    db: &support::TestDb,
+    doc_id: String,
+    request_id: String,
+    session_id: String,
+    created_at: String,
+) -> RequestLifecycle {
+    let request = build_request(doc_id, request_id, session_id, created_at);
+    RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    )
+}
+
+async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) {
+    let db = test_db("generated-request-transition").await;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+    let action = case
+        .action
+        .as_deref()
+        .expect("legal Request transition case must carry an action");
+    let mut lifecycle = request_lifecycle_for_case(
+        &db,
+        doc_id.clone(),
+        request_id.clone(),
+        session_id.clone(),
+        created_at.clone(),
+    );
+
+    match action {
+        "claim" => {
+            assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+        }
+        "dedupLose" => {
+            let earlier = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+            create_request(
+                &db.node,
+                &format!("earlier-{request_id}"),
+                &session_id,
+                "processing",
+                &earlier,
+            )
+            .await;
+            assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Superseded);
+        }
+        "beginInference" => {
+            assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+            lifecycle.prepare_session_with_identity().await.unwrap();
+            lifecycle.begin_execution().await.unwrap();
+        }
+        "advance" => {
+            assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+            lifecycle.prepare_session_with_identity().await.unwrap();
+            lifecycle.begin_execution().await.unwrap();
+            let response_doc_id = create_response_with_status(
+                &db.node,
+                &format!("resp-{request_id}"),
+                &request_id,
+                &session_id,
+                "streaming",
+            )
+            .await;
+            lifecycle.set_response_doc_id(&response_doc_id);
+            lifecycle.advance().await.unwrap();
+        }
+        "finish" => {
+            assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+            lifecycle.prepare_session_with_identity().await.unwrap();
+            lifecycle.begin_execution().await.unwrap();
+            lifecycle.complete().await.unwrap();
+        }
+        "fail" => {
+            assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+            lifecycle.prepare_session_with_identity().await.unwrap();
+            lifecycle.begin_execution().await.unwrap();
+            lifecycle.fail().await.unwrap();
+        }
+        "failBeforeStream" => {
+            assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+            lifecycle.prepare_session_with_identity().await.unwrap();
+            lifecycle.fail().await.unwrap();
+        }
+        "expire" => {
+            let past = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+            set_valid_until(&db.node, &doc_id, &past).await;
+            assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Expired);
+        }
+        "interruptBeforeClaim" => {
+            let interrupt_at = chrono::Utc::now().to_rfc3339();
+            set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
+            assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Interrupted);
+        }
+        "interruptClaimed" => {
+            assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+            let interrupt_at = chrono::Utc::now().to_rfc3339();
+            set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
+            lifecycle.transition_to_interrupted().await.unwrap();
+        }
+        "interruptProcessing" => {
+            assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+            lifecycle.prepare_session_with_identity().await.unwrap();
+            lifecycle.begin_execution().await.unwrap();
+            let interrupt_at = chrono::Utc::now().to_rfc3339();
+            set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
+            lifecycle.transition_to_interrupted().await.unwrap();
+        }
+        other => panic!(
+            "generated Request transition {} has unsupported action {other:?}",
+            case.name
+        ),
+    }
+
+    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
+    assert_eq!(
+        snap.lifecycle_state, case.to,
+        "generated Request transition {} expected {} -> {} classified as {} via {:?}, got persisted lifecycle_state={}",
+        case.name, case.from, case.to, case.classification, case.action, snap.lifecycle_state
+    );
+}
+
+#[tokio::test]
+async fn generated_request_transition_cases_cover_lifecycle_policy() {
+    let mut legal_count = 0;
+    let mut illegal_count = 0;
+    let mut product_unreachable_count = 0;
+
+    for case in lean_request_transition_cases() {
+        let rust_classification = rust_request_transition_classification(&case.from, &case.to);
+        assert_eq!(
+            case.classification, rust_classification,
+            "Request transition {} expected classification drift for {} -> {}; Lean action={:?} boundary={:?}",
+            case.name, case.from, case.to, case.action, case.boundary
+        );
+
+        match case.classification.as_str() {
+            "legal" => {
+                legal_count += 1;
+                assert_eq!(
+                    case.action.as_deref(),
+                    rust_request_transition_action(&case.from, &case.to),
+                    "Request transition {} legal writer action drifted for {} -> {}",
+                    case.name,
+                    case.from,
+                    case.to
+                );
+                drive_generated_request_legal_case(case).await;
+            }
+            "illegal" => {
+                illegal_count += 1;
+                assert!(
+                    rust_request_transition_action(&case.from, &case.to).is_none(),
+                    "Request transition {} is ordinary illegal but Rust has a writer path for {} -> {}",
+                    case.name,
+                    case.from,
+                    case.to
+                );
+            }
+            "productUnreachable" => {
+                product_unreachable_count += 1;
+                assert!(
+                    case.from == "inputRequired" || case.to == "inputRequired",
+                    "Request transition {} product-unreachable classification must be scoped to reserved inputRequired, got {} -> {}",
+                    case.name,
+                    case.from,
+                    case.to
+                );
+                assert_eq!(
+                    case.boundary.as_deref(),
+                    Some("boundary.request.input-required-reserved"),
+                    "Request transition {} must cite the reserved inputRequired boundary",
+                    case.name
+                );
+                assert!(
+                    rust_request_transition_action(&case.from, &case.to).is_none(),
+                    "Request transition {} is reserved but Rust has a writer path for {} -> {}",
+                    case.name,
+                    case.from,
+                    case.to
+                );
+            }
+            other => panic!(
+                "generated Request transition {} has unknown classification {other:?}",
+                case.name
+            ),
+        }
+    }
+
+    assert_eq!(legal_count, 11);
+    assert_eq!(illegal_count, 53);
+    assert_eq!(product_unreachable_count, 17);
 }
 
 #[tokio::test]

@@ -598,6 +598,11 @@ reconstructed count never exceeds backend `max_concurrent`.
 
 The finite-state checks currently establish:
 
+- generated Request transition cases enumerate the full 9x9 state square as
+  legal, illegal, or product-unreachable, with `inputRequired` pairs classified
+  as reserved current-product vocabulary
+- generated Process transition cases enumerate the full 5x5 state square as
+  legal or illegal
 - every active current-product non-terminal request state has at least one
   successor; reserved `inputRequired` remains vocabulary-only
 - every non-terminal process state has at least one successor
@@ -610,7 +615,10 @@ The finite-state checks currently establish:
   core composed states
 
 These checks are useful because they catch structural model regressions quickly,
-even before theorem-level reasoning matters. The `Fintype` instances
+even before theorem-level reasoning matters. Rust consumes the generated
+Request and Process transition cases directly: legal cases are driven through
+deterministic lifecycle/status paths, ordinary illegal cases must have no Rust
+writer path, and reserved cases must cite their boundary. The `Fintype` instances
 structurally pin the finite vocabularies; the cardinality output is diagnostic
 and is not itself a separate proof obligation beyond those instances and the
 theorems established in `Proofs/Properties/Decidable.lean`.

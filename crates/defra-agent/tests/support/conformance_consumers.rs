@@ -175,6 +175,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "runtime_status_generation_updates_match_lean_runtime_reconcile_cases",
         },
         ConformanceConsumer::RustTest {
+            id: "runtime_status::tests::generated_process_transition_cases_match_runtime_status_policy",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/src/runtime_status/tests.rs",
+            module_path: "runtime_status::tests",
+            function: "generated_process_transition_cases_match_runtime_status_policy",
+        },
+        ConformanceConsumer::RustTest {
             id: "runtime_status::tests::rust_process_state_transitions_match_lean_contract",
             package: "defra-agent",
             source_path: "crates/defra-agent/src/runtime_status/tests.rs",
@@ -201,6 +208,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/defra-agent/tests/state_machine_conformance.rs",
             module_path: "state_machine_conformance",
             function: "generated_session_recovery_cases_drive_db_backed_reissue_contract",
+        },
+        ConformanceConsumer::RustTest {
+            id: "state_machine_conformance::generated_request_transition_cases_cover_lifecycle_policy",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/state_machine_conformance.rs",
+            module_path: "state_machine_conformance",
+            function: "generated_request_transition_cases_cover_lifecycle_policy",
         },
         ConformanceConsumer::RustTest {
             id: "state_machine_conformance::generated_tool_execution_cases_cover_preflight_and_retry_contracts",

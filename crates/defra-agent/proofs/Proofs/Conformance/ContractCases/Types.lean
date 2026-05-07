@@ -154,6 +154,16 @@ structure BackendHealthAdmissionCase where
   externalEndpointFreshnessClaimed : Bool
   deriving Repr
 
+structure LifecycleTransitionCase where
+  name : String
+  domain : String
+  fromState : String
+  toState : String
+  classification : String
+  action : Option String
+  boundary : Option String
+  deriving Repr
+
 def boolString (value : Bool) : String :=
   if value then "true" else "false"
 

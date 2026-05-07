@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -27,6 +28,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) generated_by: String,
     pub(crate) vocabularies: Vec<LeanVocabularyContract>,
     pub(crate) state_machines: Vec<LeanStateMachineContract>,
+    pub(crate) request_transition_cases: Vec<LeanLifecycleTransitionCase>,
+    pub(crate) process_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub(crate) trigger_dispatch_case_count: usize,
     pub(crate) trigger_dispatch_cases: Vec<LeanTriggerDispatchCase>,
     pub(crate) frontend_client_shell_case_count: usize,
@@ -103,6 +106,17 @@ pub(crate) struct LeanDeviation {
 pub(crate) struct LeanTransitionPair {
     pub(crate) from: String,
     pub(crate) to: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanLifecycleTransitionCase {
+    pub(crate) name: String,
+    pub(crate) domain: String,
+    pub(crate) from: String,
+    pub(crate) to: String,
+    pub(crate) classification: String,
+    pub(crate) action: Option<String>,
+    pub(crate) boundary: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -472,6 +486,14 @@ pub(crate) fn lean_state_machine_contract(domain: &str) -> &'static LeanStateMac
         .unwrap_or_else(|| panic!("Lean state-machine contract {domain:?} was not emitted"))
 }
 
+pub(crate) fn lean_request_transition_cases() -> &'static [LeanLifecycleTransitionCase] {
+    &lean_contract_snapshot().request_transition_cases
+}
+
+pub(crate) fn lean_process_transition_cases() -> &'static [LeanLifecycleTransitionCase] {
+    &lean_contract_snapshot().process_transition_cases
+}
+
 pub(crate) fn lean_runtime_reconcile_case(name: &str) -> &'static LeanRuntimeReconcileCase {
     lean_contract_snapshot()
         .runtime_reconcile_cases
@@ -751,6 +773,83 @@ pub(crate) fn assert_state_machine_contract_is_complete(domain: &str) {
         duplicate_illegal_pairs,
         expected_pairs,
         actual_pairs
+    );
+}
+
+pub(crate) fn assert_lifecycle_transition_cases_partition(
+    domain: &str,
+    states: &[&str],
+    cases: &[LeanLifecycleTransitionCase],
+) {
+    let expected_pairs = states
+        .iter()
+        .flat_map(|from| {
+            states
+                .iter()
+                .map(move |to| ((*from).to_string(), (*to).to_string()))
+        })
+        .collect::<BTreeSet<_>>();
+    let mut actual_pairs = BTreeSet::new();
+    let mut invalid_cases = Vec::new();
+
+    for case in cases {
+        if case.domain != domain {
+            invalid_cases.push(format!("{} has wrong domain {:?}", case.name, case.domain));
+        }
+        if !matches!(
+            case.classification.as_str(),
+            "legal" | "illegal" | "productUnreachable"
+        ) {
+            invalid_cases.push(format!(
+                "{} has invalid classification {:?}",
+                case.name, case.classification
+            ));
+        }
+        if case.classification == "legal" && case.action.is_none() {
+            invalid_cases.push(format!("{} legal case missing action", case.name));
+        }
+        if case.classification != "legal" && case.action.is_some() {
+            invalid_cases.push(format!("{} non-legal case has action", case.name));
+        }
+        if case.classification == "productUnreachable" && case.boundary.is_none() {
+            invalid_cases.push(format!(
+                "{} product-unreachable case missing boundary",
+                case.name
+            ));
+        }
+        if case.classification != "productUnreachable" && case.boundary.is_some() {
+            invalid_cases.push(format!("{} reachable case has boundary", case.name));
+        }
+        if !expected_pairs.contains(&(case.from.clone(), case.to.clone())) {
+            invalid_cases.push(format!(
+                "{} has pair outside {domain} vocabulary: {:?} -> {:?}",
+                case.name, case.from, case.to
+            ));
+        }
+        if !actual_pairs.insert((case.from.clone(), case.to.clone())) {
+            invalid_cases.push(format!(
+                "{} duplicates pair {:?} -> {:?}",
+                case.name, case.from, case.to
+            ));
+        }
+    }
+
+    let missing = expected_pairs
+        .difference(&actual_pairs)
+        .cloned()
+        .collect::<Vec<_>>();
+    let extra = actual_pairs
+        .difference(&expected_pairs)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    assert!(
+        invalid_cases.is_empty() && missing.is_empty() && extra.is_empty(),
+        "Lean lifecycle transition cases for {domain:?} do not form a state^2 partition\n  invalid cases: {:?}\n  missing pairs: {:?}\n  extra pairs: {:?}\n  cases: {:?}",
+        invalid_cases,
+        missing,
+        extra,
+        cases
     );
 }
 
