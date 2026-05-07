@@ -172,6 +172,18 @@ def caseCoverage : List CoverageEntry :=
       "tool_cases"
       "ToolExecutionRetry"
       "mcp_pool::tests::tool_retry_disposition_contract_cases_match_mcp_pool_policy"
+  , consumerCoverage
+      "command_policy_cases"
+      "CommandPolicyValidation"
+      "toolset::tests::generated_command_policy_cases_match_rust_validation"
+  , consumerCoverage
+      "command_policy_cases"
+      "CommandPolicySandbox"
+      "toolset::tests::generated_command_sandbox_cases_match_rust_selection"
+  , consumerCoverage
+      "command_policy_cases"
+      "CommandPolicyEnv"
+      "toolset::tests::generated_command_env_cases_match_rust_filtering"
   ]
 
 def followUpHookCoverage : List CoverageEntry :=

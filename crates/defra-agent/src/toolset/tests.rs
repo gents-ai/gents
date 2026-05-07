@@ -13,11 +13,16 @@ use super::file_tools::{
     EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool,
 };
 use super::shared::{
-    build_shell_env_from_vars, validate_command_policy, validate_read_only_command,
-    CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode, ToolContext,
+    build_shell_env_from_vars, select_sandbox_for_policy, validate_command_policy,
+    validate_read_only_command, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,
+    ToolContext,
 };
 use super::*;
 use crate::ensure_schemas;
+use crate::lean_vocab_test::{
+    lean_command_env_cases, lean_command_policy_cases, lean_command_sandbox_cases,
+    LeanCommandPolicyCase,
+};
 use crate::lifecycle::DEFAULT_REQUEST_MAX_RETRIES;
 
 #[test]
@@ -558,6 +563,180 @@ fn command_policy_applies_forbidden_and_allowed_prefixes() {
         &policy
     )
     .is_err());
+}
+
+#[test]
+fn generated_command_policy_cases_match_rust_validation() {
+    for case in lean_command_policy_cases() {
+        let mode = rust_command_execution_mode(&case.mode);
+        let network_mode = rust_command_network_mode(&case.network_mode);
+        let lookup_command = std::path::Path::new(&case.command)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(&case.command);
+        assert_eq!(
+            lookup_command, case.lookup_command,
+            "Lean command policy case {} must use Rust basename lookup",
+            case.name
+        );
+
+        let policy = CommandExecutionPolicy::read_only(case.read_only_allowlist.clone())
+            .with_mode(mode)
+            .with_allowed_argv_prefixes(case.allowed_argv_prefixes.clone())
+            .with_forbidden_argv_prefixes(case.forbidden_argv_prefixes.clone())
+            .with_network_mode(network_mode);
+        let result = validate_command_policy(&case.command, &case.args, &policy);
+
+        match case.decision.as_str() {
+            "allow" => assert!(
+                result.is_ok(),
+                "Lean CommandPolicy case {} should allow but Rust denied: {:?}",
+                case.name,
+                result.err()
+            ),
+            "deny" => {
+                let error = result.unwrap_err().to_string();
+                assert_command_denial_matches(case, &error);
+            }
+            other => panic!(
+                "Lean CommandPolicy case {} emitted unknown decision {other:?}",
+                case.name
+            ),
+        }
+    }
+}
+
+#[test]
+fn generated_command_sandbox_cases_match_rust_selection() {
+    for case in lean_command_sandbox_cases() {
+        let mode = rust_command_execution_mode(&case.mode);
+        let result = select_sandbox_for_policy(mode, case.workspace_write_sandbox_enforced);
+
+        match case.decision.as_str() {
+            "selected" => assert_eq!(
+                result.unwrap(),
+                case.sandbox.as_deref().unwrap(),
+                "Lean CommandPolicy sandbox case {} must match Rust sandbox label",
+                case.name
+            ),
+            "denied" => {
+                let error = result.unwrap_err().to_string();
+                assert_eq!(
+                    case.denial_reason.as_deref(),
+                    Some("workspaceWriteSandboxUnavailable"),
+                    "Lean CommandPolicy sandbox case {} denied for unexpected reason",
+                    case.name
+                );
+                assert!(
+                    error.contains("workspace_write") || error.contains("sandbox-exec"),
+                    "Lean CommandPolicy sandbox case {} expected workspace_write denial, got: {error}",
+                    case.name
+                );
+            }
+            other => panic!(
+                "Lean CommandPolicy sandbox case {} emitted unknown decision {other:?}",
+                case.name
+            ),
+        }
+    }
+}
+
+#[test]
+fn generated_command_env_cases_match_rust_filtering() {
+    for case in lean_command_env_cases() {
+        let vars = if case.input_present {
+            vec![(case.input_name.clone(), case.input_value.clone())]
+        } else {
+            Vec::new()
+        };
+        let env = build_shell_env_from_vars(vars);
+        let actual = env.get(&case.output_name).map(String::as_str);
+
+        assert_eq!(
+            actual,
+            case.expected_output_value.as_deref(),
+            "Lean CommandPolicy env case {} ({}) must match Rust shell env filtering; expected kind {:?}",
+            case.name,
+            case.env_key,
+            case.expected_value_kind
+        );
+    }
+}
+
+fn rust_command_execution_mode(value: &str) -> CommandExecutionMode {
+    CommandExecutionMode::parse(value)
+        .unwrap_or_else(|error| panic!("unknown Lean command execution mode {value:?}: {error}"))
+}
+
+fn rust_command_network_mode(value: &str) -> CommandNetworkMode {
+    CommandNetworkMode::parse(value)
+        .unwrap_or_else(|error| panic!("unknown Lean command network mode {value:?}: {error}"))
+}
+
+fn assert_command_denial_matches(case: &LeanCommandPolicyCase, error: &str) {
+    match case.denial_reason.as_deref() {
+        Some("forbiddenPrefix") => {
+            let matched = case
+                .matched_prefix
+                .as_ref()
+                .unwrap_or_else(|| panic!("Lean case {} missing matched_prefix", case.name));
+            assert!(
+                error.ends_with(&format!("prefix: {}", matched.join(" "))),
+                "Lean CommandPolicy case {} expected forbidden prefix {:?}, got Rust error: {error}",
+                case.name,
+                matched
+            );
+        }
+        Some("allowedPrefixRequired") => {
+            let argv = case
+                .denied_argv
+                .as_ref()
+                .unwrap_or_else(|| panic!("Lean case {} missing denied_argv", case.name));
+            assert!(
+                error.ends_with(&format!("prefixes: {}", argv.join(" "))),
+                "Lean CommandPolicy case {} expected allowed-prefix denial for {:?}, got Rust error: {error}",
+                case.name,
+                argv
+            );
+        }
+        Some("readOnlyCommandNotAllowlisted") => {
+            let command = case
+                .denied_command
+                .as_deref()
+                .unwrap_or_else(|| panic!("Lean case {} missing denied_command", case.name));
+            assert!(
+                error.contains("not allowed by the read-only bash tool") && error.contains(command),
+                "Lean CommandPolicy case {} expected read-only allowlist denial for {command:?}, got Rust error: {error}",
+                case.name
+            );
+        }
+        Some("disabledNetworkUnenforceable") => {
+            assert!(
+                error.contains("command_network_mode=disabled cannot be enforced"),
+                "Lean CommandPolicy case {} expected disabled-network unenforceable denial, got Rust error: {error}",
+                case.name
+            );
+        }
+        Some("disabledNetworkCommand") => {
+            let command = case
+                .denied_command
+                .as_deref()
+                .unwrap_or_else(|| panic!("Lean case {} missing denied_command", case.name));
+            assert!(
+                error.contains(command) && error.contains("command_network_mode=disabled"),
+                "Lean CommandPolicy case {} expected disabled-network command denial for {command:?}, got Rust error: {error}",
+                case.name
+            );
+        }
+        Some(other) => panic!(
+            "Lean CommandPolicy case {} emitted unsupported denial reason {other:?}",
+            case.name
+        ),
+        None => panic!(
+            "Lean CommandPolicy case {} denied without a denial reason; Rust error: {error}",
+            case.name
+        ),
+    }
 }
 
 #[test]

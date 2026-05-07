@@ -4,7 +4,9 @@ mod filesystem;
 
 pub(crate) use command::parse_argv_prefixes;
 #[cfg(test)]
-pub(super) use command::{build_shell_env_from_vars, validate_read_only_command};
+pub(super) use command::{
+    build_shell_env_from_vars, select_sandbox_for_policy, validate_read_only_command,
+};
 pub(super) use command::{run_command, validate_command_policy};
 pub use command::{CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode};
 pub(super) use context::{ToolContext, ToolError};

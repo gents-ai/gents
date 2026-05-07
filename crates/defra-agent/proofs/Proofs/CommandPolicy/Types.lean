@@ -16,12 +16,30 @@ inductive ExecutionMode where
   | unrestricted
   deriving DecidableEq, Repr
 
+namespace ExecutionMode
+
+def toDefraDB : ExecutionMode → String
+  | .readOnly => "read_only"
+  | .workspaceWrite => "workspace_write"
+  | .unrestricted => "unrestricted"
+
+end ExecutionMode
+
 /-- Mirrors `CommandNetworkMode`. -/
 inductive NetworkMode where
   | inherit
   | disabled
   | enabled
   deriving DecidableEq, Repr
+
+namespace NetworkMode
+
+def toDefraDB : NetworkMode → String
+  | .inherit => "inherit"
+  | .disabled => "disabled"
+  | .enabled => "enabled"
+
+end NetworkMode
 
 /-- A command request after bash tool argument normalization.
 
@@ -53,11 +71,48 @@ inductive DenialReason where
   | workspaceWriteSandboxUnavailable
   deriving DecidableEq, Repr
 
+namespace DenialReason
+
+def toContract : DenialReason → String
+  | .forbiddenPrefix _ => "forbiddenPrefix"
+  | .allowedPrefixRequired _ => "allowedPrefixRequired"
+  | .readOnlyCommandNotAllowlisted _ => "readOnlyCommandNotAllowlisted"
+  | .disabledNetworkUnenforceable => "disabledNetworkUnenforceable"
+  | .disabledNetworkCommand _ => "disabledNetworkCommand"
+  | .workspaceWriteSandboxUnavailable => "workspaceWriteSandboxUnavailable"
+
+def matchedPrefix? : DenialReason → Option (List String)
+  | .forbiddenPrefix matched => some matched
+  | _ => none
+
+def argv? : DenialReason → Option (List String)
+  | .allowedPrefixRequired argv => some argv
+  | _ => none
+
+def command? : DenialReason → Option String
+  | .readOnlyCommandNotAllowlisted command => some command
+  | .disabledNetworkCommand command => some command
+  | _ => none
+
+end DenialReason
+
 /-- Executable validator result. -/
 inductive Decision where
   | allow
   | deny (reason : DenialReason)
   deriving DecidableEq, Repr
+
+namespace Decision
+
+def toContract : Decision → String
+  | .allow => "allow"
+  | .deny _ => "deny"
+
+def denialReason? : Decision → Option DenialReason
+  | .allow => none
+  | .deny reason => some reason
+
+end Decision
 
 /-- Command execution policy as configured from a tool selection. -/
 structure Policy where
@@ -75,11 +130,36 @@ inductive SandboxKind where
   | unsandboxedUnrestricted
   deriving DecidableEq, Repr
 
+namespace SandboxKind
+
+def toContract : SandboxKind → String
+  | .policyReadOnly => "policy_read_only"
+  | .macosSeatbelt => "macos_seatbelt"
+  | .unsandboxedUnrestricted => "unsandboxed_unrestricted"
+
+end SandboxKind
+
 /-- Sandbox selection may fail before spawning the process. -/
 inductive SandboxDecision where
   | selected (sandbox : SandboxKind)
   | denied (reason : DenialReason)
   deriving DecidableEq, Repr
+
+namespace SandboxDecision
+
+def toContract : SandboxDecision → String
+  | .selected _ => "selected"
+  | .denied _ => "denied"
+
+def sandbox? : SandboxDecision → Option SandboxKind
+  | .selected sandbox => some sandbox
+  | .denied _ => none
+
+def denialReason? : SandboxDecision → Option DenialReason
+  | .selected _ => none
+  | .denied reason => some reason
+
+end SandboxDecision
 
 /-- Host capabilities relevant to workspace-write sandbox enforcement. -/
 structure RuntimeSupport where
