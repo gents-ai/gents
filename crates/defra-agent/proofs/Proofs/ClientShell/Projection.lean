@@ -130,3 +130,96 @@ def projectTransportIndicator : TransportHealth → TransportIndicator
   | .healthy  => .quiet
   | .degraded => .degradedNotice
   | .wedged   => .wedgedNotice
+
+/-! ## Active Overlay
+
+`projectActiveOverlay` is a pure function over the tip response and the
+derived turn state. It returns `some` when the live overlay block should be
+rendered, otherwise `none`. The body of the block is intentionally elided —
+the formal model only needs the *presence* decision, not the byte content. -/
+
+structure OverlayBlock where
+  hasContent   : Bool
+  hasReasoning : Bool
+  deriving DecidableEq, Repr
+
+/-- Decide whether the live overlay should be rendered, and if so what
+    payload presence flags it carries. -/
+def projectActiveOverlay
+    (resp : Option ResponseSnapshot)
+    (turn : Option ClientTurnState)
+    (materialized : Bool)
+    (hasContent hasReasoning : Bool)
+    : Option OverlayBlock :=
+  match resp with
+  | none => none
+  | some r =>
+    if materialized then none
+    else if r.status = .complete ∨ r.status = .error then none
+    else
+      match turn with
+      | none => none
+      | some t =>
+        if t.isTerminal then none
+        else if t = .waitingForClaim ∨ t = .streaming then
+          if hasContent ∨ hasReasoning then
+            some { hasContent := hasContent, hasReasoning := hasReasoning }
+          else none
+        else none
+
+/-! ## Theorems O1–O3 -/
+
+/-- O1: `projectActiveOverlay` returns at most one `OverlayBlock`. Trivial by
+    construction (the function returns at most one `some`). Stated for the
+    contract surface. -/
+theorem projectActiveOverlay_at_most_one
+    (resp : Option ResponseSnapshot)
+    (turn : Option ClientTurnState)
+    (materialized hasContent hasReasoning : Bool) :
+    ∀ b₁ b₂,
+      projectActiveOverlay resp turn materialized hasContent hasReasoning = some b₁ →
+      projectActiveOverlay resp turn materialized hasContent hasReasoning = some b₂ →
+      b₁ = b₂ := by
+  intros b₁ b₂ h₁ h₂
+  rw [h₁] at h₂
+  injection h₂
+
+/-- O2: A terminal turn state hides the overlay. -/
+theorem projectActiveOverlay_terminal_hides
+    (resp : Option ResponseSnapshot)
+    (t : ClientTurnState)
+    (h : t.isTerminal = true)
+    (materialized hasContent hasReasoning : Bool) :
+    projectActiveOverlay resp (some t) materialized hasContent hasReasoning = none := by
+  cases resp with
+  | none => rfl
+  | some r =>
+    cases materialized with
+    | true =>
+      simp [projectActiveOverlay]
+    | false =>
+      cases r with
+      | mk status tail =>
+        cases status with
+        | streaming =>
+          cases t with
+          | waitingForClaim => simp [ClientTurnState.isTerminal] at h
+          | streaming       => simp [ClientTurnState.isTerminal] at h
+          | completed       => simp [projectActiveOverlay, ClientTurnState.isTerminal]
+          | failed          => simp [projectActiveOverlay, ClientTurnState.isTerminal]
+          | superseded      => simp [projectActiveOverlay, ClientTurnState.isTerminal]
+          | interrupted     => simp [projectActiveOverlay, ClientTurnState.isTerminal]
+        | complete =>
+          simp [projectActiveOverlay]
+        | error =>
+          simp [projectActiveOverlay]
+
+/-- O3: A materialized response hides the overlay. -/
+theorem projectActiveOverlay_materialized_hides
+    (resp : Option ResponseSnapshot)
+    (turn : Option ClientTurnState)
+    (hasContent hasReasoning : Bool) :
+    projectActiveOverlay resp turn true hasContent hasReasoning = none := by
+  cases resp with
+  | none => rfl
+  | some _ => rfl
