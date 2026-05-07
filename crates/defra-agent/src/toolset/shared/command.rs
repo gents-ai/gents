@@ -449,9 +449,13 @@ fn sandboxed_command_for_policy(
         CommandExecutionMode::Unrestricted => {
             Ok((command_name.to_string(), args.to_vec(), sandbox))
         }
-        CommandExecutionMode::WorkspaceWrite => {
-            sandboxed_workspace_write_command(root, command_name, args, policy.network_mode)
-        }
+        CommandExecutionMode::WorkspaceWrite => sandboxed_workspace_write_command(
+            root,
+            command_name,
+            args,
+            policy.network_mode,
+            sandbox,
+        ),
     }
 }
 
@@ -461,11 +465,8 @@ fn sandboxed_workspace_write_command(
     command_name: &str,
     args: &[String],
     network_mode: CommandNetworkMode,
+    sandbox: &'static str,
 ) -> Result<(String, Vec<String>, &'static str)> {
-    if !Path::new(SANDBOX_EXEC).exists() {
-        bail!("macOS sandbox-exec is required for workspace_write bash but was not found");
-    }
-
     let policy = macos_workspace_write_policy(network_mode);
     let mut sandbox_args = vec![
         "-p".to_string(),
@@ -475,7 +476,7 @@ fn sandboxed_workspace_write_command(
         command_name.to_string(),
     ];
     sandbox_args.extend(args.iter().cloned());
-    Ok((SANDBOX_EXEC.to_string(), sandbox_args, "macos_seatbelt"))
+    Ok((SANDBOX_EXEC.to_string(), sandbox_args, sandbox))
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -484,6 +485,7 @@ fn sandboxed_workspace_write_command(
     _command_name: &str,
     _args: &[String],
     _network_mode: CommandNetworkMode,
+    _sandbox: &'static str,
 ) -> Result<(String, Vec<String>, &'static str)> {
     bail!("workspace_write bash requires macOS seatbelt sandbox enforcement on this build")
 }

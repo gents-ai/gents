@@ -110,6 +110,16 @@ def commandPolicyCases : List CommandPolicyCase :=
         ["git"])
       (commandRequest "git" "git" ["status", "--short"])
   , validationCase
+      "forbidden_prefix_second_configured_match"
+      "forbidden_prefix"
+      (commandPolicy
+        .readOnly
+        []
+        [["git", "status", "--short"], ["git", "diff"]]
+        .inherit
+        ["git"])
+      (commandRequest "git" "git" ["diff", "--stat"])
+  , validationCase
       "allowed_prefix_required_precedes_network_and_allowlist"
       "allowed_prefix_required"
       (commandPolicy
@@ -189,6 +199,7 @@ def commandEnvCases : List CommandEnvCase :=
   , envCase "env_token_marker_dropped" .token true "secret"
   , envCase "env_other_key_dropped" .other true "drop"
   , envCase "env_pager_forced_cat" .pager true "less"
+  , envCase "env_pager_absent_still_forced_cat" .pager false
   , envCase "env_git_pager_forced_cat" .gitPager true "less"
   , envCase "env_no_color_forced_on" .noColor false
   , envCase "env_clicolor_forced_off" .cliColor false

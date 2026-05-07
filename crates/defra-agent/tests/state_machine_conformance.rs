@@ -138,9 +138,9 @@ fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().client_shell_cases.len(), 15);
     assert_eq!(lean_contract_snapshot().tool_preflight_cases.len(), 9);
     assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 45);
-    assert_eq!(lean_contract_snapshot().command_policy_cases.len(), 9);
+    assert_eq!(lean_contract_snapshot().command_policy_cases.len(), 10);
     assert_eq!(lean_contract_snapshot().command_sandbox_cases.len(), 4);
-    assert_eq!(lean_contract_snapshot().command_env_cases.len(), 13);
+    assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
 }
 
 #[test]
@@ -807,6 +807,11 @@ fn generated_command_policy_cases_cover_policy_sandbox_and_env_contracts() {
         forbidden.matched_prefix.as_ref(),
         Some(&vec!["git".to_string()])
     );
+    let second_forbidden = lean_command_policy_case("forbidden_prefix_second_configured_match");
+    assert_eq!(
+        second_forbidden.matched_prefix.as_ref(),
+        Some(&vec!["git".to_string(), "diff".to_string()])
+    );
 
     let allowed =
         lean_command_policy_case("allowed_prefix_required_precedes_network_and_allowlist");
@@ -843,6 +848,8 @@ fn generated_command_policy_cases_cover_policy_sandbox_and_env_contracts() {
 
     let pager = lean_command_env_case("env_pager_forced_cat");
     assert_eq!(pager.expected_output_value.as_deref(), Some("cat"));
+    let pager_absent = lean_command_env_case("env_pager_absent_still_forced_cat");
+    assert_eq!(pager_absent.expected_output_value.as_deref(), Some("cat"));
 }
 
 #[tokio::test]
