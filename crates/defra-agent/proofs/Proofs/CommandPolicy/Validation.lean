@@ -59,8 +59,7 @@ def argStartsWith (arg candidatePrefix : String) : Bool :=
   arg.startsWith candidatePrefix
 
 def sedArgumentDenied (arg : String) : Bool :=
-  stringMatches arg "-i"
-    || stringMatches arg "--in-place"
+  stringMatches arg "--in-place"
     || argStartsWith arg "-i"
 
 def validateSedArgs (args : List String) : Decision :=
@@ -170,6 +169,9 @@ def validateCurlArgs (args : List String) : Decision :=
       else
         .deny (.readOnlyUrlRequired "curl")
 
+/-- Matches Rust decisions for exact and attached git global-option forms.
+    The `startsWith` branches also cover bare `-C`/`-c`, which are already
+    denied by the exact list above. -/
 def gitGlobalOptionDenied (arg : String) : Bool :=
   stringIn arg
       [ "-C"
@@ -235,7 +237,7 @@ def gitBranchArgAllowed (arg : String) : Bool :=
     || argStartsWith arg "--format="
 
 def validateGitBranchArgs (args : List String) : Decision :=
-  match firstArgWhere (fun arg => if gitBranchArgAllowed arg then false else true) args with
+  match firstArgWhere (fun arg => !gitBranchArgAllowed arg) args with
   | some arg => .deny (.readOnlyArgumentNotAllowed "git" arg)
   | none => .allow
 

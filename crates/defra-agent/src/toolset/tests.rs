@@ -21,8 +21,8 @@ use super::shared::{
 use super::*;
 use crate::ensure_schemas;
 use crate::lean_vocab_test::{
-    lean_command_env_cases, lean_command_policy_cases, lean_command_sandbox_cases,
-    LeanCommandPolicyCase,
+    lean_command_env_cases, lean_command_policy_case, lean_command_policy_cases,
+    lean_command_sandbox_cases, LeanCommandPolicyCase,
 };
 use crate::lifecycle::DEFAULT_REQUEST_MAX_RETRIES;
 
@@ -657,6 +657,99 @@ fn generated_command_policy_cases_cover_read_only_safety_matrix() {
             "Lean CommandPolicy contract must emit read-only safety case {name}"
         );
     }
+
+    for name in [
+        "read_only_git_status_allows",
+        "read_only_git_branch_list_allows",
+        "read_only_sed_print_allows",
+        "read_only_find_type_file_allows",
+        "read_only_rg_search_allows",
+        "read_only_curl_http_get_allows",
+        "read_only_launchctl_print_allows",
+        "read_only_tailscale_status_allows",
+        "read_only_tailscale_netcheck_allows",
+        "read_only_sudo_launchctl_print_allows",
+    ] {
+        let case = lean_command_policy_case(name);
+        assert_eq!(case.decision, "allow");
+        assert_eq!(case.denial_reason, None);
+    }
+
+    for (name, argument) in [
+        ("read_only_git_global_config_denies", "-c"),
+        (
+            "read_only_git_config_env_denies",
+            "--config-env=GIT_CONFIG_GLOBAL=ENV_FILE",
+        ),
+        (
+            "read_only_git_output_flag_denies",
+            "--output=/tmp/defra-agent-diff.txt",
+        ),
+        (
+            "read_only_git_exec_flag_denies",
+            "--exec=touch /tmp/defra-agent-nope",
+        ),
+        ("read_only_git_branch_delete_denies", "-D"),
+        ("read_only_sed_in_place_short_denies", "-i"),
+        ("read_only_sed_in_place_long_denies", "--in-place"),
+        ("read_only_find_delete_denies", "-delete"),
+        ("read_only_find_exec_denies", "-exec"),
+        ("read_only_find_fprint_denies", "-fprint0"),
+        ("read_only_rg_pre_denies", "--pre"),
+        ("read_only_rg_search_zip_denies", "--search-zip"),
+        ("read_only_curl_post_denies", "-X"),
+        ("read_only_curl_data_denies", "--data={}"),
+        ("read_only_curl_output_denies", "-o"),
+        ("read_only_curl_upload_denies", "-T"),
+        ("read_only_curl_config_denies", "-K"),
+        (
+            "read_only_sudo_launchctl_wrong_path_denies",
+            "/usr/bin/launchctl",
+        ),
+    ] {
+        let case = lean_command_policy_case(name);
+        assert_eq!(case.decision, "deny");
+        assert_eq!(
+            case.denial_reason.as_deref(),
+            Some("readOnlyArgumentNotAllowed")
+        );
+        assert_eq!(case.denied_argument.as_deref(), Some(argument));
+    }
+
+    for (name, subcommand) in [
+        ("read_only_git_commit_subcommand_denies", "commit"),
+        ("read_only_launchctl_bootout_denies", "bootout"),
+        ("read_only_tailscale_up_denies", "up"),
+        ("read_only_sudo_rm_denies", "rm"),
+    ] {
+        let case = lean_command_policy_case(name);
+        assert_eq!(case.decision, "deny");
+        assert_eq!(
+            case.denial_reason.as_deref(),
+            Some("readOnlySubcommandNotAllowlisted")
+        );
+        assert_eq!(case.denied_subcommand.as_deref(), Some(subcommand));
+    }
+
+    for name in [
+        "read_only_launchctl_missing_subcommand_denies",
+        "read_only_sudo_missing_command_denies",
+    ] {
+        let case = lean_command_policy_case(name);
+        assert_eq!(case.decision, "deny");
+        assert_eq!(
+            case.denial_reason.as_deref(),
+            Some("readOnlySubcommandRequired")
+        );
+    }
+
+    let missing_url = lean_command_policy_case("read_only_curl_missing_http_url_denies");
+    assert_eq!(missing_url.decision, "deny");
+    assert_eq!(
+        missing_url.denial_reason.as_deref(),
+        Some("readOnlyUrlRequired")
+    );
+    assert_eq!(missing_url.denied_command.as_deref(), Some("curl"));
 }
 
 #[test]
