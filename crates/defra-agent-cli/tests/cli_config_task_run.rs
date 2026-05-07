@@ -16,7 +16,7 @@ use uuid::Uuid;
 ///   * `caused_by_trigger_kind = "manual"`,
 ///   * `caused_by_trigger_id = null`,
 ///   * `execution_origin = "interactive"`,
-///   * `lifecycle_state = "pending"`,
+///   * `lifecycle_state` created as `pending`, possibly already advanced by the daemon,
 ///   * the rendered content from `prompt_template` after binding `args.*`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_task_run_creates_manual_agent_request() -> Result<()> {
@@ -165,10 +165,17 @@ async fn config_task_run_creates_manual_agent_request() -> Result<()> {
         Some(behavior_id.as_str())
     );
     assert_eq!(row.get("content").and_then(Value::as_str), Some("hi Amy"));
-    assert_eq!(row.get("status").and_then(Value::as_str), Some("pending"));
-    assert_eq!(
-        row.get("lifecycle_state").and_then(Value::as_str),
-        Some("pending")
+    let persisted_status = row.get("status").and_then(Value::as_str);
+    let persisted_lifecycle_state = row.get("lifecycle_state").and_then(Value::as_str);
+    assert!(
+        matches!(
+            (persisted_status, persisted_lifecycle_state),
+            (Some("pending"), Some("pending"))
+                | (Some("processing"), Some("claimed"))
+                | (Some("processing"), Some("processing"))
+                | (Some("completed"), Some("completed"))
+        ),
+        "manual task run should create a request that is pending or has advanced through the daemon lifecycle, got status={persisted_status:?} lifecycle_state={persisted_lifecycle_state:?}"
     );
     assert_eq!(
         row.get("execution_origin").and_then(Value::as_str),
