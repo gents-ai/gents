@@ -5,10 +5,15 @@ use defra_agent::graphql::escape_graphql_string;
 use defra_agent::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
 use defra_agent::{write_manual_agent_request, DefraStreamWriter, RequestLifecycle};
 
+#[path = "../src/admission/slot_accounting.rs"]
+mod admission_slot_accounting;
 #[path = "../src/lean_vocab_test.rs"]
 mod lean_vocab_test;
 mod support;
 
+use admission_slot_accounting::{
+    reconstructed_running_slot_count, slot_contribution, InferenceCallSlotRow,
+};
 use lean_vocab_test::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
     assert_state_machine_contract_is_complete, lean_client_shell_case, lean_command_env_case,
@@ -156,6 +161,7 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
         "boundary.tool-call.permanent-without-retry-evidence",
         "boundary.mcp.call-tool-dispatch-retry-evidence",
         "boundary.inference-slots.running-row-derived",
+        "boundary.fleet-slot-accounting.derived-view",
         "boundary.command-policy.host-execution-assumptions",
         "boundary.trigger.dispatch-source-delivery",
         "boundary.persistence.abstract-lifecycle",
@@ -728,8 +734,48 @@ fn generated_tool_execution_cases_cover_preflight_and_retry_contracts() {
     }
 }
 
+fn slot_rows_from_contract<'a>(
+    backend_ids: &'a [String],
+    row_states: &'a [String],
+) -> impl Iterator<Item = InferenceCallSlotRow<'a>> {
+    backend_ids
+        .iter()
+        .zip(row_states)
+        .map(|(backend_id, state)| InferenceCallSlotRow::new(backend_id.as_str(), state.as_str()))
+}
+
 #[test]
 fn generated_slot_accounting_cases_pin_inference_and_fleet_contracts() {
+    for case in &lean_contract_snapshot().inference_slot_accounting_cases {
+        assert_eq!(
+            case.row_backend_ids.len(),
+            case.row_states.len(),
+            "Inference slot case {} emitted mismatched row arrays",
+            case.name
+        );
+        if case.row_states.len() == 1 {
+            let row = InferenceCallSlotRow::new(
+                case.row_backend_ids[0].as_str(),
+                case.row_states[0].as_str(),
+            );
+            assert_eq!(
+                slot_contribution(row, &case.backend_id),
+                case.expected_contribution,
+                "Inference slot case {} drifted from Rust slot contribution",
+                case.name
+            );
+        }
+        let reconstructed = reconstructed_running_slot_count(
+            slot_rows_from_contract(&case.row_backend_ids, &case.row_states),
+            &case.backend_id,
+        );
+        assert_eq!(
+            reconstructed, case.reconstructed_running_count,
+            "Inference slot case {} drifted from Rust admission reconstruction",
+            case.name
+        );
+    }
+
     let queued = lean_inference_slot_accounting_case("queued_contributes_zero");
     assert_eq!(queued.property.as_str(), "state_contribution");
     assert_eq!(queued.pre_state.as_str(), "queued");
@@ -795,7 +841,50 @@ fn generated_slot_accounting_cases_pin_inference_and_fleet_contracts() {
         ]
     );
 
+    let fleet_ledger = lean_contract_snapshot()
+        .coverage_ledger
+        .iter()
+        .find(|entry| entry.category == "fleet_cases" && entry.domain == "FleetSlotAccounting")
+        .expect("FleetSlotAccounting coverage ledger entry must be emitted");
+    assert_eq!(
+        fleet_ledger.accepted_boundary.as_str(),
+        "boundary.fleet-slot-accounting.derived-view",
+        "FleetSlotAccounting must be classified as a derived boundary, not a persisted aggregate"
+    );
+
     for case in &lean_contract_snapshot().fleet_slot_accounting_cases {
+        assert_eq!(
+            case.row_backend_ids.len(),
+            case.row_states.len(),
+            "Fleet slot case {} emitted mismatched projection row arrays",
+            case.name
+        );
+        if case.row_states.len() == 1 {
+            let row = InferenceCallSlotRow::new(
+                case.row_backend_ids[0].as_str(),
+                case.row_states[0].as_str(),
+            );
+            assert_eq!(
+                slot_contribution(row, &case.backend_id),
+                case.expected_contribution,
+                "Fleet slot case {} drifted from Rust slot contribution",
+                case.name
+            );
+        }
+        let reconstructed = reconstructed_running_slot_count(
+            slot_rows_from_contract(&case.row_backend_ids, &case.row_states),
+            &case.backend_id,
+        );
+        assert_eq!(
+            reconstructed, case.reconstructed_running_count,
+            "Fleet slot case {} drifted from Rust admission reconstruction",
+            case.name
+        );
+        assert_eq!(
+            reconstructed, case.slot_count,
+            "Fleet slot case {} must be a derived projection over admission reconstruction",
+            case.name
+        );
         assert_eq!(
             case.scheduler_running, case.slot_count,
             "Fleet slot case {} must keep aggregate running reconstructed from slot count",
@@ -841,6 +930,16 @@ fn generated_slot_accounting_cases_pin_inference_and_fleet_contracts() {
     );
     assert_eq!(fleet_bound.slot_count, fleet_bound.scheduler_running);
     assert_eq!(fleet_bound.slot_count, 2);
+    assert_eq!(fleet_bound.reconstructed_running_count, 2);
+    assert_eq!(
+        fleet_bound.row_states,
+        vec![
+            "running".to_string(),
+            "running".to_string(),
+            "queued".to_string(),
+            "completed".to_string()
+        ]
+    );
     assert_eq!(fleet_bound.max_concurrent, 2);
     assert!(fleet_bound.bounded_by_max_concurrent);
 }

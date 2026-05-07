@@ -60,7 +60,10 @@ The scheduler's aggregate fleet slot state is reconstructed from
 with `call_state = "running"`; queued rows are waiting for a semaphore permit
 and terminal rows (`cancelled`, `completed`, `failed`) have released any permit.
 There is intentionally no denormalized persisted `FleetState` document that
-must carry the aggregate invariant.
+must carry the aggregate invariant. Generated `FleetSlotAccounting` cases are
+therefore boundary witnesses over the derived projection; the executable Rust
+consumer must check that projection against admission reconstruction, not
+pretend a production `FleetState` aggregate exists.
 
 The command-policy model covers local validation and selection logic for
 `CommandExecutionMode`, `CommandNetworkMode`, argv allowed/forbidden prefixes,
@@ -196,6 +199,9 @@ def boundaryMcpCallToolDispatchRetryEvidenceId : String :=
 def boundaryInferenceSlotsRunningRowDerivedId : String :=
   "boundary.inference-slots.running-row-derived"
 
+def boundaryFleetSlotAccountingDerivedViewId : String :=
+  "boundary.fleet-slot-accounting.derived-view"
+
 def boundaryCommandPolicyHostExecutionAssumptionsId : String :=
   "boundary.command-policy.host-execution-assumptions"
 
@@ -259,6 +265,12 @@ def boundaries : List Boundary :=
     , subject := "fleet slot accounting"
     , statement :=
         "Backend held slots are derived from InferenceCall rows with call_state running; no denormalized FleetState document carries the aggregate invariant."
+    }
+  , { id := boundaryFleetSlotAccountingDerivedViewId
+    , domain := "FleetSlotAccounting"
+    , subject := "derived scheduler aggregate"
+    , statement :=
+        "FleetSlotAccounting is a derived proof view over request admission states projected to InferenceCall reconstruction rows; Rust does not persist or consume a separate FleetState aggregate."
     }
   , { id := boundaryCommandPolicyHostExecutionAssumptionsId
     , domain := "CommandPolicy"

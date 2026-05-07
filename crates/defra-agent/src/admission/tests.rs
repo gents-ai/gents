@@ -15,7 +15,8 @@ use super::{
 use crate::lean_vocab_test::{
     assert_lean_contract_vocabulary_set_matches, assert_lean_transition_is_illegal,
     assert_lean_transition_is_legal, assert_state_machine_contract_is_complete,
-    lean_inference_slot_accounting_cases, lean_vocabulary_values, LeanContractVocabulary,
+    lean_fleet_slot_accounting_case, lean_inference_slot_accounting_cases, lean_vocabulary_values,
+    LeanContractVocabulary, LeanFleetSlotAccountingCase,
 };
 use crate::schema::ensure_schemas;
 use crate::watcher::AgentRequest;
@@ -207,6 +208,60 @@ fn assert_reconstructed_slot_count_at_most(
     );
 }
 
+fn assert_fleet_case_matches_call_row(case: &LeanFleetSlotAccountingCase, row: &Value) {
+    assert_eq!(
+        case.row_backend_ids,
+        vec![case.backend_id.clone()],
+        "Fleet slot case {} should project to one backend row",
+        case.name
+    );
+    assert_eq!(
+        case.row_states.len(),
+        1,
+        "Fleet slot case {} should project to one call_state row",
+        case.name
+    );
+    assert_eq!(
+        row.get("backend_id").and_then(Value::as_str),
+        Some(case.row_backend_ids[0].as_str()),
+        "Fleet slot case {} projected backend drifted from persisted InferenceCall row",
+        case.name
+    );
+    assert_eq!(
+        row.get("call_state").and_then(Value::as_str),
+        Some(case.row_states[0].as_str()),
+        "Fleet slot case {} projected call_state drifted from persisted InferenceCall row",
+        case.name
+    );
+
+    let contribution = slot_contribution(slot_row_from_value(row), &case.backend_id);
+    assert_eq!(
+        contribution, case.expected_contribution,
+        "Fleet slot case {} drifted from admission slot contribution",
+        case.name
+    );
+    assert_eq!(
+        contribution, case.reconstructed_running_count,
+        "Fleet slot case {} one-row projection drifted from admission reconstruction",
+        case.name
+    );
+}
+
+fn sorted_call_states_for_backend(rows: &[Value], backend_id: &str) -> Vec<String> {
+    let mut states = rows
+        .iter()
+        .filter(|row| row.get("backend_id").and_then(Value::as_str) == Some(backend_id))
+        .map(|row| {
+            row.get("call_state")
+                .and_then(Value::as_str)
+                .expect("InferenceCall row must include call_state")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    states.sort();
+    states
+}
+
 async fn wait_for_call_row_count(node: &EmbeddedNode, expected: usize) -> Vec<Value> {
     let mut last = Vec::new();
     for _ in 0..100 {
@@ -343,6 +398,144 @@ fn generated_inference_slot_accounting_cases_match_admission_reconstruction_logi
             assert!(case.permit_drop_terminalization, "{}", case.name);
         }
     }
+}
+
+#[tokio::test]
+async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary() {
+    let waiting = lean_fleet_slot_accounting_case("fleet_waiting_contributes_zero");
+    let acquired = lean_fleet_slot_accounting_case("fleet_acquired_contributes_one");
+    let executing = lean_fleet_slot_accounting_case("fleet_executing_contributes_one");
+    let released = lean_fleet_slot_accounting_case("fleet_released_terminal_contributes_zero");
+    let bounded = lean_fleet_slot_accounting_case(
+        "fleet_reconstructed_running_count_bounded_by_max_concurrent",
+    );
+    let backend_id = acquired.backend_id.clone();
+
+    let node = test_node().await;
+    let registry = AdmissionRegistry::new(node.clone());
+    registry.reconcile(
+        1,
+        &HashMap::from([(backend_id.clone(), config(&backend_id, 1, 1))]),
+    );
+
+    let running_context =
+        AdmissionCallContext::for_request(&request("req-fleet-running"), "default", &backend_id);
+    let queued_context =
+        AdmissionCallContext::for_request(&request("req-fleet-waiting"), "default", &backend_id);
+
+    scope_request(running_context, async {
+        let mut running_permit = registry.acquire_current_call().await.unwrap();
+        let running_row = wait_for_request_call_state(
+            node.as_ref(),
+            "req-fleet-running",
+            &acquired.row_states[0],
+        )
+        .await;
+        assert_fleet_case_matches_call_row(acquired, &running_row);
+        assert_fleet_case_matches_call_row(executing, &running_row);
+
+        let queued_registry = registry.clone();
+        let queued = tokio::spawn(async move {
+            scope_request(queued_context, async move {
+                let mut queued_permit = queued_registry.acquire_current_call().await.unwrap();
+                queued_permit.finish_success(None).await;
+            })
+            .await;
+        });
+        let queued_row =
+            wait_for_request_call_state(node.as_ref(), "req-fleet-waiting", &waiting.row_states[0])
+                .await;
+        assert_fleet_case_matches_call_row(waiting, &queued_row);
+
+        running_permit.finish_success(None).await;
+        drop(running_permit);
+        queued.await.unwrap();
+    })
+    .await;
+
+    let completed_row =
+        wait_for_request_call_state(node.as_ref(), "req-fleet-running", &released.row_states[0])
+            .await;
+    assert_fleet_case_matches_call_row(released, &completed_row);
+
+    let bounded_node = test_node().await;
+    let bounded_registry = AdmissionRegistry::new(bounded_node.clone());
+    bounded_registry.reconcile(
+        1,
+        &HashMap::from([(
+            backend_id.clone(),
+            config(&backend_id, bounded.max_concurrent, 1),
+        )]),
+    );
+
+    let completed_context = AdmissionCallContext::for_request(
+        &request("req-fleet-bound-completed"),
+        "default",
+        &backend_id,
+    );
+    scope_request(completed_context, async {
+        let mut permit = bounded_registry.acquire_current_call().await.unwrap();
+        permit.finish_success(None).await;
+        drop(permit);
+    })
+    .await;
+
+    let first_context = AdmissionCallContext::for_request(
+        &request("req-fleet-bound-running-1"),
+        "default",
+        &backend_id,
+    );
+    let second_context = AdmissionCallContext::for_request(
+        &request("req-fleet-bound-running-2"),
+        "default",
+        &backend_id,
+    );
+    let queued_context = AdmissionCallContext::for_request(
+        &request("req-fleet-bound-queued"),
+        "default",
+        &backend_id,
+    );
+
+    let mut first = scope_request(first_context, async {
+        bounded_registry.acquire_current_call().await.unwrap()
+    })
+    .await;
+    let mut second = scope_request(second_context, async {
+        bounded_registry.acquire_current_call().await.unwrap()
+    })
+    .await;
+    let queued_registry = bounded_registry.clone();
+    let queued = tokio::spawn(async move {
+        scope_request(queued_context, async move {
+            let mut permit = queued_registry.acquire_current_call().await.unwrap();
+            permit.finish_success(None).await;
+        })
+        .await;
+    });
+
+    wait_for_request_call_state(bounded_node.as_ref(), "req-fleet-bound-queued", "queued").await;
+    let rows = wait_for_call_row_count(bounded_node.as_ref(), bounded.active_count).await;
+    let reconstructed = running_slot_count_for_backend(&rows, &backend_id);
+    assert_eq!(
+        reconstructed, bounded.reconstructed_running_count,
+        "generated fleet bounded case drifted from runtime admission reconstruction"
+    );
+    assert_eq!(reconstructed, bounded.slot_count);
+    assert!(reconstructed <= bounded.max_concurrent);
+
+    let mut expected_states = bounded.row_states.clone();
+    expected_states.sort();
+    assert_eq!(
+        sorted_call_states_for_backend(&rows, &backend_id),
+        expected_states,
+        "generated fleet bounded projection must match the real admission row states"
+    );
+
+    first.finish_success(None).await;
+    drop(first);
+    queued.await.unwrap();
+    second.finish_success(None).await;
+    drop(second);
 }
 
 #[tokio::test]

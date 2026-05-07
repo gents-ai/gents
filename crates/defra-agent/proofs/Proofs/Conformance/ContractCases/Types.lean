@@ -98,6 +98,9 @@ structure FleetSlotAccountingCase where
   activeCount : Nat
   schedulerRunning : Nat
   slotCount : Nat
+  rowStates : List String
+  rowBackendIds : List String
+  reconstructedRunningCount : Nat
   maxConcurrent : Nat
   boundedByMaxConcurrent : Bool
   aggregateReconstructedNotPersisted : Bool
