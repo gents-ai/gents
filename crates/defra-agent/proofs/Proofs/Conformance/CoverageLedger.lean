@@ -157,10 +157,11 @@ def caseCoverage : List CoverageEntry :=
       "slot_cases"
       "InferenceCallSlotAccounting"
       "admission::tests::generated_inference_slot_accounting_cases_match_admission_reconstruction_logic"
-  , consumerCoverage
+  , boundaryCoverage
       "fleet_cases"
       "FleetSlotAccounting"
-      "state_machine_conformance::generated_slot_accounting_cases_pin_inference_and_fleet_contracts"
+      boundaryFleetSlotAccountingDerivedViewId
+      "admission::tests::generated_slot_accounting_fleet_cases_match_admission_runtime_boundary"
   , consumerCoverage
       "frontend_client_shell_cases"
       "FrontendClientShellCases"

@@ -194,6 +194,23 @@ def fleetBoundedState : FleetState :=
       }
   }
 
+def fleetReleasedProjectionState : RequestState → InferenceCallState
+  | .completed => .completed
+  | .failed => .failed
+  | .interrupted => .cancelled
+  | .superseded => .cancelled
+  | .dead => .cancelled
+  | _ => .completed
+
+def fleetAdmissionProjectionState
+    (state : RequestState)
+    (admission : AdmissionState) : InferenceCallState :=
+  match admission with
+  | .released => fleetReleasedProjectionState state
+  | .waiting => .queued
+  | .acquired => .running
+  | .executing => .running
+
 def fleetSlotContributionCase
     (name : String)
     (state : RequestState)
@@ -201,6 +218,9 @@ def fleetSlotContributionCase
     (expected : Nat) : FleetSlotAccountingCase :=
   let ctx := slotContext state admission contractBackend
   let contribution := FleetState.slotContribution ctx contractBackend
+  let projectedState := fleetAdmissionProjectionState state admission
+  let reconstructed :=
+    (slotCall 1 contractBackend projectedState).slotContribution contractBackend
   { name := name
   , property := "admission_contribution"
   , backendId := contractBackend.val
@@ -211,6 +231,9 @@ def fleetSlotContributionCase
   , activeCount := 1
   , schedulerRunning := contribution
   , slotCount := contribution
+  , rowStates := [projectedState.toDefraDB]
+  , rowBackendIds := [contractBackend.val]
+  , reconstructedRunningCount := reconstructed
   , maxConcurrent := 1
   , boundedByMaxConcurrent := decide (contribution ≤ 1)
   , aggregateReconstructedNotPersisted := true
@@ -220,6 +243,27 @@ def fleetBoundedCase : FleetSlotAccountingCase :=
   let slotCount := fleetBoundedState.slotCountFor contractBackend
   let schedulerRunning := fleetBoundedState.scheduler.running contractBackend
   let maxConcurrent := (fleetBoundedState.scheduler.backends contractBackend).max_concurrent
+  let projectedRows : Nat → InferenceCall :=
+    fun
+      | 1 => slotCall 1 contractBackend .running
+      | 2 => slotCall 2 contractBackend .running
+      | 3 => slotCall 3 contractBackend .queued
+      | 4 => slotCall 4 contractBackend .completed
+      | n => slotCall n otherBackend .failed
+  let reconstructed :=
+    InferenceCall.reconstructedSlotCount fleetBoundedState.activeIds projectedRows contractBackend
+  let rowStates :=
+    [ InferenceCallState.running.toDefraDB
+    , InferenceCallState.running.toDefraDB
+    , InferenceCallState.queued.toDefraDB
+    , InferenceCallState.completed.toDefraDB
+    ]
+  let rowBackendIds :=
+    [ contractBackend.val
+    , contractBackend.val
+    , contractBackend.val
+    , contractBackend.val
+    ]
   { name := "fleet_reconstructed_running_count_bounded_by_max_concurrent"
   , property := "fleet_reconstructed_running_bound"
   , backendId := contractBackend.val
@@ -230,6 +274,9 @@ def fleetBoundedCase : FleetSlotAccountingCase :=
   , activeCount := fleetBoundedState.activeIds.card
   , schedulerRunning := schedulerRunning
   , slotCount := slotCount
+  , rowStates := rowStates
+  , rowBackendIds := rowBackendIds
+  , reconstructedRunningCount := reconstructed
   , maxConcurrent := maxConcurrent
   , boundedByMaxConcurrent := decide (slotCount ≤ maxConcurrent)
   , aggregateReconstructedNotPersisted := true
