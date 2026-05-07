@@ -746,8 +746,6 @@ mod tests {
 
     const RECOVERY_AGENT_DID: &str = "did:defra:amy";
     const RECOVERY_BEHAVIOR_ID: &str = "amy-code";
-    const RECOVERY_BACKEND_ID: &str = "lean-contract-backend";
-    const RECOVERY_EXECUTION_ORIGIN: &str = "scheduled";
 
     #[derive(Debug)]
     struct RecoveryPreState {
@@ -765,8 +763,8 @@ mod tests {
         retry_count: i64,
         max_retries: i64,
         deadline: String,
-        backend_id: &'static str,
-        execution_origin: &'static str,
+        backend_id: String,
+        execution_origin: String,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -901,13 +899,13 @@ mod tests {
         );
         assert_eq!(
             pre.parent.backend_id.as_deref(),
-            Some(RECOVERY_BACKEND_ID),
+            Some(case.pre_backend.as_str()),
             "pre backend_id must match Lean witness for {}",
             case.name
         );
         assert_eq!(
             pre.parent.execution_origin.as_deref(),
-            Some(RECOVERY_EXECUTION_ORIGIN),
+            Some(case.pre_origin.as_str()),
             "pre execution_origin must match Lean witness for {}",
             case.name
         );
@@ -1039,13 +1037,13 @@ mod tests {
             );
             assert_eq!(
                 parent.backend_id.as_deref(),
-                Some(RECOVERY_BACKEND_ID),
+                Some(case.pre_backend.as_str()),
                 "seeded retry parent backend_id did not refresh into the desktop store for {}",
                 case.name
             );
             assert_eq!(
                 parent.execution_origin.as_deref(),
-                Some(RECOVERY_EXECUTION_ORIGIN),
+                Some(case.pre_origin.as_str()),
                 "seeded retry parent execution_origin did not refresh into the desktop store for {}",
                 case.name
             );
@@ -1094,8 +1092,8 @@ mod tests {
             content: Some(format!("missing request for {}", case.name)),
             status: Some(retry_parent_status_for_case(case).to_string()),
             lifecycle_state: Some(case.pre_failed_state.clone()),
-            backend_id: Some(RECOVERY_BACKEND_ID.to_string()),
-            execution_origin: Some(RECOVERY_EXECUTION_ORIGIN.to_string()),
+            backend_id: Some(case.pre_backend.clone()),
+            execution_origin: Some(case.pre_origin.clone()),
             caused_by_trigger_id: None,
             caused_by_trigger_kind: None,
             failure_reason: Some(String::new()),
@@ -1179,10 +1177,10 @@ mod tests {
         assert_eq!(new_request.retry_count, case.post_retry_count as i64);
         assert_eq!(new_request.max_retries, case.max_retries as i64);
         if case.origin_preserved {
-            assert_eq!(new_request.execution_origin, RECOVERY_EXECUTION_ORIGIN);
+            assert_eq!(new_request.execution_origin, case.post_new_origin);
         }
         if case.backend_preserved {
-            assert_eq!(new_request.backend_id, RECOVERY_BACKEND_ID);
+            assert_eq!(new_request.backend_id, case.post_new_backend);
         }
 
         let failed_request =
@@ -1190,8 +1188,8 @@ mod tests {
         assert_eq!(failed_request.lifecycle_state, case.post_failed_state);
         assert_eq!(failed_request.status, retry_parent_status_for_case(case));
         assert_eq!(failed_request.retry_count, case.pre_retry_count as i64);
-        assert_eq!(failed_request.backend_id, RECOVERY_BACKEND_ID);
-        assert_eq!(failed_request.execution_origin, RECOVERY_EXECUTION_ORIGIN);
+        assert_eq!(failed_request.backend_id, case.pre_backend);
+        assert_eq!(failed_request.execution_origin, case.pre_origin);
         assert_eq!(
             request_count_by_id_for_test(core.node(), &pre.failed_request_id).await?,
             if case.old_request_retained { 1 } else { 0 },
@@ -1274,8 +1272,8 @@ mod tests {
             retry_count: case.pre_retry_count as i64,
             max_retries: case.max_retries as i64,
             deadline: recovery_deadline_for_case(case),
-            backend_id: RECOVERY_BACKEND_ID,
-            execution_origin: RECOVERY_EXECUTION_ORIGIN,
+            backend_id: case.pre_backend.clone(),
+            execution_origin: case.pre_origin.clone(),
         }
     }
 
@@ -1295,8 +1293,8 @@ mod tests {
             retry_count: 0,
             max_retries: case.max_retries as i64,
             deadline: (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
-            backend_id: RECOVERY_BACKEND_ID,
-            execution_origin: RECOVERY_EXECUTION_ORIGIN,
+            backend_id: case.pre_backend.clone(),
+            execution_origin: case.pre_origin.clone(),
         }
     }
 
@@ -1345,6 +1343,9 @@ mod tests {
     }
 
     fn expected_illegal_guard_fragment(case: &LeanSessionRecoveryCase) -> &'static str {
+        // Generated cases assert the first surfaced denial in this production
+        // guard order, so future multi-violation cases should choose the same
+        // precedence deliberately.
         if !case.pre_failed_exists {
             "not found"
         } else if case.pre_failed_state != "failed" || case.pre_failed_admission != "released" {
@@ -1522,8 +1523,8 @@ mod tests {
         let escaped_status = escape_graphql_string(state.status);
         let escaped_lifecycle_state = escape_graphql_string(&state.lifecycle_state);
         let escaped_deadline = escape_graphql_string(&state.deadline);
-        let escaped_backend_id = escape_graphql_string(state.backend_id);
-        let escaped_execution_origin = escape_graphql_string(state.execution_origin);
+        let escaped_backend_id = escape_graphql_string(&state.backend_id);
+        let escaped_execution_origin = escape_graphql_string(&state.execution_origin);
         let retry_count = state.retry_count;
         let max_retries = state.max_retries;
         let mutation = format!(

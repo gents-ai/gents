@@ -38,6 +38,9 @@ def recoveryContext
   recoveryContextWith .interactive contractBackend
     state admission retryCount maxRetries deadline currentTime isLatest
 
+def recoveryBackendAlt : BackendId :=
+  { val := "contract-backend-alt" }
+
 def recoveryPre
     (failedCtx latestCtx : RequestContext)
     (latestId : RequestId := 1)
@@ -159,6 +162,8 @@ def recoveryCaseFromStep
 def sessionRecoveryCases : List SessionRecoveryCase :=
   let initialFailed := recoveryContext .failed .released 0 3 10 5 true
   let openFailed := recoveryContext .failed .released 1 3 10 5 true
+  let scheduledOpenFailed :=
+    recoveryContextWith .scheduled recoveryBackendAlt .failed .released 1 3 10 5 true
   let lastBudgetFailed := recoveryContext .failed .released 2 3 10 5 true
   let exhaustedFailed := recoveryContext .failed .released 3 3 10 5 true
   let deadlineClosedFailed := recoveryContext .failed .released 1 3 10 11 true
@@ -179,7 +184,7 @@ def sessionRecoveryCases : List SessionRecoveryCase :=
       2
   , recoveryCaseFromStep
       "legal_open_budget_latest"
-      (recoveryPre openFailed openFailed 1)
+      (recoveryPre scheduledOpenFailed scheduledOpenFailed 1)
       1
       2
   , recoveryCaseFromStep
