@@ -145,7 +145,7 @@ theorem lifecycle_transition_monotonic
     · cases resp with
       | none => simp [deriveAttempt, ClientTurnState.rank]
       | some r =>
-        obtain ⟨status⟩ := r
+        obtain ⟨status, _⟩ := r
         cases status <;> simp [deriveAttempt, ClientTurnState.rank]
     · simp [deriveAttempt, ClientTurnState.rank]
 
@@ -172,7 +172,7 @@ theorem response_advance_monotonic_streaming_to_terminal
                      req.lifecycleState = .processing ∨ req.lifecycleState = .inputRequired)
     (h_terminal : resp_new.status = .complete ∨ resp_new.status = .error) :
     (deriveAttempt ⟨req, some resp_new⟩).rank ≥
-    (deriveAttempt ⟨req, some ⟨.streaming⟩⟩).rank := by
+    (deriveAttempt ⟨req, some ⟨.streaming, false⟩⟩).rank := by
   rw [deriveAttempt_nonterminal_response_driven h_not_super h_nonterminal,
       deriveAttempt_nonterminal_response_driven h_not_super h_nonterminal]
   rcases h_terminal with h | h <;> simp [h, ClientTurnState.rank]
