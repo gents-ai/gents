@@ -118,3 +118,18 @@ pub(crate) fn desktop_client_snapshot(
     let core = current_core(&state);
     tauri::async_runtime::block_on(build_client_snapshot(core.as_ref()))
 }
+
+#[tauri::command]
+pub(crate) fn desktop_set_selected_agent(
+    state: State<'_, DesktopAppState>,
+    agent_did: Option<String>,
+) -> Result<(), String> {
+    let Some(core) = current_core(&state) else {
+        return Err("desktop client not initialized".to_string());
+    };
+    let did = agent_did
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    core.set_selected_agent_did(did);
+    Ok(())
+}

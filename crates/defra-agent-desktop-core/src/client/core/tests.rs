@@ -465,6 +465,31 @@ fn p2p_health_materially_changed_ignores_probe_timestamps() {
     assert!(!p2p_health_materially_changed(&previous, &next));
 }
 
+#[tokio::test]
+async fn selected_agent_did_channel_updates_subscribers() {
+    use crate::client::paths::DesktopPaths;
+
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
+    let options = ClientCoreOptions::local_only();
+    let core = ClientCore::start_with_paths_and_options(paths, options)
+        .await
+        .expect("client core");
+
+    let mut rx = core.selected_agent_did_rx();
+    assert_eq!(rx.borrow().clone(), None);
+
+    core.set_selected_agent_did(Some("did:alpha".to_string()));
+    rx.changed().await.expect("watch update");
+    assert_eq!(rx.borrow().clone(), Some("did:alpha".to_string()));
+
+    core.set_selected_agent_did(None);
+    rx.changed().await.expect("watch update");
+    assert_eq!(rx.borrow().clone(), None);
+
+    core.shutdown().await.expect("shutdown");
+}
+
 #[test]
 fn p2p_health_materially_changed_detects_live_topology_change() {
     let previous = P2PHealth {

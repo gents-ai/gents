@@ -155,6 +155,7 @@ pub struct ClientCore {
     p2p_supervisor: Mutex<Option<JoinHandle<()>>>,
     materialization_supervisor: Mutex<Option<JoinHandle<()>>>,
     p2p_health: watch::Sender<P2PHealth>,
+    selected_agent_did: watch::Sender<Option<String>>,
     p2p_control: Mutex<Option<mpsc::Sender<P2PSupervisorCommand>>>,
     last_mutation_error: StdRwLock<Option<String>>,
     local_peer_id: String,
@@ -208,6 +209,18 @@ impl ClientCore {
 
     pub fn p2p_health_updates(&self) -> watch::Receiver<P2PHealth> {
         self.p2p_health.subscribe()
+    }
+
+    pub fn set_selected_agent_did(&self, agent_did: Option<String>) {
+        self.selected_agent_did.send_replace(agent_did);
+    }
+
+    pub fn selected_agent_did(&self) -> Option<String> {
+        self.selected_agent_did.borrow().clone()
+    }
+
+    pub fn selected_agent_did_rx(&self) -> watch::Receiver<Option<String>> {
+        self.selected_agent_did.subscribe()
     }
 
     pub async fn peer_records(&self) -> Vec<PeerRecord> {

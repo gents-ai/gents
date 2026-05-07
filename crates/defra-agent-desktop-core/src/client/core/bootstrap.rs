@@ -104,6 +104,7 @@ impl ClientCore {
         };
         let peer_statuses = Arc::new(std::sync::RwLock::new(peer_statuses));
         let (p2p_health, _p2p_health_rx) = watch::channel(P2PHealth::default());
+        let (selected_agent_did, _) = watch::channel(None);
         let initial_health = super::supervisor::probe_p2p_health(&p2p, &P2PHealth::default()).await;
         p2p_health.send_replace(initial_health);
         let (p2p_control, p2p_control_rx) = mpsc::channel(8);
@@ -134,6 +135,7 @@ impl ClientCore {
             p2p_supervisor: tokio::sync::Mutex::new(Some(p2p_supervisor)),
             materialization_supervisor: tokio::sync::Mutex::new(Some(materialization_supervisor)),
             p2p_health,
+            selected_agent_did,
             p2p_control: tokio::sync::Mutex::new(Some(p2p_control)),
             last_mutation_error: std::sync::RwLock::new(None),
             local_peer_id,
