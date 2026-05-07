@@ -1,3 +1,5 @@
+import Proofs.Conformance.ContractTypes
+
 /-!
 # Conformance Boundaries and Product Policies
 
@@ -134,6 +136,9 @@ depends on broader transition coverage from it.
 `Proofs.Conformance.Contracts` JSON. Rust asserts that every emitted vocabulary,
 state machine, trigger-case group, runtime witness group, session-recovery
 witness group, and follow-up hook appears in that ledger exactly once.
+Boundary and deviation metadata is emitted as structured review metadata and is
+shape-checked separately; ledger `accepted_boundary` fields reference the stable
+boundary ids emitted by this file.
 
 A ledger entry is acceptable only when it names a Rust/TypeScript consumer, an
 intentional product boundary recorded in this file, or an accepted follow-up.
@@ -155,3 +160,175 @@ These were previous conformance gaps and are now closed product/spec behavior:
 * Interrupting a request has an end-to-end path to cancelling queued/running
   linked `InferenceCall` rows.
 -/
+
+namespace Conformance.Contracts
+
+-- Rust pins the complete id set in
+-- state_machine_conformance::lean_boundary_metadata_is_typed_and_reviewable.
+-- That duplicated list is the deliberate review gate for boundary drift.
+structure Boundary where
+  id : String
+  domain : String
+  subject : String
+  statement : String
+  acceptedFailureMode : Option String := none
+  acceptedFollowUp : Option String := none
+  deriving Repr
+
+def boundaryRequestInputRequiredReservedId : String :=
+  "boundary.request.input-required-reserved"
+
+def boundaryRequestDeadPreclaimOnlyId : String :=
+  "boundary.request.dead-preclaim-only"
+
+def boundaryToolCallPermanentWithoutRetryEvidenceId : String :=
+  "boundary.tool-call.permanent-without-retry-evidence"
+
+def boundaryMcpCallToolDispatchRetryEvidenceId : String :=
+  "boundary.mcp.call-tool-dispatch-retry-evidence"
+
+def boundaryInferenceSlotsRunningRowDerivedId : String :=
+  "boundary.inference-slots.running-row-derived"
+
+def boundaryCommandPolicyHostExecutionAssumptionsId : String :=
+  "boundary.command-policy.host-execution-assumptions"
+
+def boundaryTriggerDispatchSourceDeliveryId : String :=
+  "boundary.trigger.dispatch-source-delivery"
+
+def boundaryPersistenceAbstractLifecycleId : String :=
+  "boundary.persistence.abstract-lifecycle"
+
+def boundaryStorageHookFailurePolicyId : String :=
+  "boundary.storage.hook-failure-policy"
+
+def boundaryStorageObservationDaemonVisibleId : String :=
+  "boundary.storage.observation-daemon-visible"
+
+def boundaryStorageMinimumVisibilityPathId : String :=
+  "boundary.storage.minimum-visibility-path"
+
+def boundaryBackendHealthAdmissionFreshnessId : String :=
+  "boundary.backend-health.admission-freshness"
+
+def boundarySessionRecoveryFailedLatestSmokeId : String :=
+  "boundary.session-recovery.failed-latest-smoke"
+
+def boundaryCoverageLedgerReviewDisciplineId : String :=
+  "boundary.coverage-ledger.review-discipline"
+
+def boundaries : List Boundary :=
+  [ { id := boundaryRequestInputRequiredReservedId
+    , domain := "RequestLifecycle"
+    , subject := "inputRequired vocabulary"
+    , statement :=
+        "inputRequired is reserved persisted and client protocol vocabulary; Rust does not emit it until a first-class approval or human-input loop exists."
+    , acceptedFollowUp :=
+        some "Future approval work should extend the core transition relation and Rust writer tests."
+    }
+  , { id := boundaryRequestDeadPreclaimOnlyId
+    , domain := "RequestLifecycle"
+    , subject := "dead terminal state"
+    , statement :=
+        "dead is terminal only for stale pre-claim work; post-claim provider, retry, tool, and deadline failures remain failed."
+    }
+  , { id := boundaryToolCallPermanentWithoutRetryEvidenceId
+    , domain := "ToolExecution"
+    , subject := "tool-call failure retry policy"
+    , statement :=
+        "Tool-call failures are permanent unless metadata proves retry safety; the request machine does not model tool retries."
+    , acceptedFollowUp :=
+        some "Future retries need health, idempotency, and side-effect metadata before widening Rust behavior."
+    }
+  , { id := boundaryMcpCallToolDispatchRetryEvidenceId
+    , domain := "ToolExecution"
+    , subject := "McpPool call_tool retry boundary"
+    , statement :=
+        "Rust does not persist MCP idempotency metadata, so McpPool::call_tool must not implicitly retry after dispatch failure."
+    , acceptedFollowUp :=
+        some "Extend ToolExecution.IdempotencyEvidence and add a Rust metadata contract before adding call_tool transport retries."
+    }
+  , { id := boundaryInferenceSlotsRunningRowDerivedId
+    , domain := "InferenceCall"
+    , subject := "fleet slot accounting"
+    , statement :=
+        "Backend held slots are derived from InferenceCall rows with call_state running; no denormalized FleetState document carries the aggregate invariant."
+    }
+  , { id := boundaryCommandPolicyHostExecutionAssumptionsId
+    , domain := "CommandPolicy"
+    , subject := "host command semantics"
+    , statement :=
+        "The command-policy model proves fail-closed policy ordering and sandbox/environment invariants, not external binary read-only semantics or host kernel sandbox correctness."
+    }
+  , { id := boundaryTriggerDispatchSourceDeliveryId
+    , domain := "TriggerDispatch"
+    , subject := "trigger source delivery"
+    , statement :=
+        "Lean covers pure dispatch and concurrency semantics once a FireIntent exists; DefraDB event delivery, schedule ticks, debounce, and template parsing remain operational assumptions."
+    }
+  , { id := boundaryPersistenceAbstractLifecycleId
+    , domain := "Persistence"
+    , subject := "abstract persistence lifecycle"
+    , statement :=
+        "PersistenceState is an abstract committed/uncommitted lifecycle; Rust does not persist a per-token PersistenceState document."
+    }
+  , { id := boundaryStorageHookFailurePolicyId
+    , domain := "Persistence"
+    , subject := "hook storage failure policy"
+    , statement :=
+        "Rust hook policy observes storage failure as fail-closed retry or fail-open lost output instead of exposing per-token persistence documents."
+    , acceptedFailureMode :=
+        some "Fail-open acknowledges lost output by policy."
+    }
+  , { id := boundaryStorageObservationDaemonVisibleId
+    , domain := "StorageObservation"
+    , subject := "daemon-visible storage facts"
+    , statement :=
+        "StorageObservation records daemon-visible mutation and read facts that justify lifecycle movement; it is not a proof of DefraDB internals."
+    }
+  , { id := boundaryStorageMinimumVisibilityPathId
+    , domain := "StorageObservation"
+    , subject := "minimum visibility path"
+    , statement :=
+        "After a successful mutation ack, stale reads or events may occur, but the daemon assumes read-your-writes for local confirmation or eventual later observation."
+    , acceptedFailureMode :=
+        some "Stale reads or missing events after success acknowledgement do not invalidate the commit assumption."
+    }
+  , { id := boundaryBackendHealthAdmissionFreshnessId
+    , domain := "Admission"
+    , subject := "backend health freshness"
+    , statement :=
+        "Backend health and availability observations are only as fresh as backend documents visible at admission time; provider and network behavior are environmental."
+    }
+  , { id := boundarySessionRecoveryFailedLatestSmokeId
+    , domain := "SessionRecovery"
+    , subject := "finite failed-latest witness"
+    , statement :=
+        "The generated SessionRecovery contract covers failed -> pending reissue as an executable smoke boundary, not full request-state transition coverage."
+    , acceptedFollowUp :=
+        some "Future executable witnesses should widen the contract before Rust depends on broader transition coverage."
+    }
+  , { id := boundaryCoverageLedgerReviewDisciplineId
+    , domain := "CoverageLedger"
+    , subject := "advisory contract guard"
+    , statement :=
+        "CoverageLedger is a checked index requiring every emitted domain to name a Rust or TypeScript consumer, accepted boundary, or follow-up; this boundary documents the ledger discipline as a whole."
+    }
+  ]
+
+def Boundary.toJson (boundary : Boundary) : String :=
+  "{"
+    ++ "\"id\":" ++ jsonString boundary.id ++ ","
+    ++ "\"domain\":" ++ jsonString boundary.domain ++ ","
+    ++ "\"subject\":" ++ jsonString boundary.subject ++ ","
+    ++ "\"statement\":" ++ jsonString boundary.statement ++ ","
+    ++ "\"accepted_failure_mode\":"
+      ++ jsonOptionalString boundary.acceptedFailureMode ++ ","
+    ++ "\"accepted_follow_up\":"
+      ++ jsonOptionalString boundary.acceptedFollowUp
+    ++ "}"
+
+def boundariesJson : String :=
+  jsonArray (boundaries.map Boundary.toJson)
+
+end Conformance.Contracts

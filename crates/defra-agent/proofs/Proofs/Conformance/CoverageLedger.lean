@@ -1,4 +1,5 @@
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Boundaries
 
 /-!
 # Conformance Coverage Ledger
@@ -64,11 +65,11 @@ def vocabularyCoverage : List CoverageEntry :=
   , boundaryCoverage
       "vocabulary"
       "PersistenceState"
-      "Proofs.Conformance.Boundaries: abstract persistence lifecycle, no per-token Rust document"
+      boundaryPersistenceAbstractLifecycleId
   , boundaryCoverage
       "vocabulary"
       "PersistenceFailurePolicy"
-      "Proofs.Conformance.Boundaries: hook/storage failure-policy boundary"
+      boundaryStorageHookFailurePolicyId
   , consumerCoverage
       "vocabulary"
       "ReconcilePhase"
@@ -76,7 +77,7 @@ def vocabularyCoverage : List CoverageEntry :=
   , boundaryCoverage
       "vocabulary"
       "StorageObservation"
-      "Proofs.Conformance.Boundaries: daemon-visible storage observation boundary"
+      boundaryStorageObservationDaemonVisibleId
   , consumerCoverage
       "vocabulary"
       "SessionRecoveryLatestRequestState"
@@ -107,22 +108,22 @@ def stateMachineCoverage : List CoverageEntry :=
   , boundaryCoverage
       "state_machine"
       "Persistence.failClosed"
-      "Proofs.Conformance.Boundaries: storage write failures are observed through Rust hooks"
+      boundaryStorageHookFailurePolicyId
       "state_machine_conformance::lean_executable_contracts_cover_initial_domains"
   , boundaryCoverage
       "state_machine"
       "Persistence.failOpen"
-      "Proofs.Conformance.Boundaries: fail-open acknowledges lost output at the hook boundary"
+      boundaryStorageHookFailurePolicyId
       "state_machine_conformance::lean_executable_contracts_cover_initial_domains"
   , boundaryCoverage
       "state_machine"
       "StorageObservation.failClosed"
-      "Proofs.Conformance.Boundaries: daemon observation model, not DefraDB internals"
+      boundaryStorageObservationDaemonVisibleId
       "state_machine_conformance::lean_executable_contracts_cover_initial_domains"
   , boundaryCoverage
       "state_machine"
       "StorageObservation.failOpen"
-      "Proofs.Conformance.Boundaries: daemon observation model, not DefraDB internals"
+      boundaryStorageObservationDaemonVisibleId
       "state_machine_conformance::lean_executable_contracts_cover_initial_domains"
   , consumerCoverage
       "state_machine"
