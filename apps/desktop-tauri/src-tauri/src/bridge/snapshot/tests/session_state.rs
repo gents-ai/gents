@@ -541,13 +541,13 @@ fn client_shell_contract_store(case: &LeanClientShellCase) -> ClientStore {
     let turn_state = case.desktop_observed_turn_state.as_deref();
     let (request_status, lifecycle_state) = request_state_for_turn(turn_state);
 
-    let mut rows = ClientStoreRows {
-        sessions: Vec::new(),
-        conversations: Vec::new(),
-        requests: Vec::new(),
-        responses: Vec::new(),
-        ..ClientStoreRows::default()
-    };
+    assert!(
+        !case.frontend_conversation_present || case.desktop_snapshot_present,
+        "case {} must not emit a conversation row without a desktop session observation",
+        case.name
+    );
+
+    let mut rows = ClientStoreRows::default();
 
     if case.desktop_snapshot_present {
         rows.sessions.push(AgentSessionRow {

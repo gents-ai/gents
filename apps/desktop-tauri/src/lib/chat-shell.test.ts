@@ -14,6 +14,8 @@ import {
 
 const CONTRACT_JSON_BEGIN = "---BEGIN DEFRA LEAN CONTRACT JSON---";
 const CONTRACT_JSON_END = "---END DEFRA LEAN CONTRACT JSON---";
+// The generated contract test shells out to Lake before reading Lean JSON.
+const GENERATED_CONTRACT_TEST_TIMEOUT_MS = 30000;
 
 type LeanClientShellCase = {
   name: string;
@@ -315,7 +317,7 @@ describe("projectChatShell", () => {
         }
       }
     }
-  }, 30000);
+  }, GENERATED_CONTRACT_TEST_TIMEOUT_MS);
 
   test("blocks follow up while turn is streaming", () => {
     const projection = projectChatShell({

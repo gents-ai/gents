@@ -135,12 +135,13 @@ depends on broader transition coverage from it.
 ## Coverage Ledger Policy
 
 `Proofs.Conformance.CoverageLedger` is the checked index for the
-`Proofs.Conformance.Contracts` JSON. Rust asserts that every emitted vocabulary,
-state machine, trigger dispatch case group, runtime-reconcile witness group,
-session-recovery witness group, inference-slot witness group, fleet-slot witness
-group, frontend/desktop ClientShell witness group, tool-execution witness group,
-command-policy validation/sandbox/env witness group, and follow-up hook appears
-in that ledger exactly once.
+`Proofs.Conformance.Contracts` JSON. Rust/TypeScript conformance coverage must
+account for every emitted vocabulary, state machine, trigger dispatch case
+group, runtime-reconcile witness group, session-recovery witness group,
+inference-slot witness group, fleet-slot witness group, frontend/desktop
+ClientShell witness group, tool-execution witness group, command-policy
+validation/sandbox/env witness group, and follow-up hook; Rust checks that each
+appears in that ledger exactly once.
 Boundary and deviation metadata is emitted as structured review metadata and is
 shape-checked separately; ledger `accepted_boundary` fields reference the stable
 boundary ids emitted by this file.
