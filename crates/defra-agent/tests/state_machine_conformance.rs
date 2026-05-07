@@ -24,6 +24,7 @@ use lean_vocab_test::{
     lean_runtime_reconcile_case, lean_session_recovery_case, lean_tool_preflight_case,
     lean_tool_retry_case, lean_vocabulary_values,
 };
+use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
     fetch_conversation_snapshot, fetch_request_lineage_snapshot,
     fetch_request_lineage_snapshot_by_tuple, fetch_request_snapshot, fetch_request_snapshot_raw,
@@ -475,37 +476,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "command_policy_cases",
         "follow_up_hook",
     ];
-    let acknowledged_consumers = [
-        "apply_conformance::generated_apply_reconcile_cases_drive_apply_model_and_production_ordering",
-        "admission::tests::generated_slot_accounting_fleet_cases_match_admission_runtime_boundary",
-        "admission::tests::generated_inference_slot_accounting_cases_match_admission_reconstruction_logic",
-        "admission::tests::rust_inference_call_state_vocabulary_matches_lean_model",
-        "admission::tests::rust_inference_call_terminal_reason_vocabulary_matches_lean_model",
-        "admission::tests::rust_inference_call_transition_table_matches_lean_contract",
-        "backend_registry::tests::generated_backend_health_admission_cases_match_registry_and_admission_policy",
-        "hook::tests::generated_persistence_failure_policy_cases_match_hook_decisions",
-        "hook::tests::generated_storage_observation_cases_match_hook_runtime_classification",
-        "lifecycle::tests::request_state_machine_contract_is_complete",
-        "lifecycle::tests::rust_execution_origin_vocabulary_matches_lean_model",
-        "lifecycle::tests::rust_request_lifecycle_state_vocabulary_matches_lean_model",
-        "mcp_pool::tests::tool_retry_disposition_contract_cases_match_mcp_pool_policy",
-        "runtime_status::tests::runtime_status_generation_updates_match_lean_runtime_reconcile_cases",
-        "runtime_status::tests::rust_process_state_transitions_match_lean_contract",
-        "runtime_status::tests::rust_process_state_vocabulary_matches_lean_model",
-        "runtime_status::tests::rust_reconcile_phase_vocabulary_matches_lean_model",
-        "apps/desktop-tauri/src/lib/chat-shell.test.ts::projectChatShell matches generated Lean ClientShell projection contracts",
-        "defra_agent_desktop_tauri::bridge::snapshot::tests::session_state::session_snapshot_projection_consumes_generated_client_shell_contract_cases",
-        "state_machine_conformance::generated_session_recovery_cases_drive_db_backed_reissue_contract",
-        "state_machine_conformance::generated_tool_execution_cases_cover_preflight_and_retry_contracts",
-        "state_machine_conformance::lean_executable_contracts_cover_initial_domains",
-        "toolset::tests::generated_command_env_cases_match_rust_filtering",
-        "toolset::tests::generated_command_policy_cases_match_rust_validation",
-        "toolset::tests::generated_command_sandbox_cases_match_rust_selection",
-        "trigger_engine::tests::trigger_engine_dispatch_matches_lean_generated_contract_cases",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect::<BTreeSet<_>>();
+    let registered_consumers = assert_registered_conformance_consumers_resolve();
     let mut ledger = BTreeSet::new();
     let mut ledger_consumers = BTreeSet::new();
 
@@ -545,11 +516,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         }
         if has_consumer {
             assert!(
-                acknowledged_consumers.contains(&entry.consumer),
-                "coverage ledger consumer must be acknowledged in Rust review list: {:?}",
+                registered_consumers.contains(entry.consumer.as_str()),
+                "coverage ledger consumer must resolve to a registered Rust/TS conformance consumer: {:?}",
                 entry
             );
-            ledger_consumers.insert(entry.consumer.clone());
+            ledger_consumers.insert(entry.consumer.as_str());
         }
 
         assert!(
@@ -570,13 +541,13 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted,
         ledger
     );
-    let unreferenced_consumers = acknowledged_consumers
+    let unreferenced_consumers = registered_consumers
         .difference(&ledger_consumers)
-        .cloned()
+        .copied()
         .collect::<Vec<_>>();
     assert!(
         unreferenced_consumers.is_empty(),
-        "coverage ledger consumer acknowledgement list has unreferenced entries: {:?}",
+        "coverage ledger consumer registry has unreferenced entries: {:?}",
         unreferenced_consumers
     );
 }

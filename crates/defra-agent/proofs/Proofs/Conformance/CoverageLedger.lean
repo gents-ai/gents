@@ -19,9 +19,9 @@ structure CoverageEntry where
   acceptedFollowUp : String
   deriving Repr
 
--- Consumer strings are review-acknowledged Rust/TypeScript test pointers.
--- Rust does not perform symbol resolution, but it rejects consumer strings
--- missing from the state_machine_conformance acknowledgement list.
+-- Consumer strings are registered Rust/TypeScript test pointers. The Rust
+-- registry in `tests/support/conformance_consumers.rs` resolves each pointer
+-- against the named source file and test, so stale consumer names fail tests.
 def consumerCoverage
     (category domain consumer : String) : CoverageEntry :=
   { category := category
