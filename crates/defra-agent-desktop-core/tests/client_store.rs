@@ -476,3 +476,53 @@ async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
     core.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let paths = DesktopPaths::from_root(tmp.path());
+
+    let core =
+        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?;
+
+    // Write 20 docs through the embedded node directly.
+    for i in 0..20usize {
+        let mutation = format!(
+            r#"mutation {{
+                add_AgentPrincipal(input: {{
+                    agent_did: "did:race-{i}",
+                    display_name: "race-{i}",
+                    enabled: true
+                }}) {{ agent_did }}
+            }}"#
+        );
+        let response = core.node().execute(&mutation).await;
+        assert!(!response.has_errors(), "mutation {i} failed: {:?}", response.errors);
+    }
+
+    // Wait for observer debounce + safety margin.
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if core.store().snapshot().agent_principals.len() >= 20 {
+                return Ok::<(), anyhow::Error>(());
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .context("timed out waiting for all 20 principals to appear in store")??;
+
+    let snap = core.store().snapshot();
+    let dids: std::collections::HashSet<&str> = snap
+        .agent_principals
+        .iter()
+        .map(|p| p.agent_did.as_str())
+        .collect();
+    for i in 0..20usize {
+        let want = format!("did:race-{i}");
+        assert!(dids.contains(want.as_str()), "missing {want}");
+    }
+
+    core.shutdown().await?;
+    Ok(())
+}

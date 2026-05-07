@@ -77,6 +77,14 @@ impl ClientCore {
         ));
         ensure_runtime_schemas(node.as_ref()).await?;
         subscribe_all_collections(node.as_ref()).await?;
+
+        // Open the EventName::Update subscription BEFORE reading the
+        // bootstrap snapshot. Writes that land between subscribe and the
+        // snapshot read are buffered in the bounded mpsc and drained by
+        // the observer on first tick. merge_snapshot is idempotent so
+        // duplicates are harmless.
+        let observer_subscription = node.subscribe(&[defra_node::EventName::Update]);
+
         let initial_snapshot = {
             let records = peer_directory.read().await.records().to_vec();
             load_full_snapshot_with_peer_records(node.as_ref(), &records).await?
@@ -86,6 +94,7 @@ impl ClientCore {
             Arc::clone(&node),
             Arc::clone(&store),
             Arc::clone(&peer_directory),
+            observer_subscription,
         );
 
         let p2p = node

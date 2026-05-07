@@ -1,7 +1,8 @@
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use defra_node::{EmbeddedNode, EventName};
+use defra_node::EmbeddedNode;
+use events::Subscription;
 use tokio::sync::{watch, RwLock as AsyncRwLock};
 
 use super::peer_directory::PeerDirectory;
@@ -97,10 +98,11 @@ pub fn spawn_observer(
     node: Arc<EmbeddedNode>,
     store: Arc<ObservedStore>,
     _peer_directory: Arc<AsyncRwLock<PeerDirectory>>,
+    subscription: Subscription,
 ) -> ObserverHandle {
     let (stop_tx, mut stop_rx) = watch::channel(false);
     let task = tokio::spawn(async move {
-        let mut subscription = node.subscribe(&[EventName::Update]);
+        let mut subscription = subscription;
 
         loop {
             let next_message = tokio::select! {
