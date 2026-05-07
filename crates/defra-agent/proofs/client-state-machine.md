@@ -222,22 +222,25 @@ enforces these parts:
 
 | Lean property | Runtime enforcement today | Coverage |
 |---|---|---|
-| C2 snapshot preserves selection | React selection state is separate from snapshot refresh. `projectChatShell` is pure and receives selection as input rather than writing it. | `Proofs.Conformance.ClientShell.Contracts` emits `snapshot_preserves_selection`; Rust conformance checks the generated pre/post selection fields. |
+| C2 snapshot preserves selection | React selection state is separate from snapshot refresh. `projectChatShell` is pure and receives selection as input rather than writing it. | `Proofs.Conformance.ClientShell.Contracts` emits `snapshot_preserves_selection`; TypeScript consumes the frontend projection row and Rust conformance checks the generated pre/post selection fields. |
 | C3 transport input is non-mutating | P2P health lives in `DesktopRuntimeSnapshot.p2pHealth`; it is projected separately from selected session/chat state. Auto-restart refreshes the selected session by id instead of rewriting selection from transport health. | Generated `transport_noop` case checks that `step` returns the same shell state. |
 | C4/C4' session selection is local | `onSelectSession` latches the clicked session and clears the loaded session snapshot if it belongs to another session. Store presence affects projection only. | Generated `stale_workflow_after_session_switch` is consumed by TypeScript projection tests and Rust conformance. |
 | C6 start-submit is gated | `onSendMessage` checks `shellProjection.sendStatus === ready` before calling `sendChatMessage`; Rust submission APIs still validate required agent/session fields. | Generated `blocked_submit_*` cases cover offline client, missing agent, empty composer, mutation in flight, awaiting observation, missing session, and non-terminal turn gates. |
 | C9 awaiting retires only on matching request | Rust `build_session_snapshot_from_store(..., preferred_request_id)` reports a preferred request only if that request is actually in the observed store; TypeScript keeps `awaitingObservation` while latest/pending request ids do not match. | Generated stale/matching observation cases are consumed by both `projectChatShell` and desktop session snapshot tests. |
 | Terminal follow-up allowance | A terminal turn is trustworthy for a follow-up even when the conversation summary is missing but the session snapshot is present. | Generated terminal cases cover both summary-present and session-snapshot-only frontend paths. |
 
-`Proofs.Conformance.Contracts` now includes `client_shell_case_count` and
-`client_shell_cases`. Those cases are evaluated from `step`, `canSubmit`,
-`projectChat`, and the Lean turn derivation helpers, then consumed by
-frontend and desktop Rust tests. Future shell changes that add workflow states,
-blocker reasons, behavior-mismatch handling, or transport coupling should
-extend `Proofs.ClientShell` first and update this generated contract surface in
-the same change. The emitted ClientShell domain is also listed in
-`Proofs.Conformance.CoverageLedger`, so future contract additions must name a
-runtime consumer or an accepted boundary.
+`Proofs.Conformance.Contracts` now includes `frontend_client_shell_case_count`,
+`frontend_client_shell_cases`, `desktop_client_shell_case_count`, and
+`desktop_client_shell_cases`. Those cases are evaluated from `step`,
+`canSubmit`, `projectChat`, and the Lean turn derivation helpers. The frontend
+list keeps all generated rows for TypeScript projection coverage; the desktop
+list contains selected-session rows that the Rust session-snapshot bridge can
+own directly, including the selected-but-absent snapshot case. Future shell
+changes that add workflow states, blocker reasons, behavior-mismatch handling,
+or transport coupling should extend `Proofs.ClientShell` first and update this
+generated contract surface in the same change. The emitted frontend and desktop
+ClientShell domains are also listed in `Proofs.Conformance.CoverageLedger`, so
+future contract additions must name a runtime consumer or an accepted boundary.
 
 ## Reference Pseudocode
 

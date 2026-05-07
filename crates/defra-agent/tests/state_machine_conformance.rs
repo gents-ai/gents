@@ -136,10 +136,21 @@ fn lean_executable_contracts_cover_initial_domains() {
         5
     );
     assert_eq!(
-        lean_contract_snapshot().client_shell_case_count,
-        lean_contract_snapshot().client_shell_cases.len()
+        lean_contract_snapshot().frontend_client_shell_case_count,
+        lean_contract_snapshot().frontend_client_shell_cases.len()
     );
-    assert_eq!(lean_contract_snapshot().client_shell_cases.len(), 15);
+    assert_eq!(
+        lean_contract_snapshot().frontend_client_shell_cases.len(),
+        15
+    );
+    assert_eq!(
+        lean_contract_snapshot().desktop_client_shell_case_count,
+        lean_contract_snapshot().desktop_client_shell_cases.len()
+    );
+    assert_eq!(
+        lean_contract_snapshot().desktop_client_shell_cases.len(),
+        12
+    );
     assert_eq!(lean_contract_snapshot().tool_preflight_cases.len(), 9);
     assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 45);
     assert_eq!(lean_contract_snapshot().command_policy_cases.len(), 45);
@@ -327,14 +338,25 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert(("fleet_cases".to_string(), "FleetSlotAccounting".to_string()));
     }
     assert_eq!(
-        snapshot.client_shell_case_count,
-        snapshot.client_shell_cases.len(),
-        "Lean ClientShell case count drifted from emitted cases"
+        snapshot.frontend_client_shell_case_count,
+        snapshot.frontend_client_shell_cases.len(),
+        "Lean frontend ClientShell case count drifted from emitted cases"
     );
-    if !snapshot.client_shell_cases.is_empty() {
+    if !snapshot.frontend_client_shell_cases.is_empty() {
         emitted.insert((
-            "client_shell_cases".to_string(),
-            "ClientShellCases".to_string(),
+            "frontend_client_shell_cases".to_string(),
+            "FrontendClientShellCases".to_string(),
+        ));
+    }
+    assert_eq!(
+        snapshot.desktop_client_shell_case_count,
+        snapshot.desktop_client_shell_cases.len(),
+        "Lean desktop ClientShell case count drifted from emitted cases"
+    );
+    if !snapshot.desktop_client_shell_cases.is_empty() {
+        emitted.insert((
+            "desktop_client_shell_cases".to_string(),
+            "DesktopClientShellCases".to_string(),
         ));
     }
     if !snapshot.tool_preflight_cases.is_empty() {
@@ -377,7 +399,8 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "session_recovery_cases",
         "slot_cases",
         "fleet_cases",
-        "client_shell_cases",
+        "frontend_client_shell_cases",
+        "desktop_client_shell_cases",
         "tool_cases",
         "command_policy_cases",
         "follow_up_hook",
@@ -395,7 +418,8 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "runtime_status::tests::rust_process_state_transitions_match_lean_contract",
         "runtime_status::tests::rust_process_state_vocabulary_matches_lean_model",
         "runtime_status::tests::rust_reconcile_phase_vocabulary_matches_lean_model",
-        "state_machine_conformance::generated_client_shell_cases_cover_shell_projection_contracts",
+        "apps/desktop-tauri/src/lib/chat-shell.test.ts::projectChatShell matches generated Lean ClientShell projection contracts",
+        "defra_agent_desktop_tauri::bridge::snapshot::tests::session_state::session_snapshot_projection_consumes_generated_client_shell_contract_cases",
         "state_machine_conformance::generated_session_recovery_cases_cover_retry_guards_and_preservation",
         "state_machine_conformance::generated_slot_accounting_cases_pin_inference_and_fleet_contracts",
         "state_machine_conformance::generated_tool_execution_cases_cover_preflight_and_retry_contracts",
@@ -502,6 +526,10 @@ fn generated_client_shell_cases_cover_shell_projection_contracts() {
 
     let stale = lean_client_shell_case("awaiting_stale_request_observation");
     assert!(!stale.workflow_advanced);
+    assert_eq!(
+        stale.property.as_str(),
+        "awaiting_stale_request_observation"
+    );
     assert_eq!(stale.post_workflow_kind.as_str(), "awaiting");
     assert_eq!(
         stale.frontend_expected_send_blocked_reason.as_deref(),

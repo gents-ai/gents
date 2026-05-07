@@ -306,6 +306,7 @@ def clientShellCaseFromStep
   , frontendExpectedActiveRequestId := activeRequest
   , frontendExpectedTurnState := turnStateOptionName (obs.bind (·.latestTurn))
   , desktopSelectedSessionId := frontendLocal.selection.session
+  , desktopSnapshotPresent := selectedObs.isSome
   , desktopPreferredRequestId := desktopPreferred
   , desktopObservedRequestId := selectedObs.bind (·.latestObservedRequest)
   , desktopObservedTurnState := turnStateOptionName (selectedObs.bind (·.latestTurn))
@@ -341,7 +342,7 @@ def clientShellCases : List ClientShellContractCase :=
     let post := step awaitingNew input emptyStore .healthy ctxReady
     clientShellCaseFromStep
       "awaiting_stale_request_observation"
-      "awaiting_matching_request_observation"
+      "awaiting_stale_request_observation"
       awaitingNew input emptyStore .healthy ctxReady awaitingNew post storeOldCompleted
   , let input := ShellInput.snapshot storeNewStreaming
     let post := step awaitingNew input emptyStore .healthy ctxReady

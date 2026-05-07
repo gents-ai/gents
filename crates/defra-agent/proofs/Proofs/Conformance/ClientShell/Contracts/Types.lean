@@ -71,6 +71,7 @@ structure ClientShellContractCase where
   frontendExpectedActiveRequestId : Option RequestId
   frontendExpectedTurnState : Option String
   desktopSelectedSessionId : Option SessionId
+  desktopSnapshotPresent : Bool
   desktopPreferredRequestId : Option RequestId
   desktopObservedRequestId : Option RequestId
   desktopObservedTurnState : Option String

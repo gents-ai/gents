@@ -29,8 +29,10 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) state_machines: Vec<LeanStateMachineContract>,
     pub(crate) trigger_dispatch_case_count: usize,
     pub(crate) trigger_dispatch_cases: Vec<LeanTriggerDispatchCase>,
-    pub(crate) client_shell_case_count: usize,
-    pub(crate) client_shell_cases: Vec<LeanClientShellCase>,
+    pub(crate) frontend_client_shell_case_count: usize,
+    pub(crate) frontend_client_shell_cases: Vec<LeanClientShellCase>,
+    pub(crate) desktop_client_shell_case_count: usize,
+    pub(crate) desktop_client_shell_cases: Vec<LeanClientShellCase>,
     pub(crate) runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
     pub(crate) session_recovery_cases: Vec<LeanSessionRecoveryCase>,
     pub(crate) inference_slot_accounting_cases: Vec<LeanInferenceSlotAccountingCase>,
@@ -177,6 +179,7 @@ pub(crate) struct LeanClientShellCase {
     pub(crate) frontend_expected_active_request_id: Option<usize>,
     pub(crate) frontend_conversation_present: bool,
     pub(crate) desktop_selected_session_id: Option<usize>,
+    pub(crate) desktop_snapshot_present: bool,
     pub(crate) desktop_preferred_request_id: Option<usize>,
     pub(crate) desktop_observed_request_id: Option<usize>,
     pub(crate) desktop_observed_turn_state: Option<String>,
@@ -375,10 +378,14 @@ pub(crate) fn lean_session_recovery_case(name: &str) -> &'static LeanSessionReco
 
 pub(crate) fn lean_client_shell_case(name: &str) -> &'static LeanClientShellCase {
     lean_contract_snapshot()
-        .client_shell_cases
+        .frontend_client_shell_cases
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean ClientShell case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_desktop_client_shell_cases() -> &'static [LeanClientShellCase] {
+    &lean_contract_snapshot().desktop_client_shell_cases
 }
 
 pub(crate) fn lean_inference_slot_accounting_cases() -> &'static [LeanInferenceSlotAccountingCase] {

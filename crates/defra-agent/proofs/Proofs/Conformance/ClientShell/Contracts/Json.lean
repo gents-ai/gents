@@ -63,6 +63,7 @@ def ClientShellContractCase.toJson (witness : ClientShellContractCase) : String 
     ++ "\"frontend_expected_active_request_id\":" ++ jsonNatOption witness.frontendExpectedActiveRequestId ++ ","
     ++ "\"frontend_expected_turn_state\":" ++ jsonStringOption witness.frontendExpectedTurnState ++ ","
     ++ "\"desktop_selected_session_id\":" ++ jsonNatOption witness.desktopSelectedSessionId ++ ","
+    ++ "\"desktop_snapshot_present\":" ++ boolJson witness.desktopSnapshotPresent ++ ","
     ++ "\"desktop_preferred_request_id\":" ++ jsonNatOption witness.desktopPreferredRequestId ++ ","
     ++ "\"desktop_observed_request_id\":" ++ jsonNatOption witness.desktopObservedRequestId ++ ","
     ++ "\"desktop_observed_turn_state\":" ++ jsonStringOption witness.desktopObservedTurnState ++ ","
@@ -71,10 +72,22 @@ def ClientShellContractCase.toJson (witness : ClientShellContractCase) : String 
     ++ "\"desktop_expect_pending_turn\":" ++ jsonBoolOption witness.desktopExpectPendingTurn
     ++ "}"
 
-def clientShellCasesJson : String :=
-  jsonArray (clientShellCases.map ClientShellContractCase.toJson)
+def frontendClientShellCases : List ClientShellContractCase :=
+  clientShellCases
 
-def clientShellCaseCount : Nat :=
-  clientShellCases.length
+def frontendClientShellCasesJson : String :=
+  jsonArray (frontendClientShellCases.map ClientShellContractCase.toJson)
+
+def frontendClientShellCaseCount : Nat :=
+  frontendClientShellCases.length
+
+def desktopClientShellCases : List ClientShellContractCase :=
+  clientShellCases.filter (fun witness => witness.desktopSelectedSessionId.isSome)
+
+def desktopClientShellCasesJson : String :=
+  jsonArray (desktopClientShellCases.map ClientShellContractCase.toJson)
+
+def desktopClientShellCaseCount : Nat :=
+  desktopClientShellCases.length
 
 end Conformance.ClientShellContracts

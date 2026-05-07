@@ -135,12 +135,13 @@ depends on broader transition coverage from it.
 ## Coverage Ledger Policy
 
 `Proofs.Conformance.CoverageLedger` is the checked index for the
-`Proofs.Conformance.Contracts` JSON. Rust asserts that every emitted vocabulary,
-state machine, trigger dispatch case group, runtime-reconcile witness group,
-session-recovery witness group, inference-slot witness group, fleet-slot witness
-group, client-shell witness group, tool-execution witness group, command-policy
-validation/sandbox/env witness group, and follow-up hook appears in that ledger
-exactly once.
+`Proofs.Conformance.Contracts` JSON. Rust/TypeScript conformance coverage must
+account for every emitted vocabulary, state machine, trigger dispatch case
+group, runtime-reconcile witness group, session-recovery witness group,
+inference-slot witness group, fleet-slot witness group, frontend/desktop
+ClientShell witness group, tool-execution witness group, command-policy
+validation/sandbox/env witness group, and follow-up hook; Rust checks that each
+appears in that ledger exactly once.
 Boundary and deviation metadata is emitted as structured review metadata and is
 shape-checked separately; ledger `accepted_boundary` fields reference the stable
 boundary ids emitted by this file.
@@ -150,9 +151,11 @@ intentional product boundary recorded in this file, or an accepted follow-up.
 Future executable trigger, runtime, session-recovery, slot/fleet,
 `ClientShell`, `ToolExecution`, or `CommandPolicy` contracts should therefore
 add both the emitted contract domain and its runtime consumer in the same
-change. If the runtime consumer is deliberately deferred, the ledger entry must
-point here to describe the boundary or carry a follow-up hook; otherwise Rust
-will reject the generated contract as advisory-only.
+change. ClientShell rows should be assigned to the frontend list when they only
+exercise React shell state and to the desktop list when they exercise the Rust
+session-snapshot bridge. If the runtime consumer is deliberately deferred, the
+ledger entry must point here to describe the boundary or carry a follow-up hook;
+otherwise Rust will reject the generated contract as advisory-only.
 
 ## Closed Historical Items
 

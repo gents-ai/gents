@@ -3,7 +3,7 @@ use super::*;
 #[path = "../../../../../../../crates/defra-agent/src/lean_vocab_test.rs"]
 mod lean_vocab_test;
 
-use lean_vocab_test::{lean_client_shell_case, LeanClientShellCase};
+use lean_vocab_test::{lean_desktop_client_shell_cases, LeanClientShellCase};
 
 #[test]
 fn session_snapshot_can_be_built_without_conversation_row_when_session_is_observed() {
@@ -252,12 +252,15 @@ fn session_snapshot_does_not_report_unobserved_preferred_request() {
 
 #[test]
 fn session_snapshot_projection_consumes_generated_client_shell_contract_cases() {
-    for name in [
-        "awaiting_stale_request_observation",
-        "awaiting_matching_request_observation",
-        "terminal_follow_up_session_snapshot_without_summary",
-    ] {
-        let case = lean_client_shell_case(name);
+    let cases = lean_desktop_client_shell_cases();
+    assert_eq!(
+        cases.len(),
+        12,
+        "desktop ClientShell contract surface should include every selected-session case"
+    );
+
+    for case in cases {
+        let name = case.name.as_str();
         let store = client_shell_contract_store(case);
         let selected_session_id = contract_session_id(
             case.desktop_selected_session_id
@@ -269,8 +272,17 @@ fn session_snapshot_projection_consumes_generated_client_shell_contract_cases() 
             &store,
             &selected_session_id,
             preferred_request_id.as_deref(),
-        )
-        .expect("session snapshot from generated ClientShell contract case");
+        );
+
+        assert_eq!(
+            snapshot.is_some(),
+            case.desktop_snapshot_present,
+            "case {name} snapshot presence drifted from Lean-selected observation"
+        );
+
+        let Some(snapshot) = snapshot else {
+            continue;
+        };
 
         assert_eq!(
             snapshot.latest_request_id.as_deref(),
@@ -529,20 +541,24 @@ fn client_shell_contract_store(case: &LeanClientShellCase) -> ClientStore {
     let turn_state = case.desktop_observed_turn_state.as_deref();
     let (request_status, lifecycle_state) = request_state_for_turn(turn_state);
 
-    let mut rows = ClientStoreRows {
-        sessions: vec![AgentSessionRow {
+    assert!(
+        !case.frontend_conversation_present || case.desktop_snapshot_present,
+        "case {} must not emit a conversation row without a desktop session observation",
+        case.name
+    );
+
+    let mut rows = ClientStoreRows::default();
+
+    if case.desktop_snapshot_present {
+        rows.sessions.push(AgentSessionRow {
             session_id: session_id.clone(),
             agent_name: Some("Contract Agent".to_string()),
             behavior_id: Some("contract-behavior".to_string()),
             started: Some("2026-04-21T12:00:00Z".to_string()),
             ended: None,
             status: Some("active".to_string()),
-        }],
-        conversations: Vec::new(),
-        requests: Vec::new(),
-        responses: Vec::new(),
-        ..ClientStoreRows::default()
-    };
+        });
+    }
 
     if case.frontend_conversation_present {
         rows.conversations.push(AgentConversationRow {
