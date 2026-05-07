@@ -343,6 +343,16 @@ async fn retry_request_rejects_generated_illegal_session_recovery_cases() -> Res
     ] {
         assert!(!case.legal, "{} should be illegal", case.name.as_str());
     }
+    assert!(
+        duplicate_new_id.pre_new_request_exists,
+        "Lean duplicate-new-id witness must start with the retry id already present"
+    );
+    assert_eq!(source_not_released.pre_latest_state.as_str(), "failed");
+    assert_eq!(
+        source_not_released.pre_failed_admission.as_str(),
+        "waiting",
+        "Lean source-not-released maps to a failed request that is not released for retry"
+    );
 
     let tempdir = tempfile::tempdir()?;
     let core = ClientCore::start_with_paths_and_options(
