@@ -179,6 +179,67 @@ impl DefraStreamWriter {
         }))
     }
 
+    /// Reset the live-tail buffer at a commit boundary.
+    ///
+    /// Clears the in-memory content/reasoning, leaves token_count cumulative
+    /// (metering field), and persists empty content/reasoning on the
+    /// streaming response row. progress_seq is not bumped here — it is
+    /// owned by `RequestLifecycle::advance` and bumps at lifecycle
+    /// boundaries (which are exactly the call sites that invoke
+    /// reset_tail).
+    pub async fn reset_tail(&self, doc_id: &str) -> Result<()> {
+        {
+            let mut buffers = self.buffers.lock().await;
+            let buf = buffers
+                .get_mut(doc_id)
+                .ok_or_else(|| anyhow::anyhow!("no buffer for doc_id={}", doc_id))?;
+            buf.content.clear();
+            buf.reasoning.clear();
+            buf.last_flush_at = Instant::now();
+        }
+
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentResponse(
+                    filter: {{
+                        _docID: {{ _eq: "{doc_id}" }},
+                        status: {{ _eq: "streaming" }}
+                    }},
+                    input: {{
+                        content: "",
+                        reasoning: ""
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+
+        let resp = execute_mutation_with_retry(
+            &self.node,
+            &mutation,
+            "reset_streaming_response_tail",
+        )
+        .await?;
+
+        if !resp
+            .data
+            .as_ref()
+            .and_then(|data| data.get("update_AgentResponse"))
+            .is_some_and(response_has_documents)
+        {
+            let current = load_response_state(&self.node, doc_id).await?;
+            anyhow::bail!(
+                "cannot reset tail of AgentResponse {} because it is {}",
+                doc_id,
+                current
+                    .as_ref()
+                    .map(|r| r.status.as_str())
+                    .unwrap_or("missing")
+            );
+        }
+
+        Ok(())
+    }
+
     pub async fn set_error_message(&self, doc_id: &str, error_message: &str) -> Result<()> {
         let escaped_error_message = escape_graphql_string(error_message);
         let mutation = format!(
