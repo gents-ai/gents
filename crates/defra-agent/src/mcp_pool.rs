@@ -127,6 +127,10 @@ impl ToolRetryDisposition {
     }
 }
 
+/// Test-only mirror of `Proofs.ToolExecution.retryDisposition`.
+///
+/// Production retry behavior is still encoded by the `list_tools` safe-read
+/// retry path and the absence of a `call_tool` retry loop.
 #[cfg(test)]
 pub(crate) fn tool_retry_disposition(
     operation: ToolExecutionOperation,

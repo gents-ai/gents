@@ -205,11 +205,12 @@ async fn assert_call_tool_transport_no_retry(case: &LeanToolRetryCase) {
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_for_fn = Arc::clone(&calls);
     let endpoint = "http://mcp.test/mcp";
+    let service_id = format!("mutating-service-{}", case.idempotency);
 
     {
         let mut guard = pool.inner.write().await;
         guard.insert(
-            format!("mutating-service-{}", case.idempotency),
+            service_id.clone(),
             McpConnection {
                 endpoint: endpoint.to_string(),
                 list_tools_fn: Box::new(|| Box::pin(async { Ok(ListToolsResult::default()) })),
@@ -226,7 +227,7 @@ async fn assert_call_tool_transport_no_retry(case: &LeanToolRetryCase) {
 
     let error = pool
         .call_tool(
-            &format!("mutating-service-{}", case.idempotency),
+            &service_id,
             endpoint,
             "write_record",
             serde_json::json!({ "id": 1 }),
@@ -242,10 +243,7 @@ async fn assert_call_tool_transport_no_retry(case: &LeanToolRetryCase) {
         case.name
     );
     assert!(
-        pool.inner
-            .read()
-            .await
-            .contains_key(&format!("mutating-service-{}", case.idempotency)),
+        pool.inner.read().await.contains_key(&service_id),
         "a failed call_tool must not evict and reconnect without idempotency evidence"
     );
 }
