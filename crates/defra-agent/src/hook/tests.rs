@@ -15,6 +15,9 @@ use serde_json::json;
 
 use super::*;
 use crate::ensure_schemas;
+use crate::lean_vocab_test::{
+    lean_persistence_failure_policy_cases, lean_storage_observation_runtime_cases,
+};
 
 #[derive(Clone, Default)]
 struct TestModel;
@@ -72,6 +75,14 @@ fn hook_counters_for_test() -> HookCounters {
     HookCounters {
         failures: AtomicU64::new(0),
         successes: AtomicU64::new(0),
+    }
+}
+
+fn failure_policy_from_contract(policy: &str) -> FailurePolicy {
+    match policy {
+        "failOpen" => FailurePolicy::FailOpen,
+        "failClosed" => FailurePolicy::FailClosed,
+        other => panic!("unknown Lean persistence failure policy {other:?}"),
     }
 }
 
@@ -140,6 +151,126 @@ fn fail_open_persistence_policy_continues_without_success_ack() {
         0,
         "fail-open continuation must not count as a successful storage ack"
     );
+}
+
+#[test]
+fn generated_persistence_failure_policy_cases_match_hook_decisions() {
+    let cases = lean_persistence_failure_policy_cases();
+    assert_eq!(cases.len(), 2);
+
+    for case in cases {
+        let counters = hook_counters_for_test();
+        let error = anyhow::anyhow!("generated persistence failure for {}", case.name);
+        let decision = decide_persistence_outcome(
+            failure_policy_from_contract(&case.policy),
+            &counters,
+            &case.name,
+            &error,
+        );
+        let actual_decision = match decision {
+            PolicyDecision::Continue => "continue",
+            PolicyDecision::Terminate(_) => "terminate",
+        };
+
+        assert_eq!(case.action, "writeFail", "{}", case.name);
+        assert_eq!(case.pre_persistence, "committing", "{}", case.name);
+        assert_eq!(actual_decision, case.hook_decision, "{}", case.name);
+        assert_eq!(
+            counters.failures.load(Ordering::Relaxed),
+            u64::from(case.records_failure),
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            counters.successes.load(Ordering::Relaxed),
+            u64::from(case.records_success),
+            "{}",
+            case.name
+        );
+        assert!(
+            !case.external_durability_claimed,
+            "{} must not claim DefraDB durability",
+            case.name
+        );
+
+        match case.policy.as_str() {
+            "failClosed" => {
+                assert_eq!(case.post_persistence, "uncommitted");
+                assert_eq!(case.post_storage_observation, "mutationFailed");
+            }
+            "failOpen" => {
+                assert_eq!(case.post_persistence, "lost");
+                assert_eq!(case.post_storage_observation, "lostAcknowledged");
+            }
+            other => panic!("unknown Lean persistence failure policy {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn generated_storage_observation_cases_match_hook_runtime_classification() {
+    let cases = lean_storage_observation_runtime_cases();
+    assert_eq!(cases.len(), 4);
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+
+    for case in cases {
+        let hook = DefraSessionHook::with_identity(
+            node.clone(),
+            "agent",
+            "did:defra-agent:test",
+            failure_policy_from_contract(&case.policy),
+        );
+        let result = match case.mutation_result.as_str() {
+            "success" => Ok(()),
+            "failure" => Err(anyhow::anyhow!(
+                "generated storage-observation failure for {}",
+                case.name
+            )),
+            other => panic!("unknown Lean mutation result {other:?}"),
+        };
+        let actual_result = hook.apply_persistence_policy(result, &case.name);
+        let stats = hook.stats();
+
+        assert_eq!(
+            actual_result.is_ok(),
+            case.hook_result == "ok",
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            stats.persistence_failures,
+            u64::from(case.records_failure),
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            stats.persistence_successes,
+            u64::from(case.records_success),
+            "{}",
+            case.name
+        );
+        assert!(
+            !case.external_visibility_claimed,
+            "{} must not claim storage-engine visibility",
+            case.name
+        );
+
+        match case.post_observation.as_str() {
+            "successAcknowledged" => {
+                assert_eq!(case.post_persistence, "committed");
+                assert!(case.terminal_write_observed, "{}", case.name);
+            }
+            "mutationFailed" => {
+                assert_eq!(case.post_persistence, "uncommitted");
+                assert!(!case.terminal_write_observed, "{}", case.name);
+            }
+            "lostAcknowledged" => {
+                assert_eq!(case.post_persistence, "lost");
+                assert!(!case.terminal_write_observed, "{}", case.name);
+            }
+            other => panic!("unexpected Lean storage observation {other:?}"),
+        }
+    }
 }
 
 async fn create_streaming_response(

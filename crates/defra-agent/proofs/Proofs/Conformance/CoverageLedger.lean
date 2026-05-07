@@ -166,6 +166,21 @@ def caseCoverage : List CoverageEntry :=
       "FleetSlotAccounting"
       boundaryFleetSlotAccountingDerivedViewId
       "admission::tests::generated_slot_accounting_fleet_cases_match_admission_runtime_boundary"
+  , boundaryCoverage
+      "persistence_policy_cases"
+      "PersistenceFailurePolicyCases"
+      boundaryStorageHookFailurePolicyId
+      "hook::tests::generated_persistence_failure_policy_cases_match_hook_decisions"
+  , boundaryCoverage
+      "storage_observation_cases"
+      "StorageObservationRuntimeCases"
+      boundaryStorageObservationDaemonVisibleId
+      "hook::tests::generated_storage_observation_cases_match_hook_runtime_classification"
+  , boundaryCoverage
+      "backend_health_cases"
+      "BackendHealthAdmissionCases"
+      boundaryBackendHealthAdmissionFreshnessId
+      "backend_registry::tests::generated_backend_health_admission_cases_match_registry_and_admission_policy"
   , consumerCoverage
       "frontend_client_shell_cases"
       "FrontendClientShellCases"
