@@ -9,4 +9,8 @@ type AgentToolCall @branchable {
     status: String
     started_at: DateTime
     completed_at: DateTime
+    selected_service_id: String
+    selected_tool_name: String
+    tool_failure_class: String
+    latency_ms: Int
 }

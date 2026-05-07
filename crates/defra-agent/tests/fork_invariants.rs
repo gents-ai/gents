@@ -1,3 +1,4 @@
+use defra_agent::graphql::escape_graphql_string;
 use defra_agent::session::{fork, ForkError, ForkParams};
 
 mod support;
@@ -11,6 +12,48 @@ use support::{
     create_agent_tool_call, create_agent_tool_result, create_compaction_entry, create_request,
     test_db, AGENT_DID, AGENT_NAME,
 };
+
+async fn set_tool_call_trace_fields(
+    node: &defra_node::EmbeddedNode,
+    session_id: &str,
+    tool_call_id: &str,
+    selected_service_id: &str,
+    selected_tool_name: &str,
+    tool_failure_class: &str,
+    latency_ms: i64,
+    started_at: &str,
+    completed_at: &str,
+) {
+    let session_id = escape_graphql_string(session_id);
+    let tool_call_id = escape_graphql_string(tool_call_id);
+    let tool_call_key = format!("{session_id}:{tool_call_id}");
+    let selected_service_id = escape_graphql_string(selected_service_id);
+    let selected_tool_name = escape_graphql_string(selected_tool_name);
+    let tool_failure_class = escape_graphql_string(tool_failure_class);
+    let started_at = escape_graphql_string(started_at);
+    let completed_at = escape_graphql_string(completed_at);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentToolCall(
+                filter: {{ tool_call_key: {{ _eq: "{tool_call_key}" }} }},
+                input: {{
+                    started_at: "{started_at}",
+                    completed_at: "{completed_at}",
+                    selected_service_id: "{selected_service_id}",
+                    selected_tool_name: "{selected_tool_name}",
+                    tool_failure_class: "{tool_failure_class}",
+                    latency_ms: {latency_ms}
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "set tool call trace fields failed: {:?}",
+        resp.errors
+    );
+}
 
 #[tokio::test]
 async fn fork_copies_message_prefix_up_to_user_turn_boundary() {
@@ -152,12 +195,24 @@ async fn fork_copies_tool_calls_up_to_user_turn_boundary() {
         parent_session,
         2,
         "tc-1",
-        "read_file",
-        r#"{"path":"foo"}"#,
-        "file contents",
+        "describe_tool",
+        r#"{"service_id":"x-data","tool_name":"missing"}"#,
+        "tool 'missing' not found on service 'x-data'. Available tools: search_posts",
         "completed",
         "2026-04-21T10:00:02Z",
+        "2026-04-21T10:00:02.025Z",
+    )
+    .await;
+    set_tool_call_trace_fields(
+        &db.node,
+        parent_session,
+        "tc-1",
+        "x-data",
+        "missing",
+        "tool_not_found",
+        25,
         "2026-04-21T10:00:02Z",
+        "2026-04-21T10:00:02.025Z",
     )
     .await;
     create_agent_message(
@@ -227,6 +282,19 @@ async fn fork_copies_tool_calls_up_to_user_turn_boundary() {
         child_tool_calls[0].tool_call_key,
         format!("{}:tc-1", outcome.session_id)
     );
+    assert_eq!(
+        child_tool_calls[0].selected_service_id.as_deref(),
+        Some("x-data")
+    );
+    assert_eq!(
+        child_tool_calls[0].selected_tool_name.as_deref(),
+        Some("missing")
+    );
+    assert_eq!(
+        child_tool_calls[0].tool_failure_class.as_deref(),
+        Some("tool_not_found")
+    );
+    assert_eq!(child_tool_calls[0].latency_ms, Some(25));
 
     assert_eq!(outcome.copied_tool_calls, 1);
 }

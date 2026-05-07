@@ -76,7 +76,7 @@ These documents record user requests, assistant output, and conversation history
 | `AgentSession` | `session_id`, `behavior_id`, `status`, `started`, `ended` | ties a sequence of requests to one behavior | session manager | `chat`, inspection, recovery |
 | `AgentConversation` | `session_id`, `agent_did`, `behavior_id`, `title`, `preview_text`, `status`, `latest_request_id` | high-level conversation summary per session | session/conversation layer | UI and inspection |
 | `AgentMessage` | `message_key`, `session_id`, `sequence`, `role`, `content`, `timestamp` | ordered transcript entries | session/history layer | chat history, TUI, debugging |
-| `AgentToolCall` | `tool_call_key`, `session_id`, `tool_name`, `tool_call_id`, `args`, `result`, `status` | concrete tool invocation records within a session | runtime/tool persistence | chat progress, TUI, diagnostics |
+| `AgentToolCall` | `tool_call_key`, `session_id`, `tool_name`, `tool_call_id`, `args`, `result`, `status`, trace enrichment fields | concrete tool invocation records within a session | runtime/tool persistence | chat progress, TUI, diagnostics |
 | `AgentToolResult` | `agent_did`, `session_id`, `tool_name`, `tool_input`, `output_text`, `truncated`, `discarded_because_interrupted` | normalized tool result persistence | tool persistence hook | compaction and later inspection |
 | `CompactionEntry` | `compaction_key`, `session_id`, `summary`, `messages_compacted`, token counts | persisted compaction summaries | compaction layer | session reconstruction and debugging |
 

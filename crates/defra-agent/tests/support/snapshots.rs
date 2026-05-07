@@ -508,6 +508,14 @@ pub struct ToolCallSnapshot {
     pub status: String,
     pub started_at: String,
     pub completed_at: String,
+    #[serde(default)]
+    pub selected_service_id: Option<String>,
+    #[serde(default)]
+    pub selected_tool_name: Option<String>,
+    #[serde(default)]
+    pub tool_failure_class: Option<String>,
+    #[serde(default)]
+    pub latency_ms: Option<i64>,
 }
 
 pub async fn fetch_tool_call_snapshots_for_session(
@@ -523,6 +531,7 @@ pub async fn fetch_tool_call_snapshots_for_session(
             ) {{
                 tool_call_key session_id message_sequence tool_name tool_call_id
                 args result status started_at completed_at
+                selected_service_id selected_tool_name tool_failure_class latency_ms
             }}
         }}"#
     );

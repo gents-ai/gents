@@ -336,6 +336,7 @@ async fn copy_tool_calls(
                 order: {{ message_sequence: ASC }}
             ) {{
                 message_sequence tool_name tool_call_id args result status started_at completed_at
+                selected_service_id selected_tool_name tool_failure_class latency_ms
             }}
         }}"#
     );
@@ -370,6 +371,10 @@ async fn copy_tool_calls(
             .get("completed_at")
             .and_then(|v| v.as_str())
             .unwrap_or("");
+        let selected_service_id = row.get("selected_service_id").and_then(|v| v.as_str());
+        let selected_tool_name = row.get("selected_tool_name").and_then(|v| v.as_str());
+        let tool_failure_class = row.get("tool_failure_class").and_then(|v| v.as_str());
+        let latency_ms = row.get("latency_ms").and_then(json_i64);
         let tool_call_id_escaped = escape_graphql_string(tool_call_id);
         let tool_call_key = format!("{child_session_escaped}:{tool_call_id_escaped}");
         mutation_fields.push(format!(
@@ -383,7 +388,11 @@ async fn copy_tool_calls(
                     result: "{result_escaped}",
                     status: "{status_escaped}",
                     started_at: "{started_at_escaped}",
-                    completed_at: "{completed_at_escaped}"
+                    completed_at: "{completed_at_escaped}",
+                    selected_service_id: {selected_service_id},
+                    selected_tool_name: {selected_tool_name},
+                    tool_failure_class: {tool_failure_class},
+                    latency_ms: {latency_ms}
                 }}) {{ _docID }}
             "#,
             tool_name_escaped = escape_graphql_string(tool_name),
@@ -392,6 +401,10 @@ async fn copy_tool_calls(
             status_escaped = escape_graphql_string(status),
             started_at_escaped = escape_graphql_string(started_at),
             completed_at_escaped = escape_graphql_string(completed_at),
+            selected_service_id = nullable_string_literal(selected_service_id),
+            selected_tool_name = nullable_string_literal(selected_tool_name),
+            tool_failure_class = nullable_string_literal(tool_failure_class),
+            latency_ms = nullable_i64_literal(latency_ms),
         ));
     }
     execute_batch_mutation_with_retry(node, &mutation_fields, "fork::copy_tool_calls").await?;
@@ -619,4 +632,22 @@ async fn create_child_session_and_conversation(
     );
     execute_mutation_with_retry(node, &conv_mutation, "fork::create_conversation").await?;
     Ok(())
+}
+
+fn nullable_string_literal(value: Option<&str>) -> String {
+    value
+        .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
+        .unwrap_or_else(|| "null".to_string())
+}
+
+fn nullable_i64_literal(value: Option<i64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "null".to_string())
+}
+
+fn json_i64(value: &serde_json::Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
 }

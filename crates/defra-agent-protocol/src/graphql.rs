@@ -597,6 +597,10 @@ pub fn session_shape_query(session_id: &str) -> String {
                 status
                 args
                 result
+                selected_service_id
+                selected_tool_name
+                tool_failure_class
+                latency_ms
             }}
             AgentToolResult(filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}, order: {{ created_at: ASC }}) {{
                 agent_did
