@@ -631,21 +631,23 @@ async fn finalize_existing_request_error_terminalizes_streaming_response_without
 
 #[tokio::test]
 async fn reset_tail_clears_response_content_and_reasoning() {
-    let (node, _path) = build_test_node("reset-tail").await;
+    let (node, data_path) = build_test_node("reset-tail").await;
     let writer = DefraStreamWriter::new(
         Arc::clone(&node),
         "did:defra-agent:test",
         Duration::from_millis(0),
     );
-    let _request_doc =
-        create_processing_request(&node, "req-reset", "session-reset").await;
+    let _request_doc = create_processing_request(&node, "req-reset", "session-reset").await;
 
     let doc_id = writer
         .begin("session-reset", "req-reset", "general")
         .await
         .expect("begin");
 
-    writer.write_tokens(&doc_id, "hello").await.expect("write tokens");
+    writer
+        .write_tokens(&doc_id, "hello")
+        .await
+        .expect("write tokens");
     writer
         .write_reasoning(&doc_id, "thinking")
         .await
@@ -655,10 +657,18 @@ async fn reset_tail_clears_response_content_and_reasoning() {
     let pre = load_response(&node, &doc_id).await;
     assert_eq!(pre["content"].as_str(), Some("hello"));
     assert_eq!(pre["reasoning"].as_str(), Some("thinking"));
+    let pre_token_count = pre["token_count"].as_u64().expect("token_count present");
 
     writer.reset_tail(&doc_id).await.expect("reset_tail");
 
     let post = load_response(&node, &doc_id).await;
     assert_eq!(post["content"].as_str(), Some(""));
     assert_eq!(post["reasoning"].as_str(), Some(""));
+    assert_eq!(
+        post["token_count"].as_u64().expect("token_count present"),
+        pre_token_count,
+        "token_count must be cumulative across reset"
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
 }

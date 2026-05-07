@@ -188,6 +188,10 @@ impl DefraStreamWriter {
     /// boundaries (which are exactly the call sites that invoke
     /// reset_tail).
     pub async fn reset_tail(&self, doc_id: &str) -> Result<()> {
+        tracing::debug!(
+            doc_id = %doc_id,
+            "resetting streaming response live tail"
+        );
         {
             let mut buffers = self.buffers.lock().await;
             let buf = buffers
@@ -213,12 +217,9 @@ impl DefraStreamWriter {
             }}"#
         );
 
-        let resp = execute_mutation_with_retry(
-            &self.node,
-            &mutation,
-            "reset_streaming_response_tail",
-        )
-        .await?;
+        let resp =
+            execute_mutation_with_retry(&self.node, &mutation, "reset_streaming_response_tail")
+                .await?;
 
         if !resp
             .data
@@ -232,7 +233,7 @@ impl DefraStreamWriter {
                 doc_id,
                 current
                     .as_ref()
-                    .map(|r| r.status.as_str())
+                    .map(|response| response.status.as_str())
                     .unwrap_or("missing")
             );
         }
