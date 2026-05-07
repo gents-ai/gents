@@ -24,15 +24,18 @@ def consistentLineage (seed : RequestSeed) (origin : ExecutionOrigin) : Prop :=
   (seed.causedByTriggerKind = .schedule ∧ origin = .scheduled) ∨
   (seed.causedByTriggerKind = .event ∧ origin = .scheduled)
 
-/-- **Theorem T4 (lineage completeness).**
+/-- **Theorem T4 (lineage shape characterization).**
 
 The `consistentLineage` predicate fully characterizes admissible
-`(seed, origin)` pairs: every branch of the disjunction is exactly the
-set of lineage tuples `dispatch` may produce.
+`(seed, origin)` pairs at the predicate layer.
 
-Stated as an `iff` so it doubles as a definitional characterization,
-which makes it easy for downstream proofs (and conformance tests in
-Rust) to pattern-match on the three admissible shapes. -/
+This theorem is intentionally definitional: it states the three accepted
+lineage shapes as an `iff`, so downstream proofs can pattern-match on the
+manual, schedule, and event cases without reopening `consistentLineage`.
+The dispatch-specific substance lives one layer up in
+`dispatch_materializedTriggerRequest_consistentLineage`, which proves that
+actual `dispatch` output and the materialized request origin satisfy this
+predicate. -/
 theorem T4_lineage_completeness
     (seed : RequestSeed) (origin : ExecutionOrigin) :
     consistentLineage seed origin ↔
