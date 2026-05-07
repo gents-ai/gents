@@ -145,28 +145,6 @@ impl ObserverHandle {
     pub fn metrics_snapshot(&self) -> ObserverMetricsSnapshot {
         self.metrics.snapshot()
     }
-
-    pub fn metrics_arc(&self) -> Arc<ObserverMetrics> {
-        Arc::clone(&self.metrics)
-    }
-}
-
-// ===================== spawn_observer (public wrapper) =====================
-
-/// Spawn the observer with no agent-selection scope (drop-recovery falls back
-/// to `load_full_snapshot`). Preserves the existing 4-arg call signature for
-/// callers that have not yet moved to `spawn_observer_with_selection`.
-pub fn spawn_observer(
-    node: Arc<EmbeddedNode>,
-    store: Arc<ObservedStore>,
-    peer_directory: Arc<AsyncRwLock<PeerDirectory>>,
-    subscription: Subscription,
-) -> ObserverHandle {
-    let (_tx, rx) = watch::channel::<Option<String>>(None);
-    // _tx is immediately dropped, closing the sender. borrow() on a closed
-    // receiver still returns the last value (None), so drop-recovery falls
-    // through to load_full_snapshot — preserving backward compatibility.
-    spawn_observer_with_selection(node, store, peer_directory, subscription, rx)
 }
 
 // ===================== spawn_observer_with_selection =====================
@@ -428,7 +406,9 @@ mod tests {
             .expect("peer_directory"),
         ));
         let subscription = node.subscribe(&[EventName::Update]);
-        let handle = spawn_observer(node.clone(), store.clone(), peer_dir, subscription);
+        let (_tx, rx) = watch::channel::<Option<String>>(None);
+        let handle =
+            spawn_observer_with_selection(node.clone(), store.clone(), peer_dir, subscription, rx);
         (node, store, handle)
     }
 
