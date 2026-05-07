@@ -120,7 +120,8 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Conformance/Boundaries.lean` | Intentional product policies and external assumptions at the Rust/Lean boundary |
 | `Proofs/Conformance/Deviations.lean` | Active unresolved Rust/spec mismatches; currently empty |
 | `Proofs/Conformance/SchedulerConformance.lean` | Scheduler-specific conformance notes |
-| `Proofs/Conformance/Contracts.lean` | Test-time JSON extraction surface for Rust vocabularies, finite state counts, transition tables, and legal/illegal transition pairs |
+| `Proofs/Conformance/CoverageLedger.lean` | Checked ledger mapping every emitted conformance domain to a Rust consumer, accepted boundary, or accepted follow-up |
+| `Proofs/Conformance/Contracts.lean` | Test-time JSON extraction surface for Rust vocabularies, finite state counts, transition tables, legal/illegal transition pairs, witness rows, and the coverage ledger |
 | `Proofs/Conformance/Triggers.lean` | Barrel for trigger lifecycle/materialization conformance |
 
 Semantic submodules:
@@ -181,6 +182,15 @@ It also emits the `ToolRetryDisposition` vocabulary from
 `Proofs.ToolExecution` so Rust tests can reject accidental MCP `call_tool`
 retry drift before idempotency metadata exists.
 
+The same JSON includes `coverage_ledger`, maintained in
+`Proofs/Conformance/CoverageLedger.lean`. The Rust test
+`lean_contract_coverage_ledger_accounts_for_every_emitted_domain` compares that
+ledger against every emitted vocabulary domain, state-machine domain,
+trigger-case group, runtime witness group, session-recovery witness group, and
+follow-up hook. Each entry must name a Rust consumer or an accepted
+product-boundary/follow-up, so adding a Lean contract also requires making its
+runtime coverage explicit.
+
 When a Lean vocabulary, terminal partition, action, or legal transition changes,
 the generated JSON changes on the next Rust test run. The Rust tests then fail
 unless the runtime behavior or the documented product-boundary assertions are
@@ -189,7 +199,15 @@ updated to match.
 `ToolExecution` currently exports only retry disposition vocabulary and theorems.
 Before adding idempotent MCP retries, extend that Lean model first with the
 metadata source, retry budget, and replay/idempotency assumptions, then add a
-Rust contract that ties advertised MCP metadata to the widened retry rule.
+Rust contract that ties advertised MCP metadata to the widened retry rule and
+replace the `follow_up_hook` ledger entry with the executable contract domain.
+
+Future executable `ClientShell` or `ToolExecution` contracts should extend
+`Proofs.Conformance.Contracts` and add matching coverage-ledger entries in the
+same PR. If the runtime side is intentionally not executable yet, the entry must
+point to `Proofs.Conformance.Boundaries` or to an accepted follow-up rather than
+leaving the Lean contract advisory-only.
+
 ## Core Model
 
 ### Layer 1: Process Lifecycle
@@ -513,6 +531,7 @@ The main conformance files are:
 - `crates/defra-agent-cli/src/desired_state/tests.rs`
 - `Proofs/Conformance/DefraAgent.lean`
 - `Proofs/Conformance/Boundaries.lean`
+- `Proofs/Conformance/CoverageLedger.lean`
 - `Proofs/Conformance/SchedulerConformance.lean`
 - `Proofs/Conformance/Triggers.lean`
 - `Proofs/Conformance/Deviations.lean`
