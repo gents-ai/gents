@@ -161,6 +161,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "rust_request_lifecycle_state_vocabulary_matches_lean_model",
         },
         ConformanceConsumer::RustTest {
+            id: "live_overlay_conformance::live_overlay_cases_match_lean_table",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/live_overlay_conformance.rs",
+            module_path: "live_overlay_conformance",
+            function: "live_overlay_cases_match_lean_table",
+        },
+        ConformanceConsumer::RustTest {
             id: "mcp_pool::tests::tool_retry_disposition_contract_cases_match_mcp_pool_policy",
             package: "defra-agent",
             source_path: "crates/defra-agent/src/mcp_pool/tests.rs",

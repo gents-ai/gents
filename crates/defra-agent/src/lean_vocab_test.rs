@@ -51,6 +51,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) command_policy_cases: Vec<LeanCommandPolicyCase>,
     pub(crate) command_sandbox_cases: Vec<LeanCommandSandboxCase>,
     pub(crate) command_env_cases: Vec<LeanCommandEnvCase>,
+    pub(crate) live_overlay_cases: Vec<LeanLiveOverlayCase>,
     pub(crate) follow_up_hooks: Vec<String>,
     pub(crate) coverage_ledger: Vec<LeanCoverageEntry>,
 }
@@ -450,6 +451,26 @@ pub(crate) struct LeanCommandEnvCase {
     pub(crate) expected_output_value: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanLiveOverlayCase {
+    pub(crate) name: String,
+    #[serde(rename = "responseStatus")]
+    pub(crate) response_status: String,
+    pub(crate) materialized: bool,
+    #[serde(rename = "precedingToolCalls")]
+    pub(crate) preceding_tool_calls: u64,
+    #[serde(rename = "turnTerminal")]
+    pub(crate) turn_terminal: bool,
+    #[serde(rename = "turnLabel")]
+    pub(crate) turn_label: String,
+    #[serde(rename = "hasContent")]
+    pub(crate) has_content: bool,
+    #[serde(rename = "hasReasoning")]
+    pub(crate) has_reasoning: bool,
+    #[serde(rename = "expectOverlay")]
+    pub(crate) expect_overlay: bool,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum LeanVocabularyParseError<'a> {
     MissingNamespace,
@@ -628,6 +649,10 @@ pub(crate) fn lean_command_env_case(name: &str) -> &'static LeanCommandEnvCase {
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean command env case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_live_overlay_cases() -> &'static [LeanLiveOverlayCase] {
+    &lean_contract_snapshot().live_overlay_cases
 }
 
 pub(crate) fn lean_vocabulary_values(domain: &str) -> Vec<&'static str> {
