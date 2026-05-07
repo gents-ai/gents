@@ -125,7 +125,7 @@ pub(super) fn spawn_materialization_supervisor_task(
                         };
                         match snapshot_result {
                             Ok(snapshot) => {
-                                store.replace_snapshot(snapshot);
+                                store.merge_snapshot(snapshot);
                             }
                             Err(error) => {
                                 tracing::warn!(

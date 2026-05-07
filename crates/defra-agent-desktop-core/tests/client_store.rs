@@ -529,9 +529,9 @@ async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
 
 /// Verify that the incremental observer handles long sessions without
 /// re-fetching history-sized data. Seeds 1000 messages and then streams
-/// 100 progress updates; asserts that the final progress_seq is 100.
-/// Metrics-based assertions (docs_fetched < 200) are deferred to Task 8
-/// once `core.observer_metrics()` is available.
+/// 100 progress updates; asserts that the final progress_seq is 100 and
+/// that `docs_fetched` is independent of the seeded message count
+/// (bounded by debounce-flush count × dirty-doc count, not history size).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn incremental_observer_handles_long_session() -> Result<()> {
     let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -581,6 +581,29 @@ async fn incremental_observer_handles_long_session() -> Result<()> {
         .await;
     assert!(!resp.has_errors(), "seed response: {:?}", resp.errors);
 
+    // Wait for the seed phase to fully drain through the observer before we
+    // measure the streaming-phase fetches. Otherwise the baseline would
+    // include 1000 message fetches that are unrelated to the issue's
+    // pathology (which is "many updates to the SAME doc").
+    timeout(Duration::from_millis(2000), async {
+        loop {
+            let snap = core.store().snapshot();
+            if snap.messages.iter().filter(|m| m.session_id.as_deref() == Some("long")).count() >= 1_000
+                && snap.responses.iter().any(|r| r.response_key == "long-req")
+            {
+                return Ok::<(), anyhow::Error>(());
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .context("timed out waiting for seed to drain")??;
+
+    let baseline = core
+        .observer_metrics()
+        .await
+        .expect("observer running and exposing metrics");
+
     // Stream 100 progress updates.
     for i in 1..=100usize {
         let mutation = format!(
@@ -619,6 +642,21 @@ async fn incremental_observer_handles_long_session() -> Result<()> {
         .find(|r| r.response_key == "long-req")
         .expect("response present");
     assert_eq!(resp.progress_seq, Some(100), "final progress_seq should be 100");
+
+    // The whole point of issue #62: streaming-phase docs_fetched is bounded
+    // by debounce-flush count, not by seeded history. We measure ONLY the
+    // streaming phase (after the seed has drained); the bound is generous
+    // headroom over OBSERVER_DEBOUNCE worst case, but the old
+    // load_full_snapshot path would have fetched >100,000 rows here.
+    let after = core
+        .observer_metrics()
+        .await
+        .expect("observer running and exposing metrics");
+    let streaming_docs_fetched = after.docs_fetched.saturating_sub(baseline.docs_fetched);
+    assert!(
+        streaming_docs_fetched < 50,
+        "streaming phase fetched too many rows; got {streaming_docs_fetched}"
+    );
 
     core.shutdown().await?;
     Ok(())
