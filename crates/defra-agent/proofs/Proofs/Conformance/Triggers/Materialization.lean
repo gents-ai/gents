@@ -45,10 +45,12 @@ theorem materializedTriggerRequest_origin
 
 /--
 If `dispatch` materializes `seed`, the origin assigned to the corresponding
-trigger request is lineage-consistent in the sense of `T4`.
+trigger request is lineage-consistent.
 
-The manual case depends on `dispatch`'s normalization theorem that forces
-manual lineage ids to `none`.
+This is the load-bearing lineage theorem for materialization: unlike
+`T4_lineage_completeness`, which only unfolds the `consistentLineage`
+predicate, this theorem connects actual `dispatch` output, manual lineage-id
+normalization, and the execution origin written into the materialized request.
 -/
 theorem dispatch_materializedTriggerRequest_consistentLineage
     (state : SystemState)

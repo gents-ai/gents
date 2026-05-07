@@ -150,6 +150,13 @@ theorem terminal_requires_released (s : RequestState) (a : AdmissionState)
           subst h
           cases a <;> simp [RequestContext.coherentStateAdmission]
 
+/-!
+The following `#eval`s print finite-state cardinalities as build-time sanity
+output. They help reviewers notice accidental vocabulary/product-size drift,
+but the proof obligations in this module are the theorems above, not these
+diagnostic counts themselves.
+-/
+
 #eval Fintype.card RequestState
 #eval Fintype.card ProcessState
 #eval Fintype.card PersistenceState

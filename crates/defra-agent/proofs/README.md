@@ -46,7 +46,7 @@ lake env lean --run Proofs/Conformance/Contracts.lean
 
 ## What Is Proven
 
-The current proof suite covers eleven practical areas:
+The current proof suite covers twelve practical areas:
 
 1. Request/process/persistence state transitions
 2. Daemon storage-observation assumptions that refine persistence
@@ -60,7 +60,7 @@ The current proof suite covers eleven practical areas:
 10. Client-shell workflow rules for selection, submission, and transport decoupling
 11. Command/tool execution policy: argv prefixes, read-only allowlists,
     disabled-network fail-closed behavior, sandbox selection, and filtered env
-11. Tool execution boundary rules: schema/health preflight and MCP retry
+12. Tool execution boundary rules: schema/health preflight and MCP retry
     eligibility before future idempotent tool retries are enabled
 
 The proof boundary matters:
@@ -475,7 +475,11 @@ roots.
 - `T3_latest_only_convergence` proves latest-only supersession directly from
   `dispatchStep`; `latestOnlyFireTransition_convergence` is only the abstract
   relation unwrapping lemma
-- materialized requests carry complete trigger lineage
+- `T4_lineage_completeness` is the definitional lineage shape theorem for
+  `consistentLineage`; the materialization substance is
+  `dispatch_materializedTriggerRequest_consistentLineage`, which connects
+  actual `dispatch` output, manual lineage-id normalization, and the execution
+  origin assigned to the materialized request
 
 `Proofs/Conformance/Triggers.lean` records the Rust/DefraDB shape used by the
 runtime trigger implementation. `Proofs/Conformance/Triggers/Contracts.lean`
@@ -587,11 +591,15 @@ The finite-state checks currently establish:
 - every non-terminal storage-observation state has at least one successor
 - every non-terminal inference-call state has at least one successor
 - admission-state invariants line up with request state
-- state counts stay as expected: 9 request, 5 process, 4 persistence,
-  7 storage-observation, 5 call, 180 core composed
+- the trailing `#eval` cardinalities print sanity counts for reviewers: 9
+  request, 5 process, 4 persistence, 7 storage-observation, 5 call, and 180
+  core composed states
 
 These checks are useful because they catch structural model regressions quickly,
-even before theorem-level reasoning matters.
+even before theorem-level reasoning matters. The `Fintype` instances
+structurally pin the finite vocabularies; the cardinality output is diagnostic
+and is not itself a separate proof obligation beyond those instances and the
+theorems established in `Proofs/Properties/Decidable.lean`.
 
 ## Boundaries And Deviations
 
