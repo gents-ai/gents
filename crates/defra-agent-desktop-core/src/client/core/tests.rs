@@ -490,6 +490,27 @@ async fn selected_agent_did_channel_updates_subscribers() {
     core.shutdown().await.expect("shutdown");
 }
 
+#[tokio::test]
+async fn refresh_store_succeeds_with_selection_set() {
+    use crate::client::paths::DesktopPaths;
+
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
+    let options = ClientCoreOptions::local_only();
+    let core = ClientCore::start_with_paths_and_options(paths, options)
+        .await
+        .expect("client core");
+
+    // Without selection: should hit load_full_snapshot path.
+    core.refresh_store().await.expect("refresh full");
+
+    // With selection: should hit scoped path.
+    core.set_selected_agent_did(Some("did:any".to_string()));
+    core.refresh_store().await.expect("refresh scoped");
+
+    core.shutdown().await.expect("shutdown");
+}
+
 #[test]
 fn p2p_health_materially_changed_detects_live_topology_change() {
     let previous = P2PHealth {

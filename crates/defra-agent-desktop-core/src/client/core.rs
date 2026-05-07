@@ -23,7 +23,7 @@ use super::observe::{ObservedStore, ObserverHandle};
 use super::paths::DesktopPaths;
 use super::peer_directory::{PeerDirectory, PeerRecord};
 use super::principal_identity::PrincipalIdentity;
-use super::query::{load_full_snapshot, load_full_snapshot_from_graphql};
+use super::query::{load_agent_scoped_snapshot, load_full_snapshot, load_full_snapshot_from_graphql};
 
 const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -286,13 +286,18 @@ impl ClientCore {
     }
 
     pub async fn refresh_store(&self) -> Result<u64> {
-        let snapshot = load_full_snapshot(self.node.as_ref()).await?;
+        let scoped = self.selected_agent_did();
+        let snapshot = match scoped.as_deref() {
+            Some(did) => load_agent_scoped_snapshot(self.node.as_ref(), did).await?,
+            None => load_full_snapshot(self.node.as_ref()).await?,
+        };
         let rows = snapshot.row_count();
         let version = self.store.merge_snapshot(snapshot);
         tracing::debug!(
             target: "defra_agent_desktop_core::replication",
             version,
             rows,
+            scoped = scoped.is_some(),
             "desktop local replica snapshot refreshed"
         );
         Ok(version)
@@ -327,6 +332,9 @@ impl ClientCore {
             .filter(|value| !value.is_empty())
             .ok_or_else(|| anyhow::anyhow!("peer {} has no GraphQL endpoint", record.label))?;
 
+        // Remote peers serve only their own agent's data, so the remote-side
+        // "full snapshot" is already agent-scoped from our perspective. The
+        // local-side merge is unchanged.
         let mut snapshot = load_full_snapshot_from_graphql(graphql).await?;
         snapshot.stamp_source_agent_did(&record.agent_did);
         let rows = snapshot.row_count();
@@ -339,7 +347,7 @@ impl ClientCore {
             graphql,
             version,
             rows,
-            "desktop remote peer snapshot merged"
+            "desktop remote peer snapshot merged (peer is single-agent scoped)"
         );
         Ok(version)
     }
