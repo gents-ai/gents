@@ -9,7 +9,7 @@ use p2p::iroh::parse_public_peer_addr;
 use tokio::sync::{mpsc, watch};
 use tokio::time::{sleep, Instant};
 
-use super::super::observe::{spawn_observer, ObservedStore};
+use super::super::observe::{spawn_observer_with_selection, ObservedStore};
 use super::super::paths::DesktopPaths;
 use super::super::peer_directory::{PeerDirectory, PeerRecord};
 use super::super::principal_identity::PrincipalIdentity;
@@ -85,16 +85,21 @@ impl ClientCore {
         // duplicates are harmless.
         let observer_subscription = node.subscribe(&[defra_node::EventName::Update]);
 
+        // Create the selection channel BEFORE the observer is spawned so the
+        // observer can use the receiver for scoped drop-recovery reloads.
+        let (selected_agent_did, _) = watch::channel::<Option<String>>(None);
+
         let initial_snapshot = {
             let records = peer_directory.read().await.records().to_vec();
             load_full_snapshot_with_peer_records(node.as_ref(), &records).await?
         };
         let (store, _store_updates) = ObservedStore::new(initial_snapshot);
-        let observer = spawn_observer(
+        let observer = spawn_observer_with_selection(
             Arc::clone(&node),
             Arc::clone(&store),
             Arc::clone(&peer_directory),
             observer_subscription,
+            selected_agent_did.subscribe(),
         );
 
         let p2p = node
@@ -113,7 +118,6 @@ impl ClientCore {
         };
         let peer_statuses = Arc::new(std::sync::RwLock::new(peer_statuses));
         let (p2p_health, _p2p_health_rx) = watch::channel(P2PHealth::default());
-        let (selected_agent_did, _) = watch::channel(None);
         let initial_health = super::supervisor::probe_p2p_health(&p2p, &P2PHealth::default()).await;
         p2p_health.send_replace(initial_health);
         let (p2p_control, p2p_control_rx) = mpsc::channel(8);

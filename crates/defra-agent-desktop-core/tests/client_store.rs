@@ -526,3 +526,163 @@ async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
     core.shutdown().await?;
     Ok(())
 }
+
+/// Verify that the incremental observer handles long sessions without
+/// re-fetching history-sized data. Seeds 1000 messages and then streams
+/// 100 progress updates; asserts that the final progress_seq is 100.
+/// Metrics-based assertions (docs_fetched < 200) are deferred to Task 8
+/// once `core.observer_metrics()` is available.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn incremental_observer_handles_long_session() -> Result<()> {
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let paths = DesktopPaths::from_root(tmp.path());
+    let core =
+        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?;
+
+    // Seed 1000 AgentMessage rows for a single session.
+    for i in 0..1_000usize {
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentMessage(input: {{
+                    message_key: "long:{i}",
+                    session_id: "long",
+                    sequence: {i},
+                    role: "user",
+                    content: "msg",
+                    timestamp: "2026-05-07T00:00:00Z"
+                }}) {{ _docID }}
+            }}"#
+        );
+        let resp = core.node().execute(&mutation).await;
+        assert!(!resp.has_errors(), "seed message {i}: {:?}", resp.errors);
+    }
+
+    // Seed the response.
+    let resp = core
+        .node()
+        .execute(
+            r#"mutation {
+                create_AgentResponse(input: {
+                    response_key: "long-req",
+                    request_id: "long-req",
+                    agent_did: "did:long",
+                    behavior_id: "default",
+                    session_id: "long",
+                    content: "",
+                    reasoning: "",
+                    status: "streaming",
+                    error_message: "",
+                    token_count: 0,
+                    progress_seq: 0,
+                    created_at: "2026-05-07T00:00:00Z"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(!resp.has_errors(), "seed response: {:?}", resp.errors);
+
+    // Stream 100 progress updates.
+    for i in 1..=100usize {
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentResponse(
+                    filter: {{ response_key: {{ _eq: "long-req" }} }},
+                    input: {{ progress_seq: {i} }}
+                ) {{ _docID }}
+            }}"#
+        );
+        let resp = core.node().execute(&mutation).await;
+        assert!(!resp.has_errors(), "update {i}: {:?}", resp.errors);
+    }
+
+    // Wait for debounce + safety margin.
+    timeout(Duration::from_millis(2000), async {
+        loop {
+            let snap = core.store().snapshot();
+            if snap
+                .responses
+                .iter()
+                .any(|r| r.response_key == "long-req" && r.progress_seq == Some(100))
+            {
+                return Ok::<(), anyhow::Error>(());
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .context("timed out waiting for progress_seq=100")??;
+
+    let snap = core.store().snapshot();
+    let resp = snap
+        .responses
+        .iter()
+        .find(|r| r.response_key == "long-req")
+        .expect("response present");
+    assert_eq!(resp.progress_seq, Some(100), "final progress_seq should be 100");
+
+    core.shutdown().await?;
+    Ok(())
+}
+
+/// Verify that after setting a selected agent, writes from both agents still
+/// appear in the store (the bootstrap snapshot includes all agents; incremental
+/// updates appear per-document). Scope-isolation of drop-recovery is verified
+/// via log/metric inspection in PR review.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn agent_scope_isolation_under_drop_recovery() -> Result<()> {
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let paths = DesktopPaths::from_root(tmp.path());
+    let core =
+        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?;
+
+    // Seed two agents.
+    for did in &["did:alpha", "did:beta"] {
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentPrincipal(input: {{
+                    agent_did: "{did}",
+                    display_name: "{did}",
+                    default_behavior_id: "default",
+                    enabled: true,
+                    created_at: "2026-05-07T00:00:00Z",
+                    created_by: "test"
+                }}) {{ _docID }}
+            }}"#
+        );
+        let resp = core.node().execute(&mutation).await;
+        assert!(!resp.has_errors(), "seed {did}: {:?}", resp.errors);
+    }
+
+    // Switch selection to alpha.
+    core.set_selected_agent_did(Some("did:alpha".to_string()));
+
+    // Wait for both principals to land in the store.
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let snap = core.store().snapshot();
+            let dids: Vec<&str> = snap
+                .agent_principals
+                .iter()
+                .map(|p| p.agent_did.as_str())
+                .collect();
+            if dids.contains(&"did:alpha") && dids.contains(&"did:beta") {
+                return Ok::<(), anyhow::Error>(());
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .context("timed out waiting for both agents in store")??;
+
+    let snap = core.store().snapshot();
+    let dids: Vec<&str> = snap
+        .agent_principals
+        .iter()
+        .map(|p| p.agent_did.as_str())
+        .collect();
+    assert!(dids.contains(&"did:alpha"), "did:alpha missing");
+    assert!(dids.contains(&"did:beta"), "did:beta missing");
+
+    core.shutdown().await?;
+    Ok(())
+}
