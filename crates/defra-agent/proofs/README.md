@@ -175,7 +175,8 @@ currently covers:
 `RuntimeReconcile` and `SessionRecovery` also emit deterministic witness rows.
 Those rows keep the JSON small while pinning generation publication/router
 observation/request admission, and session retry guards for deadline closure,
-retry budget, latest-request status, and identity preservation.
+retry budget, latest-request status, duplicate new request ids, and identity
+preservation.
 
 It also emits the `ToolRetryDisposition` vocabulary from
 `Proofs.ToolExecution` so Rust tests can reject accidental MCP `call_tool`
@@ -234,6 +235,18 @@ Operational meaning:
   `failed`
 - `interrupted` models operator cancellation and releases admission
 - terminal states are `completed`, `failed`, `superseded`, `dead`, and `interrupted`
+
+Lean `AdmissionState` is not persisted as its own `AgentRequest` column. Rust
+bridges it through persisted request fields and runtime-owned call rows:
+`pending/released` is stored as `status="pending", lifecycle_state="pending"`;
+claimed work that is waiting or acquired is stored as
+`status="processing", lifecycle_state="claimed"`; executing work is stored as
+`status="processing", lifecycle_state="processing"` and holds capacity through a
+running `InferenceCall`; terminal released work is stored with a terminal
+`lifecycle_state` (`failed` uses `status="error"`). The desktop retry API
+therefore accepts Lean's released failed source only when the parent row is
+persisted as `lifecycle_state="failed", status="error"` and rejects the
+source-not-released witness with a non-error in-flight status.
 
 ### Layer 3: Persistence Lifecycle
 

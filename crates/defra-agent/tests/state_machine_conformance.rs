@@ -110,7 +110,7 @@ fn lean_executable_contracts_cover_initial_domains() {
         "ToolExecution remains a follow-up until idempotency metadata is modeled"
     );
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 6);
-    assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 8);
+    assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 10);
 }
 
 #[test]
@@ -180,6 +180,11 @@ fn generated_session_recovery_cases_cover_retry_guards_and_preservation() {
     assert_eq!(legal.action.as_str(), "reissueFailed");
     assert_eq!(legal.pre_latest_state.as_str(), "failed");
     assert_eq!(legal.post_latest_state.as_str(), "pending");
+    assert_eq!(legal.pre_latest_admission.as_str(), "released");
+    assert_eq!(legal.post_latest_admission.as_str(), "released");
+    assert_eq!(legal.pre_failed_admission.as_str(), "released");
+    assert_eq!(legal.post_failed_admission.as_str(), "released");
+    assert_eq!(legal.post_new_admission.as_str(), "released");
     assert_eq!(legal.pre_retry_count + 1, legal.post_retry_count);
     assert!(legal.post_retry_count <= legal.max_retries);
     assert_eq!(legal.pre_session_id, legal.post_session_id);
@@ -189,6 +194,7 @@ fn generated_session_recovery_cases_cover_retry_guards_and_preservation() {
     assert!(legal.pre_failed_is_latest);
     assert!(!legal.post_failed_is_latest);
     assert!(legal.post_new_is_latest);
+    assert!(!legal.pre_new_request_exists);
     assert!(legal.old_request_retained);
     assert!(legal.new_request_inserted);
     assert!(legal.origin_preserved);
@@ -198,11 +204,37 @@ fn generated_session_recovery_cases_cover_retry_guards_and_preservation() {
     assert!(last_slot.legal);
     assert_eq!(last_slot.post_retry_count, last_slot.max_retries);
 
+    let initial_slot = lean_session_recovery_case("legal_initial_retry_slot");
+    assert!(initial_slot.legal);
+    assert_eq!(initial_slot.pre_retry_count, 0);
+    assert_eq!(initial_slot.post_retry_count, 1);
+
+    let duplicate_new_id = lean_session_recovery_case("illegal_new_request_id_already_exists");
+    assert!(!duplicate_new_id.legal);
+    assert!(duplicate_new_id.pre_new_request_exists);
+    assert_eq!(duplicate_new_id.pre_failed_admission.as_str(), "released");
+
+    let duplicate_failed_id =
+        lean_session_recovery_case("illegal_new_request_id_matches_failed_id");
+    assert!(!duplicate_failed_id.legal);
+    assert_eq!(duplicate_failed_id.failed_id, duplicate_failed_id.new_id);
+    assert!(duplicate_failed_id.pre_new_request_exists);
+    assert_eq!(
+        duplicate_failed_id.pre_failed_admission.as_str(),
+        "released"
+    );
+
+    let source_not_released = lean_session_recovery_case("illegal_source_not_released");
+    assert!(!source_not_released.legal);
+    assert_eq!(source_not_released.pre_latest_state.as_str(), "failed");
+    assert_eq!(source_not_released.pre_failed_admission.as_str(), "waiting");
+
     for name in [
         "illegal_retry_budget_exhausted",
         "illegal_deadline_closed",
         "illegal_non_latest_failed_request",
         "illegal_new_request_id_already_exists",
+        "illegal_new_request_id_matches_failed_id",
         "illegal_source_not_failed",
         "illegal_source_not_released",
     ] {

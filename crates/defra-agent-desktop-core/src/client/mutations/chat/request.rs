@@ -192,7 +192,17 @@ pub async fn retry_request(
     store: &ClientStore,
     parent: &AgentRequestRow,
 ) -> Result<SubmittedRequest> {
+    retry_request_with_request_id(node, store, parent, Uuid::new_v4().to_string()).await
+}
+
+async fn retry_request_with_request_id(
+    node: &EmbeddedNode,
+    store: &ClientStore,
+    parent: &AgentRequestRow,
+    request_id: String,
+) -> Result<SubmittedRequest> {
     let parent_request_id = normalize_required("request_id", &parent.request_id)?;
+    let request_id = normalize_required("new_request_id", &request_id)?.to_string();
     let parent_session_id = normalize_required(
         "session_id",
         parent
@@ -227,7 +237,10 @@ pub async fn retry_request(
     // primitive here, so Rust enforces the same predicate as a database-backed
     // preflight immediately before the coalesced write.
     ensure_latest_retry_parent(node, parent_session_id, parent_request_id).await?;
-    let request_id = Uuid::new_v4().to_string();
+    // Lean also requires the new request id to be fresh. This preflight catches
+    // injected-id tests and UUID collisions; a schema uniqueness constraint is
+    // still the hard concurrent guarantee.
+    ensure_new_retry_request_id_available(node, &request_id).await?;
     let session_id = parent_session_id.to_string();
     let created_at = Utc::now().to_rfc3339();
     let binding = resolve_agent_binding(store, agent_did, behavior_id, Some(parent_session_id))?;
@@ -368,6 +381,40 @@ async fn ensure_latest_retry_parent(
         bail!(
             "retry parent request must be latest for session {session_id}, got latest_request_id={latest_request_id}"
         );
+    }
+
+    Ok(())
+}
+
+async fn ensure_new_retry_request_id_available(
+    node: &EmbeddedNode,
+    request_id: &str,
+) -> Result<()> {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                limit: 1
+            ) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        bail!(
+            "querying retry request id availability failed: {:?}",
+            resp.errors
+        );
+    }
+    let exists = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|rows| rows.as_array())
+        .is_some_and(|rows| !rows.is_empty());
+
+    if exists {
+        bail!("retry new request id already exists: request_id={request_id}");
     }
 
     Ok(())
@@ -626,4 +673,163 @@ async fn fetch_retry_root(node: &EmbeddedNode, request_id: &str) -> Result<Optio
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(String::from))
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::{bail, Context, Result};
+
+    use super::*;
+    use crate::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let core = ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(tempdir.path()),
+            ClientCoreOptions::local_only(),
+        )
+        .await?;
+
+        let created = core
+            .create_conversation("did:defra:amy", Some("amy-code"))
+            .await?;
+        let original = core
+            .submit_request(&created.session_id, "did:defra:amy", "first attempt", None)
+            .await?;
+        let mut parent = core
+            .store()
+            .snapshot()
+            .requests
+            .iter()
+            .find(|row| row.request_id == original.request_id)
+            .cloned()
+            .context("expected submitted parent request in desktop store")?;
+
+        let deadline = Utc::now() + chrono::Duration::minutes(5);
+        force_retry_parent_eligible_for_test(
+            core.node(),
+            &original.request_id,
+            1,
+            i64::from(DEFAULT_REQUEST_MAX_RETRIES),
+            &deadline.to_rfc3339(),
+        )
+        .await?;
+        parent.status = Some("error".to_string());
+        parent.lifecycle_state = Some("failed".to_string());
+        parent.deadline = Some(deadline.to_rfc3339());
+        parent.retry_count = Some(1);
+        parent.max_retries = Some(i64::from(DEFAULT_REQUEST_MAX_RETRIES));
+
+        let duplicate_request_id = "duplicate-retry-request-id";
+        seed_duplicate_request_id_for_test(
+            core.node(),
+            duplicate_request_id,
+            &created.session_id,
+            "did:defra:amy",
+            "amy-code",
+        )
+        .await?;
+        assert_eq!(
+            request_count_by_id_for_test(core.node(), duplicate_request_id).await?,
+            1
+        );
+
+        let snapshot = core.store().snapshot();
+        let err = retry_request_with_request_id(
+            core.node(),
+            snapshot.as_ref(),
+            &parent,
+            duplicate_request_id.to_string(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("already exists"),
+            "duplicate new request id must be rejected before retry insert: {err}"
+        );
+        assert_eq!(
+            request_count_by_id_for_test(core.node(), duplicate_request_id).await?,
+            1,
+            "failed duplicate retry must not add another row with the colliding request_id"
+        );
+
+        core.shutdown().await?;
+        Ok(())
+    }
+
+    async fn force_retry_parent_eligible_for_test(
+        node: &EmbeddedNode,
+        request_id: &str,
+        retry_count: i64,
+        max_retries: i64,
+        deadline: &str,
+    ) -> Result<()> {
+        let escaped_request_id = escape_graphql_string(request_id);
+        let escaped_deadline = escape_graphql_string(deadline);
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentRequest(
+                    filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                    input: {{
+                        status: "error",
+                        lifecycle_state: "failed",
+                        retry_count: {retry_count},
+                        max_retries: {max_retries},
+                        deadline: "{escaped_deadline}"
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+        execute_mutation(node, &mutation, "force_retry_parent_eligible_for_test").await
+    }
+
+    async fn seed_duplicate_request_id_for_test(
+        node: &EmbeddedNode,
+        request_id: &str,
+        session_id: &str,
+        agent_did: &str,
+        behavior_id: &str,
+    ) -> Result<()> {
+        let created_at = Utc::now().to_rfc3339();
+        let request_field = build_add_agent_request_field(
+            "duplicate",
+            request_id,
+            agent_did,
+            behavior_id,
+            session_id,
+            "",
+            "",
+            "existing duplicate request id occupant",
+            &created_at,
+            0,
+            i64::from(DEFAULT_REQUEST_MAX_RETRIES),
+            "",
+        );
+        let mutation = format!("mutation {{\n{request_field}\n}}");
+        execute_mutation(node, &mutation, "seed_duplicate_request_id_for_test").await
+    }
+
+    async fn request_count_by_id_for_test(node: &EmbeddedNode, request_id: &str) -> Result<usize> {
+        let escaped_request_id = escape_graphql_string(request_id);
+        let query = format!(
+            r#"{{
+                AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}) {{
+                    _docID
+                }}
+            }}"#
+        );
+        let resp = node.execute(&query).await;
+        if resp.has_errors() {
+            bail!("request_count_by_id_for_test failed: {:?}", resp.errors);
+        }
+        Ok(resp
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(|rows| rows.as_array())
+            .map(Vec::len)
+            .unwrap_or_default())
+    }
 }

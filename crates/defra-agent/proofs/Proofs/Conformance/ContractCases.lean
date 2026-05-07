@@ -41,6 +41,11 @@ structure SessionRecoveryCase where
   legal : Bool
   preLatestState : String
   postLatestState : String
+  preLatestAdmission : String
+  postLatestAdmission : String
+  preFailedAdmission : String
+  postFailedAdmission : String
+  postNewAdmission : String
   failedId : RequestId
   newId : RequestId
   preLatestId : RequestId
@@ -59,6 +64,7 @@ structure SessionRecoveryCase where
   preFailedIsLatest : Bool
   postFailedIsLatest : Bool
   postNewIsLatest : Bool
+  preNewRequestExists : Bool
   oldRequestRetained : Bool
   newRequestInserted : Bool
   originPreserved : Bool
@@ -231,20 +237,33 @@ def recoveryPre
   , latest := latestId
   }
 
+def recoveryAdmissionName : AdmissionState → String
+  | .released => "released"
+  | .waiting => "waiting"
+  | .acquired => "acquired"
+  | .executing => "executing"
+
 def recoveryCaseFromStep
     (name : String)
     (pre : SessionState)
     (failedId newId : RequestId) : SessionRecoveryCase :=
   let failedPre := pre.ctx failedId
+  let latestPre := pre.ctx pre.latest
   match SessionState.step? pre (.reissueFailed failedId newId) with
   | some post =>
       let failedPost := post.ctx failedId
       let newPost := post.ctx newId
+      let latestPost := post.ctx post.latest
       { name := name
       , action := "reissueFailed"
       , legal := true
-      , preLatestState := (pre.ctx pre.latest).state.toDefraDB
-      , postLatestState := (post.ctx post.latest).state.toDefraDB
+      , preLatestState := latestPre.state.toDefraDB
+      , postLatestState := latestPost.state.toDefraDB
+      , preLatestAdmission := recoveryAdmissionName latestPre.admission
+      , postLatestAdmission := recoveryAdmissionName latestPost.admission
+      , preFailedAdmission := recoveryAdmissionName failedPre.admission
+      , postFailedAdmission := recoveryAdmissionName failedPost.admission
+      , postNewAdmission := recoveryAdmissionName newPost.admission
       , failedId := failedId
       , newId := newId
       , preLatestId := pre.latest
@@ -263,6 +282,7 @@ def recoveryCaseFromStep
       , preFailedIsLatest := failedPre.isLatest
       , postFailedIsLatest := failedPost.isLatest
       , postNewIsLatest := newPost.isLatest
+      , preNewRequestExists := decide (newId ∈ pre.requestIds)
       , oldRequestRetained := decide (failedId ∈ post.requestIds)
       , newRequestInserted := decide (newId ∈ post.requestIds)
       , originPreserved := decide (newPost.origin = failedPre.origin)
@@ -272,8 +292,13 @@ def recoveryCaseFromStep
       { name := name
       , action := "reissueFailed"
       , legal := false
-      , preLatestState := (pre.ctx pre.latest).state.toDefraDB
+      , preLatestState := latestPre.state.toDefraDB
       , postLatestState := ""
+      , preLatestAdmission := recoveryAdmissionName latestPre.admission
+      , postLatestAdmission := ""
+      , preFailedAdmission := recoveryAdmissionName failedPre.admission
+      , postFailedAdmission := ""
+      , postNewAdmission := ""
       , failedId := failedId
       , newId := newId
       , preLatestId := pre.latest
@@ -292,6 +317,7 @@ def recoveryCaseFromStep
       , preFailedIsLatest := failedPre.isLatest
       , postFailedIsLatest := false
       , postNewIsLatest := false
+      , preNewRequestExists := decide (newId ∈ pre.requestIds)
       , oldRequestRetained := false
       , newRequestInserted := false
       , originPreserved := false
@@ -299,6 +325,7 @@ def recoveryCaseFromStep
       }
 
 def sessionRecoveryCases : List SessionRecoveryCase :=
+  let initialFailed := recoveryContext .failed .released 0 3 10 5 true
   let openFailed := recoveryContext .failed .released 1 3 10 5 true
   let lastBudgetFailed := recoveryContext .failed .released 2 3 10 5 true
   let exhaustedFailed := recoveryContext .failed .released 3 3 10 5 true
@@ -308,6 +335,11 @@ def sessionRecoveryCases : List SessionRecoveryCase :=
   let pendingLatest := recoveryContext .pending .released 1 3 10 5 true
   let claimedLatest := recoveryContext .failed .waiting 1 3 10 5 true
   [ recoveryCaseFromStep
+      "legal_initial_retry_slot"
+      (recoveryPre initialFailed initialFailed 1)
+      1
+      2
+  , recoveryCaseFromStep
       "legal_open_budget_latest"
       (recoveryPre openFailed openFailed 1)
       1
@@ -337,6 +369,11 @@ def sessionRecoveryCases : List SessionRecoveryCase :=
       (recoveryPre openFailed openFailed 1)
       1
       3
+  , recoveryCaseFromStep
+      "illegal_new_request_id_matches_failed_id"
+      (recoveryPre openFailed openFailed 1)
+      1
+      1
   , recoveryCaseFromStep
       "illegal_source_not_failed"
       (recoveryPre pendingLatest pendingLatest 1)
