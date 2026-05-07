@@ -72,10 +72,10 @@ struct MaterializeGate {
 /// so assertions can check both the call count and the rendered prompt that
 /// reached the materializer.
 ///
-/// `nonterminal_for` counts `(trigger_id, trigger_kind)` tuples that
-/// `has_nonterminal_request_for_trigger` should report as having in-flight
-/// requests. Tests can pre-populate it to simulate prior fires. Lean contract
-/// tests can opt into counting successful materializations as new
+/// `nonterminal_for` stores the concrete request ids for `(trigger_id,
+/// trigger_kind)` tuples that `has_nonterminal_request_for_trigger` should
+/// report as in-flight. Tests can pre-populate it to simulate prior fires.
+/// Lean contract tests can opt into adding successful materializations as new
 /// non-terminal requests, which mirrors production persistence without
 /// changing the default spy behavior expected by local unit tests.
 ///
@@ -86,8 +86,9 @@ struct MaterializeGate {
 struct SpyMaterializer {
     materialize_calls: Arc<Mutex<Vec<MaterializeCall>>>,
     next_request_id: AtomicUsize,
-    nonterminal_for: Arc<Mutex<HashMap<(String, TriggerKind), usize>>>,
+    nonterminal_for: Arc<Mutex<HashMap<(String, TriggerKind), Vec<String>>>>,
     supersede_calls: Arc<Mutex<Vec<SupersedeCall>>>,
+    superseded_request_ids: Arc<Mutex<Vec<String>>>,
     materialize_delay: Mutex<Option<Duration>>,
     materialize_gate: Mutex<Option<MaterializeGate>>,
     track_materialized_nonterminal: AtomicBool,
@@ -100,6 +101,7 @@ impl SpyMaterializer {
             next_request_id: AtomicUsize::new(0),
             nonterminal_for: Arc::new(Mutex::new(HashMap::new())),
             supersede_calls: Arc::new(Mutex::new(Vec::new())),
+            superseded_request_ids: Arc::new(Mutex::new(Vec::new())),
             materialize_delay: Mutex::new(None),
             materialize_gate: Mutex::new(None),
             track_materialized_nonterminal: AtomicBool::new(false),
@@ -114,12 +116,16 @@ impl SpyMaterializer {
         self.supersede_calls.lock().unwrap().clone()
     }
 
+    fn superseded_request_ids(&self) -> Vec<String> {
+        self.superseded_request_ids.lock().unwrap().clone()
+    }
+
     fn nonterminal_count_for(&self, trigger_id: &str, trigger_kind: TriggerKind) -> usize {
         self.nonterminal_for
             .lock()
             .unwrap()
             .get(&(trigger_id.to_owned(), trigger_kind))
-            .copied()
+            .map(Vec::len)
             .unwrap_or(0)
     }
 
@@ -129,12 +135,23 @@ impl SpyMaterializer {
     /// report the tuple count (and clears it, mirroring real terminal
     /// transitions) so LatestOnly tests can assert the count plumbed through.
     fn mark_nonterminal(&self, trigger_id: &str, trigger_kind: TriggerKind) {
+        let next_index = self.nonterminal_count_for(trigger_id, trigger_kind);
+        let request_id = format!("spy-prior-{}-{next_index}", trigger_kind.as_str());
+        self.mark_nonterminal_request(trigger_id, trigger_kind, request_id);
+    }
+
+    fn mark_nonterminal_request(
+        &self,
+        trigger_id: &str,
+        trigger_kind: TriggerKind,
+        request_id: impl Into<String>,
+    ) {
         self.nonterminal_for
             .lock()
             .unwrap()
             .entry((trigger_id.to_owned(), trigger_kind))
-            .and_modify(|count| *count += 1)
-            .or_insert(1);
+            .or_default()
+            .push(request_id.into());
     }
 
     /// Make successful materializations increment the in-flight tuple count.
@@ -182,6 +199,7 @@ impl MaterializerHandle for SpyMaterializer {
         let track_materialized_nonterminal =
             self.track_materialized_nonterminal.load(Ordering::SeqCst);
         let id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
+        let request_id = format!("req-{id}");
         let delay = *self.materialize_delay.lock().unwrap();
         let gate = self.materialize_gate.lock().unwrap().clone();
         Box::pin(async move {
@@ -198,10 +216,10 @@ impl MaterializerHandle for SpyMaterializer {
                     .lock()
                     .unwrap()
                     .entry(key)
-                    .and_modify(|count| *count += 1)
-                    .or_insert(1);
+                    .or_default()
+                    .push(request_id.clone());
             }
-            Ok(format!("req-{id}"))
+            Ok(request_id)
         })
     }
 
@@ -212,7 +230,14 @@ impl MaterializerHandle for SpyMaterializer {
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
         let set = self.nonterminal_for.clone();
         let key = (trigger_id.to_owned(), trigger_kind);
-        Box::pin(async move { Ok(set.lock().unwrap().get(&key).copied().unwrap_or(0) > 0) })
+        Box::pin(async move {
+            Ok(set
+                .lock()
+                .unwrap()
+                .get(&key)
+                .map(|request_ids| !request_ids.is_empty())
+                .unwrap_or(false))
+        })
     }
 
     fn supersede_nonterminal_requests_for_trigger(
@@ -222,12 +247,16 @@ impl MaterializerHandle for SpyMaterializer {
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<usize>> + Send + '_>> {
         let nonterm = self.nonterminal_for.clone();
         let supersede_calls = self.supersede_calls.clone();
+        let superseded_request_ids = self.superseded_request_ids.clone();
         let key = (trigger_id.to_owned(), trigger_kind);
         Box::pin(async move {
             supersede_calls.lock().unwrap().push(key.clone());
             // Mirror a real terminal transition: the tuple is no longer
             // in-flight after supersede.
-            Ok(nonterm.lock().unwrap().remove(&key).unwrap_or(0))
+            let removed = nonterm.lock().unwrap().remove(&key).unwrap_or_default();
+            let count = removed.len();
+            superseded_request_ids.lock().unwrap().extend(removed);
+            Ok(count)
         })
     }
 }
@@ -381,10 +410,50 @@ async fn trigger_engine_dispatch_matches_lean_generated_contract_cases() {
         let (_tx, rx) = watch::channel(snapshot);
         let materializer = SpyMaterializer::new();
         materializer.track_materialized_nonterminal();
+        let target_key = case
+            .trigger_id
+            .as_ref()
+            .map(|trigger_id| (trigger_id.clone(), trigger_kind));
+        let expects_target_supersede = target_key.as_ref().map_or(false, |(trigger_id, kind)| {
+            case.expected_supersede_call_keys.iter().any(|key| {
+                key.trigger_id == *trigger_id && trigger_kind_from_lean(&key.trigger_kind) == *kind
+            })
+        });
+        // Lean emits both lists by scanning `before.requests` in order; consume
+        // superseded ids as we seed matching prior target keys to preserve that
+        // request-id alignment.
+        let mut superseded_prior_ids = case.superseded_prior_ids.iter();
         for key in &case.prior_nonterminal_keys {
-            let (trigger_id, trigger_kind) = trigger_key_from_lean(key);
-            materializer.mark_nonterminal(&trigger_id, trigger_kind);
+            let (prior_trigger_id, prior_trigger_kind) = trigger_key_from_lean(key);
+            if target_key
+                .as_ref()
+                .map_or(false, |(target_id, target_kind)| {
+                    target_id == &prior_trigger_id && *target_kind == prior_trigger_kind
+                })
+            {
+                if let Some(request_id) = superseded_prior_ids.next() {
+                    materializer.mark_nonterminal_request(
+                        &prior_trigger_id,
+                        prior_trigger_kind,
+                        request_id.clone(),
+                    );
+                } else {
+                    assert!(
+                        !expects_target_supersede,
+                        "Lean case {} emitted fewer superseded_prior_ids than prior target keys",
+                        case.name
+                    );
+                    materializer.mark_nonterminal(&prior_trigger_id, prior_trigger_kind);
+                }
+            } else {
+                materializer.mark_nonterminal(&prior_trigger_id, prior_trigger_kind);
+            }
         }
+        assert!(
+            superseded_prior_ids.next().is_none(),
+            "Lean case {} emitted superseded_prior_ids that were not backed by prior target keys",
+            case.name
+        );
         let engine = TriggerEngine::new(rx, materializer.clone());
 
         let intent = FireIntent {
@@ -489,13 +558,10 @@ async fn trigger_engine_dispatch_matches_lean_generated_contract_cases() {
             "Lean case {} supersede calls drifted",
             case.name
         );
-        // The spy tracks tuple-level supersede calls and counts, not concrete
-        // request ids. Lean still emits `superseded_prior_ids` to document the
-        // exact model transition; this assertion keeps the Rust observable at
-        // the same abstraction boundary as `MaterializerHandle`.
-        assert!(
-            case.superseded_prior_ids.is_empty() || !supersede_calls.is_empty(),
-            "Lean case {} cannot supersede prior ids without a Rust supersede call",
+        assert_eq!(
+            materializer.superseded_request_ids(),
+            case.superseded_prior_ids,
+            "Lean case {} superseded concrete request ids drifted",
             case.name
         );
 

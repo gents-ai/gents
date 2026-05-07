@@ -481,6 +481,8 @@ in-crate Rust trigger-engine test consumes those generated cases and checks
 manual dispatch, schedule/event reachability, tuple-sensitive serial behavior,
 latest-only supersession, parallel bypass of in-flight gates, lineage, and
 execution-origin projection against the real `TriggerEngine::dispatch` path.
+For latest-only cases, Rust seeds the spy materializer with Lean's
+`superseded_prior_ids` and asserts those concrete request ids were superseded.
 
 Operational trigger-source behavior remains covered in Rust: DefraDB event
 delivery, control-watcher debounce, schedule tick cadence, subscription

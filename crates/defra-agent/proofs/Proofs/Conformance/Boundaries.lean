@@ -72,9 +72,9 @@ dispatch cases from `Proofs.Conformance.Triggers.Contracts`; Rust consumes them
 in `trigger_engine::tests::trigger_engine_dispatch_matches_lean_generated_contract_cases`.
 That generated contract covers manual fires with null trigger ids, schedule and
 event enabled-gate reachability, tuple-sensitive serial gating, latest-only
-supersession, parallel bypass of in-flight gates, manual latest-only without a
-trigger key, materialized lineage, and the interactive/scheduled
-execution-origin projection. A separate
+supersession including the concrete `superseded_prior_ids`, parallel bypass of
+in-flight gates, manual latest-only without a trigger key, materialized lineage,
+and the interactive/scheduled execution-origin projection. A separate
 deterministic Rust lock test covers the latest-only critical section without
 using elapsed time as the only oracle.
 
