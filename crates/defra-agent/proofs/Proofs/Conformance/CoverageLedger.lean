@@ -150,6 +150,10 @@ def caseCoverage : List CoverageEntry :=
       "RuntimeReconcileCases"
       "runtime_status::tests::runtime_status_generation_updates_match_lean_runtime_reconcile_cases"
   , consumerCoverage
+      "apply_reconcile_cases"
+      "ApplyReconcileCases"
+      "apply_conformance::generated_apply_reconcile_cases_drive_apply_model_and_production_ordering"
+  , consumerCoverage
       "session_recovery_cases"
       "SessionRecoveryCases"
       "state_machine_conformance::generated_session_recovery_cases_cover_retry_guards_and_preservation"

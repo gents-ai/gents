@@ -195,11 +195,11 @@ pub fn desired_references_closed(l: &LiveState) -> bool {
 /// Product-facing corollary scoped to documents already written by a prefix.
 pub fn prefix_referrers_closed(prefix: &[ApplyStep], l: &LiveState) -> bool {
     prefix.iter().all(|step| {
-        l.desired
-            .get(step.target())
-            .into_iter()
-            .flat_map(references_of)
-            .all(|r| l.desired.contains_key(&r))
+        l.desired.get(step.target()).is_some_and(|payload| {
+            references_of(payload)
+                .into_iter()
+                .all(|r| l.desired.contains_key(&r))
+        })
     })
 }
 

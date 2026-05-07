@@ -34,6 +34,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) desktop_client_shell_case_count: usize,
     pub(crate) desktop_client_shell_cases: Vec<LeanClientShellCase>,
     pub(crate) runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
+    pub(crate) apply_reconcile_cases: Vec<LeanApplyReconcileCase>,
     pub(crate) session_recovery_cases: Vec<LeanSessionRecoveryCase>,
     pub(crate) inference_slot_accounting_cases: Vec<LeanInferenceSlotAccountingCase>,
     pub(crate) fleet_slot_accounting_cases: Vec<LeanFleetSlotAccountingCase>,
@@ -153,6 +154,60 @@ pub(crate) struct LeanRuntimeReconcileCase {
     pub(crate) tracked_request_session: usize,
     pub(crate) tracked_request_behavior: usize,
     pub(crate) tracked_session_behavior: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanApplyDocRef {
+    pub(crate) collection: String,
+    pub(crate) id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanApplyDesiredDoc {
+    pub(crate) collection: String,
+    pub(crate) id: String,
+    pub(crate) content: String,
+    pub(crate) refs: Vec<LeanApplyDocRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanApplyLiveDoc {
+    pub(crate) collection: String,
+    pub(crate) id: String,
+    pub(crate) content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanApplyStep {
+    pub(crate) action: String,
+    pub(crate) target: LeanApplyDocRef,
+    pub(crate) content: String,
+    pub(crate) refs: Vec<LeanApplyDocRef>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanApplyReconcileCase {
+    pub(crate) name: String,
+    pub(crate) manifest: Vec<LeanApplyDesiredDoc>,
+    pub(crate) pre_desired: Vec<LeanApplyDesiredDoc>,
+    pub(crate) pre_live: Vec<LeanApplyLiveDoc>,
+    pub(crate) expected_create: Vec<LeanApplyDocRef>,
+    pub(crate) expected_update: Vec<LeanApplyDocRef>,
+    pub(crate) expected_unchanged: Vec<LeanApplyDocRef>,
+    pub(crate) expected_live_only: Vec<LeanApplyDocRef>,
+    pub(crate) expected_steps: Vec<LeanApplyStep>,
+    pub(crate) prefix_len: usize,
+    pub(crate) expected_prefix_desired: Vec<LeanApplyDesiredDoc>,
+    pub(crate) expected_after_desired: Vec<LeanApplyDesiredDoc>,
+    pub(crate) expected_retry_desired: Vec<LeanApplyDesiredDoc>,
+    pub(crate) expected_retry_step_count: usize,
+    pub(crate) expected_rediff_step_count: usize,
+    pub(crate) live_preserved: bool,
+    pub(crate) manifest_realized_after: bool,
+    pub(crate) retry_converges: bool,
+    pub(crate) idempotent_after: bool,
+    pub(crate) prefix_referrers_closed: bool,
+    pub(crate) desired_references_closed_after_prefix: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -369,6 +424,18 @@ pub(crate) fn lean_runtime_reconcile_case(name: &str) -> &'static LeanRuntimeRec
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean runtime-reconcile case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_apply_reconcile_cases() -> &'static [LeanApplyReconcileCase] {
+    &lean_contract_snapshot().apply_reconcile_cases
+}
+
+pub(crate) fn lean_apply_reconcile_case(name: &str) -> &'static LeanApplyReconcileCase {
+    lean_contract_snapshot()
+        .apply_reconcile_cases
+        .iter()
+        .find(|case| case.name == name)
+        .unwrap_or_else(|| panic!("Lean apply-reconcile case {name:?} was not emitted"))
 }
 
 pub(crate) fn lean_session_recovery_case(name: &str) -> &'static LeanSessionRecoveryCase {
