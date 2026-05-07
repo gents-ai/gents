@@ -12,12 +12,6 @@ namespace Conformance.ContractCases
 def otherBackend : BackendId :=
   { val := "other-backend" }
 
-def admissionName : AdmissionState → String
-  | .released => "released"
-  | .waiting => "waiting"
-  | .acquired => "acquired"
-  | .executing => "executing"
-
 def slotCall
     (callId : Nat)
     (backend : BackendId)

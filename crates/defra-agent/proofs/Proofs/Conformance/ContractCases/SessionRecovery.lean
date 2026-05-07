@@ -41,12 +41,6 @@ def recoveryPre
   , latest := latestId
   }
 
-def recoveryAdmissionName : AdmissionState → String
-  | .released => "released"
-  | .waiting => "waiting"
-  | .acquired => "acquired"
-  | .executing => "executing"
-
 def recoveryCaseFromStep
     (name : String)
     (pre : SessionState)
@@ -63,11 +57,11 @@ def recoveryCaseFromStep
       , legal := true
       , preLatestState := latestPre.state.toDefraDB
       , postLatestState := latestPost.state.toDefraDB
-      , preLatestAdmission := recoveryAdmissionName latestPre.admission
-      , postLatestAdmission := recoveryAdmissionName latestPost.admission
-      , preFailedAdmission := recoveryAdmissionName failedPre.admission
-      , postFailedAdmission := recoveryAdmissionName failedPost.admission
-      , postNewAdmission := recoveryAdmissionName newPost.admission
+      , preLatestAdmission := admissionName latestPre.admission
+      , postLatestAdmission := admissionName latestPost.admission
+      , preFailedAdmission := admissionName failedPre.admission
+      , postFailedAdmission := admissionName failedPost.admission
+      , postNewAdmission := admissionName newPost.admission
       , failedId := failedId
       , newId := newId
       , preLatestId := pre.latest
@@ -98,9 +92,9 @@ def recoveryCaseFromStep
       , legal := false
       , preLatestState := latestPre.state.toDefraDB
       , postLatestState := ""
-      , preLatestAdmission := recoveryAdmissionName latestPre.admission
+      , preLatestAdmission := admissionName latestPre.admission
       , postLatestAdmission := ""
-      , preFailedAdmission := recoveryAdmissionName failedPre.admission
+      , preFailedAdmission := admissionName failedPre.admission
       , postFailedAdmission := ""
       , postNewAdmission := ""
       , failedId := failedId

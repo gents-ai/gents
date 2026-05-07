@@ -41,9 +41,6 @@ def requestActions : List (String × RequestContext.Action) :=
   , ("interruptProcessing", .interruptProcessing)
   ]
 
-def contractBackend : BackendId :=
-  { val := "contract-backend" }
-
 def requestContext
     (state : RequestState)
     (admission : AdmissionState)

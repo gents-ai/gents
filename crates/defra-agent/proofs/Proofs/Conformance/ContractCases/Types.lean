@@ -109,4 +109,10 @@ def boolString (value : Bool) : String :=
 def contractBackend : BackendId :=
   { val := "contract-backend" }
 
+def admissionName : AdmissionState → String
+  | .released => "released"
+  | .waiting => "waiting"
+  | .acquired => "acquired"
+  | .executing => "executing"
+
 end Conformance.ContractCases
