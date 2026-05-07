@@ -149,9 +149,11 @@ Order by: `sequence` ascending
 
 Key fields: `role`, `content`, `timestamp`
 
-Rendering: ordered transcript for scroll-back history. The streaming bubble
-reads from `AgentResponse.content`; `AgentMessage` is the persisted transcript
-surface.
+Rendering: ordered transcript for scroll-back history. `AgentMessage` is the
+persisted transcript surface; `AgentResponse.content` and
+`AgentResponse.reasoning` carry the **live tail** (the visible bytes streamed
+since the most recent commit boundary in this turn) — see "Live Overlay"
+below.
 
 ### InferenceCall
 
@@ -172,6 +174,94 @@ mock-stream backend.
 The closed, system-generated `failure_reason` strings for admission and
 interrupt/drop paths are checked against the Lean
 `InferenceCallTerminalReason` vocabulary. Provider errors remain open strings.
+
+## Live Overlay
+
+`AgentResponse.content` and `AgentResponse.reasoning` are the **live tail** of
+the active assistant segment. They are reset to empty whenever a partial
+assistant turn or a tool-result is persisted as an `AgentMessage`, and again
+on finalize. They are **not** a transcript record — the transcript is
+`AgentMessage`. `token_count` is cumulative across the turn (metering, not
+rendering). `progress_seq` is a strict-monotonic version cursor that bumps at
+lifecycle boundaries (`RequestLifecycle::advance`).
+
+A compliant client renders an active turn with this algorithm:
+
+```text
+input:
+  committed_messages : [AgentMessage]   # filtered to the active turn
+  tool_calls         : [AgentToolCall]  # filtered to the active turn
+  active_response    : AgentResponse?   # tip response for the active turn
+  derived_turn       : ClientTurnState?
+
+output:
+  timeline : [TimelineItem]
+
+algorithm:
+  sort committed_messages by sequence ASC
+  group tool_calls by message_sequence
+  for each msg in committed_messages:
+    emit UserMessage / AssistantMessage / ToolMessage based on role
+    if tool_calls grouped at msg.sequence:
+      emit ToolGroup
+  emit any tool_calls whose message_sequence has no matching committed
+    message yet (lag fallback)
+
+  if should_show_overlay(active_response, derived_turn):
+    emit LiveAssistant {
+      content   : active_response.content,
+      reasoning : active_response.reasoning,
+    }
+
+should_show_overlay(r, t):
+  r is not None
+  AND r.materialized_message_sequence is None
+  AND r.status not in {"complete", "error"}
+  AND t in {WaitingForClaim, Streaming}
+  AND (r.content non-empty OR r.reasoning non-empty)
+```
+
+### Reference TypeScript
+
+```typescript
+function shouldShowOverlay(
+  r: { status: string; materializedMessageSequence?: number | null;
+       content?: string | null; reasoning?: string | null } | null,
+  t: ClientTurnState | null,
+): boolean {
+  if (!r) return false;
+  if (r.materializedMessageSequence != null) return false;
+  if (r.status === "complete" || r.status === "error") return false;
+  if (t !== "waitingForClaim" && t !== "streaming") return false;
+  return Boolean(r.content?.trim()) || Boolean(r.reasoning?.trim());
+}
+```
+
+### Reference Swift
+
+```swift
+func shouldShowOverlay(
+    _ r: AgentResponseState?, _ t: ClientTurnState?
+) -> Bool {
+    guard let r else { return false }
+    if r.materializedMessageSequence != nil { return false }
+    if r.status == "complete" || r.status == "error" { return false }
+    guard t == .waitingForClaim || t == .streaming else { return false }
+    let hasContent = !(r.content ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+    let hasReasoning = !(r.reasoning ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+    return hasContent || hasReasoning
+}
+```
+
+### Replication-lag note
+
+There is a brief window where `AgentResponse.content` for a post-tool tail can
+replicate before the tool-result `AgentMessage` that explains the boundary.
+During this window the overlay may render at a lower-sequence slot than its
+true anchor. Self-heals once the boundary message replicates. If this becomes
+a visible problem, the forward-compatible fix is an optional
+`after_message_sequence: Int` field on `AgentResponse` that pins the slot
+atomically.
 
 ## Subscription Model
 
