@@ -100,8 +100,8 @@ The contract for two existing fields changes; the schema does not.
 Other `AgentResponse` fields are unchanged:
 
 - `status` — `streaming` / `complete` / `error` (terminal).
-- `progress_seq` — strict-monotonic version cursor; bumps on every flush
-  including resets.
+- `progress_seq` — strict-monotonic version cursor; bumps at lifecycle
+  boundaries (`RequestLifecycle::advance`).
 - `token_count` — cumulative across the turn (metering, not rendering).
 - `materialized_message_sequence` / `materialized_at` — set when the final
   assistant turn is persisted.
@@ -213,8 +213,9 @@ Behavior:
   `StreamBuffer.reasoning`. Leave `StreamBuffer.token_count` cumulative
   (it's a metering field).
 - Issue an `update_AgentResponse` mutation gated by
-  `status: { _eq: "streaming" }`, setting `content: ""`, `reasoning: ""`,
-  and bumping `progress_seq` so subscribers observe the reset.
+  `status: { _eq: "streaming" }`, setting `content: ""`, `reasoning: ""`.
+  `progress_seq` is owned by the lifecycle layer and already advances at
+  the same boundary, so the reset itself does not bump it.
 - Same retry / status-mismatch handling as `flush_snapshot`.
 
 Update `finalize` (the existing terminal mutation builder
@@ -252,23 +253,19 @@ which matches the existing visual behavior.
 
 ### `crates/defra-agent-desktop-core/src/client/core/materialization.rs`
 
-`MaterializationSignature` (`materialization.rs:24-35`) currently uses
-`response_content_len` and `response_reasoning_len` as cumulative-growth
-proxies for the stall detector. Under tail-reset semantics those go to
-zero on every commit.
+`MaterializationSignature` (`materialization.rs:24-35`) keeps
+`response_content_len` and `response_reasoning_len`, but their *meaning*
+changes: previously they measured turn-cumulative growth; under
+tail-reset they measure the *current tail* length, which resets to 0 at
+every commit boundary and grows during active streaming. That is
+actually a cleaner stall signal — the detector observes either
+"tail length still growing" (active) or "tail length unchanged for N
+seconds" (stalled). Doc-comment update only; no detector logic change.
 
-Change:
-
-- Drop `response_content_len`, `response_reasoning_len`.
-- Keep `response_status`, `progress_seq`,
-  `materialized_message_sequence`, `message_count`, `tool_call_count`,
-  `completed_tool_call_count`, `tool_result_count`.
-
-`progress_seq` already increments on every flush including resets, so it
-remains a strict-monotonic stall signal. The 5-second
-`MATERIALIZATION_STALL_THRESHOLD` is still appropriate — even at high
-tool-call cadence, a reset bumps `progress_seq` and a genuinely stalled
-turn does not.
+`progress_seq` increments at `RequestLifecycle::advance` (lifecycle
+boundaries) but not on every flush, so it alone is insufficient as a
+within-boundary signal — keep the length fields. The 5-second
+`MATERIALIZATION_STALL_THRESHOLD` remains appropriate.
 
 ## Migration and backcompat
 
@@ -375,8 +372,10 @@ subsection.
   response row's `content` history follows the expected reset pattern.
   Cover the interrupt path via `persist_partial_turn`.
 - `crates/defra-agent-desktop-core/src/client/core/materialization.rs`
-  unit tests — drop `response_content_len` cases, ensure `progress_seq`
-  drives stall detection across reset boundaries.
+  unit tests — verify the stall detector still trips when the *current
+  tail* length plateaus (e.g. tokens emitted then silence within a
+  boundary), and recovers when length resumes growing or boundary
+  counters advance.
 - `apps/desktop-tauri/src-tauri/src/bridge/snapshot/tests/session_timeline.rs`
   — replace any tests that depend on `live_overlay_suffix` semantics with
   tests that assert overlay = `response.content` directly under the new
@@ -416,9 +415,18 @@ regressions surface through those suites and the new conformance test.
    observed in practice.
 2. **`token_count` semantics.** Kept cumulative across the turn — it's a
    metering field, not a rendering field. Documented in the contract.
-3. **`progress_seq` as primary stall signal.** Replaces cumulative
-   content length. Existing 5-second threshold should remain valid; quick
-   re-look during implementation.
+3. **Stall detector signal under tail-reset.**
+   `MaterializationSignature` (`materialization.rs:24-35`) uses
+   `response_content_len` / `response_reasoning_len` as a within-boundary
+   liveness signal. Under tail-reset semantics those fields measure the
+   *current tail* rather than cumulative turn length — actually a cleaner
+   stall signal, because the tail resets to 0 after every commit and grows
+   monotonically during active streaming. `progress_seq` only bumps at
+   `RequestLifecycle::advance` (lifecycle boundaries, not every flush), so
+   it alone is insufficient as a within-boundary signal. The fields stay in
+   the signature; their *meaning* shifts from "turn-cumulative growth" to
+   "current-tail growth". Doc-comment update only; no detector logic
+   change.
 4. **`@branchable` revisions.** Adds a small constant number of extra
    revisions per turn (resets at boundaries + finalize). No consumer
    relies on revision count today.
@@ -459,8 +467,12 @@ Six commits, each independently reviewable and `cargo check` /
    `stream_processor/tests.rs`.
 
 5. **`crates/defra-agent-desktop-core/src/client/core/materialization.rs`**
-   — stall signature. Drop `response_content_len` and
-   `response_reasoning_len`. Update tests.
+   — stall signature meaning update. Doc-comment on
+   `MaterializationSignature` to reflect that
+   `response_content_len` / `response_reasoning_len` now measure the
+   *current tail* (resets at every commit boundary), not turn-cumulative
+   growth. Add a test asserting the detector still trips on within-boundary
+   silence; struct shape unchanged.
 
 6. **Bridge + integration tests.** Delete `live_overlay_suffix` and
    `active_turn_committed_assistant_texts` in
