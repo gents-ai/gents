@@ -47,7 +47,8 @@ type LeanClientShellCase = {
 };
 
 type LeanContractSnapshot = {
-  client_shell_cases: LeanClientShellCase[];
+  frontend_client_shell_case_count: number;
+  frontend_client_shell_cases: LeanClientShellCase[];
 };
 
 let leanContractSnapshot: LeanContractSnapshot | null = null;
@@ -107,9 +108,15 @@ function loadLeanClientShellCases() {
     leanContractSnapshot = JSON.parse(
       stdout.slice(begin + CONTRACT_JSON_BEGIN.length, end).trim(),
     ) as LeanContractSnapshot;
+    if (
+      leanContractSnapshot.frontend_client_shell_case_count !==
+      leanContractSnapshot.frontend_client_shell_cases.length
+    ) {
+      throw new Error("Lean frontend ClientShell case count drifted from emitted cases");
+    }
   }
 
-  return leanContractSnapshot.client_shell_cases;
+  return leanContractSnapshot.frontend_client_shell_cases;
 }
 
 function runLeanCommand(proofsDir: string, args: string[]) {
@@ -272,7 +279,10 @@ function compactWorkflow(workflow: ChatWorkflowState) {
 
 describe("projectChatShell", () => {
   test("matches generated Lean ClientShell projection contracts", () => {
-    for (const contractCase of loadLeanClientShellCases()) {
+    const contractCases = loadLeanClientShellCases();
+    expect(contractCases).toHaveLength(15);
+
+    for (const contractCase of contractCases) {
       const projection = projectChatShell({
         clientAvailable: contractCase.frontend_client_available,
         selectedAgentDid: agentDid(contractCase.frontend_selected_agent_did),
@@ -305,7 +315,7 @@ describe("projectChatShell", () => {
         }
       }
     }
-  });
+  }, 30000);
 
   test("blocks follow up while turn is streaming", () => {
     const projection = projectChatShell({

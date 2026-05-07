@@ -162,9 +162,13 @@ def caseCoverage : List CoverageEntry :=
       "FleetSlotAccounting"
       "state_machine_conformance::generated_slot_accounting_cases_pin_inference_and_fleet_contracts"
   , consumerCoverage
-      "client_shell_cases"
-      "ClientShellCases"
-      "state_machine_conformance::generated_client_shell_cases_cover_shell_projection_contracts"
+      "frontend_client_shell_cases"
+      "FrontendClientShellCases"
+      "apps/desktop-tauri/src/lib/chat-shell.test.ts::projectChatShell matches generated Lean ClientShell projection contracts"
+  , consumerCoverage
+      "desktop_client_shell_cases"
+      "DesktopClientShellCases"
+      "defra_agent_desktop_tauri::bridge::snapshot::tests::session_state::session_snapshot_projection_consumes_generated_client_shell_contract_cases"
   , consumerCoverage
       "tool_cases"
       "ToolExecutionPreflight"

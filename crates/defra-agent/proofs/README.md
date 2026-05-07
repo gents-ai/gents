@@ -179,8 +179,10 @@ witness rows. Those rows keep the JSON small while pinning generation
 publication/router observation/request admission, session retry guards for
 deadline closure, retry budget, latest-request status, duplicate new request
 ids, and identity preservation, and shell projection behavior for selection
-preservation, matching request observation, stale workflow cleanup, transport
-no-op, submit gates, and terminal follow-up allowance.
+preservation, stale and matching request observation, stale workflow cleanup,
+transport no-op, submit gates, and terminal follow-up allowance. ClientShell
+rows are split into a frontend list consumed by the TypeScript chat projection
+test and a desktop list consumed by the Rust session-snapshot bridge test.
 
 It also emits `ToolExecution` preflight and retry witness rows, plus the
 `ToolRetryDisposition` vocabulary, so Rust tests can reject accidental MCP
@@ -191,8 +193,8 @@ The same JSON includes `coverage_ledger`, maintained in
 `lean_contract_coverage_ledger_accounts_for_every_emitted_domain` compares that
 ledger against every emitted vocabulary domain, state-machine domain,
 trigger-case group, runtime witness group, session-recovery witness group,
-ClientShell case group, ToolExecution case group, and follow-up hook. Each entry
-must name a Rust consumer or an accepted
+frontend and desktop ClientShell case groups, ToolExecution case group, and
+follow-up hook. Each entry must name a Rust/TypeScript consumer or an accepted
 product-boundary/follow-up, so adding a Lean contract also requires making its
 runtime coverage explicit.
 
@@ -523,10 +525,11 @@ desktop-style multi-session shell:
 
 `Proofs/Conformance/ClientShell/Contracts.lean` turns those properties into
 finite executable cases emitted through `Proofs.Conformance.Contracts`. The
-frontend `projectChatShell` test consumes the generated projection fields, and
-desktop Rust snapshot tests consume the generated observed/preferred request
-fields. This is the formal guard against render-time "repair" logic corrupting
-local UI state.
+frontend `projectChatShell` test consumes all generated frontend projection
+fields, and desktop Rust snapshot tests consume the selected-session subset
+with generated observed/preferred request fields. Rows without a selected
+session are frontend-owned submit-gate cases. This is the formal guard against
+render-time "repair" logic corrupting local UI state.
 
 ## Executable Model
 

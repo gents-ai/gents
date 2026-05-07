@@ -136,10 +136,21 @@ fn lean_executable_contracts_cover_initial_domains() {
         5
     );
     assert_eq!(
-        lean_contract_snapshot().client_shell_case_count,
-        lean_contract_snapshot().client_shell_cases.len()
+        lean_contract_snapshot().frontend_client_shell_case_count,
+        lean_contract_snapshot().frontend_client_shell_cases.len()
     );
-    assert_eq!(lean_contract_snapshot().client_shell_cases.len(), 15);
+    assert_eq!(
+        lean_contract_snapshot().frontend_client_shell_cases.len(),
+        15
+    );
+    assert_eq!(
+        lean_contract_snapshot().desktop_client_shell_case_count,
+        lean_contract_snapshot().desktop_client_shell_cases.len()
+    );
+    assert_eq!(
+        lean_contract_snapshot().desktop_client_shell_cases.len(),
+        12
+    );
     assert_eq!(lean_contract_snapshot().tool_preflight_cases.len(), 9);
     assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 45);
     assert_eq!(lean_contract_snapshot().command_policy_cases.len(), 10);
@@ -327,14 +338,25 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert(("fleet_cases".to_string(), "FleetSlotAccounting".to_string()));
     }
     assert_eq!(
-        snapshot.client_shell_case_count,
-        snapshot.client_shell_cases.len(),
-        "Lean ClientShell case count drifted from emitted cases"
+        snapshot.frontend_client_shell_case_count,
+        snapshot.frontend_client_shell_cases.len(),
+        "Lean frontend ClientShell case count drifted from emitted cases"
     );
-    if !snapshot.client_shell_cases.is_empty() {
+    if !snapshot.frontend_client_shell_cases.is_empty() {
         emitted.insert((
-            "client_shell_cases".to_string(),
-            "ClientShellCases".to_string(),
+            "frontend_client_shell_cases".to_string(),
+            "FrontendClientShellCases".to_string(),
+        ));
+    }
+    assert_eq!(
+        snapshot.desktop_client_shell_case_count,
+        snapshot.desktop_client_shell_cases.len(),
+        "Lean desktop ClientShell case count drifted from emitted cases"
+    );
+    if !snapshot.desktop_client_shell_cases.is_empty() {
+        emitted.insert((
+            "desktop_client_shell_cases".to_string(),
+            "DesktopClientShellCases".to_string(),
         ));
     }
     if !snapshot.tool_preflight_cases.is_empty() {
@@ -377,7 +399,8 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "session_recovery_cases",
         "slot_cases",
         "fleet_cases",
-        "client_shell_cases",
+        "frontend_client_shell_cases",
+        "desktop_client_shell_cases",
         "tool_cases",
         "command_policy_cases",
         "follow_up_hook",
@@ -502,6 +525,10 @@ fn generated_client_shell_cases_cover_shell_projection_contracts() {
 
     let stale = lean_client_shell_case("awaiting_stale_request_observation");
     assert!(!stale.workflow_advanced);
+    assert_eq!(
+        stale.property.as_str(),
+        "awaiting_stale_request_observation"
+    );
     assert_eq!(stale.post_workflow_kind.as_str(), "awaiting");
     assert_eq!(
         stale.frontend_expected_send_blocked_reason.as_deref(),
