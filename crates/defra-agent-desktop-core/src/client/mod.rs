@@ -10,6 +10,7 @@ mod schema;
 mod store;
 
 pub use collection_resolver::CollectionResolver;
+pub use query::{fetch_doc_patch, load_agent_scoped_snapshot};
 pub use core::{ClientCore, ClientCoreOptions, ClientPeerStatus, P2PHealth, P2PHealthStatus};
 pub use mutations::{
     CreatedConversation, PeerMutationResult, SubmitRequestOptions, SubmittedRequest,
