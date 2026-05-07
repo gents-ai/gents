@@ -7,7 +7,9 @@ use super::*;
 use crate::ensure_runtime_schemas;
 use crate::lean_vocab_test::{
     assert_lean_contract_vocabulary_matches, assert_lean_transition_is_legal,
-    assert_state_machine_contract_is_complete, lean_runtime_reconcile_case, LeanContractVocabulary,
+    assert_lifecycle_transition_cases_partition, assert_state_machine_contract_is_complete,
+    lean_process_transition_cases, lean_runtime_reconcile_case, lean_vocabulary_values,
+    LeanContractVocabulary, LeanLifecycleTransitionCase,
 };
 
 #[derive(Debug, Deserialize)]
@@ -87,6 +89,144 @@ fn rust_process_state_transitions_match_lean_contract() {
     assert_lean_transition_is_legal("Process", "recovering", "ready");
     assert_lean_transition_is_legal("Process", "ready", "shuttingDown");
     assert_lean_transition_is_legal("Process", "shuttingDown", "shutdown");
+    assert_lifecycle_transition_cases_partition(
+        "Process",
+        &lean_vocabulary_values("ProcessState"),
+        lean_process_transition_cases(),
+    );
+}
+
+fn rust_process_transition_action(from: &str, to: &str) -> Option<&'static str> {
+    match (from, to) {
+        ("uninitialized", "recovering") => Some("startupRecover"),
+        ("uninitialized", "ready") => Some("startupClean"),
+        ("recovering", "ready") => Some("recoveryComplete"),
+        ("ready", "shuttingDown") => Some("beginShutdown"),
+        ("shuttingDown", "shutdown") => Some("finishShutdown"),
+        _ => None,
+    }
+}
+
+fn rust_process_transition_classification(from: &str, to: &str) -> &'static str {
+    if rust_process_transition_action(from, to).is_some() {
+        "legal"
+    } else {
+        "illegal"
+    }
+}
+
+fn process_state_from_contract(state: &str) -> ProcessLifecycleState {
+    match state {
+        "uninitialized" => ProcessLifecycleState::Uninitialized,
+        "recovering" => ProcessLifecycleState::Recovering,
+        "ready" => ProcessLifecycleState::Ready,
+        "shuttingDown" => ProcessLifecycleState::ShuttingDown,
+        "shutdown" => ProcessLifecycleState::Shutdown,
+        other => panic!("unknown generated Process state {other:?}"),
+    }
+}
+
+async fn drive_generated_process_legal_case(case: &LeanLifecycleTransitionCase) {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let agent_did = format!("did:defra-agent:process-contract:{}", case.name);
+    let status = RuntimeStatusHandle::new(node.clone(), agent_did.clone());
+    let action = case
+        .action
+        .as_deref()
+        .expect("legal Process transition case must carry an action");
+
+    match action {
+        "startupRecover" | "startupClean" => {
+            status
+                .set_process_state(process_state_from_contract(&case.to))
+                .await;
+        }
+        "recoveryComplete" => {
+            status
+                .set_process_state(ProcessLifecycleState::Recovering)
+                .await;
+            status.set_process_state(ProcessLifecycleState::Ready).await;
+        }
+        "beginShutdown" => {
+            status.set_process_state(ProcessLifecycleState::Ready).await;
+            status
+                .set_process_state(ProcessLifecycleState::ShuttingDown)
+                .await;
+        }
+        "finishShutdown" => {
+            status
+                .set_process_state(ProcessLifecycleState::ShuttingDown)
+                .await;
+            status
+                .set_process_state(ProcessLifecycleState::Shutdown)
+                .await;
+        }
+        other => panic!(
+            "generated Process transition {} has unsupported action {other:?}",
+            case.name
+        ),
+    }
+
+    let row = fetch_runtime_row(node.as_ref(), &agent_did).await;
+    assert_eq!(
+        row.process_state, case.to,
+        "generated Process transition {} expected {} -> {} classified as {} via {:?}, got persisted process_state={}",
+        case.name, case.from, case.to, case.classification, case.action, row.process_state
+    );
+}
+
+#[tokio::test]
+async fn generated_process_transition_cases_match_runtime_status_policy() {
+    let mut legal_count = 0;
+    let mut illegal_count = 0;
+
+    for case in lean_process_transition_cases() {
+        let rust_classification = rust_process_transition_classification(&case.from, &case.to);
+        assert_eq!(
+            case.classification, rust_classification,
+            "Process transition {} expected classification drift for {} -> {}; Lean action={:?} boundary={:?}",
+            case.name, case.from, case.to, case.action, case.boundary
+        );
+
+        match case.classification.as_str() {
+            "legal" => {
+                legal_count += 1;
+                assert_eq!(
+                    case.action.as_deref(),
+                    rust_process_transition_action(&case.from, &case.to),
+                    "Process transition {} legal writer action drifted for {} -> {}",
+                    case.name,
+                    case.from,
+                    case.to
+                );
+                drive_generated_process_legal_case(case).await;
+            }
+            "illegal" => {
+                illegal_count += 1;
+                assert!(
+                    rust_process_transition_action(&case.from, &case.to).is_none(),
+                    "Process transition {} is ordinary illegal but Rust has a writer path for {} -> {}",
+                    case.name,
+                    case.from,
+                    case.to
+                );
+            }
+            "productUnreachable" => {
+                panic!(
+                    "Process transition {} unexpectedly emitted product-unreachable classification",
+                    case.name
+                );
+            }
+            other => panic!(
+                "generated Process transition {} has unknown classification {other:?}",
+                case.name
+            ),
+        }
+    }
+
+    assert_eq!(legal_count, 5);
+    assert_eq!(illegal_count, 20);
 }
 
 #[test]

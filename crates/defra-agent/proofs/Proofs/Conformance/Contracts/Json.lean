@@ -17,6 +17,17 @@ namespace Conformance.Contracts
 
 open Conformance.ContractCases
 
+def lifecycleTransitionCaseJson (witness : LifecycleTransitionCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"domain\":" ++ jsonString witness.domain ++ ","
+    ++ "\"from\":" ++ jsonString witness.fromState ++ ","
+    ++ "\"to\":" ++ jsonString witness.toState ++ ","
+    ++ "\"classification\":" ++ jsonString witness.classification ++ ","
+    ++ "\"action\":" ++ jsonOptionalString witness.action ++ ","
+    ++ "\"boundary\":" ++ jsonOptionalString witness.boundary
+    ++ "}"
+
 def runtimeReconcileCaseJson (witness : RuntimeReconcileCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
@@ -280,6 +291,10 @@ def snapshotJson : String :=
       ++ jsonArray (vocabularies.map VocabularyContract.toJson) ++ ","
     ++ "\"state_machines\":"
       ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
+    ++ "\"request_transition_cases\":"
+      ++ jsonArray (requestTransitionCases.map lifecycleTransitionCaseJson) ++ ","
+    ++ "\"process_transition_cases\":"
+      ++ jsonArray (processTransitionCases.map lifecycleTransitionCaseJson) ++ ","
     ++ "\"trigger_dispatch_case_count\":"
       ++ toString Conformance.TriggerContracts.triggerDispatchCaseCount ++ ","
     ++ "\"trigger_dispatch_cases\":"
