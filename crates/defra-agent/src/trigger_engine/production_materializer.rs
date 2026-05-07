@@ -7,12 +7,11 @@
 //!   `TriggerLineage` so the normal watcher/router/daemon path claims and
 //!   executes it while preserving `caused_by_trigger_id` /
 //!   `caused_by_trigger_kind`.
-//! * `has_nonterminal_request_for_trigger` performs a GraphQL query against
+//! * `has_active_runtime_request_for_trigger` performs a GraphQL query against
 //!   `AgentRequest`, filtering on the `(trigger_id, trigger_kind)` tuple and
-//!   the non-terminal lifecycle states (`pending`, `claimed`, `processing`,
-//!   `inputRequired`).
-//! * `supersede_nonterminal_requests_for_trigger` transitions every matching
-//!   non-terminal request to `lifecycle_state = superseded` /
+//!   the active runtime lifecycle states (`pending`, `claimed`, `processing`).
+//! * `supersede_active_runtime_requests_for_trigger` transitions every matching
+//!   active runtime request to `lifecycle_state = superseded` /
 //!   `status = superseded`.
 //!
 //! Behavior lookup happens against a `watch::Receiver<Arc<ActiveRuntimeSnapshot>>`
@@ -28,7 +27,7 @@ use tokio::sync::watch;
 
 use crate::graphql::escape_graphql_string;
 use crate::lifecycle::{
-    nonterminal_lifecycle_state_graphql_list, task_run_conversation_title,
+    active_runtime_lifecycle_state_graphql_list, task_run_conversation_title,
     write_pending_agent_request_with_lineage_and_conversation_title, ExecutionOrigin,
     TriggerLineage,
 };
@@ -154,7 +153,7 @@ impl MaterializerHandle for ProductionMaterializer {
         })
     }
 
-    fn has_nonterminal_request_for_trigger(
+    fn has_active_runtime_request_for_trigger(
         &self,
         trigger_id: &str,
         trigger_kind: TriggerKind,
@@ -162,18 +161,18 @@ impl MaterializerHandle for ProductionMaterializer {
         let node = self.node.clone();
         let escaped_trigger_id = escape_graphql_string(trigger_id);
         let trigger_kind_str = trigger_kind.as_str();
-        let nonterminal_states = nonterminal_lifecycle_state_graphql_list();
+        let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
         Box::pin(async move {
             // Strict tuple match on `(caused_by_trigger_id, caused_by_trigger_kind)`
-            // + non-terminal `lifecycle_state`. Limit 1 is sufficient: we only
-            // need a boolean signal for the concurrency gate.
+            // + active runtime `lifecycle_state`. Limit 1 is sufficient: we
+            // only need a boolean signal for the concurrency gate.
             let query = format!(
                 r#"query {{
                     AgentRequest(
                         filter: {{
                             caused_by_trigger_id: {{ _eq: "{trigger_id}" }},
                             caused_by_trigger_kind: {{ _eq: "{trigger_kind}" }},
-                            lifecycle_state: {{ _in: {nonterminal_states} }}
+                            lifecycle_state: {{ _in: {active_runtime_states} }}
                         }},
                         limit: 1
                     ) {{ _docID }}
@@ -184,7 +183,7 @@ impl MaterializerHandle for ProductionMaterializer {
             let resp = node.execute(&query).await;
             if resp.has_errors() {
                 anyhow::bail!(
-                    "query for nonterminal AgentRequest by trigger failed: {:?}",
+                    "query for active runtime AgentRequest by trigger failed: {:?}",
                     resp.errors
                 );
             }
@@ -199,7 +198,7 @@ impl MaterializerHandle for ProductionMaterializer {
         })
     }
 
-    fn supersede_nonterminal_requests_for_trigger(
+    fn supersede_active_runtime_requests_for_trigger(
         &self,
         trigger_id: &str,
         trigger_kind: TriggerKind,
@@ -207,21 +206,21 @@ impl MaterializerHandle for ProductionMaterializer {
         let node = self.node.clone();
         let escaped_trigger_id = escape_graphql_string(trigger_id);
         let trigger_kind_str = trigger_kind.as_str();
-        let nonterminal_states = nonterminal_lifecycle_state_graphql_list();
+        let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
         Box::pin(async move {
-            // Single bulk update against the non-terminal tuple match. DefraDB
-            // returns the list of updated documents in the mutation response
-            // so we can count how many requests were transitioned — the
-            // engine's `LatestOnly` path treats this count as observational
-            // (logged, not gated on). Failure reason left blank; the engine
-            // layer does not have a structured reason to attach.
+            // Single bulk update against the active runtime tuple match.
+            // DefraDB returns the list of updated documents in the mutation
+            // response so we can count how many requests were transitioned;
+            // the engine's `LatestOnly` path treats this count as
+            // observational (logged, not gated on). Failure reason left blank;
+            // the engine layer does not have a structured reason to attach.
             let mutation = format!(
                 r#"mutation {{
                     update_AgentRequest(
                         filter: {{
                             caused_by_trigger_id: {{ _eq: "{trigger_id}" }},
                             caused_by_trigger_kind: {{ _eq: "{trigger_kind}" }},
-                            lifecycle_state: {{ _in: {nonterminal_states} }}
+                            lifecycle_state: {{ _in: {active_runtime_states} }}
                         }},
                         input: {{
                             status: "superseded",
@@ -235,7 +234,7 @@ impl MaterializerHandle for ProductionMaterializer {
             let resp = node.execute(&mutation).await;
             if resp.has_errors() {
                 anyhow::bail!(
-                    "supersede nonterminal AgentRequests by trigger failed: {:?}",
+                    "supersede active runtime AgentRequests by trigger failed: {:?}",
                     resp.errors
                 );
             }
@@ -251,7 +250,7 @@ impl MaterializerHandle for ProductionMaterializer {
                     trigger_id = %escaped_trigger_id,
                     trigger_kind = %trigger_kind_str,
                     count,
-                    "superseded non-terminal AgentRequests for trigger"
+                    "superseded active runtime AgentRequests for trigger"
                 );
             }
             Ok(count)

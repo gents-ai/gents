@@ -250,7 +250,8 @@ Operational meaning:
 - `claimed` owns admission but has not started inference
 - `processing` is actively executing
 - `inputRequired` is reserved for a blocked external-input cycle; current Rust
-  runtime code does not emit it because autonomous tool calls run inline
+  runtime code does not emit it because autonomous tool calls run inline, and
+  active runtime filters exclude it until that loop is modeled
 - `dead` is persisted only for stale pre-claim TTL expiry; post-claim provider
   failure, retry exhaustion, tool failure, and deadline expiry are terminal
   `failed`
@@ -609,8 +610,10 @@ are not deviations.
 
 Current boundaries:
 
-- `inputRequired` is reserved persisted/client vocabulary. Rust parses it and
-  treats it as non-terminal if observed, but the runtime does not emit it today.
+- `inputRequired` is reserved persisted/client vocabulary. Rust parses it as
+  non-terminal client vocabulary if observed, but active runtime lifecycle
+  filters use only `pending`, `claimed`, and `processing` until external input
+  is modeled.
 - `dead` is current product behavior only for stale pre-claim TTL expiry.
   Post-claim provider failure, retry exhaustion, tool failure, and deadline
   expiry remain terminal `failed`.

@@ -127,20 +127,63 @@ impl PersistedLifecycleState {
         )
     }
 
+    fn from_persisted(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "claimed" => Some(Self::Claimed),
+            "processing" => Some(Self::Processing),
+            "inputRequired" => Some(Self::InputRequired),
+            "completed" => Some(Self::Completed),
+            "failed" => Some(Self::Failed),
+            "superseded" => Some(Self::Superseded),
+            "dead" => Some(Self::Dead),
+            "interrupted" => Some(Self::Interrupted),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
     const fn is_nonterminal(self) -> bool {
         !self.is_terminal()
     }
+
+    const fn is_active_runtime(self) -> bool {
+        matches!(self, Self::Pending | Self::Claimed | Self::Processing)
+    }
 }
 
-pub(crate) fn nonterminal_lifecycle_state_graphql_list() -> String {
-    let states = PersistedLifecycleState::ALL
-        .iter()
-        .copied()
-        .filter(|state| state.is_nonterminal())
+fn lifecycle_state_graphql_list(
+    states: impl IntoIterator<Item = PersistedLifecycleState>,
+) -> String {
+    let states = states
+        .into_iter()
         .map(|state| format!(r#""{}""#, state.as_str()))
         .collect::<Vec<_>>()
         .join(", ");
     format!("[{states}]")
+}
+
+#[cfg(test)]
+pub(crate) fn nonterminal_lifecycle_state_graphql_list() -> String {
+    lifecycle_state_graphql_list(
+        PersistedLifecycleState::ALL
+            .iter()
+            .copied()
+            .filter(|state| state.is_nonterminal()),
+    )
+}
+
+pub(crate) fn active_runtime_lifecycle_state_graphql_list() -> String {
+    lifecycle_state_graphql_list(
+        PersistedLifecycleState::ALL
+            .iter()
+            .copied()
+            .filter(|state| state.is_active_runtime()),
+    )
+}
+
+fn lifecycle_state_graphql_list_for(states: &[PersistedLifecycleState]) -> String {
+    lifecycle_state_graphql_list(states.iter().copied())
 }
 
 pub struct RequestLifecycle {
@@ -259,6 +302,7 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert!(PersistedLifecycleState::InputRequired.is_nonterminal());
+        assert!(!PersistedLifecycleState::InputRequired.is_active_runtime());
         assert!(PersistedLifecycleState::Interrupted.is_terminal());
         let expected_nonterminal_graphql_list = format!(
             "[{}]",
@@ -272,6 +316,10 @@ mod tests {
         assert_eq!(
             nonterminal_lifecycle_state_graphql_list(),
             expected_nonterminal_graphql_list
+        );
+        assert_eq!(
+            active_runtime_lifecycle_state_graphql_list(),
+            r#"["pending", "claimed", "processing"]"#
         );
         assert_eq!(
             ExecutionOrigin::from_persisted(Some("scheduled")),

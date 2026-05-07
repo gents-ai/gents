@@ -76,7 +76,11 @@ impl RequestLifecycle {
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(
-                    filter: {{ _docID: {{ _eq: "{doc_id}" }}, status: {{ _eq: "pending" }} }},
+                    filter: {{
+                        _docID: {{ _eq: "{doc_id}" }},
+                        status: {{ _eq: "pending" }},
+                        lifecycle_state: {{ _eq: "pending" }}
+                    }},
                     input: {{
                         status: "interrupted",
                         lifecycle_state: "interrupted"
@@ -84,8 +88,34 @@ impl RequestLifecycle {
                 ) {{ _docID }}
             }}"#
         );
-        session::execute_mutation_with_retry(&self.node, &mutation, "interrupt_before_claim")
-            .await?;
+        let resp =
+            session::execute_mutation_with_retry(&self.node, &mutation, "interrupt_before_claim")
+                .await?;
+        if !resp
+            .data
+            .as_ref()
+            .and_then(|data| data.get("update_AgentRequest"))
+            .is_some_and(response_has_documents)
+        {
+            let request_view = self.request_view().await?;
+            if request_view.as_ref().is_some_and(|row| {
+                row.status == "interrupted" && row.lifecycle_state.as_deref() == Some("interrupted")
+            }) {
+                return Ok(());
+            }
+            anyhow::bail!(
+                "request {} could not transition pending -> interrupted; current status={} lifecycle_state={}",
+                self.request.request_id,
+                request_view
+                    .as_ref()
+                    .map(|row| row.status.as_str())
+                    .unwrap_or("missing"),
+                request_view
+                    .as_ref()
+                    .and_then(|row| row.lifecycle_state.as_deref())
+                    .unwrap_or("missing")
+            );
+        }
         Ok(())
     }
 
@@ -94,7 +124,11 @@ impl RequestLifecycle {
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(
-                    filter: {{ _docID: {{ _eq: "{doc_id}" }}, status: {{ _eq: "pending" }} }},
+                    filter: {{
+                        _docID: {{ _eq: "{doc_id}" }},
+                        status: {{ _eq: "pending" }},
+                        lifecycle_state: {{ _eq: "pending" }}
+                    }},
                     input: {{
                         status: "dead",
                         lifecycle_state: "dead",
@@ -103,7 +137,33 @@ impl RequestLifecycle {
                 ) {{ _docID }}
             }}"#
         );
-        session::execute_mutation_with_retry(&self.node, &mutation, "expire_stale").await?;
+        let resp =
+            session::execute_mutation_with_retry(&self.node, &mutation, "expire_stale").await?;
+        if !resp
+            .data
+            .as_ref()
+            .and_then(|data| data.get("update_AgentRequest"))
+            .is_some_and(response_has_documents)
+        {
+            let request_view = self.request_view().await?;
+            if request_view.as_ref().is_some_and(|row| {
+                row.status == "dead" && row.lifecycle_state.as_deref() == Some("dead")
+            }) {
+                return Ok(());
+            }
+            anyhow::bail!(
+                "request {} could not transition pending -> dead; current status={} lifecycle_state={}",
+                self.request.request_id,
+                request_view
+                    .as_ref()
+                    .map(|row| row.status.as_str())
+                    .unwrap_or("missing"),
+                request_view
+                    .as_ref()
+                    .and_then(|row| row.lifecycle_state.as_deref())
+                    .unwrap_or("missing")
+            );
+        }
         self.failure_reason = Some("Stale".to_string());
         Ok(())
     }
@@ -165,7 +225,8 @@ impl RequestLifecycle {
                 update_AgentRequest(
                     filter: {{
                         _docID: {{ _eq: "{doc_id}" }},
-                        status: {{ _eq: "pending" }}
+                        status: {{ _eq: "pending" }},
+                        lifecycle_state: {{ _eq: "pending" }}
                     }},
                     input: {{
                         status: "processing",

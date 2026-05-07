@@ -27,9 +27,11 @@ The current core request transition machine uses these current-product paths:
 
 `inputRequired` is reserved persisted/client protocol vocabulary. Rust does not
 currently emit it because there is no first-class approval or human-input loop;
-autonomous tool calls run inline. Future approval work should add an explicit
-extension module or widen the core transition relation together with Rust writer
-tests.
+autonomous tool calls run inline. Rust active runtime lifecycle filters are
+limited to `pending`, `claimed`, and `processing`, so reserved `inputRequired`
+rows are not interrupted or superseded by autonomous lifecycle code. Future
+approval work should add an explicit extension module or widen the core
+transition relation together with Rust writer tests.
 
 `dead` is a real terminal persisted state only for stale pre-claim work. Once a
 request is claimed, provider failures, retry exhaustion, tool failures, and

@@ -5,12 +5,14 @@ use super::*;
 impl RequestLifecycle {
     pub(super) async fn check_deduplication(&self) -> Result<DedupPlan> {
         let escaped_session_id = escape_graphql_string(&self.request.session_id);
+        let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
         let query = format!(
             r#"{{
                 AgentRequest(
                     filter: {{
                         session_id: {{ _eq: "{escaped_session_id}" }},
-                        status: {{ _in: ["pending", "processing"] }}
+                        status: {{ _in: ["pending", "processing"] }},
+                        lifecycle_state: {{ _in: {active_runtime_states} }}
                     }},
                     order: {{ created_at: ASC }}
                 ) {{
@@ -51,9 +53,9 @@ impl RequestLifecycle {
                 request_id = %self.request.request_id,
                 session_id = %self.request.session_id,
                 is_earliest,
-                non_terminal_count = rows.len(),
+                active_runtime_count = rows.len(),
                 duplicate_pending_count = duplicates_to_suppress.len(),
-                "deduplication check found multiple non-terminal requests"
+                "deduplication check found multiple active runtime requests"
             );
         }
 

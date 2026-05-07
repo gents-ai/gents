@@ -131,19 +131,19 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         rendered_prompt: &str,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + '_>>;
 
-    /// Check whether any non-terminal `AgentRequest` is currently bound to
+    /// Check whether any active runtime `AgentRequest` is currently bound to
     /// this trigger. Used by the concurrency gate to decide whether a new
     /// fire should skip or supersede.
-    fn has_nonterminal_request_for_trigger(
+    fn has_active_runtime_request_for_trigger(
         &self,
         trigger_id: &str,
         trigger_kind: TriggerKind,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>;
 
-    /// Supersede any non-terminal requests bound to this trigger. Returns the
-    /// number of requests transitioned. Invoked by `LatestOnly` concurrency
-    /// before materializing the new fire.
-    fn supersede_nonterminal_requests_for_trigger(
+    /// Supersede any active runtime requests bound to this trigger. Returns
+    /// the number of requests transitioned. Invoked by `LatestOnly`
+    /// concurrency before materializing the new fire.
+    fn supersede_active_runtime_requests_for_trigger(
         &self,
         trigger_id: &str,
         trigger_kind: TriggerKind,
@@ -226,10 +226,10 @@ impl TriggerEngine {
     /// Current scope (Tasks 30-33): enabled gate against the active snapshot,
     /// then render the task's prompt template (render failures return
     /// `Errored` without materializing), then apply the intent's concurrency
-    /// mode (`Parallel` fires unconditionally; `Serial` skips when a
-    /// non-terminal request already exists for this trigger tuple;
-    /// `LatestOnly` supersedes any prior non-terminal request under a
-    /// per-trigger lock), then hand the rendered prompt to the materializer.
+    /// mode (`Parallel` fires unconditionally; `Serial` skips when an active
+    /// runtime request already exists for this trigger tuple; `LatestOnly`
+    /// supersedes any prior active runtime request under a per-trigger lock),
+    /// then hand the rendered prompt to the materializer.
     #[allow(dead_code)]
     async fn dispatch(&self, intent: FireIntent) -> FireResult {
         if let Some(error) = intent.well_formed_error() {
@@ -306,10 +306,9 @@ impl TriggerEngine {
         };
 
         // 3. Concurrency gate. `Parallel` skips the check entirely. `Serial`
-        // queries the materializer for a non-terminal request bound to the
-        // same `(trigger_id, trigger_kind)` tuple — matching on the tuple is
+        // queries the materializer for an active runtime request bound to the
+        // same `(trigger_id, trigger_kind)` tuple; matching on the tuple is
         // load-bearing because trigger_id alone is not unique across kinds.
-        // `LatestOnly` lands in Task 32.
         use crate::runtime_snapshot::ConcurrencyMode;
         match intent.concurrency {
             ConcurrencyMode::Parallel => {
@@ -322,7 +321,7 @@ impl TriggerEngine {
                 if let Some(trigger_id) = intent.trigger_id.as_deref() {
                     match self
                         .materializer
-                        .has_nonterminal_request_for_trigger(trigger_id, intent.trigger_kind)
+                        .has_active_runtime_request_for_trigger(trigger_id, intent.trigger_kind)
                         .await
                     {
                         Ok(true) => {
@@ -365,7 +364,10 @@ impl TriggerEngine {
                     let _guard = lock.lock().await;
                     match self
                         .materializer
-                        .supersede_nonterminal_requests_for_trigger(trigger_id, intent.trigger_kind)
+                        .supersede_active_runtime_requests_for_trigger(
+                            trigger_id,
+                            intent.trigger_kind,
+                        )
                         .await
                     {
                         Ok(_count) => { /* proceed to materialize under lock */ }

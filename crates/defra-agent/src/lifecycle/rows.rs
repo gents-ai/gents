@@ -11,7 +11,7 @@ pub(super) struct DedupPlan {
 pub(super) enum RequestStatusTransition {
     Updated,
     AlreadyTarget,
-    ConflictingTerminal(String),
+    ConflictingTerminal(RequestViewRow),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -29,7 +29,7 @@ pub(super) struct StatusRow {
     pub(super) status: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(super) struct RequestViewRow {
     pub(super) status: String,
     pub(super) lifecycle_state: Option<String>,
