@@ -23,5 +23,6 @@ import Proofs.Conformance.DefraAgent
 import Proofs.Conformance.Boundaries
 import Proofs.Conformance.Deviations
 import Proofs.Conformance.SchedulerConformance
+import Proofs.Conformance.CoverageLedger
 import Proofs.Conformance.Contracts
 import Proofs.ApplyReconcile

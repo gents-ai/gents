@@ -32,6 +32,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
     pub(crate) session_recovery_cases: Vec<LeanSessionRecoveryCase>,
     pub(crate) follow_up_hooks: Vec<String>,
+    pub(crate) coverage_ledger: Vec<LeanCoverageEntry>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,6 +51,15 @@ pub(crate) struct LeanStateMachineContract {
     pub(crate) actions: Vec<String>,
     pub(crate) legal_transitions: Vec<LeanTransitionPair>,
     pub(crate) illegal_transitions: Vec<LeanTransitionPair>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanCoverageEntry {
+    pub(crate) category: String,
+    pub(crate) domain: String,
+    pub(crate) consumer: String,
+    pub(crate) accepted_boundary: String,
+    pub(crate) accepted_follow_up: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

@@ -9,6 +9,7 @@ import Proofs.Conformance.Triggers.Contracts
 import Proofs.RuntimeReconcile
 import Proofs.Conformance.ContractCases
 import Proofs.ToolExecution
+import Proofs.Conformance.CoverageLedger
 
 /-!
 # Rust Conformance Contracts
@@ -432,7 +433,9 @@ def snapshotJson : String :=
       ++ jsonArray (sessionRecoveryCases.map sessionRecoveryCaseJson) ++ ","
     ++ "\"follow_up_hooks\":["
       ++ jsonString "ToolExecution idempotent MCP call retry contract"
-      ++ "]"
+      ++ "],"
+    ++ "\"coverage_ledger\":"
+      ++ coverageLedgerJson
     ++ "}"
 
 def contractJsonBegin : String :=

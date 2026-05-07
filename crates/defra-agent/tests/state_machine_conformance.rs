@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use defra_agent::graphql::escape_graphql_string;
@@ -111,6 +112,100 @@ fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 6);
     assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 10);
+}
+
+#[test]
+fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
+    let snapshot = lean_contract_snapshot();
+    let mut emitted = BTreeSet::new();
+
+    for vocabulary in &snapshot.vocabularies {
+        emitted.insert(("vocabulary".to_string(), vocabulary.domain.clone()));
+    }
+    for machine in &snapshot.state_machines {
+        emitted.insert(("state_machine".to_string(), machine.domain.clone()));
+    }
+    assert_eq!(
+        snapshot.trigger_dispatch_case_count,
+        snapshot.trigger_dispatch_cases.len(),
+        "Lean trigger dispatch case count drifted from emitted cases"
+    );
+    if !snapshot.trigger_dispatch_cases.is_empty() {
+        emitted.insert(("trigger_cases".to_string(), "TriggerDispatch".to_string()));
+    }
+    if !snapshot.runtime_reconcile_cases.is_empty() {
+        emitted.insert((
+            "runtime_cases".to_string(),
+            "RuntimeReconcileCases".to_string(),
+        ));
+    }
+    if !snapshot.session_recovery_cases.is_empty() {
+        emitted.insert((
+            "session_recovery_cases".to_string(),
+            "SessionRecoveryCases".to_string(),
+        ));
+    }
+    for hook in &snapshot.follow_up_hooks {
+        emitted.insert(("follow_up_hook".to_string(), hook.clone()));
+    }
+
+    // Keep this mirrored with the category strings in CoverageLedger.lean.
+    let valid_categories = [
+        "vocabulary",
+        "state_machine",
+        "trigger_cases",
+        "runtime_cases",
+        "session_recovery_cases",
+        "follow_up_hook",
+    ];
+    let mut ledger = BTreeSet::new();
+
+    for entry in &snapshot.coverage_ledger {
+        assert!(
+            valid_categories.contains(&entry.category.as_str()),
+            "coverage ledger entry has unknown category: {:?}",
+            entry
+        );
+        assert!(
+            !entry.domain.trim().is_empty(),
+            "coverage ledger entry has an empty domain: {:?}",
+            entry
+        );
+
+        let has_consumer = !entry.consumer.trim().is_empty();
+        let has_boundary = !entry.accepted_boundary.trim().is_empty();
+        let has_follow_up = !entry.accepted_follow_up.trim().is_empty();
+        assert!(
+            has_consumer || has_boundary || has_follow_up,
+            "coverage ledger entry must name a consumer, boundary, or follow-up: {:?}",
+            entry
+        );
+        if entry.category == "follow_up_hook" {
+            assert!(
+                has_follow_up,
+                "follow-up hook ledger entries must carry accepted_follow_up text: {:?}",
+                entry
+            );
+        }
+
+        assert!(
+            ledger.insert((entry.category.clone(), entry.domain.clone())),
+            "duplicate coverage ledger entry for {:?} / {:?}",
+            entry.category,
+            entry.domain
+        );
+    }
+
+    let missing = emitted.difference(&ledger).cloned().collect::<Vec<_>>();
+    let extra = ledger.difference(&emitted).cloned().collect::<Vec<_>>();
+    assert!(
+        missing.is_empty() && extra.is_empty(),
+        "coverage ledger must exactly match emitted Lean contract domains\n  missing ledger entries: {:?}\n  extra ledger entries: {:?}\n  emitted: {:?}\n  ledger: {:?}",
+        missing,
+        extra,
+        emitted,
+        ledger
+    );
 }
 
 #[test]

@@ -233,7 +233,9 @@ there is no Rust or TypeScript consumer of `step` yet. Future shell changes that
 add workflow states, blocker reasons, behavior-mismatch handling, or transport
 coupling should extend `Proofs/ClientShell` first, then either emit a
 `Proofs.Conformance.Contracts` vocabulary/state-machine contract or add a
-proof-linked runtime test that names the theorem it protects.
+proof-linked runtime test that names the theorem it protects. Any emitted
+ClientShell contract must also add a `Proofs.Conformance.CoverageLedger` entry
+that names the Rust/TypeScript consumer or records the accepted boundary.
 
 ## Reference Pseudocode
 
