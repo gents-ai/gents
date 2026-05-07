@@ -92,7 +92,7 @@ def vocabularyCoverage : List CoverageEntry :=
   , consumerCoverage
       "vocabulary"
       "ToolRetryDisposition"
-      "mcp_pool::tests::tool_retry_disposition_contract_matches_mcp_pool_policy"
+      "mcp_pool::tests::tool_retry_disposition_contract_cases_match_mcp_pool_policy"
   ]
 
 def stateMachineCoverage : List CoverageEntry :=
@@ -155,14 +155,18 @@ def caseCoverage : List CoverageEntry :=
       "client_shell_cases"
       "ClientShellCases"
       "state_machine_conformance::generated_client_shell_cases_cover_shell_projection_contracts"
+  , consumerCoverage
+      "tool_cases"
+      "ToolExecutionPreflight"
+      "state_machine_conformance::generated_tool_execution_cases_cover_preflight_and_retry_contracts"
+  , consumerCoverage
+      "tool_cases"
+      "ToolExecutionRetry"
+      "mcp_pool::tests::tool_retry_disposition_contract_cases_match_mcp_pool_policy"
   ]
 
 def followUpHookCoverage : List CoverageEntry :=
-  [ followUpCoverage
-      "follow_up_hook"
-      "ToolExecution idempotent MCP call retry contract"
-      "Proofs.Conformance.Boundaries: add MCP idempotency metadata before widening retries"
-  ]
+  []
 
 def coverageLedger : List CoverageEntry :=
   vocabularyCoverage ++ stateMachineCoverage ++ caseCoverage ++ followUpHookCoverage

@@ -182,16 +182,17 @@ ids, and identity preservation, and shell projection behavior for selection
 preservation, matching request observation, stale workflow cleanup, transport
 no-op, submit gates, and terminal follow-up allowance.
 
-It also emits the `ToolRetryDisposition` vocabulary from
-`Proofs.ToolExecution` so Rust tests can reject accidental MCP `call_tool`
-retry drift before idempotency metadata exists.
+It also emits `ToolExecution` preflight and retry witness rows, plus the
+`ToolRetryDisposition` vocabulary, so Rust tests can reject accidental MCP
+preflight or `call_tool` retry drift before idempotency metadata changes.
 
 The same JSON includes `coverage_ledger`, maintained in
 `Proofs/Conformance/CoverageLedger.lean`. The Rust test
 `lean_contract_coverage_ledger_accounts_for_every_emitted_domain` compares that
 ledger against every emitted vocabulary domain, state-machine domain,
-trigger-case group, runtime witness group, session-recovery witness group, and
-follow-up hook. Each entry must name a Rust consumer or an accepted
+trigger-case group, runtime witness group, session-recovery witness group,
+ClientShell case group, ToolExecution case group, and follow-up hook. Each entry
+must name a Rust consumer or an accepted
 product-boundary/follow-up, so adding a Lean contract also requires making its
 runtime coverage explicit.
 
@@ -200,11 +201,10 @@ the generated JSON changes on the next Rust test run. The Rust tests then fail
 unless the runtime behavior or the documented product-boundary assertions are
 updated to match.
 
-`ToolExecution` currently exports only retry disposition vocabulary and theorems.
-Before adding idempotent MCP retries, extend that Lean model first with the
-metadata source, retry budget, and replay/idempotency assumptions, then add a
-Rust contract that ties advertised MCP metadata to the widened retry rule and
-replace the `follow_up_hook` ledger entry with the executable contract domain.
+`ToolExecution` exports executable preflight/retry contract cases. Before adding
+idempotent MCP retries, extend that Lean model first with the metadata source,
+retry budget, and replay/idempotency assumptions, then update the Rust contract
+that ties advertised MCP metadata to the widened retry rule.
 
 Future executable `ToolExecution` or other contracts should extend
 `Proofs.Conformance.Contracts` and add matching coverage-ledger entries in the

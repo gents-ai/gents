@@ -22,8 +22,10 @@ use tokio::sync::RwLock;
 /// generic parameter (which includes rmcp's internal reqwest 0.13 Client).
 type ListToolsFuture = Pin<Box<dyn Future<Output = Result<ListToolsResult>> + Send + 'static>>;
 type CallToolFuture = Pin<Box<dyn Future<Output = Result<CallToolResult>> + Send + 'static>>;
+type ConnectFuture = Pin<Box<dyn Future<Output = Result<McpConnection>> + Send + 'static>>;
 type ListToolsFn = dyn Fn() -> ListToolsFuture + Send + Sync;
 type CallToolFn = dyn Fn(CallToolRequestParams) -> CallToolFuture + Send + Sync;
+type ConnectFn = dyn Fn(String, String) -> ConnectFuture + Send + Sync;
 
 struct McpConnection {
     endpoint: String,
@@ -65,6 +67,89 @@ where
     }
 }
 
+async fn connect_mcp_service(service_id: &str, endpoint: &str) -> Result<McpConnection> {
+    let transport = rmcp::transport::StreamableHttpClientTransport::from_uri(endpoint);
+    let client = ()
+        .serve(transport)
+        .await
+        .map_err(|e| anyhow::anyhow!("MCP handshake failed for {service_id} ({endpoint}): {e}"))?;
+    Ok(wrap_connection(endpoint.to_string(), client))
+}
+
+fn default_connect_fn() -> Arc<ConnectFn> {
+    Arc::new(|service_id: String, endpoint: String| {
+        Box::pin(async move { connect_mcp_service(&service_id, &endpoint).await })
+    })
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolExecutionOperation {
+    McpListTools,
+    McpCall,
+    NativeCommand,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolIdempotencyEvidence {
+    Unknown,
+    Idempotent,
+    NonIdempotent,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolFailureClass {
+    ArgumentInvalid,
+    ServiceUnavailable,
+    Transport,
+    ToolReturnedError,
+    External,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolRetryDisposition {
+    DoNotRetry,
+    RetrySafeRead,
+    RetryIdempotentToolCall,
+}
+
+#[cfg(test)]
+impl ToolRetryDisposition {
+    pub(crate) fn as_contract(self) -> &'static str {
+        match self {
+            Self::DoNotRetry => "doNotRetry",
+            Self::RetrySafeRead => "retrySafeRead",
+            Self::RetryIdempotentToolCall => "retryIdempotentToolCall",
+        }
+    }
+}
+
+/// Test-only mirror of `Proofs.ToolExecution.retryDisposition`.
+///
+/// Production retry behavior is still encoded by the `list_tools` safe-read
+/// retry path and the absence of a `call_tool` retry loop.
+#[cfg(test)]
+pub(crate) fn tool_retry_disposition(
+    operation: ToolExecutionOperation,
+    idempotency: ToolIdempotencyEvidence,
+    failure: ToolFailureClass,
+) -> ToolRetryDisposition {
+    match (operation, idempotency, failure) {
+        (ToolExecutionOperation::McpListTools, _, ToolFailureClass::Transport) => {
+            ToolRetryDisposition::RetrySafeRead
+        }
+        (
+            ToolExecutionOperation::McpCall,
+            ToolIdempotencyEvidence::Idempotent,
+            ToolFailureClass::Transport,
+        ) => ToolRetryDisposition::RetryIdempotentToolCall,
+        _ => ToolRetryDisposition::DoNotRetry,
+    }
+}
+
 /// Connection pool for MCP data-service clients.
 ///
 /// Connections are created lazily on the first `list_tools` or `call_tool`
@@ -74,12 +159,28 @@ where
 #[derive(Clone)]
 pub struct McpPool {
     inner: Arc<RwLock<HashMap<String, McpConnection>>>,
+    connect_fn: Arc<ConnectFn>,
 }
 
 impl McpPool {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(RwLock::new(HashMap::new())),
+            connect_fn: default_connect_fn(),
+        }
+    }
+
+    #[cfg(test)]
+    fn new_with_connector<F, Fut>(connector: F) -> Self
+    where
+        F: Fn(String, String) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<McpConnection>> + Send + 'static,
+    {
+        Self {
+            inner: Arc::new(RwLock::new(HashMap::new())),
+            connect_fn: Arc::new(move |service_id, endpoint| {
+                Box::pin(connector(service_id, endpoint))
+            }),
         }
     }
 
@@ -186,15 +287,8 @@ impl McpPool {
         }
 
         tracing::info!(service_id, endpoint, "connecting MCP client");
-        let transport = rmcp::transport::StreamableHttpClientTransport::from_uri(endpoint);
-        let client = ().serve(transport).await.map_err(|e| {
-            anyhow::anyhow!("MCP handshake failed for {service_id} ({endpoint}): {e}")
-        })?;
-
-        guard.insert(
-            service_id.to_string(),
-            wrap_connection(endpoint.to_string(), client),
-        );
+        let connection = (self.connect_fn)(service_id.to_string(), endpoint.to_string()).await?;
+        guard.insert(service_id.to_string(), connection);
         Ok(())
     }
 }

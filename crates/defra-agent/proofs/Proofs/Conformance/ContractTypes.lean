@@ -39,6 +39,10 @@ def jsonArray (values : List String) : String :=
 def jsonStringArray (values : List String) : String :=
   jsonArray (values.map jsonString)
 
+def jsonOptionalString : Option String → String
+  | none => "null"
+  | some value => jsonString value
+
 def dedup {α : Type} [DecidableEq α] (values : List α) : List α :=
   values.foldl
     (fun seen value => if value ∈ seen then seen else seen ++ [value])

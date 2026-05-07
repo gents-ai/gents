@@ -417,6 +417,25 @@ def sessionRecoveryCaseJson (witness : SessionRecoveryCase) : String :=
     ++ "\"backend_preserved\":" ++ boolString witness.backendPreserved
     ++ "}"
 
+def toolPreflightCaseJson (witness : ToolExecution.PreflightCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"health\":" ++ jsonString witness.health.toDefraDB ++ ","
+    ++ "\"schema_status\":" ++ jsonString witness.schema.toDefraDB ++ ","
+    ++ "\"decision\":" ++ jsonString witness.decision.toContract ++ ","
+    ++ "\"failure_class\":"
+      ++ jsonOptionalString ((witness.decision.failureClass).map ToolExecution.FailureClass.toDefraDB)
+    ++ "}"
+
+def toolRetryCaseJson (witness : ToolExecution.RetryCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"operation\":" ++ jsonString witness.operation.toDefraDB ++ ","
+    ++ "\"idempotency\":" ++ jsonString witness.idempotency.toDefraDB ++ ","
+    ++ "\"failure_class\":" ++ jsonString witness.failure.toDefraDB ++ ","
+    ++ "\"disposition\":" ++ jsonString witness.disposition.toDefraDB
+    ++ "}"
+
 def snapshotJson : String :=
   "{"
     ++ "\"generated_by\":\"lake env lean --run Proofs/Conformance/Contracts.lean\","
@@ -436,9 +455,11 @@ def snapshotJson : String :=
       ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
     ++ "\"session_recovery_cases\":"
       ++ jsonArray (sessionRecoveryCases.map sessionRecoveryCaseJson) ++ ","
-    ++ "\"follow_up_hooks\":["
-      ++ jsonString "ToolExecution idempotent MCP call retry contract"
-      ++ "],"
+    ++ "\"tool_preflight_cases\":"
+      ++ jsonArray (ToolExecution.preflightCases.map toolPreflightCaseJson) ++ ","
+    ++ "\"tool_retry_cases\":"
+      ++ jsonArray (ToolExecution.retryCases.map toolRetryCaseJson) ++ ","
+    ++ "\"follow_up_hooks\":[],"
     ++ "\"coverage_ledger\":"
       ++ coverageLedgerJson
     ++ "}"
