@@ -13,7 +13,7 @@ impl<'a> InferenceCallSlotRow<'a> {
     }
 }
 
-pub(crate) fn call_state_holds_backend_slot(call_state: &str) -> bool {
+fn call_state_holds_backend_slot(call_state: &str) -> bool {
     call_state == "running"
 }
 

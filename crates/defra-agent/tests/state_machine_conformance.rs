@@ -718,10 +718,33 @@ fn generated_slot_accounting_cases_pin_inference_and_fleet_contracts() {
         ]
     );
 
+    for case in &lean_contract_snapshot().fleet_slot_accounting_cases {
+        assert_eq!(
+            case.scheduler_running, case.slot_count,
+            "Fleet slot case {} must keep aggregate running reconstructed from slot count",
+            case.name
+        );
+        assert_eq!(
+            case.contribution, case.expected_contribution,
+            "Fleet slot case {} must compute its expected contribution",
+            case.name
+        );
+        assert_eq!(
+            case.bounded_by_max_concurrent,
+            case.slot_count <= case.max_concurrent,
+            "Fleet slot case {} must compute its max_concurrent bound",
+            case.name
+        );
+        assert!(
+            case.aggregate_reconstructed_not_persisted,
+            "Fleet slot case {} must preserve reconstructed-not-persisted policy",
+            case.name
+        );
+    }
+
     let waiting = lean_fleet_slot_accounting_case("fleet_waiting_contributes_zero");
     assert_eq!(waiting.admission_state.as_str(), "waiting");
     assert_eq!(waiting.contribution, 0);
-    assert!(waiting.aggregate_reconstructed_not_persisted);
 
     let acquired = lean_fleet_slot_accounting_case("fleet_acquired_contributes_one");
     assert_eq!(acquired.admission_state.as_str(), "acquired");
@@ -743,7 +766,6 @@ fn generated_slot_accounting_cases_pin_inference_and_fleet_contracts() {
     assert_eq!(fleet_bound.slot_count, 2);
     assert_eq!(fleet_bound.max_concurrent, 2);
     assert!(fleet_bound.bounded_by_max_concurrent);
-    assert!(fleet_bound.aggregate_reconstructed_not_persisted);
 }
 
 #[tokio::test]

@@ -348,10 +348,6 @@ pub(crate) fn lean_inference_slot_accounting_case(
         .unwrap_or_else(|| panic!("Lean inference slot-accounting case {name:?} was not emitted"))
 }
 
-pub(crate) fn lean_fleet_slot_accounting_cases() -> &'static [LeanFleetSlotAccountingCase] {
-    &lean_contract_snapshot().fleet_slot_accounting_cases
-}
-
 pub(crate) fn lean_fleet_slot_accounting_case(name: &str) -> &'static LeanFleetSlotAccountingCase {
     lean_contract_snapshot()
         .fleet_slot_accounting_cases
