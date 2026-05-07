@@ -4,6 +4,7 @@ use defra_node::EmbeddedNode;
 use super::query::load_conversation_document;
 use super::retry::{execute_batch_mutation_with_retry, execute_mutation_with_retry};
 use crate::graphql::escape_graphql_string;
+use crate::lifecycle::active_runtime_lifecycle_state_graphql_list;
 
 #[derive(Debug, Clone)]
 pub struct ForkParams<'a> {
@@ -28,7 +29,7 @@ pub enum ForkError {
     ForkSourceNotFound(String),
     #[error("fork source's agent_did does not match caller")]
     ForkNotSameAgent,
-    #[error("fork source has a non-terminal AgentRequest and is busy")]
+    #[error("fork source has an active runtime AgentRequest and is busy")]
     ForkSourceBusy,
     #[error("fork_at_user_turn={0} is out of range (parent has only {1} user messages)")]
     ForkAtUserTurnOutOfRange(u32, u32),
@@ -42,12 +43,13 @@ pub enum ForkError {
 
 async fn verify_source_idle(node: &EmbeddedNode, source_session_id: &str) -> Result<bool> {
     let escaped = escape_graphql_string(source_session_id);
+    let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
     let query = format!(
         r#"{{
             AgentRequest(
                 filter: {{
                     session_id: {{ _eq: "{escaped}" }},
-                    lifecycle_state: {{ _in: ["pending", "claimed", "processing", "inputRequired"] }}
+                    lifecycle_state: {{ _in: {active_runtime_states} }}
                 }},
                 limit: 1
             ) {{ request_id }}

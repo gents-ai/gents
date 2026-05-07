@@ -12,9 +12,8 @@ mod support;
 use lean_vocab_test::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
     assert_state_machine_contract_is_complete, lean_client_shell_case, lean_contract_snapshot,
-    lean_runtime_reconcile_case,
-    lean_session_recovery_case, lean_tool_preflight_case, lean_tool_retry_case,
-    lean_vocabulary_values,
+    lean_runtime_reconcile_case, lean_session_recovery_case, lean_tool_preflight_case,
+    lean_tool_retry_case, lean_vocabulary_values,
 };
 use support::snapshots::{
     fetch_conversation_snapshot, fetch_request_lineage_snapshot,
@@ -160,10 +159,16 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "Lean ClientShell case count drifted from emitted cases"
     );
     if !snapshot.client_shell_cases.is_empty() {
-        emitted.insert(("client_shell_cases".to_string(), "ClientShellCases".to_string()));
+        emitted.insert((
+            "client_shell_cases".to_string(),
+            "ClientShellCases".to_string(),
+        ));
     }
     if !snapshot.tool_preflight_cases.is_empty() {
-        emitted.insert(("tool_cases".to_string(), "ToolExecutionPreflight".to_string()));
+        emitted.insert((
+            "tool_cases".to_string(),
+            "ToolExecutionPreflight".to_string(),
+        ));
     }
     if !snapshot.tool_retry_cases.is_empty() {
         emitted.insert(("tool_cases".to_string(), "ToolExecutionRetry".to_string()));
@@ -838,9 +843,9 @@ async fn scheduled_materialization_persists_trigger_lineage() {
 // `ProductionMaterializer` issues, and assert the resulting on-disk snapshot.
 // -----------------------------------------------------------------------------
 
-/// Serial concurrency: when a non-terminal request already exists for the
+/// Serial concurrency: when an active runtime request already exists for the
 /// `(trigger_id, trigger_kind)` tuple, the materializer's
-/// `has_nonterminal_request_for_trigger` query must observe it (the engine
+/// `has_active_runtime_request_for_trigger` query must observe it (the engine
 /// turns this into `FireResult::Skipped`). The state-machine conformance
 /// assertion: no second `AgentRequest` is created for the tuple — the count
 /// observed before and after the skip decision is the same.
@@ -867,13 +872,13 @@ async fn serial_skip_does_not_create_request() {
     .unwrap();
 
     // Run the exact query `ProductionMaterializer` uses to gate the fire.
-    // Expect `true` — a non-terminal request for this tuple exists.
+    // Expect `true` — an active runtime request for this tuple exists.
     let gating_query = r#"query {
             AgentRequest(
                 filter: {
                     caused_by_trigger_id: { _eq: "sched-serial" },
                     caused_by_trigger_kind: { _eq: "schedule" },
-                    lifecycle_state: { _in: ["pending", "claimed", "processing", "inputRequired"] }
+                    lifecycle_state: { _in: ["pending", "claimed", "processing"] }
                 },
                 limit: 1
             ) { _docID }
@@ -937,7 +942,7 @@ async fn serial_skip_does_not_create_request() {
         "serial skip must not create a new AgentRequest"
     );
 
-    // Sanity: the seeded request is still in its non-terminal state
+    // Sanity: the seeded request is still in its active runtime state
     // (the skip decision neither advances nor terminates it).
     let still_claimed = fetch_request_snapshot(&db.node, &seeded.request().doc_id).await;
     assert_eq!(still_claimed.lifecycle_state, "claimed");
@@ -946,7 +951,7 @@ async fn serial_skip_does_not_create_request() {
 
 /// LatestOnly concurrency: when a new fire arrives for a trigger tuple with an
 /// in-flight request, the engine supersedes the prior via the same mutation
-/// shape `ProductionMaterializer::supersede_nonterminal_requests_for_trigger`
+/// shape `ProductionMaterializer::supersede_active_runtime_requests_for_trigger`
 /// uses. The seeded request must transition
 /// `(processing / claimed) -> (superseded / superseded)` exactly.
 #[tokio::test]
@@ -976,13 +981,13 @@ async fn latest_only_transition_to_superseded() {
     assert_eq!(before.status, "processing");
 
     // Run the engine's supersede mutation verbatim (the shape in
-    // `production_materializer::supersede_nonterminal_requests_for_trigger`).
+    // `production_materializer::supersede_active_runtime_requests_for_trigger`).
     let supersede = r#"mutation {
             update_AgentRequest(
                 filter: {
                     caused_by_trigger_id: { _eq: "sched-latest" },
                     caused_by_trigger_kind: { _eq: "schedule" },
-                    lifecycle_state: { _in: ["pending", "claimed", "processing", "inputRequired"] }
+                    lifecycle_state: { _in: ["pending", "claimed", "processing"] }
                 },
                 input: {
                     status: "superseded",
@@ -1030,6 +1035,93 @@ async fn latest_only_transition_to_superseded() {
             failure_reason: "".into(),
         }
     );
+}
+
+#[tokio::test]
+async fn active_runtime_trigger_filters_ignore_input_required() {
+    let db = test_db("transition-input-required-active-filter").await;
+
+    let lineage = TriggerLineage {
+        trigger_id: Some("sched-input-required".into()),
+        trigger_kind: Some("schedule".into()),
+    };
+    let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        "reserved inputRequired seed",
+        DEADLINE_SECS,
+        ExecutionOrigin::Scheduled,
+        BACKEND_ID,
+        lineage,
+    )
+    .await
+    .unwrap();
+    set_request_lifecycle_state(&db.node, &seeded.request().doc_id, "inputRequired").await;
+
+    let gating_query = r#"query {
+        AgentRequest(
+            filter: {
+                caused_by_trigger_id: { _eq: "sched-input-required" },
+                caused_by_trigger_kind: { _eq: "schedule" },
+                lifecycle_state: { _in: ["pending", "claimed", "processing"] }
+            },
+            limit: 1
+        ) { _docID }
+    }"#;
+    let gate = db.node.execute(gating_query).await;
+    assert!(
+        !gate.has_errors(),
+        "gating query errored: {:?}",
+        gate.errors
+    );
+    let gate_rows = gate
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        gate_rows.is_empty(),
+        "active runtime gate must not observe reserved inputRequired rows"
+    );
+
+    let supersede = r#"mutation {
+        update_AgentRequest(
+            filter: {
+                caused_by_trigger_id: { _eq: "sched-input-required" },
+                caused_by_trigger_kind: { _eq: "schedule" },
+                lifecycle_state: { _in: ["pending", "claimed", "processing"] }
+            },
+            input: {
+                status: "superseded",
+                lifecycle_state: "superseded"
+            }
+        ) { _docID }
+    }"#;
+    let resp = db.node.execute(supersede).await;
+    assert!(
+        !resp.has_errors(),
+        "supersede mutation errored: {:?}",
+        resp.errors
+    );
+    let updated_rows = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("update_AgentRequest"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        updated_rows.is_empty(),
+        "active runtime supersede must not transition reserved inputRequired rows"
+    );
+    assert_lean_transition_is_illegal("Request", "inputRequired", "superseded");
+
+    let snap = fetch_request_snapshot(&db.node, &seeded.request().doc_id).await;
+    assert_eq!(snap.status, "processing");
+    assert_eq!(snap.lifecycle_state, "inputRequired");
 }
 
 /// Template render failure (`FireResult::Errored`): the engine must NOT
@@ -1163,7 +1255,7 @@ async fn fire_errored_does_not_create_request() {
 // need their own independent assertions.
 // -----------------------------------------------------------------------------
 
-/// Serial concurrency (event kind): when a non-terminal request with
+/// Serial concurrency (event kind): when an active runtime request with
 /// `caused_by_trigger_kind = "event"` already exists for the tuple, the
 /// materializer's gating query observes it and the engine skips. The
 /// state-machine conformance assertion: no second `AgentRequest` is created
@@ -1191,13 +1283,13 @@ async fn serial_skip_event_does_not_create_request() {
     .unwrap();
 
     // Run the exact query `ProductionMaterializer` uses to gate the fire.
-    // Expect `true` — a non-terminal request for this tuple exists.
+    // Expect `true` — an active runtime request for this tuple exists.
     let gating_query = r#"query {
         AgentRequest(
             filter: {
                 caused_by_trigger_id: { _eq: "trigger-event-serial" },
                 caused_by_trigger_kind: { _eq: "event" },
-                lifecycle_state: { _in: ["pending", "claimed", "processing", "inputRequired"] }
+                lifecycle_state: { _in: ["pending", "claimed", "processing"] }
             },
             limit: 1
         ) { _docID }
@@ -1260,7 +1352,7 @@ async fn serial_skip_event_does_not_create_request() {
         "serial skip on event-kind trigger must not create a new AgentRequest"
     );
 
-    // Sanity: the seeded request is still in its non-terminal state.
+    // Sanity: the seeded request is still in its active runtime state.
     let still_claimed = fetch_request_snapshot(&db.node, &seeded.request().doc_id).await;
     assert_eq!(still_claimed.lifecycle_state, "claimed");
     assert_eq!(still_claimed.status, "processing");
@@ -1299,13 +1391,13 @@ async fn latest_only_event_transition_to_superseded() {
 
     // Run the engine's supersede mutation verbatim, filtered on the event
     // kind's lineage tuple (the shape in
-    // `production_materializer::supersede_nonterminal_requests_for_trigger`).
+    // `production_materializer::supersede_active_runtime_requests_for_trigger`).
     let supersede = r#"mutation {
         update_AgentRequest(
             filter: {
                 caused_by_trigger_id: { _eq: "trigger-event-latest" },
                 caused_by_trigger_kind: { _eq: "event" },
-                lifecycle_state: { _in: ["pending", "claimed", "processing", "inputRequired"] }
+                lifecycle_state: { _in: ["pending", "claimed", "processing"] }
             },
             input: {
                 status: "superseded",
@@ -1514,7 +1606,7 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
 
     // Parent has a completed AgentRequest + AgentResponse so the parent is idle
-    // (no non-terminal lifecycle_state) and fork is allowed.
+    // (no active runtime lifecycle_state) and fork is allowed.
     let request_id = uuid::Uuid::new_v4().to_string();
     let request_doc_id = create_request(
         &db.node,
@@ -1774,11 +1866,10 @@ async fn processing_interrupted_preserves_partial_response() {
 }
 
 #[tokio::test]
-async fn input_required_interrupted() {
-    // Simulates an interrupt arriving for a reserved `inputRequired` row. The
-    // current product preserves this vocabulary for protocol parity but does
-    // not emit it, so this test sets the DB lifecycle_state directly and relies
-    // on the _nin filter in `transition_to_interrupted` to allow the move.
+async fn input_required_interrupt_is_rejected_without_transition() {
+    // `inputRequired` is reserved persisted/client vocabulary. Rust may parse
+    // and display it, but the core lifecycle cannot interrupt it until Lean
+    // models an external-input loop.
     let db = test_db("input-required-interrupted").await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -1808,15 +1899,43 @@ async fn input_required_interrupted() {
 
     let interrupt_at = chrono::Utc::now().to_rfc3339();
     set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
-    lifecycle.transition_to_interrupted().await.unwrap();
-    // Core Lean Request semantics reserve inputRequired and have no active
-    // transition out of it; Rust keeps this repair path as a product boundary
-    // for replicated rows that already contain the reserved state.
+    let err = lifecycle
+        .transition_to_interrupted()
+        .await
+        .expect_err("inputRequired is not an interruptible runtime state");
+    assert!(
+        err.to_string().contains("inputRequired"),
+        "error should name the reserved state: {err:?}"
+    );
     assert_lean_transition_is_illegal("Request", "inputRequired", "interrupted");
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.status, "interrupted");
-    assert_eq!(snap.lifecycle_state, "interrupted");
+    assert_eq!(snap.status, "processing");
+    assert_eq!(snap.lifecycle_state, "inputRequired");
+
+    let complete_err = lifecycle
+        .complete()
+        .await
+        .expect_err("inputRequired must not complete through a status-only transition");
+    assert!(
+        complete_err.to_string().contains("processing"),
+        "complete error should describe the persisted status: {complete_err:?}"
+    );
+    assert_lean_transition_is_illegal("Request", "inputRequired", "completed");
+
+    let fail_err = lifecycle
+        .fail()
+        .await
+        .expect_err("inputRequired must not fail through a status-only transition");
+    assert!(
+        fail_err.to_string().contains("processing"),
+        "fail error should describe the persisted status: {fail_err:?}"
+    );
+    assert_lean_transition_is_illegal("Request", "inputRequired", "failed");
+
+    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
+    assert_eq!(snap.status, "processing");
+    assert_eq!(snap.lifecycle_state, "inputRequired");
 }
 
 #[tokio::test]
@@ -2395,6 +2514,12 @@ fn conformance_mapping_all_9_lifecycle_states_round_trip() {
             "as_str must round-trip to the source string"
         );
     }
+    assert_eq!(
+        RequestLifecycleState::try_from("inputRequired")
+            .expect("reserved vocabulary should parse")
+            .as_str(),
+        "inputRequired"
+    );
 
     // Unknown strings must reject.
     assert!(RequestLifecycleState::try_from("bogus").is_err());

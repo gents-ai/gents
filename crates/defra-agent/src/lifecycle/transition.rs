@@ -5,8 +5,18 @@
 // submodules with no readability gain.
 use anyhow::Context;
 
-use super::rows::{DedupRow, RequestStatusTransition};
+use super::rows::{DedupRow, RequestStatusTransition, RequestViewRow};
 use super::*;
+
+fn request_view_is_terminal(view: &RequestViewRow) -> bool {
+    matches!(
+        view.lifecycle_state.as_deref(),
+        Some("completed" | "failed" | "superseded" | "dead" | "interrupted")
+    ) || matches!(
+        view.status.as_str(),
+        "completed" | "error" | "superseded" | "dead" | "interrupted"
+    )
+}
 
 impl RequestLifecycle {
     pub async fn record_failure_reason(&mut self, reason: &str) -> Result<()> {
@@ -114,6 +124,10 @@ impl RequestLifecycle {
         match self
             .transition_request_status(
                 "processing",
+                &[
+                    PersistedLifecycleState::Claimed,
+                    PersistedLifecycleState::Processing,
+                ],
                 "completed",
                 PersistedLifecycleState::Completed,
             )
@@ -166,20 +180,21 @@ impl RequestLifecycle {
         Ok(())
     }
 
-    /// Mark a non-terminal request as interrupted. This includes reserved
-    /// `inputRequired` rows if one already exists, but the runtime does not
-    /// currently emit `inputRequired` itself.
+    /// Mark a modeled active runtime request as interrupted.
     /// Writes `lifecycle_state="interrupted"` and `status="interrupted"` and
-    /// sets the in-memory state. Idempotent via the `_nin` filter on terminal
-    /// statuses: if the row is already terminal (completed/interrupted/dead/
-    /// superseded/error), the mutation is a no-op.
+    /// sets the in-memory state only when the persisted row is updated or was
+    /// already interrupted. Reserved `inputRequired` rows are parseable
+    /// persisted vocabulary, but they are not modeled interruptible runtime
+    /// states.
     pub async fn transition_to_interrupted(&mut self) -> Result<()> {
         let doc_id = &self.request.doc_id;
+        let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(
                     filter: {{
                         _docID: {{ _eq: "{doc_id}" }},
+                        lifecycle_state: {{ _in: {active_runtime_states} }},
                         status: {{ _nin: ["completed", "interrupted", "dead", "superseded", "error"] }}
                     }},
                     input: {{
@@ -189,10 +204,45 @@ impl RequestLifecycle {
                 ) {{ _docID }}
             }}"#
         );
-        session::execute_mutation_with_retry(&self.node, &mutation, "transition_interrupted")
-            .await?;
-        self.state = LocalLifecycleState::Interrupted;
-        Ok(())
+        let resp =
+            session::execute_mutation_with_retry(&self.node, &mutation, "transition_interrupted")
+                .await?;
+        if resp
+            .data
+            .as_ref()
+            .and_then(|data| data.get("update_AgentRequest"))
+            .is_some_and(response_has_documents)
+        {
+            self.state = LocalLifecycleState::Interrupted;
+            return Ok(());
+        }
+
+        match self.request_view().await? {
+            Some(current)
+                if current.status == "interrupted"
+                    && current.lifecycle_state.as_deref() == Some("interrupted") =>
+            {
+                self.state = LocalLifecycleState::Interrupted;
+                Ok(())
+            }
+            Some(current) if request_view_is_terminal(&current) => Ok(()),
+            Some(current) if current.lifecycle_state.as_deref() == Some("inputRequired") => {
+                anyhow::bail!(
+                    "cannot interrupt request_id={} from reserved lifecycle_state=inputRequired",
+                    self.request.request_id
+                )
+            }
+            Some(current) => anyhow::bail!(
+                "request {} could not transition to interrupted; current status={} lifecycle_state={}",
+                self.request.request_id,
+                current.status,
+                current.lifecycle_state.as_deref().unwrap_or("missing")
+            ),
+            None => anyhow::bail!(
+                "request {} disappeared while transitioning to interrupted",
+                self.request.request_id
+            ),
+        }
     }
 
     pub async fn fail(&mut self) -> Result<()> {
@@ -219,7 +269,15 @@ impl RequestLifecycle {
         )?;
 
         match self
-            .transition_request_status("processing", "error", PersistedLifecycleState::Failed)
+            .transition_request_status(
+                "processing",
+                &[
+                    PersistedLifecycleState::Claimed,
+                    PersistedLifecycleState::Processing,
+                ],
+                "error",
+                PersistedLifecycleState::Failed,
+            )
             .await?
         {
             RequestStatusTransition::Updated | RequestStatusTransition::AlreadyTarget => {
@@ -272,16 +330,19 @@ impl RequestLifecycle {
     pub(super) async fn transition_request_status(
         &self,
         from_status: &str,
+        from_lifecycle_states: &[PersistedLifecycleState],
         target_status: &str,
         target_lifecycle_state: PersistedLifecycleState,
     ) -> Result<RequestStatusTransition> {
         let doc_id = &self.request.doc_id;
+        let from_lifecycle_states = lifecycle_state_graphql_list_for(from_lifecycle_states);
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(
                     filter: {{
                         _docID: {{ _eq: "{doc_id}" }},
-                        status: {{ _eq: "{from_status}" }}
+                        status: {{ _eq: "{from_status}" }},
+                        lifecycle_state: {{ _in: {from_lifecycle_states} }}
                     }},
                     input: {{
                         status: "{target_status}",
@@ -328,7 +389,12 @@ impl RequestLifecycle {
 
         match self.request_status().await? {
             Some(current) if current == target_status => Ok(RequestStatusTransition::AlreadyTarget),
-            Some(current) if matches!(current.as_str(), "completed" | "error" | "superseded") => {
+            Some(current)
+                if matches!(
+                    current.as_str(),
+                    "completed" | "error" | "superseded" | "dead" | "interrupted"
+                ) =>
+            {
                 Ok(RequestStatusTransition::ConflictingTerminal(current))
             }
             Some(current) => anyhow::bail!(
@@ -459,7 +525,8 @@ impl RequestLifecycle {
                     update_AgentRequest(
                         filter: {{
                             _docID: {{ _eq: "{doc_id}" }},
-                            status: {{ _eq: "pending" }}
+                            status: {{ _eq: "pending" }},
+                            lifecycle_state: {{ _eq: "pending" }}
                         }},
                         input: {{
                             status: "superseded",
@@ -517,7 +584,8 @@ impl RequestLifecycle {
                 update_AgentRequest(
                     filter: {{
                         _docID: {{ _eq: "{doc_id}" }},
-                        status: {{ _eq: "pending" }}
+                        status: {{ _eq: "pending" }},
+                        lifecycle_state: {{ _eq: "pending" }}
                     }},
                     input: {{
                         status: "superseded",
@@ -543,6 +611,32 @@ impl RequestLifecycle {
                 "failed to mark duplicate request_id={} superseded: {:?}",
                 self.request.request_id,
                 resp.errors
+            );
+        }
+
+        if !resp
+            .data
+            .as_ref()
+            .and_then(|data| data.get("update_AgentRequest"))
+            .is_some_and(response_has_documents)
+        {
+            let request_view = self.request_view().await?;
+            if request_view.as_ref().is_some_and(|row| {
+                row.status == "superseded" && row.lifecycle_state.as_deref() == Some("superseded")
+            }) {
+                return Ok(());
+            }
+            anyhow::bail!(
+                "request {} could not transition pending -> superseded; current status={} lifecycle_state={}",
+                self.request.request_id,
+                request_view
+                    .as_ref()
+                    .map(|row| row.status.as_str())
+                    .unwrap_or("missing"),
+                request_view
+                    .as_ref()
+                    .and_then(|row| row.lifecycle_state.as_deref())
+                    .unwrap_or("missing")
             );
         }
 

@@ -25,15 +25,15 @@
 //!   writeback path (`update_Schedule` with `last_status = "error"`) mirrors
 //!   what `ScheduleSource::on_result` writes on a render failure.
 //! * `serial_skips_when_prior_non_terminal` — the engine's
-//!   `has_nonterminal_request_for_trigger` query returns `true` exactly when a
-//!   request carrying the `(trigger_id, trigger_kind)` tuple is in a
-//!   non-terminal lifecycle state.
+//!   `has_active_runtime_request_for_trigger` query returns `true` exactly when a
+//!   request carrying the `(trigger_id, trigger_kind)` tuple is in an active
+//!   runtime lifecycle state.
 //! * `serial_advances_next_run_at_on_skip` — the Schedule writeback path
 //!   advances `next_run_at` by `interval_secs` on skip while leaving
 //!   apply-owned fields untouched.
 //! * `latest_only_supersedes_prior_fire` — the supersede mutation (same shape
-//!   as `supersede_nonterminal_requests_for_trigger` uses) transitions every
-//!   non-terminal request for a trigger tuple to `lifecycle_state = superseded`
+//!   as `supersede_active_runtime_requests_for_trigger` uses) transitions every
+//!   active runtime request for a trigger tuple to `lifecycle_state = superseded`
 //!   / `status = superseded`.
 //! * `generation_bump_reconfigures_active_schedules` — inserting a Schedule
 //!   post-startup drives a snapshot reload and bumps `active_generation`;
@@ -53,7 +53,7 @@
 //! This file still boots `DefraAgent::run` only where the observable under
 //! test is operational reconfiguration (`active_generation` bumps). The other
 //! cases pin the persistence-layer contract the engine delegates to: DefraDB
-//! materialization lineage, non-terminal gating queries, supersede mutations,
+//! materialization lineage, active runtime gating queries, supersede mutations,
 //! and source writeback shape.
 
 use std::sync::Arc;
@@ -351,10 +351,10 @@ async fn fetch_schedule_row(
     })
 }
 
-/// Query the same shape `ProductionMaterializer::has_nonterminal_request_for_trigger`
+/// Query the same shape `ProductionMaterializer::has_active_runtime_request_for_trigger`
 /// uses — filters by `(caused_by_trigger_id, caused_by_trigger_kind)` and the
-/// non-terminal lifecycle state set — and returns whether any row matches.
-async fn has_nonterminal_request_for_trigger(
+/// active runtime lifecycle state set — and returns whether any row matches.
+async fn has_active_runtime_request_for_trigger(
     node: &defra_agent::defra_node::EmbeddedNode,
     trigger_id: &str,
     trigger_kind: &str,
@@ -367,7 +367,7 @@ async fn has_nonterminal_request_for_trigger(
                 filter: {{
                     caused_by_trigger_id: {{ _eq: "{escaped_trigger_id}" }},
                     caused_by_trigger_kind: {{ _eq: "{escaped_trigger_kind}" }},
-                    lifecycle_state: {{ _in: ["pending", "claimed", "processing", "inputRequired"] }}
+                    lifecycle_state: {{ _in: ["pending", "claimed", "processing"] }}
                 }},
                 limit: 1
             ) {{ _docID }}
@@ -376,7 +376,7 @@ async fn has_nonterminal_request_for_trigger(
     let resp = node.execute(&query).await;
     assert!(
         !resp.has_errors(),
-        "has_nonterminal_request_for_trigger query failed: {:?}",
+        "has_active_runtime_request_for_trigger query failed: {:?}",
         resp.errors
     );
     resp.data
@@ -387,11 +387,11 @@ async fn has_nonterminal_request_for_trigger(
         .unwrap_or(false)
 }
 
-/// Mirrors `ProductionMaterializer::supersede_nonterminal_requests_for_trigger`:
-/// transitions every non-terminal request bound to `(trigger_id, trigger_kind)`
+/// Mirrors `ProductionMaterializer::supersede_active_runtime_requests_for_trigger`:
+/// transitions every active runtime request bound to `(trigger_id, trigger_kind)`
 /// to `lifecycle_state = superseded` / `status = superseded`. Returns the
 /// number of documents updated.
-async fn supersede_nonterminal_requests_for_trigger(
+async fn supersede_active_runtime_requests_for_trigger(
     node: &defra_agent::defra_node::EmbeddedNode,
     trigger_id: &str,
     trigger_kind: &str,
@@ -404,7 +404,7 @@ async fn supersede_nonterminal_requests_for_trigger(
                 filter: {{
                     caused_by_trigger_id: {{ _eq: "{escaped_trigger_id}" }},
                     caused_by_trigger_kind: {{ _eq: "{escaped_trigger_kind}" }},
-                    lifecycle_state: {{ _in: ["pending", "claimed", "processing", "inputRequired"] }}
+                    lifecycle_state: {{ _in: ["pending", "claimed", "processing"] }}
                 }},
                 input: {{
                     status: "superseded",
@@ -416,7 +416,7 @@ async fn supersede_nonterminal_requests_for_trigger(
     let resp = node.execute(&mutation).await;
     assert!(
         !resp.has_errors(),
-        "supersede_nonterminal_requests_for_trigger failed: {:?}",
+        "supersede_active_runtime_requests_for_trigger failed: {:?}",
         resp.errors
     );
     resp.data
@@ -848,9 +848,9 @@ async fn template_render_failure_records_error_status() {
     );
 }
 
-/// Serial concurrency must gate: when a non-terminal `AgentRequest` already
+/// Serial concurrency must gate: when an active runtime `AgentRequest` already
 /// exists for the `(trigger_id, trigger_kind)` tuple, the engine's
-/// concurrency-gate query (`has_nonterminal_request_for_trigger`) must return
+/// concurrency-gate query (`has_active_runtime_request_for_trigger`) must return
 /// `true`, and a new fire must not materialize a second `AgentRequest` for the
 /// same trigger. We pin this by:
 /// 1. Seeding an in-flight request via the lifecycle entry point the engine
@@ -886,7 +886,7 @@ async fn serial_skips_when_prior_non_terminal() {
     );
     // The engine's gating query must see it.
     assert!(
-        has_nonterminal_request_for_trigger(db.node.as_ref(), "sched-serial-skip", "schedule")
+        has_active_runtime_request_for_trigger(db.node.as_ref(), "sched-serial-skip", "schedule")
             .await,
         "gating query must see the in-flight request"
     );
@@ -1025,7 +1025,7 @@ async fn latest_only_supersedes_prior_fire() {
     let prior_request_id = prior.request().request_id.clone();
 
     // Step 1: supersede (what the LatestOnly path does before materializing).
-    let superseded_count = supersede_nonterminal_requests_for_trigger(
+    let superseded_count = supersede_active_runtime_requests_for_trigger(
         db.node.as_ref(),
         "sched-latest-only",
         "schedule",
@@ -1076,7 +1076,7 @@ async fn latest_only_supersedes_prior_fire() {
     // The gating query must NOT see the superseded prior (it's terminal);
     // it DOES see the newly claimed fire.
     assert!(
-        has_nonterminal_request_for_trigger(db.node.as_ref(), "sched-latest-only", "schedule")
+        has_active_runtime_request_for_trigger(db.node.as_ref(), "sched-latest-only", "schedule")
             .await,
         "after materialize, the new claimed request must be visible to the gating query"
     );

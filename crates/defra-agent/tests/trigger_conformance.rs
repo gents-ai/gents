@@ -22,8 +22,8 @@
 //! * `subscription_reconciles_on_generation_bump` — re-pointing a trigger from
 //!   collection A to collection B bumps `active_generation` and only B-side
 //!   writes fire afterwards.
-//! * `serial_skips_when_prior_non_terminal` — the engine's gating query sees a
-//!   non-terminal `(trigger_id, "event")` tuple and the serial trigger skips.
+//! * `serial_skips_when_prior_non_terminal` — the engine's gating query sees an
+//!   active runtime `(trigger_id, "event")` tuple and the serial trigger skips.
 //! * `latest_only_supersedes_prior_fire` — the supersede mutation the engine
 //!   would run transitions the in-flight event-kind request to
 //!   `superseded`, and a new materialize lands with the same lineage.
@@ -394,8 +394,8 @@ async fn fetch_event_trigger_row(node: &EmbeddedNode, trigger_id: &str) -> Optio
     })
 }
 
-/// Mirrors `ProductionMaterializer::has_nonterminal_request_for_trigger`.
-async fn has_nonterminal_request_for_trigger(
+/// Mirrors `ProductionMaterializer::has_active_runtime_request_for_trigger`.
+async fn has_active_runtime_request_for_trigger(
     node: &EmbeddedNode,
     trigger_id: &str,
     trigger_kind: &str,
@@ -408,7 +408,7 @@ async fn has_nonterminal_request_for_trigger(
                 filter: {{
                     caused_by_trigger_id: {{ _eq: "{escaped_trigger_id}" }},
                     caused_by_trigger_kind: {{ _eq: "{escaped_trigger_kind}" }},
-                    lifecycle_state: {{ _in: ["pending", "claimed", "processing", "inputRequired"] }}
+                    lifecycle_state: {{ _in: ["pending", "claimed", "processing"] }}
                 }},
                 limit: 1
             ) {{ _docID }}
@@ -417,7 +417,7 @@ async fn has_nonterminal_request_for_trigger(
     let resp = node.execute(&query).await;
     assert!(
         !resp.has_errors(),
-        "has_nonterminal_request_for_trigger failed: {:?}",
+        "has_active_runtime_request_for_trigger failed: {:?}",
         resp.errors
     );
     resp.data
@@ -428,8 +428,8 @@ async fn has_nonterminal_request_for_trigger(
         .unwrap_or(false)
 }
 
-/// Mirrors `ProductionMaterializer::supersede_nonterminal_requests_for_trigger`.
-async fn supersede_nonterminal_requests_for_trigger(
+/// Mirrors `ProductionMaterializer::supersede_active_runtime_requests_for_trigger`.
+async fn supersede_active_runtime_requests_for_trigger(
     node: &EmbeddedNode,
     trigger_id: &str,
     trigger_kind: &str,
@@ -442,7 +442,7 @@ async fn supersede_nonterminal_requests_for_trigger(
                 filter: {{
                     caused_by_trigger_id: {{ _eq: "{escaped_trigger_id}" }},
                     caused_by_trigger_kind: {{ _eq: "{escaped_trigger_kind}" }},
-                    lifecycle_state: {{ _in: ["pending", "claimed", "processing", "inputRequired"] }}
+                    lifecycle_state: {{ _in: ["pending", "claimed", "processing"] }}
                 }},
                 input: {{
                     status: "superseded",
@@ -454,7 +454,7 @@ async fn supersede_nonterminal_requests_for_trigger(
     let resp = node.execute(&mutation).await;
     assert!(
         !resp.has_errors(),
-        "supersede_nonterminal_requests_for_trigger failed: {:?}",
+        "supersede_active_runtime_requests_for_trigger failed: {:?}",
         resp.errors
     );
     resp.data
@@ -1027,7 +1027,7 @@ async fn subscription_reconciles_on_generation_bump() {
     agent.shutdown().await;
 }
 
-/// Serial concurrency: when a non-terminal request already exists for the
+/// Serial concurrency: when an active runtime request already exists for the
 /// event-kind lineage tuple, the engine's gating query sees it → `FireResult::Skipped`.
 /// No second `AgentRequest` materializes for the same tuple. Asserted at the
 /// persistence-layer contract (PR 1 pattern).
@@ -1053,7 +1053,7 @@ async fn serial_skips_when_prior_non_terminal() {
     .unwrap();
 
     assert!(
-        has_nonterminal_request_for_trigger(db.node.as_ref(), "trigger-event-serial", "event",)
+        has_active_runtime_request_for_trigger(db.node.as_ref(), "trigger-event-serial", "event",)
             .await,
         "gating query must see the in-flight event-kind request"
     );
@@ -1098,7 +1098,7 @@ async fn latest_only_supersedes_prior_fire() {
     .unwrap();
     let prior_request_id = prior.request().request_id.clone();
 
-    let superseded = supersede_nonterminal_requests_for_trigger(
+    let superseded = supersede_active_runtime_requests_for_trigger(
         db.node.as_ref(),
         "trigger-event-latest",
         "event",
@@ -1144,7 +1144,7 @@ async fn latest_only_supersedes_prior_fire() {
         2
     );
     assert!(
-        has_nonterminal_request_for_trigger(db.node.as_ref(), "trigger-event-latest", "event",)
+        has_active_runtime_request_for_trigger(db.node.as_ref(), "trigger-event-latest", "event",)
             .await,
         "after materialize, the new claimed request must be visible to the gating query"
     );

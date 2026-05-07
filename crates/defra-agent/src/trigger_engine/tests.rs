@@ -73,7 +73,7 @@ struct MaterializeGate {
 /// reached the materializer.
 ///
 /// `nonterminal_for` stores the concrete request ids for `(trigger_id,
-/// trigger_kind)` tuples that `has_nonterminal_request_for_trigger` should
+/// trigger_kind)` tuples that `has_active_runtime_request_for_trigger` should
 /// report as in-flight. Tests can pre-populate it to simulate prior fires.
 /// Lean contract tests can opt into adding successful materializations as new
 /// non-terminal requests, which mirrors production persistence without
@@ -130,8 +130,8 @@ impl SpyMaterializer {
     }
 
     /// Pre-populate the in-flight set with `(trigger_id, trigger_kind)` so the
-    /// next `has_nonterminal_request_for_trigger` call returns `true` for the
-    /// matching tuple. Also makes `supersede_nonterminal_requests_for_trigger`
+    /// next `has_active_runtime_request_for_trigger` call returns `true` for the
+    /// matching tuple. Also makes `supersede_active_runtime_requests_for_trigger`
     /// report the tuple count (and clears it, mirroring real terminal
     /// transitions) so LatestOnly tests can assert the count plumbed through.
     fn mark_nonterminal(&self, trigger_id: &str, trigger_kind: TriggerKind) {
@@ -223,7 +223,7 @@ impl MaterializerHandle for SpyMaterializer {
         })
     }
 
-    fn has_nonterminal_request_for_trigger(
+    fn has_active_runtime_request_for_trigger(
         &self,
         trigger_id: &str,
         trigger_kind: TriggerKind,
@@ -240,7 +240,7 @@ impl MaterializerHandle for SpyMaterializer {
         })
     }
 
-    fn supersede_nonterminal_requests_for_trigger(
+    fn supersede_active_runtime_requests_for_trigger(
         &self,
         trigger_id: &str,
         trigger_kind: TriggerKind,
