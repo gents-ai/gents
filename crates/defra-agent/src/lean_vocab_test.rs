@@ -35,6 +35,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) session_recovery_cases: Vec<LeanSessionRecoveryCase>,
     pub(crate) tool_preflight_cases: Vec<LeanToolPreflightCase>,
     pub(crate) tool_retry_cases: Vec<LeanToolRetryCase>,
+    pub(crate) boundaries: Vec<LeanBoundary>,
+    pub(crate) deviations: Vec<LeanDeviation>,
     pub(crate) follow_up_hooks: Vec<String>,
     pub(crate) coverage_ledger: Vec<LeanCoverageEntry>,
 }
@@ -64,6 +66,26 @@ pub(crate) struct LeanCoverageEntry {
     pub(crate) consumer: String,
     pub(crate) accepted_boundary: String,
     pub(crate) accepted_follow_up: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanBoundary {
+    pub(crate) id: String,
+    pub(crate) domain: String,
+    pub(crate) subject: String,
+    pub(crate) statement: String,
+    pub(crate) accepted_failure_mode: Option<String>,
+    pub(crate) accepted_follow_up: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanDeviation {
+    pub(crate) id: String,
+    pub(crate) domain: String,
+    pub(crate) subject: String,
+    pub(crate) statement: String,
+    pub(crate) accepted_failure_mode: Option<String>,
+    pub(crate) accepted_follow_up: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

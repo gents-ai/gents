@@ -30,8 +30,19 @@ structure StateMachineContract where
   illegalTransitions : List TransitionPair
   deriving Repr
 
+def jsonEscapeChar : Char → String
+  | '"' => "\\\""
+  | '\\' => "\\\\"
+  | '\n' => "\\n"
+  | '\r' => "\\r"
+  | '\t' => "\\t"
+  | c => String.mk [c]
+
+def jsonEscape (s : String) : String :=
+  String.intercalate "" ((String.toList s).map jsonEscapeChar)
+
 def jsonString (s : String) : String :=
-  "\"" ++ s ++ "\""
+  "\"" ++ jsonEscape s ++ "\""
 
 def jsonArray (values : List String) : String :=
   "[" ++ String.intercalate "," values ++ "]"

@@ -12,9 +12,8 @@ mod support;
 use lean_vocab_test::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
     assert_state_machine_contract_is_complete, lean_client_shell_case, lean_contract_snapshot,
-    lean_runtime_reconcile_case,
-    lean_session_recovery_case, lean_tool_preflight_case, lean_tool_retry_case,
-    lean_vocabulary_values,
+    lean_runtime_reconcile_case, lean_session_recovery_case, lean_tool_preflight_case,
+    lean_tool_retry_case, lean_vocabulary_values,
 };
 use support::snapshots::{
     fetch_conversation_snapshot, fetch_request_lineage_snapshot,
@@ -124,9 +123,148 @@ fn lean_executable_contracts_cover_initial_domains() {
 }
 
 #[test]
+fn lean_boundary_metadata_is_typed_and_reviewable() {
+    let snapshot = lean_contract_snapshot();
+    let expected_boundary_ids = [
+        "boundary.request.input-required-reserved",
+        "boundary.request.dead-preclaim-only",
+        "boundary.tool-call.permanent-without-retry-evidence",
+        "boundary.mcp.call-tool-dispatch-retry-evidence",
+        "boundary.inference-slots.running-row-derived",
+        "boundary.command-policy.host-execution-assumptions",
+        "boundary.trigger.dispatch-source-delivery",
+        "boundary.persistence.abstract-lifecycle",
+        "boundary.storage.hook-failure-policy",
+        "boundary.storage.observation-daemon-visible",
+        "boundary.storage.minimum-visibility-path",
+        "boundary.backend-health.admission-freshness",
+        "boundary.session-recovery.failed-latest-smoke",
+        "boundary.coverage-ledger.review-discipline",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect::<BTreeSet<_>>();
+
+    let mut actual_boundary_ids = BTreeSet::new();
+    let mut boundary_subjects = BTreeSet::new();
+    for boundary in &snapshot.boundaries {
+        assert!(
+            !boundary.id.trim().is_empty(),
+            "boundary id must be non-empty: {:?}",
+            boundary
+        );
+        assert!(
+            !boundary.domain.trim().is_empty(),
+            "boundary domain must be non-empty: {:?}",
+            boundary
+        );
+        assert!(
+            !boundary.subject.trim().is_empty(),
+            "boundary subject must be non-empty: {:?}",
+            boundary
+        );
+        assert!(
+            !boundary.statement.trim().is_empty(),
+            "boundary statement must be non-empty: {:?}",
+            boundary
+        );
+        assert!(
+            boundary
+                .accepted_failure_mode
+                .as_deref()
+                .map_or(true, |text| !text.trim().is_empty()),
+            "boundary accepted_failure_mode must be omitted or non-empty: {:?}",
+            boundary
+        );
+        assert!(
+            boundary
+                .accepted_follow_up
+                .as_deref()
+                .map_or(true, |text| !text.trim().is_empty()),
+            "boundary accepted_follow_up must be omitted or non-empty: {:?}",
+            boundary
+        );
+        assert!(
+            actual_boundary_ids.insert(boundary.id.clone()),
+            "duplicate boundary id: {:?}",
+            boundary
+        );
+        assert!(
+            boundary_subjects.insert((boundary.domain.clone(), boundary.subject.clone())),
+            "duplicate boundary subject in domain {:?}: {:?}",
+            boundary.domain,
+            boundary
+        );
+    }
+
+    assert_eq!(
+        actual_boundary_ids, expected_boundary_ids,
+        "Lean boundary metadata ids changed; update this review-discipline list with the boundary data"
+    );
+}
+
+#[test]
+fn lean_deviation_metadata_is_empty_or_explicitly_classified() {
+    let snapshot = lean_contract_snapshot();
+    let mut deviation_ids = BTreeSet::new();
+    let mut deviation_subjects = BTreeSet::new();
+
+    for deviation in &snapshot.deviations {
+        assert!(
+            !deviation.id.trim().is_empty(),
+            "deviation id must be non-empty: {:?}",
+            deviation
+        );
+        assert!(
+            !deviation.domain.trim().is_empty(),
+            "deviation domain must be non-empty: {:?}",
+            deviation
+        );
+        assert!(
+            !deviation.subject.trim().is_empty(),
+            "deviation subject must be non-empty: {:?}",
+            deviation
+        );
+        assert!(
+            !deviation.statement.trim().is_empty(),
+            "deviation statement must be non-empty: {:?}",
+            deviation
+        );
+        assert!(
+            deviation
+                .accepted_failure_mode
+                .as_deref()
+                .is_some_and(|text| !text.trim().is_empty())
+                || deviation
+                    .accepted_follow_up
+                    .as_deref()
+                    .is_some_and(|text| !text.trim().is_empty()),
+            "active deviations must carry accepted_failure_mode or accepted_follow_up text: {:?}",
+            deviation
+        );
+        assert!(
+            deviation_ids.insert(deviation.id.clone()),
+            "duplicate deviation id: {:?}",
+            deviation
+        );
+        assert!(
+            deviation_subjects.insert((deviation.domain.clone(), deviation.subject.clone())),
+            "duplicate deviation subject in domain {:?}: {:?}",
+            deviation.domain,
+            deviation
+        );
+    }
+}
+
+#[test]
 fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     let snapshot = lean_contract_snapshot();
     let mut emitted = BTreeSet::new();
+    let boundary_ids = snapshot
+        .boundaries
+        .iter()
+        .map(|boundary| boundary.id.clone())
+        .collect::<BTreeSet<_>>();
 
     for vocabulary in &snapshot.vocabularies {
         emitted.insert(("vocabulary".to_string(), vocabulary.domain.clone()));
@@ -160,10 +298,16 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "Lean ClientShell case count drifted from emitted cases"
     );
     if !snapshot.client_shell_cases.is_empty() {
-        emitted.insert(("client_shell_cases".to_string(), "ClientShellCases".to_string()));
+        emitted.insert((
+            "client_shell_cases".to_string(),
+            "ClientShellCases".to_string(),
+        ));
     }
     if !snapshot.tool_preflight_cases.is_empty() {
-        emitted.insert(("tool_cases".to_string(), "ToolExecutionPreflight".to_string()));
+        emitted.insert((
+            "tool_cases".to_string(),
+            "ToolExecutionPreflight".to_string(),
+        ));
     }
     if !snapshot.tool_retry_cases.is_empty() {
         emitted.insert(("tool_cases".to_string(), "ToolExecutionRetry".to_string()));
@@ -209,6 +353,13 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             assert!(
                 has_follow_up,
                 "follow-up hook ledger entries must carry accepted_follow_up text: {:?}",
+                entry
+            );
+        }
+        if has_boundary {
+            assert!(
+                boundary_ids.contains(&entry.accepted_boundary),
+                "coverage ledger accepted_boundary must reference an emitted boundary id: {:?}",
                 entry
             );
         }

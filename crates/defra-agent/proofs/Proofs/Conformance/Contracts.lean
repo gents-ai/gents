@@ -10,6 +10,7 @@ import Proofs.Conformance.ClientShell.Contracts
 import Proofs.RuntimeReconcile
 import Proofs.Conformance.ContractCases
 import Proofs.ToolExecution
+import Proofs.Conformance.Deviations
 import Proofs.Conformance.CoverageLedger
 
 /-!
@@ -459,6 +460,10 @@ def snapshotJson : String :=
       ++ jsonArray (ToolExecution.preflightCases.map toolPreflightCaseJson) ++ ","
     ++ "\"tool_retry_cases\":"
       ++ jsonArray (ToolExecution.retryCases.map toolRetryCaseJson) ++ ","
+    ++ "\"boundaries\":"
+      ++ boundariesJson ++ ","
+    ++ "\"deviations\":"
+      ++ deviationsJson ++ ","
     ++ "\"follow_up_hooks\":[],"
     ++ "\"coverage_ledger\":"
       ++ coverageLedgerJson
