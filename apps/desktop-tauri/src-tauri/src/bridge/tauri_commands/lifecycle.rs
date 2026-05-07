@@ -130,6 +130,18 @@ pub(crate) fn desktop_set_selected_agent(
     let did = agent_did
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
-    core.set_selected_agent_did(did);
+    core.set_selected_agent_did(did.clone());
+
+    // Lazy-load the new scope's rows. Best-effort: log a warning on failure
+    // but don't fail the selection update — the next refresh or event will
+    // converge.
+    if let Some(did_str) = did {
+        let core_arc = Arc::clone(&core);
+        tauri::async_runtime::spawn(async move {
+            if let Err(err) = core_arc.ensure_agent_loaded(&did_str).await {
+                tracing::warn!(error = %err, agent_did = %did_str, "ensure_agent_loaded failed");
+            }
+        });
+    }
     Ok(())
 }

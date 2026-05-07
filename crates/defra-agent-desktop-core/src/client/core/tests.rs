@@ -511,6 +511,46 @@ async fn refresh_store_succeeds_with_selection_set() {
     core.shutdown().await.expect("shutdown");
 }
 
+#[tokio::test]
+async fn ensure_agent_loaded_debounces_repeats() {
+    use crate::client::paths::DesktopPaths;
+
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
+    let core = ClientCore::start_with_paths_and_options(
+        paths,
+        ClientCoreOptions::local_only(),
+    )
+    .await
+    .expect("core");
+
+    let first = core.ensure_agent_loaded("did:alpha").await.expect("first");
+    let second = core.ensure_agent_loaded("did:alpha").await.expect("second");
+    assert!(first, "first call should load");
+    assert!(!second, "second call within debounce window should be a no-op");
+
+    core.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
+async fn ensure_agent_loaded_distinguishes_agents() {
+    use crate::client::paths::DesktopPaths;
+
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
+    let core = ClientCore::start_with_paths_and_options(
+        paths,
+        ClientCoreOptions::local_only(),
+    )
+    .await
+    .expect("core");
+
+    assert!(core.ensure_agent_loaded("did:alpha").await.expect("alpha"));
+    assert!(core.ensure_agent_loaded("did:beta").await.expect("beta"));
+
+    core.shutdown().await.expect("shutdown");
+}
+
 #[test]
 fn p2p_health_materially_changed_detects_live_topology_change() {
     let previous = P2PHealth {

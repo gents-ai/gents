@@ -7,6 +7,7 @@ mod writes;
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
@@ -156,6 +157,7 @@ pub struct ClientCore {
     materialization_supervisor: Mutex<Option<JoinHandle<()>>>,
     p2p_health: watch::Sender<P2PHealth>,
     selected_agent_did: watch::Sender<Option<String>>,
+    last_loaded_for: tokio::sync::Mutex<HashMap<String, std::time::Instant>>,
     p2p_control: Mutex<Option<mpsc::Sender<P2PSupervisorCommand>>>,
     last_mutation_error: StdRwLock<Option<String>>,
     local_peer_id: String,
@@ -350,6 +352,34 @@ impl ClientCore {
             "desktop remote peer snapshot merged (peer is single-agent scoped)"
         );
         Ok(version)
+    }
+
+    const SELECTION_RELOAD_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(2);
+
+    /// Ensure the local store has fresh rows for `agent_did`. If a prior
+    /// `ensure_agent_loaded(agent_did)` ran within `SELECTION_RELOAD_DEBOUNCE`,
+    /// returns `Ok(false)` without doing work. Otherwise loads a scoped
+    /// snapshot, merges it into the store, and records the timestamp.
+    pub async fn ensure_agent_loaded(&self, agent_did: &str) -> Result<bool> {
+        let now = std::time::Instant::now();
+        let mut map = self.last_loaded_for.lock().await;
+        if let Some(last) = map.get(agent_did) {
+            if now.duration_since(*last) < Self::SELECTION_RELOAD_DEBOUNCE {
+                return Ok(false);
+            }
+        }
+        let snapshot = load_agent_scoped_snapshot(self.node.as_ref(), agent_did).await?;
+        let rows = snapshot.row_count();
+        let version = self.store.merge_snapshot(snapshot);
+        map.insert(agent_did.to_string(), now);
+        tracing::info!(
+            target: "defra_agent_desktop_core::replication",
+            agent_did,
+            rows,
+            version,
+            "ensure_agent_loaded merged scoped snapshot"
+        );
+        Ok(true)
     }
 
     pub async fn shutdown(&self) -> Result<()> {

@@ -149,6 +149,7 @@ impl ClientCore {
             materialization_supervisor: tokio::sync::Mutex::new(Some(materialization_supervisor)),
             p2p_health,
             selected_agent_did,
+            last_loaded_for: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             p2p_control: tokio::sync::Mutex::new(Some(p2p_control)),
             last_mutation_error: std::sync::RwLock::new(None),
             local_peer_id,
