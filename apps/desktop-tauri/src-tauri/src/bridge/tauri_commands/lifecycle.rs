@@ -145,3 +145,35 @@ pub(crate) fn desktop_set_selected_agent(
     }
     Ok(())
 }
+
+#[derive(serde::Serialize)]
+pub(crate) struct DesktopObserverMetrics {
+    pub events_received: u64,
+    pub docs_fetched: u64,
+    pub debounce_flushes: u64,
+    pub scope_reloads: u64,
+    pub drop_recoveries: u64,
+    pub local_write_redundant_fetches: u64,
+    pub fetch_failures: u64,
+}
+
+#[tauri::command]
+pub(crate) async fn desktop_observer_metrics(
+    state: State<'_, DesktopAppState>,
+) -> Result<Option<DesktopObserverMetrics>, String> {
+    let Some(core) = current_core(&state) else {
+        return Ok(None);
+    };
+    let Some(snap) = core.observer_metrics().await else {
+        return Ok(None);
+    };
+    Ok(Some(DesktopObserverMetrics {
+        events_received: snap.events_received,
+        docs_fetched: snap.docs_fetched,
+        debounce_flushes: snap.debounce_flushes,
+        scope_reloads: snap.scope_reloads,
+        drop_recoveries: snap.drop_recoveries,
+        local_write_redundant_fetches: snap.local_write_redundant_fetches,
+        fetch_failures: snap.fetch_failures,
+    }))
+}

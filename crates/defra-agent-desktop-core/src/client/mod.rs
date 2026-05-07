@@ -15,7 +15,7 @@ pub use core::{ClientCore, ClientCoreOptions, ClientPeerStatus, P2PHealth, P2PHe
 pub use mutations::{
     CreatedConversation, PeerMutationResult, SubmitRequestOptions, SubmittedRequest,
 };
-pub use observe::ObservedStore;
+pub use observe::{ObservedStore, ObserverHandle, ObserverMetricsSnapshot};
 pub use paths::DesktopPaths;
 pub use peer_directory::{PeerDirectory, PeerRecord};
 pub use principal_identity::PrincipalIdentity;

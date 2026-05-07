@@ -569,3 +569,26 @@ fn p2p_health_materially_changed_detects_live_topology_change() {
 
     assert!(p2p_health_materially_changed(&previous, &next));
 }
+
+#[tokio::test]
+async fn observer_metrics_returns_snapshot() {
+    use crate::client::paths::DesktopPaths;
+
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
+    let core = ClientCore::start_with_paths_and_options(
+        paths,
+        ClientCoreOptions::local_only(),
+    )
+    .await
+    .expect("core");
+
+    let metrics = core.observer_metrics().await;
+    assert!(metrics.is_some(), "observer should be running and expose metrics");
+
+    core.shutdown().await.expect("shutdown");
+
+    // After shutdown the observer is gone; metrics should be None.
+    let metrics = core.observer_metrics().await;
+    assert!(metrics.is_none(), "observer metrics should be None after shutdown");
+}

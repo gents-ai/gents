@@ -382,6 +382,15 @@ impl ClientCore {
         Ok(true)
     }
 
+    /// Snapshot the observer's metrics if the observer is running.
+    pub async fn observer_metrics(&self) -> Option<crate::client::observe::ObserverMetricsSnapshot> {
+        self.observer
+            .lock()
+            .await
+            .as_ref()
+            .map(|h| h.metrics_snapshot())
+    }
+
     pub async fn shutdown(&self) -> Result<()> {
         tracing::info!("client core shutdown: begin");
         self.p2p_control.lock().await.take();
