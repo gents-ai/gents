@@ -58,6 +58,10 @@ def hookResultForMutation
       | .failOpen => "ok"
       | .failClosed => "err"
 
+def actionNameForMutationResult : MutationResult -> String
+  | .success => "mutationSuccess"
+  | .failure => "mutationFailure"
+
 def storageObservationForMutation
     (policy : PersistenceState.FailurePolicy)
     (result : MutationResult) : StorageObservation :=
@@ -111,12 +115,38 @@ def storageObservationRuntimeCase
   let postObservation := storageObservationForMutation policy result
   { name := name
   , policy := policy.toDefraDB
+  , action := actionNameForMutationResult result
+  , preObservation := StorageObservation.toContract .inFlight
   , mutationResult := result.toContract
   , postObservation := postObservation.toContract
   , postPersistence := (StorageObservation.toPersistence postObservation).toDefraDB
   , hookResult := hookResultForMutation policy result
-  , recordsFailure := if result = .failure then true else false
-  , recordsSuccess := if result = .success then true else false
+  , recordsFailure := decide (result = .failure)
+  , recordsSuccess := decide (result = .success)
+  , terminalWriteObserved := terminalWriteObservedBool postObservation
+  , externalVisibilityClaimed := false
+  }
+
+def storageVisibilityRuntimeCase
+    (name : String)
+    (policy : PersistenceState.FailurePolicy)
+    (preObservation : StorageObservation)
+    (actionName : String)
+    (action : StorageObservation.Action) : StorageObservationRuntimeCase :=
+  let postObservation :=
+    match StorageObservation.step? policy preObservation action with
+    | some obs => obs
+    | none => preObservation
+  { name := name
+  , policy := policy.toDefraDB
+  , action := actionName
+  , preObservation := preObservation.toContract
+  , mutationResult := "notApplicable"
+  , postObservation := postObservation.toContract
+  , postPersistence := (StorageObservation.toPersistence postObservation).toDefraDB
+  , hookResult := "notApplicable"
+  , recordsFailure := false
+  , recordsSuccess := false
   , terminalWriteObserved := terminalWriteObservedBool postObservation
   , externalVisibilityClaimed := false
   }
@@ -138,10 +168,34 @@ def storageObservationRuntimeCases : List StorageObservationRuntimeCase :=
       "fail_open_failure_acknowledges_lost_output"
       .failOpen
       .failure
+  , storageVisibilityRuntimeCase
+      "read_your_writes_success_ack_is_visible"
+      .failClosed
+      .successAcknowledged
+      "readYourWrites"
+      .readYourWrites
+  , storageVisibilityRuntimeCase
+      "stale_read_preserves_committed_observation"
+      .failClosed
+      .successAcknowledged
+      "staleRead"
+      .staleRead
+  , storageVisibilityRuntimeCase
+      "stale_event_preserves_committed_observation"
+      .failClosed
+      .successAcknowledged
+      "staleEvent"
+      .staleEvent
+  , storageVisibilityRuntimeCase
+      "event_after_stale_observation_is_visible"
+      .failClosed
+      .staleObserved
+      "eventArrives"
+      .eventArrives
   ]
 
 def backendAvailable (enabled : Bool) (probeStatus : BackendProbeStatus) : Bool :=
-  enabled && (if probeStatus = .healthy then true else false)
+  enabled && decide (probeStatus = .healthy)
 
 def backendHealthAdmissionCase
     (name : String)

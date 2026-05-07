@@ -107,9 +107,11 @@ mutations; it does not persist a per-token `PersistenceState` or
 local hook classification: successful mutation results count as local success
 acks, fail-closed mutation failures propagate an error and remain uncommitted,
 and fail-open mutation failures continue as acknowledged lost output without a
-success ack. Storage-engine crash windows, transport delivery, global CRDT
-convergence, stale-read recovery, and event-bus delivery correctness remain
-external DefraDB/environment assumptions.
+success ack. They also cover local classification of direct read-your-writes,
+stale read/event, and later visible-read observations. Storage-engine crash
+windows, transport delivery, global CRDT convergence, the arrival of later
+visibility observations, and event-bus delivery correctness remain external
+DefraDB/environment assumptions.
 
 This section is the modeled part of the former broad storage assumption; the
 following section keeps the still-external DefraDB/environment assumptions
@@ -315,7 +317,7 @@ def boundaries : List Boundary :=
     , domain := "StorageObservation"
     , subject := "daemon-visible storage facts"
     , statement :=
-        "Lean-generated cases and Rust hook tests cover local success/failure observation classification; daemon-visible storage facts remain observations, not proofs of DefraDB internals."
+        "Lean-generated cases and Rust hook tests cover local success/failure and stale/read-visible observation classification; daemon-visible storage facts remain observations, not proofs of DefraDB internals."
     }
   , { id := boundaryStorageMinimumVisibilityPathId
     , domain := "StorageObservation"

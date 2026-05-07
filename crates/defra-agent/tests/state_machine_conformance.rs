@@ -151,7 +151,7 @@ fn lean_executable_contracts_cover_initial_domains() {
         lean_contract_snapshot()
             .storage_observation_runtime_cases
             .len(),
-        4
+        8
     );
     assert_eq!(
         lean_contract_snapshot()

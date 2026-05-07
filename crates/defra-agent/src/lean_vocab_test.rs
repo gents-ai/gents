@@ -341,6 +341,8 @@ pub(crate) struct LeanPersistenceFailurePolicyCase {
 pub(crate) struct LeanStorageObservationRuntimeCase {
     pub(crate) name: String,
     pub(crate) policy: String,
+    pub(crate) action: String,
+    pub(crate) pre_observation: String,
     pub(crate) mutation_result: String,
     pub(crate) post_observation: String,
     pub(crate) post_persistence: String,

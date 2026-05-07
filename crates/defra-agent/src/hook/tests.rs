@@ -210,45 +210,51 @@ fn generated_persistence_failure_policy_cases_match_hook_decisions() {
 #[tokio::test]
 async fn generated_storage_observation_cases_match_hook_runtime_classification() {
     let cases = lean_storage_observation_runtime_cases();
-    assert_eq!(cases.len(), 4);
+    assert_eq!(cases.len(), 8);
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
 
     for case in cases {
-        let hook = DefraSessionHook::with_identity(
-            node.clone(),
-            "agent",
-            "did:defra-agent:test",
-            failure_policy_from_contract(&case.policy),
-        );
-        let result = match case.mutation_result.as_str() {
-            "success" => Ok(()),
-            "failure" => Err(anyhow::anyhow!(
-                "generated storage-observation failure for {}",
-                case.name
-            )),
-            other => panic!("unknown Lean mutation result {other:?}"),
-        };
-        let actual_result = hook.apply_persistence_policy(result, &case.name);
-        let stats = hook.stats();
+        if case.mutation_result == "notApplicable" {
+            assert_eq!(case.hook_result, "notApplicable", "{}", case.name);
+            assert!(!case.records_failure, "{}", case.name);
+            assert!(!case.records_success, "{}", case.name);
+        } else {
+            let hook = DefraSessionHook::with_identity(
+                node.clone(),
+                "agent",
+                "did:defra-agent:test",
+                failure_policy_from_contract(&case.policy),
+            );
+            let result = match case.mutation_result.as_str() {
+                "success" => Ok(()),
+                "failure" => Err(anyhow::anyhow!(
+                    "generated storage-observation failure for {}",
+                    case.name
+                )),
+                other => panic!("unknown Lean mutation result {other:?}"),
+            };
+            let actual_result = hook.apply_persistence_policy(result, &case.name);
+            let stats = hook.stats();
 
-        assert_eq!(
-            actual_result.is_ok(),
-            case.hook_result == "ok",
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            stats.persistence_failures,
-            u64::from(case.records_failure),
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            stats.persistence_successes,
-            u64::from(case.records_success),
-            "{}",
-            case.name
-        );
+            assert_eq!(
+                actual_result.is_ok(),
+                case.hook_result == "ok",
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                stats.persistence_failures,
+                u64::from(case.records_failure),
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                stats.persistence_successes,
+                u64::from(case.records_success),
+                "{}",
+                case.name
+            );
+        }
         assert!(
             !case.external_visibility_claimed,
             "{} must not claim storage-engine visibility",
@@ -257,16 +263,49 @@ async fn generated_storage_observation_cases_match_hook_runtime_classification()
 
         match case.post_observation.as_str() {
             "successAcknowledged" => {
+                assert_eq!(case.action, "mutationSuccess");
+                assert_eq!(case.pre_observation, "inFlight");
                 assert_eq!(case.post_persistence, "committed");
                 assert!(case.terminal_write_observed, "{}", case.name);
             }
             "mutationFailed" => {
+                assert_eq!(case.action, "mutationFailure");
+                assert_eq!(case.pre_observation, "inFlight");
                 assert_eq!(case.post_persistence, "uncommitted");
                 assert!(!case.terminal_write_observed, "{}", case.name);
             }
             "lostAcknowledged" => {
+                assert_eq!(case.action, "mutationFailure");
+                assert_eq!(case.pre_observation, "inFlight");
                 assert_eq!(case.post_persistence, "lost");
                 assert!(!case.terminal_write_observed, "{}", case.name);
+            }
+            "staleObserved" => {
+                assert!(
+                    matches!(case.action.as_str(), "staleRead" | "staleEvent"),
+                    "{}",
+                    case.name
+                );
+                assert_eq!(case.pre_observation, "successAcknowledged");
+                assert_eq!(case.post_persistence, "committed");
+                assert!(!case.terminal_write_observed, "{}", case.name);
+            }
+            "readVisible" => {
+                assert!(
+                    matches!(case.action.as_str(), "readYourWrites" | "eventArrives"),
+                    "{}",
+                    case.name
+                );
+                assert!(
+                    matches!(
+                        case.pre_observation.as_str(),
+                        "successAcknowledged" | "staleObserved"
+                    ),
+                    "{}",
+                    case.name
+                );
+                assert_eq!(case.post_persistence, "committed");
+                assert!(case.terminal_write_observed, "{}", case.name);
             }
             other => panic!("unexpected Lean storage observation {other:?}"),
         }

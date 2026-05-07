@@ -122,6 +122,8 @@ structure PersistenceFailurePolicyCase where
 structure StorageObservationRuntimeCase where
   name : String
   policy : String
+  action : String
+  preObservation : String
   mutationResult : String
   postObservation : String
   postPersistence : String

@@ -147,6 +147,8 @@ def storageObservationRuntimeCaseJson
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
     ++ "\"policy\":" ++ jsonString witness.policy ++ ","
+    ++ "\"action\":" ++ jsonString witness.action ++ ","
+    ++ "\"pre_observation\":" ++ jsonString witness.preObservation ++ ","
     ++ "\"mutation_result\":" ++ jsonString witness.mutationResult ++ ","
     ++ "\"post_observation\":" ++ jsonString witness.postObservation ++ ","
     ++ "\"post_persistence\":" ++ jsonString witness.postPersistence ++ ","
