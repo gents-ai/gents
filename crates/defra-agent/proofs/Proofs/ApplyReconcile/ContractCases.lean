@@ -224,6 +224,8 @@ def buildCase (scenario : ApplyReconcileScenario) : ApplyReconcileCase :=
   , expectedRetryDesired := sortedDocs retry
   , expectedRetryStepCount := retrySteps.length
   , expectedRediffStepCount := rediff.length
+  -- The list projection has no live-write constructor; Rust checks this
+  -- invariant against `apply_model::apply_all` using the emitted pre-live rows.
   , livePreserved := true
   , manifestRealizedAfter := manifestRealizedBool scenario.manifest after
   , retryConverges := desiredDocsEq retry after

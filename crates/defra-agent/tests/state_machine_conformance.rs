@@ -420,6 +420,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "follow_up_hook",
     ];
     let acknowledged_consumers = [
+        "apply_conformance::generated_apply_reconcile_cases_drive_apply_model_and_production_ordering",
         "admission::tests::generated_slot_accounting_fleet_cases_match_admission_runtime_boundary",
         "admission::tests::generated_inference_slot_accounting_cases_match_admission_reconstruction_logic",
         "admission::tests::rust_inference_call_state_vocabulary_matches_lean_model",
