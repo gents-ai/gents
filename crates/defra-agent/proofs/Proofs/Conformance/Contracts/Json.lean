@@ -1,6 +1,7 @@
 import Proofs.Conformance.Contracts.Machines
 import Proofs.Conformance.Triggers.Contracts
 import Proofs.Conformance.ClientShell.Contracts
+import Proofs.ApplyReconcile.ContractCases
 import Proofs.ToolExecution
 import Proofs.Conformance.Deviations
 import Proofs.CommandPolicy.Cases
@@ -231,6 +232,8 @@ def snapshotJson : String :=
       ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
     ++ "\"runtime_reconcile_cases\":"
       ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
+    ++ "\"apply_reconcile_cases\":"
+      ++ ApplyReconcile.ContractCases.applyReconcileCasesJson ++ ","
     ++ "\"session_recovery_cases\":"
       ++ jsonArray (sessionRecoveryCases.map sessionRecoveryCaseJson) ++ ","
     ++ "\"inference_slot_accounting_cases\":"

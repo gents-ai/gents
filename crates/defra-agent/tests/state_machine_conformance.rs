@@ -129,6 +129,7 @@ fn lean_executable_contracts_cover_initial_domains() {
         "CommandPolicy should be emitted as generated contract output, not a follow-up hook"
     );
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 6);
+    assert_eq!(lean_contract_snapshot().apply_reconcile_cases.len(), 6);
     assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 10);
     assert_eq!(
         lean_contract_snapshot()
@@ -328,6 +329,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "RuntimeReconcileCases".to_string(),
         ));
     }
+    if !snapshot.apply_reconcile_cases.is_empty() {
+        emitted.insert((
+            "apply_reconcile_cases".to_string(),
+            "ApplyReconcileCases".to_string(),
+        ));
+    }
     if !snapshot.session_recovery_cases.is_empty() {
         emitted.insert((
             "session_recovery_cases".to_string(),
@@ -402,6 +409,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "state_machine",
         "trigger_cases",
         "runtime_cases",
+        "apply_reconcile_cases",
         "session_recovery_cases",
         "slot_cases",
         "fleet_cases",

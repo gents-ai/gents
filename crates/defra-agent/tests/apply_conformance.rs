@@ -11,7 +11,15 @@ use defra_agent::apply_model::{
     prefix_referrers_closed, references_of, retry_after_prefix, ApplyStep, Collection,
     DesiredFields, DocRef, LiveState, Manifest,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+#[path = "../src/lean_vocab_test.rs"]
+mod lean_vocab_test;
+
+use lean_vocab_test::{
+    lean_apply_reconcile_cases, LeanApplyDesiredDoc, LeanApplyDocRef, LeanApplyLiveDoc,
+    LeanApplyStep,
+};
 
 fn r(c: Collection, id: &str) -> DocRef {
     DocRef {
@@ -40,6 +48,303 @@ fn live(desired: &[(DocRef, &str)], live: &[(DocRef, &str)]) -> LiveState {
     LiveState {
         desired: desired_map,
         live: live_map,
+    }
+}
+
+fn collection_from_lean(name: &str) -> Collection {
+    Collection::ALL
+        .into_iter()
+        .find(|collection| collection.graphql_type() == name)
+        .unwrap_or_else(|| panic!("unknown Lean apply collection {name:?}"))
+}
+
+fn doc_ref_from_lean(doc: &LeanApplyDocRef) -> DocRef {
+    let collection = collection_from_lean(&doc.collection);
+    assert!(
+        !collection.unique_field().is_empty(),
+        "production apply helpers require a unique field for {collection:?}",
+    );
+    DocRef {
+        collection,
+        id: doc.id.clone(),
+    }
+}
+
+fn doc_ref_from_parts(collection: &str, id: &str) -> DocRef {
+    let collection = collection_from_lean(collection);
+    assert!(
+        !collection.unique_field().is_empty(),
+        "production apply helpers require a unique field for {collection:?}",
+    );
+    DocRef {
+        collection,
+        id: id.to_string(),
+    }
+}
+
+fn desired_fields_from_lean(doc: &LeanApplyDesiredDoc) -> DesiredFields {
+    DesiredFields::with_refs(
+        doc.content.clone(),
+        doc.refs.iter().map(doc_ref_from_lean).collect(),
+    )
+}
+
+fn manifest_from_lean(docs: &[LeanApplyDesiredDoc]) -> Manifest {
+    Manifest {
+        docs: docs
+            .iter()
+            .map(|doc| {
+                (
+                    doc_ref_from_parts(&doc.collection, &doc.id),
+                    desired_fields_from_lean(doc),
+                )
+            })
+            .collect(),
+    }
+}
+
+fn live_state_from_lean(desired: &[LeanApplyDesiredDoc], live: &[LeanApplyLiveDoc]) -> LiveState {
+    LiveState {
+        desired: desired
+            .iter()
+            .map(|doc| {
+                (
+                    doc_ref_from_parts(&doc.collection, &doc.id),
+                    desired_fields_from_lean(doc),
+                )
+            })
+            .collect(),
+        live: live
+            .iter()
+            .map(|doc| {
+                (
+                    doc_ref_from_parts(&doc.collection, &doc.id),
+                    doc.content.clone(),
+                )
+            })
+            .collect(),
+    }
+}
+
+fn desired_map_from_lean(docs: &[LeanApplyDesiredDoc]) -> BTreeMap<DocRef, DesiredFields> {
+    docs.iter()
+        .map(|doc| {
+            (
+                doc_ref_from_parts(&doc.collection, &doc.id),
+                desired_fields_from_lean(doc),
+            )
+        })
+        .collect()
+}
+
+fn doc_ref_set_from_lean(refs: &[LeanApplyDocRef]) -> BTreeSet<DocRef> {
+    refs.iter().map(doc_ref_from_lean).collect()
+}
+
+fn doc_ref_set(refs: &[DocRef]) -> BTreeSet<DocRef> {
+    refs.iter().cloned().collect()
+}
+
+fn step_contract(step: &ApplyStep) -> (String, DocRef, DesiredFields) {
+    match step {
+        ApplyStep::Create(doc, fields) => ("create".to_string(), doc.clone(), fields.clone()),
+        ApplyStep::Update(doc, fields) => ("update".to_string(), doc.clone(), fields.clone()),
+    }
+}
+
+fn step_contract_from_lean(step: &LeanApplyStep) -> (String, DocRef, DesiredFields) {
+    (
+        step.action.clone(),
+        doc_ref_from_lean(&step.target),
+        DesiredFields::with_refs(
+            step.content.clone(),
+            step.refs.iter().map(doc_ref_from_lean).collect(),
+        ),
+    )
+}
+
+fn assert_steps_match_lean(case_name: &str, actual: &[ApplyStep], expected: &[LeanApplyStep]) {
+    let actual = actual.iter().map(step_contract).collect::<Vec<_>>();
+    let expected = expected
+        .iter()
+        .map(step_contract_from_lean)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual, expected,
+        "apply_model diff steps must match Lean case {case_name}"
+    );
+}
+
+fn assert_steps_are_production_apply_ordered(case_name: &str, steps: &[ApplyStep]) {
+    for pair in steps.windows(2) {
+        let left = pair[0].target();
+        let right = pair[1].target();
+        let left_key = (left.collection.apply_order(), left.id.as_str());
+        let right_key = (right.collection.apply_order(), right.id.as_str());
+        assert!(
+            left_key <= right_key,
+            "case {case_name} emitted out-of-order production apply step: {left:?} before {right:?}",
+        );
+    }
+}
+
+fn assert_manifest_refs_point_to_lower_apply_ranks(
+    case_name: &str,
+    manifest: &[LeanApplyDesiredDoc],
+) {
+    for doc in manifest {
+        let referrer = doc_ref_from_parts(&doc.collection, &doc.id);
+        for referenced in &doc.refs {
+            let referenced = doc_ref_from_lean(referenced);
+            assert!(
+                referenced.collection.apply_order() < referrer.collection.apply_order(),
+                "case {case_name} has non-prefix-safe reference {referrer:?} -> {referenced:?}",
+            );
+        }
+    }
+}
+
+#[test]
+fn generated_apply_reconcile_cases_drive_apply_model_and_production_ordering() {
+    let cases = lean_apply_reconcile_cases();
+    let names = cases
+        .iter()
+        .map(|case| case.name.as_str())
+        .collect::<BTreeSet<_>>();
+    for required in [
+        "empty_manifest",
+        "backend_before_behavior_ordering",
+        "update_existing_backend",
+        "live_only_no_op",
+        "prefix_retry_convergence_idempotence",
+        "referrer_closure",
+    ] {
+        assert!(
+            names.contains(required),
+            "Lean did not emit required ApplyReconcile case {required:?}",
+        );
+    }
+
+    for case in cases {
+        let manifest = manifest_from_lean(&case.manifest);
+        let live = live_state_from_lean(&case.pre_desired, &case.pre_live);
+        let report = diff(&manifest, &live);
+        let steps = report.steps().to_vec();
+
+        assert_eq!(
+            doc_ref_set(&report.create),
+            doc_ref_set_from_lean(&case.expected_create),
+            "create bucket mismatch for Lean case {}",
+            case.name,
+        );
+        assert_eq!(
+            doc_ref_set(&report.update),
+            doc_ref_set_from_lean(&case.expected_update),
+            "update bucket mismatch for Lean case {}",
+            case.name,
+        );
+        assert_eq!(
+            doc_ref_set(&report.unchanged),
+            doc_ref_set_from_lean(&case.expected_unchanged),
+            "unchanged bucket mismatch for Lean case {}",
+            case.name,
+        );
+        assert_eq!(
+            doc_ref_set(&report.live_only),
+            doc_ref_set_from_lean(&case.expected_live_only),
+            "live-only bucket mismatch for Lean case {}",
+            case.name,
+        );
+
+        assert_steps_match_lean(&case.name, &steps, &case.expected_steps);
+        assert_steps_are_production_apply_ordered(&case.name, &steps);
+        assert_manifest_refs_point_to_lower_apply_ranks(&case.name, &case.manifest);
+
+        let prefix = apply_prefix(&live, &steps, case.prefix_len);
+        assert_eq!(
+            prefix.desired,
+            desired_map_from_lean(&case.expected_prefix_desired),
+            "prefix desired projection mismatch for Lean case {}",
+            case.name,
+        );
+        assert_eq!(
+            prefix_referrers_closed(&steps[..case.prefix_len], &prefix),
+            case.prefix_referrers_closed,
+            "prefix referrer-closure mismatch for Lean case {}",
+            case.name,
+        );
+        assert_eq!(
+            desired_references_closed(&prefix),
+            case.desired_references_closed_after_prefix,
+            "prefix desired reference-closure mismatch for Lean case {}",
+            case.name,
+        );
+
+        let after = apply_all(&live, &steps);
+        assert_eq!(
+            after.desired,
+            desired_map_from_lean(&case.expected_after_desired),
+            "complete apply desired projection mismatch for Lean case {}",
+            case.name,
+        );
+        assert_eq!(
+            after.live == live.live,
+            case.live_preserved,
+            "live projection preservation mismatch for Lean case {}",
+            case.name,
+        );
+        assert_eq!(
+            manifest_realized(&manifest, &after),
+            case.manifest_realized_after,
+            "manifest realization mismatch for Lean case {}",
+            case.name,
+        );
+
+        let retry_steps = diff(&manifest, &prefix).into_steps();
+        assert_eq!(
+            retry_steps.len(),
+            case.expected_retry_step_count,
+            "retry step count mismatch for Lean case {}",
+            case.name,
+        );
+        let retry = apply_all(&prefix, &retry_steps);
+        assert_eq!(
+            retry.desired,
+            desired_map_from_lean(&case.expected_retry_desired),
+            "retry desired projection mismatch for Lean case {}",
+            case.name,
+        );
+        let helper_retry = retry_after_prefix(&manifest, &live, case.prefix_len);
+        assert_eq!(
+            helper_retry, retry,
+            "retry_after_prefix helper mismatch for Lean case {}",
+            case.name,
+        );
+        assert_eq!(
+            retry == after,
+            case.retry_converges,
+            "retry convergence mismatch for Lean case {}",
+            case.name,
+        );
+        assert_eq!(
+            retry, after,
+            "retry must converge to complete apply for Lean case {}",
+            case.name,
+        );
+
+        let rediff = diff(&manifest, &after).into_steps();
+        assert_eq!(
+            rediff.len(),
+            case.expected_rediff_step_count,
+            "post-convergence rediff count mismatch for Lean case {}",
+            case.name,
+        );
+        assert_eq!(
+            apply_all(&after, &rediff) == after,
+            case.idempotent_after,
+            "idempotence mismatch for Lean case {}",
+            case.name,
+        );
     }
 }
 
