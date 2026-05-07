@@ -1,5 +1,85 @@
 use super::*;
 
+fn make_streaming_store_with_response_content(content: &str) -> ClientStore {
+    ClientStore::from_rows(ClientStoreRows {
+        conversations: vec![AgentConversationRow {
+            session_id: "sess-1".to_string(),
+            agent_name: Some("Amy".to_string()),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            title: Some("conversation".to_string()),
+            title_source: Some("generated".to_string()),
+            preview_text: Some("hello".to_string()),
+            status: Some("active".to_string()),
+            created_at: Some("2026-04-21T12:00:00Z".to_string()),
+            updated_at: Some("2026-04-21T12:01:00Z".to_string()),
+            latest_request_id: Some("req-1".to_string()),
+        }],
+        requests: vec![AgentRequestRow {
+            request_id: "req-1".to_string(),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            session_id: Some("sess-1".to_string()),
+            retry_parent_request: None,
+            retry_root_request: None,
+            superseded_by_request: None,
+            content: Some("hello".to_string()),
+            status: Some("processing".to_string()),
+            lifecycle_state: Some("processing".to_string()),
+            backend_id: None,
+            execution_origin: Some("interactive".to_string()),
+            failure_reason: None,
+            created_at: Some("2026-04-21T12:00:00Z".to_string()),
+            claimed_at: None,
+            deadline: None,
+            retry_count: Some(0),
+            max_retries: Some(3),
+            caused_by_trigger_id: None,
+            caused_by_trigger_kind: None,
+            interrupt_requested_at: None,
+            valid_until: None,
+        }],
+        messages: vec![AgentMessageRow {
+            message_key: "msg-1".to_string(),
+            session_id: Some("sess-1".to_string()),
+            sequence: Some(1),
+            role: Some("user".to_string()),
+            content: Some(user_message_json("hello")),
+            timestamp: Some("2026-04-21T12:00:00Z".to_string()),
+        }],
+        responses: vec![AgentResponseRow {
+            response_key: "resp-1".to_string(),
+            request_id: Some("req-1".to_string()),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            session_id: Some("sess-1".to_string()),
+            content: Some(content.to_string()),
+            reasoning: None,
+            status: Some("streaming".to_string()),
+            error_message: None,
+            token_count: Some(4),
+            progress_seq: Some(1),
+            materialized_message_sequence: None,
+            materialized_at: None,
+            created_at: Some("2026-04-21T12:00:01Z".to_string()),
+            completed_at: None,
+            interrupted_at: None,
+        }],
+        ..ClientStoreRows::default()
+    })
+}
+
+#[test]
+fn overlay_hidden_when_response_tail_is_empty() {
+    let store = make_streaming_store_with_response_content("");
+    let snapshot = build_session_snapshot_from_store(&store, "sess-1", None).expect("snapshot");
+    let has_live = snapshot
+        .timeline_items
+        .iter()
+        .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. }));
+    assert!(!has_live, "overlay must be hidden when tail is empty");
+}
+
 #[test]
 fn session_snapshot_orders_pending_turn_before_orphan_tool_groups_and_live_overlay() {
     let store = ClientStore::from_rows(ClientStoreRows {
@@ -103,6 +183,10 @@ fn session_snapshot_orders_pending_turn_before_orphan_tool_groups_and_live_overl
             status: Some("running".to_string()),
             started_at: Some("2026-04-21T12:01:02Z".to_string()),
             completed_at: None,
+            selected_service_id: None,
+            selected_tool_name: None,
+            tool_failure_class: None,
+            latency_ms: None,
         }],
         ..ClientStoreRows::default()
     });
@@ -395,6 +479,10 @@ fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
             status: Some("completed".to_string()),
             started_at: Some("2026-04-21T12:00:01Z".to_string()),
             completed_at: Some("2026-04-21T12:00:02Z".to_string()),
+            selected_service_id: None,
+            selected_tool_name: None,
+            tool_failure_class: None,
+            latency_ms: None,
         }],
         ..ClientStoreRows::default()
     });

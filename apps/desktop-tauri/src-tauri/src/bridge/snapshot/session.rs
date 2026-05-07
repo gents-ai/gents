@@ -127,9 +127,6 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
     let pending_turn = latest_request_id
         .as_deref()
         .and_then(|request_id| build_pending_turn(store, agent_did, session_id, request_id));
-    let active_turn_index = latest_request_id.as_deref().and_then(|request_id| {
-        logical_turn_index_for_request(store, agent_did, session_id, request_id)
-    });
 
     let messages = transcript
         .messages
@@ -203,7 +200,6 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
         &tool_calls,
         pending_turn.as_ref(),
         active_response_overlay.as_ref(),
-        active_turn_index,
     );
 
     Some(DesktopSessionSnapshot {
