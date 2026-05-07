@@ -18,13 +18,14 @@ structure CoverageEntry where
   acceptedFollowUp : String
   deriving Repr
 
+-- Consumer strings are documentation pointers; Rust checks domain coverage,
+-- not that these names resolve to test symbols.
 def consumerCoverage
-    (category domain consumer : String)
-    (acceptedBoundary : String := "") : CoverageEntry :=
+    (category domain consumer : String) : CoverageEntry :=
   { category := category
   , domain := domain
   , consumer := consumer
-  , acceptedBoundary := acceptedBoundary
+  , acceptedBoundary := ""
   , acceptedFollowUp := ""
   }
 

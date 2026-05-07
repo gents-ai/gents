@@ -125,7 +125,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     for machine in &snapshot.state_machines {
         emitted.insert(("state_machine".to_string(), machine.domain.clone()));
     }
-    if snapshot.trigger_dispatch_case_count > 0 || !snapshot.trigger_dispatch_cases.is_empty() {
+    assert_eq!(
+        snapshot.trigger_dispatch_case_count,
+        snapshot.trigger_dispatch_cases.len(),
+        "Lean trigger dispatch case count drifted from emitted cases"
+    );
+    if !snapshot.trigger_dispatch_cases.is_empty() {
         emitted.insert(("trigger_cases".to_string(), "TriggerDispatch".to_string()));
     }
     if !snapshot.runtime_reconcile_cases.is_empty() {
@@ -144,6 +149,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert(("follow_up_hook".to_string(), hook.clone()));
     }
 
+    // Keep this mirrored with the category strings in CoverageLedger.lean.
     let valid_categories = [
         "vocabulary",
         "state_machine",
