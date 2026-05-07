@@ -539,6 +539,12 @@ fn build_finalize_mutation(
     let request_transition = existing
         .map(|existing| build_request_terminal_update(&existing.request_id, status))
         .unwrap_or_default();
+    // content / reasoning are always cleared on finalize because they
+    // represent the live tail (issue #64). token_count is preserved as a
+    // cumulative metering field — only updated when the in-memory buffer
+    // is present (the snapshot path); on the crash-recovery path
+    // (`snapshot = None`) the previously-flushed token_count is left
+    // untouched.
     match snapshot {
         Some(snapshot) => format!(
             r#"mutation {{
@@ -548,8 +554,8 @@ fn build_finalize_mutation(
                         status: {{ _eq: "streaming" }}
                     }},
                     input: {{
-                        content: "{content}",
-                        reasoning: "{reasoning}",
+                        content: "",
+                        reasoning: "",
                         status: "{status}",
                         token_count: {token_count},
                         completed_at: "{now}"
@@ -557,8 +563,6 @@ fn build_finalize_mutation(
                 ) {{ _docID }}
                 {request_transition}
             }}"#,
-            content = escape_graphql_string(&snapshot.content),
-            reasoning = escape_graphql_string(&snapshot.reasoning),
             status = status.as_str(),
             token_count = snapshot.token_count,
         ),
@@ -570,6 +574,8 @@ fn build_finalize_mutation(
                         status: {{ _eq: "streaming" }}
                     }},
                     input: {{
+                        content: "",
+                        reasoning: "",
                         status: "{status}",
                         completed_at: "{now}"
                     }}
