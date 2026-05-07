@@ -1,3 +1,5 @@
+import Proofs.Request
+import Proofs.SessionRecovery
 import Proofs.Conformance.ContractCases.Types
 
 /-!

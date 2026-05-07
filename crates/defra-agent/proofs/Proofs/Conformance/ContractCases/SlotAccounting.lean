@@ -1,3 +1,6 @@
+import Proofs.Fleet
+import Proofs.InferenceCall.SlotAccounting
+import Proofs.Request
 import Proofs.Conformance.ContractCases.Types
 
 /-!

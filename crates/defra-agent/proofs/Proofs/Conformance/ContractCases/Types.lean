@@ -1,7 +1,6 @@
-import Proofs.Fleet
-import Proofs.InferenceCall.SlotAccounting
-import Proofs.RuntimeReconcile
-import Proofs.SessionRecovery
+import Proofs.Basic
+import Proofs.Scheduling
+import Proofs.RuntimeReconcile.State
 
 /-!
 # Finite Conformance Witness Types
