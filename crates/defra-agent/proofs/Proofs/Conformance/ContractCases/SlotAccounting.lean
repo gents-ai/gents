@@ -194,8 +194,19 @@ def fleetBoundedState : FleetState :=
       }
   }
 
-def fleetAdmissionProjectionState : AdmissionState → InferenceCallState
-  | .released => .completed
+def fleetReleasedProjectionState : RequestState → InferenceCallState
+  | .completed => .completed
+  | .failed => .failed
+  | .interrupted => .cancelled
+  | .superseded => .cancelled
+  | .dead => .cancelled
+  | _ => .completed
+
+def fleetAdmissionProjectionState
+    (state : RequestState)
+    (admission : AdmissionState) : InferenceCallState :=
+  match admission with
+  | .released => fleetReleasedProjectionState state
   | .waiting => .queued
   | .acquired => .running
   | .executing => .running
@@ -207,7 +218,7 @@ def fleetSlotContributionCase
     (expected : Nat) : FleetSlotAccountingCase :=
   let ctx := slotContext state admission contractBackend
   let contribution := FleetState.slotContribution ctx contractBackend
-  let projectedState := fleetAdmissionProjectionState admission
+  let projectedState := fleetAdmissionProjectionState state admission
   let reconstructed :=
     (slotCall 1 contractBackend projectedState).slotContribution contractBackend
   { name := name

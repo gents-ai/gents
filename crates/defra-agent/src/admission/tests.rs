@@ -209,18 +209,35 @@ fn assert_reconstructed_slot_count_at_most(
 }
 
 fn assert_fleet_case_matches_call_row(case: &LeanFleetSlotAccountingCase, row: &Value) {
-    assert_eq!(
-        case.row_backend_ids,
-        vec![case.backend_id.clone()],
-        "Fleet slot case {} should project to one backend row",
-        case.name
+    assert!(
+        case.row_backend_ids == vec![case.backend_id.clone()],
+        "single-row Fleet slot helper called with non-single-backend case {}: {:?}",
+        case.name,
+        case.row_backend_ids
     );
-    assert_eq!(
-        case.row_states.len(),
-        1,
-        "Fleet slot case {} should project to one call_state row",
-        case.name
+    assert!(
+        case.row_states.len() == 1,
+        "single-row Fleet slot helper called with multi-row case {}: {:?}",
+        case.name,
+        case.row_states
     );
+    if case.admission_state == "released" {
+        let expected_terminal_state = match case.request_state.as_str() {
+            "completed" => "completed",
+            "failed" => "failed",
+            "interrupted" | "superseded" | "dead" => "cancelled",
+            other => panic!(
+                "Fleet slot released case {} has non-terminal request_state={other}",
+                case.name
+            ),
+        };
+        assert_eq!(
+            case.row_states[0].as_str(),
+            expected_terminal_state,
+            "Fleet slot released case {} projected the wrong terminal InferenceCall state",
+            case.name
+        );
+    }
     assert_eq!(
         row.get("backend_id").and_then(Value::as_str),
         Some(case.row_backend_ids[0].as_str()),
@@ -410,6 +427,10 @@ async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary(
         "fleet_reconstructed_running_count_bounded_by_max_concurrent",
     );
     let backend_id = acquired.backend_id.clone();
+    assert_eq!(waiting.backend_id, backend_id);
+    assert_eq!(executing.backend_id, backend_id);
+    assert_eq!(released.backend_id, backend_id);
+    assert_eq!(bounded.backend_id, backend_id);
 
     let node = test_node().await;
     let registry = AdmissionRegistry::new(node.clone());

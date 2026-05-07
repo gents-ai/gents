@@ -389,6 +389,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "follow_up_hook",
     ];
     let acknowledged_consumers = [
+        "admission::tests::generated_slot_accounting_fleet_cases_match_admission_runtime_boundary",
         "admission::tests::generated_inference_slot_accounting_cases_match_admission_reconstruction_logic",
         "admission::tests::rust_inference_call_state_vocabulary_matches_lean_model",
         "admission::tests::rust_inference_call_terminal_reason_vocabulary_matches_lean_model",
@@ -403,7 +404,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "runtime_status::tests::rust_reconcile_phase_vocabulary_matches_lean_model",
         "state_machine_conformance::generated_client_shell_cases_cover_shell_projection_contracts",
         "state_machine_conformance::generated_session_recovery_cases_cover_retry_guards_and_preservation",
-        "state_machine_conformance::generated_slot_accounting_cases_pin_inference_and_fleet_contracts",
         "state_machine_conformance::generated_tool_execution_cases_cover_preflight_and_retry_contracts",
         "state_machine_conformance::lean_executable_contracts_cover_initial_domains",
         "toolset::tests::generated_command_env_cases_match_rust_filtering",
@@ -860,6 +860,23 @@ fn generated_slot_accounting_cases_pin_inference_and_fleet_contracts() {
             case.name
         );
         if case.row_states.len() == 1 {
+            if case.admission_state == "released" {
+                let expected_terminal_state = match case.request_state.as_str() {
+                    "completed" => "completed",
+                    "failed" => "failed",
+                    "interrupted" | "superseded" | "dead" => "cancelled",
+                    other => panic!(
+                        "Fleet slot released case {} has non-terminal request_state={other}",
+                        case.name
+                    ),
+                };
+                assert_eq!(
+                    case.row_states[0].as_str(),
+                    expected_terminal_state,
+                    "Fleet slot released case {} projected the wrong terminal InferenceCall state",
+                    case.name
+                );
+            }
             let row = InferenceCallSlotRow::new(
                 case.row_backend_ids[0].as_str(),
                 case.row_states[0].as_str(),
