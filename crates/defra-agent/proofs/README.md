@@ -201,11 +201,12 @@ runtime coverage explicit.
 Coverage consumers are registered in
 `crates/defra-agent/tests/support/conformance_consumers.rs`. Add a registry
 entry in the same change as a new `consumerCoverage` ledger row: Rust entries
-name the package, source file, and `#[test]`/`#[tokio::test]` function, while
-TypeScript entries name the app, source file, suite, and test. The registry is
-validated by `lean_contract_coverage_ledger_accounts_for_every_emitted_domain`,
-so a renamed or deleted consumer test makes the ledger fail instead of silently
-leaving a stale string.
+name the package, source file, module path, and `#[test]`/`#[tokio::test]`
+function, while TypeScript entries name the app, source file, suite, and test.
+The registry is validated by
+`lean_contract_coverage_ledger_accounts_for_every_emitted_domain`, so a renamed
+or deleted consumer test makes the ledger fail instead of silently leaving a
+stale string.
 
 When a Lean vocabulary, terminal partition, action, or legal transition changes,
 the generated JSON changes on the next Rust test run. The Rust tests then fail
