@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,8 +21,8 @@ use super::shared::{
 use super::*;
 use crate::ensure_schemas;
 use crate::lean_vocab_test::{
-    lean_command_env_cases, lean_command_policy_cases, lean_command_sandbox_cases,
-    LeanCommandPolicyCase,
+    lean_command_env_cases, lean_command_policy_case, lean_command_policy_cases,
+    lean_command_sandbox_cases, LeanCommandPolicyCase,
 };
 use crate::lifecycle::DEFAULT_REQUEST_MAX_RETRIES;
 
@@ -607,6 +608,151 @@ fn generated_command_policy_cases_match_rust_validation() {
 }
 
 #[test]
+fn generated_command_policy_cases_cover_read_only_safety_matrix() {
+    let emitted = lean_command_policy_cases()
+        .iter()
+        .map(|case| case.name.as_str())
+        .collect::<BTreeSet<_>>();
+    let expected = [
+        "read_only_git_status_allows",
+        "read_only_git_branch_list_allows",
+        "read_only_git_global_config_denies",
+        "read_only_git_config_env_denies",
+        "read_only_git_output_flag_denies",
+        "read_only_git_exec_flag_denies",
+        "read_only_git_commit_subcommand_denies",
+        "read_only_git_branch_delete_denies",
+        "read_only_sed_print_allows",
+        "read_only_sed_in_place_short_denies",
+        "read_only_sed_in_place_long_denies",
+        "read_only_find_type_file_allows",
+        "read_only_find_delete_denies",
+        "read_only_find_exec_denies",
+        "read_only_find_fprint_denies",
+        "read_only_rg_search_allows",
+        "read_only_rg_pre_denies",
+        "read_only_rg_search_zip_denies",
+        "read_only_curl_http_get_allows",
+        "read_only_curl_post_denies",
+        "read_only_curl_data_denies",
+        "read_only_curl_output_denies",
+        "read_only_curl_upload_denies",
+        "read_only_curl_config_denies",
+        "read_only_curl_missing_http_url_denies",
+        "read_only_launchctl_print_allows",
+        "read_only_launchctl_bootout_denies",
+        "read_only_launchctl_missing_subcommand_denies",
+        "read_only_tailscale_status_allows",
+        "read_only_tailscale_netcheck_allows",
+        "read_only_tailscale_up_denies",
+        "read_only_sudo_launchctl_print_allows",
+        "read_only_sudo_launchctl_wrong_path_denies",
+        "read_only_sudo_rm_denies",
+        "read_only_sudo_missing_command_denies",
+    ];
+
+    for name in expected {
+        assert!(
+            emitted.contains(name),
+            "Lean CommandPolicy contract must emit read-only safety case {name}"
+        );
+    }
+
+    for name in [
+        "read_only_git_status_allows",
+        "read_only_git_branch_list_allows",
+        "read_only_sed_print_allows",
+        "read_only_find_type_file_allows",
+        "read_only_rg_search_allows",
+        "read_only_curl_http_get_allows",
+        "read_only_launchctl_print_allows",
+        "read_only_tailscale_status_allows",
+        "read_only_tailscale_netcheck_allows",
+        "read_only_sudo_launchctl_print_allows",
+    ] {
+        let case = lean_command_policy_case(name);
+        assert_eq!(case.decision, "allow");
+        assert_eq!(case.denial_reason, None);
+    }
+
+    for (name, argument) in [
+        ("read_only_git_global_config_denies", "-c"),
+        (
+            "read_only_git_config_env_denies",
+            "--config-env=GIT_CONFIG_GLOBAL=ENV_FILE",
+        ),
+        (
+            "read_only_git_output_flag_denies",
+            "--output=/tmp/defra-agent-diff.txt",
+        ),
+        (
+            "read_only_git_exec_flag_denies",
+            "--exec=touch /tmp/defra-agent-nope",
+        ),
+        ("read_only_git_branch_delete_denies", "-D"),
+        ("read_only_sed_in_place_short_denies", "-i"),
+        ("read_only_sed_in_place_long_denies", "--in-place"),
+        ("read_only_find_delete_denies", "-delete"),
+        ("read_only_find_exec_denies", "-exec"),
+        ("read_only_find_fprint_denies", "-fprint0"),
+        ("read_only_rg_pre_denies", "--pre"),
+        ("read_only_rg_search_zip_denies", "--search-zip"),
+        ("read_only_curl_post_denies", "-X"),
+        ("read_only_curl_data_denies", "--data={}"),
+        ("read_only_curl_output_denies", "-o"),
+        ("read_only_curl_upload_denies", "-T"),
+        ("read_only_curl_config_denies", "-K"),
+        (
+            "read_only_sudo_launchctl_wrong_path_denies",
+            "/usr/bin/launchctl",
+        ),
+    ] {
+        let case = lean_command_policy_case(name);
+        assert_eq!(case.decision, "deny");
+        assert_eq!(
+            case.denial_reason.as_deref(),
+            Some("readOnlyArgumentNotAllowed")
+        );
+        assert_eq!(case.denied_argument.as_deref(), Some(argument));
+    }
+
+    for (name, subcommand) in [
+        ("read_only_git_commit_subcommand_denies", "commit"),
+        ("read_only_launchctl_bootout_denies", "bootout"),
+        ("read_only_tailscale_up_denies", "up"),
+        ("read_only_sudo_rm_denies", "rm"),
+    ] {
+        let case = lean_command_policy_case(name);
+        assert_eq!(case.decision, "deny");
+        assert_eq!(
+            case.denial_reason.as_deref(),
+            Some("readOnlySubcommandNotAllowlisted")
+        );
+        assert_eq!(case.denied_subcommand.as_deref(), Some(subcommand));
+    }
+
+    for name in [
+        "read_only_launchctl_missing_subcommand_denies",
+        "read_only_sudo_missing_command_denies",
+    ] {
+        let case = lean_command_policy_case(name);
+        assert_eq!(case.decision, "deny");
+        assert_eq!(
+            case.denial_reason.as_deref(),
+            Some("readOnlySubcommandRequired")
+        );
+    }
+
+    let missing_url = lean_command_policy_case("read_only_curl_missing_http_url_denies");
+    assert_eq!(missing_url.decision, "deny");
+    assert_eq!(
+        missing_url.denial_reason.as_deref(),
+        Some("readOnlyUrlRequired")
+    );
+    assert_eq!(missing_url.denied_command.as_deref(), Some("curl"));
+}
+
+#[test]
 fn generated_command_sandbox_cases_match_rust_selection() {
     for case in lean_command_sandbox_cases() {
         let mode = rust_command_execution_mode(&case.mode);
@@ -710,6 +856,54 @@ fn assert_command_denial_matches(case: &LeanCommandPolicyCase, error: &str) {
                 case.name
             );
         }
+        Some("readOnlyArgumentNotAllowed") => {
+            let command = case
+                .denied_command
+                .as_deref()
+                .unwrap_or_else(|| panic!("Lean case {} missing denied_command", case.name));
+            let argument = case
+                .denied_argument
+                .as_deref()
+                .unwrap_or_else(|| panic!("Lean case {} missing denied_argument", case.name));
+            assert_read_only_argument_denial_matches(&case.name, command, argument, error);
+        }
+        Some("readOnlySubcommandRequired") => {
+            let command = case
+                .denied_command
+                .as_deref()
+                .unwrap_or_else(|| panic!("Lean case {} missing denied_command", case.name));
+            assert!(
+                error.contains(command) && (error.contains("requires") || error.contains("approved")),
+                "Lean CommandPolicy case {} expected required-subcommand denial for {command:?}, got Rust error: {error}",
+                case.name
+            );
+        }
+        Some("readOnlySubcommandNotAllowlisted") => {
+            let command = case
+                .denied_command
+                .as_deref()
+                .unwrap_or_else(|| panic!("Lean case {} missing denied_command", case.name));
+            let subcommand = case
+                .denied_subcommand
+                .as_deref()
+                .unwrap_or_else(|| panic!("Lean case {} missing denied_subcommand", case.name));
+            assert!(
+                error.contains(command) && error.contains(subcommand) && error.contains("not allowed"),
+                "Lean CommandPolicy case {} expected read-only subcommand denial for {command:?} {subcommand:?}, got Rust error: {error}",
+                case.name
+            );
+        }
+        Some("readOnlyUrlRequired") => {
+            let command = case
+                .denied_command
+                .as_deref()
+                .unwrap_or_else(|| panic!("Lean case {} missing denied_command", case.name));
+            assert!(
+                error.contains(command) && error.contains("requires an http:// or https:// URL"),
+                "Lean CommandPolicy case {} expected read-only URL requirement denial for {command:?}, got Rust error: {error}",
+                case.name
+            );
+        }
         Some("disabledNetworkUnenforceable") => {
             assert!(
                 error.contains("command_network_mode=disabled cannot be enforced"),
@@ -735,6 +929,50 @@ fn assert_command_denial_matches(case: &LeanCommandPolicyCase, error: &str) {
         None => panic!(
             "Lean CommandPolicy case {} denied without a denial reason; Rust error: {error}",
             case.name
+        ),
+    }
+}
+
+fn assert_read_only_argument_denial_matches(
+    case_name: &str,
+    command: &str,
+    argument: &str,
+    error: &str,
+) {
+    match command {
+        "sed" => assert!(
+            error.contains("sed in-place edits are not allowed"),
+            "Lean CommandPolicy case {case_name} expected sed in-place denial for {argument:?}, got Rust error: {error}"
+        ),
+        "find" => assert!(
+            error.contains("find arguments that can write or execute are not allowed"),
+            "Lean CommandPolicy case {case_name} expected find write/exec denial for {argument:?}, got Rust error: {error}"
+        ),
+        "sudo" if argument.ends_with("launchctl") => assert!(
+            error.contains("sudo launchctl must use the absolute /bin/launchctl path"),
+            "Lean CommandPolicy case {case_name} expected sudo launchctl path denial for {argument:?}, got Rust error: {error}"
+        ),
+        "git" if argument == "-c" || argument == "-C" || argument.starts_with("--config-env") => {
+            assert!(
+                error.contains("git global options")
+                    && error.contains("not allowed")
+                    && error.contains("config"),
+                "Lean CommandPolicy case {case_name} expected git config/global-option denial for {argument:?}, got Rust error: {error}"
+            );
+        }
+        "git" => assert!(
+            error.contains("git")
+                && error.contains(argument)
+                && (error.contains("not allowed") || error.contains("not read-only")),
+            "Lean CommandPolicy case {case_name} expected git argument denial for {argument:?}, got Rust error: {error}"
+        ),
+        "rg" | "curl" => assert!(
+            error.contains(command) && error.contains(argument) && error.contains("not allowed"),
+            "Lean CommandPolicy case {case_name} expected {command} argument denial for {argument:?}, got Rust error: {error}"
+        ),
+        other => assert!(
+            error.contains(other) && error.contains("not allowed"),
+            "Lean CommandPolicy case {case_name} expected read-only argument denial for {other:?} {argument:?}, got Rust error: {error}"
         ),
     }
 }

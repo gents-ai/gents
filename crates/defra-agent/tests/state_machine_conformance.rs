@@ -142,7 +142,7 @@ fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().client_shell_cases.len(), 15);
     assert_eq!(lean_contract_snapshot().tool_preflight_cases.len(), 9);
     assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 45);
-    assert_eq!(lean_contract_snapshot().command_policy_cases.len(), 10);
+    assert_eq!(lean_contract_snapshot().command_policy_cases.len(), 45);
     assert_eq!(lean_contract_snapshot().command_sandbox_cases.len(), 4);
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
 }

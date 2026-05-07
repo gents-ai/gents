@@ -170,7 +170,11 @@ def commandPolicyCaseJson (witness : CommandPolicy.CommandPolicyCase) : String :
     ++ "\"denied_argv\":"
       ++ jsonOptionalStringArray (reason.bind CommandPolicy.DenialReason.argv?) ++ ","
     ++ "\"denied_command\":"
-      ++ jsonOptionalString (reason.bind CommandPolicy.DenialReason.command?)
+      ++ jsonOptionalString (reason.bind CommandPolicy.DenialReason.command?) ++ ","
+    ++ "\"denied_argument\":"
+      ++ jsonOptionalString (reason.bind CommandPolicy.DenialReason.argument?) ++ ","
+    ++ "\"denied_subcommand\":"
+      ++ jsonOptionalString (reason.bind CommandPolicy.DenialReason.subcommand?)
     ++ "}"
 
 def commandSandboxCaseJson (witness : CommandPolicy.CommandSandboxCase) : String :=

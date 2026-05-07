@@ -66,6 +66,10 @@ inductive DenialReason where
   | forbiddenPrefix (matched : List String)
   | allowedPrefixRequired (argv : List String)
   | readOnlyCommandNotAllowlisted (command : String)
+  | readOnlyArgumentNotAllowed (command : String) (argument : String)
+  | readOnlySubcommandRequired (command : String)
+  | readOnlySubcommandNotAllowlisted (command : String) (subcommand : String)
+  | readOnlyUrlRequired (command : String)
   | disabledNetworkUnenforceable
   | disabledNetworkCommand (command : String)
   | workspaceWriteSandboxUnavailable
@@ -77,6 +81,10 @@ def toContract : DenialReason → String
   | .forbiddenPrefix _ => "forbiddenPrefix"
   | .allowedPrefixRequired _ => "allowedPrefixRequired"
   | .readOnlyCommandNotAllowlisted _ => "readOnlyCommandNotAllowlisted"
+  | .readOnlyArgumentNotAllowed _ _ => "readOnlyArgumentNotAllowed"
+  | .readOnlySubcommandRequired _ => "readOnlySubcommandRequired"
+  | .readOnlySubcommandNotAllowlisted _ _ => "readOnlySubcommandNotAllowlisted"
+  | .readOnlyUrlRequired _ => "readOnlyUrlRequired"
   | .disabledNetworkUnenforceable => "disabledNetworkUnenforceable"
   | .disabledNetworkCommand _ => "disabledNetworkCommand"
   | .workspaceWriteSandboxUnavailable => "workspaceWriteSandboxUnavailable"
@@ -91,7 +99,19 @@ def argv? : DenialReason → Option (List String)
 
 def command? : DenialReason → Option String
   | .readOnlyCommandNotAllowlisted command => some command
+  | .readOnlyArgumentNotAllowed command _ => some command
+  | .readOnlySubcommandRequired command => some command
+  | .readOnlySubcommandNotAllowlisted command _ => some command
+  | .readOnlyUrlRequired command => some command
   | .disabledNetworkCommand command => some command
+  | _ => none
+
+def argument? : DenialReason → Option String
+  | .readOnlyArgumentNotAllowed _ argument => some argument
+  | _ => none
+
+def subcommand? : DenialReason → Option String
+  | .readOnlySubcommandNotAllowlisted _ subcommand => some subcommand
   | _ => none
 
 end DenialReason
