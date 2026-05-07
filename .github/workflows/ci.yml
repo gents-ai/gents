@@ -88,6 +88,10 @@ jobs:
           cargo test -p defra-agent-cli --test cli_status -- --nocapture --test-threads=1
           cargo test -p defra-agent-cli --test cli_reconciliation reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop -- --nocapture --test-threads=1
 
+      - name: Run PR proof conformance tests
+        if: github.event_name == 'pull_request'
+        run: cargo test -p defra-agent --test state_machine_conformance
+
       - name: Run full library and integration tests
         if: github.event_name != 'pull_request'
         run: cargo test -p defra-agent --lib --tests

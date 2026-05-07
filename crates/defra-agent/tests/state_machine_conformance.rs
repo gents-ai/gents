@@ -12,9 +12,8 @@ mod support;
 use lean_vocab_test::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
     assert_state_machine_contract_is_complete, lean_client_shell_case, lean_contract_snapshot,
-    lean_runtime_reconcile_case,
-    lean_session_recovery_case, lean_tool_preflight_case, lean_tool_retry_case,
-    lean_vocabulary_values,
+    lean_runtime_reconcile_case, lean_session_recovery_case, lean_tool_preflight_case,
+    lean_tool_retry_case, lean_vocabulary_values,
 };
 use support::snapshots::{
     fetch_conversation_snapshot, fetch_request_lineage_snapshot,
@@ -160,10 +159,16 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "Lean ClientShell case count drifted from emitted cases"
     );
     if !snapshot.client_shell_cases.is_empty() {
-        emitted.insert(("client_shell_cases".to_string(), "ClientShellCases".to_string()));
+        emitted.insert((
+            "client_shell_cases".to_string(),
+            "ClientShellCases".to_string(),
+        ));
     }
     if !snapshot.tool_preflight_cases.is_empty() {
-        emitted.insert(("tool_cases".to_string(), "ToolExecutionPreflight".to_string()));
+        emitted.insert((
+            "tool_cases".to_string(),
+            "ToolExecutionPreflight".to_string(),
+        ));
     }
     if !snapshot.tool_retry_cases.is_empty() {
         emitted.insert(("tool_cases".to_string(), "ToolExecutionRetry".to_string()));
