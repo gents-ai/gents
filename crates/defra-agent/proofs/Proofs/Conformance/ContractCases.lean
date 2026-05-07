@@ -1,6 +1,7 @@
 import Proofs.Conformance.ContractCases.Runtime
 import Proofs.Conformance.ContractCases.SlotAccounting
 import Proofs.Conformance.ContractCases.SessionRecovery
+import Proofs.Conformance.ContractCases.BoundaryRuntime
 
 /-!
 # Finite Conformance Witness Cases

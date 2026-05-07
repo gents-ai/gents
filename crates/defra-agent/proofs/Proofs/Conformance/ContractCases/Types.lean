@@ -106,6 +106,44 @@ structure FleetSlotAccountingCase where
   aggregateReconstructedNotPersisted : Bool
   deriving Repr
 
+structure PersistenceFailurePolicyCase where
+  name : String
+  policy : String
+  action : String
+  prePersistence : String
+  postPersistence : String
+  postStorageObservation : String
+  hookDecision : String
+  recordsFailure : Bool
+  recordsSuccess : Bool
+  externalDurabilityClaimed : Bool
+  deriving Repr
+
+structure StorageObservationRuntimeCase where
+  name : String
+  policy : String
+  action : String
+  preObservation : String
+  mutationResult : String
+  postObservation : String
+  postPersistence : String
+  hookResult : String
+  recordsFailure : Bool
+  recordsSuccess : Bool
+  terminalWriteObserved : Bool
+  externalVisibilityClaimed : Bool
+  deriving Repr
+
+structure BackendHealthAdmissionCase where
+  name : String
+  enabled : Bool
+  probeStatus : String
+  expectedAvailable : Bool
+  admissionDecision : String
+  observedDocumentOnly : Bool
+  externalEndpointFreshnessClaimed : Bool
+  deriving Repr
+
 def boolString (value : Bool) : String :=
   if value then "true" else "false"
 

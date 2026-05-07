@@ -142,6 +142,24 @@ fn lean_executable_contracts_cover_initial_domains() {
         5
     );
     assert_eq!(
+        lean_contract_snapshot()
+            .persistence_failure_policy_cases
+            .len(),
+        2
+    );
+    assert_eq!(
+        lean_contract_snapshot()
+            .storage_observation_runtime_cases
+            .len(),
+        8
+    );
+    assert_eq!(
+        lean_contract_snapshot()
+            .backend_health_admission_cases
+            .len(),
+        5
+    );
+    assert_eq!(
         lean_contract_snapshot().frontend_client_shell_case_count,
         lean_contract_snapshot().frontend_client_shell_cases.len()
     );
@@ -350,6 +368,24 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     if !snapshot.fleet_slot_accounting_cases.is_empty() {
         emitted.insert(("fleet_cases".to_string(), "FleetSlotAccounting".to_string()));
     }
+    if !snapshot.persistence_failure_policy_cases.is_empty() {
+        emitted.insert((
+            "persistence_policy_cases".to_string(),
+            "PersistenceFailurePolicyCases".to_string(),
+        ));
+    }
+    if !snapshot.storage_observation_runtime_cases.is_empty() {
+        emitted.insert((
+            "storage_observation_cases".to_string(),
+            "StorageObservationRuntimeCases".to_string(),
+        ));
+    }
+    if !snapshot.backend_health_admission_cases.is_empty() {
+        emitted.insert((
+            "backend_health_cases".to_string(),
+            "BackendHealthAdmissionCases".to_string(),
+        ));
+    }
     assert_eq!(
         snapshot.frontend_client_shell_case_count,
         snapshot.frontend_client_shell_cases.len(),
@@ -413,6 +449,9 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "session_recovery_cases",
         "slot_cases",
         "fleet_cases",
+        "persistence_policy_cases",
+        "storage_observation_cases",
+        "backend_health_cases",
         "frontend_client_shell_cases",
         "desktop_client_shell_cases",
         "tool_cases",
@@ -426,6 +465,9 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "admission::tests::rust_inference_call_state_vocabulary_matches_lean_model",
         "admission::tests::rust_inference_call_terminal_reason_vocabulary_matches_lean_model",
         "admission::tests::rust_inference_call_transition_table_matches_lean_contract",
+        "backend_registry::tests::generated_backend_health_admission_cases_match_registry_and_admission_policy",
+        "hook::tests::generated_persistence_failure_policy_cases_match_hook_decisions",
+        "hook::tests::generated_storage_observation_cases_match_hook_runtime_classification",
         "lifecycle::tests::request_state_machine_contract_is_complete",
         "lifecycle::tests::rust_execution_origin_vocabulary_matches_lean_model",
         "lifecycle::tests::rust_request_lifecycle_state_vocabulary_matches_lean_model",

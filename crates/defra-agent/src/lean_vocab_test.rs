@@ -38,6 +38,9 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) session_recovery_cases: Vec<LeanSessionRecoveryCase>,
     pub(crate) inference_slot_accounting_cases: Vec<LeanInferenceSlotAccountingCase>,
     pub(crate) fleet_slot_accounting_cases: Vec<LeanFleetSlotAccountingCase>,
+    pub(crate) persistence_failure_policy_cases: Vec<LeanPersistenceFailurePolicyCase>,
+    pub(crate) storage_observation_runtime_cases: Vec<LeanStorageObservationRuntimeCase>,
+    pub(crate) backend_health_admission_cases: Vec<LeanBackendHealthAdmissionCase>,
     pub(crate) tool_preflight_cases: Vec<LeanToolPreflightCase>,
     pub(crate) tool_retry_cases: Vec<LeanToolRetryCase>,
     pub(crate) boundaries: Vec<LeanBoundary>,
@@ -321,6 +324,47 @@ pub(crate) struct LeanFleetSlotAccountingCase {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct LeanPersistenceFailurePolicyCase {
+    pub(crate) name: String,
+    pub(crate) policy: String,
+    pub(crate) action: String,
+    pub(crate) pre_persistence: String,
+    pub(crate) post_persistence: String,
+    pub(crate) post_storage_observation: String,
+    pub(crate) hook_decision: String,
+    pub(crate) records_failure: bool,
+    pub(crate) records_success: bool,
+    pub(crate) external_durability_claimed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanStorageObservationRuntimeCase {
+    pub(crate) name: String,
+    pub(crate) policy: String,
+    pub(crate) action: String,
+    pub(crate) pre_observation: String,
+    pub(crate) mutation_result: String,
+    pub(crate) post_observation: String,
+    pub(crate) post_persistence: String,
+    pub(crate) hook_result: String,
+    pub(crate) records_failure: bool,
+    pub(crate) records_success: bool,
+    pub(crate) terminal_write_observed: bool,
+    pub(crate) external_visibility_claimed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanBackendHealthAdmissionCase {
+    pub(crate) name: String,
+    pub(crate) enabled: bool,
+    pub(crate) probe_status: String,
+    pub(crate) expected_available: bool,
+    pub(crate) admission_decision: String,
+    pub(crate) observed_document_only: bool,
+    pub(crate) external_endpoint_freshness_claimed: bool,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct LeanToolPreflightCase {
     pub(crate) name: String,
     pub(crate) health: String,
@@ -478,6 +522,20 @@ pub(crate) fn lean_fleet_slot_accounting_case(name: &str) -> &'static LeanFleetS
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean fleet slot-accounting case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_persistence_failure_policy_cases() -> &'static [LeanPersistenceFailurePolicyCase]
+{
+    &lean_contract_snapshot().persistence_failure_policy_cases
+}
+
+pub(crate) fn lean_storage_observation_runtime_cases(
+) -> &'static [LeanStorageObservationRuntimeCase] {
+    &lean_contract_snapshot().storage_observation_runtime_cases
+}
+
+pub(crate) fn lean_backend_health_admission_cases() -> &'static [LeanBackendHealthAdmissionCase] {
+    &lean_contract_snapshot().backend_health_admission_cases
 }
 
 pub(crate) fn lean_tool_preflight_cases() -> &'static [LeanToolPreflightCase] {

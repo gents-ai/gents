@@ -1,5 +1,7 @@
 use super::*;
+use crate::admission::BackendAdmissionConfig;
 use crate::backend_provider::BackendProviderKind;
+use crate::lean_vocab_test::lean_backend_health_admission_cases;
 
 #[test]
 fn inference_backend_from_value_parses() {
@@ -83,4 +85,61 @@ fn is_available_requires_enabled_and_healthy() {
         ..healthy.clone()
     };
     assert!(!unhealthy.is_available());
+}
+
+#[test]
+fn generated_backend_health_admission_cases_match_registry_and_admission_policy() {
+    let cases = lean_backend_health_admission_cases();
+    assert_eq!(cases.len(), 5);
+
+    for case in cases {
+        let backend = InferenceBackend {
+            backend_id: case.name.clone(),
+            name: case.name.clone(),
+            provider_kind: BackendProviderKind::OpenAiCompatible,
+            endpoint: "http://localhost:8000/v1".into(),
+            api_key: None,
+            api_key_env_var: None,
+            max_concurrent: 1,
+            max_queue_depth: DEFAULT_MAX_QUEUE_DEPTH,
+            enabled: case.enabled,
+            models: Vec::new(),
+            probe_status: case.probe_status.clone(),
+        };
+        let admission_config =
+            BackendAdmissionConfig::from_backend(&backend).expect("valid backend config");
+
+        assert_eq!(
+            backend.is_available(),
+            case.expected_available,
+            "{} registry availability drifted from Lean case",
+            case.name
+        );
+        assert_eq!(
+            admission_config.is_available(),
+            case.expected_available,
+            "{} admission availability drifted from Lean case",
+            case.name
+        );
+        assert_eq!(
+            case.admission_decision.as_str(),
+            if case.expected_available {
+                "available"
+            } else {
+                "unavailable"
+            },
+            "{}",
+            case.name
+        );
+        assert!(
+            case.observed_document_only,
+            "{} must stay scoped to the observed backend document",
+            case.name
+        );
+        assert!(
+            !case.external_endpoint_freshness_claimed,
+            "{} must not claim endpoint/provider freshness",
+            case.name
+        );
+    }
 }

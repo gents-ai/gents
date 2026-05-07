@@ -103,8 +103,14 @@ that justify moving through that lifecycle:
 These are daemon storage assumptions, not proofs of DefraDB internals. Rust uses
 `StreamBuffer`, `DefraSessionHook`, and hook failure policy around DefraDB
 mutations; it does not persist a per-token `PersistenceState` or
-`StorageObservation` document. Storage-engine crash windows, transport delivery,
-global CRDT convergence, and event-bus delivery correctness remain external
+`StorageObservation` document. Lean-generated runtime cases cover only the
+local hook classification: successful mutation results count as local success
+acks, fail-closed mutation failures propagate an error and remain uncommitted,
+and fail-open mutation failures continue as acknowledged lost output without a
+success ack. They also cover local classification of direct read-your-writes,
+stale read/event, and later visible-read observations. Storage-engine crash
+windows, transport delivery, global CRDT convergence, the arrival of later
+visibility observations, and event-bus delivery correctness remain external
 DefraDB/environment assumptions.
 
 This section is the modeled part of the former broad storage assumption; the
@@ -116,9 +122,13 @@ separate.
 Backend health and availability observations are only as fresh as the backend
 documents visible at admission time. Endpoint freshness and network/provider
 behavior are environmental assumptions, not service-local state-machine facts.
-The service-local proof and tests cover the consequence of an observed backend
-configuration: reconstructed running call rows do not exceed that backend's
-`max_concurrent`.
+Lean-generated runtime cases and Rust tests cover the service-local admission
+classification for an observed backend document: a backend is available only
+when `enabled = true` and `probe_status = "healthy"`. They also cover the
+consequence of an observed backend configuration: reconstructed running call
+rows do not exceed that backend's `max_concurrent`. They do not prove that the
+backend document is fresh, that a probe result reflects current endpoint
+availability, or that provider/network calls will succeed.
 
 Trigger source delivery remains operational. Lean does not model the DefraDB
 event bus, control-watcher debounce, schedule tick cadence, subscription
@@ -142,9 +152,10 @@ depends on broader transition coverage from it.
 account for every emitted vocabulary, state machine, trigger dispatch case
 group, runtime-reconcile witness group, session-recovery witness group,
 inference-slot witness group, fleet-slot witness group, frontend/desktop
-ClientShell witness group, tool-execution witness group, command-policy
-validation/sandbox/env witness group, and follow-up hook; Rust checks that each
-appears in that ledger exactly once.
+ClientShell witness group, boundary-runtime policy witness group,
+tool-execution witness group, command-policy validation/sandbox/env witness
+group, and follow-up hook; Rust checks that each appears in that ledger exactly
+once.
 Boundary and deviation metadata is emitted as structured review metadata and is
 shape-checked separately; ledger `accepted_boundary` fields reference the stable
 boundary ids emitted by this file.
@@ -152,13 +163,14 @@ boundary ids emitted by this file.
 A ledger entry is acceptable only when it names a Rust/TypeScript consumer, an
 intentional product boundary recorded in this file, or an accepted follow-up.
 Future executable trigger, runtime, session-recovery, slot/fleet,
-`ClientShell`, `ToolExecution`, or `CommandPolicy` contracts should therefore
-add both the emitted contract domain and its runtime consumer in the same
-change. ClientShell rows should be assigned to the frontend list when they only
-exercise React shell state and to the desktop list when they exercise the Rust
-session-snapshot bridge. If the runtime consumer is deliberately deferred, the
-ledger entry must point here to describe the boundary or carry a follow-up hook;
-otherwise Rust will reject the generated contract as advisory-only.
+boundary-runtime, `ClientShell`, `ToolExecution`, or `CommandPolicy` contracts
+should therefore add both the emitted contract domain and its runtime consumer
+in the same change. ClientShell rows should be assigned to the frontend list
+when they only exercise React shell state and to the desktop list when they
+exercise the Rust session-snapshot bridge. If the runtime consumer is
+deliberately deferred, the ledger entry must point here to describe the
+boundary or carry a follow-up hook; otherwise Rust will reject the generated
+contract as advisory-only.
 
 ## Closed Historical Items
 
@@ -297,7 +309,7 @@ def boundaries : List Boundary :=
     , domain := "Persistence"
     , subject := "hook storage failure policy"
     , statement :=
-        "Rust hook policy observes storage failure as fail-closed retry or fail-open lost output instead of exposing per-token persistence documents."
+        "Lean-generated cases and Rust hook tests cover local fail-closed termination versus fail-open lost-output continuation; Rust still does not expose per-token persistence documents."
     , acceptedFailureMode :=
         some "Fail-open acknowledges lost output by policy."
     }
@@ -305,7 +317,7 @@ def boundaries : List Boundary :=
     , domain := "StorageObservation"
     , subject := "daemon-visible storage facts"
     , statement :=
-        "StorageObservation records daemon-visible mutation and read facts that justify lifecycle movement; it is not a proof of DefraDB internals."
+        "Lean-generated cases and Rust hook tests cover local success/failure and stale/read-visible observation classification; daemon-visible storage facts remain observations, not proofs of DefraDB internals."
     }
   , { id := boundaryStorageMinimumVisibilityPathId
     , domain := "StorageObservation"
@@ -319,7 +331,7 @@ def boundaries : List Boundary :=
     , domain := "Admission"
     , subject := "backend health freshness"
     , statement :=
-        "Backend health and availability observations are only as fresh as backend documents visible at admission time; provider and network behavior are environmental."
+        "Lean-generated cases and Rust tests cover observed-document admission availability; backend document freshness, probes, provider behavior, and network behavior remain environmental."
     }
   , { id := boundarySessionRecoveryFailedLatestSmokeId
     , domain := "SessionRecovery"
