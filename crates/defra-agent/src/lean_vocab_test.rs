@@ -39,6 +39,9 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) tool_retry_cases: Vec<LeanToolRetryCase>,
     pub(crate) boundaries: Vec<LeanBoundary>,
     pub(crate) deviations: Vec<LeanDeviation>,
+    pub(crate) command_policy_cases: Vec<LeanCommandPolicyCase>,
+    pub(crate) command_sandbox_cases: Vec<LeanCommandSandboxCase>,
+    pub(crate) command_env_cases: Vec<LeanCommandEnvCase>,
     pub(crate) follow_up_hooks: Vec<String>,
     pub(crate) coverage_ledger: Vec<LeanCoverageEntry>,
 }
@@ -274,6 +277,48 @@ pub(crate) struct LeanToolRetryCase {
     pub(crate) disposition: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanCommandPolicyCase {
+    pub(crate) name: String,
+    pub(crate) category: String,
+    pub(crate) mode: String,
+    pub(crate) allowed_argv_prefixes: Vec<Vec<String>>,
+    pub(crate) forbidden_argv_prefixes: Vec<Vec<String>>,
+    pub(crate) network_mode: String,
+    pub(crate) read_only_allowlist: Vec<String>,
+    pub(crate) command: String,
+    pub(crate) lookup_command: String,
+    pub(crate) args: Vec<String>,
+    pub(crate) decision: String,
+    pub(crate) denial_reason: Option<String>,
+    pub(crate) matched_prefix: Option<Vec<String>>,
+    pub(crate) denied_argv: Option<Vec<String>>,
+    pub(crate) denied_command: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanCommandSandboxCase {
+    pub(crate) name: String,
+    pub(crate) category: String,
+    pub(crate) mode: String,
+    pub(crate) workspace_write_sandbox_enforced: bool,
+    pub(crate) decision: String,
+    pub(crate) sandbox: Option<String>,
+    pub(crate) denial_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanCommandEnvCase {
+    pub(crate) name: String,
+    pub(crate) env_key: String,
+    pub(crate) input_present: bool,
+    pub(crate) input_name: String,
+    pub(crate) input_value: String,
+    pub(crate) output_name: String,
+    pub(crate) expected_value_kind: Option<String>,
+    pub(crate) expected_output_value: Option<String>,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum LeanVocabularyParseError<'a> {
     MissingNamespace,
@@ -378,6 +423,42 @@ pub(crate) fn lean_tool_retry_case(name: &str) -> &'static LeanToolRetryCase {
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean tool retry case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_command_policy_cases() -> &'static [LeanCommandPolicyCase] {
+    &lean_contract_snapshot().command_policy_cases
+}
+
+pub(crate) fn lean_command_policy_case(name: &str) -> &'static LeanCommandPolicyCase {
+    lean_contract_snapshot()
+        .command_policy_cases
+        .iter()
+        .find(|case| case.name == name)
+        .unwrap_or_else(|| panic!("Lean command policy case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_command_sandbox_cases() -> &'static [LeanCommandSandboxCase] {
+    &lean_contract_snapshot().command_sandbox_cases
+}
+
+pub(crate) fn lean_command_sandbox_case(name: &str) -> &'static LeanCommandSandboxCase {
+    lean_contract_snapshot()
+        .command_sandbox_cases
+        .iter()
+        .find(|case| case.name == name)
+        .unwrap_or_else(|| panic!("Lean command sandbox case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_command_env_cases() -> &'static [LeanCommandEnvCase] {
+    &lean_contract_snapshot().command_env_cases
+}
+
+pub(crate) fn lean_command_env_case(name: &str) -> &'static LeanCommandEnvCase {
+    lean_contract_snapshot()
+        .command_env_cases
+        .iter()
+        .find(|case| case.name == name)
+        .unwrap_or_else(|| panic!("Lean command env case {name:?} was not emitted"))
 }
 
 pub(crate) fn lean_vocabulary_values(domain: &str) -> Vec<&'static str> {

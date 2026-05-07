@@ -11,7 +11,8 @@ mod support;
 
 use lean_vocab_test::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
-    assert_state_machine_contract_is_complete, lean_client_shell_case, lean_contract_snapshot,
+    assert_state_machine_contract_is_complete, lean_client_shell_case, lean_command_env_case,
+    lean_command_policy_case, lean_command_sandbox_case, lean_contract_snapshot,
     lean_fleet_slot_accounting_case, lean_inference_slot_accounting_case,
     lean_runtime_reconcile_case, lean_session_recovery_case, lean_tool_preflight_case,
     lean_tool_retry_case, lean_vocabulary_values,
@@ -112,6 +113,12 @@ fn lean_executable_contracts_cover_initial_domains() {
             .any(|hook| hook.contains("ToolExecution")),
         "ToolExecution should be emitted as generated contract output, not a follow-up hook"
     );
+    assert!(
+        !follow_up_hooks
+            .iter()
+            .any(|hook| hook.contains("CommandPolicy")),
+        "CommandPolicy should be emitted as generated contract output, not a follow-up hook"
+    );
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 6);
     assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 10);
     assert_eq!(
@@ -131,6 +138,9 @@ fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().client_shell_cases.len(), 15);
     assert_eq!(lean_contract_snapshot().tool_preflight_cases.len(), 9);
     assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 45);
+    assert_eq!(lean_contract_snapshot().command_policy_cases.len(), 9);
+    assert_eq!(lean_contract_snapshot().command_sandbox_cases.len(), 4);
+    assert_eq!(lean_contract_snapshot().command_env_cases.len(), 13);
 }
 
 #[test]
@@ -332,6 +342,24 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     if !snapshot.tool_retry_cases.is_empty() {
         emitted.insert(("tool_cases".to_string(), "ToolExecutionRetry".to_string()));
     }
+    if !snapshot.command_policy_cases.is_empty() {
+        emitted.insert((
+            "command_policy_cases".to_string(),
+            "CommandPolicyValidation".to_string(),
+        ));
+    }
+    if !snapshot.command_sandbox_cases.is_empty() {
+        emitted.insert((
+            "command_policy_cases".to_string(),
+            "CommandPolicySandbox".to_string(),
+        ));
+    }
+    if !snapshot.command_env_cases.is_empty() {
+        emitted.insert((
+            "command_policy_cases".to_string(),
+            "CommandPolicyEnv".to_string(),
+        ));
+    }
     for hook in &snapshot.follow_up_hooks {
         emitted.insert(("follow_up_hook".to_string(), hook.clone()));
     }
@@ -347,6 +375,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "fleet_cases",
         "client_shell_cases",
         "tool_cases",
+        "command_policy_cases",
         "follow_up_hook",
     ];
     let mut ledger = BTreeSet::new();
@@ -766,6 +795,54 @@ fn generated_slot_accounting_cases_pin_inference_and_fleet_contracts() {
     assert_eq!(fleet_bound.slot_count, 2);
     assert_eq!(fleet_bound.max_concurrent, 2);
     assert!(fleet_bound.bounded_by_max_concurrent);
+}
+
+#[test]
+fn generated_command_policy_cases_cover_policy_sandbox_and_env_contracts() {
+    let forbidden = lean_command_policy_case("forbidden_prefix_wins_over_allowed_prefix_order");
+    assert_eq!(forbidden.category, "forbidden_prefix");
+    assert_eq!(forbidden.decision, "deny");
+    assert_eq!(forbidden.denial_reason.as_deref(), Some("forbiddenPrefix"));
+    assert_eq!(
+        forbidden.matched_prefix.as_ref(),
+        Some(&vec!["git".to_string()])
+    );
+
+    let allowed =
+        lean_command_policy_case("allowed_prefix_required_precedes_network_and_allowlist");
+    assert_eq!(allowed.decision, "deny");
+    assert_eq!(
+        allowed.denial_reason.as_deref(),
+        Some("allowedPrefixRequired")
+    );
+    assert_eq!(
+        allowed.denied_argv.as_ref(),
+        Some(&vec!["curl".to_string(), "https://example.com".to_string()])
+    );
+
+    let curl = lean_command_policy_case("disabled_network_read_only_curl_denies_before_allowlist");
+    assert_eq!(
+        curl.denial_reason.as_deref(),
+        Some("disabledNetworkCommand")
+    );
+    assert_eq!(curl.denied_command.as_deref(), Some("curl"));
+
+    let workspace = lean_command_sandbox_case("workspace_write_enforced_selects_macos_seatbelt");
+    assert_eq!(workspace.decision, "selected");
+    assert_eq!(workspace.sandbox.as_deref(), Some("macos_seatbelt"));
+
+    let unrestricted = lean_command_sandbox_case("unrestricted_selects_unsandboxed_unrestricted");
+    assert_eq!(
+        unrestricted.sandbox.as_deref(),
+        Some("unsandboxed_unrestricted")
+    );
+
+    let key = lean_command_env_case("env_key_marker_dropped");
+    assert_eq!(key.input_name, "OPENAI_API_KEY");
+    assert_eq!(key.expected_output_value, None);
+
+    let pager = lean_command_env_case("env_pager_forced_cat");
+    assert_eq!(pager.expected_output_value.as_deref(), Some("cat"));
 }
 
 #[tokio::test]
