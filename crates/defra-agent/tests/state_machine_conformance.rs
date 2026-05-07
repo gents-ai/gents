@@ -214,6 +214,16 @@ fn generated_session_recovery_cases_cover_retry_guards_and_preservation() {
     assert!(duplicate_new_id.pre_new_request_exists);
     assert_eq!(duplicate_new_id.pre_failed_admission.as_str(), "released");
 
+    let duplicate_failed_id =
+        lean_session_recovery_case("illegal_new_request_id_matches_failed_id");
+    assert!(!duplicate_failed_id.legal);
+    assert_eq!(duplicate_failed_id.failed_id, duplicate_failed_id.new_id);
+    assert!(duplicate_failed_id.pre_new_request_exists);
+    assert_eq!(
+        duplicate_failed_id.pre_failed_admission.as_str(),
+        "released"
+    );
+
     let source_not_released = lean_session_recovery_case("illegal_source_not_released");
     assert!(!source_not_released.legal);
     assert_eq!(source_not_released.pre_latest_state.as_str(), "failed");

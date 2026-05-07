@@ -332,6 +332,8 @@ async fn retry_request_rejects_generated_illegal_session_recovery_cases() -> Res
     let deadline_closed = lean_session_recovery_case("illegal_deadline_closed");
     let non_latest = lean_session_recovery_case("illegal_non_latest_failed_request");
     let duplicate_new_id = lean_session_recovery_case("illegal_new_request_id_already_exists");
+    let duplicate_failed_id =
+        lean_session_recovery_case("illegal_new_request_id_matches_failed_id");
     let source_not_released = lean_session_recovery_case("illegal_source_not_released");
     for case in [
         source_not_failed,
@@ -339,6 +341,7 @@ async fn retry_request_rejects_generated_illegal_session_recovery_cases() -> Res
         deadline_closed,
         non_latest,
         duplicate_new_id,
+        duplicate_failed_id,
         source_not_released,
     ] {
         assert!(!case.legal, "{} should be illegal", case.name.as_str());
@@ -346,6 +349,11 @@ async fn retry_request_rejects_generated_illegal_session_recovery_cases() -> Res
     assert!(
         duplicate_new_id.pre_new_request_exists,
         "Lean duplicate-new-id witness must start with the retry id already present"
+    );
+    assert_eq!(duplicate_failed_id.failed_id, duplicate_failed_id.new_id);
+    assert!(
+        duplicate_failed_id.pre_new_request_exists,
+        "Lean failed-id-as-new-id witness must collide with the retained failed request"
     );
     assert_eq!(source_not_released.pre_latest_state.as_str(), "failed");
     assert_eq!(

@@ -237,6 +237,9 @@ async fn retry_request_with_request_id(
     // primitive here, so Rust enforces the same predicate as a database-backed
     // preflight immediately before the coalesced write.
     ensure_latest_retry_parent(node, parent_session_id, parent_request_id).await?;
+    // Lean also requires the new request id to be fresh. This preflight catches
+    // injected-id tests and UUID collisions; a schema uniqueness constraint is
+    // still the hard concurrent guarantee.
     ensure_new_retry_request_id_available(node, &request_id).await?;
     let session_id = parent_session_id.to_string();
     let created_at = Utc::now().to_rfc3339();
@@ -704,7 +707,7 @@ mod tests {
             .context("expected submitted parent request in desktop store")?;
 
         let deadline = Utc::now() + chrono::Duration::minutes(5);
-        force_retry_parent_state_for_test(
+        force_retry_parent_eligible_for_test(
             core.node(),
             &original.request_id,
             1,
@@ -756,7 +759,7 @@ mod tests {
         Ok(())
     }
 
-    async fn force_retry_parent_state_for_test(
+    async fn force_retry_parent_eligible_for_test(
         node: &EmbeddedNode,
         request_id: &str,
         retry_count: i64,
@@ -779,7 +782,7 @@ mod tests {
                 ) {{ _docID }}
             }}"#
         );
-        execute_mutation(node, &mutation, "force_retry_parent_state_for_test").await
+        execute_mutation(node, &mutation, "force_retry_parent_eligible_for_test").await
     }
 
     async fn seed_duplicate_request_id_for_test(
@@ -797,7 +800,7 @@ mod tests {
             behavior_id,
             session_id,
             "",
-            request_id,
+            "",
             "existing duplicate request id occupant",
             &created_at,
             0,
