@@ -37,12 +37,19 @@ structure SessionRecoveryCase where
   action : String
   legal : Bool
   preLatestState : String
+  preFailedState : String
   postLatestState : String
+  postFailedState : String
+  postNewState : String
   preLatestAdmission : String
   postLatestAdmission : String
   preFailedAdmission : String
   postFailedAdmission : String
   postNewAdmission : String
+  preOrigin : String
+  postNewOrigin : String
+  preBackend : String
+  postNewBackend : String
   failedId : RequestId
   newId : RequestId
   preLatestId : RequestId
@@ -61,6 +68,9 @@ structure SessionRecoveryCase where
   preFailedIsLatest : Bool
   postFailedIsLatest : Bool
   postNewIsLatest : Bool
+  preRequestIds : List RequestId
+  preFailedExists : Bool
+  preLatestExists : Bool
   preNewRequestExists : Bool
   oldRequestRetained : Bool
   newRequestInserted : Bool

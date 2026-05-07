@@ -138,12 +138,14 @@ waits and persistence-shape assertions; the Lean-generated trigger contract
 covers the pure dispatch/reachability/concurrency semantics once a source has
 produced a `FireIntent`.
 
-The generated `SessionRecovery` conformance contract currently covers the
-finite failed-latest-request reissue witness (`failed -> pending`) instead of
-the full request lifecycle vocabulary. It is a smoke contract for the executable
-session boundary, not a complete request-state coverage claim. Future
-session-recovery executable witnesses should widen that contract before Rust
-depends on broader transition coverage from it.
+The generated `SessionRecovery` conformance contract covers DB-backed client
+retry/reissue eligibility for failed latest requests, retry budget/deadline
+guards, non-latest denial, duplicate successor ids, missing parents, terminal
+source states, and reserved/product-unreachable source states. The Rust
+consumers drive real `AgentRequest`/`AgentConversation` rows and the desktop
+client retry path. There is still no autonomous server-side reissue API in
+`defra-agent` core; startup recovery closes stuck processing rows and missing
+responses rather than creating successor requests.
 
 ## Coverage Ledger Policy
 
@@ -238,8 +240,8 @@ def boundaryStorageMinimumVisibilityPathId : String :=
 def boundaryBackendHealthAdmissionFreshnessId : String :=
   "boundary.backend-health.admission-freshness"
 
-def boundarySessionRecoveryFailedLatestSmokeId : String :=
-  "boundary.session-recovery.failed-latest-smoke"
+def boundarySessionRecoveryClientRetrySurfaceId : String :=
+  "boundary.session-recovery.client-retry-surface"
 
 def boundaryCoverageLedgerReviewDisciplineId : String :=
   "boundary.coverage-ledger.review-discipline"
@@ -333,13 +335,13 @@ def boundaries : List Boundary :=
     , statement :=
         "Lean-generated cases and Rust tests cover observed-document admission availability; backend document freshness, probes, provider behavior, and network behavior remain environmental."
     }
-  , { id := boundarySessionRecoveryFailedLatestSmokeId
+  , { id := boundarySessionRecoveryClientRetrySurfaceId
     , domain := "SessionRecovery"
-    , subject := "finite failed-latest witness"
+    , subject := "client retry surface"
     , statement :=
-        "The generated SessionRecovery contract covers failed -> pending reissue as an executable smoke boundary, not full request-state transition coverage."
+        "Generated SessionRecovery cases cover DB-backed client retry/reissue and denial guards; defra-agent startup recovery does not autonomously create successor requests."
     , acceptedFollowUp :=
-        some "Future executable witnesses should widen the contract before Rust depends on broader transition coverage."
+        some "Add a separate contract if defra-agent core gains autonomous server-side reissue."
     }
   , { id := boundaryCoverageLedgerReviewDisciplineId
     , domain := "CoverageLedger"

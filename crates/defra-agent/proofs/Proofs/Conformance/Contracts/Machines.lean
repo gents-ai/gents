@@ -267,7 +267,7 @@ def sessionRecoveryLegalTransitions : List TransitionPair :=
 def sessionRecoveryMachine : StateMachineContract :=
   machineContract
     "SessionRecovery"
-    [RequestState.failed.toDefraDB, RequestState.pending.toDefraDB]
+    requestStateNames
     []
     ["reissueFailed"]
     sessionRecoveryLegalTransitions
@@ -321,7 +321,7 @@ def vocabularies : List VocabularyContract :=
   , { domain := "ReconcilePhase", values := runtimeReconcileStateNames }
   , { domain := "StorageObservation", values := storageObservationStateNames }
   , { domain := "SessionRecoveryLatestRequestState"
-    , values := [RequestState.failed.toDefraDB, RequestState.pending.toDefraDB]
+    , values := requestStateNames
     }
   , { domain := "InferenceCallState", values := inferenceCallStateNames }
   , { domain := "InferenceCallTerminalReason", values :=

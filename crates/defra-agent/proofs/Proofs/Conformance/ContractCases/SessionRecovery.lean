@@ -8,14 +8,16 @@ import Proofs.Conformance.ContractCases.Types
 
 namespace Conformance.ContractCases
 
-def recoveryContext
+def recoveryContextWith
+    (origin : ExecutionOrigin)
+    (backend : BackendId)
     (state : RequestState)
     (admission : AdmissionState)
     (retryCount maxRetries deadline currentTime : Nat)
     (isLatest : Bool) : RequestContext :=
   { state := state
-  , origin := .interactive
-  , backend := contractBackend
+  , origin := origin
+  , backend := backend
   , admission := admission
   , deadline := deadline
   , claimTime := currentTime
@@ -28,18 +30,30 @@ def recoveryContext
   , persistence := .committed
   }
 
+def recoveryContext
+    (state : RequestState)
+    (admission : AdmissionState)
+    (retryCount maxRetries deadline currentTime : Nat)
+    (isLatest : Bool) : RequestContext :=
+  recoveryContextWith .interactive contractBackend
+    state admission retryCount maxRetries deadline currentTime isLatest
+
 def recoveryPre
     (failedCtx latestCtx : RequestContext)
-    (latestId : RequestId := 1) : SessionState :=
+    (latestId : RequestId := 1)
+    (requestIds : Finset RequestId := {1, 3}) : SessionState :=
   { sessionId := 10
   , behaviorId := 20
-  , requestIds := {1, 3}
+  , requestIds := requestIds
   , ctx := fun rid =>
       if rid = 1 then failedCtx
       else if rid = 3 then latestCtx
       else recoveryContext .pending .released 0 3 10 0 false
   , latest := latestId
   }
+
+def requestIdList (ids : Finset RequestId) : List RequestId :=
+  [1, 2, 3].filter fun rid => decide (rid ∈ ids)
 
 def recoveryCaseFromStep
     (name : String)
@@ -56,12 +70,19 @@ def recoveryCaseFromStep
       , action := "reissueFailed"
       , legal := true
       , preLatestState := latestPre.state.toDefraDB
+      , preFailedState := failedPre.state.toDefraDB
       , postLatestState := latestPost.state.toDefraDB
+      , postFailedState := failedPost.state.toDefraDB
+      , postNewState := newPost.state.toDefraDB
       , preLatestAdmission := admissionName latestPre.admission
       , postLatestAdmission := admissionName latestPost.admission
       , preFailedAdmission := admissionName failedPre.admission
       , postFailedAdmission := admissionName failedPost.admission
       , postNewAdmission := admissionName newPost.admission
+      , preOrigin := failedPre.origin.toDefraDB
+      , postNewOrigin := newPost.origin.toDefraDB
+      , preBackend := failedPre.backend.val
+      , postNewBackend := newPost.backend.val
       , failedId := failedId
       , newId := newId
       , preLatestId := pre.latest
@@ -80,6 +101,9 @@ def recoveryCaseFromStep
       , preFailedIsLatest := failedPre.isLatest
       , postFailedIsLatest := failedPost.isLatest
       , postNewIsLatest := newPost.isLatest
+      , preRequestIds := requestIdList pre.requestIds
+      , preFailedExists := decide (failedId ∈ pre.requestIds)
+      , preLatestExists := decide (pre.latest ∈ pre.requestIds)
       , preNewRequestExists := decide (newId ∈ pre.requestIds)
       , oldRequestRetained := decide (failedId ∈ post.requestIds)
       , newRequestInserted := decide (newId ∈ post.requestIds)
@@ -91,12 +115,19 @@ def recoveryCaseFromStep
       , action := "reissueFailed"
       , legal := false
       , preLatestState := latestPre.state.toDefraDB
+      , preFailedState := failedPre.state.toDefraDB
       , postLatestState := ""
+      , postFailedState := ""
+      , postNewState := ""
       , preLatestAdmission := admissionName latestPre.admission
       , postLatestAdmission := ""
       , preFailedAdmission := admissionName failedPre.admission
       , postFailedAdmission := ""
       , postNewAdmission := ""
+      , preOrigin := failedPre.origin.toDefraDB
+      , postNewOrigin := ""
+      , preBackend := failedPre.backend.val
+      , postNewBackend := ""
       , failedId := failedId
       , newId := newId
       , preLatestId := pre.latest
@@ -115,6 +146,9 @@ def recoveryCaseFromStep
       , preFailedIsLatest := failedPre.isLatest
       , postFailedIsLatest := false
       , postNewIsLatest := false
+      , preRequestIds := requestIdList pre.requestIds
+      , preFailedExists := decide (failedId ∈ pre.requestIds)
+      , preLatestExists := decide (pre.latest ∈ pre.requestIds)
       , preNewRequestExists := decide (newId ∈ pre.requestIds)
       , oldRequestRetained := false
       , newRequestInserted := false
@@ -131,7 +165,13 @@ def sessionRecoveryCases : List SessionRecoveryCase :=
   let nonLatestFailed := recoveryContext .failed .released 1 3 10 5 false
   let latestFailed := recoveryContext .failed .released 0 3 10 5 true
   let pendingLatest := recoveryContext .pending .released 1 3 10 5 true
-  let claimedLatest := recoveryContext .failed .waiting 1 3 10 5 true
+  let waitingFailed := recoveryContext .failed .waiting 1 3 10 5 true
+  let completedLatest := recoveryContext .completed .released 1 3 10 5 true
+  let deadLatest := recoveryContext .dead .released 1 3 10 5 true
+  let supersededLatest := recoveryContext .superseded .released 1 3 10 5 true
+  let interruptedLatest := recoveryContext .interrupted .released 1 3 10 5 true
+  let inputRequiredLatest := recoveryContext .inputRequired .executing 1 3 10 5 true
+  let processingLatest := recoveryContext .processing .executing 1 3 10 5 true
   [ recoveryCaseFromStep
       "legal_initial_retry_slot"
       (recoveryPre initialFailed initialFailed 1)
@@ -163,6 +203,11 @@ def sessionRecoveryCases : List SessionRecoveryCase :=
       1
       2
   , recoveryCaseFromStep
+      "illegal_non_latest_failed_with_pending_latest"
+      (recoveryPre nonLatestFailed pendingLatest 3)
+      1
+      2
+  , recoveryCaseFromStep
       "illegal_new_request_id_already_exists"
       (recoveryPre openFailed openFailed 1)
       1
@@ -179,7 +224,42 @@ def sessionRecoveryCases : List SessionRecoveryCase :=
       2
   , recoveryCaseFromStep
       "illegal_source_not_released"
-      (recoveryPre claimedLatest claimedLatest 1)
+      (recoveryPre waitingFailed waitingFailed 1)
+      1
+      2
+  , recoveryCaseFromStep
+      "illegal_source_completed_terminal"
+      (recoveryPre completedLatest completedLatest 1)
+      1
+      2
+  , recoveryCaseFromStep
+      "illegal_source_dead_stale_terminal"
+      (recoveryPre deadLatest deadLatest 1)
+      1
+      2
+  , recoveryCaseFromStep
+      "illegal_source_superseded_terminal"
+      (recoveryPre supersededLatest supersededLatest 1)
+      1
+      2
+  , recoveryCaseFromStep
+      "illegal_source_interrupted_terminal"
+      (recoveryPre interruptedLatest interruptedLatest 1)
+      1
+      2
+  , recoveryCaseFromStep
+      "illegal_source_input_required_reserved"
+      (recoveryPre inputRequiredLatest inputRequiredLatest 1)
+      1
+      2
+  , recoveryCaseFromStep
+      "illegal_source_processing_active_runtime"
+      (recoveryPre processingLatest processingLatest 1)
+      1
+      2
+  , recoveryCaseFromStep
+      "illegal_missing_failed_request"
+      (recoveryPre openFailed pendingLatest 1 {3})
       1
       2
   ]

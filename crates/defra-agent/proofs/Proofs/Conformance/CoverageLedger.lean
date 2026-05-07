@@ -82,7 +82,7 @@ def vocabularyCoverage : List CoverageEntry :=
   , consumerCoverage
       "vocabulary"
       "SessionRecoveryLatestRequestState"
-      "state_machine_conformance::lean_executable_contracts_cover_initial_domains"
+      "state_machine_conformance::generated_session_recovery_cases_drive_db_backed_reissue_contract"
   , consumerCoverage
       "vocabulary"
       "InferenceCallState"
@@ -133,7 +133,7 @@ def stateMachineCoverage : List CoverageEntry :=
   , consumerCoverage
       "state_machine"
       "SessionRecovery"
-      "state_machine_conformance::lean_executable_contracts_cover_initial_domains"
+      "state_machine_conformance::generated_session_recovery_cases_drive_db_backed_reissue_contract"
   , consumerCoverage
       "state_machine"
       "InferenceCall"
@@ -156,7 +156,7 @@ def caseCoverage : List CoverageEntry :=
   , consumerCoverage
       "session_recovery_cases"
       "SessionRecoveryCases"
-      "state_machine_conformance::generated_session_recovery_cases_cover_retry_guards_and_preservation"
+      "state_machine_conformance::generated_session_recovery_cases_drive_db_backed_reissue_contract"
   , consumerCoverage
       "slot_cases"
       "InferenceCallSlotAccounting"

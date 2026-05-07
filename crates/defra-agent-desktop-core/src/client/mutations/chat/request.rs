@@ -247,6 +247,7 @@ async fn retry_request_with_request_id(
         }
     };
     ensure_retry_parent_eligible(parent, retry_count - 1, max_retries)?;
+    ensure_retry_parent_request_exists(node, parent_request_id).await?;
     // Lean checks `isLatest` inside one session-state transition. The desktop
     // GraphQL API does not expose a transactional conditional create+update
     // primitive here, so Rust enforces the same predicate as a database-backed
@@ -352,6 +353,37 @@ fn ensure_retry_parent_eligible(
                 deadline.to_rfc3339()
             );
         }
+    }
+
+    Ok(())
+}
+
+async fn ensure_retry_parent_request_exists(
+    node: &EmbeddedNode,
+    parent_request_id: &str,
+) -> Result<()> {
+    let escaped_request_id = escape_graphql_string(parent_request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                limit: 1
+            ) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        bail!("querying retry parent request failed: {:?}", resp.errors);
+    }
+    let exists = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|rows| rows.as_array())
+        .is_some_and(|rows| !rows.is_empty());
+
+    if !exists {
+        bail!("retry parent request not found: request_id={parent_request_id}");
     }
 
     Ok(())
@@ -771,7 +803,7 @@ mod tests {
         let illegal_count = cases.len() - legal_count;
         assert_eq!(
             (legal_count, illegal_count),
-            (3, 7),
+            (3, 15),
             "Lean SessionRecovery case split changed; update this desktop driver before bumping"
         );
 
@@ -830,14 +862,31 @@ mod tests {
             "pre latest request role must match Lean witness for {}",
             case.name
         );
-        assert_eq!(
-            fetch_request_row_for_test(core.node(), &pre.pre_latest_request_id)
-                .await?
-                .lifecycle_state,
-            case.pre_latest_state,
-            "pre latest request state must match Lean witness for {}",
-            case.name
-        );
+        if case.pre_latest_exists {
+            assert_eq!(
+                fetch_request_row_for_test(core.node(), &pre.pre_latest_request_id)
+                    .await?
+                    .lifecycle_state,
+                case.pre_latest_state,
+                "pre latest request state must match Lean witness for {}",
+                case.name
+            );
+        } else {
+            assert_eq!(
+                request_count_by_id_for_test(core.node(), &pre.pre_latest_request_id).await?,
+                0,
+                "missing latest request must be absent for {}",
+                case.name
+            );
+        }
+        if case.pre_failed_exists {
+            assert_eq!(
+                pre.parent.lifecycle_state.as_deref(),
+                Some(case.pre_failed_state.as_str()),
+                "pre failed request state must match Lean witness for {}",
+                case.name
+            );
+        }
         assert_eq!(
             pre.parent.retry_count,
             Some(case.pre_retry_count as i64),
@@ -853,13 +902,13 @@ mod tests {
         assert_eq!(
             pre.parent.backend_id.as_deref(),
             Some(RECOVERY_BACKEND_ID),
-            "pre backend_id must be visible in the desktop store for {}",
+            "pre backend_id must match Lean witness for {}",
             case.name
         );
         assert_eq!(
             pre.parent.execution_origin.as_deref(),
             Some(RECOVERY_EXECUTION_ORIGIN),
-            "pre execution_origin must be visible in the desktop store for {}",
+            "pre execution_origin must match Lean witness for {}",
             case.name
         );
 
@@ -896,99 +945,198 @@ mod tests {
             .create_conversation(RECOVERY_AGENT_DID, Some(RECOVERY_BEHAVIOR_ID))
             .await?;
         let failed_is_latest = case.pre_latest_id == case.failed_id;
+        let should_seed_failed =
+            case.pre_request_ids.contains(&case.failed_id) || !case.pre_failed_exists;
+        let should_seed_existing = case
+            .pre_request_ids
+            .iter()
+            .any(|request_id| *request_id != case.failed_id);
 
-        let (failed, existing) = if failed_is_latest {
-            let existing = core
-                .submit_request(
-                    &created.session_id,
-                    RECOVERY_AGENT_DID,
-                    &format!("existing request for {}", case.name),
-                    None,
-                )
-                .await?;
-            let failed = core
-                .submit_request(
-                    &created.session_id,
-                    RECOVERY_AGENT_DID,
-                    &format!("failed request for {}", case.name),
-                    None,
-                )
-                .await?;
-            (failed, existing)
+        let mut failed = None;
+        let mut existing = None;
+        if failed_is_latest {
+            if should_seed_existing {
+                existing = Some(
+                    submit_recovery_seed_request(core, &created.session_id, case, "existing")
+                        .await?,
+                );
+            }
+            if should_seed_failed {
+                failed = Some(
+                    submit_recovery_seed_request(core, &created.session_id, case, "failed").await?,
+                );
+            }
         } else {
-            let failed = core
-                .submit_request(
-                    &created.session_id,
-                    RECOVERY_AGENT_DID,
-                    &format!("failed request for {}", case.name),
-                    None,
-                )
-                .await?;
-            let existing = core
-                .submit_request(
-                    &created.session_id,
-                    RECOVERY_AGENT_DID,
-                    &format!("latest request for {}", case.name),
-                    None,
-                )
-                .await?;
-            (failed, existing)
+            if should_seed_failed {
+                failed = Some(
+                    submit_recovery_seed_request(core, &created.session_id, case, "failed").await?,
+                );
+            }
+            if should_seed_existing {
+                existing = Some(
+                    submit_recovery_seed_request(core, &created.session_id, case, "latest").await?,
+                );
+            }
+        }
+
+        let failed_request_id = failed
+            .as_ref()
+            .map(|request| request.request_id.clone())
+            .unwrap_or_else(|| format!("missing-failed-{}", case.name));
+        let existing_request_id = existing.as_ref().map(|request| request.request_id.clone());
+        let pre_latest_request_id = if case.pre_latest_exists {
+            if failed_is_latest {
+                failed_request_id.clone()
+            } else {
+                existing_request_id.clone().with_context(|| {
+                    format!(
+                        "Lean case {} expected an existing latest request",
+                        case.name
+                    )
+                })?
+            }
+        } else {
+            failed_request_id.clone()
         };
 
         let expected_parent_status = retry_parent_status_for_case(case);
-        force_request_state_for_test(
-            core.node(),
-            &failed.request_id,
-            &forced_retry_parent_state(case),
-        )
-        .await?;
-        if !failed_is_latest {
+        if let Some(failed) = failed.as_ref() {
             force_request_state_for_test(
                 core.node(),
-                &existing.request_id,
-                &forced_latest_request_state(case),
+                &failed.request_id,
+                &forced_retry_parent_state(case),
             )
             .await?;
         }
+        if let Some(existing) = existing.as_ref() {
+            if !failed_is_latest {
+                force_request_state_for_test(
+                    core.node(),
+                    &existing.request_id,
+                    &forced_latest_request_state(case),
+                )
+                .await?;
+            }
+        }
+        if !case.pre_failed_exists {
+            delete_request_by_id_for_test(core.node(), &failed_request_id).await?;
+        }
         core.refresh_store().await?;
 
-        let parent = request_from_store_for_test(core, &failed.request_id)?;
-        assert_eq!(
-            parent.lifecycle_state.as_deref(),
-            Some(case.pre_latest_state.as_str()),
-            "seeded retry parent lifecycle must match Lean witness for {}",
-            case.name
-        );
-        assert_eq!(
-            parent.status.as_deref(),
-            Some(expected_parent_status),
-            "seeded retry parent admission/status must match Lean witness for {}",
-            case.name
-        );
-        assert_eq!(
-            parent.backend_id.as_deref(),
-            Some(RECOVERY_BACKEND_ID),
-            "seeded retry parent backend_id did not refresh into the desktop store for {}",
-            case.name
-        );
-        assert_eq!(
-            parent.execution_origin.as_deref(),
-            Some(RECOVERY_EXECUTION_ORIGIN),
-            "seeded retry parent execution_origin did not refresh into the desktop store for {}",
-            case.name
-        );
+        let parent = if case.pre_failed_exists {
+            let parent = request_from_store_for_test(core, &failed_request_id)?;
+            assert_eq!(
+                parent.lifecycle_state.as_deref(),
+                Some(case.pre_failed_state.as_str()),
+                "seeded retry parent lifecycle must match Lean witness for {}",
+                case.name
+            );
+            assert_eq!(
+                parent.status.as_deref(),
+                Some(expected_parent_status),
+                "seeded retry parent admission/status must match Lean witness for {}",
+                case.name
+            );
+            assert_eq!(
+                parent.backend_id.as_deref(),
+                Some(RECOVERY_BACKEND_ID),
+                "seeded retry parent backend_id did not refresh into the desktop store for {}",
+                case.name
+            );
+            assert_eq!(
+                parent.execution_origin.as_deref(),
+                Some(RECOVERY_EXECUTION_ORIGIN),
+                "seeded retry parent execution_origin did not refresh into the desktop store for {}",
+                case.name
+            );
+            parent
+        } else {
+            synthetic_missing_retry_parent(case, &created.session_id, &failed_request_id)
+        };
 
         Ok(RecoveryPreState {
             session_id: created.session_id,
-            failed_request_id: failed.request_id.clone(),
-            existing_request_id: Some(existing.request_id.clone()),
-            pre_latest_request_id: if failed_is_latest {
-                failed.request_id
-            } else {
-                existing.request_id
-            },
+            failed_request_id,
+            existing_request_id,
+            pre_latest_request_id,
             parent,
         })
+    }
+
+    async fn submit_recovery_seed_request(
+        core: &ClientCore,
+        session_id: &str,
+        case: &LeanSessionRecoveryCase,
+        role: &str,
+    ) -> Result<SubmittedRequest> {
+        core.submit_request(
+            session_id,
+            RECOVERY_AGENT_DID,
+            &format!("{role} request for {}", case.name),
+            None,
+        )
+        .await
+    }
+
+    fn synthetic_missing_retry_parent(
+        case: &LeanSessionRecoveryCase,
+        session_id: &str,
+        request_id: &str,
+    ) -> AgentRequestRow {
+        AgentRequestRow {
+            request_id: request_id.to_string(),
+            agent_did: Some(RECOVERY_AGENT_DID.to_string()),
+            behavior_id: Some(RECOVERY_BEHAVIOR_ID.to_string()),
+            session_id: Some(session_id.to_string()),
+            retry_parent_request: Some(String::new()),
+            retry_root_request: Some(request_id.to_string()),
+            superseded_by_request: Some(String::new()),
+            content: Some(format!("missing request for {}", case.name)),
+            status: Some(retry_parent_status_for_case(case).to_string()),
+            lifecycle_state: Some(case.pre_failed_state.clone()),
+            backend_id: Some(RECOVERY_BACKEND_ID.to_string()),
+            execution_origin: Some(RECOVERY_EXECUTION_ORIGIN.to_string()),
+            caused_by_trigger_id: None,
+            caused_by_trigger_kind: None,
+            failure_reason: Some(String::new()),
+            created_at: Some(chrono::Utc::now().to_rfc3339()),
+            claimed_at: None,
+            deadline: Some(recovery_deadline_for_case(case)),
+            retry_count: Some(case.pre_retry_count as i64),
+            max_retries: Some(case.max_retries as i64),
+            interrupt_requested_at: None,
+            valid_until: None,
+        }
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct DocIdForTest {
+        #[serde(rename = "_docID")]
+        doc_id: String,
+    }
+
+    async fn delete_request_by_id_for_test(node: &EmbeddedNode, request_id: &str) -> Result<()> {
+        let escaped_request_id = escape_graphql_string(request_id);
+        let query = format!(
+            r#"{{
+                AgentRequest(
+                    filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                    limit: 1
+                ) {{ _docID }}
+            }}"#
+        );
+        let row: DocIdForTest = query_single_for_test(node, &query, "AgentRequest").await?;
+        let escaped_doc_id = escape_graphql_string(&row.doc_id);
+        let mutation = format!(
+            r#"mutation {{
+                delete_AgentRequest(docID: "{escaped_doc_id}") {{ _docID }}
+            }}"#
+        );
+        let resp = node.execute(&mutation).await;
+        if resp.has_errors() {
+            bail!("delete request {request_id} failed: {:?}", resp.errors);
+        }
+        Ok(())
     }
 
     async fn assert_legal_session_recovery_post_state(
@@ -1025,7 +1173,7 @@ mod tests {
             pre.parent.content.as_deref().unwrap_or_default()
         );
         assert_eq!(new_request.status, "pending");
-        assert_eq!(new_request.lifecycle_state, case.post_latest_state);
+        assert_eq!(new_request.lifecycle_state, case.post_new_state);
         assert_eq!(new_request.retry_parent_request, pre.failed_request_id);
         assert_eq!(new_request.retry_root_request, pre.failed_request_id);
         assert_eq!(new_request.retry_count, case.post_retry_count as i64);
@@ -1039,7 +1187,7 @@ mod tests {
 
         let failed_request =
             fetch_request_row_for_test(core.node(), &pre.failed_request_id).await?;
-        assert_eq!(failed_request.lifecycle_state, case.pre_latest_state);
+        assert_eq!(failed_request.lifecycle_state, case.post_failed_state);
         assert_eq!(failed_request.status, retry_parent_status_for_case(case));
         assert_eq!(failed_request.retry_count, case.pre_retry_count as i64);
         assert_eq!(failed_request.backend_id, RECOVERY_BACKEND_ID);
@@ -1120,21 +1268,24 @@ mod tests {
     }
 
     fn forced_retry_parent_state(case: &LeanSessionRecoveryCase) -> ForcedRequestState {
+        ForcedRequestState {
+            status: retry_parent_status_for_case(case),
+            lifecycle_state: case.pre_failed_state.clone(),
+            retry_count: case.pre_retry_count as i64,
+            max_retries: case.max_retries as i64,
+            deadline: recovery_deadline_for_case(case),
+            backend_id: RECOVERY_BACKEND_ID,
+            execution_origin: RECOVERY_EXECUTION_ORIGIN,
+        }
+    }
+
+    fn recovery_deadline_for_case(case: &LeanSessionRecoveryCase) -> String {
         let deadline = if case.pre_deadline_exceeded {
             chrono::Utc::now() - chrono::Duration::seconds(5)
         } else {
             chrono::Utc::now() + chrono::Duration::minutes(5)
         };
-
-        ForcedRequestState {
-            status: retry_parent_status_for_case(case),
-            lifecycle_state: case.pre_latest_state.clone(),
-            retry_count: case.pre_retry_count as i64,
-            max_retries: case.max_retries as i64,
-            deadline: deadline.to_rfc3339(),
-            backend_id: RECOVERY_BACKEND_ID,
-            execution_origin: RECOVERY_EXECUTION_ORIGIN,
-        }
+        deadline.to_rfc3339()
     }
 
     fn forced_latest_request_state(case: &LeanSessionRecoveryCase) -> ForcedRequestState {
@@ -1150,8 +1301,8 @@ mod tests {
     }
 
     fn retry_parent_status_for_case(case: &LeanSessionRecoveryCase) -> &'static str {
-        if case.pre_latest_state != "failed" {
-            status_for_lifecycle_state(&case.pre_latest_state)
+        if case.pre_failed_state != "failed" {
+            status_for_lifecycle_state(&case.pre_failed_state)
         } else if case.pre_failed_admission == "released" {
             "error"
         } else {
@@ -1163,6 +1314,10 @@ mod tests {
         match lifecycle_state {
             "failed" => "error",
             "pending" => "pending",
+            "completed" => "completed",
+            "superseded" => "superseded",
+            "dead" => "dead",
+            "interrupted" => "interrupted",
             _ => "processing",
         }
     }
@@ -1190,7 +1345,9 @@ mod tests {
     }
 
     fn expected_illegal_guard_fragment(case: &LeanSessionRecoveryCase) -> &'static str {
-        if case.pre_latest_state != "failed" || case.pre_failed_admission != "released" {
+        if !case.pre_failed_exists {
+            "not found"
+        } else if case.pre_failed_state != "failed" || case.pre_failed_admission != "released" {
             "failed/error"
         } else if case.pre_retry_count >= case.max_retries {
             "exhausted retry budget"
