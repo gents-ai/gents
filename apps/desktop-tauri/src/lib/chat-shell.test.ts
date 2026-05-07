@@ -92,30 +92,17 @@ function session(overrides: Partial<DesktopSessionSnapshot> = {}): DesktopSessio
 function loadLeanClientShellCases() {
   if (!leanContractSnapshot) {
     const proofsDir = join(repoRoot(), "crates/defra-agent/proofs");
-    const command = "lake env lean --run Proofs/Conformance/Contracts.lean";
-    const result = spawnSync(
-      "lake",
-      ["env", "lean", "--run", "Proofs/Conformance/Contracts.lean"],
-      {
-        cwd: proofsDir,
-        encoding: "utf8",
-      },
-    );
-
-    if (result.error) {
-      throw new Error(`failed to run ${command} in ${proofsDir}: ${result.error.message}`);
-    }
-    if (result.status !== 0) {
-      throw new Error(
-        `${command} failed in ${proofsDir}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
-      );
-    }
-
-    const stdout = result.stdout.toString();
-    const begin = stdout.indexOf(CONTRACT_JSON_BEGIN);
-    const end = stdout.indexOf(CONTRACT_JSON_END);
+    runLeanCommand(proofsDir, ["build", "Proofs.Conformance.Contracts"]);
+    const stdout = runLeanCommand(proofsDir, [
+      "env",
+      "lean",
+      "--run",
+      "Proofs/Conformance/Contracts.lean",
+    ]);
+    const begin = uniqueMarkerPosition(stdout, CONTRACT_JSON_BEGIN);
+    const end = uniqueMarkerPosition(stdout, CONTRACT_JSON_END);
     if (begin < 0 || end < 0 || begin >= end) {
-      throw new Error(`${command} did not emit a valid ClientShell contract JSON sentinel block`);
+      throw new Error("Lean ClientShell contract JSON sentinel order is invalid");
     }
     leanContractSnapshot = JSON.parse(
       stdout.slice(begin + CONTRACT_JSON_BEGIN.length, end).trim(),
@@ -123,6 +110,37 @@ function loadLeanClientShellCases() {
   }
 
   return leanContractSnapshot.client_shell_cases;
+}
+
+function runLeanCommand(proofsDir: string, args: string[]) {
+  const command = `lake ${args.join(" ")}`;
+  const result = spawnSync("lake", args, {
+    cwd: proofsDir,
+    encoding: "utf8",
+  });
+
+  if (result.error) {
+    throw new Error(`failed to run ${command} in ${proofsDir}: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `${command} failed in ${proofsDir}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+  }
+
+  return result.stdout.toString();
+}
+
+function uniqueMarkerPosition(stdout: string, marker: string) {
+  const first = stdout.indexOf(marker);
+  const last = stdout.lastIndexOf(marker);
+  if (first < 0) {
+    throw new Error(`Lean contract generator stdout did not contain ${marker}`);
+  }
+  if (first !== last) {
+    throw new Error(`Lean contract generator stdout contained duplicate ${marker} sentinels`);
+  }
+  return first;
 }
 
 function repoRoot() {
@@ -243,6 +261,8 @@ function expectedWorkflowFromContract(contractCase: LeanClientShellCase) {
 }
 
 function compactWorkflow(workflow: ChatWorkflowState) {
+  // The Lean frontend contract models rendered workflow fields; TypeScript keeps
+  // agentDid on submittingRequest for the API callback path.
   return Object.fromEntries(
     Object.entries(workflow).filter(
       ([key, value]) => key !== "agentDid" && value !== undefined && value !== null,

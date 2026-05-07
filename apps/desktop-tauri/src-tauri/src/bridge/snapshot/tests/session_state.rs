@@ -619,7 +619,8 @@ fn request_state_for_turn(turn_state: Option<&str>) -> (&'static str, &'static s
         Some("failed") => ("failed", "failed"),
         Some("superseded") => ("superseded", "superseded"),
         Some("interrupted") => ("interrupted", "interrupted"),
-        _ => ("pending", "pending"),
+        Some(other) => panic!("unsupported Lean ClientShell turn state {other:?}"),
+        None => ("pending", "pending"),
     }
 }
 
@@ -628,6 +629,7 @@ fn response_status_for_turn(turn_state: Option<&str>) -> Option<&'static str> {
         Some("streaming") => Some("streaming"),
         Some("completed") => Some("complete"),
         Some("failed") => Some("error"),
-        _ => None,
+        Some("waitingForClaim") | Some("superseded") | Some("interrupted") | None => None,
+        Some(other) => panic!("unsupported Lean ClientShell turn state {other:?}"),
     }
 }

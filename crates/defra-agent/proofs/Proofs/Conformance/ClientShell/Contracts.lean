@@ -145,6 +145,9 @@ def sendBlockedReasonName : SendBlockedReason → String
   | .inconsistentObservation    => "inconsistentObservation"
   | .workflowBlocked            => "workflowBlocked"
 
+/-- Frontend-facing names for the same `SendBlockedReason` constructors above.
+    This intentionally differs where the TypeScript shell exposes existing UI
+    vocabulary (`submittingRequest`, `waitingForRequestObservation`, etc.). -/
 def frontendBlockedReasonName : SendBlockedReason → String
   | .clientOffline              => "clientOffline"
   | .agentNotSelected           => "agentNotSelected"
@@ -504,6 +507,8 @@ def clientShellCases : List ClientShellContractCase :=
     }
   let switchedStaleLocal :=
     { staleBeforeSwitch with selection := { staleBeforeSwitch.selection with session := some sid2 } }
+  -- Case groups: snapshot selection/workflow, request observation, session
+  -- switching, transport no-op, submit gates, and terminal follow-up allowance.
   [ let input := ShellInput.snapshot storeNewCompleted
     let post := step awaitingNew input emptyStore .healthy ctxReady
     clientShellCaseFromStep

@@ -204,3 +204,12 @@ theorem select_session_clears_stale_awaiting
     (h_ne : oldSid ≠ newSid) :
     (step s (.user (.selectSession newSid)) store h ctx).workflow = .idle := by
   simp [step, workflowAfterSelectSession, h_wf, h_ne]
+
+/-- Re-selecting the same session preserves its awaiting workflow. The
+    stale-workflow cleanup only applies when the selected session changes. -/
+theorem select_session_preserves_same_session_awaiting
+    (s : ShellState) (store : LocalStore) (ctx : SubmitContext)
+    (sid : SessionId) (req : RequestId) (h : TransportHealth)
+    (h_wf : s.workflow = .awaiting sid req) :
+    (step s (.user (.selectSession sid)) store h ctx).workflow = .awaiting sid req := by
+  simp [step, workflowAfterSelectSession, h_wf]
