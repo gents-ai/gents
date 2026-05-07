@@ -72,6 +72,11 @@ impl ServiceHealthMap {
         self.inner.write().await.insert(service_id, health);
     }
 
+    #[cfg(test)]
+    pub(crate) async fn set_for_test(&self, service_id: impl Into<String>, health: ServiceHealth) {
+        self.set(service_id.into(), health).await;
+    }
+
     async fn retain_services(&self, service_ids: &HashSet<String>) {
         self.inner
             .write()

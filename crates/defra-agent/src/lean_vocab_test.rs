@@ -33,6 +33,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) client_shell_cases: Vec<LeanClientShellCase>,
     pub(crate) runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
     pub(crate) session_recovery_cases: Vec<LeanSessionRecoveryCase>,
+    pub(crate) tool_preflight_cases: Vec<LeanToolPreflightCase>,
+    pub(crate) tool_retry_cases: Vec<LeanToolRetryCase>,
     pub(crate) follow_up_hooks: Vec<String>,
     pub(crate) coverage_ledger: Vec<LeanCoverageEntry>,
 }
@@ -193,6 +195,24 @@ pub(crate) struct LeanSessionRecoveryCase {
     pub(crate) backend_preserved: bool,
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanToolPreflightCase {
+    pub(crate) name: String,
+    pub(crate) health: String,
+    pub(crate) schema_status: String,
+    pub(crate) decision: String,
+    pub(crate) failure_class: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanToolRetryCase {
+    pub(crate) name: String,
+    pub(crate) operation: String,
+    pub(crate) idempotency: String,
+    pub(crate) failure_class: String,
+    pub(crate) disposition: String,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum LeanVocabularyParseError<'a> {
     MissingNamespace,
@@ -251,6 +271,30 @@ pub(crate) fn lean_client_shell_case(name: &str) -> &'static LeanClientShellCase
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean ClientShell case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_tool_preflight_cases() -> &'static [LeanToolPreflightCase] {
+    &lean_contract_snapshot().tool_preflight_cases
+}
+
+pub(crate) fn lean_tool_preflight_case(name: &str) -> &'static LeanToolPreflightCase {
+    lean_contract_snapshot()
+        .tool_preflight_cases
+        .iter()
+        .find(|case| case.name == name)
+        .unwrap_or_else(|| panic!("Lean tool preflight case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_tool_retry_cases() -> &'static [LeanToolRetryCase] {
+    &lean_contract_snapshot().tool_retry_cases
+}
+
+pub(crate) fn lean_tool_retry_case(name: &str) -> &'static LeanToolRetryCase {
+    lean_contract_snapshot()
+        .tool_retry_cases
+        .iter()
+        .find(|case| case.name == name)
+        .unwrap_or_else(|| panic!("Lean tool retry case {name:?} was not emitted"))
 }
 
 pub(crate) fn lean_vocabulary_values(domain: &str) -> Vec<&'static str> {

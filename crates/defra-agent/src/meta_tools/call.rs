@@ -352,7 +352,11 @@ fn json_type_name(value: &Value) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
     use serde_json::json;
+
+    use crate::health_checker::{HealthStatus, ServiceHealth, ServiceHealthMap};
+    use crate::lean_vocab_test::{lean_tool_preflight_cases, LeanToolPreflightCase};
 
     fn search_schema() -> Map<String, Value> {
         json!({
@@ -366,6 +370,89 @@ mod tests {
         .as_object()
         .expect("object schema")
         .clone()
+    }
+
+    #[tokio::test]
+    async fn generated_tool_preflight_cases_match_health_and_schema_gates() {
+        for case in lean_tool_preflight_cases() {
+            let actual = actual_preflight_contract(case).await;
+            assert_eq!(
+                actual.0, case.decision,
+                "Lean ToolExecution preflight case {} must match Rust dispatch decision",
+                case.name
+            );
+            assert_eq!(
+                actual.1, case.failure_class,
+                "Lean ToolExecution preflight case {} must match Rust failure class",
+                case.name
+            );
+        }
+    }
+
+    async fn actual_preflight_contract(case: &LeanToolPreflightCase) -> (String, Option<String>) {
+        let health_map = ServiceHealthMap::new();
+        health_map
+            .set_for_test(
+                "x-data",
+                ServiceHealth {
+                    status: rust_health_status(&case.health),
+                    last_seen: Utc::now(),
+                    last_error: (case.health == "unreachable")
+                        .then(|| "probe timed out".to_string()),
+                },
+            )
+            .await;
+
+        if enforce_health_gate(&health_map, "x-data").await.is_err() {
+            return ("block".to_string(), Some("serviceUnavailable".to_string()));
+        }
+
+        match case.schema_status.as_str() {
+            "unchecked" => ("dispatch".to_string(), None),
+            "valid" => {
+                let arguments = json!({ "query": "amy", "limit": 5 })
+                    .as_object()
+                    .expect("arguments")
+                    .clone();
+                let result = validate_arguments_against_schema(
+                    "x-data",
+                    "search_bookmarks",
+                    &arguments,
+                    &search_schema(),
+                );
+                assert!(
+                    result.is_ok(),
+                    "{} should pass schema validation",
+                    case.name
+                );
+                ("dispatch".to_string(), None)
+            }
+            "invalid" => {
+                let arguments = json!({ "limit": 5 })
+                    .as_object()
+                    .expect("arguments")
+                    .clone();
+                let error = validate_arguments_against_schema(
+                    "x-data",
+                    "search_bookmarks",
+                    &arguments,
+                    &search_schema(),
+                )
+                .expect_err("generated invalid-schema case should fail validation");
+                assert_eq!(error.failure_class, "invalid_tool_arguments");
+                ("block".to_string(), Some("argumentInvalid".to_string()))
+            }
+            other => panic!("unknown Lean schema status {other:?}"),
+        }
+    }
+
+    fn rust_health_status(value: &str) -> HealthStatus {
+        match value {
+            "healthy" => HealthStatus::Healthy,
+            "stale" => HealthStatus::Stale,
+            "unreachable" => HealthStatus::Unreachable,
+            other => panic!("unknown Lean health status {other:?}"),
+        }
     }
 
     #[test]

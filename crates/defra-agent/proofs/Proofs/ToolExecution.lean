@@ -18,12 +18,36 @@ inductive Health where
   | unreachable
   deriving DecidableEq, Repr
 
+namespace Health
+
+def toDefraDB : Health → String
+  | .healthy => "healthy"
+  | .stale => "stale"
+  | .unreachable => "unreachable"
+
+def all : List Health :=
+  [ .healthy, .stale, .unreachable ]
+
+end Health
+
 /-- Result of argument/schema checks available before dispatch. -/
 inductive SchemaStatus where
   | unchecked
   | valid
   | invalid
   deriving DecidableEq, Repr
+
+namespace SchemaStatus
+
+def toDefraDB : SchemaStatus → String
+  | .unchecked => "unchecked"
+  | .valid => "valid"
+  | .invalid => "invalid"
+
+def all : List SchemaStatus :=
+  [ .unchecked, .valid, .invalid ]
+
+end SchemaStatus
 
 /-- Evidence needed before a tool call can be retried after dispatch. -/
 inductive IdempotencyEvidence where
@@ -32,12 +56,36 @@ inductive IdempotencyEvidence where
   | nonIdempotent
   deriving DecidableEq, Repr
 
+namespace IdempotencyEvidence
+
+def toDefraDB : IdempotencyEvidence → String
+  | .unknown => "unknown"
+  | .idempotent => "idempotent"
+  | .nonIdempotent => "nonIdempotent"
+
+def all : List IdempotencyEvidence :=
+  [ .unknown, .idempotent, .nonIdempotent ]
+
+end IdempotencyEvidence
+
 /-- Tool operations that have different retry semantics. -/
 inductive ToolOperation where
   | mcpListTools
   | mcpCall
   | nativeCommand
   deriving DecidableEq, Repr
+
+namespace ToolOperation
+
+def toDefraDB : ToolOperation → String
+  | .mcpListTools => "mcpListTools"
+  | .mcpCall => "mcpCall"
+  | .nativeCommand => "nativeCommand"
+
+def all : List ToolOperation :=
+  [ .mcpListTools, .mcpCall, .nativeCommand ]
+
+end ToolOperation
 
 /-- Failure classes at the tool boundary. -/
 inductive FailureClass where
@@ -48,11 +96,42 @@ inductive FailureClass where
   | external
   deriving DecidableEq, Repr
 
+namespace FailureClass
+
+def toDefraDB : FailureClass → String
+  | .argumentInvalid => "argumentInvalid"
+  | .serviceUnavailable => "serviceUnavailable"
+  | .transport => "transport"
+  | .toolReturnedError => "toolReturnedError"
+  | .external => "external"
+
+def all : List FailureClass :=
+  [ .argumentInvalid
+  , .serviceUnavailable
+  , .transport
+  , .toolReturnedError
+  , .external
+  ]
+
+end FailureClass
+
 /-- Pre-dispatch decision. -/
 inductive PreflightDecision where
   | dispatch
   | block (failure : FailureClass)
   deriving DecidableEq, Repr
+
+namespace PreflightDecision
+
+def toContract : PreflightDecision → String
+  | .dispatch => "dispatch"
+  | .block _ => "block"
+
+def failureClass : PreflightDecision → Option FailureClass
+  | .dispatch => none
+  | .block failure => some failure
+
+end PreflightDecision
 
 /-- Retry class emitted by the model for Rust conformance docs/tests. -/
 inductive RetryDisposition where
@@ -92,6 +171,23 @@ def preflight
       | .invalid => .block .argumentInvalid
       | .unchecked | .valid => .dispatch
 
+/-- Generated witness row for Rust health/schema preflight conformance. -/
+structure PreflightCase where
+  name : String
+  health : Health
+  schema : SchemaStatus
+  decision : PreflightDecision
+  deriving Repr
+
+/-- Generated witness row for Rust retry-disposition conformance. -/
+structure RetryCase where
+  name : String
+  operation : ToolOperation
+  idempotency : IdempotencyEvidence
+  failure : FailureClass
+  disposition : RetryDisposition
+  deriving Repr
+
 /-- Retry eligibility after a failed operation. Listing tools is a safe read.
 Calling tools requires explicit idempotency evidence before a transport retry.
 Native command retries are outside this model. -/
@@ -103,6 +199,51 @@ def retryDisposition
   | .mcpListTools, _, .transport => .retrySafeRead
   | .mcpCall, .idempotent, .transport => .retryIdempotentToolCall
   | _, _, _ => .doNotRetry
+
+def preflightCaseName
+    (health : Health)
+    (schema : SchemaStatus)
+    (decision : PreflightDecision) : String :=
+  let suffix :=
+    match decision with
+    | .dispatch => "dispatch"
+    | .block failure => "blocks_" ++ failure.toDefraDB
+  "preflight_" ++ health.toDefraDB ++ "_" ++ schema.toDefraDB ++ "_" ++ suffix
+
+def retryCaseName
+    (operation : ToolOperation)
+    (idempotency : IdempotencyEvidence)
+    (failure : FailureClass)
+    (disposition : RetryDisposition) : String :=
+  "retry_"
+    ++ operation.toDefraDB ++ "_"
+    ++ idempotency.toDefraDB ++ "_"
+    ++ failure.toDefraDB ++ "_"
+    ++ disposition.toDefraDB
+
+/-- Exhaustive health/schema matrix evaluated from `preflight`. -/
+def preflightCases : List PreflightCase :=
+  Health.all.flatMap fun health =>
+    SchemaStatus.all.map fun schema =>
+      let decision := preflight health schema
+      { name := preflightCaseName health schema decision
+      , health := health
+      , schema := schema
+      , decision := decision
+      }
+
+/-- Exhaustive retry-disposition matrix evaluated from `retryDisposition`. -/
+def retryCases : List RetryCase :=
+  ToolOperation.all.flatMap fun operation =>
+    IdempotencyEvidence.all.flatMap fun idempotency =>
+      FailureClass.all.map fun failure =>
+        let disposition := retryDisposition operation idempotency failure
+        { name := retryCaseName operation idempotency failure disposition
+        , operation := operation
+        , idempotency := idempotency
+        , failure := failure
+        , disposition := disposition
+        }
 
 theorem unreachable_blocks_dispatch
     (schema : SchemaStatus) :

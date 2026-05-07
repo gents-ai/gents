@@ -12,7 +12,9 @@ mod support;
 use lean_vocab_test::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
     assert_state_machine_contract_is_complete, lean_client_shell_case, lean_contract_snapshot,
-    lean_runtime_reconcile_case, lean_session_recovery_case, lean_vocabulary_values,
+    lean_runtime_reconcile_case,
+    lean_session_recovery_case, lean_tool_preflight_case, lean_tool_retry_case,
+    lean_vocabulary_values,
 };
 use support::snapshots::{
     fetch_conversation_snapshot, fetch_request_lineage_snapshot,
@@ -105,10 +107,10 @@ fn lean_executable_contracts_cover_initial_domains() {
         "RuntimeReconcile should be emitted as generated contract output, not a follow-up hook"
     );
     assert!(
-        follow_up_hooks
+        !follow_up_hooks
             .iter()
             .any(|hook| hook.contains("ToolExecution")),
-        "ToolExecution remains a follow-up until idempotency metadata is modeled"
+        "ToolExecution should be emitted as generated contract output, not a follow-up hook"
     );
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 6);
     assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 10);
@@ -117,6 +119,8 @@ fn lean_executable_contracts_cover_initial_domains() {
         lean_contract_snapshot().client_shell_cases.len()
     );
     assert_eq!(lean_contract_snapshot().client_shell_cases.len(), 15);
+    assert_eq!(lean_contract_snapshot().tool_preflight_cases.len(), 9);
+    assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 45);
 }
 
 #[test]
@@ -158,6 +162,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     if !snapshot.client_shell_cases.is_empty() {
         emitted.insert(("client_shell_cases".to_string(), "ClientShellCases".to_string()));
     }
+    if !snapshot.tool_preflight_cases.is_empty() {
+        emitted.insert(("tool_cases".to_string(), "ToolExecutionPreflight".to_string()));
+    }
+    if !snapshot.tool_retry_cases.is_empty() {
+        emitted.insert(("tool_cases".to_string(), "ToolExecutionRetry".to_string()));
+    }
     for hook in &snapshot.follow_up_hooks {
         emitted.insert(("follow_up_hook".to_string(), hook.clone()));
     }
@@ -170,6 +180,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "runtime_cases",
         "session_recovery_cases",
         "client_shell_cases",
+        "tool_cases",
         "follow_up_hook",
     ];
     let mut ledger = BTreeSet::new();
@@ -424,6 +435,46 @@ fn generated_session_recovery_cases_cover_retry_guards_and_preservation() {
         let case = lean_session_recovery_case(name);
         assert!(!case.legal, "{name} must be rejected by Lean");
         assert!(case.post_latest_state.is_empty());
+    }
+}
+
+#[test]
+fn generated_tool_execution_cases_cover_preflight_and_retry_contracts() {
+    let unreachable =
+        lean_tool_preflight_case("preflight_unreachable_valid_blocks_serviceUnavailable");
+    assert_eq!(unreachable.decision, "block");
+    assert_eq!(
+        unreachable.failure_class.as_deref(),
+        Some("serviceUnavailable")
+    );
+
+    let invalid = lean_tool_preflight_case("preflight_healthy_invalid_blocks_argumentInvalid");
+    assert_eq!(invalid.decision, "block");
+    assert_eq!(invalid.failure_class.as_deref(), Some("argumentInvalid"));
+
+    for name in [
+        "preflight_healthy_valid_dispatch",
+        "preflight_stale_valid_dispatch",
+    ] {
+        let case = lean_tool_preflight_case(name);
+        assert_eq!(case.decision, "dispatch", "{name}");
+        assert_eq!(case.failure_class, None, "{name}");
+    }
+
+    let safe_read = lean_tool_retry_case("retry_mcpListTools_unknown_transport_retrySafeRead");
+    assert_eq!(safe_read.disposition, "retrySafeRead");
+
+    let idempotent =
+        lean_tool_retry_case("retry_mcpCall_idempotent_transport_retryIdempotentToolCall");
+    assert_eq!(idempotent.disposition, "retryIdempotentToolCall");
+
+    for name in [
+        "retry_mcpCall_unknown_transport_doNotRetry",
+        "retry_mcpCall_nonIdempotent_transport_doNotRetry",
+        "retry_nativeCommand_idempotent_transport_doNotRetry",
+    ] {
+        let case = lean_tool_retry_case(name);
+        assert_eq!(case.disposition, "doNotRetry", "{name}");
     }
 }
 
