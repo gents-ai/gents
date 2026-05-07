@@ -8,6 +8,7 @@ use defra_agent::{ensure_runtime_schemas, watcher::AgentRequest};
 use serde::Deserialize;
 use tempfile::TempDir;
 
+pub mod conformance_consumers;
 pub mod fixtures;
 pub mod http_mock;
 pub mod interrupt;
