@@ -8,6 +8,17 @@ One-step shell state transitions and snapshot workflow advancement.
 
 /-! ## Transition function -/
 
+/-- Session selection clears blockers and stale awaiting workflows. An
+    awaiting workflow for the same session remains meaningful; an
+    awaiting workflow for a different session belongs to the previous
+    view and must not gate the newly selected conversation. -/
+def workflowAfterSelectSession
+    (sid : SessionId) : SubmissionWorkflow → SubmissionWorkflow
+  | .blocked _        => .idle
+  | .awaiting sid' req =>
+      if sid' = sid then .awaiting sid' req else .idle
+  | w                 => w
+
 /-- The only way a snapshot may advance the workflow: an `awaiting sid
     req` retires to `.idle` when the store carries an observation for
     `sid` whose tip request is `req`. All other workflow states are
@@ -42,11 +53,9 @@ def step
           workflow  := .idle }
   | .user (.selectSession sid) =>
       -- latch unconditionally; any blocked state clears so the user
-      -- can navigate away from it
-      let cleared : SubmissionWorkflow :=
-        match s.workflow with
-        | .blocked _ => .idle
-        | w          => w
+      -- can navigate away from it; stale awaiting workflows from the
+      -- previous session also clear so they cannot gate the new view
+      let cleared := workflowAfterSelectSession sid s.workflow
       { s with
           selection := { s.selection with session := some sid },
           workflow  := cleared }

@@ -1,7 +1,56 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { dirname, join, parse } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { ConversationSummary, DesktopSessionSnapshot } from "./types";
-import { projectChatShell } from "./chat-shell";
+import {
+  projectChatShell,
+  type ChatBlockedReason,
+  type ChatWorkflowState,
+  type TurnState,
+} from "./chat-shell";
+
+const CONTRACT_JSON_BEGIN = "---BEGIN DEFRA LEAN CONTRACT JSON---";
+const CONTRACT_JSON_END = "---END DEFRA LEAN CONTRACT JSON---";
+
+type LeanClientShellCase = {
+  name: string;
+  frontend_client_available: boolean;
+  frontend_selected_agent_did: number | null;
+  frontend_selected_session_id: number | null;
+  frontend_composer_non_empty: boolean;
+  frontend_sending: boolean;
+  frontend_session_present: boolean;
+  frontend_session_id: number | null;
+  frontend_session_latest_request_id: number | null;
+  frontend_session_turn_state: TurnState | null;
+  frontend_session_pending_request_id: number | null;
+  frontend_conversation_present: boolean;
+  frontend_conversation_session_id: number | null;
+  frontend_conversation_latest_request_id: number | null;
+  frontend_conversation_turn_state: TurnState | null;
+  frontend_local_workflow_kind: string;
+  frontend_local_workflow_session: number | null;
+  frontend_local_workflow_request: number | null;
+  frontend_local_workflow_turn_state: TurnState | null;
+  frontend_expected_workflow_kind: string;
+  frontend_expected_workflow_session: number | null;
+  frontend_expected_workflow_request: number | null;
+  frontend_expected_workflow_turn_state: TurnState | null;
+  frontend_expected_workflow_reason: ChatBlockedReason | null;
+  frontend_expected_send_status: "ready" | "disabled";
+  frontend_expected_send_blocked_reason: ChatBlockedReason | null;
+  frontend_expected_active_request_id: number | null;
+  frontend_expected_turn_state: TurnState | null;
+};
+
+type LeanContractSnapshot = {
+  client_shell_cases: LeanClientShellCase[];
+};
+
+let leanContractSnapshot: LeanContractSnapshot | null = null;
 
 function conversation(overrides: Partial<ConversationSummary> = {}): ConversationSummary {
   return {
@@ -40,7 +89,204 @@ function session(overrides: Partial<DesktopSessionSnapshot> = {}): DesktopSessio
   };
 }
 
+function loadLeanClientShellCases() {
+  if (!leanContractSnapshot) {
+    const proofsDir = join(repoRoot(), "crates/defra-agent/proofs");
+    const command = "lake env lean --run Proofs/Conformance/Contracts.lean";
+    const result = spawnSync(
+      "lake",
+      ["env", "lean", "--run", "Proofs/Conformance/Contracts.lean"],
+      {
+        cwd: proofsDir,
+        encoding: "utf8",
+      },
+    );
+
+    if (result.error) {
+      throw new Error(`failed to run ${command} in ${proofsDir}: ${result.error.message}`);
+    }
+    if (result.status !== 0) {
+      throw new Error(
+        `${command} failed in ${proofsDir}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+      );
+    }
+
+    const stdout = result.stdout.toString();
+    const begin = stdout.indexOf(CONTRACT_JSON_BEGIN);
+    const end = stdout.indexOf(CONTRACT_JSON_END);
+    if (begin < 0 || end < 0 || begin >= end) {
+      throw new Error(`${command} did not emit a valid ClientShell contract JSON sentinel block`);
+    }
+    leanContractSnapshot = JSON.parse(
+      stdout.slice(begin + CONTRACT_JSON_BEGIN.length, end).trim(),
+    ) as LeanContractSnapshot;
+  }
+
+  return leanContractSnapshot.client_shell_cases;
+}
+
+function repoRoot() {
+  let dir = dirname(fileURLToPath(import.meta.url));
+  const root = parse(dir).root;
+  while (dir !== root) {
+    if (existsSync(join(dir, "crates/defra-agent/proofs/lakefile.lean"))) {
+      return dir;
+    }
+    dir = dirname(dir);
+  }
+  throw new Error("could not find repository root from chat-shell.test.ts");
+}
+
+function agentDid(id: number | null) {
+  return id === null ? null : `did:defra:agent-${id}`;
+}
+
+function sessionId(id: number | null) {
+  return id === null ? null : `session-${id}`;
+}
+
+function requestId(id: number | null) {
+  return id === null ? null : `req-${id}`;
+}
+
+function sessionFromContract(contractCase: LeanClientShellCase) {
+  if (!contractCase.frontend_session_present) {
+    return null;
+  }
+  return session({
+    sessionId: sessionId(contractCase.frontend_session_id) ?? "session-missing",
+    agentDid: agentDid(contractCase.frontend_selected_agent_did),
+    latestRequestId: requestId(contractCase.frontend_session_latest_request_id),
+    turnState: contractCase.frontend_session_turn_state,
+    pendingTurn: contractCase.frontend_session_pending_request_id
+      ? {
+          requestId: requestId(contractCase.frontend_session_pending_request_id)!,
+          content: "contract prompt",
+          lifecycleState: "processing",
+          createdAt: "2026-04-21T12:01:00Z",
+        }
+      : null,
+  });
+}
+
+function conversationFromContract(contractCase: LeanClientShellCase) {
+  if (!contractCase.frontend_conversation_present) {
+    return null;
+  }
+  return conversation({
+    sessionId: sessionId(contractCase.frontend_conversation_session_id) ?? "session-missing",
+    latestRequestId: requestId(contractCase.frontend_conversation_latest_request_id),
+    turnState: contractCase.frontend_conversation_turn_state,
+  });
+}
+
+function localWorkflowFromContract(contractCase: LeanClientShellCase): ChatWorkflowState {
+  switch (contractCase.frontend_local_workflow_kind) {
+    case "ready":
+      return { kind: "ready" };
+    case "submittingRequest":
+      return {
+        kind: "submittingRequest",
+        agentDid: agentDid(contractCase.frontend_selected_agent_did) ?? "did:defra:agent-missing",
+        sessionId: sessionId(contractCase.frontend_local_workflow_session),
+      };
+    case "awaitingObservation":
+      return {
+        kind: "awaitingObservation",
+        sessionId: sessionId(contractCase.frontend_local_workflow_session) ?? "session-missing",
+        requestId: requestId(contractCase.frontend_local_workflow_request) ?? "req-missing",
+      };
+    case "blocked":
+      return {
+        kind: "blocked",
+        reason: contractCase.frontend_expected_workflow_reason ?? "clientOffline",
+      };
+    default:
+      throw new Error(
+        `unsupported Lean frontend workflow ${contractCase.frontend_local_workflow_kind}`,
+      );
+  }
+}
+
+function expectedWorkflowFromContract(contractCase: LeanClientShellCase) {
+  switch (contractCase.frontend_expected_workflow_kind) {
+    case "ready":
+      return { kind: "ready" };
+    case "submittingRequest":
+      return {
+        kind: "submittingRequest",
+        sessionId: sessionId(contractCase.frontend_expected_workflow_session),
+      };
+    case "awaitingObservation":
+      return {
+        kind: "awaitingObservation",
+        sessionId: sessionId(contractCase.frontend_expected_workflow_session),
+        requestId: requestId(contractCase.frontend_expected_workflow_request),
+      };
+    case "turnInProgress":
+      return {
+        kind: "turnInProgress",
+        sessionId: sessionId(contractCase.frontend_expected_workflow_session),
+        requestId: requestId(contractCase.frontend_expected_workflow_request),
+        turnState: contractCase.frontend_expected_workflow_turn_state,
+      };
+    case "blocked":
+      return {
+        kind: "blocked",
+        reason: contractCase.frontend_expected_workflow_reason,
+      };
+    default:
+      throw new Error(
+        `unsupported Lean expected workflow ${contractCase.frontend_expected_workflow_kind}`,
+      );
+  }
+}
+
+function compactWorkflow(workflow: ChatWorkflowState) {
+  return Object.fromEntries(
+    Object.entries(workflow).filter(
+      ([key, value]) => key !== "agentDid" && value !== undefined && value !== null,
+    ),
+  );
+}
+
 describe("projectChatShell", () => {
+  test("matches generated Lean ClientShell projection contracts", () => {
+    for (const contractCase of loadLeanClientShellCases()) {
+      const projection = projectChatShell({
+        clientAvailable: contractCase.frontend_client_available,
+        selectedAgentDid: agentDid(contractCase.frontend_selected_agent_did),
+        selectedSessionId: sessionId(contractCase.frontend_selected_session_id),
+        draft: contractCase.frontend_composer_non_empty ? "follow up" : "",
+        sending: contractCase.frontend_sending,
+        selectedConversation: conversationFromContract(contractCase),
+        session: sessionFromContract(contractCase),
+        localWorkflow: localWorkflowFromContract(contractCase),
+      });
+
+      expect(compactWorkflow(projection.workflow)).toEqual(
+        expectedWorkflowFromContract(contractCase),
+      );
+      expect(projection.activeRequestId).toBe(
+        requestId(contractCase.frontend_expected_active_request_id),
+      );
+      expect(projection.turnState).toBe(
+        contractCase.frontend_expected_turn_state,
+      );
+
+      if (contractCase.frontend_expected_send_status === "ready") {
+        expect(projection.sendStatus).toEqual({ kind: "ready" });
+      } else {
+        expect(projection.sendStatus.kind).toBe("disabled");
+        if (projection.sendStatus.kind === "disabled") {
+          expect(projection.sendStatus.reason).toBe(
+            contractCase.frontend_expected_send_blocked_reason,
+          );
+        }
+      }
+    }
+  });
+
   test("blocks follow up while turn is streaming", () => {
     const projection = projectChatShell({
       clientAvailable: true,

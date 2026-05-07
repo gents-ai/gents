@@ -121,7 +121,8 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Conformance/Deviations.lean` | Active unresolved Rust/spec mismatches; currently empty |
 | `Proofs/Conformance/SchedulerConformance.lean` | Scheduler-specific conformance notes |
 | `Proofs/Conformance/CoverageLedger.lean` | Checked ledger mapping every emitted conformance domain to a Rust consumer, accepted boundary, or accepted follow-up |
-| `Proofs/Conformance/Contracts.lean` | Test-time JSON extraction surface for Rust vocabularies, finite state counts, transition tables, legal/illegal transition pairs, witness rows, and the coverage ledger |
+| `Proofs/Conformance/Contracts.lean` | Test-time JSON extraction surface for Rust vocabularies, finite state counts, transition tables, legal/illegal transition pairs, witness rows, ClientShell cases, and the coverage ledger |
+| `Proofs/Conformance/ClientShell/Contracts.lean` | Generated finite ClientShell step/projection cases for frontend and desktop shell tests |
 | `Proofs/Conformance/Triggers.lean` | Barrel for trigger lifecycle/materialization conformance |
 
 Semantic submodules:
@@ -173,11 +174,13 @@ currently covers:
 - `SessionRecovery`
 - `InferenceCall`
 
-`RuntimeReconcile` and `SessionRecovery` also emit deterministic witness rows.
-Those rows keep the JSON small while pinning generation publication/router
-observation/request admission, and session retry guards for deadline closure,
-retry budget, latest-request status, duplicate new request ids, and identity
-preservation.
+`RuntimeReconcile`, `SessionRecovery`, and `ClientShell` also emit deterministic
+witness rows. Those rows keep the JSON small while pinning generation
+publication/router observation/request admission, session retry guards for
+deadline closure, retry budget, latest-request status, duplicate new request
+ids, and identity preservation, and shell projection behavior for selection
+preservation, matching request observation, stale workflow cleanup, transport
+no-op, submit gates, and terminal follow-up allowance.
 
 It also emits the `ToolRetryDisposition` vocabulary from
 `Proofs.ToolExecution` so Rust tests can reject accidental MCP `call_tool`
@@ -203,7 +206,7 @@ metadata source, retry budget, and replay/idempotency assumptions, then add a
 Rust contract that ties advertised MCP metadata to the widened retry rule and
 replace the `follow_up_hook` ledger entry with the executable contract domain.
 
-Future executable `ClientShell` or `ToolExecution` contracts should extend
+Future executable `ToolExecution` or other contracts should extend
 `Proofs.Conformance.Contracts` and add matching coverage-ledger entries in the
 same PR. If the runtime side is intentionally not executable yet, the entry must
 point to `Proofs.Conformance.Boundaries` or to an accepted follow-up rather than
@@ -513,8 +516,12 @@ desktop-style multi-session shell:
 - follow-up submission safety is independent from transport health
 - an awaiting submission only retires after the matching tip is observed
 
-This is the formal guard against render-time "repair" logic corrupting local UI
-state.
+`Proofs/Conformance/ClientShell/Contracts.lean` turns those properties into
+finite executable cases emitted through `Proofs.Conformance.Contracts`. The
+frontend `projectChatShell` test consumes the generated projection fields, and
+desktop Rust snapshot tests consume the generated observed/preferred request
+fields. This is the formal guard against render-time "repair" logic corrupting
+local UI state.
 
 ## Executable Model
 

@@ -6,6 +6,7 @@ import Proofs.SessionRecovery
 import Proofs.InferenceCall
 import Proofs.Conformance.ContractTypes
 import Proofs.Conformance.Triggers.Contracts
+import Proofs.Conformance.ClientShell.Contracts
 import Proofs.RuntimeReconcile
 import Proofs.Conformance.ContractCases
 import Proofs.ToolExecution
@@ -427,6 +428,10 @@ def snapshotJson : String :=
       ++ toString Conformance.TriggerContracts.triggerDispatchCaseCount ++ ","
     ++ "\"trigger_dispatch_cases\":"
       ++ Conformance.TriggerContracts.triggerDispatchCasesJson ++ ","
+    ++ "\"client_shell_case_count\":"
+      ++ toString Conformance.ClientShellContracts.clientShellCaseCount ++ ","
+    ++ "\"client_shell_cases\":"
+      ++ Conformance.ClientShellContracts.clientShellCasesJson ++ ","
     ++ "\"runtime_reconcile_cases\":"
       ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
     ++ "\"session_recovery_cases\":"

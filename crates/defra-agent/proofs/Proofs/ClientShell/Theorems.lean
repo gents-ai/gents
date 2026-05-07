@@ -192,7 +192,15 @@ theorem select_session_clears_blocker
     (sid : SessionId) (r : BlockedReason) (h : TransportHealth)
     (h_wf : s.workflow = .blocked r) :
     (step s (.user (.selectSession sid)) store h ctx).workflow = .idle := by
-  show
-    (match s.workflow with | .blocked _ => (.idle : SubmissionWorkflow) | w => w)
-      = .idle
-  rw [h_wf]
+  simp [step, workflowAfterSelectSession, h_wf]
+
+/-- Selecting a different session clears an awaiting workflow tied to
+    the previous session. This is the Lean-side contract for the
+    frontend projection's stale-workflow-after-switch behavior. -/
+theorem select_session_clears_stale_awaiting
+    (s : ShellState) (store : LocalStore) (ctx : SubmitContext)
+    (oldSid newSid : SessionId) (req : RequestId) (h : TransportHealth)
+    (h_wf : s.workflow = .awaiting oldSid req)
+    (h_ne : oldSid ≠ newSid) :
+    (step s (.user (.selectSession newSid)) store h ctx).workflow = .idle := by
+  simp [step, workflowAfterSelectSession, h_wf, h_ne]

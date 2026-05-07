@@ -11,8 +11,8 @@ mod support;
 
 use lean_vocab_test::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
-    assert_state_machine_contract_is_complete, lean_contract_snapshot, lean_runtime_reconcile_case,
-    lean_session_recovery_case, lean_vocabulary_values,
+    assert_state_machine_contract_is_complete, lean_client_shell_case, lean_contract_snapshot,
+    lean_runtime_reconcile_case, lean_session_recovery_case, lean_vocabulary_values,
 };
 use support::snapshots::{
     fetch_conversation_snapshot, fetch_request_lineage_snapshot,
@@ -112,6 +112,11 @@ fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 6);
     assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 10);
+    assert_eq!(
+        lean_contract_snapshot().client_shell_case_count,
+        lean_contract_snapshot().client_shell_cases.len()
+    );
+    assert_eq!(lean_contract_snapshot().client_shell_cases.len(), 15);
 }
 
 #[test]
@@ -145,6 +150,14 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "SessionRecoveryCases".to_string(),
         ));
     }
+    assert_eq!(
+        snapshot.client_shell_case_count,
+        snapshot.client_shell_cases.len(),
+        "Lean ClientShell case count drifted from emitted cases"
+    );
+    if !snapshot.client_shell_cases.is_empty() {
+        emitted.insert(("client_shell_cases".to_string(), "ClientShellCases".to_string()));
+    }
     for hook in &snapshot.follow_up_hooks {
         emitted.insert(("follow_up_hook".to_string(), hook.clone()));
     }
@@ -156,6 +169,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "trigger_cases",
         "runtime_cases",
         "session_recovery_cases",
+        "client_shell_cases",
         "follow_up_hook",
     ];
     let mut ledger = BTreeSet::new();
@@ -206,6 +220,80 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted,
         ledger
     );
+}
+
+#[test]
+fn generated_client_shell_cases_cover_shell_projection_contracts() {
+    let snapshot = lean_client_shell_case("snapshot_preserves_selection");
+    assert_eq!(snapshot.input.as_str(), "snapshot");
+    assert!(snapshot.selection_preserved);
+    assert_eq!(
+        snapshot.pre_selection_session,
+        snapshot.post_selection_session
+    );
+
+    let advanced = lean_client_shell_case("snapshot_workflow_advances_on_matching_request");
+    assert!(advanced.workflow_advanced);
+    assert_eq!(advanced.pre_workflow_kind.as_str(), "awaiting");
+    assert_eq!(advanced.post_workflow_kind.as_str(), "idle");
+    assert_eq!(advanced.pre_workflow_request, Some(101));
+    assert_eq!(advanced.post_workflow_request, None);
+
+    let stale = lean_client_shell_case("awaiting_stale_request_observation");
+    assert!(!stale.workflow_advanced);
+    assert_eq!(stale.post_workflow_kind.as_str(), "awaiting");
+    assert_eq!(
+        stale.frontend_expected_send_blocked_reason.as_deref(),
+        Some("waitingForRequestObservation")
+    );
+
+    let matching = lean_client_shell_case("awaiting_matching_request_observation");
+    assert_eq!(
+        matching.frontend_expected_workflow_kind.as_str(),
+        "turnInProgress"
+    );
+    assert_eq!(
+        matching.frontend_expected_send_blocked_reason.as_deref(),
+        Some("awaitingTurnTerminality")
+    );
+
+    let switched = lean_client_shell_case("stale_workflow_after_session_switch");
+    assert!(switched.workflow_advanced);
+    assert_eq!(switched.pre_selection_session, Some(1));
+    assert_eq!(switched.post_selection_session, Some(2));
+    assert_eq!(switched.post_workflow_kind.as_str(), "idle");
+    assert_eq!(switched.frontend_expected_send_status.as_str(), "ready");
+
+    let transport = lean_client_shell_case("transport_noop");
+    assert!(transport.transport_noop);
+    assert!(transport.selection_preserved);
+    assert!(!transport.workflow_advanced);
+
+    for (name, reason) in [
+        ("blocked_submit_client_offline", "clientOffline"),
+        ("blocked_submit_agent_not_selected", "agentNotSelected"),
+        ("blocked_submit_composer_empty", "composerEmpty"),
+        ("blocked_submit_mutation_in_flight", "mutationInFlight"),
+        ("blocked_submit_awaiting_observation", "awaitingObservation"),
+        ("blocked_submit_session_absent", "sessionAbsent"),
+        ("blocked_submit_nonterminal_turn", "awaitingTurnTerminality"),
+    ] {
+        let case = lean_client_shell_case(name);
+        assert!(!case.can_submit_before, "{name} should gate submit");
+        assert_eq!(case.send_decision.as_str(), "blocked");
+        assert_eq!(case.send_blocked_reason.as_deref(), Some(reason));
+        assert_eq!(case.frontend_expected_send_status.as_str(), "disabled");
+    }
+
+    let terminal = lean_client_shell_case("terminal_follow_up_allowed");
+    assert!(terminal.can_submit_before);
+    assert_eq!(terminal.send_decision.as_str(), "ready");
+    assert_eq!(terminal.frontend_expected_send_status.as_str(), "ready");
+
+    let no_summary = lean_client_shell_case("terminal_follow_up_session_snapshot_without_summary");
+    assert!(no_summary.can_submit_before);
+    assert_eq!(no_summary.frontend_expected_send_status.as_str(), "ready");
+    assert_eq!(no_summary.frontend_expected_active_request_id, Some(101));
 }
 
 #[test]

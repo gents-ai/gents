@@ -29,6 +29,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) state_machines: Vec<LeanStateMachineContract>,
     pub(crate) trigger_dispatch_case_count: usize,
     pub(crate) trigger_dispatch_cases: Vec<LeanTriggerDispatchCase>,
+    pub(crate) client_shell_case_count: usize,
+    pub(crate) client_shell_cases: Vec<LeanClientShellCase>,
     pub(crate) runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
     pub(crate) session_recovery_cases: Vec<LeanSessionRecoveryCase>,
     pub(crate) follow_up_hooks: Vec<String>,
@@ -123,6 +125,38 @@ pub(crate) struct LeanRuntimeReconcileCase {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct LeanClientShellCase {
+    pub(crate) name: String,
+    pub(crate) property: String,
+    pub(crate) input: String,
+    pub(crate) pre_selection_session: Option<usize>,
+    pub(crate) post_selection_session: Option<usize>,
+    pub(crate) pre_workflow_kind: String,
+    pub(crate) pre_workflow_request: Option<usize>,
+    pub(crate) post_workflow_kind: String,
+    pub(crate) post_workflow_request: Option<usize>,
+    pub(crate) selection_preserved: bool,
+    pub(crate) workflow_advanced: bool,
+    pub(crate) transport_noop: bool,
+    pub(crate) can_submit_before: bool,
+    pub(crate) can_submit_after: bool,
+    pub(crate) send_decision: String,
+    pub(crate) send_blocked_reason: Option<String>,
+    pub(crate) frontend_expected_workflow_kind: String,
+    pub(crate) frontend_expected_send_status: String,
+    pub(crate) frontend_expected_send_blocked_reason: Option<String>,
+    pub(crate) frontend_expected_active_request_id: Option<usize>,
+    pub(crate) frontend_conversation_present: bool,
+    pub(crate) desktop_selected_session_id: Option<usize>,
+    pub(crate) desktop_preferred_request_id: Option<usize>,
+    pub(crate) desktop_observed_request_id: Option<usize>,
+    pub(crate) desktop_observed_turn_state: Option<String>,
+    pub(crate) desktop_expected_latest_request_id: Option<usize>,
+    pub(crate) desktop_expected_turn_state: Option<String>,
+    pub(crate) desktop_expect_pending_turn: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct LeanSessionRecoveryCase {
     pub(crate) name: String,
     pub(crate) action: String,
@@ -209,6 +243,14 @@ pub(crate) fn lean_session_recovery_case(name: &str) -> &'static LeanSessionReco
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean session-recovery case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_client_shell_case(name: &str) -> &'static LeanClientShellCase {
+    lean_contract_snapshot()
+        .client_shell_cases
+        .iter()
+        .find(|case| case.name == name)
+        .unwrap_or_else(|| panic!("Lean ClientShell case {name:?} was not emitted"))
 }
 
 pub(crate) fn lean_vocabulary_values(domain: &str) -> Vec<&'static str> {
@@ -445,6 +487,12 @@ fn proofs_dir() -> PathBuf {
     let direct = manifest_dir.join("proofs");
     if direct.exists() {
         return direct;
+    }
+    for ancestor in manifest_dir.ancestors() {
+        let candidate = ancestor.join("crates/defra-agent/proofs");
+        if candidate.exists() {
+            return candidate;
+        }
     }
     manifest_dir
         .parent()
