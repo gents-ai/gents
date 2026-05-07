@@ -294,6 +294,8 @@ pub(crate) struct LeanCommandPolicyCase {
     pub(crate) matched_prefix: Option<Vec<String>>,
     pub(crate) denied_argv: Option<Vec<String>>,
     pub(crate) denied_command: Option<String>,
+    pub(crate) denied_argument: Option<String>,
+    pub(crate) denied_subcommand: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

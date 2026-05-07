@@ -98,7 +98,46 @@ def envCase
   , expected := filteredEnv (envInput envKey inputPresent) envKey
   }
 
-def commandPolicyCases : List CommandPolicyCase :=
+def defaultReadOnlyAllowlist : List String :=
+  [ "pwd"
+  , "ls"
+  , "find"
+  , "cat"
+  , "head"
+  , "tail"
+  , "sed"
+  , "grep"
+  , "rg"
+  , "wc"
+  , "stat"
+  , "file"
+  , "git"
+  , "date"
+  , "hostname"
+  , "uptime"
+  , "df"
+  , "vm_stat"
+  , "ps"
+  , "lsof"
+  , "curl"
+  , "launchctl"
+  , "tailscale"
+  , "sudo"
+  ]
+
+def readOnlySafetyPolicy : Policy :=
+  commandPolicy .readOnly [] [] .inherit defaultReadOnlyAllowlist
+
+def readOnlySafetyCase
+    (name command lookupCommand : String)
+    (args : List String) : CommandPolicyCase :=
+  validationCase
+    name
+    "read_only_argv_safety"
+    readOnlySafetyPolicy
+    (commandRequest command lookupCommand args)
+
+def commandPolicyOrderingCases : List CommandPolicyCase :=
   [ validationCase
       "forbidden_prefix_wins_over_allowed_prefix_order"
       "forbidden_prefix"
@@ -165,6 +204,187 @@ def commandPolicyCases : List CommandPolicyCase :=
       (commandPolicy .workspaceWrite [] [] .disabled [])
       (commandRequest "printf" "printf" ["ok"])
   ]
+
+def readOnlySafetyCases : List CommandPolicyCase :=
+  [ readOnlySafetyCase
+      "read_only_git_status_allows"
+      "git"
+      "git"
+      ["status", "--short"]
+  , readOnlySafetyCase
+      "read_only_git_branch_list_allows"
+      "git"
+      "git"
+      ["branch", "--list", "--format=%(refname:short)"]
+  , readOnlySafetyCase
+      "read_only_sed_print_allows"
+      "sed"
+      "sed"
+      ["-n", "1,10p", "README.md"]
+  , readOnlySafetyCase
+      "read_only_find_type_file_allows"
+      "find"
+      "find"
+      [".", "-maxdepth", "2", "-type", "f"]
+  , readOnlySafetyCase
+      "read_only_rg_search_allows"
+      "rg"
+      "rg"
+      ["-n", "needle", "."]
+  , readOnlySafetyCase
+      "read_only_curl_http_get_allows"
+      "curl"
+      "curl"
+      ["-fsS", "https://example.com/metrics"]
+  , readOnlySafetyCase
+      "read_only_launchctl_print_allows"
+      "launchctl"
+      "launchctl"
+      ["print", "system/com.example.agent"]
+  , readOnlySafetyCase
+      "read_only_tailscale_status_allows"
+      "tailscale"
+      "tailscale"
+      ["status"]
+  , readOnlySafetyCase
+      "read_only_tailscale_netcheck_allows"
+      "tailscale"
+      "tailscale"
+      ["netcheck"]
+  , readOnlySafetyCase
+      "read_only_sudo_launchctl_print_allows"
+      "sudo"
+      "sudo"
+      ["/bin/launchctl", "print", "system/com.example.agent"]
+  , readOnlySafetyCase
+      "read_only_git_global_config_denies"
+      "git"
+      "git"
+      ["-c", "core.pager=cat", "status"]
+  , readOnlySafetyCase
+      "read_only_git_config_env_denies"
+      "git"
+      "git"
+      ["--config-env=GIT_CONFIG_GLOBAL=ENV_FILE", "status"]
+  , readOnlySafetyCase
+      "read_only_git_output_flag_denies"
+      "git"
+      "git"
+      ["diff", "--output=/tmp/defra-agent-diff.txt"]
+  , readOnlySafetyCase
+      "read_only_git_exec_flag_denies"
+      "git"
+      "git"
+      ["log", "--exec=touch /tmp/defra-agent-nope"]
+  , readOnlySafetyCase
+      "read_only_git_commit_subcommand_denies"
+      "git"
+      "git"
+      ["commit", "-m", "nope"]
+  , readOnlySafetyCase
+      "read_only_git_branch_delete_denies"
+      "git"
+      "git"
+      ["branch", "-D", "main"]
+  , readOnlySafetyCase
+      "read_only_sed_in_place_short_denies"
+      "sed"
+      "sed"
+      ["-i", "s/a/b/g", "README.md"]
+  , readOnlySafetyCase
+      "read_only_sed_in_place_long_denies"
+      "sed"
+      "sed"
+      ["--in-place", "s/a/b/g", "README.md"]
+  , readOnlySafetyCase
+      "read_only_find_delete_denies"
+      "find"
+      "find"
+      [".", "-delete"]
+  , readOnlySafetyCase
+      "read_only_find_exec_denies"
+      "find"
+      "find"
+      [".", "-exec", "rm", "{}", ";"]
+  , readOnlySafetyCase
+      "read_only_find_fprint_denies"
+      "find"
+      "find"
+      [".", "-fprint0", "out"]
+  , readOnlySafetyCase
+      "read_only_rg_pre_denies"
+      "rg"
+      "rg"
+      ["--pre", "touch /tmp/defra-agent-nope", "needle"]
+  , readOnlySafetyCase
+      "read_only_rg_search_zip_denies"
+      "rg"
+      "rg"
+      ["--search-zip", "needle"]
+  , readOnlySafetyCase
+      "read_only_curl_post_denies"
+      "curl"
+      "curl"
+      ["-X", "POST", "https://example.com/graphql"]
+  , readOnlySafetyCase
+      "read_only_curl_data_denies"
+      "curl"
+      "curl"
+      ["--data={}", "https://example.com/graphql"]
+  , readOnlySafetyCase
+      "read_only_curl_output_denies"
+      "curl"
+      "curl"
+      ["-o", "/tmp/defra-agent-out", "https://example.com/metrics"]
+  , readOnlySafetyCase
+      "read_only_curl_upload_denies"
+      "curl"
+      "curl"
+      ["-T", "payload.json", "https://example.com/upload"]
+  , readOnlySafetyCase
+      "read_only_curl_config_denies"
+      "curl"
+      "curl"
+      ["-K", "curlrc", "https://example.com/metrics"]
+  , readOnlySafetyCase
+      "read_only_curl_missing_http_url_denies"
+      "curl"
+      "curl"
+      ["-fsS", "example.com/metrics"]
+  , readOnlySafetyCase
+      "read_only_launchctl_bootout_denies"
+      "launchctl"
+      "launchctl"
+      ["bootout", "system/com.example.agent"]
+  , readOnlySafetyCase
+      "read_only_launchctl_missing_subcommand_denies"
+      "launchctl"
+      "launchctl"
+      []
+  , readOnlySafetyCase
+      "read_only_tailscale_up_denies"
+      "tailscale"
+      "tailscale"
+      ["up"]
+  , readOnlySafetyCase
+      "read_only_sudo_launchctl_wrong_path_denies"
+      "sudo"
+      "sudo"
+      ["/usr/bin/launchctl", "print", "system/com.example.agent"]
+  , readOnlySafetyCase
+      "read_only_sudo_rm_denies"
+      "sudo"
+      "sudo"
+      ["rm", "-rf", "/tmp/defra-agent-nope"]
+  , readOnlySafetyCase
+      "read_only_sudo_missing_command_denies"
+      "sudo"
+      "sudo"
+      []
+  ]
+
+def commandPolicyCases : List CommandPolicyCase :=
+  commandPolicyOrderingCases ++ readOnlySafetyCases
 
 def commandSandboxCases : List CommandSandboxCase :=
   [ sandboxCase
