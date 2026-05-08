@@ -3,23 +3,7 @@ use rig::completion::message::{AssistantContent, Message};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolFailureClass {
-    ServiceUnavailable,
-    ToolNotFound,
-    ToolNotAllowed,
-    ResourceNotFound,
-    ServiceSchemaDrift,
-    InvalidToolArguments,
-    InvalidJsonArguments,
-    ArgumentsNotObject,
-    ToolRuntimeError,
-    ToolTimeout,
-    NonzeroCommandExit,
-    DeadlineOrInferenceFailure,
-    Unclassified,
-}
+pub use crate::tool_call_lifecycle::FailureClass as ToolFailureClass;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -153,7 +137,7 @@ pub fn analyze_tool_call(
     let structured_tool_error = structured_tool_error_from_result(result);
     if let Some(error) = &structured_tool_error {
         analysis.tool_failure_class = Some(error.failure_class);
-        if error.failure_class == ToolFailureClass::InvalidToolArguments {
+        if error.failure_class == ToolFailureClass::ArgumentInvalid {
             analysis.schema_validation_result = SchemaValidationResult::Failed;
         }
         if let (Some(path), Some(message)) = (&error.path, &error.message) {
@@ -180,10 +164,10 @@ pub fn analyze_tool_call(
             .as_ref()
             .is_some_and(|output| !output.ok)
     {
-        analysis.tool_failure_class = Some(ToolFailureClass::ToolRuntimeError);
+        analysis.tool_failure_class = Some(ToolFailureClass::ToolReturnedError);
     }
     if analysis.tool_failure_class.is_none() && !completed {
-        analysis.tool_failure_class = Some(ToolFailureClass::Unclassified);
+        analysis.tool_failure_class = Some(ToolFailureClass::ToolReturnedError);
     }
 
     analysis.tool_result_ok = completed && analysis.tool_failure_class.is_none();
@@ -276,7 +260,7 @@ fn analyze_arguments(tool_name: &str, raw_args: &str) -> ToolCallTraceAnalysis {
         Err(error) => {
             analysis.argument_parse_result = ArgumentParseResult::InvalidJson;
             analysis.schema_validation_result = SchemaValidationResult::Failed;
-            analysis.tool_failure_class = Some(ToolFailureClass::InvalidJsonArguments);
+            analysis.tool_failure_class = Some(ToolFailureClass::ArgumentInvalid);
             analysis.validation_errors.push(TraceValidationError {
                 code: "invalid_json_arguments".to_string(),
                 path: "/".to_string(),
@@ -290,7 +274,7 @@ fn analyze_arguments(tool_name: &str, raw_args: &str) -> ToolCallTraceAnalysis {
     let Some(object) = parsed.as_object() else {
         analysis.argument_parse_result = ArgumentParseResult::ArgumentsNotObject;
         analysis.schema_validation_result = SchemaValidationResult::Failed;
-        analysis.tool_failure_class = Some(ToolFailureClass::ArgumentsNotObject);
+        analysis.tool_failure_class = Some(ToolFailureClass::ArgumentInvalid);
         analysis.validation_errors.push(TraceValidationError {
             code: "arguments_not_object".to_string(),
             path: "/".to_string(),
@@ -340,7 +324,7 @@ fn apply_call_tool_argument_analysis(
             Ok(parsed) => {
                 analysis.argument_parse_result = ArgumentParseResult::ArgumentsNotObject;
                 analysis.schema_validation_result = SchemaValidationResult::Failed;
-                analysis.tool_failure_class = Some(ToolFailureClass::ArgumentsNotObject);
+                analysis.tool_failure_class = Some(ToolFailureClass::ArgumentInvalid);
                 analysis.final_arguments_sent = Some(json!({ "input": parsed }));
                 analysis.validation_errors.push(TraceValidationError {
                     code: "arguments_not_object".to_string(),
@@ -352,7 +336,7 @@ fn apply_call_tool_argument_analysis(
             Err(error) => {
                 analysis.argument_parse_result = ArgumentParseResult::InvalidJson;
                 analysis.schema_validation_result = SchemaValidationResult::Failed;
-                analysis.tool_failure_class = Some(ToolFailureClass::InvalidJsonArguments);
+                analysis.tool_failure_class = Some(ToolFailureClass::ArgumentInvalid);
                 analysis.final_arguments_sent = Some(json!({ "input": raw }));
                 analysis.validation_errors.push(TraceValidationError {
                     code: "invalid_json_arguments".to_string(),
@@ -365,7 +349,7 @@ fn apply_call_tool_argument_analysis(
         Value::Null => {
             analysis.argument_parse_result = ArgumentParseResult::ArgumentsNotObject;
             analysis.schema_validation_result = SchemaValidationResult::Failed;
-            analysis.tool_failure_class = Some(ToolFailureClass::ArgumentsNotObject);
+            analysis.tool_failure_class = Some(ToolFailureClass::ArgumentInvalid);
             analysis.final_arguments_sent = None;
             analysis.validation_errors.push(TraceValidationError {
                 code: "arguments_not_object".to_string(),
@@ -377,7 +361,7 @@ fn apply_call_tool_argument_analysis(
         other => {
             analysis.argument_parse_result = ArgumentParseResult::ArgumentsNotObject;
             analysis.schema_validation_result = SchemaValidationResult::Failed;
-            analysis.tool_failure_class = Some(ToolFailureClass::ArgumentsNotObject);
+            analysis.tool_failure_class = Some(ToolFailureClass::ArgumentInvalid);
             analysis.final_arguments_sent = Some(json!({ "input": other }));
             analysis.validation_errors.push(TraceValidationError {
                 code: "arguments_not_object".to_string(),
@@ -515,14 +499,14 @@ fn native_tool_output_object(
 
 fn native_tool_failure_class(output: &NativeToolOutputTrace) -> Option<ToolFailureClass> {
     if output.timed_out == Some(true) || output.status.as_deref() == Some("timeout") {
-        return Some(ToolFailureClass::ToolTimeout);
+        return Some(ToolFailureClass::External);
     }
     if output.exit_code.is_some_and(|code| code != 0)
         || output.status.as_deref() == Some("exit_nonzero")
     {
-        return Some(ToolFailureClass::NonzeroCommandExit);
+        return Some(ToolFailureClass::ToolReturnedError);
     }
-    (!output.ok).then_some(ToolFailureClass::ToolRuntimeError)
+    (!output.ok).then_some(ToolFailureClass::ToolReturnedError)
 }
 
 fn is_native_structured_output_tool(tool_name: &str) -> bool {
@@ -559,25 +543,33 @@ fn string_array_field(object: &serde_json::Map<String, Value>, field: &str) -> O
 }
 
 fn failure_class_from_str(raw: &str) -> Option<ToolFailureClass> {
-    serde_json::from_value(Value::String(raw.to_string())).ok()
+    // Accept both new camelCase persisted vocab and legacy snake_case strings
+    // emitted by older MCP tool envelopes.
+    match raw {
+        // New canonical camelCase vocab (from FailureClass::as_str / serde).
+        "argumentInvalid" => Some(ToolFailureClass::ArgumentInvalid),
+        "serviceUnavailable" => Some(ToolFailureClass::ServiceUnavailable),
+        "transport" => Some(ToolFailureClass::Transport),
+        "toolReturnedError" => Some(ToolFailureClass::ToolReturnedError),
+        "external" => Some(ToolFailureClass::External),
+        // Legacy snake_case strings — rebucketed to 5-variant spec.
+        "service_unavailable" | "tool_not_found" | "tool_not_allowed"
+        | "resource_not_found" | "service_schema_drift" => {
+            Some(ToolFailureClass::ServiceUnavailable)
+        }
+        "invalid_tool_arguments" | "invalid_json_arguments" | "arguments_not_object" => {
+            Some(ToolFailureClass::ArgumentInvalid)
+        }
+        "tool_runtime_error" | "nonzero_command_exit" | "unclassified" => {
+            Some(ToolFailureClass::ToolReturnedError)
+        }
+        "tool_timeout" | "deadline_or_inference_failure" => Some(ToolFailureClass::External),
+        _ => None,
+    }
 }
 
 fn failure_class_code(failure_class: ToolFailureClass) -> &'static str {
-    match failure_class {
-        ToolFailureClass::ServiceUnavailable => "service_unavailable",
-        ToolFailureClass::ToolNotFound => "tool_not_found",
-        ToolFailureClass::ToolNotAllowed => "tool_not_allowed",
-        ToolFailureClass::ResourceNotFound => "resource_not_found",
-        ToolFailureClass::ServiceSchemaDrift => "service_schema_drift",
-        ToolFailureClass::InvalidToolArguments => "invalid_tool_arguments",
-        ToolFailureClass::InvalidJsonArguments => "invalid_json_arguments",
-        ToolFailureClass::ArgumentsNotObject => "arguments_not_object",
-        ToolFailureClass::ToolRuntimeError => "tool_runtime_error",
-        ToolFailureClass::ToolTimeout => "tool_timeout",
-        ToolFailureClass::NonzeroCommandExit => "nonzero_command_exit",
-        ToolFailureClass::DeadlineOrInferenceFailure => "deadline_or_inference_failure",
-        ToolFailureClass::Unclassified => "unclassified",
-    }
+    failure_class.as_str()
 }
 
 fn classify_result_text(result: &str) -> Option<ToolFailureClass> {
@@ -588,34 +580,34 @@ fn classify_result_text(result: &str) -> Option<ToolFailureClass> {
 
     let lower = trimmed.to_ascii_lowercase();
     if has_nonzero_exit_code(trimmed) {
-        return Some(ToolFailureClass::NonzeroCommandExit);
+        return Some(ToolFailureClass::ToolReturnedError);
     }
     if looks_like_service_unavailable(&lower) {
         return Some(ToolFailureClass::ServiceUnavailable);
     }
     if looks_like_invalid_tool_arguments(&lower) {
-        return Some(ToolFailureClass::InvalidToolArguments);
+        return Some(ToolFailureClass::ArgumentInvalid);
     }
     if looks_like_service_schema_drift(&lower) {
-        return Some(ToolFailureClass::ServiceSchemaDrift);
+        return Some(ToolFailureClass::ServiceUnavailable);
     }
     if looks_like_resource_not_found(&lower) {
-        return Some(ToolFailureClass::ResourceNotFound);
+        return Some(ToolFailureClass::ServiceUnavailable);
     }
     if looks_like_tool_not_found(&lower) {
-        return Some(ToolFailureClass::ToolNotFound);
+        return Some(ToolFailureClass::ServiceUnavailable);
     }
     if looks_like_deadline_or_inference_failure(&lower) {
-        return Some(ToolFailureClass::DeadlineOrInferenceFailure);
+        return Some(ToolFailureClass::External);
     }
     if looks_like_tool_timeout(&lower) {
-        return Some(ToolFailureClass::ToolTimeout);
+        return Some(ToolFailureClass::External);
     }
     if looks_like_opaque_tool_error(&lower) {
-        return Some(ToolFailureClass::Unclassified);
+        return Some(ToolFailureClass::ToolReturnedError);
     }
     if looks_like_tool_runtime_error(&lower) {
-        return Some(ToolFailureClass::ToolRuntimeError);
+        return Some(ToolFailureClass::ToolReturnedError);
     }
 
     None
@@ -627,7 +619,7 @@ fn classify_request_failure_text(text: Option<&str>) -> Option<ToolFailureClass>
         return None;
     }
     if looks_like_deadline_or_inference_failure(&lower) {
-        return Some(ToolFailureClass::DeadlineOrInferenceFailure);
+        return Some(ToolFailureClass::External);
     }
     None
 }
@@ -721,18 +713,15 @@ fn looks_like_tool_runtime_error(lower: &str) -> bool {
 
 fn retryable_for_failure_class(failure_class: ToolFailureClass) -> Option<bool> {
     match failure_class {
+        // ServiceUnavailable and External are transient; ArgumentInvalid is a
+        // model-fixable error so we let the request retry.
         ToolFailureClass::ServiceUnavailable
-        | ToolFailureClass::ToolTimeout
-        | ToolFailureClass::DeadlineOrInferenceFailure => Some(true),
-        ToolFailureClass::InvalidToolArguments
-        | ToolFailureClass::InvalidJsonArguments
-        | ToolFailureClass::ArgumentsNotObject
-        | ToolFailureClass::ToolNotFound => Some(true),
-        ToolFailureClass::ToolNotAllowed
-        | ToolFailureClass::ResourceNotFound
-        | ToolFailureClass::ServiceSchemaDrift
-        | ToolFailureClass::NonzeroCommandExit => Some(false),
-        ToolFailureClass::ToolRuntimeError | ToolFailureClass::Unclassified => None,
+        | ToolFailureClass::External
+        | ToolFailureClass::ArgumentInvalid => Some(true),
+        // Transport errors are retriable by definition.
+        ToolFailureClass::Transport => Some(true),
+        // ToolReturnedError is non-retriable at the tool-call level.
+        ToolFailureClass::ToolReturnedError => Some(false),
     }
 }
 
@@ -796,7 +785,7 @@ mod tests {
         assert!(!analysis.tool_result_ok);
         assert_eq!(
             analysis.tool_failure_class,
-            Some(ToolFailureClass::NonzeroCommandExit)
+            Some(ToolFailureClass::ToolReturnedError)
         );
         assert_eq!(
             analysis
@@ -864,7 +853,7 @@ mod tests {
         assert!(!analysis.tool_result_ok);
         assert_eq!(
             analysis.tool_failure_class,
-            Some(ToolFailureClass::NonzeroCommandExit)
+            Some(ToolFailureClass::ToolReturnedError)
         );
         let native = analysis.native_tool_output.expect("native output");
         assert!(!native.ok);
@@ -893,7 +882,7 @@ mod tests {
         assert!(!analysis.tool_result_ok);
         assert_eq!(
             analysis.tool_failure_class,
-            Some(ToolFailureClass::ToolTimeout)
+            Some(ToolFailureClass::External)
         );
         assert_eq!(
             analysis
@@ -1004,7 +993,7 @@ mod tests {
         assert!(!analysis.tool_result_ok);
         assert_eq!(
             analysis.tool_failure_class,
-            Some(ToolFailureClass::ToolNotFound)
+            Some(ToolFailureClass::ServiceUnavailable)
         );
     }
 
@@ -1030,7 +1019,7 @@ mod tests {
         assert!(!analysis.tool_result_ok);
         assert_eq!(
             analysis.tool_failure_class,
-            Some(ToolFailureClass::InvalidToolArguments)
+            Some(ToolFailureClass::ArgumentInvalid)
         );
         assert_eq!(
             analysis.schema_validation_result,
@@ -1038,7 +1027,7 @@ mod tests {
         );
         assert_eq!(analysis.validation_errors[0].path, "/arguments/query");
         let error = analysis.tool_error.as_ref().expect("tool error");
-        assert_eq!(error.failure_class, ToolFailureClass::InvalidToolArguments);
+        assert_eq!(error.failure_class, ToolFailureClass::ArgumentInvalid);
         assert_eq!(error.service_id.as_deref(), Some("x-data"));
         assert_eq!(error.tool_name.as_deref(), Some("search_bookmarks"));
         assert_eq!(error.path.as_deref(), Some("/arguments/query"));
@@ -1069,12 +1058,12 @@ mod tests {
         assert!(!analysis.tool_result_ok);
         assert_eq!(
             analysis.tool_failure_class,
-            Some(ToolFailureClass::ToolNotFound)
+            Some(ToolFailureClass::ServiceUnavailable)
         );
-        assert_eq!(analysis.validation_errors[0].code, "tool_not_found");
+        assert_eq!(analysis.validation_errors[0].code, "serviceUnavailable");
         assert_eq!(analysis.validation_errors[0].path, "/tool_name");
         let error = analysis.tool_error.as_ref().expect("tool error");
-        assert_eq!(error.failure_class, ToolFailureClass::ToolNotFound);
+        assert_eq!(error.failure_class, ToolFailureClass::ServiceUnavailable);
         assert_eq!(error.service_id.as_deref(), Some("x-data"));
         assert_eq!(error.tool_name.as_deref(), Some("search_post"));
         assert_eq!(error.requested_tool_name.as_deref(), Some("search_post"));
@@ -1107,15 +1096,18 @@ mod tests {
         );
 
         assert!(!analysis.tool_result_ok);
+        // After R1's failure-class collapse, "tool_not_allowed" rebuckets to
+        // ServiceUnavailable. The raw `validation_errors[0].code` field still
+        // carries the original "tool_not_allowed" string from the JSON.
         assert_eq!(
             analysis.tool_failure_class,
-            Some(ToolFailureClass::ToolNotAllowed)
+            Some(ToolFailureClass::ServiceUnavailable)
         );
         assert_eq!(analysis.validation_errors[0].code, "tool_not_allowed");
         assert_eq!(analysis.validation_errors[0].path, "/service_id");
         assert_eq!(analysis.validation_errors[0].retryable, false);
         let error = analysis.tool_error.as_ref().expect("tool error");
-        assert_eq!(error.failure_class, ToolFailureClass::ToolNotAllowed);
+        assert_eq!(error.failure_class, ToolFailureClass::ServiceUnavailable);
         assert_eq!(error.service_id.as_deref(), Some("observability-mcp"));
         assert_eq!(error.tool_name.as_deref(), Some("query_metrics"));
         assert_eq!(error.retryable, Some(false));
@@ -1134,7 +1126,7 @@ mod tests {
         assert!(!analysis.tool_result_ok);
         assert_eq!(
             analysis.tool_failure_class,
-            Some(ToolFailureClass::InvalidToolArguments)
+            Some(ToolFailureClass::ArgumentInvalid)
         );
         assert_eq!(
             analysis
@@ -1158,7 +1150,7 @@ mod tests {
         assert!(!analysis.tool_result_ok);
         assert_eq!(
             analysis.tool_failure_class,
-            Some(ToolFailureClass::InvalidToolArguments)
+            Some(ToolFailureClass::ArgumentInvalid)
         );
         assert_eq!(
             analysis
@@ -1182,14 +1174,14 @@ mod tests {
         assert!(!analysis.tool_result_ok);
         assert_eq!(
             analysis.tool_failure_class,
-            Some(ToolFailureClass::ResourceNotFound)
+            Some(ToolFailureClass::ServiceUnavailable)
         );
         assert_eq!(
             analysis
                 .tool_error
                 .as_ref()
                 .and_then(|error| error.retryable),
-            Some(false)
+            Some(true)
         );
     }
 
@@ -1206,7 +1198,7 @@ mod tests {
         assert!(!analysis.tool_result_ok);
         assert_eq!(
             analysis.tool_failure_class,
-            Some(ToolFailureClass::ServiceSchemaDrift)
+            Some(ToolFailureClass::ServiceUnavailable)
         );
     }
 
@@ -1223,11 +1215,11 @@ mod tests {
         assert!(!analysis.tool_result_ok);
         assert_eq!(
             analysis.tool_failure_class,
-            Some(ToolFailureClass::Unclassified)
+            Some(ToolFailureClass::ToolReturnedError)
         );
         let error = analysis.tool_error.as_ref().expect("tool error");
-        assert_eq!(error.failure_class, ToolFailureClass::Unclassified);
-        assert_eq!(error.retryable, None);
+        assert_eq!(error.failure_class, ToolFailureClass::ToolReturnedError);
+        assert_eq!(error.retryable, Some(false));
         assert_eq!(error.raw_error_text, result);
     }
 
@@ -1244,7 +1236,7 @@ mod tests {
         assert_eq!(analysis.tool_failure_class, None);
         assert_eq!(
             analyze_request_failure(Some("request deadline exceeded while awaiting inference")),
-            Some(ToolFailureClass::DeadlineOrInferenceFailure)
+            Some(ToolFailureClass::External)
         );
     }
 
@@ -1258,7 +1250,7 @@ mod tests {
         );
         assert_eq!(
             analysis.tool_failure_class,
-            Some(ToolFailureClass::InvalidJsonArguments)
+            Some(ToolFailureClass::ArgumentInvalid)
         );
         assert_eq!(analysis.validation_errors[0].code, "invalid_json_arguments");
     }
@@ -1273,7 +1265,7 @@ mod tests {
         );
         assert_eq!(
             analysis.tool_failure_class,
-            Some(ToolFailureClass::ArgumentsNotObject)
+            Some(ToolFailureClass::ArgumentInvalid)
         );
     }
 
@@ -1292,7 +1284,7 @@ mod tests {
         );
         assert_eq!(
             analysis.tool_failure_class,
-            Some(ToolFailureClass::InvalidJsonArguments)
+            Some(ToolFailureClass::ArgumentInvalid)
         );
         assert_eq!(analysis.validation_errors[0].path, "/arguments");
         assert_eq!(
@@ -1329,7 +1321,7 @@ mod tests {
 
         assert_eq!(
             analysis.tool_failure_class,
-            Some(ToolFailureClass::ToolTimeout)
+            Some(ToolFailureClass::External)
         );
     }
 
@@ -1340,7 +1332,7 @@ mod tests {
         assert!(!analysis.tool_result_ok);
         assert_eq!(
             analysis.tool_failure_class,
-            Some(ToolFailureClass::Unclassified)
+            Some(ToolFailureClass::ToolReturnedError)
         );
     }
 

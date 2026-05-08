@@ -256,7 +256,7 @@ async fn complete_tool_call_persists_known_failure_class() {
     assert_eq!(
         row.get("tool_failure_class")
             .and_then(|value| value.as_str()),
-        Some("tool_not_found")
+        Some("serviceUnavailable")
     );
 
     let _ = std::fs::remove_dir_all(&data_path);
@@ -380,7 +380,7 @@ async fn save_tool_call_does_not_clobber_completed_trace_enrichment() {
     assert_eq!(
         row.get("tool_failure_class")
             .and_then(|value| value.as_str()),
-        Some("tool_not_found")
+        Some("serviceUnavailable")
     );
     assert_eq!(
         row.get("latency_ms").and_then(|value| value.as_i64()),
