@@ -72,6 +72,22 @@ pub(crate) struct LeanStateMachineContract {
     pub(crate) actions: Vec<String>,
     pub(crate) legal_transitions: Vec<LeanTransitionPair>,
     pub(crate) illegal_transitions: Vec<LeanTransitionPair>,
+    /// Named transition rows emitted by `Conformance.Contracts.NamedTransition`.
+    /// Defaults to empty so existing call sites (Bucket 0/Bucket 1) don't need
+    /// to deserialize this field on machines that don't emit any.
+    #[serde(default)]
+    pub(crate) named_transitions: Vec<LeanNamedTransition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanNamedTransition {
+    pub(crate) name: String,
+    pub(crate) from: String,
+    pub(crate) to: String,
+    #[serde(default)]
+    pub(crate) requires_native: bool,
+    #[serde(default)]
+    pub(crate) requires_child: bool,
 }
 
 #[derive(Debug, Deserialize)]
