@@ -7,5 +7,5 @@
 /vendor/
 
 # TLA+ tooling and TLC state output
-crates/defra-agent/proofs/tla/.tools/
-crates/defra-agent/proofs/tla/states/
+/crates/defra-agent/proofs/tla/.tools/
+/crates/defra-agent/proofs/tla/states/

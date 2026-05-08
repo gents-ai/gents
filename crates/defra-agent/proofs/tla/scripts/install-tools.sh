@@ -11,7 +11,11 @@ if [[ -f "$DEST" ]]; then
   echo "tla2tools.jar already present at $DEST"
 else
   echo "Downloading tla2tools.jar ${VERSION}..."
-  curl -fL "$URL" -o "$DEST"
+  TMP="$DEST.tmp"
+  trap 'rm -f "$TMP"' EXIT
+  curl -fL "$URL" -o "$TMP"
+  mv "$TMP" "$DEST"
+  trap - EXIT
 fi
 
-java -cp "$DEST" tlc2.TLC -h | head -1
+{ java -cp "$DEST" tlc2.TLC -help 2>&1 || true; } | grep -q "NAME" && echo "TLC $VERSION ready."
