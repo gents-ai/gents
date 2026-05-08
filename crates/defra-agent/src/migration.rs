@@ -134,3 +134,143 @@ pub async fn ensure_tool_call_migrations(node: Arc<EmbeddedNode>) -> Result<()> 
 fn collection_has_lifecycle_state(cv: &defra_node::CollectionVersion) -> bool {
     cv.fields.iter().any(|f| f.name == "lifecycle_state")
 }
+
+/// Resolve the path to the bundled WASM lens artifact for the v2->v3 subagent
+/// extension migration.
+fn subagent_lens_wasm_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/wasm32-unknown-unknown/release/agent_subagent_v2_to_v3_lens.wasm")
+}
+
+fn collection_has_field(cv: &defra_node::CollectionVersion, field_name: &str) -> bool {
+    cv.fields.iter().any(|f| f.name == field_name)
+}
+
+/// Per-collection idempotent migration orchestrator for v2->v3.
+/// Applies the three subagent-extension patches and registers the unified
+/// lens. Re-running after a partial failure picks up at the un-migrated
+/// collection without manual intervention.
+pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    // 1. AgentToolCall — patch only if v3 fields not already present.
+    let atc_collection = node
+        .get_collection("AgentToolCall")
+        .context("get AgentToolCall collection")?;
+
+    let atc_v3_version_id = if let Some(ref cv) = atc_collection {
+        if collection_has_field(cv, "await_mode") {
+            tracing::debug!("AgentToolCall already has await_mode; skipping patch");
+            cv.version_id.clone()
+        } else {
+            let pre_version_id = cv.version_id.clone();
+            let v3 = node
+                .patch_collection("AgentToolCall", ADD_AGENT_TOOL_CALL_SUBAGENT_PATCH)
+                .await
+                .context("patch_collection v2 -> v3 (AgentToolCall subagent fields)")?;
+            let v3_version_id = v3.version_id.clone();
+            node.set_active_collection_version(&v3_version_id)
+                .await
+                .context("set_active_collection_version v3 (AgentToolCall)")?;
+            tracing::info!(
+                pre = %pre_version_id,
+                v3 = %v3_version_id,
+                "AgentToolCall patched to v3 (subagent fields)"
+            );
+            v3_version_id
+        }
+    } else {
+        tracing::debug!("AgentToolCall collection absent; subagent patch no-op");
+        return Ok(());
+    };
+
+    // 2. AgentRequest — independent idempotency check.
+    let ar_collection = node
+        .get_collection("AgentRequest")
+        .context("get AgentRequest collection")?;
+
+    if let Some(ref cv) = ar_collection {
+        if collection_has_field(cv, "caused_by_parent_request_id") {
+            tracing::debug!("AgentRequest already has caused_by_parent_request_id; skipping patch");
+        } else {
+            let pre_version_id = cv.version_id.clone();
+            let v3 = node
+                .patch_collection("AgentRequest", ADD_AGENT_REQUEST_SUBAGENT_PATCH)
+                .await
+                .context("patch_collection v2 -> v3 (AgentRequest subagent fields)")?;
+            let v3_version_id = v3.version_id.clone();
+            node.set_active_collection_version(&v3_version_id)
+                .await
+                .context("set_active_collection_version v3 (AgentRequest)")?;
+            tracing::info!(
+                pre = %pre_version_id,
+                v3 = %v3_version_id,
+                "AgentRequest patched to v3 (subagent fields)"
+            );
+        }
+    } else {
+        tracing::debug!("AgentRequest collection absent; subagent patch no-op");
+    }
+
+    // 3. ToolSelection — independent idempotency check.
+    let ts_collection = node
+        .get_collection("ToolSelection")
+        .context("get ToolSelection collection")?;
+
+    if let Some(ref cv) = ts_collection {
+        if collection_has_field(cv, "subagent_targets") {
+            tracing::debug!("ToolSelection already has subagent_targets; skipping patch");
+        } else {
+            let pre_version_id = cv.version_id.clone();
+            let v3 = node
+                .patch_collection("ToolSelection", ADD_TOOL_SELECTION_SUBAGENT_PATCH)
+                .await
+                .context("patch_collection v2 -> v3 (ToolSelection subagent fields)")?;
+            let v3_version_id = v3.version_id.clone();
+            node.set_active_collection_version(&v3_version_id)
+                .await
+                .context("set_active_collection_version v3 (ToolSelection)")?;
+            tracing::info!(
+                pre = %pre_version_id,
+                v3 = %v3_version_id,
+                "ToolSelection patched to v3 (subagent fields)"
+            );
+        }
+    } else {
+        tracing::debug!("ToolSelection collection absent; subagent patch no-op");
+    }
+
+    // 4. Register the unified forward lens AgentToolCall v2 -> v3.
+    //    Only AgentToolCall has a versioned schema lens; AgentRequest and
+    //    ToolSelection new fields are additive (nullable), so existing
+    //    documents round-trip without a transform. The lens covers
+    //    AgentToolCall's new required fields.
+    let lens_path = subagent_lens_wasm_path();
+    let lens_path_str = lens_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-utf8 subagent lens path"))?;
+
+    // The "from" version is the AgentToolCall version before the patch
+    // (captured above) and "to" is the v3 version we just activated.
+    // Re-read the pre-patch version from the collection we already fetched.
+    let atc_pre_version_id = atc_collection
+        .as_ref()
+        .map(|cv| cv.version_id.clone())
+        .ok_or_else(|| anyhow::anyhow!("AgentToolCall collection absent after earlier check"))?;
+
+    let forward_config = LensConfig::new(
+        atc_pre_version_id.clone(),
+        atc_v3_version_id.clone(),
+        LensModule::from_path(lens_path_str),
+    );
+
+    node.set_migration(forward_config)
+        .await
+        .context("set_migration forward AgentToolCall v2 -> v3")?;
+
+    tracing::info!(
+        v2 = %atc_pre_version_id,
+        v3 = %atc_v3_version_id,
+        "agent_subagent_v2_to_v3 lens registered"
+    );
+
+    Ok(())
+}
