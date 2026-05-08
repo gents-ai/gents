@@ -185,6 +185,62 @@ impl ToolCallLifecycle {
         self.failure_class = Some(failure);
         Ok(())
     }
+
+    /// Pending → Failed. Used when the dispatcher cannot start the call
+    /// (MCP service unreachable, argument parse failure pre-spawn).
+    pub async fn spawn_failed(
+        &mut self,
+        failure: super::FailureClass,
+        reason: &str,
+    ) -> Result<()> {
+        self.ensure_state(&[ToolCallState::Pending], "spawn_failed")?;
+
+        // Pending means the row hasn't been created yet. We create it
+        // directly in Failed state.
+        let now = Utc::now();
+        let started_at_str = now.to_rfc3339();
+        let escaped_session_id = escape_graphql_string(&self.session_id);
+        let escaped_tool_call_id = escape_graphql_string(&self.tool_call_id);
+        let escaped_tool_name = escape_graphql_string(&self.tool_name);
+        let escaped_args = escape_graphql_string(&self.args);
+        let escaped_result = escape_graphql_string(reason);
+        let tool_call_key = format!("{escaped_session_id}:{escaped_tool_call_id}");
+        let message_sequence = self.message_sequence;
+        let failure_class_str = failure.as_str();
+
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentToolCall(input: {{
+                    tool_call_key: "{tool_call_key}",
+                    session_id: "{escaped_session_id}",
+                    message_sequence: {message_sequence},
+                    tool_name: "{escaped_tool_name}",
+                    tool_call_id: "{escaped_tool_call_id}",
+                    args: "{escaped_args}",
+                    result: "{escaped_result}",
+                    status: "completed",
+                    lifecycle_state: "failed",
+                    started_at: "{started_at_str}",
+                    completed_at: "{started_at_str}",
+                    tool_failure_class: "{failure_class_str}",
+                    latency_ms: 0
+                }}) {{ _docID }}
+            }}"#
+        );
+
+        let resp = execute_mutation_with_retry(&self.node, &mutation, "spawn_failed")
+            .await
+            .context("spawn_failed mutation")?;
+
+        let doc_id = extract_doc_id_from_create_response(&resp)
+            .ok_or_else(|| anyhow!("create_AgentToolCall returned no _docID"))?;
+
+        self.doc_id = Some(doc_id);
+        self.state = ToolCallState::Failed;
+        self.failure_class = Some(failure);
+        self.started_at = Some(now);
+        Ok(())
+    }
 }
 
 /// Helper to extract `_docID` from a `create_*` mutation response.
