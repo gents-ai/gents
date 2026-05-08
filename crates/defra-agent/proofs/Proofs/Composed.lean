@@ -221,26 +221,49 @@ theorem interrupted_request_cancels_live_linked_tool
   sorry
 
 
-/-- C1: A request whose deadline is exceeded times out a Running linked
-    tool call via the timeout transition. The composition theorem whose
-    absence in the runtime caused issue #149.
-
-    STUBBED for Task 6 (multi-flight refactor). Task 7 restates this with
-    multi-flight quantification (`_tools` plural) and a fresh proof. -/
-theorem deadline_exceeded_request_timesOut_running_tool
+/-- C1: A request whose deadline is exceeded times out every Running linked
+    tool. Multi-flight form: any tool ∈ pre.tools that is running, linked, and
+    deadline-synced reaches .timedOut. The composition theorem whose absence
+    in the runtime caused issue #149. -/
+theorem deadline_exceeded_request_timesOut_running_tools
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
-    (h_tool     : pre.tools = [toolPre])
-    (h_running  : toolPre.state = .running)
-    (h_linked   : toolPre.linkedTo pre.requestId)
-    (h_deadline : pre.request.deadlineExceeded)
-    (h_synced   : Coherent pre toolPre) :
+    (h_in        : toolPre ∈ pre.tools)
+    (h_running   : toolPre.state = .running)
+    (h_linked    : toolPre.requestId = pre.requestId)
+    (h_deadline  : pre.request.deadlineExceeded)
+    (h_synced    : toolPre.deadline = pre.request.deadline ∧
+                   toolPre.currentTime = pre.request.currentTime) :
     ∃ post toolPost,
       Trace pre post ∧
-      post.tools = [toolPost] ∧
+      toolPost ∈ post.tools ∧
       post.request = pre.request ∧
       toolPost.state = .timedOut ∧
-      toolPost.linkedTo pre.requestId := by
-  sorry
+      toolPost.requestId = pre.requestId := by
+  -- Find the index of toolPre in pre.tools.
+  obtain ⟨idx, h_idx⟩ := List.mem_iff_getElem?.mp h_in
+  -- Apply the inner ToolCallContext.timeout transition on toolPre.
+  have h_t_step : ToolExecution.ToolCallContext.Transition toolPre
+                    { toolPre with state := .timedOut } := by
+    refine ToolExecution.ToolCallContext.Transition.timeout
+      h_running ?_ rfl
+    -- discharge deadlineExceeded for toolPre using h_synced + h_deadline
+    show toolPre.currentTime > toolPre.deadline
+    rw [h_synced.1, h_synced.2]
+    exact h_deadline
+  -- Construct the post composed state by setting idx to the timed-out tool.
+  let toolPost : ToolExecution.ToolCallContext := { toolPre with state := .timedOut }
+  let post : ComposedState := { pre with tools := pre.tools.set idx toolPost }
+  refine ⟨post, toolPost, ?_, ?_, rfl, rfl, h_linked⟩
+  · -- One-step trace via tool_step
+    refine Trace.step ?_ Trace.refl
+    -- The Coherent witness: bundle h_linked + h_synced
+    refine Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl ?_
+    exact ⟨h_linked, h_synced.1, h_synced.2⟩
+  · -- toolPost ∈ post.tools — follows from `pre.tools.set idx toolPost`
+    show toolPost ∈ pre.tools.set idx toolPost
+    have h_lt : idx < pre.tools.length :=
+      (List.getElem?_eq_some_iff.mp h_idx).1
+    exact List.mem_set pre.tools idx h_lt toolPost
 
 
 /-- C1': A request whose deadline is exceeded cancels a Pending linked tool
