@@ -284,27 +284,33 @@ RPCWellFormed ==
              /\ rpc.of \in rpcIdsUsed
 
 (***************************************************************************)
-(* Supporting invariant: in-flight justification (bounded-model form).     *)
+(* Supporting invariant: in-flight justification.                          *)
 (*                                                                         *)
-(* For every reachable state WHERE FreshIds(1) holds, every               *)
-(* desired/replicator disagreement is either:                              *)
-(*   (a) matched by a reconciling RPC anywhere in the system (inFlight,    *)
-(*       messages, or pendingInbound), OR                                  *)
-(*   (b) structurally eligible for Reconcile (no blocking duplicate        *)
-(*       in-flight RPC) — meaning the system is one Reconcile firing away  *)
-(*       from emitting the resolving RPC.                                  *)
+(* For every reachable state, every desired/replicator disagreement is     *)
+(* either:                                                                 *)
+(*   (a) matched by a reconciling RPC anywhere in the system (inFlight,   *)
+(*       messages, or pendingInbound on the peer side), OR                *)
+(*   (b) eligible for Reconcile to fire — i.e. ReconcileInstall(n,p,c)   *)
+(*       (resp. ReconcileTeardown) is enabled. The four conjuncts in the *)
+(*       second disjunct are exactly the missing ReconcileInstall          *)
+(*       preconditions beyond the antecedent (n # p, disagreement):       *)
+(*       no blocking duplicate in-flight RPC, and FreshIds(1).             *)
 (*                                                                         *)
-(* The outer FreshIds(1) guard scopes the invariant to states where the    *)
-(* system can act: pool-exhausted states are a TLC-bounding artifact (the  *)
-(* real system has an effectively unbounded ID space) and are excluded.    *)
+(* Reading: the system is never simultaneously (i) in disagreement, (ii)  *)
+(* without a covering RPC anywhere, AND (iii) unable to emit one because  *)
+(* the RPC pool is exhausted. The third condition is the bounded-model    *)
+(* artifact noted below.                                                   *)
 (*                                                                         *)
-(* The second disjunct qualifies the invariant for the OperatorWrite/      *)
-(* Reconcile window and for post-Crash recovery states where the gap       *)
-(* exists but no RPC is in flight yet. Under fairness on Reconcile, the   *)
-(* second disjunct collapses to the first within finitely many steps.      *)
+(* Bounded-model caveat: TLC may report a violation of this invariant in  *)
+(* pool-exhausted states where every RPCId has been issued and the        *)
+(* covering RPC has been Drop()ped. This is an artifact of the finite     *)
+(* RPCId set; the real system has an effectively unbounded id space and   *)
+(* the violation cannot occur. Mitigation: bump `RPCId` in                *)
+(* `MCReversePairing.cfg` until the artifact is unreachable, or accept    *)
+(* the artifact and document it.                                           *)
 (*                                                                         *)
 (* This is the inductive invariant supporting the leads-to liveness        *)
-(* property to be added in Task 10.                                        *)
+(* property in Task 10.                                                    *)
 (***************************************************************************)
 
 InstallJustified ==
@@ -315,7 +321,8 @@ InstallJustified ==
             /\ rpc.src = n
             /\ rpc.tgt = p
             /\ rpc.collection = c
-       \/ ~PendingInstallFor(n, p, c)
+       \/ /\ ~PendingInstallFor(n, p, c)
+          /\ FreshIds(1)
 
 TeardownJustified ==
   \A n, p \in Node, c \in Collection :
@@ -325,9 +332,10 @@ TeardownJustified ==
             /\ rpc.src = n
             /\ rpc.tgt = p
             /\ rpc.collection = c
-       \/ ~PendingTeardownFor(n, p, c)
+       \/ /\ ~PendingTeardownFor(n, p, c)
+          /\ FreshIds(1)
 
-InFlightJustified == FreshIds(1) => (InstallJustified /\ TeardownJustified)
+InFlightJustified == InstallJustified /\ TeardownJustified
 
 Spec == Init /\ [][Next]_vars
 
