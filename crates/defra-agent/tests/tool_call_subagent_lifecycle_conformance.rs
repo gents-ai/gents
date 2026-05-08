@@ -656,3 +656,237 @@ async fn test_make_terminal_request_all_states() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Bucket 3 / Task 26 — migration round-trip default-population behavior
+// ---------------------------------------------------------------------------
+//
+// Approach (a) per Task 26: the standard `test_db` already registers the v3
+// schema directly (no patch needed because the SDL ships with the v3 fields).
+// We insert a minimal AgentToolCall row with only the v1/v2 fields and verify
+// what the schema does for the unset v3 fields (`await_mode`, `cancel_policy`,
+// `child_request_id`, `request_id`).
+//
+// The point of the test is to lock in the actual observed behavior so that any
+// future drift — whether DefraDB starts materializing schema defaults on insert,
+// or vice-versa — is caught by a deliberate signal rather than silent
+// regressions in dependent code.
+
+#[tokio::test]
+async fn integration_v3_schema_defaults_populate_correctly() {
+    let db = test_db("tc-sa-mig-1").await;
+
+    // Insert a minimal AgentToolCall row with only v1/v2 fields populated.
+    // All v3 subagent fields (await_mode, cancel_policy, child_request_id,
+    // request_id) are deliberately omitted.
+    let mutation = r#"mutation {
+        create_AgentToolCall(input: {
+            tool_call_key: "mig-test-1",
+            session_id: "mig-sess-1",
+            message_sequence: 1,
+            tool_name: "echo",
+            tool_call_id: "mig-tc-1",
+            args: "{}",
+            lifecycle_state: "running"
+        }) { _docID }
+    }"#;
+    let resp = db.node.execute(mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "create_AgentToolCall (minimal) failed: {:?}",
+        resp.errors
+    );
+
+    // Read back and observe what the v3 fields contain on a directly-inserted
+    // row (i.e. one that did not pass through the v2->v3 Lens forward
+    // transform).
+    let query = r#"{
+        AgentToolCall(filter: { tool_call_key: { _eq: "mig-test-1" } }) {
+            tool_call_key
+            lifecycle_state
+            await_mode
+            cancel_policy
+            child_request_id
+            request_id
+        }
+    }"#;
+    let resp = db.node.execute(query).await;
+    assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
+
+    let data = resp.data.expect("data");
+    let rows = data["AgentToolCall"].as_array().expect("array");
+    assert_eq!(rows.len(), 1, "expected exactly one row");
+    let row = &rows[0];
+
+    eprintln!("v3 schema default-population observed behavior: {row}");
+
+    // The row's v1/v2 fields are present as written.
+    assert_eq!(row["tool_call_key"].as_str(), Some("mig-test-1"));
+    assert_eq!(row["lifecycle_state"].as_str(), Some("running"));
+
+    // Lock in the observed behavior for the v3 fields.
+    //
+    // DefraDB's GraphQL @branchable schema does not materialize schema-level
+    // defaults onto directly-inserted rows: the SDL only declares each new
+    // field as a nullable `String`. The lens transform (registered by
+    // `ensure_subagent_extensions_migrations` in the daemon path) is what
+    // populates the v3 defaults onto pre-existing v2 rows on read. New rows
+    // inserted directly without these fields therefore observe Null for each
+    // unset v3 field.
+    //
+    // If a future change starts materializing defaults on insert, this test
+    // will fail — at which point the assertion should be flipped to the new
+    // observed values and a comment added explaining the change.
+    assert!(
+        row["await_mode"].is_null(),
+        "directly-inserted v3 row: await_mode expected null, got: {:?}",
+        row["await_mode"]
+    );
+    assert!(
+        row["cancel_policy"].is_null(),
+        "directly-inserted v3 row: cancel_policy expected null, got: {:?}",
+        row["cancel_policy"]
+    );
+    assert!(
+        row["child_request_id"].is_null(),
+        "directly-inserted v3 row: child_request_id expected null, got: {:?}",
+        row["child_request_id"]
+    );
+    assert!(
+        row["request_id"].is_null(),
+        "directly-inserted v3 row: request_id expected null, got: {:?}",
+        row["request_id"]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Bucket 3 / Task 26 — `create_subagent_request` end-to-end depth + coherence
+// ---------------------------------------------------------------------------
+//
+// These complement the unit-level tests in `subagent_request.rs` (which only
+// verify the precondition arithmetic via #[test] blocks that don't touch the
+// DB). Here we exercise the helper through a real EmbeddedNode.
+
+#[tokio::test]
+async fn integration_create_subagent_request_at_max_depth_succeeds() {
+    let db = test_db("tc-sa-csr-1").await;
+    let new_id = create_subagent_request(
+        &db.node,
+        "parent-req-csr-1".to_string(),
+        "parent-tc-csr-1".to_string(),
+        MAX_SUBAGENT_DEPTH - 1,
+        support::AGENT_DID.to_string(),
+        "behavior-csr-1".to_string(),
+        "csr test prompt".to_string(),
+        None,
+    )
+    .await
+    .expect("create_subagent_request at MAX-1 should succeed");
+
+    // The helper returns a freshly minted UUID; verify by reading the row
+    // back out of the DB and checking the stored fields.
+    assert!(!new_id.is_empty(), "expected non-empty request_id");
+    let new_id_escaped = defra_agent::graphql::escape_graphql_string(&new_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{new_id_escaped}" }} }}) {{
+                request_id
+                lifecycle_state
+                subagent_depth
+                caused_by_parent_request_id
+                caused_by_parent_tool_call_id
+            }}
+        }}"#
+    );
+    let resp = db.node.execute(&query).await;
+    assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
+    let data = resp.data.expect("data");
+    let rows = data["AgentRequest"].as_array().expect("array");
+    assert_eq!(rows.len(), 1, "expected exactly one row");
+    let row = &rows[0];
+    assert_eq!(row["lifecycle_state"].as_str(), Some("pending"));
+    assert_eq!(
+        row["subagent_depth"].as_i64(),
+        Some(i64::from(MAX_SUBAGENT_DEPTH)),
+        "child depth should be parent_depth + 1 = MAX_SUBAGENT_DEPTH"
+    );
+    assert_eq!(
+        row["caused_by_parent_request_id"].as_str(),
+        Some("parent-req-csr-1")
+    );
+    assert_eq!(
+        row["caused_by_parent_tool_call_id"].as_str(),
+        Some("parent-tc-csr-1")
+    );
+}
+
+#[tokio::test]
+async fn integration_create_subagent_request_above_max_depth_fails() {
+    let db = test_db("tc-sa-csr-2").await;
+    let err = create_subagent_request(
+        &db.node,
+        "parent-req-csr-2".to_string(),
+        "parent-tc-csr-2".to_string(),
+        MAX_SUBAGENT_DEPTH,
+        support::AGENT_DID.to_string(),
+        "behavior-csr-2".to_string(),
+        "csr test prompt".to_string(),
+        None,
+    )
+    .await
+    .expect_err("should reject parent_depth == MAX_SUBAGENT_DEPTH");
+    assert!(
+        matches!(
+            err.downcast_ref::<IllegalToolCallTransition>(),
+            Some(IllegalToolCallTransition::SubagentDepthExceeded)
+        ),
+        "expected SubagentDepthExceeded, got: {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn integration_create_subagent_request_empty_parent_fields_fails() {
+    let db = test_db("tc-sa-csr-3").await;
+
+    // Empty parent_request_id triggers ParentLinkageIncoherent.
+    let err = create_subagent_request(
+        &db.node,
+        "".to_string(),
+        "parent-tc".to_string(),
+        0,
+        support::AGENT_DID.to_string(),
+        "behavior".to_string(),
+        "prompt".to_string(),
+        None,
+    )
+    .await
+    .expect_err("empty parent_request_id should fail");
+    assert!(
+        matches!(
+            err.downcast_ref::<IllegalToolCallTransition>(),
+            Some(IllegalToolCallTransition::ParentLinkageIncoherent)
+        ),
+        "expected ParentLinkageIncoherent for empty parent_request_id, got: {err:?}"
+    );
+
+    // Empty parent_tool_call_id also triggers ParentLinkageIncoherent.
+    let err = create_subagent_request(
+        &db.node,
+        "parent-req".to_string(),
+        "".to_string(),
+        0,
+        support::AGENT_DID.to_string(),
+        "behavior".to_string(),
+        "prompt".to_string(),
+        None,
+    )
+    .await
+    .expect_err("empty parent_tool_call_id should fail");
+    assert!(
+        matches!(
+            err.downcast_ref::<IllegalToolCallTransition>(),
+            Some(IllegalToolCallTransition::ParentLinkageIncoherent)
+        ),
+        "expected ParentLinkageIncoherent for empty parent_tool_call_id, got: {err:?}"
+    );
+}
