@@ -20,13 +20,36 @@ use crate::session::execute_mutation_with_retry;
 use super::{ToolCallLifecycle, ToolCallState};
 
 /// Error returned when a transition method is called from an illegal
-/// pre-state. Programmer error, not a user-visible failure.
-#[derive(Debug, thiserror::Error)]
-#[error("illegal tool call transition: cannot {method} from state {from:?} (allowed: {allowed:?})")]
-pub struct IllegalToolCallTransition {
-    pub method: &'static str,
-    pub from: ToolCallState,
-    pub allowed: Vec<ToolCallState>,
+/// pre-state, or when a subagent-specific guard is violated.
+/// Programmer error, not a user-visible failure.
+#[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
+pub enum IllegalToolCallTransition {
+    #[error("illegal tool call transition: cannot {method} from state {from:?} (allowed: {allowed:?})")]
+    BadState {
+        method: &'static str,
+        from: ToolCallState,
+        allowed: Vec<ToolCallState>,
+    },
+    #[error("await_mode flip rejected: tool already Background")]
+    ModeAlreadyBackground,
+    #[error("await_mode flip rejected: tool already Foreground")]
+    ModeAlreadyForeground,
+    #[error("cancel_policy flip rejected: tool already Detach")]
+    PolicyAlreadyDetach,
+    #[error("bridge_complete called on tool without child_request_id")]
+    BridgeCompleteRequiresChildLink,
+    #[error("bridge_failure called on tool without child_request_id")]
+    BridgeFailureRequiresChildLink,
+    #[error("bridge_cancel_cascade called on tool not in .cancelled state")]
+    CascadeRequiresCancelled,
+    #[error("create_subagent_request rejected: depth exceeds maxSubagentDepth")]
+    SubagentDepthExceeded,
+    #[error("AgentRequest parent linkage incoherent: must set both or neither parent fields")]
+    ParentLinkageIncoherent,
+    #[error("native complete() called on subagent-typed tool (child_request_id is set)")]
+    NativeCompleteOnSubagentTool,
+    #[error("native fail() called on subagent-typed tool (child_request_id is set)")]
+    NativeFailOnSubagentTool,
 }
 
 impl ToolCallLifecycle {
@@ -40,7 +63,7 @@ impl ToolCallLifecycle {
         if allowed.contains(&self.state) {
             Ok(())
         } else {
-            Err(anyhow!(IllegalToolCallTransition {
+            Err(anyhow!(IllegalToolCallTransition::BadState {
                 method,
                 from: self.state,
                 allowed: allowed.to_vec(),

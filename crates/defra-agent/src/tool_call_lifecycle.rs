@@ -215,6 +215,9 @@ pub struct ToolCallLifecycle {
     state: ToolCallState,
     started_at: Option<chrono::DateTime<chrono::Utc>>,
     failure_class: Option<FailureClass>,
+    pub(crate) await_mode: AwaitMode,
+    pub(crate) cancel_policy: CancelPolicy,
+    pub(crate) child_request_id: Option<String>,
 }
 
 impl ToolCallLifecycle {
@@ -239,6 +242,41 @@ impl ToolCallLifecycle {
             state: ToolCallState::Pending,
             started_at: None,
             failure_class: None,
+            await_mode: AwaitMode::Foreground,
+            cancel_policy: CancelPolicy::Cascade,
+            child_request_id: None,
+        }
+    }
+
+    /// Constructor for the subagent invocation path. Sets child_request_id (the
+    /// link to the spawned child AgentRequest) and lets the caller pick await_mode
+    /// and cancel_policy. Synchronous and does not persist — first transition
+    /// (typically start_running) creates the row.
+    pub fn new_subagent(
+        node: Arc<EmbeddedNode>,
+        session_id: String,
+        tool_call_id: String,
+        message_sequence: u32,
+        tool_name: String,
+        args: String,
+        await_mode: AwaitMode,
+        cancel_policy: CancelPolicy,
+        child_request_id: String,
+    ) -> Self {
+        Self {
+            node,
+            session_id,
+            tool_call_id,
+            message_sequence,
+            tool_name,
+            args,
+            doc_id: None,
+            state: ToolCallState::Pending,
+            started_at: None,
+            failure_class: None,
+            await_mode,
+            cancel_policy,
+            child_request_id: Some(child_request_id),
         }
     }
 
