@@ -99,14 +99,7 @@ pub(crate) enum ToolIdempotencyEvidence {
 }
 
 #[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ToolFailureClass {
-    ArgumentInvalid,
-    ServiceUnavailable,
-    Transport,
-    ToolReturnedError,
-    External,
-}
+pub(crate) use crate::tool_call_lifecycle::FailureClass as ToolFailureClass;
 
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
