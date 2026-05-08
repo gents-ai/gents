@@ -10,6 +10,60 @@ use crate::graphql::escape_graphql_string;
 
 use super::{FailureClass, ToolCallLifecycle, ToolCallState};
 
+#[derive(Debug, Clone, Deserialize)]
+struct ToolCallResultRow {
+    result: String,
+}
+
+/// Load the persisted result string for a tool call identified by
+/// `session_id` + `tool_call_id`. Returns an error if the row is absent.
+pub async fn load_tool_call_result(
+    node: &EmbeddedNode,
+    session_id: &str,
+    tool_call_id: &str,
+) -> Result<String> {
+    let escaped_session_id = escape_graphql_string(session_id);
+    let escaped_tool_call_id = escape_graphql_string(tool_call_id);
+    let tool_call_key = format!("{escaped_session_id}:{escaped_tool_call_id}");
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    tool_call_key: {{ _eq: "{tool_call_key}" }}
+                }},
+                limit: 1
+            ) {{
+                result
+            }}
+        }}"#
+    );
+
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        anyhow::bail!(
+            "loading tool call result for session_id={} tool_call_id={}: {:?}",
+            session_id,
+            tool_call_id,
+            resp.errors
+        );
+    }
+
+    let mut rows: Vec<ToolCallResultRow> = match resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+    {
+        Some(value) => serde_json::from_value(value.clone())?,
+        None => Vec::new(),
+    };
+
+    rows.pop().map(|row| row.result).ok_or_else(|| {
+        anyhow::anyhow!(
+            "loading tool call result: no AgentToolCall for session_id={session_id} tool_call_id={tool_call_id}"
+        )
+    })
+}
+
 #[derive(Debug, Deserialize)]
 struct ToolCallRow {
     #[serde(rename = "_docID")]
