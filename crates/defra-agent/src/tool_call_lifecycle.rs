@@ -103,6 +103,95 @@ impl FailureClass {
     }
 }
 
+/// Whether the parent's narrative is blocked on this tool's terminal state.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum AwaitMode {
+    Foreground,
+    Background,
+}
+
+impl AwaitMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AwaitMode::Foreground => "foreground",
+            AwaitMode::Background => "background",
+        }
+    }
+
+    pub fn from_persisted(s: &str) -> Option<Self> {
+        match s {
+            "foreground" => Some(AwaitMode::Foreground),
+            "background" => Some(AwaitMode::Background),
+            _ => None,
+        }
+    }
+
+    pub const ALL: &'static [AwaitMode] = &[AwaitMode::Foreground, AwaitMode::Background];
+}
+
+/// Whether parent termination drives the linked child request to .interrupted
+/// (cascade) or detaches the child to its own deadline.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum CancelPolicy {
+    Cascade,
+    Detach,
+}
+
+impl CancelPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CancelPolicy::Cascade => "cascade",
+            CancelPolicy::Detach => "detach",
+        }
+    }
+
+    pub fn from_persisted(s: &str) -> Option<Self> {
+        match s {
+            "cascade" => Some(CancelPolicy::Cascade),
+            "detach" => Some(CancelPolicy::Detach),
+            _ => None,
+        }
+    }
+
+    pub const ALL: &'static [CancelPolicy] = &[CancelPolicy::Cascade, CancelPolicy::Detach];
+}
+
+/// The four non-.completed terminal states a child AgentRequest can reach.
+/// Used as the argument shape to bridge_failure to project the child terminal
+/// onto a parent ToolCallState (.failed for most, .cancelled for .interrupted).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChildTerminal {
+    Failed { reason: String, failure_class: FailureClass },
+    Dead,
+    Interrupted,
+    Superseded,
+}
+
+impl ChildTerminal {
+    /// Lean B2 projection: .interrupted → .cancelled, all others → .failed.
+    pub fn projected_state(&self) -> ToolCallState {
+        match self {
+            ChildTerminal::Interrupted => ToolCallState::Cancelled,
+            _ => ToolCallState::Failed,
+        }
+    }
+
+    /// Persisted vocabulary names for conformance enumeration.
+    pub const ALL_KIND: &'static [&'static str] =
+        &["failed", "dead", "interrupted", "superseded"];
+}
+
+/// Returned by `bridge_cancel_cascade` (wrapped in Option). The caller — typically
+/// R3's daemon interrupt dispatcher — performs the actual write to the child
+/// AgentRequest's interrupt_requested_at field. Returning None from
+/// bridge_cancel_cascade means no cascade is required: the bridge tool is
+/// native (no child link), detached (no cascade), or not in .cancelled state.
+#[derive(Clone, Debug)]
+pub struct CascadeIntent {
+    pub child_request_id: String,
+    pub at: chrono::DateTime<chrono::Utc>,
+}
+
 use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
