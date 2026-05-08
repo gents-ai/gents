@@ -62,6 +62,46 @@ impl ToolCallState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureClass {
+    ArgumentInvalid,
+    ServiceUnavailable,
+    Transport,
+    ToolReturnedError,
+    External,
+}
+
+impl FailureClass {
+    pub const ALL: [Self; 5] = [
+        Self::ArgumentInvalid,
+        Self::ServiceUnavailable,
+        Self::Transport,
+        Self::ToolReturnedError,
+        Self::External,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ArgumentInvalid => "argumentInvalid",
+            Self::ServiceUnavailable => "serviceUnavailable",
+            Self::Transport => "transport",
+            Self::ToolReturnedError => "toolReturnedError",
+            Self::External => "external",
+        }
+    }
+
+    pub fn from_persisted(value: &str) -> Option<Self> {
+        match value {
+            "argumentInvalid" => Some(Self::ArgumentInvalid),
+            "serviceUnavailable" => Some(Self::ServiceUnavailable),
+            "transport" => Some(Self::Transport),
+            "toolReturnedError" => Some(Self::ToolReturnedError),
+            "external" => Some(Self::External),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,5 +125,18 @@ mod tests {
     #[test]
     fn all_lists_six_states() {
         assert_eq!(ToolCallState::ALL.len(), 6);
+    }
+
+    #[test]
+    fn failure_class_round_trip_persisted_vocabulary() {
+        for fc in FailureClass::ALL {
+            assert_eq!(FailureClass::from_persisted(fc.as_str()), Some(fc));
+        }
+        assert_eq!(FailureClass::from_persisted("unknown"), None);
+    }
+
+    #[test]
+    fn failure_class_all_lists_five_variants() {
+        assert_eq!(FailureClass::ALL.len(), 5);
     }
 }
