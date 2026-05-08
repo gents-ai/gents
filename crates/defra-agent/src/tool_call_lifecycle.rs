@@ -106,6 +106,10 @@ use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
 
+mod transition;
+
+pub use transition::IllegalToolCallTransition;
+
 /// State machine struct for an individual tool call. Mirrors `RequestLifecycle`
 /// from `lifecycle.rs:189-204`. Owns every persistence write for a single
 /// AgentToolCall row.
