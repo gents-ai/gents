@@ -497,7 +497,11 @@ async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
             }}"#
         );
         let response = core.node().execute(&mutation).await;
-        assert!(!response.has_errors(), "mutation {i} failed: {:?}", response.errors);
+        assert!(
+            !response.has_errors(),
+            "mutation {i} failed: {:?}",
+            response.errors
+        );
     }
 
     // Wait for observer debounce + safety margin.
@@ -588,7 +592,12 @@ async fn incremental_observer_handles_long_session() -> Result<()> {
     timeout(Duration::from_millis(2000), async {
         loop {
             let snap = core.store().snapshot();
-            if snap.messages.iter().filter(|m| m.session_id.as_deref() == Some("long")).count() >= 1_000
+            if snap
+                .messages
+                .iter()
+                .filter(|m| m.session_id.as_deref() == Some("long"))
+                .count()
+                >= 1_000
                 && snap.responses.iter().any(|r| r.response_key == "long-req")
             {
                 return Ok::<(), anyhow::Error>(());
@@ -641,7 +650,11 @@ async fn incremental_observer_handles_long_session() -> Result<()> {
         .iter()
         .find(|r| r.response_key == "long-req")
         .expect("response present");
-    assert_eq!(resp.progress_seq, Some(100), "final progress_seq should be 100");
+    assert_eq!(
+        resp.progress_seq,
+        Some(100),
+        "final progress_seq should be 100"
+    );
 
     // The whole point of issue #62: streaming-phase docs_fetched is bounded
     // by debounce-flush count, not by seeded history. We measure ONLY the

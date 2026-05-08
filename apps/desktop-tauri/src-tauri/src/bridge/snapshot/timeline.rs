@@ -55,29 +55,6 @@ fn render_tool_call(tool: ToolCallView) -> RenderedToolCallView {
     }
 }
 
-fn live_overlay_suffix(
-    committed_assistant_texts: &[String],
-    overlay_text: Option<&str>,
-) -> Option<String> {
-    let mut remaining = normalize_timeline_text(overlay_text);
-    if remaining.is_empty() {
-        return None;
-    }
-
-    for committed_text in committed_assistant_texts {
-        let normalized = committed_text.trim();
-        if normalized.is_empty() {
-            continue;
-        }
-
-        if remaining.starts_with(normalized) {
-            remaining = remaining[normalized.len()..].trim_start().to_string();
-        }
-    }
-
-    (!remaining.is_empty()).then_some(remaining)
-}
-
 pub(super) fn materialized_user_turn_count(messages: &[MessageView]) -> usize {
     let mut ordered = messages.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|message| message.sequence.unwrap_or_default());
@@ -95,51 +72,11 @@ pub(super) fn materialized_user_turn_count(messages: &[MessageView]) -> usize {
         .count()
 }
 
-fn active_turn_committed_assistant_texts(
-    messages: &[MessageView],
-    active_turn_index: Option<usize>,
-) -> Vec<String> {
-    let Some(active_turn_index) = active_turn_index else {
-        return Vec::new();
-    };
-
-    let mut ordered = messages.iter().collect::<Vec<_>>();
-    ordered.sort_by_key(|message| message.sequence.unwrap_or_default());
-
-    let mut current_turn_index = None;
-    let mut next_turn_index = 0usize;
-    let mut assistant_texts = Vec::new();
-
-    for message in ordered {
-        let role = message
-            .display_role
-            .as_deref()
-            .or(message.role.as_deref())
-            .unwrap_or_default();
-        let content = normalize_optional(message.display_content.as_deref());
-
-        if role.eq_ignore_ascii_case("user") && content.is_some() {
-            current_turn_index = Some(next_turn_index);
-            next_turn_index += 1;
-            continue;
-        }
-
-        if role.eq_ignore_ascii_case("assistant") && current_turn_index == Some(active_turn_index) {
-            if let Some(content) = content {
-                assistant_texts.push(content);
-            }
-        }
-    }
-
-    assistant_texts
-}
-
 pub(super) fn build_rendered_timeline(
     messages: &[MessageView],
     tool_calls: &[ToolCallView],
     pending_turn: Option<&PendingTurnView>,
     active_response_overlay: Option<&ResponseView>,
-    active_turn_index: Option<usize>,
 ) -> Vec<RenderedTimelineItem> {
     let mut timeline = Vec::new();
     let mut tool_groups: std::collections::BTreeMap<Option<i64>, Vec<ToolCallView>> =
@@ -230,12 +167,8 @@ pub(super) fn build_rendered_timeline(
         });
     }
 
-    let committed_assistant_texts =
-        active_turn_committed_assistant_texts(messages, active_turn_index);
-    let overlay_content = live_overlay_suffix(
-        &committed_assistant_texts,
-        active_response_overlay.and_then(|overlay| overlay.content.as_deref()),
-    );
+    let overlay_content =
+        active_response_overlay.and_then(|overlay| normalize_optional(overlay.content.as_deref()));
     let overlay_reasoning = active_response_overlay
         .and_then(|overlay| normalize_optional(overlay.reasoning.as_deref()));
     if overlay_content.is_some() || overlay_reasoning.is_some() {

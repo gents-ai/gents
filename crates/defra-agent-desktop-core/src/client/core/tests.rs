@@ -517,17 +517,17 @@ async fn ensure_agent_loaded_debounces_repeats() {
 
     let tmp = tempfile::TempDir::new().expect("tmpdir");
     let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
-    let core = ClientCore::start_with_paths_and_options(
-        paths,
-        ClientCoreOptions::local_only(),
-    )
-    .await
-    .expect("core");
+    let core = ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
+        .await
+        .expect("core");
 
     let first = core.ensure_agent_loaded("did:alpha").await.expect("first");
     let second = core.ensure_agent_loaded("did:alpha").await.expect("second");
     assert!(first, "first call should load");
-    assert!(!second, "second call within debounce window should be a no-op");
+    assert!(
+        !second,
+        "second call within debounce window should be a no-op"
+    );
 
     core.shutdown().await.expect("shutdown");
 }
@@ -538,12 +538,9 @@ async fn ensure_agent_loaded_distinguishes_agents() {
 
     let tmp = tempfile::TempDir::new().expect("tmpdir");
     let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
-    let core = ClientCore::start_with_paths_and_options(
-        paths,
-        ClientCoreOptions::local_only(),
-    )
-    .await
-    .expect("core");
+    let core = ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
+        .await
+        .expect("core");
 
     assert!(core.ensure_agent_loaded("did:alpha").await.expect("alpha"));
     assert!(core.ensure_agent_loaded("did:beta").await.expect("beta"));
@@ -576,19 +573,22 @@ async fn observer_metrics_returns_snapshot() {
 
     let tmp = tempfile::TempDir::new().expect("tmpdir");
     let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
-    let core = ClientCore::start_with_paths_and_options(
-        paths,
-        ClientCoreOptions::local_only(),
-    )
-    .await
-    .expect("core");
+    let core = ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
+        .await
+        .expect("core");
 
     let metrics = core.observer_metrics().await;
-    assert!(metrics.is_some(), "observer should be running and expose metrics");
+    assert!(
+        metrics.is_some(),
+        "observer should be running and expose metrics"
+    );
 
     core.shutdown().await.expect("shutdown");
 
     // After shutdown the observer is gone; metrics should be None.
     let metrics = core.observer_metrics().await;
-    assert!(metrics.is_none(), "observer metrics should be None after shutdown");
+    assert!(
+        metrics.is_none(),
+        "observer metrics should be None after shutdown"
+    );
 }

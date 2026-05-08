@@ -74,6 +74,7 @@ pub(crate) struct ResponseView {
     pub token_count: Option<i64>,
     pub materialized_message_sequence: Option<i64>,
     pub materialized_at: Option<String>,
+    pub interrupted_at: Option<String>,
     pub completed_at: Option<String>,
 }
 

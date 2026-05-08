@@ -284,6 +284,19 @@ def commandEnvCaseJson (witness : CommandPolicy.CommandEnvCase) : String :=
       ++ jsonOptionalString (witness.expected.map (fun value => value.toRustValue witness.inputValue))
     ++ "}"
 
+def liveOverlayCaseJson (witness : LiveOverlayCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"responseStatus\":" ++ jsonString witness.responseStatus ++ ","
+    ++ "\"materialized\":" ++ boolString witness.materialized ++ ","
+    ++ "\"precedingToolCalls\":" ++ toString witness.precedingToolCalls ++ ","
+    ++ "\"turnTerminal\":" ++ boolString witness.turnTerminal ++ ","
+    ++ "\"turnLabel\":" ++ jsonString witness.turnLabel ++ ","
+    ++ "\"hasContent\":" ++ boolString witness.hasContent ++ ","
+    ++ "\"hasReasoning\":" ++ boolString witness.hasReasoning ++ ","
+    ++ "\"expectOverlay\":" ++ boolString witness.expectOverlay
+    ++ "}"
+
 def snapshotJson : String :=
   "{"
     ++ "\"generated_by\":\"lake env lean --run Proofs/Conformance/Contracts.lean\","
@@ -340,6 +353,8 @@ def snapshotJson : String :=
       ++ jsonArray (CommandPolicy.commandSandboxCases.map commandSandboxCaseJson) ++ ","
     ++ "\"command_env_cases\":"
       ++ jsonArray (CommandPolicy.commandEnvCases.map commandEnvCaseJson) ++ ","
+    ++ "\"live_overlay_cases\":"
+      ++ jsonArray (liveOverlayCases.map liveOverlayCaseJson) ++ ","
     ++ "\"follow_up_hooks\":[],"
     ++ "\"coverage_ledger\":"
       ++ coverageLedgerJson

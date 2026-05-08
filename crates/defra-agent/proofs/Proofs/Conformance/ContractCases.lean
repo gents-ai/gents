@@ -3,6 +3,7 @@ import Proofs.Conformance.ContractCases.SlotAccounting
 import Proofs.Conformance.ContractCases.SessionRecovery
 import Proofs.Conformance.ContractCases.BoundaryRuntime
 import Proofs.Conformance.ContractCases.LifecycleTransitions
+import Proofs.Conformance.ContractCases.LiveOverlay
 
 /-!
 # Finite Conformance Witness Cases

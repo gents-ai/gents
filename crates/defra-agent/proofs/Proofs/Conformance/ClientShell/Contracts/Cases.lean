@@ -26,7 +26,7 @@ def turnWaiting : ClientTurnState :=
 def turnStreaming : ClientTurnState :=
   deriveAttempt
     { request := { lifecycleState := .processing, isSuperseded := false }
-    , response := some { status := .streaming }
+    , response := some { status := .streaming, tailEmpty := false }
     }
 
 def turnCompleted : ClientTurnState :=

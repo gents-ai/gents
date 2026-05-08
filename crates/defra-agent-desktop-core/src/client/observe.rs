@@ -321,10 +321,7 @@ pub fn spawn_observer_with_selection(
                                 redundant_fetches_pending.remove(&key);
                             } else {
                                 // Re-queue for next debounce round.
-                                dirty
-                                    .entry(collection_name)
-                                    .or_default()
-                                    .insert(id.clone());
+                                dirty.entry(collection_name).or_default().insert(id.clone());
                             }
                         }
                     }
@@ -366,10 +363,7 @@ async fn accumulate_dirty(
             dirty.entry(name).or_default().insert(doc_id.to_string());
         }
         Ok(None) => {
-            tracing::trace!(
-                collection_id,
-                "ignoring update for unknown collection"
-            );
+            tracing::trace!(collection_id, "ignoring update for unknown collection");
         }
         Err(err) => {
             tracing::warn!(
@@ -622,9 +616,7 @@ mod tests {
         // delete signal from DefraDB.
         let snap = store.snapshot();
         assert!(
-            snap.messages
-                .iter()
-                .any(|m| m.message_key == "sess-1:1"),
+            snap.messages.iter().any(|m| m.message_key == "sess-1:1"),
             "expected stale row to remain after delete (soft-delete-by-omission)"
         );
         handle.shutdown().await;
@@ -638,12 +630,9 @@ mod tests {
         // (the observer's fetch_failures counter path). The counter itself
         // stays at zero here because no events were routed to an unknown
         // collection — that would require a RecordingNode test double.
-        let result = crate::client::query::fetch_doc_patch(
-            node.as_ref(),
-            "NotARealCollection",
-            &["x"],
-        )
-        .await;
+        let result =
+            crate::client::query::fetch_doc_patch(node.as_ref(), "NotARealCollection", &["x"])
+                .await;
         assert!(result.is_err(), "expected error for unknown collection");
 
         // No events for unknown collections were dispatched, so counter is 0.

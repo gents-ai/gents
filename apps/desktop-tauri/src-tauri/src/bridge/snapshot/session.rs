@@ -105,16 +105,25 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
             token_count: row.token_count,
             materialized_message_sequence: row.materialized_message_sequence,
             materialized_at: normalize_optional(row.materialized_at.as_deref()),
+            interrupted_at: normalize_optional(row.interrupted_at.as_deref()),
             completed_at: normalize_optional(row.completed_at.as_deref()),
         });
     let active_response_overlay = latest_response.clone().filter(|response| {
+        let response_status = response
+            .status
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
         matches!(
             turn_state,
             Some(defra_agent_protocol::client_protocol::ClientTurnState::WaitingForClaim)
                 | Some(defra_agent_protocol::client_protocol::ClientTurnState::Streaming)
-                | Some(defra_agent_protocol::client_protocol::ClientTurnState::Failed)
-                | Some(defra_agent_protocol::client_protocol::ClientTurnState::Interrupted)
         ) && response.materialized_message_sequence.is_none()
+            && response.interrupted_at.is_none()
+            && !matches!(
+                response_status.as_str(),
+                "complete" | "completed" | "error" | "failed"
+            )
             && (response
                 .content
                 .as_deref()
@@ -127,9 +136,6 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
     let pending_turn = latest_request_id
         .as_deref()
         .and_then(|request_id| build_pending_turn(store, agent_did, session_id, request_id));
-    let active_turn_index = latest_request_id.as_deref().and_then(|request_id| {
-        logical_turn_index_for_request(store, agent_did, session_id, request_id)
-    });
 
     let messages = transcript
         .messages
@@ -203,7 +209,6 @@ pub(crate) fn build_session_snapshot_from_store_for_agent(
         &tool_calls,
         pending_turn.as_ref(),
         active_response_overlay.as_ref(),
-        active_turn_index,
     );
 
     Some(DesktopSessionSnapshot {

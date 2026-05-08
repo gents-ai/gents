@@ -24,7 +24,9 @@ use super::observe::{ObservedStore, ObserverHandle};
 use super::paths::DesktopPaths;
 use super::peer_directory::{PeerDirectory, PeerRecord};
 use super::principal_identity::PrincipalIdentity;
-use super::query::{load_agent_scoped_snapshot, load_full_snapshot, load_full_snapshot_from_graphql};
+use super::query::{
+    load_agent_scoped_snapshot, load_full_snapshot, load_full_snapshot_from_graphql,
+};
 
 const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -383,7 +385,9 @@ impl ClientCore {
     }
 
     /// Snapshot the observer's metrics if the observer is running.
-    pub async fn observer_metrics(&self) -> Option<crate::client::observe::ObserverMetricsSnapshot> {
+    pub async fn observer_metrics(
+        &self,
+    ) -> Option<crate::client::observe::ObserverMetricsSnapshot> {
         self.observer
             .lock()
             .await

@@ -473,6 +473,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CommandPolicyEnv".to_string(),
         ));
     }
+    if !snapshot.live_overlay_cases.is_empty() {
+        emitted.insert((
+            "live_overlay_cases".to_string(),
+            "LiveOverlayCases".to_string(),
+        ));
+    }
     for hook in &snapshot.follow_up_hooks {
         emitted.insert(("follow_up_hook".to_string(), hook.clone()));
     }
@@ -495,6 +501,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "desktop_client_shell_cases",
         "tool_cases",
         "command_policy_cases",
+        "live_overlay_cases",
         "follow_up_hook",
     ];
     let registered_consumers = assert_registered_conformance_consumers_resolve();

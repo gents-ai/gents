@@ -180,7 +180,7 @@ fn extract_mutation_doc_id_accepts_upsert_create_and_add_shapes() {
 }
 
 #[test]
-fn build_finalize_mutation_omits_content_fields_without_buffer() {
+fn build_finalize_mutation_clears_tail_without_buffer() {
     let mutation = build_finalize_mutation(
         Some(&PersistedResponseState {
             doc_id: "doc-1".to_string(),
@@ -200,8 +200,10 @@ fn build_finalize_mutation_omits_content_fields_without_buffer() {
     assert!(mutation.contains(r#"update_AgentRequest("#));
     assert!(mutation.contains(r#"request_id: { _eq: "req-1" }"#));
     assert!(mutation.contains(r#"lifecycle_state: "completed""#));
-    assert!(!mutation.contains("content:"));
-    assert!(!mutation.contains("reasoning:"));
+    // content and reasoning are cleared to "" on finalize (issue #64 contract)
+    assert!(mutation.contains(r#"content: """#));
+    assert!(mutation.contains(r#"reasoning: """#));
+    // token_count is NOT present on the crash-recovery (None) path
     assert!(!mutation.contains("token_count:"));
 }
 
@@ -226,14 +228,16 @@ async fn finalize_removes_buffer_after_successful_mutation() {
         .await
         .unwrap();
 
-    assert_eq!(result.content, "tail content");
+    // After finalize, content/reasoning are cleared in the DB (issue #64 contract).
+    // StreamResult.content reflects the post-finalize DB state (empty tail).
+    assert_eq!(result.content, "");
     assert_eq!(result.token_count, 2);
     assert!(!writer.buffers.lock().await.contains_key(&doc_id));
 
     let row = load_response(&node, &doc_id).await;
     assert_eq!(
         row.get("content").and_then(|value| value.as_str()),
-        Some("tail content")
+        Some("")
     );
     assert_eq!(
         row.get("reasoning").and_then(|value| value.as_str()),
@@ -287,7 +291,8 @@ async fn finalize_treats_matching_terminal_observation_as_idempotent() {
         .finalize(&doc_id, StreamStatus::Complete)
         .await
         .unwrap();
-    assert_eq!(first.content, "final answer");
+    // content is cleared on finalize (issue #64 contract)
+    assert_eq!(first.content, "");
     assert!(!writer.buffers.lock().await.contains_key(&doc_id));
 
     let second = writer
@@ -296,14 +301,14 @@ async fn finalize_treats_matching_terminal_observation_as_idempotent() {
         .unwrap();
 
     assert_eq!(second.status, StreamStatus::Complete);
-    assert_eq!(second.content, "final answer");
+    assert_eq!(second.content, "");
     assert_eq!(second.token_count, 2);
     assert!(!writer.buffers.lock().await.contains_key(&doc_id));
 
     let row = load_response(&node, &doc_id).await;
     assert_eq!(
         row.get("content").and_then(|value| value.as_str()),
-        Some("final answer")
+        Some("")
     );
     assert_eq!(
         row.get("status").and_then(|value| value.as_str()),
@@ -541,10 +546,11 @@ async fn write_reasoning_persists_on_response() {
         .await
         .unwrap();
 
+    // reasoning is cleared on finalize (issue #64 contract — tail is empty post-finalize)
     let row = load_response(&node, &doc_id).await;
     assert_eq!(
         row.get("reasoning").and_then(|value| value.as_str()),
-        Some("Need to inspect the repo structure first.")
+        Some("")
     );
 
     let _ = fs::remove_dir_all(&data_path);
@@ -627,4 +633,76 @@ async fn finalize_existing_request_error_terminalizes_streaming_response_without
     );
 
     let _ = fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn reset_tail_clears_response_content_and_reasoning() {
+    let (node, data_path) = build_test_node("reset-tail").await;
+    let writer = DefraStreamWriter::new(
+        Arc::clone(&node),
+        "did:defra-agent:test",
+        Duration::from_millis(0),
+    );
+    let _request_doc = create_processing_request(&node, "req-reset", "session-reset").await;
+
+    let doc_id = writer
+        .begin("session-reset", "req-reset", "general")
+        .await
+        .expect("begin");
+
+    writer
+        .write_tokens(&doc_id, "hello")
+        .await
+        .expect("write tokens");
+    writer
+        .write_reasoning(&doc_id, "thinking")
+        .await
+        .expect("write reasoning");
+    writer.flush_pending(&doc_id).await.expect("flush");
+
+    let pre = load_response(&node, &doc_id).await;
+    assert_eq!(pre["content"].as_str(), Some("hello"));
+    assert_eq!(pre["reasoning"].as_str(), Some("thinking"));
+    let pre_token_count = pre["token_count"].as_u64().expect("token_count present");
+
+    writer.reset_tail(&doc_id).await.expect("reset_tail");
+
+    let post = load_response(&node, &doc_id).await;
+    assert_eq!(post["content"].as_str(), Some(""));
+    assert_eq!(post["reasoning"].as_str(), Some(""));
+    assert_eq!(
+        post["token_count"].as_u64().expect("token_count present"),
+        pre_token_count,
+        "token_count must be cumulative across reset"
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn finalize_complete_clears_tail() {
+    let (node, data_path) = build_test_node("finalize-tail").await;
+    let writer = DefraStreamWriter::new(
+        Arc::clone(&node),
+        "did:defra-agent:test",
+        Duration::from_millis(0),
+    );
+    let _ = create_processing_request(&node, "req-fin", "session-fin").await;
+    let doc_id = writer
+        .begin("session-fin", "req-fin", "general")
+        .await
+        .expect("begin");
+    writer.write_tokens(&doc_id, "world").await.expect("write");
+    writer.flush_pending(&doc_id).await.expect("flush");
+    writer
+        .finalize(&doc_id, StreamStatus::Complete)
+        .await
+        .expect("finalize");
+
+    let row = load_response(&node, &doc_id).await;
+    assert_eq!(row["status"].as_str(), Some("complete"));
+    assert_eq!(row["content"].as_str(), Some(""));
+    assert_eq!(row["reasoning"].as_str(), Some(""));
+
+    let _ = std::fs::remove_dir_all(&data_path);
 }

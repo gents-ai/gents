@@ -5,7 +5,7 @@ use anyhow::Result;
 use defra_agent::graphql::escape_graphql_string;
 use serde_json::Value;
 
-use crate::{post_graphql, request_diagnostic_hint};
+use crate::{hydrate_materialized_response_content, post_graphql, request_diagnostic_hint};
 
 use super::SubmittedRequest;
 
@@ -42,6 +42,8 @@ pub(super) fn chat_progress_query(request_id: &str, session_id: &str) -> String 
                 reasoning
                 error_message
                 progress_seq
+                materialized_message_sequence
+                materialized_at
                 completed_at
             }}
             AgentToolCall(
@@ -171,8 +173,38 @@ pub(super) async fn stream_turn_progress(
             latest_reasoning = progress.reasoning.clone();
 
             if matches!(progress.status.as_str(), "complete" | "error") {
-                if !progress.content.trim().is_empty() {
-                    println!("{}", progress.content);
+                let mut terminal_response = response_row.unwrap_or(Value::Null);
+                let should_wait_for_materialized_content = progress.status == "complete"
+                    && terminal_response
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .unwrap_or_default()
+                        .is_empty()
+                    && terminal_response
+                        .get("materialized_message_sequence")
+                        .is_some_and(|value| !value.is_null());
+                let hydrated =
+                    hydrate_materialized_response_content(graphql, &mut terminal_response).await?;
+                if should_wait_for_materialized_content && !hydrated {
+                    if last_progress_at.elapsed() >= idle_timeout {
+                        anyhow::bail!(
+                            "timed out waiting for materialized AgentMessage {} after {}s of inactivity\n{}",
+                            submitted.request_id,
+                            timeout_secs,
+                            request_diagnostic_hint(&submitted.request_id)
+                        );
+                    }
+                    tokio::time::sleep(Duration::from_secs(poll_secs)).await;
+                    continue;
+                }
+
+                let terminal_content = terminal_response
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if !terminal_content.trim().is_empty() {
+                    println!("{}", terminal_content);
                     io::stdout().flush()?;
                 }
                 if progress.status == "error" {
@@ -182,7 +214,7 @@ pub(super) async fn stream_turn_progress(
                         .map(str::trim)
                         .filter(|value| !value.is_empty())
                     {
-                        if !progress.content.contains(error_message) {
+                        if !terminal_content.contains(error_message) {
                             println!("[agent error] {error_message}");
                             println!(
                                 "[inspect] defra-agent show response {}",
@@ -198,7 +230,7 @@ pub(super) async fn stream_turn_progress(
                         io::stdout().flush()?;
                     }
                 }
-                return Ok(response_row.unwrap_or(Value::Null));
+                return Ok(terminal_response);
             }
         }
 

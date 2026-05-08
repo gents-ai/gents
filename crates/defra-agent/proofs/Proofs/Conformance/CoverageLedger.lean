@@ -198,6 +198,10 @@ def caseCoverage : List CoverageEntry :=
       "DesktopClientShellCases"
       "defra_agent_desktop_tauri::bridge::snapshot::tests::session_state::session_snapshot_projection_consumes_generated_client_shell_contract_cases"
   , consumerCoverage
+      "live_overlay_cases"
+      "LiveOverlayCases"
+      "live_overlay_conformance::live_overlay_cases_match_lean_table"
+  , consumerCoverage
       "tool_cases"
       "ToolExecutionPreflight"
       "state_machine_conformance::generated_tool_execution_cases_cover_preflight_and_retry_contracts"

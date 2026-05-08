@@ -179,6 +179,68 @@ impl DefraStreamWriter {
         }))
     }
 
+    /// Reset the live-tail buffer at a commit boundary.
+    ///
+    /// Clears the in-memory content/reasoning, leaves token_count cumulative
+    /// (metering field), and persists empty content/reasoning on the
+    /// streaming response row. progress_seq is not bumped here — it is
+    /// owned by `RequestLifecycle::advance` and bumps at lifecycle
+    /// boundaries (which are exactly the call sites that invoke
+    /// reset_tail).
+    pub async fn reset_tail(&self, doc_id: &str) -> Result<()> {
+        tracing::debug!(
+            doc_id = %doc_id,
+            "resetting streaming response live tail"
+        );
+        {
+            let mut buffers = self.buffers.lock().await;
+            let buf = buffers
+                .get_mut(doc_id)
+                .ok_or_else(|| anyhow::anyhow!("no buffer for doc_id={}", doc_id))?;
+            buf.content.clear();
+            buf.reasoning.clear();
+            buf.last_flush_at = Instant::now();
+        }
+
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentResponse(
+                    filter: {{
+                        _docID: {{ _eq: "{doc_id}" }},
+                        status: {{ _eq: "streaming" }}
+                    }},
+                    input: {{
+                        content: "",
+                        reasoning: ""
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+
+        let resp =
+            execute_mutation_with_retry(&self.node, &mutation, "reset_streaming_response_tail")
+                .await?;
+
+        if !resp
+            .data
+            .as_ref()
+            .and_then(|data| data.get("update_AgentResponse"))
+            .is_some_and(response_has_documents)
+        {
+            let current = load_response_state(&self.node, doc_id).await?;
+            anyhow::bail!(
+                "cannot reset tail of AgentResponse {} because it is {}",
+                doc_id,
+                current
+                    .as_ref()
+                    .map(|response| response.status.as_str())
+                    .unwrap_or("missing")
+            );
+        }
+
+        Ok(())
+    }
+
     pub async fn set_error_message(&self, doc_id: &str, error_message: &str) -> Result<()> {
         let escaped_error_message = escape_graphql_string(error_message);
         let mutation = format!(
@@ -477,6 +539,12 @@ fn build_finalize_mutation(
     let request_transition = existing
         .map(|existing| build_request_terminal_update(&existing.request_id, status))
         .unwrap_or_default();
+    // content / reasoning are always cleared on finalize because they
+    // represent the live tail (issue #64). token_count is preserved as a
+    // cumulative metering field — only updated when the in-memory buffer
+    // is present (the snapshot path); on the crash-recovery path
+    // (`snapshot = None`) the previously-flushed token_count is left
+    // untouched.
     match snapshot {
         Some(snapshot) => format!(
             r#"mutation {{
@@ -486,8 +554,8 @@ fn build_finalize_mutation(
                         status: {{ _eq: "streaming" }}
                     }},
                     input: {{
-                        content: "{content}",
-                        reasoning: "{reasoning}",
+                        content: "",
+                        reasoning: "",
                         status: "{status}",
                         token_count: {token_count},
                         completed_at: "{now}"
@@ -495,8 +563,6 @@ fn build_finalize_mutation(
                 ) {{ _docID }}
                 {request_transition}
             }}"#,
-            content = escape_graphql_string(&snapshot.content),
-            reasoning = escape_graphql_string(&snapshot.reasoning),
             status = status.as_str(),
             token_count = snapshot.token_count,
         ),
@@ -508,6 +574,8 @@ fn build_finalize_mutation(
                         status: {{ _eq: "streaming" }}
                     }},
                     input: {{
+                        content: "",
+                        reasoning: "",
                         status: "{status}",
                         completed_at: "{now}"
                     }}

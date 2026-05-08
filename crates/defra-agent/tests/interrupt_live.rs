@@ -19,6 +19,7 @@ use anyhow::Result;
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{interrupt_request, AgentIdentity, DefraAgent, ToolCeiling};
+use defra_agent_protocol::transcript::present_persisted_message;
 
 use support::fixtures::test_identity;
 use support::interrupt::{
@@ -26,7 +27,9 @@ use support::interrupt::{
     wait_for_response_content_min_len, wait_for_response_doc_id, wait_for_runtime_ready,
     BootedAgent,
 };
-use support::snapshots::{fetch_response_content, fetch_response_interrupted_at};
+use support::snapshots::{
+    fetch_message_snapshots_for_session, fetch_response_content, fetch_response_interrupted_at,
+};
 
 const DEFAULT_LIVE_ENDPOINT: &str = "http://100.74.68.88:8000/v1";
 const DEFAULT_LIVE_MODEL: &str = "Qwen3.5-122B-A10B-NVFP4";
@@ -75,9 +78,20 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
     assert_eq!(call.failure_reason.as_deref(), Some("Cancelled"));
 
     let final_content = fetch_response_content(&db.node, &response_doc_id).await;
+    assert_eq!(
+        final_content, "",
+        "live interrupt must clear AgentResponse.content after persisting the partial turn"
+    );
+    let messages = fetch_message_snapshots_for_session(&db.node, session_id).await;
+    let before_interrupt_prefix = before_interrupt.trim();
     assert!(
-        final_content.starts_with(&before_interrupt),
-        "live interrupt must preserve content streamed before the interrupt; before={before_interrupt:?} final={final_content:?}"
+        messages.iter().any(|message| {
+            message.role == "assistant"
+                && present_persisted_message(&message.role, &message.content)
+                    .body_markdown
+                    .starts_with(before_interrupt_prefix)
+        }),
+        "live interrupt must preserve content streamed before the interrupt in AgentMessage; before={before_interrupt:?}"
     );
     assert!(
         fetch_response_interrupted_at(&db.node, &response_doc_id)
@@ -90,7 +104,7 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
     let settled_content = fetch_response_content(&db.node, &response_doc_id).await;
     assert_eq!(
         settled_content, final_content,
-        "response content should stop changing after interrupted lifecycle is persisted"
+        "response live tail should stay empty after interrupted lifecycle is persisted"
     );
 
     agent.shutdown().await;

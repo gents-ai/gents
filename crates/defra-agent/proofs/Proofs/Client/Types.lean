@@ -59,9 +59,15 @@ structure RequestSnapshot where
 
 /-- Snapshot of an AgentResponse as observed by the client.
     progressSeq is omitted — it orders response versions
-    but does not affect the derivation result. -/
+    but does not affect the derivation result.
+    `tailEmpty` reflects whether both live-tail fields (content/reasoning)
+    are empty. It does not affect `deriveAttempt` and is not read by
+    `projectActiveOverlay`, which takes more granular `hasContent` /
+    `hasReasoning` parameters from the runtime. The flag is exposed for
+    client-side render decisions that only need the single empty bit. -/
 structure ResponseSnapshot where
-  status : ResponseStatus
+  status    : ResponseStatus
+  tailEmpty : Bool
   deriving DecidableEq, Repr
 
 /-- A single attempt observation: request + optional response. -/

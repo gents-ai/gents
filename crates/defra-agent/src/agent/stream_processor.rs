@@ -123,6 +123,7 @@ impl<'a> StreamProcessor<'a> {
                         .await,
                     "persist streamed tool result",
                 )?;
+                self.stream_writer.reset_tail(self.doc_id).await?;
                 Ok(StreamAction::Continue)
             }
             Ok(MultiTurnStreamItem::FinalResponse(response)) => {
@@ -137,6 +138,7 @@ impl<'a> StreamProcessor<'a> {
                             .await,
                         "mark final assistant turn materialized",
                     )?;
+                    self.stream_writer.reset_tail(self.doc_id).await?;
                 }
                 self.final_text = Some(response.response().to_string());
                 Ok(StreamAction::Done)
@@ -167,6 +169,7 @@ impl<'a> StreamProcessor<'a> {
                 .map(|_| ()),
             context,
         )?;
+        self.stream_writer.reset_tail(self.doc_id).await?;
 
         Ok(true)
     }

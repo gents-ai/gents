@@ -10,7 +10,6 @@ mod schema;
 mod store;
 
 pub use collection_resolver::CollectionResolver;
-pub use query::{fetch_doc_patch, load_agent_scoped_snapshot};
 pub use core::{ClientCore, ClientCoreOptions, ClientPeerStatus, P2PHealth, P2PHealthStatus};
 pub use mutations::{
     CreatedConversation, PeerMutationResult, SubmitRequestOptions, SubmittedRequest,
@@ -19,4 +18,5 @@ pub use observe::{ObservedStore, ObserverHandle, ObserverMetricsSnapshot};
 pub use paths::DesktopPaths;
 pub use peer_directory::{PeerDirectory, PeerRecord};
 pub use principal_identity::PrincipalIdentity;
+pub use query::{fetch_doc_patch, load_agent_scoped_snapshot};
 pub use store::{ClientStore, ClientStoreRows, TaskRecentRuns, TranscriptView};
