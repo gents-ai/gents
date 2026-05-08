@@ -560,6 +560,68 @@ async fn integration_bridge_failure_superseded_projects_to_failed() {
 }
 
 // ---------------------------------------------------------------------------
+// Integration: cascade intent — bridge_cancel_cascade after real cancel_during_run
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn integration_cascade_intent_for_cascade_subagent_returns_some() {
+    let db = test_db("tc-sa-cas-1").await;
+    let mut lc = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        "sess-cas-1".to_string(),
+        "tc-cas-1".to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        "{}".to_string(),
+        AwaitMode::Foreground,
+        CancelPolicy::Cascade,
+        "child-req-cas-1".to_string(),
+    );
+    lc.start_running().await.unwrap();
+    lc.cancel_during_run().await.unwrap();
+    let intent = lc.bridge_cancel_cascade().await.unwrap();
+    assert!(intent.is_some());
+    assert_eq!(intent.unwrap().child_request_id, "child-req-cas-1");
+}
+
+#[tokio::test]
+async fn integration_cascade_intent_for_detached_subagent_returns_none() {
+    let db = test_db("tc-sa-cas-2").await;
+    let mut lc = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        "sess-cas-2".to_string(),
+        "tc-cas-2".to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        "{}".to_string(),
+        AwaitMode::Foreground,
+        CancelPolicy::Detach,
+        "child-req-cas-2".to_string(),
+    );
+    lc.start_running().await.unwrap();
+    lc.cancel_during_run().await.unwrap();
+    let intent = lc.bridge_cancel_cascade().await.unwrap();
+    assert!(intent.is_none(), "Detach policy returns None");
+}
+
+#[tokio::test]
+async fn integration_cascade_intent_for_native_returns_none() {
+    let db = test_db("tc-sa-cas-3").await;
+    let mut lc = ToolCallLifecycle::new(
+        db.node.clone(),
+        "sess-cas-3".to_string(),
+        "tc-cas-3".to_string(),
+        1,
+        "echo".to_string(),
+        "{}".to_string(),
+    );
+    lc.start_running().await.unwrap();
+    lc.cancel_during_run().await.unwrap();
+    let intent = lc.bridge_cancel_cascade().await.unwrap();
+    assert!(intent.is_none(), "Native tool (no child_request_id) returns None");
+}
+
+// ---------------------------------------------------------------------------
 // Sanity test: make_terminal_request creates rows in each terminal state
 // ---------------------------------------------------------------------------
 
