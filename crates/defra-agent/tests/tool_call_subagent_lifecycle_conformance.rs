@@ -174,6 +174,116 @@ async fn make_terminal_request(
 }
 
 // ---------------------------------------------------------------------------
+// Integration: background → foreground round-trip persists await_mode
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn integration_background_then_foreground_persists_round_trip() {
+    let db = test_db("tc-sa-int-1").await;
+
+    let mut lc = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        "sess-int-1".to_string(),
+        "tc-int-1".to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        "{}".to_string(),
+        AwaitMode::Foreground,
+        CancelPolicy::Cascade,
+        "child-req-int-1".to_string(),
+    );
+    lc.start_running().await.unwrap();
+
+    // Flip to background and verify persisted await_mode.
+    lc.background().await.unwrap();
+    let resp = db.node.execute(
+        r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "tc-int-1" } }) { await_mode } }"#
+    ).await;
+    assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
+    let data = resp.data.expect("data");
+    let rows = data["AgentToolCall"].as_array().expect("array");
+    assert_eq!(rows.len(), 1, "expected one row");
+    assert_eq!(
+        rows[0]["await_mode"].as_str(),
+        Some("background"),
+        "await_mode should be persisted as 'background' after background()"
+    );
+
+    // Flip back to foreground and verify persisted await_mode.
+    lc.foreground().await.unwrap();
+    let resp = db.node.execute(
+        r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "tc-int-1" } }) { await_mode } }"#
+    ).await;
+    assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
+    let data = resp.data.expect("data");
+    let rows = data["AgentToolCall"].as_array().expect("array");
+    assert_eq!(rows.len(), 1, "expected one row");
+    assert_eq!(
+        rows[0]["await_mode"].as_str(),
+        Some("foreground"),
+        "await_mode should be persisted as 'foreground' after foreground()"
+    );
+
+    // Calling foreground() again returns ModeAlreadyForeground.
+    let err = lc.foreground().await.unwrap_err();
+    assert!(
+        matches!(
+            err.downcast_ref::<IllegalToolCallTransition>(),
+            Some(IllegalToolCallTransition::ModeAlreadyForeground)
+        ),
+        "expected ModeAlreadyForeground on second foreground() call, got: {err:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Integration: detach one-way persists cancel_policy
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn integration_detach_one_way_persists() {
+    let db = test_db("tc-sa-det-1").await;
+
+    let mut lc = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        "sess-det-1".to_string(),
+        "tc-det-1".to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        "{}".to_string(),
+        AwaitMode::Foreground,
+        CancelPolicy::Cascade,
+        "child-req-det-1".to_string(),
+    );
+    lc.start_running().await.unwrap();
+
+    lc.detach().await.unwrap();
+
+    // Verify cancel_policy is persisted as "detach".
+    let resp = db.node.execute(
+        r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "tc-det-1" } }) { cancel_policy } }"#
+    ).await;
+    assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
+    let data = resp.data.expect("data");
+    let rows = data["AgentToolCall"].as_array().expect("array");
+    assert_eq!(rows.len(), 1, "expected one row");
+    assert_eq!(
+        rows[0]["cancel_policy"].as_str(),
+        Some("detach"),
+        "cancel_policy should be persisted as 'detach' after detach()"
+    );
+
+    // detach again errors.
+    let err = lc.detach().await.unwrap_err();
+    assert!(
+        matches!(
+            err.downcast_ref::<IllegalToolCallTransition>(),
+            Some(IllegalToolCallTransition::PolicyAlreadyDetach)
+        ),
+        "expected PolicyAlreadyDetach on second detach() call, got: {err:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Sanity test: make_completed_request creates a row with the expected state
 // ---------------------------------------------------------------------------
 

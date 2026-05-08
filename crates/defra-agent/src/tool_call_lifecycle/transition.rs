@@ -513,6 +513,12 @@ impl ToolCallLifecycle {
             .doc_id
             .as_ref()
             .ok_or_else(|| anyhow!("background called before start_running persisted a row"))?;
+        // DefraDB requires DateTime fields to be re-supplied on update to
+        // avoid a type-mismatch error when re-validating the document.
+        let started_at = self
+            .started_at
+            .ok_or_else(|| anyhow!("background called without started_at set"))?;
+        let started_at_str = started_at.to_rfc3339();
 
         let escaped_doc_id = escape_graphql_string(doc_id);
 
@@ -520,7 +526,7 @@ impl ToolCallLifecycle {
             r#"mutation {{
                 update_AgentToolCall(
                     filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
-                    input: {{ await_mode: "background" }}
+                    input: {{ await_mode: "background", started_at: "{started_at_str}" }}
                 ) {{ _docID }}
             }}"#
         );
@@ -549,6 +555,12 @@ impl ToolCallLifecycle {
             .doc_id
             .as_ref()
             .ok_or_else(|| anyhow!("foreground called before start_running persisted a row"))?;
+        // DefraDB requires DateTime fields to be re-supplied on update to
+        // avoid a type-mismatch error when re-validating the document.
+        let started_at = self
+            .started_at
+            .ok_or_else(|| anyhow!("foreground called without started_at set"))?;
+        let started_at_str = started_at.to_rfc3339();
 
         let escaped_doc_id = escape_graphql_string(doc_id);
 
@@ -556,7 +568,7 @@ impl ToolCallLifecycle {
             r#"mutation {{
                 update_AgentToolCall(
                     filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
-                    input: {{ await_mode: "foreground" }}
+                    input: {{ await_mode: "foreground", started_at: "{started_at_str}" }}
                 ) {{ _docID }}
             }}"#
         );
@@ -585,6 +597,15 @@ impl ToolCallLifecycle {
             .doc_id
             .as_ref()
             .ok_or_else(|| anyhow!("doc_id must be set before policy-flip"))?;
+        // DefraDB requires DateTime fields to be re-supplied on update to
+        // avoid a type-mismatch error when re-validating the document.
+        // started_at is only set once the row is in Running state; for Pending
+        // state the row has not been created yet so this field will be absent.
+        let started_at_fragment = if let Some(started_at) = self.started_at {
+            format!(", started_at: \"{}\"", started_at.to_rfc3339())
+        } else {
+            String::new()
+        };
 
         let escaped_doc_id = escape_graphql_string(doc_id);
 
@@ -592,7 +613,7 @@ impl ToolCallLifecycle {
             r#"mutation {{
                 update_AgentToolCall(
                     filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
-                    input: {{ cancel_policy: "detach" }}
+                    input: {{ cancel_policy: "detach"{started_at_fragment} }}
                 ) {{ _docID }}
             }}"#
         );
