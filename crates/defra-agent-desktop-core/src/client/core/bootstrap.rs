@@ -9,7 +9,7 @@ use p2p::iroh::parse_public_peer_addr;
 use tokio::sync::{mpsc, watch};
 use tokio::time::{sleep, Instant};
 
-use super::super::observe::{spawn_observer, ObservedStore};
+use super::super::observe::{spawn_observer_with_selection, ObservedStore};
 use super::super::paths::DesktopPaths;
 use super::super::peer_directory::{PeerDirectory, PeerRecord};
 use super::super::principal_identity::PrincipalIdentity;
@@ -77,15 +77,29 @@ impl ClientCore {
         ));
         ensure_runtime_schemas(node.as_ref()).await?;
         subscribe_all_collections(node.as_ref()).await?;
+
+        // Open the EventName::Update subscription BEFORE reading the
+        // bootstrap snapshot. Writes that land between subscribe and the
+        // snapshot read are buffered in the bounded mpsc and drained by
+        // the observer on first tick. merge_snapshot is idempotent so
+        // duplicates are harmless.
+        let observer_subscription = node.subscribe(&[defra_node::EventName::Update]);
+
+        // Create the selection channel BEFORE the observer is spawned so the
+        // observer can use the receiver for scoped drop-recovery reloads.
+        let (selected_agent_did, _) = watch::channel::<Option<String>>(None);
+
         let initial_snapshot = {
             let records = peer_directory.read().await.records().to_vec();
             load_full_snapshot_with_peer_records(node.as_ref(), &records).await?
         };
         let (store, _store_updates) = ObservedStore::new(initial_snapshot);
-        let observer = spawn_observer(
+        let observer = spawn_observer_with_selection(
             Arc::clone(&node),
             Arc::clone(&store),
             Arc::clone(&peer_directory),
+            observer_subscription,
+            selected_agent_did.subscribe(),
         );
 
         let p2p = node
@@ -134,6 +148,8 @@ impl ClientCore {
             p2p_supervisor: tokio::sync::Mutex::new(Some(p2p_supervisor)),
             materialization_supervisor: tokio::sync::Mutex::new(Some(materialization_supervisor)),
             p2p_health,
+            selected_agent_did,
+            last_loaded_for: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             p2p_control: tokio::sync::Mutex::new(Some(p2p_control)),
             last_mutation_error: std::sync::RwLock::new(None),
             local_peer_id,

@@ -465,6 +465,89 @@ fn p2p_health_materially_changed_ignores_probe_timestamps() {
     assert!(!p2p_health_materially_changed(&previous, &next));
 }
 
+#[tokio::test]
+async fn selected_agent_did_channel_updates_subscribers() {
+    use crate::client::paths::DesktopPaths;
+
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
+    let options = ClientCoreOptions::local_only();
+    let core = ClientCore::start_with_paths_and_options(paths, options)
+        .await
+        .expect("client core");
+
+    let mut rx = core.selected_agent_did_rx();
+    assert_eq!(rx.borrow().clone(), None);
+
+    core.set_selected_agent_did(Some("did:alpha".to_string()));
+    rx.changed().await.expect("watch update");
+    assert_eq!(rx.borrow().clone(), Some("did:alpha".to_string()));
+
+    core.set_selected_agent_did(None);
+    rx.changed().await.expect("watch update");
+    assert_eq!(rx.borrow().clone(), None);
+
+    core.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
+async fn refresh_store_succeeds_with_selection_set() {
+    use crate::client::paths::DesktopPaths;
+
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
+    let options = ClientCoreOptions::local_only();
+    let core = ClientCore::start_with_paths_and_options(paths, options)
+        .await
+        .expect("client core");
+
+    // Without selection: should hit load_full_snapshot path.
+    core.refresh_store().await.expect("refresh full");
+
+    // With selection: should hit scoped path.
+    core.set_selected_agent_did(Some("did:any".to_string()));
+    core.refresh_store().await.expect("refresh scoped");
+
+    core.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
+async fn ensure_agent_loaded_debounces_repeats() {
+    use crate::client::paths::DesktopPaths;
+
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
+    let core = ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
+        .await
+        .expect("core");
+
+    let first = core.ensure_agent_loaded("did:alpha").await.expect("first");
+    let second = core.ensure_agent_loaded("did:alpha").await.expect("second");
+    assert!(first, "first call should load");
+    assert!(
+        !second,
+        "second call within debounce window should be a no-op"
+    );
+
+    core.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
+async fn ensure_agent_loaded_distinguishes_agents() {
+    use crate::client::paths::DesktopPaths;
+
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
+    let core = ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
+        .await
+        .expect("core");
+
+    assert!(core.ensure_agent_loaded("did:alpha").await.expect("alpha"));
+    assert!(core.ensure_agent_loaded("did:beta").await.expect("beta"));
+
+    core.shutdown().await.expect("shutdown");
+}
+
 #[test]
 fn p2p_health_materially_changed_detects_live_topology_change() {
     let previous = P2PHealth {
@@ -482,4 +565,30 @@ fn p2p_health_materially_changed_detects_live_topology_change() {
     };
 
     assert!(p2p_health_materially_changed(&previous, &next));
+}
+
+#[tokio::test]
+async fn observer_metrics_returns_snapshot() {
+    use crate::client::paths::DesktopPaths;
+
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
+    let core = ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
+        .await
+        .expect("core");
+
+    let metrics = core.observer_metrics().await;
+    assert!(
+        metrics.is_some(),
+        "observer should be running and expose metrics"
+    );
+
+    core.shutdown().await.expect("shutdown");
+
+    // After shutdown the observer is gone; metrics should be None.
+    let metrics = core.observer_metrics().await;
+    assert!(
+        metrics.is_none(),
+        "observer metrics should be None after shutdown"
+    );
 }

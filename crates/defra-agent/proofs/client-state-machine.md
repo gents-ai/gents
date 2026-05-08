@@ -285,6 +285,20 @@ Polling interval guidance:
 - 500-1000 ms for active turns
 - 5-10 s for idle session monitoring
 
+### Incremental Observation Invariants
+
+A compliant client MUST open its `EventName::Update` subscription before
+reading the initial snapshot and MUST drain the subscription continuously
+thereafter. Drop-counter signals (`Subscription::check_and_reset_dropped() > 0`)
+MUST trigger a scope-bounded resync, scoped to the currently-selected
+`agent_did` when one is set. Per-event patches MUST upsert by stable per-collection
+key (the `*_merge_key` functions in `defra-agent-desktop-core::client::store`),
+so that row-level merges converge to the same state a full reload would produce.
+
+These invariants preserve T1 — equivalent merged observations converge before
+derivation — and therefore preserve the `deriveTurn` properties (T2-T5)
+proved in `Proofs/Client.lean`.
+
 ## Formal Notes
 
 T2-T5 are proven in `Proofs/Client.lean`. T1 is documented there as a merge-layer

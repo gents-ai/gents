@@ -15,6 +15,7 @@ defra-agent-protocol.workspace = true
 defra-node = { workspace = true, features = ["p2p", "rocksdb"] }
 defra-p2p-adapter.workspace = true
 dirs.workspace = true
+events.workspace = true
 identity.workspace = true
 p2p.workspace = true
 reqwest.workspace = true

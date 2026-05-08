@@ -7,6 +7,7 @@ mod writes;
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
@@ -23,7 +24,9 @@ use super::observe::{ObservedStore, ObserverHandle};
 use super::paths::DesktopPaths;
 use super::peer_directory::{PeerDirectory, PeerRecord};
 use super::principal_identity::PrincipalIdentity;
-use super::query::{load_full_snapshot, load_full_snapshot_from_graphql};
+use super::query::{
+    load_agent_scoped_snapshot, load_full_snapshot, load_full_snapshot_from_graphql,
+};
 
 const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -155,6 +158,8 @@ pub struct ClientCore {
     p2p_supervisor: Mutex<Option<JoinHandle<()>>>,
     materialization_supervisor: Mutex<Option<JoinHandle<()>>>,
     p2p_health: watch::Sender<P2PHealth>,
+    selected_agent_did: watch::Sender<Option<String>>,
+    last_loaded_for: tokio::sync::Mutex<HashMap<String, std::time::Instant>>,
     p2p_control: Mutex<Option<mpsc::Sender<P2PSupervisorCommand>>>,
     last_mutation_error: StdRwLock<Option<String>>,
     local_peer_id: String,
@@ -208,6 +213,18 @@ impl ClientCore {
 
     pub fn p2p_health_updates(&self) -> watch::Receiver<P2PHealth> {
         self.p2p_health.subscribe()
+    }
+
+    pub fn set_selected_agent_did(&self, agent_did: Option<String>) {
+        self.selected_agent_did.send_replace(agent_did);
+    }
+
+    pub fn selected_agent_did(&self) -> Option<String> {
+        self.selected_agent_did.borrow().clone()
+    }
+
+    pub fn selected_agent_did_rx(&self) -> watch::Receiver<Option<String>> {
+        self.selected_agent_did.subscribe()
     }
 
     pub async fn peer_records(&self) -> Vec<PeerRecord> {
@@ -273,13 +290,18 @@ impl ClientCore {
     }
 
     pub async fn refresh_store(&self) -> Result<u64> {
-        let snapshot = load_full_snapshot(self.node.as_ref()).await?;
+        let scoped = self.selected_agent_did();
+        let snapshot = match scoped.as_deref() {
+            Some(did) => load_agent_scoped_snapshot(self.node.as_ref(), did).await?,
+            None => load_full_snapshot(self.node.as_ref()).await?,
+        };
         let rows = snapshot.row_count();
         let version = self.store.merge_snapshot(snapshot);
         tracing::debug!(
             target: "defra_agent_desktop_core::replication",
             version,
             rows,
+            scoped = scoped.is_some(),
             "desktop local replica snapshot refreshed"
         );
         Ok(version)
@@ -314,6 +336,9 @@ impl ClientCore {
             .filter(|value| !value.is_empty())
             .ok_or_else(|| anyhow::anyhow!("peer {} has no GraphQL endpoint", record.label))?;
 
+        // Remote peers serve only their own agent's data, so the remote-side
+        // "full snapshot" is already agent-scoped from our perspective. The
+        // local-side merge is unchanged.
         let mut snapshot = load_full_snapshot_from_graphql(graphql).await?;
         snapshot.stamp_source_agent_did(&record.agent_did);
         let rows = snapshot.row_count();
@@ -326,9 +351,48 @@ impl ClientCore {
             graphql,
             version,
             rows,
-            "desktop remote peer snapshot merged"
+            "desktop remote peer snapshot merged (peer is single-agent scoped)"
         );
         Ok(version)
+    }
+
+    const SELECTION_RELOAD_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(2);
+
+    /// Ensure the local store has fresh rows for `agent_did`. If a prior
+    /// `ensure_agent_loaded(agent_did)` ran within `SELECTION_RELOAD_DEBOUNCE`,
+    /// returns `Ok(false)` without doing work. Otherwise loads a scoped
+    /// snapshot, merges it into the store, and records the timestamp.
+    pub async fn ensure_agent_loaded(&self, agent_did: &str) -> Result<bool> {
+        let now = std::time::Instant::now();
+        let mut map = self.last_loaded_for.lock().await;
+        if let Some(last) = map.get(agent_did) {
+            if now.duration_since(*last) < Self::SELECTION_RELOAD_DEBOUNCE {
+                return Ok(false);
+            }
+        }
+        let snapshot = load_agent_scoped_snapshot(self.node.as_ref(), agent_did).await?;
+        let rows = snapshot.row_count();
+        let version = self.store.merge_snapshot(snapshot);
+        map.insert(agent_did.to_string(), now);
+        tracing::info!(
+            target: "defra_agent_desktop_core::replication",
+            agent_did,
+            rows,
+            version,
+            "ensure_agent_loaded merged scoped snapshot"
+        );
+        Ok(true)
+    }
+
+    /// Snapshot the observer's metrics if the observer is running.
+    pub async fn observer_metrics(
+        &self,
+    ) -> Option<crate::client::observe::ObserverMetricsSnapshot> {
+        self.observer
+            .lock()
+            .await
+            .as_ref()
+            .map(|h| h.metrics_snapshot())
     }
 
     pub async fn shutdown(&self) -> Result<()> {

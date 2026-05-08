@@ -3698,6 +3698,7 @@ dependencies = [
  "defra-node",
  "defra-p2p-adapter",
  "dirs 5.0.1",
+ "events",
  "identity",
  "p2p",
  "reqwest 0.12.28",

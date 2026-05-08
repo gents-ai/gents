@@ -118,3 +118,62 @@ pub(crate) fn desktop_client_snapshot(
     let core = current_core(&state);
     tauri::async_runtime::block_on(build_client_snapshot(core.as_ref()))
 }
+
+#[tauri::command]
+pub(crate) fn desktop_set_selected_agent(
+    state: State<'_, DesktopAppState>,
+    agent_did: Option<String>,
+) -> Result<(), String> {
+    let Some(core) = current_core(&state) else {
+        return Err("desktop client not initialized".to_string());
+    };
+    let did = agent_did
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    core.set_selected_agent_did(did.clone());
+
+    // Lazy-load the new scope's rows. Best-effort: log a warning on failure
+    // but don't fail the selection update — the next refresh or event will
+    // converge.
+    if let Some(did_str) = did {
+        let core_arc = Arc::clone(&core);
+        tauri::async_runtime::spawn(async move {
+            if let Err(err) = core_arc.ensure_agent_loaded(&did_str).await {
+                tracing::warn!(error = %err, agent_did = %did_str, "ensure_agent_loaded failed");
+            }
+        });
+    }
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+pub(crate) struct DesktopObserverMetrics {
+    pub events_received: u64,
+    pub docs_fetched: u64,
+    pub debounce_flushes: u64,
+    pub scope_reloads: u64,
+    pub drop_recoveries: u64,
+    pub local_write_redundant_fetches: u64,
+    pub fetch_failures: u64,
+}
+
+#[tauri::command]
+pub(crate) async fn desktop_observer_metrics(
+    state: State<'_, DesktopAppState>,
+) -> Result<Option<DesktopObserverMetrics>, String> {
+    let Some(core) = current_core(&state) else {
+        return Ok(None);
+    };
+    let Some(snap) = core.observer_metrics().await else {
+        return Ok(None);
+    };
+    Ok(Some(DesktopObserverMetrics {
+        events_received: snap.events_received,
+        docs_fetched: snap.docs_fetched,
+        debounce_flushes: snap.debounce_flushes,
+        scope_reloads: snap.scope_reloads,
+        drop_recoveries: snap.drop_recoveries,
+        local_write_redundant_fetches: snap.local_write_redundant_fetches,
+        fetch_failures: snap.fetch_failures,
+    }))
+}
