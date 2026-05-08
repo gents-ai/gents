@@ -2,6 +2,7 @@ import Proofs.Process
 import Proofs.Request
 import Proofs.InferenceCall
 import Proofs.Persistence
+import Proofs.ToolExecution
 
 /-!
 # Cross-Layer Composition
@@ -10,12 +11,14 @@ Combines the process, request, and persistence layers into a single
 single-execution composed state.
 -/
 
-/-- The composed state of all single-execution layers. -/
+/-- The composed state of all single-execution layers, including the
+    optional in-flight tool call. -/
 structure ComposedState where
   requestId : RequestId
   process : ProcessState
   request : RequestContext
   call : InferenceCall
+  tool : Option ToolExecution.ToolCallContext := none
   deriving Repr
 
 namespace ComposedState
@@ -81,6 +84,7 @@ def initial : ComposedState :=
     , backend := { val := "initial-backend" }
     , state := .queued
     }
+  , tool := none
   }
 
 /-!
