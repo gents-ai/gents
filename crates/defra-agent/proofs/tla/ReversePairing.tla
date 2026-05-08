@@ -283,6 +283,52 @@ RPCWellFormed ==
           \/ /\ rpc.kind = "Ack"
              /\ rpc.of \in rpcIdsUsed
 
+(***************************************************************************)
+(* Supporting invariant: in-flight justification (bounded-model form).     *)
+(*                                                                         *)
+(* For every reachable state WHERE FreshIds(1) holds, every               *)
+(* desired/replicator disagreement is either:                              *)
+(*   (a) matched by a reconciling RPC anywhere in the system (inFlight,    *)
+(*       messages, or pendingInbound), OR                                  *)
+(*   (b) structurally eligible for Reconcile (no blocking duplicate        *)
+(*       in-flight RPC) — meaning the system is one Reconcile firing away  *)
+(*       from emitting the resolving RPC.                                  *)
+(*                                                                         *)
+(* The outer FreshIds(1) guard scopes the invariant to states where the    *)
+(* system can act: pool-exhausted states are a TLC-bounding artifact (the  *)
+(* real system has an effectively unbounded ID space) and are excluded.    *)
+(*                                                                         *)
+(* The second disjunct qualifies the invariant for the OperatorWrite/      *)
+(* Reconcile window and for post-Crash recovery states where the gap       *)
+(* exists but no RPC is in flight yet. Under fairness on Reconcile, the   *)
+(* second disjunct collapses to the first within finitely many steps.      *)
+(*                                                                         *)
+(* This is the inductive invariant supporting the leads-to liveness        *)
+(* property to be added in Task 10.                                        *)
+(***************************************************************************)
+
+InstallJustified ==
+  \A n, p \in Node, c \in Collection :
+    (n # p /\ c \in desired[n][p] /\ c \notin replicator[p][n])
+    => \/ \E rpc \in inFlight[n] \cup messages \cup pendingInbound[p] :
+            /\ rpc.kind = "Install"
+            /\ rpc.src = n
+            /\ rpc.tgt = p
+            /\ rpc.collection = c
+       \/ ~PendingInstallFor(n, p, c)
+
+TeardownJustified ==
+  \A n, p \in Node, c \in Collection :
+    (n # p /\ c \in replicator[p][n] /\ c \notin desired[n][p])
+    => \/ \E rpc \in inFlight[n] \cup messages \cup pendingInbound[p] :
+            /\ rpc.kind = "Teardown"
+            /\ rpc.src = n
+            /\ rpc.tgt = p
+            /\ rpc.collection = c
+       \/ ~PendingTeardownFor(n, p, c)
+
+InFlightJustified == FreshIds(1) => (InstallJustified /\ TeardownJustified)
+
 Spec == Init /\ [][Next]_vars
 
 ====
