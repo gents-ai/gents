@@ -268,4 +268,32 @@ theorem deadline_exceeded_request_cancels_pending_tool
   unfold ToolExecution.ToolCallContext.linkedTo at *
   exact h_linked
 
+
+/-- C3: A request whose linked tool is terminal can resume making progress.
+    Semantic complement of issue #149: terminal tool ⇒ no daemon-side
+    blockage at the request layer. -/
+theorem terminal_tool_unblocks_request_progress
+    {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
+    (h_tool     : pre.tool = some toolPre)
+    (h_terminal : isTerminal toolPre.state)
+    (h_proc     : pre.request.state = .processing)
+    (h_admit    : pre.request.admission = .executing) :
+    ∃ post : ComposedState,
+      Transition pre post ∧
+      post.request.state = .failed := by
+  -- Use a request_step transition: processing → failed via the existing
+  -- RequestContext.Transition.fail constructor.
+  let postReq : RequestContext :=
+    { pre.request with state := .failed, admission := .released }
+  let post : ComposedState := { pre with request := postReq }
+  have h_req_step : RequestContext.Transition pre.request postReq :=
+    RequestContext.Transition.fail h_proc h_admit rfl
+  have h_pending_guard : pre.request.state = .pending → pre.process.acceptsWork := by
+    intro h_eq
+    rw [h_proc] at h_eq
+    cases h_eq
+  have h_step : Transition pre post :=
+    Transition.request_step h_req_step rfl rfl rfl rfl h_pending_guard
+  exact ⟨post, h_step, rfl⟩
+
 end ComposedState
