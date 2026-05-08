@@ -106,6 +106,7 @@ use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
 
+mod query;
 mod transition;
 
 pub use transition::IllegalToolCallTransition;
@@ -155,6 +156,22 @@ impl ToolCallLifecycle {
     #[cfg(test)]
     pub(crate) fn state_for_test(&self) -> ToolCallState {
         self.state
+    }
+
+    pub(crate) fn set_doc_id(&mut self, doc_id: Option<String>) {
+        self.doc_id = doc_id;
+    }
+
+    pub(crate) fn set_state(&mut self, state: ToolCallState) {
+        self.state = state;
+    }
+
+    pub(crate) fn set_started_at(&mut self, t: Option<chrono::DateTime<chrono::Utc>>) {
+        self.started_at = t;
+    }
+
+    pub(crate) fn set_failure_class(&mut self, fc: Option<FailureClass>) {
+        self.failure_class = fc;
     }
 }
 
