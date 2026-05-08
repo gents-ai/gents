@@ -17,7 +17,6 @@ mod rows;
 mod sessions;
 #[cfg(test)]
 mod tests;
-mod tool_calls;
 
 pub use compaction_entries::{load_compaction_entries, save_compaction_entry};
 #[allow(unused_imports)]
@@ -40,14 +39,7 @@ pub(crate) use sessions::{
     create_session_with_behavior_id, create_session_with_id, ensure_session,
     ensure_session_with_behavior_id, max_sequence,
 };
-pub async fn load_tool_call_result(
-    node: &EmbeddedNode,
-    session_id: &str,
-    tool_call_id: &str,
-) -> Result<String> {
-    tool_calls::load_tool_call_result(node, session_id, tool_call_id).await
-}
-pub(crate) use tool_calls::{complete_tool_call, save_tool_call};
+pub use crate::tool_call_lifecycle::query::load_tool_call_result;
 
 const MAX_MUTATION_RETRIES: u32 = 3;
 const INITIAL_RETRY_BACKOFF_MS: u64 = 100;

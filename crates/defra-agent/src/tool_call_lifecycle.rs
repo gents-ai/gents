@@ -107,7 +107,7 @@ use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
 
-mod query;
+pub(crate) mod query;
 mod transition;
 
 pub use transition::IllegalToolCallTransition;
