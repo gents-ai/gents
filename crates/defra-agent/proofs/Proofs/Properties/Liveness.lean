@@ -84,7 +84,7 @@ theorem claimed_eventually_terminal
   have h_req : RequestContext.Transition pre.request postRequest := by
     exact RequestContext.Transition.fail_before_stream h_claimed h_admission rfl
   have h_step : ComposedState.Transition pre post := by
-    refine ComposedState.Transition.request_step h_req rfl rfl rfl ?_
+    refine ComposedState.Transition.request_step h_req rfl rfl rfl rfl ?_
     intro h_pending
     rw [h_claimed] at h_pending
     simp at h_pending

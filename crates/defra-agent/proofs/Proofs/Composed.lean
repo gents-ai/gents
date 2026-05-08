@@ -23,18 +23,22 @@ structure ComposedState where
 
 namespace ComposedState
 
-/-- A composed transition is valid only when cross-layer guards hold. -/
+/-- A composed transition is valid only when cross-layer guards hold.
+    Each constructor lifts a single-layer transition; the other layers must
+    be unchanged across the composed step. -/
 inductive Transition : ComposedState → ComposedState → Prop where
   | process_step {pre post : ComposedState} :
       ProcessState.Transition pre.process post.process →
       post.request = pre.request →
       post.call = pre.call →
+      post.tool = pre.tool →
       post.requestId = pre.requestId →
       Transition pre post
   | request_step {pre post : ComposedState} :
       RequestContext.Transition pre.request post.request →
       post.process = pre.process →
       post.call = pre.call →
+      post.tool = pre.tool →
       post.requestId = pre.requestId →
       (pre.request.state = .pending → pre.process.acceptsWork) →
       Transition pre post
@@ -44,13 +48,28 @@ inductive Transition : ComposedState → ComposedState → Prop where
       post.request = { pre.request with persistence := nextPersistence } →
       post.process = pre.process →
       post.call = pre.call →
+      post.tool = pre.tool →
       post.requestId = pre.requestId →
       Transition pre post
   | call_step {pre post : ComposedState} :
       InferenceCall.Transition pre.call post.call →
       post.request = pre.request →
       post.process = pre.process →
+      post.tool = pre.tool →
       post.requestId = pre.requestId →
+      Transition pre post
+  | tool_step {pre post : ComposedState} {toolPre toolPost : ToolExecution.ToolCallContext} :
+      pre.tool = some toolPre →
+      ToolExecution.ToolCallContext.Transition toolPre toolPost →
+      post.tool = some toolPost →
+      post.request = pre.request →
+      post.process = pre.process →
+      post.call = pre.call →
+      post.requestId = pre.requestId →
+      -- structural composition guards: tool tracks the parent request
+      toolPre.requestId = pre.requestId →
+      toolPre.deadline = pre.request.deadline →
+      toolPre.currentTime = pre.request.currentTime →
       Transition pre post
 
 /-- A trace is a sequence of valid composed transitions. -/
@@ -120,7 +139,7 @@ theorem interrupted_request_cancels_live_linked_call
     | inr h_running =>
         exact InferenceCall.cancel_during_stream_transition h_running rfl
   have h_step : Transition pre post := by
-    exact Transition.call_step h_call_step rfl rfl rfl
+    exact Transition.call_step h_call_step rfl rfl rfl rfl
   refine ⟨post, Trace.step h_step Trace.refl, rfl, ?_, ?_, ?_, h_call_trace⟩
   · exact h_interrupted
   · unfold InferenceCall.linkedTo
