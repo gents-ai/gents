@@ -102,6 +102,58 @@ impl FailureClass {
     }
 }
 
+use std::sync::Arc;
+
+use defra_node::EmbeddedNode;
+
+/// State machine struct for an individual tool call. Mirrors `RequestLifecycle`
+/// from `lifecycle.rs:189-204`. Owns every persistence write for a single
+/// AgentToolCall row.
+pub struct ToolCallLifecycle {
+    node: Arc<EmbeddedNode>,
+    session_id: String,
+    tool_call_id: String,
+    message_sequence: u32,
+    tool_name: String,
+    args: String,
+    doc_id: Option<String>,
+    state: ToolCallState,
+    started_at: Option<chrono::DateTime<chrono::Utc>>,
+    failure_class: Option<FailureClass>,
+}
+
+impl ToolCallLifecycle {
+    /// Construct a new lifecycle. Does NOT persist; the first transition
+    /// method (`start_running`) creates the DefraDB row.
+    pub fn new(
+        node: Arc<EmbeddedNode>,
+        session_id: String,
+        tool_call_id: String,
+        message_sequence: u32,
+        tool_name: String,
+        args: String,
+    ) -> Self {
+        Self {
+            node,
+            session_id,
+            tool_call_id,
+            message_sequence,
+            tool_name,
+            args,
+            doc_id: None,
+            state: ToolCallState::Pending,
+            started_at: None,
+            failure_class: None,
+        }
+    }
+
+    /// Test-only accessor for the current in-memory state.
+    #[cfg(test)]
+    pub(crate) fn state_for_test(&self) -> ToolCallState {
+        self.state
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,5 +190,18 @@ mod tests {
     #[test]
     fn failure_class_all_lists_five_variants() {
         assert_eq!(FailureClass::ALL.len(), 5);
+    }
+
+    #[test]
+    fn lifecycle_new_signature_compiles() {
+        // Compile-only sanity test: behavior verified in Bucket 3 integration tests.
+        let _: fn(
+            std::sync::Arc<defra_node::EmbeddedNode>,
+            String,
+            String,
+            u32,
+            String,
+            String,
+        ) -> ToolCallLifecycle = ToolCallLifecycle::new;
     }
 }
