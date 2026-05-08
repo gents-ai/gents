@@ -304,6 +304,46 @@ def inferenceCallMachine : StateMachineContract :=
       InferenceCall.step?
       (fun call => call.state.toDefraDB))
 
+def toolCallStates : List ToolExecution.ToolCallState :=
+  ToolExecution.ToolCallState.all
+
+def toolCallStateNames : List String :=
+  toolCallStates.map ToolExecution.ToolCallState.toDefraDB
+
+def toolCallActions : List (String × ToolExecution.ToolCallContext.Action) :=
+  [ ("dispatch", .dispatch)
+  , ("spawnFailed_external", .spawnFailed .external)
+  , ("complete", .complete)
+  , ("fail_external", .fail .external)
+  , ("timeout", .timeout)
+  , ("cancelBeforeDispatch", .cancelBeforeDispatch)
+  , ("cancelDuringRun", .cancelDuringRun)
+  ]
+
+def toolCallWithState (state : ToolExecution.ToolCallState) : ToolExecution.ToolCallContext :=
+  { callId := 1
+  , requestId := 1
+  , state := state
+  , operation := .nativeCommand
+  , deadline := 1
+  , startedAt := none
+  , currentTime := 2
+  , failureClass := none
+  , persistence := .committed
+  }
+
+def toolCallMachine : StateMachineContract :=
+  machineContract
+    "ToolCall"
+    toolCallStateNames
+    (terminalNames toolCallStates ToolExecution.ToolCallState.toDefraDB)
+    (actionNames toolCallActions)
+    (transitionPairsFromSamples
+      (toolCallStates.map toolCallWithState)
+      toolCallActions
+      ToolExecution.ToolCallContext.step?
+      (fun call => call.state.toDefraDB))
+
 def toolRetryDispositions : List ToolExecution.RetryDisposition :=
   ToolExecution.RetryDisposition.all
 
@@ -331,6 +371,7 @@ def vocabularies : List VocabularyContract :=
         , .streamDroppedBeforeTerminalResponse
         ].map InferenceCallTerminalReason.toDefraDB
     }
+  , { domain := "ToolCallState", values := toolCallStateNames }
   , { domain := "ToolRetryDisposition", values := toolRetryDispositionNames }
   ]
 
@@ -344,6 +385,7 @@ def stateMachines : List StateMachineContract :=
   , runtimeReconcileMachine
   , sessionRecoveryMachine
   , inferenceCallMachine
+  , toolCallMachine
   ]
 
 end Conformance.Contracts
