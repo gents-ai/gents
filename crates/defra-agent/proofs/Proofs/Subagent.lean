@@ -1,4 +1,5 @@
 import Proofs.Subagent.State
+import Proofs.Subagent.Bridge
 
 /-!
 # Subagent
