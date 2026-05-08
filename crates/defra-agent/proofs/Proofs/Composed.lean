@@ -235,4 +235,37 @@ theorem deadline_exceeded_request_timesOut_running_tool
   unfold ToolExecution.ToolCallContext.linkedTo at *
   exact h_linked
 
+
+/-- C1': A request whose deadline is exceeded cancels a Pending linked tool
+    call. Companion to C1 — a Pending tool never ran, so it reaches
+    .cancelled rather than .timedOut. -/
+theorem deadline_exceeded_request_cancels_pending_tool
+    {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
+    (h_tool     : pre.tool = some toolPre)
+    (h_pending  : toolPre.state = .pending)
+    (h_linked   : toolPre.linkedTo pre.requestId)
+    (h_deadline : pre.request.deadlineExceeded)
+    (h_synced   : toolPre.requestId = pre.requestId ∧
+                  toolPre.deadline = pre.request.deadline ∧
+                  toolPre.currentTime = pre.request.currentTime) :
+    ∃ post toolPost,
+      Trace pre post ∧
+      post.tool = some toolPost ∧
+      post.request = pre.request ∧
+      toolPost.state = .cancelled ∧
+      toolPost.linkedTo pre.requestId := by
+  obtain ⟨h_sync_id, h_sync_deadline, h_sync_time⟩ := h_synced
+  let toolPost : ToolExecution.ToolCallContext :=
+    { toolPre with state := .cancelled }
+  let post : ComposedState := { pre with tool := some toolPost }
+  have h_t_step : ToolExecution.ToolCallContext.Transition toolPre toolPost :=
+    ToolExecution.ToolCallContext.Transition.cancelBeforeDispatch
+      (h_state := h_pending) (h_post := rfl)
+  have h_step : Transition pre post :=
+    Transition.tool_step h_tool h_t_step rfl rfl rfl rfl rfl
+      h_sync_id h_sync_deadline h_sync_time
+  refine ⟨post, toolPost, Trace.step h_step Trace.refl, rfl, rfl, rfl, ?_⟩
+  unfold ToolExecution.ToolCallContext.linkedTo at *
+  exact h_linked
+
 end ComposedState
