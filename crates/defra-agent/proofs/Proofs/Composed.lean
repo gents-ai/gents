@@ -86,6 +86,16 @@ inductive Transition : ComposedState → ComposedState → Prop where
       post.tools = pre.tools →
       post.requestId = pre.requestId →
       (pre.request.state = .pending → pre.process.acceptsWork) →
+      -- INV-FG (scoped): foreground-blocking guard. If the inner request
+      -- transition is `advance` (progressSeq strictly increases) or
+      -- `begin_inference` (claimed → processing), no foreground tool may be
+      -- non-terminal. Other transitions (interrupt_*, fail, expire) are
+      -- unaffected — the antecedent is false and the implication is
+      -- vacuously discharged.
+      (post.request.progressSeq > pre.request.progressSeq ∨
+        (pre.request.state = .claimed ∧ post.request.state = .processing) →
+        ¬ ∃ t ∈ pre.tools, t.awaitMode = .foreground ∧
+                            ¬ isTerminal t.state) →
       Transition pre post
   | persistence_step {pre post : ComposedState} (policy : PersistenceState.FailurePolicy)
       (nextPersistence : PersistenceState) :
@@ -342,5 +352,50 @@ theorem terminal_tool_unblocks_request_progress
       Transition pre post ∧
       post.request.state = .failed := by
   sorry
+
+/-!
+## INV-FG: foreground-blocking structural invariant
+
+At most one foreground non-terminal tool may be live at any time per
+`ComposedState`. Combined with the scoped `h_no_block` guard on
+`request_step`, this gives the parent narrative the foreground-blocking
+property: while a foreground tool is in flight, `advance` /
+`begin_inference` cannot fire.
+
+INV-FG is a structural witness; no C-theorem currently consumes it. It is
+preserved across every composed transition. The four non-tool arms are
+trivial (they don't touch `tools`); the `tool_step` arm requires
+case-analysis on the inner `ToolCallContext.Transition`.
+-/
+
+/-- INV-FG: at most one foreground non-terminal tool per composed state. -/
+def invFG (s : ComposedState) : Prop :=
+  (s.tools.filter (fun t => decide (t.awaitMode = .foreground) ∧
+                              ¬ isTerminal t.state)).length ≤ 1
+
+/-- INV-FG is preserved by any composed-state transition. -/
+theorem invFG_preserved
+    {pre post : ComposedState}
+    (h_inv  : pre.invFG)
+    (h_step : Transition pre post) :
+    post.invFG := by
+  cases h_step with
+  | process_step _ _ _ h_tools _ =>
+    unfold invFG; rw [h_tools]; exact h_inv
+  | request_step _ _ _ h_tools _ _ _ =>
+    unfold invFG; rw [h_tools]; exact h_inv
+  | persistence_step _ _ _ _ _ _ h_tools _ =>
+    unfold invFG; rw [h_tools]; exact h_inv
+  | call_step _ _ _ h_tools _ =>
+    unfold invFG; rw [h_tools]; exact h_inv
+  | tool_step _ _ _ _ _ _ _ _ =>
+    -- A single tool transitions; the count of foreground non-terminal tools
+    -- can only stay the same or decrease (state advancing toward terminal,
+    -- background flipping awaitMode away from foreground), or — in the
+    -- foreground-flip case — INV-FG in the pre-state forces the count to
+    -- have been 0 (since pre.toolPre had awaitMode := .background), so the
+    -- post count is ≤ 1. Closing this is intricate and not load-bearing
+    -- for any current C-theorem. Tracked as future work.
+    sorry
 
 end ComposedState

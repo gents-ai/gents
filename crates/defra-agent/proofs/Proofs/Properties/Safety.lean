@@ -177,7 +177,7 @@ theorem recovery_blocks_claims
     have : s'.request.state = s.request.state := congrArg RequestContext.state h_req_eq
     rw [this]
     exact h_pending
-  | request_step _ _ _ _ _ h_guard =>
+  | request_step _ _ _ _ _ h_guard _ =>
     have h_accepts := h_guard h_pending
     rw [h_recovering] at h_accepts
     exact absurd h_accepts (fun h => h)
