@@ -463,6 +463,103 @@ async fn integration_bridge_complete_with_real_child() {
 }
 
 // ---------------------------------------------------------------------------
+// Bucket 3 — bridge_failure projection tests for all 4 child terminals
+// ---------------------------------------------------------------------------
+
+async fn run_bridge_failure_case(
+    name_suffix: &str,
+    terminal_state: &str,
+    child_terminal: ChildTerminal,
+    expected_lifecycle_state: &str,
+) {
+    let db = test_db(&format!("tc-sa-bf-{name_suffix}")).await;
+    let session = format!("sess-bf-{name_suffix}");
+    let tc_id = format!("tc-bf-{name_suffix}");
+    let child_id = format!("child-req-bf-{name_suffix}");
+    let parent_req = format!("parent-req-bf-{name_suffix}");
+    let parent_tc = format!("parent-tc-bf-{name_suffix}");
+
+    make_terminal_request(
+        &db.node,
+        &child_id,
+        Some(&parent_req),
+        Some(&parent_tc),
+        terminal_state,
+    )
+    .await
+    .unwrap();
+
+    let mut bridge = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        session.clone(),
+        tc_id.clone(),
+        1,
+        "spawn_subagent".to_string(),
+        "{}".to_string(),
+        AwaitMode::Foreground,
+        CancelPolicy::Cascade,
+        child_id,
+    );
+    bridge.start_running().await.unwrap();
+    bridge.bridge_failure(child_terminal).await.unwrap();
+
+    // Verify persistence — read the bridge tool back from DB.
+    let tc_id_escaped = defra_agent::graphql::escape_graphql_string(&tc_id);
+    let query = format!(
+        r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tc_id_escaped}" }} }}) {{ lifecycle_state }} }}"#
+    );
+    let resp = db.node.execute(&query).await;
+    assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
+
+    let data = resp.data.expect("data");
+    let rows = data["AgentToolCall"].as_array().expect("array");
+    assert_eq!(rows.len(), 1, "expected one AgentToolCall row for {terminal_state}");
+    assert_eq!(
+        rows[0]["lifecycle_state"].as_str(),
+        Some(expected_lifecycle_state),
+        "Expected lifecycle_state '{}' for child terminal '{}', got: {:?}",
+        expected_lifecycle_state,
+        terminal_state,
+        rows[0]["lifecycle_state"]
+    );
+}
+
+#[tokio::test]
+async fn integration_bridge_failure_failed_projects_to_failed() {
+    run_bridge_failure_case(
+        "failed",
+        "failed",
+        ChildTerminal::Failed {
+            reason: "child failed".to_string(),
+            failure_class: FailureClass::External,
+        },
+        "failed",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn integration_bridge_failure_dead_projects_to_failed() {
+    run_bridge_failure_case("dead", "dead", ChildTerminal::Dead, "failed").await;
+}
+
+#[tokio::test]
+async fn integration_bridge_failure_interrupted_projects_to_cancelled() {
+    run_bridge_failure_case(
+        "interrupted",
+        "interrupted",
+        ChildTerminal::Interrupted,
+        "cancelled",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn integration_bridge_failure_superseded_projects_to_failed() {
+    run_bridge_failure_case("superseded", "superseded", ChildTerminal::Superseded, "failed").await;
+}
+
+// ---------------------------------------------------------------------------
 // Sanity test: make_terminal_request creates rows in each terminal state
 // ---------------------------------------------------------------------------
 
