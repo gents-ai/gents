@@ -392,6 +392,77 @@ async fn test_make_completed_request_child_sets_depth_and_parent_fields() {
 }
 
 // ---------------------------------------------------------------------------
+// Integration: bridge_complete end-to-end with real child request
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn integration_bridge_complete_with_real_child() {
+    let db = test_db("tc-sa-bc-1").await;
+
+    // 1. Create a child AgentRequest already in .completed state.
+    let child_request_id = "child-bc-1";
+    make_completed_request(
+        &db.node,
+        child_request_id,
+        Some("parent-req-bc1"),
+        Some("parent-tc-bc1"),
+        "child final assistant message",
+    )
+    .await
+    .unwrap();
+
+    // 2. Construct the parent bridge tool call and start_running.
+    let mut bridge = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        "sess-bc1".to_string(),
+        "tc-bc1".to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        "{}".to_string(),
+        AwaitMode::Foreground,
+        CancelPolicy::Cascade,
+        child_request_id.to_string(),
+    );
+    bridge.start_running().await.unwrap();
+
+    // 3. Call bridge_complete with the projected child output.
+    let projected_output = "child final assistant message".to_string();
+    bridge.bridge_complete(projected_output.clone()).await.unwrap();
+
+    // 4. Verify the bridge tool's persisted lifecycle_state, result, and
+    //    child_request_id.
+    let resp = db.node.execute(
+        r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "tc-bc1" } }) {
+            lifecycle_state
+            result
+            child_request_id
+        } }"#,
+    ).await;
+    assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
+
+    let data = resp.data.expect("data");
+    let rows = data["AgentToolCall"].as_array().expect("array");
+    assert_eq!(rows.len(), 1, "expected one AgentToolCall row");
+
+    let row = &rows[0];
+    assert_eq!(
+        row["lifecycle_state"].as_str(),
+        Some("completed"),
+        "lifecycle_state should be 'completed' after bridge_complete"
+    );
+    assert_eq!(
+        row["result"].as_str(),
+        Some("child final assistant message"),
+        "result should be the projected child output"
+    );
+    assert_eq!(
+        row["child_request_id"].as_str(),
+        Some(child_request_id),
+        "child_request_id should be persisted from start_running"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Sanity test: make_terminal_request creates rows in each terminal state
 // ---------------------------------------------------------------------------
 

@@ -89,6 +89,21 @@ impl ToolCallLifecycle {
         let tool_call_key = format!("{escaped_session_id}:{escaped_tool_call_id}");
         let message_sequence = self.message_sequence;
 
+        // Persist subagent-specific fields when this tool has a child link.
+        // These are optional schema fields so we emit them only when set.
+        let subagent_fields = if let Some(ref crid) = self.child_request_id {
+            let escaped_crid = escape_graphql_string(crid);
+            let await_mode_str = self.await_mode.as_str();
+            let cancel_policy_str = self.cancel_policy.as_str();
+            format!(
+                r#"child_request_id: "{escaped_crid}",
+                    await_mode: "{await_mode_str}",
+                    cancel_policy: "{cancel_policy_str}","#
+            )
+        } else {
+            String::new()
+        };
+
         let mutation = format!(
             r#"mutation {{
                 create_AgentToolCall(input: {{
@@ -102,6 +117,7 @@ impl ToolCallLifecycle {
                     status: "called",
                     lifecycle_state: "running",
                     started_at: "{started_at_str}",
+                    {subagent_fields}
                     selected_service_id: null,
                     selected_tool_name: null,
                     tool_failure_class: null,
