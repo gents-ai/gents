@@ -5,6 +5,65 @@ use std::time::Instant;
 use super::cooldown::{take_next_eligible_pending_request, PROCESSED_REQUEST_COOLDOWN};
 use super::*;
 
+// ---------------------------------------------------------------------------
+// validate_agent_request_subagent_coherence
+// ---------------------------------------------------------------------------
+
+#[test]
+fn validate_rejects_mixed_parent_linkage_request_id_only() {
+    let req = AgentRequest {
+        subagent_depth: 1,
+        caused_by_parent_request_id: Some("parent-req-1".to_string()),
+        caused_by_parent_tool_call_id: None,
+        ..base_request()
+    };
+    assert!(validate_agent_request_subagent_coherence(&req).is_err());
+}
+
+#[test]
+fn validate_rejects_mixed_parent_linkage_tool_call_id_only() {
+    let req = AgentRequest {
+        subagent_depth: 1,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: Some("parent-tc-1".to_string()),
+        ..base_request()
+    };
+    assert!(validate_agent_request_subagent_coherence(&req).is_err());
+}
+
+#[test]
+fn validate_rejects_subagent_depth_zero_with_parent_fields() {
+    let req = AgentRequest {
+        subagent_depth: 0,
+        caused_by_parent_request_id: Some("parent-req-1".to_string()),
+        caused_by_parent_tool_call_id: Some("parent-tc-1".to_string()),
+        ..base_request()
+    };
+    assert!(validate_agent_request_subagent_coherence(&req).is_err());
+}
+
+#[test]
+fn validate_accepts_top_level_request() {
+    let req = AgentRequest {
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: None,
+        ..base_request()
+    };
+    assert!(validate_agent_request_subagent_coherence(&req).is_ok());
+}
+
+#[test]
+fn validate_accepts_subagent_request() {
+    let req = AgentRequest {
+        subagent_depth: 1,
+        caused_by_parent_request_id: Some("parent-req-1".to_string()),
+        caused_by_parent_tool_call_id: Some("parent-tc-1".to_string()),
+        ..base_request()
+    };
+    assert!(validate_agent_request_subagent_coherence(&req).is_ok());
+}
+
 #[test]
 fn agent_request_clone() {
     let req = AgentRequest {
@@ -62,6 +121,10 @@ fn cooled_down_request_becomes_eligible_again() {
 
     assert_eq!(request.request_id, "req-1");
     assert_eq!(processed_request_ids.get("req-1").copied(), Some(later));
+}
+
+fn base_request() -> AgentRequest {
+    request("req-base", "sess-base")
 }
 
 fn request(request_id: &str, session_id: &str) -> AgentRequest {

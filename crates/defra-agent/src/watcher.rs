@@ -5,6 +5,8 @@ use std::time::Instant;
 use anyhow::Result;
 use defra_node::{EmbeddedNode, EventName};
 
+use crate::tool_call_lifecycle::IllegalToolCallTransition;
+
 mod cooldown;
 mod query;
 #[cfg(test)]
@@ -33,6 +35,26 @@ pub struct AgentRequest {
     pub subagent_depth: u32,
     pub caused_by_parent_request_id: Option<String>,
     pub caused_by_parent_tool_call_id: Option<String>,
+}
+
+/// Coherence check on AgentRequest's subagent fields:
+/// - caused_by_parent_request_id and caused_by_parent_tool_call_id must be
+///   set together (both Some) or together (both None).
+/// - subagent_depth = 0 ↔ both parent fields are None.
+pub fn validate_agent_request_subagent_coherence(req: &AgentRequest) -> Result<()> {
+    let has_parent_req = req.caused_by_parent_request_id.is_some();
+    let has_parent_tc = req.caused_by_parent_tool_call_id.is_some();
+    if has_parent_req != has_parent_tc {
+        return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
+    }
+    let is_top_level = !has_parent_req; // both None
+    if is_top_level && req.subagent_depth != 0 {
+        return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
+    }
+    if !is_top_level && req.subagent_depth == 0 {
+        return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
+    }
+    Ok(())
 }
 
 pub trait Watcher: Send + Sync {
