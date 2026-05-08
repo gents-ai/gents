@@ -1,5 +1,6 @@
 import Proofs.Subagent.State
 import Proofs.Subagent.Bridge
+import Proofs.Subagent.Transition
 
 /-!
 # Subagent
