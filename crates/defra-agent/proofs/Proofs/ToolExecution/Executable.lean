@@ -37,7 +37,7 @@ def step? (pre : ToolCallContext) : Action → Option ToolCallContext
       else
         none
   | .complete =>
-      if pre.state = .running ∧ pre.persistence = .committed then
+      if pre.state = .running ∧ pre.persistence = .committed ∧ pre.childRequestId = none then
         some { pre with state := .completed }
       else
         none
@@ -78,8 +78,8 @@ theorem step_refines_transition
       exact Transition.spawnFailed failure (h_state := h_state) (h_post := h_post.symm)
   | complete =>
       simp [step?] at h_step
-      rcases h_step with ⟨⟨h_state, h_persist⟩, h_post⟩
-      exact Transition.complete (h_state := h_state) (h_persist := h_persist) (h_post := h_post.symm)
+      rcases h_step with ⟨⟨h_state, h_persist, h_native⟩, h_post⟩
+      exact Transition.complete (h_state := h_state) (h_persist := h_persist) (h_native := h_native) (h_post := h_post.symm)
   | fail failure =>
       simp [step?] at h_step
       rcases h_step with ⟨h_state, h_post⟩
