@@ -236,6 +236,19 @@ Timeout(n, rpc) ==
   /\ inFlight' = [inFlight EXCEPT ![n] = @ \ {rpc}]
   /\ UNCHANGED <<desired, replicator, pendingInbound, messages, crashCount, rpcIdsUsed>>
 
+(***************************************************************************)
+(* Crash(n): clears n's in-memory state (inFlight, pendingInbound) and    *)
+(* increments crashCount. Bounded by MaxCrashes for finite model checking. *)
+(* Persisted state (desired, replicator) survives.                         *)
+(***************************************************************************)
+
+Crash(n) ==
+  /\ crashCount[n] < MaxCrashes
+  /\ inFlight'       = [inFlight       EXCEPT ![n] = {}]
+  /\ pendingInbound' = [pendingInbound EXCEPT ![n] = {}]
+  /\ crashCount'     = [crashCount     EXCEPT ![n] = @ + 1]
+  /\ UNCHANGED <<desired, replicator, messages, rpcIdsUsed>>
+
 Next ==
   \/ \E n \in Node, p \in Node, S \in SUBSET Collection : OperatorWrite(n, p, S)
   \/ \E n \in Node : Reconcile(n)
@@ -244,6 +257,7 @@ Next ==
   \/ \E recv \in Node : \E rpc \in pendingInbound[recv] : Process(recv, rpc)
   \/ \E n \in Node : \E ack \in pendingInbound[n] : ReceiveAck(n, ack)
   \/ \E n \in Node : \E rpc \in inFlight[n] : Timeout(n, rpc)
+  \/ \E n \in Node : Crash(n)
 
 Spec == Init /\ [][Next]_vars
 
