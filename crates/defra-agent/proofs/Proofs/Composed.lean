@@ -148,4 +148,52 @@ theorem interrupted_request_cancels_live_linked_call
     exact h_linked
   · exact InferenceCall.cancel_state pre.call
 
+
+/-- C2: An interrupted request cancels every live linked tool call.
+    Mirror of `interrupted_request_cancels_live_linked_call`. -/
+theorem interrupted_request_cancels_live_linked_tool
+    {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
+    (h_tool        : pre.tool = some toolPre)
+    (h_interrupted : pre.request.state = .interrupted)
+    (h_linked      : toolPre.linkedTo pre.requestId)
+    (h_live        : toolPre.cancellable)
+    (h_synced      : toolPre.requestId = pre.requestId ∧
+                     toolPre.deadline = pre.request.deadline ∧
+                     toolPre.currentTime = pre.request.currentTime) :
+    ∃ post toolPost,
+      Trace pre post ∧
+      post.tool = some toolPost ∧
+      post.request = pre.request ∧
+      toolPost.state = .cancelled ∧
+      toolPost.linkedTo pre.requestId := by
+  obtain ⟨h_sync_id, h_sync_deadline, h_sync_time⟩ := h_synced
+  -- Case-split on toolPre.state via h_live (which is .pending ∨ .running).
+  rcases h_live with h_pending | h_running
+  · -- Pending → cancelBeforeDispatch → Cancelled
+    let toolPost : ToolExecution.ToolCallContext :=
+      { toolPre with state := .cancelled }
+    let post : ComposedState := { pre with tool := some toolPost }
+    have h_t_step : ToolExecution.ToolCallContext.Transition toolPre toolPost :=
+      ToolExecution.ToolCallContext.Transition.cancelBeforeDispatch
+        (h_state := h_pending) (h_post := rfl)
+    have h_step : Transition pre post :=
+      Transition.tool_step h_tool h_t_step rfl rfl rfl rfl rfl
+        h_sync_id h_sync_deadline h_sync_time
+    refine ⟨post, toolPost, Trace.step h_step Trace.refl, rfl, rfl, rfl, ?_⟩
+    unfold ToolExecution.ToolCallContext.linkedTo at *
+    exact h_linked
+  · -- Running → cancelDuringRun → Cancelled
+    let toolPost : ToolExecution.ToolCallContext :=
+      { toolPre with state := .cancelled }
+    let post : ComposedState := { pre with tool := some toolPost }
+    have h_t_step : ToolExecution.ToolCallContext.Transition toolPre toolPost :=
+      ToolExecution.ToolCallContext.Transition.cancelDuringRun
+        (h_state := h_running) (h_post := rfl)
+    have h_step : Transition pre post :=
+      Transition.tool_step h_tool h_t_step rfl rfl rfl rfl rfl
+        h_sync_id h_sync_deadline h_sync_time
+    refine ⟨post, toolPost, Trace.step h_step Trace.refl, rfl, rfl, rfl, ?_⟩
+    unfold ToolExecution.ToolCallContext.linkedTo at *
+    exact h_linked
+
 end ComposedState
