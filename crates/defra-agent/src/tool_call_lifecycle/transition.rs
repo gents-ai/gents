@@ -397,6 +397,42 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
+    /// Running mode-flip: await_mode Background → Foreground.
+    ///
+    /// Lean parity: ToolCallContext.Transition.foreground.
+    /// Requires Running state. Returns `ModeAlreadyForeground` if already in
+    /// Foreground mode. Persists the new await_mode to the row, then updates
+    /// the in-memory field on success.
+    pub async fn foreground(&mut self) -> Result<()> {
+        self.ensure_state(&[ToolCallState::Running], "foreground")?;
+        if self.await_mode == AwaitMode::Foreground {
+            return Err(IllegalToolCallTransition::ModeAlreadyForeground.into());
+        }
+
+        let doc_id = self
+            .doc_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("foreground called before start_running persisted a row"))?;
+
+        let escaped_doc_id = escape_graphql_string(doc_id);
+
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentToolCall(
+                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    input: {{ await_mode: "foreground" }}
+                ) {{ _docID }}
+            }}"#
+        );
+
+        execute_mutation_with_retry(&self.node, &mutation, "foreground")
+            .await
+            .context("foreground mutation")?;
+
+        self.await_mode = AwaitMode::Foreground;
+        Ok(())
+    }
+
     /// Running → Cancelled. R1 does not call from runtime code; R4 wires up.
     pub async fn cancel_during_run(&mut self) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "cancel_during_run")?;
@@ -574,6 +610,57 @@ mod tests {
         // state is Pending (default); do not advance it
 
         let err = lc.background().await.unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::BadState { .. })
+            ),
+            "expected BadState, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn foreground_rejects_already_foreground() {
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new_subagent(
+            node,
+            "sess-fg-1".to_string(),
+            "tc-fg-1".to_string(),
+            1,
+            "spawn_subagent".to_string(),
+            "{}".to_string(),
+            AwaitMode::Foreground, // start already in Foreground
+            CancelPolicy::Cascade,
+            "child-req-fg-1".to_string(),
+        );
+        lc.set_state(ToolCallState::Running);
+        lc.set_doc_id(Some("fake-doc-id-fg-1".to_string()));
+        lc.set_started_at(Some(chrono::Utc::now()));
+
+        let err = lc.foreground().await.unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::ModeAlreadyForeground)
+            ),
+            "expected ModeAlreadyForeground, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn foreground_rejects_pending_state() {
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new(
+            node,
+            "sess-fg-2".to_string(),
+            "tc-fg-2".to_string(),
+            1,
+            "spawn_subagent".to_string(),
+            "{}".to_string(),
+        );
+        // state is Pending (default); do not advance it
+
+        let err = lc.foreground().await.unwrap_err();
         assert!(
             matches!(
                 err.downcast_ref::<IllegalToolCallTransition>(),
