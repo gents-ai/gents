@@ -195,11 +195,7 @@ impl ToolCallLifecycle {
 
     /// Pending → Failed. Used when the dispatcher cannot start the call
     /// (MCP service unreachable, argument parse failure pre-spawn).
-    pub async fn spawn_failed(
-        &mut self,
-        failure: super::FailureClass,
-        reason: &str,
-    ) -> Result<()> {
+    pub async fn spawn_failed(&mut self, failure: super::FailureClass, reason: &str) -> Result<()> {
         self.ensure_state(&[ToolCallState::Pending], "spawn_failed")?;
 
         // Pending means the row hasn't been created yet. We create it
@@ -254,10 +250,13 @@ impl ToolCallLifecycle {
     pub async fn timeout(&mut self) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "timeout")?;
 
-        let doc_id = self.doc_id.as_ref()
+        let doc_id = self
+            .doc_id
+            .as_ref()
             .ok_or_else(|| anyhow!("timeout called before start_running persisted a row"))?;
         let now = Utc::now();
-        let started_at = self.started_at
+        let started_at = self
+            .started_at
             .ok_or_else(|| anyhow!("timeout called without started_at set"))?;
         let latency_ms = (now - started_at).num_milliseconds();
 
@@ -337,10 +336,12 @@ impl ToolCallLifecycle {
     pub async fn cancel_during_run(&mut self) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "cancel_during_run")?;
 
-        let doc_id = self.doc_id.as_ref()
-            .ok_or_else(|| anyhow!("cancel_during_run called before start_running persisted a row"))?;
+        let doc_id = self.doc_id.as_ref().ok_or_else(|| {
+            anyhow!("cancel_during_run called before start_running persisted a row")
+        })?;
         let now = Utc::now();
-        let started_at = self.started_at
+        let started_at = self
+            .started_at
             .ok_or_else(|| anyhow!("cancel_during_run called without started_at set"))?;
         let latency_ms = (now - started_at).num_milliseconds();
 
