@@ -197,8 +197,10 @@ use std::sync::Arc;
 use defra_node::EmbeddedNode;
 
 pub(crate) mod query;
+pub mod subagent_request;
 mod transition;
 
+pub use subagent_request::{create_subagent_request, MAX_SUBAGENT_DEPTH};
 pub use transition::IllegalToolCallTransition;
 
 /// State machine struct for an individual tool call. Mirrors `RequestLifecycle`
