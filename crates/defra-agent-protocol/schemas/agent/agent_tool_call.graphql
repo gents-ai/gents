@@ -7,6 +7,7 @@ type AgentToolCall @branchable {
     args: String
     result: String
     status: String
+    lifecycle_state: String @index
     started_at: DateTime
     completed_at: DateTime
     selected_service_id: String
