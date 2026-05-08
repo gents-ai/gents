@@ -32,7 +32,7 @@ fn lens_wasm_path() -> PathBuf {
 
 /// Run all pending tool-call migrations against the embedded node.
 /// Called from the daemon startup path before any AgentToolCall reads.
-pub(crate) async fn ensure_tool_call_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+pub async fn ensure_tool_call_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
     // 1. Check if AgentToolCall already has lifecycle_state.
     let collection = node
         .get_collection("AgentToolCall")
