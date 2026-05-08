@@ -678,15 +678,17 @@ theorem detach_does_not_cancel_child
 /-! ### B6: foreground blocks parent advance -/
 
 /-- B6: A live foreground tool on the parent prevents the parent's
-    `progressSeq` from advancing across any single bridge `Transition`.
-    Restates the `no_blocking_foreground` guard at the BridgedState layer. -/
+    `progressSeq` and `messageSeq` from advancing across any single bridge
+    `Transition`. Restates the `no_blocking_foreground` guard at the
+    BridgedState layer. -/
 theorem foreground_blocks_parent_advance
     (pre post : BridgedState)
     (h_fg     : ∃ t ∈ pre.parent.tools,
                   t.awaitMode = .foreground ∧
                   ¬ isTerminal t.state)
     (h_step   : Transition pre post) :
-    pre.parent.request.progressSeq = post.parent.request.progressSeq := by
+    pre.parent.request.progressSeq = post.parent.request.progressSeq ∧
+    pre.parent.request.messageSeq  = post.parent.request.messageSeq := by
   cases h_step with
   | parent_step h_inner h_child_eq h_bridge_eq _ _ =>
     -- Inner ComposedState.Transition. Case-split.
@@ -698,9 +700,9 @@ theorem foreground_blocks_parent_advance
       -- and we cannot transition claimed → processing. Case-split on h_req.
       cases h_req with
       | claim _ _ _ h_post =>
-        rw [h_post]
+        constructor <;> rw [h_post]
       | dedup_lose _ _ h_post =>
-        rw [h_post]
+        constructor <;> rw [h_post]
       | begin_inference h_pre_claimed _ h_post =>
         -- begin_inference transitions claimed → processing; h_no_block fires
         -- via Or.inr ⟨pre.state = .claimed, post.state = .processing⟩, giving
@@ -720,37 +722,37 @@ theorem foreground_blocks_parent_advance
           exact Nat.lt_succ_self _
         · exact h_fg
       | finish _ _ h_post =>
-        rw [h_post]
+        constructor <;> rw [h_post]
       | fail _ _ h_post =>
-        rw [h_post]
+        constructor <;> rw [h_post]
       | fail_before_stream _ _ h_post =>
-        rw [h_post]
+        constructor <;> rw [h_post]
       | expire _ _ _ _ h_post =>
-        rw [h_post]
+        constructor <;> rw [h_post]
       | interrupt_before_claim _ _ _ h_post =>
-        rw [h_post]
+        constructor <;> rw [h_post]
       | interrupt_claimed _ _ _ h_post =>
-        rw [h_post]
+        constructor <;> rw [h_post]
       | interrupt_processing _ _ _ h_post =>
-        rw [h_post]
+        constructor <;> rw [h_post]
     | tool_step _ _ _ h_req_eq _ _ _ _ =>
-      rw [h_req_eq]
+      constructor <;> rw [h_req_eq]
     | process_step _ h_req _ _ _ =>
-      rw [h_req]
+      constructor <;> rw [h_req]
     | persistence_step _ _ _ h_req _ _ _ _ =>
-      rw [h_req]
+      constructor <;> rw [h_req]
     | call_step _ h_req _ _ _ =>
-      rw [h_req]
+      constructor <;> rw [h_req]
   | child_step _ h_parent_eq _ _ _ =>
-    rw [h_parent_eq]
+    constructor <;> rw [h_parent_eq]
   | bridge_spawn _ _ _ _ h_request_eq _ =>
-    rw [h_request_eq]
+    constructor <;> rw [h_request_eq]
   | bridge_complete _ _ _ _ _ h_request_eq _ _ _ =>
-    rw [h_request_eq]
+    constructor <;> rw [h_request_eq]
   | bridge_failure _ _ _ _ h_request_eq _ _ _ =>
-    rw [h_request_eq]
+    constructor <;> rw [h_request_eq]
   | bridge_cancel_cascade _ _ _ h_parent_eq _ _ _ _ _ =>
-    rw [h_parent_eq]
+    constructor <;> rw [h_parent_eq]
 
 /-- B4: Subagent depth bound. Restated standalone for prominence; alias of `inv_depth`. -/
 theorem subagent_depth_bounded
