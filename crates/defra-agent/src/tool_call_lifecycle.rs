@@ -413,3 +413,66 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod bucket_1_subagent_vocabulary {
+    use super::*;
+
+    #[test]
+    fn await_mode_round_trip_via_persisted_vocab() {
+        for &mode in AwaitMode::ALL {
+            assert_eq!(AwaitMode::from_persisted(mode.as_str()), Some(mode));
+        }
+    }
+
+    #[test]
+    fn await_mode_all_has_two_variants() {
+        assert_eq!(AwaitMode::ALL.len(), 2);
+    }
+
+    #[test]
+    fn await_mode_from_persisted_unknown_returns_none() {
+        assert_eq!(AwaitMode::from_persisted("unknown"), None);
+    }
+
+    #[test]
+    fn cancel_policy_round_trip_via_persisted_vocab() {
+        for &policy in CancelPolicy::ALL {
+            assert_eq!(CancelPolicy::from_persisted(policy.as_str()), Some(policy));
+        }
+    }
+
+    #[test]
+    fn cancel_policy_all_has_two_variants() {
+        assert_eq!(CancelPolicy::ALL.len(), 2);
+    }
+
+    #[test]
+    fn cancel_policy_from_persisted_unknown_returns_none() {
+        assert_eq!(CancelPolicy::from_persisted("unknown"), None);
+    }
+
+    #[test]
+    fn child_terminal_all_kind_has_four_variants() {
+        assert_eq!(ChildTerminal::ALL_KIND.len(), 4);
+        assert_eq!(
+            ChildTerminal::ALL_KIND,
+            &["failed", "dead", "interrupted", "superseded"]
+        );
+    }
+
+    #[test]
+    fn child_terminal_projection_partition() {
+        // .interrupted → .cancelled; everything else → .failed
+        assert_eq!(
+            ChildTerminal::Failed {
+                reason: "x".to_string(),
+                failure_class: FailureClass::External
+            }.projected_state(),
+            ToolCallState::Failed
+        );
+        assert_eq!(ChildTerminal::Dead.projected_state(), ToolCallState::Failed);
+        assert_eq!(ChildTerminal::Interrupted.projected_state(), ToolCallState::Cancelled);
+        assert_eq!(ChildTerminal::Superseded.projected_state(), ToolCallState::Failed);
+    }
+}
