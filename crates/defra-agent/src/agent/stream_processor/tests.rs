@@ -102,6 +102,9 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
         metadata: None,
         execution_origin: None,
         created_at: chrono::Utc::now().to_rfc3339(),
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: None,
     };
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),

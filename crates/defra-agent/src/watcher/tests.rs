@@ -21,6 +21,9 @@ fn agent_request_clone() {
         metadata: None,
         execution_origin: None,
         created_at: "2026-03-12T00:00:00Z".into(),
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: None,
     };
     let cloned = req.clone();
     assert_eq!(cloned.doc_id, "abc");
@@ -76,5 +79,8 @@ fn request(request_id: &str, session_id: &str) -> AgentRequest {
         metadata: None,
         execution_origin: None,
         created_at: "2026-03-12T00:00:00Z".into(),
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: None,
     }
 }

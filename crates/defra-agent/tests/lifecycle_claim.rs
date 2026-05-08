@@ -111,6 +111,9 @@ async fn claim_rejects_when_another_non_terminal_request_exists() {
         metadata: None,
         execution_origin: None,
         created_at: later,
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: None,
     };
 
     let mut lifecycle =
@@ -169,6 +172,9 @@ async fn claim_suppresses_later_pending_duplicates() {
         metadata: None,
         execution_origin: None,
         created_at: "2026-03-23T00:00:00Z".into(),
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: None,
     };
 
     let mut lifecycle =
@@ -254,6 +260,9 @@ async fn claim_preserves_explicit_behavior_id() {
         metadata: None,
         execution_origin: None,
         created_at: created_at.into(),
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: None,
     };
 
     let mut lifecycle =

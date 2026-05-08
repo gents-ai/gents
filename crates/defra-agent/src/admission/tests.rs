@@ -57,6 +57,9 @@ fn request(request_id: &str) -> AgentRequest {
         metadata: None,
         execution_origin: None,
         created_at: "2026-04-15T00:00:00Z".to_string(),
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: None,
     }
 }
 

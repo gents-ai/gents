@@ -360,6 +360,9 @@ pub fn build_request(
         metadata: None,
         execution_origin: None,
         created_at,
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: None,
     }
 }
 
