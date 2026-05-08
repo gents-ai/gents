@@ -209,50 +209,57 @@ inductive BridgedState.Transition : BridgedState → BridgedState → Prop where
       (h_bridgeId_eq   : post.bridgeCallId = pre.bridgeCallId)
       : Transition pre post
 
-  | bridge_spawn {pre post}
-      (h_proc        : pre.parent.request.state = .processing)
-      (h_depth       : pre.parent.request.subagentDepth + 1 ≤ maxSubagentDepth)
-      (h_new_tool    : ∃ t ∈ post.parent.tools,
-                         t.callId = post.bridgeCallId ∧
-                         t.state = .pending ∧
-                         t.childRequestId = some post.child.request.requestId)
-      (h_new_child   : post.child.request.state = .pending ∧
-                       post.child.request.causedByParentRequestId =
-                         some pre.parent.request.requestId ∧
-                       post.child.request.causedByParentToolCallId =
-                         some post.bridgeCallId ∧
-                       post.child.request.subagentDepth =
-                         pre.parent.request.subagentDepth + 1)
+  | bridge_spawn {pre post} {newTool : ToolCallContext}
+      (h_proc           : pre.parent.request.state = .processing)
+      (h_depth          : pre.parent.request.subagentDepth + 1 ≤ maxSubagentDepth)
+      (h_callId_fresh   : ∀ t ∈ pre.parent.tools, t.callId ≠ post.bridgeCallId)
+      (h_newTool_shape  : newTool.callId = post.bridgeCallId ∧
+                           newTool.state = .pending ∧
+                           newTool.childRequestId = some post.child.requestId)
+      (h_tools_append   : post.parent.tools = pre.parent.tools ++ [newTool])
+      (h_request_eq     : post.parent.request = pre.parent.request)
+      (h_child_pending  : post.child.request.state = .pending ∧
+                           post.child.request.interruptRequestedAt = none ∧
+                           post.child.request.causedByParentRequestId =
+                             some pre.parent.requestId ∧
+                           post.child.request.causedByParentToolCallId =
+                             some post.bridgeCallId ∧
+                           post.child.request.subagentDepth =
+                             pre.parent.request.subagentDepth + 1)
+      (h_child_no_tools : post.child.tools = [])
       : Transition pre post
 
-  | bridge_complete {pre post}
-      (h_child_terminal : pre.child.request.state = .completed)
-      (h_running        : ∃ t ∈ pre.parent.tools,
-                            t.callId = pre.bridgeCallId ∧ t.state = .running)
-      (h_persisted      : ∃ t ∈ pre.parent.tools,
-                            t.callId = pre.bridgeCallId ∧ t.persistence = .committed)
-      (h_post_tool      : ∃ t ∈ post.parent.tools,
-                            t.callId = pre.bridgeCallId ∧ t.state = .completed)
-      (h_other_tools_eq : ∀ t ∈ pre.parent.tools, t.callId ≠ pre.bridgeCallId →
-                          t ∈ post.parent.tools)
+  | bridge_complete {pre post} {idx : Nat} {tPre tPost : ToolCallContext}
+      (h_child_done     : pre.child.request.state = .completed)
+      (h_idx            : pre.parent.tools[idx]? = some tPre)
+      (h_tPre_shape     : tPre.callId = pre.bridgeCallId ∧
+                           tPre.state = .running ∧
+                           tPre.persistence = .committed ∧
+                           tPre.childRequestId = some pre.child.requestId)
+      (h_tPost_shape    : tPost.callId = pre.bridgeCallId ∧
+                           tPost.state = .completed ∧
+                           tPost.childRequestId = some pre.child.requestId)
+      (h_tools_set      : post.parent.tools = pre.parent.tools.set idx tPost)
       (h_request_eq     : post.parent.request = pre.parent.request)
       (h_child_eq       : post.child = pre.child)
+      (h_bridgeId_eq    : post.bridgeCallId = pre.bridgeCallId)
       : Transition pre post
 
-  | bridge_failure {pre post}
+  | bridge_failure {pre post} {idx : Nat} {tPre tPost : ToolCallContext}
       (h_child_term     : pre.child.request.state = .failed ∨
-                          pre.child.request.state = .dead ∨
-                          pre.child.request.state = .interrupted ∨
-                          pre.child.request.state = .superseded)
-      (h_running        : ∃ t ∈ pre.parent.tools,
-                            t.callId = pre.bridgeCallId ∧ t.state = .running)
-      (h_post_tool      : ∃ t ∈ post.parent.tools,
-                            t.callId = pre.bridgeCallId ∧
-                            (t.state = .failed ∨ t.state = .cancelled))
-      (h_other_tools_eq : ∀ t ∈ pre.parent.tools, t.callId ≠ pre.bridgeCallId →
-                          t ∈ post.parent.tools)
+                           pre.child.request.state = .dead ∨
+                           pre.child.request.state = .interrupted ∨
+                           pre.child.request.state = .superseded)
+      (h_idx            : pre.parent.tools[idx]? = some tPre)
+      (h_tPre_shape     : tPre.callId = pre.bridgeCallId ∧
+                           tPre.state = .running ∧
+                           tPre.childRequestId = some pre.child.requestId)
+      (h_tPost_shape    : tPost.callId = pre.bridgeCallId ∧
+                           (tPost.state = .failed ∨ tPost.state = .cancelled))
+      (h_tools_set      : post.parent.tools = pre.parent.tools.set idx tPost)
       (h_request_eq     : post.parent.request = pre.parent.request)
       (h_child_eq       : post.child = pre.child)
+      (h_bridgeId_eq    : post.bridgeCallId = pre.bridgeCallId)
       : Transition pre post
 
   | bridge_cancel_cascade {pre post}
@@ -264,10 +271,13 @@ inductive BridgedState.Transition : BridgedState → BridgedState → Prop where
                             t.cancelPolicy = .cascade)
       (h_interrupt_set  : post.child.request.interruptRequestedAt.isSome)
       (h_parent_eq      : post.parent = pre.parent)
+      (h_child_tools_eq : post.child.tools = pre.child.tools)
       : Transition pre post
 ```
 
 Six bridge transitions: `parent_step`, `child_step`, `bridge_spawn`, `bridge_complete`, `bridge_failure`, `bridge_cancel_cascade`. The split between `bridge_complete` (child `.completed`) and `bridge_failure` (child non-`.completed` terminal) keeps the projection explicit on both sides.
+
+**Constructor shapes.** `bridge_spawn` is *append-style*: `post.parent.tools = pre.parent.tools ++ [newTool]` with a freshness precondition (`newTool.callId` not present in pre-state) so the new callId can't collide. `bridge_complete` and `bridge_failure` are *set-style* (mirror of `tool_step`): an explicit index `idx` with `pre.parent.tools[idx]? = some tPre` and `post.parent.tools = pre.parent.tools.set idx tPost`. These tightenings rule out adversarial duplicate-callId tools and make `INV-UNIQUE` (below) preservable across every transition.
 
 Note that `bridge_cancel_cascade` only sets `interruptRequestedAt` on the child; the child's actual transition to `.interrupted` happens through the existing `interrupt_processing` constructor on `RequestContext.Transition` lifted via `child_step`. The cascade is two halves, and B3 (below) bundles them into a trace.
 
@@ -277,9 +287,34 @@ Invariants (proven structurally; no `sorry`):
 
 ```lean
 /-- INV-FG: at most one foreground non-terminal tool per request. -/
-theorem inv_fg (s : BridgedState) :
-    (s.parent.tools.filter
-      (fun t => t.awaitMode = .foreground ∧ ¬ isTerminal t.state)).length ≤ 1
+theorem invFG_preserved
+    {pre post : ComposedState}
+    (h_inv  : pre.invFG)
+    (h_step : Transition pre post) :
+    post.invFG
+  -- where invFG s := (s.tools.filter
+  --                    (fun t => t.awaitMode = .foreground ∧ ¬ isTerminal t.state)).length ≤ 1
+
+/-- INV-UNIQUE: every tool in `tools` has a distinct callId. Established at
+    spawn (bridge_spawn carries h_callId_fresh) and preserved by every
+    Composed.Transition; lifts to BridgedState (parent and child sides)
+    via `bridgedUniqueCallIds_preserved`. Consumed by B3' to discharge
+    the bridge_cancel_cascade case without an external uniqueness hypothesis. -/
+theorem uniqueCallIds_preserved
+    {pre post : ComposedState}
+    (h_inv  : pre.UniqueCallIds)
+    (h_step : Transition pre post) :
+    post.UniqueCallIds
+  -- where UniqueCallIds s :=
+  --   ∀ i j, ∀ (h_i : i < s.tools.length) (h_j : j < s.tools.length),
+  --     s.tools[i].callId = s.tools[j].callId → i = j
+
+theorem bridgedUniqueCallIds_preserved
+    {pre post : BridgedState}
+    (h_parent_inv : pre.parent.UniqueCallIds)
+    (h_child_inv  : pre.child.UniqueCallIds)
+    (h_step : Transition pre post) :
+    post.parent.UniqueCallIds ∧ post.child.UniqueCallIds
 
 /-- INV-DEPTH: subagent depth never exceeds the configured cap on any reachable state. -/
 theorem inv_depth
@@ -302,12 +337,18 @@ Bridge theorems:
 
 ```lean
 /-- B1: A child Request reaching .completed propagates to parent ToolCall .completed.
-    Liveness conditional: requires bounded time advance for parent to observe. -/
+    Liveness conditional: requires bounded time advance for parent to observe.
+    The running-tool witness bundles persistence and child-link facts so the
+    bridge_complete construction has everything it needs without a uniqueness
+    side condition. -/
 theorem bridged_child_completion_propagates
     (pre : BridgedState)
-    (h_running    : ∃ t ∈ pre.parent.tools, t.callId = pre.bridgeCallId ∧ t.state = .running)
-    (h_child_done : pre.child.request.state = .completed)
-    (h_parent_proc: pre.parent.request.state = .processing) :
+    (h_running    : ∃ t ∈ pre.parent.tools,
+                      t.callId = pre.bridgeCallId ∧
+                      t.state = .running ∧
+                      t.persistence = .committed ∧
+                      t.childRequestId = some pre.child.requestId)
+    (h_child_done : pre.child.request.state = .completed) :
     ∃ post, Trace pre post ∧
             ∃ t ∈ post.parent.tools,
               t.callId = pre.bridgeCallId ∧ t.state = .completed
@@ -335,13 +376,17 @@ theorem cascade_cancels_child
                        ¬ isTerminal t.state) :
     ∃ post, Trace pre post ∧ post.child.request.state = .interrupted
 
-/-- B3': Detach correctness (negative form). Detach mode does NOT cascade. -/
+/-- B3': Detach correctness (negative form). Detach mode does NOT cascade.
+    Consumes the structural INV-UNIQUE invariant on the parent's tools to
+    derive same-tool from same-callId in the bridge_cancel_cascade case;
+    no external uniqueness hypothesis required. -/
 theorem detach_does_not_cancel_child
     (pre post : BridgedState)
     (h_detach    : ∃ t ∈ pre.parent.tools,
                      t.callId = pre.bridgeCallId ∧ t.cancelPolicy = .detach)
     (h_step      : Transition pre post)
-    (h_no_other  : ¬ pre.child.request.interruptRequestedAt.isSome) :
+    (h_no_other  : ¬ pre.child.request.interruptRequestedAt.isSome)
+    (h_uniq      : pre.parent.UniqueCallIds) :
     post.child.request.interruptRequestedAt = pre.child.request.interruptRequestedAt
 
 /-- B4: Subagent depth bound. Restated standalone for prominence; same content as INV-DEPTH. -/
@@ -457,7 +502,7 @@ crates/defra-agent/proofs/Proofs/
   Subagent/
     State.lean                    # AwaitMode, CancelPolicy enums, BridgedState type
     Transition.lean               # BridgedState.Transition (6 constructors)
-    Properties.lean               # B1–B6, INV-FG / INV-DEPTH / INV-LINK
+    Properties.lean               # B1–B6, INV-FG / INV-UNIQUE / INV-DEPTH / INV-LINK
     Executable.lean               # step refinement (for Rust conformance)
   ToolExecution/
     State.lean                    # AMEND: + awaitMode, cancelPolicy, childRequestId
@@ -485,7 +530,8 @@ Rust conformance tests in `tests/state_machine_conformance.rs` and `tests/lifecy
 | B3' detach trace witness | 1 | End-to-end: detach-mode parent termination leaves child running. |
 | B4 depth bound | 1 | Spawn at `subagent_depth = maxSubagentDepth` is rejected at runtime. |
 | B5 link symmetry | per-row | Every `AgentToolCall.child_request_id` matches exactly one `AgentRequest.caused_by_parent_tool_call_id` and vice versa. |
-| B6 foreground blocking | 1 | Parent's `messageSeq` does not advance while a foreground tool is live. |
+| B6 foreground blocking | 1 | Parent's `progressSeq` and `messageSeq` do not advance while a foreground tool is live. |
+| INV-UNIQUE | per-row | `AgentToolCall.tool_call_key` (the runtime callId) is unique within a request's tool list — runtime mints fresh callIds at spawn and never reuses them. |
 
 These slot into the existing JSON-emitter pattern. Rust tests fail compilation if Lean adds a constructor that isn't covered.
 
