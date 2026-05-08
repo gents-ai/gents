@@ -23,6 +23,17 @@ structure ComposedState where
 
 namespace ComposedState
 
+/-- Structural coherence between a composed state and its in-flight tool
+    call: the tool's identifier, deadline, and clock track the parent request.
+    Promoted from inline conjuncts in the original `tool_step` constructor and
+    C1/C1'/C2 theorem signatures. Future work (B4 persistent processes) will
+    introduce a complementary `Persistent` coherence predicate; the bound case
+    will keep this shape so existing theorem bodies don't need to change. -/
+def Coherent (pre : ComposedState) (toolPre : ToolExecution.ToolCallContext) : Prop :=
+  toolPre.requestId = pre.requestId ∧
+  toolPre.deadline = pre.request.deadline ∧
+  toolPre.currentTime = pre.request.currentTime
+
 /-- A composed transition is valid only when cross-layer guards hold.
     Each constructor lifts a single-layer transition; the other layers must
     be unchanged across the composed step.
@@ -71,10 +82,8 @@ inductive Transition : ComposedState → ComposedState → Prop where
       post.process = pre.process →
       post.call = pre.call →
       post.requestId = pre.requestId →
-      -- structural composition guards: tool tracks the parent request
-      toolPre.requestId = pre.requestId →
-      toolPre.deadline = pre.request.deadline →
-      toolPre.currentTime = pre.request.currentTime →
+      -- structural composition guard: tool tracks the parent request
+      Coherent pre toolPre →
       Transition pre post
 
 /-- A trace is a sequence of valid composed transitions. -/
@@ -167,16 +176,13 @@ theorem interrupted_request_cancels_live_linked_tool
     (h_interrupted : pre.request.state = .interrupted)
     (h_linked      : toolPre.linkedTo pre.requestId)
     (h_live        : toolPre.cancellable)
-    (h_synced      : toolPre.requestId = pre.requestId ∧
-                     toolPre.deadline = pre.request.deadline ∧
-                     toolPre.currentTime = pre.request.currentTime) :
+    (h_synced      : Coherent pre toolPre) :
     ∃ post toolPost,
       Trace pre post ∧
       post.tool = some toolPost ∧
       post.request = pre.request ∧
       toolPost.state = .cancelled ∧
       toolPost.linkedTo pre.requestId := by
-  obtain ⟨h_sync_id, h_sync_deadline, h_sync_time⟩ := h_synced
   -- Case-split on toolPre.state via h_live (which is .pending ∨ .running).
   rcases h_live with h_pending | h_running
   · -- Pending → cancelBeforeDispatch → Cancelled
@@ -187,8 +193,7 @@ theorem interrupted_request_cancels_live_linked_tool
       ToolExecution.ToolCallContext.Transition.cancelBeforeDispatch
         (h_state := h_pending) (h_post := rfl)
     have h_step : Transition pre post :=
-      Transition.tool_step h_tool h_t_step rfl rfl rfl rfl rfl
-        h_sync_id h_sync_deadline h_sync_time
+      Transition.tool_step h_tool h_t_step rfl rfl rfl rfl rfl h_synced
     refine ⟨post, toolPost, Trace.step h_step Trace.refl, rfl, rfl, rfl, ?_⟩
     unfold ToolExecution.ToolCallContext.linkedTo at *
     exact h_linked
@@ -200,8 +205,7 @@ theorem interrupted_request_cancels_live_linked_tool
       ToolExecution.ToolCallContext.Transition.cancelDuringRun
         (h_state := h_running) (h_post := rfl)
     have h_step : Transition pre post :=
-      Transition.tool_step h_tool h_t_step rfl rfl rfl rfl rfl
-        h_sync_id h_sync_deadline h_sync_time
+      Transition.tool_step h_tool h_t_step rfl rfl rfl rfl rfl h_synced
     refine ⟨post, toolPost, Trace.step h_step Trace.refl, rfl, rfl, rfl, ?_⟩
     unfold ToolExecution.ToolCallContext.linkedTo at *
     exact h_linked
@@ -216,21 +220,18 @@ theorem deadline_exceeded_request_timesOut_running_tool
     (h_running  : toolPre.state = .running)
     (h_linked   : toolPre.linkedTo pre.requestId)
     (h_deadline : pre.request.deadlineExceeded)
-    (h_synced   : toolPre.requestId = pre.requestId ∧
-                  toolPre.deadline = pre.request.deadline ∧
-                  toolPre.currentTime = pre.request.currentTime) :
+    (h_synced   : Coherent pre toolPre) :
     ∃ post toolPost,
       Trace pre post ∧
       post.tool = some toolPost ∧
       post.request = pre.request ∧
       toolPost.state = .timedOut ∧
       toolPost.linkedTo pre.requestId := by
-  obtain ⟨h_sync_id, h_sync_deadline, h_sync_time⟩ := h_synced
   -- Tool deadline is exceeded because the request deadline is exceeded
   -- and they're synced.
   have h_tool_deadline : toolPre.deadlineExceeded := by
     unfold ToolExecution.ToolCallContext.deadlineExceeded
-    rw [h_sync_time, h_sync_deadline]
+    rw [h_synced.2.2, h_synced.2.1]
     exact h_deadline
   let toolPost : ToolExecution.ToolCallContext :=
     { toolPre with state := .timedOut }
@@ -239,8 +240,7 @@ theorem deadline_exceeded_request_timesOut_running_tool
     ToolExecution.ToolCallContext.Transition.timeout
       (h_state := h_running) (h_deadline := h_tool_deadline) (h_post := rfl)
   have h_step : Transition pre post :=
-    Transition.tool_step h_tool h_t_step rfl rfl rfl rfl rfl
-      h_sync_id h_sync_deadline h_sync_time
+    Transition.tool_step h_tool h_t_step rfl rfl rfl rfl rfl h_synced
   refine ⟨post, toolPost, Trace.step h_step Trace.refl, rfl, rfl, rfl, ?_⟩
   unfold ToolExecution.ToolCallContext.linkedTo at *
   exact h_linked
@@ -259,16 +259,13 @@ theorem deadline_exceeded_request_cancels_pending_tool
     (h_pending  : toolPre.state = .pending)
     (h_linked   : toolPre.linkedTo pre.requestId)
     (h_deadline : pre.request.deadlineExceeded)
-    (h_synced   : toolPre.requestId = pre.requestId ∧
-                  toolPre.deadline = pre.request.deadline ∧
-                  toolPre.currentTime = pre.request.currentTime) :
+    (h_synced   : Coherent pre toolPre) :
     ∃ post toolPost,
       Trace pre post ∧
       post.tool = some toolPost ∧
       post.request = pre.request ∧
       toolPost.state = .cancelled ∧
       toolPost.linkedTo pre.requestId := by
-  obtain ⟨h_sync_id, h_sync_deadline, h_sync_time⟩ := h_synced
   let toolPost : ToolExecution.ToolCallContext :=
     { toolPre with state := .cancelled }
   let post : ComposedState := { pre with tool := some toolPost }
@@ -276,8 +273,7 @@ theorem deadline_exceeded_request_cancels_pending_tool
     ToolExecution.ToolCallContext.Transition.cancelBeforeDispatch
       (h_state := h_pending) (h_post := rfl)
   have h_step : Transition pre post :=
-    Transition.tool_step h_tool h_t_step rfl rfl rfl rfl rfl
-      h_sync_id h_sync_deadline h_sync_time
+    Transition.tool_step h_tool h_t_step rfl rfl rfl rfl rfl h_synced
   refine ⟨post, toolPost, Trace.step h_step Trace.refl, rfl, rfl, rfl, ?_⟩
   unfold ToolExecution.ToolCallContext.linkedTo at *
   exact h_linked
