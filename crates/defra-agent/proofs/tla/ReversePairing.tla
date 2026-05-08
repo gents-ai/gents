@@ -208,12 +208,42 @@ Process(recv, rpc) ==
        /\ rpcIdsUsed'  = rpcIdsUsed \cup {ack.id}
   /\ UNCHANGED <<desired, inFlight, crashCount>>
 
+(***************************************************************************)
+(* ReceiveAck(n, ack): caller matches an Ack from pendingInbound to an     *)
+(* in_flight entry by `of`. Removes both. No persisted state change on n   *)
+(* — the install/teardown happened on the peer's side.                     *)
+(***************************************************************************)
+
+ReceiveAck(n, ack) ==
+  /\ ack \in pendingInbound[n]
+  /\ ack.kind = "Ack"
+  /\ ack.tgt = n
+  /\ \E rpc \in inFlight[n] : rpc.id = ack.of
+  /\ pendingInbound' = [pendingInbound EXCEPT ![n] = @ \ {ack}]
+  /\ inFlight' =
+       [inFlight EXCEPT ![n] = { rpc \in @ : rpc.id # ack.of }]
+  /\ UNCHANGED <<desired, replicator, messages, crashCount, rpcIdsUsed>>
+
+(***************************************************************************)
+(* Timeout(n, rpc): caller drops an in_flight RPC without seeing an ack.   *)
+(* Models the request-response timeout from the comm_channel pattern.      *)
+(* Per spec §"Boundary discipline: timeouts" this is a liveness-only       *)
+(* action: no other state changes.                                         *)
+(***************************************************************************)
+
+Timeout(n, rpc) ==
+  /\ rpc \in inFlight[n]
+  /\ inFlight' = [inFlight EXCEPT ![n] = @ \ {rpc}]
+  /\ UNCHANGED <<desired, replicator, pendingInbound, messages, crashCount, rpcIdsUsed>>
+
 Next ==
   \/ \E n \in Node, p \in Node, S \in SUBSET Collection : OperatorWrite(n, p, S)
   \/ \E n \in Node : Reconcile(n)
   \/ \E rpc \in messages : Deliver(rpc)
   \/ \E rpc \in messages : Drop(rpc)
   \/ \E recv \in Node : \E rpc \in pendingInbound[recv] : Process(recv, rpc)
+  \/ \E n \in Node : \E ack \in pendingInbound[n] : ReceiveAck(n, ack)
+  \/ \E n \in Node : \E rpc \in inFlight[n] : Timeout(n, rpc)
 
 Spec == Init /\ [][Next]_vars
 
