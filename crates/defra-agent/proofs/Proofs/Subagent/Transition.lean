@@ -58,6 +58,11 @@ inductive Transition : BridgedState → BridgedState → Prop where
       -- preserved across the spawn. Required for INV-LINK's parentLink ↔
       -- childLink symmetry under any reachable trace.
       (h_parent_id_eq  : post.parent.requestId = pre.parent.requestId)
+      -- callId-freshness guard: the new bridge tool's callId is not already
+      -- present in `pre.parent.tools`. Operationally true at the runtime —
+      -- fresh callIds are minted at spawn time, never reused. Required for
+      -- INV-UNIQUE (`UniqueCallIds`) preservation across `bridge_spawn`.
+      (h_callId_fresh  : ∀ t ∈ pre.parent.tools, t.callId ≠ post.bridgeCallId)
       : Transition pre post
 
   | bridge_complete {pre post : BridgedState}

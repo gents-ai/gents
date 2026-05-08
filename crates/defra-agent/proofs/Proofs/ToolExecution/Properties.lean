@@ -158,6 +158,28 @@ theorem transition_preserves_requestId
   | timeAdvance _ _ h_post         => rw [h_post]
   | persistenceStep _ _ _ h_post   => rw [h_post]
 
+/-- Helper: every Transition preserves `callId`. The callId is set at
+    construction time and no inner transition mentions it in its
+    `post = { pre with ... }` rewrite. Used by
+    `ComposedState.uniqueCallIds_preserved`. -/
+theorem transition_preserves_callId
+    {pre post : ToolCallContext}
+    (h_step : Transition pre post) :
+    post.callId = pre.callId := by
+  cases h_step with
+  | dispatch _ h_post              => rw [h_post]
+  | spawnFailed _ _ h_post         => rw [h_post]
+  | complete _ _ _ h_post          => rw [h_post]
+  | fail _ _ h_post                => rw [h_post]
+  | timeout _ _ h_post             => rw [h_post]
+  | cancelBeforeDispatch _ h_post  => rw [h_post]
+  | cancelDuringRun _ h_post       => rw [h_post]
+  | background _ _ h_post          => rw [h_post]
+  | foreground _ _ h_post          => rw [h_post]
+  | detach _ _ h_post              => rw [h_post]
+  | timeAdvance _ _ h_post         => rw [h_post]
+  | persistenceStep _ _ _ h_post   => rw [h_post]
+
 /-- Helper: `dispatch` sets `startedAt` to `some pre.currentTime`. -/
 theorem dispatch_sets_startedAt
     {pre post : ToolCallContext}

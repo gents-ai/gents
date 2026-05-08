@@ -565,6 +565,28 @@ theorem cascade_cancels_child
     show postChildReq.state = .interrupted
     rfl
 
+/-! ### INV-UNIQUE: BridgedState-level note
+
+`ComposedState.UniqueCallIds` is preserved by every `ComposedState.Transition`
+(see `ComposedState.uniqueCallIds_preserved`). Lifting this to a full
+`BridgedState`-level "parent and child both satisfy UniqueCallIds across any
+trace" theorem requires tightening the `bridge_complete`/`bridge_failure`
+constructors: today they only specify `h_post_tool` (a witness) and
+`h_others_eq` (non-bridge tools survive), which underdetermines
+`post.parent.tools`. A deduction like
+
+  post.parent.tools = pre.parent.tools.set idx tPost
+
+(or an equivalent shape constraint) would close the preservation proof.
+This is a follow-up tightening, not in scope here. The `bridge_spawn` arm
+already has its freshness precondition (`h_callId_fresh`) added in this
+pass.
+
+The substantive consequence — B3' is a property of any state whose parent
+satisfies UniqueCallIds, and UniqueCallIds is preserved by every composed
+transition — is established by the existing parts above.
+-/
+
 /-! ### B3': detach does not cascade -/
 
 /-- B3': Detach correctness (negative form). A detach-mode bridge tool's
@@ -576,20 +598,21 @@ theorem cascade_cancels_child
     The `h_no_other` hypothesis says the pre-state has no interrupt set,
     blocking child-side `interrupt_processing` / `interrupt_claimed` /
     `interrupt_before_claim` arms (their `pre.interruptRequestedAt.isSome`
-    guards fail). The `h_unique` hypothesis (callId uniqueness within
-    `pre.parent.tools`) discharges the `bridge_cancel_cascade` arm by
-    contradicting `cancelPolicy = .cascade` against `cancelPolicy = .detach`
-    on the same tool. -/
+    guards fail). The `h_uniq` hypothesis (`UniqueCallIds` — callIds are
+    distinct within `pre.parent.tools`) discharges the `bridge_cancel_cascade`
+    arm by deriving same-tool from same-callId, then contradicting
+    `cancelPolicy = .cascade` against `cancelPolicy = .detach`.
+
+    `h_uniq` is a structural invariant of any reachable composed state
+    (proved via `ComposedState.uniqueCallIds_preserved`), so this theorem is
+    a property of any reachable state, not a conditional one. -/
 theorem detach_does_not_cancel_child
     (pre post : BridgedState)
     (h_detach    : ∃ t ∈ pre.parent.tools,
                      t.callId = pre.bridgeCallId ∧ t.cancelPolicy = .detach)
     (h_step      : Transition pre post)
     (h_no_other  : ¬ pre.child.request.interruptRequestedAt.isSome)
-    (h_unique    : ∀ t₁ ∈ pre.parent.tools, ∀ t₂ ∈ pre.parent.tools,
-                     t₁.callId = pre.bridgeCallId →
-                     t₂.callId = pre.bridgeCallId →
-                     t₁ = t₂) :
+    (h_uniq      : pre.parent.UniqueCallIds) :
     post.child.request.interruptRequestedAt =
       pre.child.request.interruptRequestedAt := by
   cases h_step with
@@ -663,11 +686,13 @@ theorem detach_does_not_cancel_child
     rw [h_child_eq]
   | bridge_cancel_cascade _ h_cascade _ _ _ _ _ _ _ =>
     -- Bridge tool with cascade policy contradicts h_detach (the same callId
-    -- carries cancelPolicy = .detach). Use h_unique to identify the tools.
+    -- carries cancelPolicy = .detach). Use h_uniq (UniqueCallIds) to identify
+    -- the two tools as equal: both carry callId = pre.bridgeCallId.
     obtain ⟨tDet, h_in_d, h_id_d, h_pol_d⟩ := h_detach
     obtain ⟨tCas, h_in_c, h_id_c, h_pol_c⟩ := h_cascade
+    have h_callIds : tDet.callId = tCas.callId := by rw [h_id_d, h_id_c]
     have h_same_tool : tDet = tCas :=
-      h_unique tDet h_in_d tCas h_in_c h_id_d h_id_c
+      ComposedState.UniqueCallIds.eq_of_callId_eq h_uniq h_in_d h_in_c h_callIds
     -- Now h_pol_d says tDet.cancelPolicy = .detach and h_pol_c says
     -- tCas.cancelPolicy = .cascade. With tDet = tCas, we derive .detach = .cascade.
     rw [h_same_tool] at h_pol_d
