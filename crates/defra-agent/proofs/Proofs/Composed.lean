@@ -229,16 +229,16 @@ theorem deadline_exceeded_request_timesOut_running_tools
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
     (h_in        : toolPre ∈ pre.tools)
     (h_running   : toolPre.state = .running)
-    (h_linked    : toolPre.requestId = pre.requestId)
-    (h_deadline  : pre.request.deadlineExceeded)
-    (h_synced    : toolPre.deadline = pre.request.deadline ∧
-                   toolPre.currentTime = pre.request.currentTime) :
+    (h_coherent  : Coherent pre toolPre)
+    (h_deadline  : pre.request.deadlineExceeded) :
     ∃ post toolPost,
       Trace pre post ∧
       toolPost ∈ post.tools ∧
       post.request = pre.request ∧
       toolPost.state = .timedOut ∧
       toolPost.requestId = pre.requestId := by
+  -- Destructure h_coherent into its three component equalities.
+  obtain ⟨h_linked, h_deadline_eq, h_time_eq⟩ := h_coherent
   -- Find the index of toolPre in pre.tools.
   obtain ⟨idx, h_idx⟩ := List.mem_iff_getElem?.mp h_in
   -- Apply the inner ToolCallContext.timeout transition on toolPre.
@@ -246,9 +246,9 @@ theorem deadline_exceeded_request_timesOut_running_tools
                     { toolPre with state := .timedOut } := by
     refine ToolExecution.ToolCallContext.Transition.timeout
       h_running ?_ rfl
-    -- discharge deadlineExceeded for toolPre using h_synced + h_deadline
+    -- discharge deadlineExceeded for toolPre using h_coherent + h_deadline
     show toolPre.currentTime > toolPre.deadline
-    rw [h_synced.1, h_synced.2]
+    rw [h_deadline_eq, h_time_eq]
     exact h_deadline
   -- Construct the post composed state by setting idx to the timed-out tool.
   let toolPost : ToolExecution.ToolCallContext := { toolPre with state := .timedOut }
@@ -256,9 +256,9 @@ theorem deadline_exceeded_request_timesOut_running_tools
   refine ⟨post, toolPost, ?_, ?_, rfl, rfl, h_linked⟩
   · -- One-step trace via tool_step
     refine Trace.step ?_ Trace.refl
-    -- The Coherent witness: bundle h_linked + h_synced
-    refine Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl ?_
-    exact ⟨h_linked, h_synced.1, h_synced.2⟩
+    -- Pass h_coherent directly as the Coherent witness
+    exact Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
+      ⟨h_linked, h_deadline_eq, h_time_eq⟩
   · -- toolPost ∈ post.tools — follows from `pre.tools.set idx toolPost`
     show toolPost ∈ pre.tools.set idx toolPost
     have h_lt : idx < pre.tools.length :=
