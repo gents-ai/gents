@@ -752,5 +752,23 @@ theorem foreground_blocks_parent_advance
   | bridge_cancel_cascade _ _ _ h_parent_eq _ _ _ _ _ =>
     rw [h_parent_eq]
 
+/-- B4: Subagent depth bound. Restated standalone for prominence; alias of `inv_depth`. -/
+theorem subagent_depth_bounded
+    (pre post : BridgedState)
+    (h_init  : pre.parent.request.subagentDepth ≤ maxSubagentDepth ∧
+               pre.child.request.subagentDepth ≤ maxSubagentDepth)
+    (h_trace : Trace pre post) :
+    post.parent.request.subagentDepth ≤ maxSubagentDepth ∧
+    post.child.request.subagentDepth ≤ maxSubagentDepth :=
+  inv_depth pre post h_init h_trace
+
+/-- B5: Bridge link symmetry. Restated standalone for prominence; alias of `inv_link`. -/
+theorem bridge_link_symmetric
+    (pre post : BridgedState)
+    (h_init  : pre.linked)
+    (h_trace : Trace pre post) :
+    post.linked :=
+  inv_link pre post h_init h_trace
+
 end BridgedState
 end Subagent
