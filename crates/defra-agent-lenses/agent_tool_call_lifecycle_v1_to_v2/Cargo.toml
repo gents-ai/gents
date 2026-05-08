@@ -4,7 +4,15 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
+
+# `lens-entry` gates the lens_sdk::define! macro which emits an extern "C"
+# `next()` import that is only resolvable at dylib load time from the lens
+# host.  Enable by default for the normal cdylib artifact; disable when
+# importing the crate as an rlib dev-dependency for unit/integration tests.
+[features]
+default = ["lens-entry"]
+lens-entry = []
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
