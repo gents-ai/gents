@@ -337,6 +337,78 @@ TeardownJustified ==
 
 InFlightJustified == InstallJustified /\ TeardownJustified
 
-Spec == Init /\ [][Next]_vars
+(***************************************************************************)
+(* Fairness.                                                               *)
+(*                                                                         *)
+(* Weak fairness on Deliver, Process, and ReceiveAck — once an RPC is      *)
+(* in messages or pendingInbound, the action that consumes it stays        *)
+(* continuously enabled (Drop and Timeout race with these but cannot       *)
+(* indefinitely block them from firing).                                   *)
+(*                                                                         *)
+(* Strong fairness on per-node Reconcile. SF (rather than WF) is essential *)
+(* because OperatorWrite can transiently disable a Reconcile precondition  *)
+(* (e.g. operator flips desired between {} and {c1}); WF would only        *)
+(* require firing if the action stays continuously enabled. SF requires    *)
+(* firing whenever the action is enabled infinitely often, which matches  *)
+(* the operational behavior — every pass through a disagreement-enabled    *)
+(* state gets a chance to fire.                                            *)
+(*                                                                         *)
+(* Process and ReceiveAck use nested existentials because the second       *)
+(* binding (rpc \in pendingInbound[recv]) depends on the first variable    *)
+(* (recv); TLA+ does not allow that with comma-separated bounds inside     *)
+(* WF_vars(\E ... : ...).                                                  *)
+(*                                                                         *)
+(* Reconcile is per-node (\A outside the fairness operator) so each node   *)
+(* makes progress independently — important for post-Crash recovery.       *)
+(***************************************************************************)
+
+Fairness ==
+  /\ WF_vars(\E rpc \in messages : Deliver(rpc))
+  /\ WF_vars(\E recv \in Node : \E rpc \in pendingInbound[recv] : Process(recv, rpc))
+  /\ WF_vars(\E n \in Node : \E ack \in pendingInbound[n] : ReceiveAck(n, ack))
+  /\ WF_vars(\E n \in Node : \E rpc \in inFlight[n] : Timeout(n, rpc))
+  /\ \A n \in Node : SF_vars(Reconcile(n))
+
+Spec == Init /\ [][Next]_vars /\ Fairness
+
+(***************************************************************************)
+(* Liveness: leads-to convergence.                                         *)
+(*                                                                         *)
+(* Any desired/replicator disagreement is eventually resolved — either by *)
+(* the disagreement being closed (replicator catches up) or by the         *)
+(* operator retracting/re-issuing the desired entry (P itself ceases to   *)
+(* hold).                                                                  *)
+(*                                                                         *)
+(* The disjunctive form `Q \/ ~P` is necessary because OperatorWrite is   *)
+(* unconstrained — the operator may flip desired arbitrarily, and a leads- *)
+(* to of the form `P ~> Q` would be falsified by traces where P holds      *)
+(* transiently before the operator retracts it (and Reconcile never gets  *)
+(* a chance to complete). The system is converging on whatever desired    *)
+(* eventually settles to; the property here expresses progress at each    *)
+(* moment of observed disagreement, not stability of intermediate values. *)
+(***************************************************************************)
+
+InstallConverges ==
+  \A n, p \in Node, c \in Collection :
+    (n # p /\ c \in desired[n][p])
+      ~> (c \in replicator[p][n] \/ c \notin desired[n][p])
+
+TeardownConverges ==
+  \A n, p \in Node, c \in Collection :
+    (n # p /\ c \notin desired[n][p] /\ c \in replicator[p][n])
+      ~> (c \notin replicator[p][n] \/ c \in desired[n][p])
+
+Convergence == InstallConverges /\ TeardownConverges
+
+(***************************************************************************)
+(* State constraint for bounded liveness checking. The leads-to property   *)
+(* requires the RPCId pool to have headroom whenever a covering RPC needs *)
+(* to be issued; if the pool exhausts before convergence completes, the   *)
+(* model gets stuck (a bounded-model artifact, not a real-system bug).    *)
+(* StateBound truncates exploration well below pool exhaustion, leaving    *)
+(* headroom for Reconcile to fire.                                         *)
+(***************************************************************************)
+
+StateBound == Cardinality(rpcIdsUsed) <= 4
 
 ====
