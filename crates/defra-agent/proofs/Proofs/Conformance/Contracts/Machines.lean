@@ -350,6 +350,9 @@ def toolRetryDispositions : List ToolExecution.RetryDisposition :=
 def toolRetryDispositionNames : List String :=
   toolRetryDispositions.map ToolExecution.RetryDisposition.toDefraDB
 
+def failureClassNames : List String :=
+  ToolExecution.FailureClass.all.map ToolExecution.FailureClass.toDefraDB
+
 def vocabularies : List VocabularyContract :=
   [ { domain := "RequestState", values := requestStateNames }
   , { domain := "ExecutionOrigin", values :=
@@ -372,6 +375,7 @@ def vocabularies : List VocabularyContract :=
         ].map InferenceCallTerminalReason.toDefraDB
     }
   , { domain := "ToolCallState", values := toolCallStateNames }
+  , { domain := "ToolFailureClass", values := failureClassNames }
   , { domain := "ToolRetryDisposition", values := toolRetryDispositionNames }
   ]
 
