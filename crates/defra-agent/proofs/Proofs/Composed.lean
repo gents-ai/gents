@@ -266,30 +266,41 @@ theorem deadline_exceeded_request_timesOut_running_tools
     exact List.mem_set pre.tools idx h_lt toolPost
 
 
-/-- C1': A request whose deadline is exceeded cancels a Pending linked tool
-    call. Companion to C1 — a Pending tool never ran, so it reaches
+/-- C1': A request whose deadline is exceeded cancels every Pending linked
+    tool. Companion to C1 — a Pending tool never ran, so it reaches
     .cancelled rather than .timedOut.
 
     Note: `h_deadline` is documentary — `cancelBeforeDispatch` has no deadline
     guard. The hypothesis captures the operational context (deadline-driven
-    cancellation path) rather than a proof-relevant constraint.
-
-    STUBBED for Task 6 (multi-flight refactor). Task 8 restates this with
-    multi-flight quantification (`_tools` plural) and a fresh proof. -/
-theorem deadline_exceeded_request_cancels_pending_tool
+    cancellation path) rather than a proof-relevant constraint. Tracked under
+    issue #153 alongside C2/C3's documentary hypotheses for a future
+    CancelCause tightening pass. -/
+theorem deadline_exceeded_request_cancels_pending_tools
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
-    (h_tool     : pre.tools = [toolPre])
-    (h_pending  : toolPre.state = .pending)
-    (h_linked   : toolPre.linkedTo pre.requestId)
-    (h_deadline : pre.request.deadlineExceeded)
-    (h_synced   : Coherent pre toolPre) :
+    (h_in        : toolPre ∈ pre.tools)
+    (h_pending   : toolPre.state = .pending)
+    (h_deadline  : pre.request.deadlineExceeded)
+    (h_coherent  : Coherent pre toolPre) :
     ∃ post toolPost,
       Trace pre post ∧
-      post.tools = [toolPost] ∧
-      post.request = pre.request ∧
+      toolPost ∈ post.tools ∧
       toolPost.state = .cancelled ∧
-      toolPost.linkedTo pre.requestId := by
-  sorry
+      toolPost.requestId = pre.requestId := by
+  obtain ⟨h_linked, h_deadline_eq, h_time_eq⟩ := h_coherent
+  obtain ⟨idx, h_idx⟩ := List.mem_iff_getElem?.mp h_in
+  -- Inner cancelBeforeDispatch transition
+  have h_t_step : ToolExecution.ToolCallContext.Transition toolPre
+                    { toolPre with state := .cancelled } :=
+    ToolExecution.ToolCallContext.Transition.cancelBeforeDispatch h_pending rfl
+  let toolPost : ToolExecution.ToolCallContext := { toolPre with state := .cancelled }
+  let post : ComposedState := { pre with tools := pre.tools.set idx toolPost }
+  refine ⟨post, toolPost, ?_, ?_, rfl, h_linked⟩
+  · refine Trace.step ?_ Trace.refl
+    exact Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
+            ⟨h_linked, h_deadline_eq, h_time_eq⟩
+  · -- toolPost ∈ post.tools via List.mem_set
+    have h_lt : idx < pre.tools.length := (List.getElem?_eq_some_iff.mp h_idx).1
+    simpa [post, toolPost] using List.mem_set pre.tools idx h_lt toolPost
 
 
 /-- C3: A request whose linked tool is terminal can resume making progress.
