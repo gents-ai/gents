@@ -238,11 +238,25 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
         tracing::debug!("ToolSelection collection absent; subagent patch no-op");
     }
 
-    // 4. Register the unified forward lens AgentToolCall v2 -> v3.
-    //    Only AgentToolCall has a versioned schema lens; AgentRequest and
-    //    ToolSelection new fields are additive (nullable), so existing
-    //    documents round-trip without a transform. The lens covers
-    //    AgentToolCall's new required fields.
+    // 4. Register the v2→v3 forward lens for AgentToolCall only.
+    //
+    // AgentRequest and ToolSelection are NOT registered: their schema patches
+    // are pure field additions with nullable types, so no transform is needed
+    // for round-trip (a v2 client reading a v3 row sees null for unknown
+    // fields; a v3 client reading a v2 row sees null for the new fields).
+    // DefraDB's nullable-field semantics handle the back-compat without a
+    // lens.
+    //
+    // AgentToolCall, by contrast, needs the lens to populate `await_mode` and
+    // `cancel_policy` with their non-null defaults ("foreground", "cascade")
+    // for v2 rows being read by v3 clients — the runtime expects these fields
+    // to have meaningful values matching today's foreground+cascade semantics.
+    // Null is not a valid runtime value for either field; the lens fills them
+    // in on the forward read path.
+    //
+    // The WASM module (agent_subagent_v2_to_v3) retains transform logic for
+    // all three collections in case future patches are non-additive, but only
+    // the AgentToolCall transform is registered here via set_migration.
     let lens_path = subagent_lens_wasm_path();
     let lens_path_str = lens_path
         .to_str()

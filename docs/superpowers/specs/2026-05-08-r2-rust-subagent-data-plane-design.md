@@ -24,7 +24,7 @@ R2 deliberately stops at the data plane. SubagentSource (the `TriggerSource` imp
 - Add the `AwaitMode` and `CancelPolicy` enums with persisted-vocabulary round-trip.
 - Extend `ToolCallLifecycle` with three new fields (`await_mode`, `cancel_policy`, `child_request_id`) and six new transition methods (`background`, `foreground`, `detach`, `bridge_complete`, `bridge_failure`, `bridge_cancel_cascade`).
 - Add `create_subagent_request` helper as the public API for parent-linked child request creation (consumed by R3's SubagentSource).
-- Land schema migrations v2→v3 covering AgentToolCall, AgentRequest, and ToolSelection field additions via a single unified lens crate.
+- Land schema migrations v2→v3 covering AgentToolCall, AgentRequest, and ToolSelection field additions via a single unified lens crate. The lens module handles all three collections for symmetry, but only the AgentToolCall transform is registered at runtime — AgentRequest and ToolSelection are pure nullable field additions that DefraDB handles without a lens.
 - Conformance: three buckets (vocabulary, Lean transition matrix, runtime integration) covering all new types and transitions.
 
 ## Non-goals (out of scope for R2)
@@ -85,6 +85,8 @@ There is no `rows.rs` file on R1's current `tool_call_lifecycle/` (the row-shape
 ### Schema migrations (v2 → v3)
 
 Single unified lens crate `agent_subagent_v2_to_v3` covers all three collections in one WASM module. Forward transform adds new fields with defaults; inverse drops them for P2P backward-compat.
+
+**Note on runtime registration:** Only the AgentToolCall transform is registered via `set_migration` at runtime. AgentRequest and ToolSelection receive pure nullable field additions — a v2 client reading a v3 row sees `null` for unknown fields, and a v3 client reading a v2 row sees `null` for the new fields. DefraDB's nullable-field semantics provide full backward and forward compat for those two collections without a lens. AgentToolCall needs the lens because `await_mode` and `cancel_policy` must default to `"foreground"` and `"cascade"` (not `null`) when v2 rows are read by v3 clients. The lens module retains transforms for all three collections in case future patches are non-additive.
 
 #### JSON Patches (one per collection, applied atomically)
 
