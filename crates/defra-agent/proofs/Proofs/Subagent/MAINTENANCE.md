@@ -35,4 +35,9 @@ updating both layers will fail the build.
 
 ## Open obligations
 
-- 1 pre-existing sorry: `Proofs/Composed.lean:410` — `ComposedState.invFG_preserved` `tool_step` arm. Tracked separately as part of issue-149's INV-FG completion work; not load-bearing for any C-theorem or B-theorem.
+(none — full proof tree is sorry-free as of commit `34da664`.)
+
+### Tracked follow-ups (not blocking, but worth filing)
+
+- **`UniqueCallIds` invariant.** B3' (`detach_does_not_cancel_child`) takes an `h_unique` callId-uniqueness hypothesis that is not established as a structural invariant on `ComposedState.tools`. Closing this requires either (a) a `UniqueCallIds` predicate proven preserved by every `Composed.Transition` constructor, or (b) reformulating B3' to discharge the `bridge_cancel_cascade` case via `parentLink` from `pre.linked` instead of `h_unique`. Tracked via [TODO: file issue].
+- **Spec doc tightenings.** Two divergences between spec and implementation worth folding back into the spec doc: (i) `bridge_complete` / `bridge_failure` carry `childRequestId = some pre.child.requestId` in their post-tool existential, and (ii) `bridge_spawn` carries `post.child.request.interruptRequestedAt = none`. Both are load-bearing for INV-LINK / B3' and should be reflected in the design doc.
