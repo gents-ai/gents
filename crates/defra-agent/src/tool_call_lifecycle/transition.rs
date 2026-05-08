@@ -241,6 +241,44 @@ impl ToolCallLifecycle {
         self.started_at = Some(now);
         Ok(())
     }
+
+    /// Running → TimedOut. R1 does not call this from runtime code; R3 wires
+    /// it up to fire on deadline expiry. Defined here so the API surface
+    /// matches the Lean spec.
+    pub async fn timeout(&mut self) -> Result<()> {
+        self.ensure_state(&[ToolCallState::Running], "timeout")?;
+
+        let doc_id = self.doc_id.as_ref()
+            .ok_or_else(|| anyhow!("timeout called before start_running persisted a row"))?;
+        let now = Utc::now();
+        let started_at = self.started_at
+            .ok_or_else(|| anyhow!("timeout called without started_at set"))?;
+        let latency_ms = (now - started_at).num_milliseconds();
+
+        let escaped_doc_id = escape_graphql_string(doc_id);
+        let now_str = now.to_rfc3339();
+
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentToolCall(
+                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    input: {{
+                        status: "completed",
+                        lifecycle_state: "timedOut",
+                        completed_at: "{now_str}",
+                        latency_ms: {latency_ms}
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+
+        execute_mutation_with_retry(&self.node, &mutation, "timeout")
+            .await
+            .context("timeout mutation")?;
+
+        self.state = ToolCallState::TimedOut;
+        Ok(())
+    }
 }
 
 /// Helper to extract `_docID` from a `create_*` mutation response.
