@@ -324,6 +324,42 @@ impl ToolCallLifecycle {
         self.started_at = Some(now);
         Ok(())
     }
+
+    /// Running → Cancelled. R1 does not call from runtime code; R4 wires up.
+    pub async fn cancel_during_run(&mut self) -> Result<()> {
+        self.ensure_state(&[ToolCallState::Running], "cancel_during_run")?;
+
+        let doc_id = self.doc_id.as_ref()
+            .ok_or_else(|| anyhow!("cancel_during_run called before start_running persisted a row"))?;
+        let now = Utc::now();
+        let started_at = self.started_at
+            .ok_or_else(|| anyhow!("cancel_during_run called without started_at set"))?;
+        let latency_ms = (now - started_at).num_milliseconds();
+
+        let escaped_doc_id = escape_graphql_string(doc_id);
+        let now_str = now.to_rfc3339();
+
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentToolCall(
+                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    input: {{
+                        status: "completed",
+                        lifecycle_state: "cancelled",
+                        completed_at: "{now_str}",
+                        latency_ms: {latency_ms}
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+
+        execute_mutation_with_retry(&self.node, &mutation, "cancel_during_run")
+            .await
+            .context("cancel_during_run mutation")?;
+
+        self.state = ToolCallState::Cancelled;
+        Ok(())
+    }
 }
 
 /// Helper to extract `_docID` from a `create_*` mutation response.
