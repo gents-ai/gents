@@ -96,19 +96,19 @@ private theorem inv_depth_step
     refine ⟨?_, ?_⟩
     · rw [h_parent_eq]; exact h_init.1
     · rw [composed_subagentDepth_preserved h_inner]; exact h_init.2
-  | bridge_spawn _ h_depth _ h_post_child h_request_eq _ =>
+  | bridge_spawn _ h_depth _ _ _ _ h_post_child _ h_request_eq _ _ =>
     refine ⟨?_, ?_⟩
     · rw [h_request_eq]; exact h_init.1
     · rw [h_post_child.2.2.2.1]; exact h_depth
-  | bridge_complete _ _ _ _ _ h_request_eq h_child_eq _ _ =>
+  | bridge_complete _ _ _ _ _ _ _ _ _ _ h_request_eq h_child_eq _ _ =>
     refine ⟨?_, ?_⟩
     · rw [h_request_eq]; exact h_init.1
     · rw [h_child_eq]; exact h_init.2
-  | bridge_failure _ _ _ _ h_request_eq h_child_eq _ _ =>
+  | bridge_failure _ _ _ _ _ _ _ _ _ h_request_eq h_child_eq _ _ =>
     refine ⟨?_, ?_⟩
     · rw [h_request_eq]; exact h_init.1
     · rw [h_child_eq]; exact h_init.2
-  | bridge_cancel_cascade _ _ _ h_parent_eq _ _ _ _ h_child_depth_eq =>
+  | bridge_cancel_cascade _ _ _ h_parent_eq _ _ _ _ h_child_depth_eq _ =>
     refine ⟨?_, ?_⟩
     · rw [h_parent_eq]; exact h_init.1
     · rw [h_child_depth_eq]; exact h_init.2
@@ -136,40 +136,53 @@ private theorem inv_link_step
   cases h_step with
   | parent_step _ _ _ _ h_link_post => exact h_link_post
   | child_step _ _ _ _ h_link_post  => exact h_link_post
-  | bridge_spawn _ _ h_post_parent_tool h_post_child _ h_parent_id_eq =>
+  | @bridge_spawn newTool _ _ h_newTool_callId _ h_newTool_child h_tools_append
+                    h_post_child _ _ h_parent_id_eq _ =>
     refine ⟨?_, ?_, ?_⟩
-    · -- parentLink: the new bridge tool with t.callId = post.bridgeCallId ∧
-      -- t.childRequestId = some post.child.requestId is exactly what we need.
-      obtain ⟨t, h_in, h_id, _h_state, h_child⟩ := h_post_parent_tool
-      exact ⟨t, h_in, h_id, h_child⟩
+    · -- parentLink: newTool ∈ post.parent.tools (via h_tools_append's append),
+      -- with callId = post.bridgeCallId and childRequestId = some post.child.requestId.
+      refine ⟨newTool, ?_, h_newTool_callId, h_newTool_child⟩
+      rw [h_tools_append]
+      exact List.mem_append.mpr (Or.inr (List.mem_singleton.mpr rfl))
     · -- childLink.causedByParentRequestId: post.child.request.cBPRId =
       -- some pre.parent.requestId, and pre.parent.requestId =
       -- post.parent.requestId via h_parent_id_eq.
       rw [h_post_child.2.1, h_parent_id_eq]
     · exact h_post_child.2.2.1
-  | bridge_complete _ _ _ h_post_tool h_others_eq h_request_eq h_child_eq h_bridgeId_eq h_parent_id_eq =>
-    obtain ⟨h_pLink, h_cLink⟩ := h_init
+  | @bridge_complete idx _ tPost _ h_idx_pre _ _ _ _
+                       h_post_callId _ h_post_child h_tools_set _ h_child_eq
+                       h_bridgeId_eq h_parent_id_eq =>
+    obtain ⟨_h_pLink, h_cLink⟩ := h_init
     refine ⟨?_, ?_, ?_⟩
-    · -- parentLink: h_post_tool now provides t.childRequestId =
-      -- some pre.child.requestId. Combined with h_child_eq we have
-      -- pre.child.requestId = post.child.requestId.
-      obtain ⟨t, h_in, h_id, _h_state, h_child⟩ := h_post_tool
-      refine ⟨t, h_in, ?_, ?_⟩
-      · rw [h_id, h_bridgeId_eq]
-      · rw [h_child, h_child_eq]
+    · -- parentLink: tPost ∈ post.parent.tools (via .set), and tPost has the
+      -- bridge callId and childRequestId pointing at post.child.
+      have h_lt : idx < s₁.parent.tools.length :=
+        (List.getElem?_eq_some_iff.mp h_idx_pre).1
+      have h_in : tPost ∈ s₂.parent.tools := by
+        rw [h_tools_set]
+        exact List.mem_set s₁.parent.tools idx h_lt tPost
+      refine ⟨tPost, h_in, ?_, ?_⟩
+      · rw [h_post_callId, h_bridgeId_eq]
+      · rw [h_post_child, h_child_eq]
     · -- childLink.causedByParentRequestId via h_child_eq + h_parent_id_eq.
       rw [h_child_eq, h_parent_id_eq]; exact h_cLink.1
     · rw [h_child_eq, h_bridgeId_eq]; exact h_cLink.2
-  | bridge_failure _ _ h_post_tool h_others_eq h_request_eq h_child_eq h_bridgeId_eq h_parent_id_eq =>
-    obtain ⟨h_pLink, h_cLink⟩ := h_init
+  | @bridge_failure idx _ tPost _ h_idx_pre _ _ _
+                      h_post_callId _ h_post_child h_tools_set _ h_child_eq
+                      h_bridgeId_eq h_parent_id_eq =>
+    obtain ⟨_h_pLink, h_cLink⟩ := h_init
     refine ⟨?_, ?_, ?_⟩
-    · obtain ⟨t, h_in, h_id, _h_state, h_child⟩ := h_post_tool
-      refine ⟨t, h_in, ?_, ?_⟩
-      · rw [h_id, h_bridgeId_eq]
-      · rw [h_child, h_child_eq]
+    · have h_lt : idx < s₁.parent.tools.length :=
+        (List.getElem?_eq_some_iff.mp h_idx_pre).1
+      have h_in : tPost ∈ s₂.parent.tools := by
+        rw [h_tools_set]
+        exact List.mem_set s₁.parent.tools idx h_lt tPost
+      refine ⟨tPost, h_in, ?_, ?_⟩
+      · rw [h_post_callId, h_bridgeId_eq]
+      · rw [h_post_child, h_child_eq]
     · rw [h_child_eq, h_parent_id_eq]; exact h_cLink.1
     · rw [h_child_eq, h_bridgeId_eq]; exact h_cLink.2
-  | bridge_cancel_cascade _ _ _ h_parent_eq h_bridgeId_eq h_child_id_eq h_child_cBPR_eq h_child_cBPT_eq _ =>
+  | bridge_cancel_cascade _ _ _ h_parent_eq h_bridgeId_eq h_child_id_eq h_child_cBPR_eq h_child_cBPT_eq _ _ =>
     obtain ⟨h_pLink, h_cLink⟩ := h_init
     refine ⟨?_, ?_, ?_⟩
     · -- parentLink: post.parent = pre.parent, so unfold parentLink and
@@ -197,6 +210,208 @@ theorem inv_link
   | refl => exact h_init
   | step h_step _ ih => exact ih (inv_link_step h_init h_step)
 
+/-! ### INV-UNIQUE: BridgedState lift
+
+`ComposedState.UniqueCallIds` is preserved by every `ComposedState.Transition`
+(see `ComposedState.uniqueCallIds_preserved`). The BridgedState lift below
+states that both sides of the bridge satisfy `UniqueCallIds` across any
+single `BridgedState.Transition`, then the trace-level theorem threads it
+through `Trace.step`. -/
+
+/-- Helper: replacing element at `idx` with a tool that has the same callId
+    preserves `UniqueCallIds`. The `set`-style description in
+    `bridge_complete` / `bridge_failure` lets us reuse this proof shape. -/
+private theorem uniqueCallIds_set_callId_preserved
+    {s sPost : ComposedState} {idx : Nat}
+    {tPre tPost : ToolExecution.ToolCallContext}
+    (h_uniq         : s.UniqueCallIds)
+    (h_idx          : s.tools[idx]? = some tPre)
+    (h_callId_eq    : tPost.callId = tPre.callId)
+    (h_tools_set    : sPost.tools = s.tools.set idx tPost) :
+    sPost.UniqueCallIds := by
+  intro i j h_i h_j h_eq
+  have h_len : sPost.tools.length = s.tools.length := by
+    rw [h_tools_set]; exact List.length_set _ _ _
+  have h_i' : i < s.tools.length := by rw [h_len] at h_i; exact h_i
+  have h_j' : j < s.tools.length := by rw [h_len] at h_j; exact h_j
+  have h_idx_lt : idx < s.tools.length :=
+    (List.getElem?_eq_some_iff.mp h_idx).1
+  have h_pre_idx_eq : s.tools[idx] = tPre := by
+    have := (List.getElem?_eq_some_iff.mp h_idx).2
+    simpa using this
+  -- For each k, post.tools[k].callId = pre.tools[k].callId.
+  have h_callId_at : ∀ (k : Nat) (h_k : k < s.tools.length),
+      (sPost.tools[k]'(by rw [h_len]; exact h_k)).callId = s.tools[k].callId := by
+    intro k h_k
+    by_cases h_eq_idx : k = idx
+    · subst h_eq_idx
+      have h_get : (sPost.tools[k]'(by rw [h_len]; exact h_k)) = tPost := by
+        have h_k_set : (s.tools.set k tPost)[k]'(by rw [List.length_set]; exact h_k)
+                        = tPost :=
+          List.getElem_set_self (l := s.tools) (i := k) (a := tPost)
+            (h := by rw [List.length_set]; exact h_k)
+        have hk1 : sPost.tools[k]'(by rw [h_len]; exact h_k)
+                    = (s.tools.set k tPost)[k]'(by rw [List.length_set]; exact h_k) := by
+          congr 1 <;> rw [h_tools_set]
+        rw [hk1]; exact h_k_set
+      rw [h_get, h_callId_eq, ← h_pre_idx_eq]
+    · have h_k_set : (s.tools.set idx tPost)[k]'(by rw [List.length_set]; exact h_k)
+                      = s.tools[k] :=
+        List.getElem_set_ne (l := s.tools) (i := idx) (j := k) (a := tPost)
+          (h := fun h => h_eq_idx h.symm) (hj := by rw [List.length_set]; exact h_k)
+      have hk1 : sPost.tools[k]'(by rw [h_len]; exact h_k)
+                  = (s.tools.set idx tPost)[k]'(by rw [List.length_set]; exact h_k) := by
+        congr 1 <;> rw [h_tools_set]
+      rw [hk1, h_k_set]
+  have h_eq' : s.tools[i].callId = s.tools[j].callId := by
+    rw [← h_callId_at i h_i', ← h_callId_at j h_j']; exact h_eq
+  exact h_uniq i j h_i' h_j' h_eq'
+
+/-- Helper: appending a tool with a callId fresh w.r.t. `pre.tools` preserves
+    `UniqueCallIds`. Used by the `bridge_spawn` arm. -/
+private theorem uniqueCallIds_append_fresh_preserved
+    {s sPost : ComposedState} {newTool : ToolExecution.ToolCallContext}
+    (h_uniq         : s.UniqueCallIds)
+    (h_fresh        : ∀ t ∈ s.tools, t.callId ≠ newTool.callId)
+    (h_tools_append : sPost.tools = s.tools ++ [newTool]) :
+    sPost.UniqueCallIds := by
+  intro i j h_i h_j h_eq
+  have h_len : sPost.tools.length = s.tools.length + 1 := by
+    rw [h_tools_append, List.length_append, List.length_singleton]
+  -- For each k, sPost.tools[k] = (s.tools ++ [newTool])[k]; case-split based
+  -- on whether k < s.tools.length.
+  have h_get_lt : ∀ (k : Nat) (h_lt : k < s.tools.length)
+                    (h_k : k < sPost.tools.length),
+      (sPost.tools[k]'h_k) = s.tools[k]'h_lt := by
+    intro k h_lt h_k
+    have hk1 : sPost.tools[k]'h_k
+                = (s.tools ++ [newTool])[k]'(by rw [← h_tools_append]; exact h_k) := by
+      congr 1 <;> rw [h_tools_append]
+    rw [hk1]
+    exact List.getElem_append_left h_lt
+  have h_get_eq : ∀ (k : Nat) (h_k : k < sPost.tools.length),
+      ¬ k < s.tools.length → (sPost.tools[k]'h_k) = newTool := by
+    intro k h_k h_not_lt
+    have h_k_total : k < s.tools.length + 1 := by rw [← h_len]; exact h_k
+    have h_k_eq : k = s.tools.length := by omega
+    have hk1 : sPost.tools[k]'h_k
+                = (s.tools ++ [newTool])[k]'(by rw [← h_tools_append]; exact h_k) := by
+      congr 1 <;> rw [h_tools_append]
+    rw [hk1]
+    have h_ge : s.tools.length ≤ k := by rw [h_k_eq]
+    rw [List.getElem_append_right h_ge]
+    simp [h_k_eq]
+  -- Case-split on whether i < s.tools.length and j < s.tools.length.
+  by_cases h_i_lt : i < s.tools.length
+  · by_cases h_j_lt : j < s.tools.length
+    · -- Both indices in pre.tools; uniqueness from h_uniq.
+      apply h_uniq i j h_i_lt h_j_lt
+      rw [← h_get_lt i h_i_lt h_i, ← h_get_lt j h_j_lt h_j]
+      exact h_eq
+    · -- j = length (newTool); i < length.  callIds equal contradicts freshness.
+      exfalso
+      have hi := h_get_lt i h_i_lt h_i
+      have hj := h_get_eq j h_j h_j_lt
+      have h_in_i : s.tools[i] ∈ s.tools := List.getElem_mem h_i_lt
+      apply h_fresh _ h_in_i
+      rw [hi, hj] at h_eq
+      exact h_eq
+  · by_cases h_j_lt : j < s.tools.length
+    · -- i = length (newTool); j < length. Symmetric contradiction.
+      exfalso
+      have hi := h_get_eq i h_i h_i_lt
+      have hj := h_get_lt j h_j_lt h_j
+      have h_in_j : s.tools[j] ∈ s.tools := List.getElem_mem h_j_lt
+      apply h_fresh _ h_in_j
+      rw [hi, hj] at h_eq
+      exact h_eq.symm
+    · -- Both indices ≥ length; both = length; i = j.
+      have h_i_total : i < s.tools.length + 1 := by rw [← h_len]; exact h_i
+      have h_j_total : j < s.tools.length + 1 := by rw [← h_len]; exact h_j
+      have h_i_eq : i = s.tools.length := by omega
+      have h_j_eq : j = s.tools.length := by omega
+      rw [h_i_eq, h_j_eq]
+
+/-- Per-step preservation of INV-UNIQUE on both sides of the bridge. -/
+private theorem bridgedUniqueCallIds_step
+    {s₁ s₂ : BridgedState}
+    (h_parent_uniq : s₁.parent.UniqueCallIds)
+    (h_child_uniq  : s₁.child.UniqueCallIds)
+    (h_step : Transition s₁ s₂) :
+    s₂.parent.UniqueCallIds ∧ s₂.child.UniqueCallIds := by
+  cases h_step with
+  | parent_step h_inner h_child_eq _ _ _ =>
+    refine ⟨ComposedState.uniqueCallIds_preserved h_parent_uniq h_inner, ?_⟩
+    rw [h_child_eq]; exact h_child_uniq
+  | child_step h_inner h_parent_eq _ _ _ =>
+    refine ⟨?_, ComposedState.uniqueCallIds_preserved h_child_uniq h_inner⟩
+    rw [h_parent_eq]; exact h_parent_uniq
+  | @bridge_spawn newTool _ _ h_newTool_callId _ _ h_tools_append _ h_post_child_tools _ _ h_callId_fresh =>
+    refine ⟨?_, ?_⟩
+    · -- Uniqueness on post.parent.tools = pre.parent.tools ++ [newTool].
+      -- newTool.callId = post.bridgeCallId, and h_callId_fresh says no tool in
+      -- pre.parent.tools has callId = post.bridgeCallId.
+      apply uniqueCallIds_append_fresh_preserved (s := s₁.parent)
+        h_parent_uniq ?_ h_tools_append
+      intro t h_in
+      rw [h_newTool_callId]
+      exact h_callId_fresh t h_in
+    · -- post.child.tools = [] is trivially unique.
+      intro i j h_i h_j _
+      rw [h_post_child_tools] at h_i
+      cases h_i
+  | @bridge_complete idx tPre tPost _ h_idx_pre h_pre_callId _ _ _
+                       h_post_callId _ _ h_tools_set _ h_child_eq _ _ =>
+    refine ⟨?_, ?_⟩
+    · -- post.parent.tools = pre.parent.tools.set idx tPost; tPost.callId =
+      -- tPre.callId via h_post_callId, h_pre_callId.
+      apply uniqueCallIds_set_callId_preserved (s := s₁.parent)
+        h_parent_uniq h_idx_pre ?_ h_tools_set
+      rw [h_post_callId, ← h_pre_callId]
+    · rw [h_child_eq]; exact h_child_uniq
+  | @bridge_failure idx tPre tPost _ h_idx_pre h_pre_callId _ _
+                      h_post_callId _ _ h_tools_set _ h_child_eq _ _ =>
+    refine ⟨?_, ?_⟩
+    · apply uniqueCallIds_set_callId_preserved (s := s₁.parent)
+        h_parent_uniq h_idx_pre ?_ h_tools_set
+      rw [h_post_callId, ← h_pre_callId]
+    · rw [h_child_eq]; exact h_child_uniq
+  | bridge_cancel_cascade _ _ _ h_parent_eq _ _ _ _ _ h_child_tools_eq =>
+    refine ⟨?_, ?_⟩
+    · -- post.parent = pre.parent → tools unchanged.
+      intro i j h_i h_j h_eq
+      have h_tools : s₂.parent.tools = s₁.parent.tools := by rw [h_parent_eq]
+      have h_i' : i < s₁.parent.tools.length := by rw [h_tools] at h_i; exact h_i
+      have h_j' : j < s₁.parent.tools.length := by rw [h_tools] at h_j; exact h_j
+      apply h_parent_uniq i j h_i' h_j'
+      have hi : s₁.parent.tools[i] = s₂.parent.tools[i] := by congr 1 <;> rw [h_tools]
+      have hj : s₁.parent.tools[j] = s₂.parent.tools[j] := by congr 1 <;> rw [h_tools]
+      rw [hi, hj]; exact h_eq
+    · -- post.child.tools = pre.child.tools via h_child_tools_eq.
+      intro i j h_i h_j h_eq
+      have h_i' : i < s₁.child.tools.length := by rw [h_child_tools_eq] at h_i; exact h_i
+      have h_j' : j < s₁.child.tools.length := by rw [h_child_tools_eq] at h_j; exact h_j
+      apply h_child_uniq i j h_i' h_j'
+      have hi : s₁.child.tools[i] = s₂.child.tools[i] := by
+        congr 1 <;> rw [h_child_tools_eq]
+      have hj : s₁.child.tools[j] = s₂.child.tools[j] := by
+        congr 1 <;> rw [h_child_tools_eq]
+      rw [hi, hj]; exact h_eq
+
+/-- INV-UNIQUE (BridgedState lift): both sides of the bridge satisfy
+    `ComposedState.UniqueCallIds` across any reachable bridge trace. -/
+theorem bridgedUniqueCallIds_preserved
+    (pre post : BridgedState)
+    (h_parent_init : pre.parent.UniqueCallIds)
+    (h_child_init  : pre.child.UniqueCallIds)
+    (h_trace : Trace pre post) :
+    post.parent.UniqueCallIds ∧ post.child.UniqueCallIds := by
+  induction h_trace with
+  | refl => exact ⟨h_parent_init, h_child_init⟩
+  | step h_step _ ih =>
+    obtain ⟨h_p, h_c⟩ := bridgedUniqueCallIds_step h_parent_init h_child_init h_step
+    exact ih h_p h_c
+
 /-! ### B1: child completion propagates to parent ToolCall completion -/
 
 /-- B1: A child Request reaching `.completed` propagates to the parent
@@ -213,16 +428,14 @@ theorem bridged_child_completion_propagates
     (h_running     : ∃ t ∈ pre.parent.tools,
                        t.callId = pre.bridgeCallId ∧
                        t.state = .running ∧
+                       t.persistence = .committed ∧
                        t.childRequestId = some pre.child.requestId)
-    (h_persisted   : ∃ t ∈ pre.parent.tools,
-                       t.callId = pre.bridgeCallId ∧
-                       t.persistence = .committed)
     (h_child_done  : pre.child.request.state = .completed) :
     ∃ post, Trace pre post ∧
             ∃ t ∈ post.parent.tools,
               t.callId = pre.bridgeCallId ∧ t.state = .completed := by
   -- Pull out the running bridge tool and its index in pre.parent.tools.
-  obtain ⟨tPre, h_in, h_id, h_run_state, h_child_id⟩ := h_running
+  obtain ⟨tPre, h_in, h_id, h_run_state, h_committed, h_child_id⟩ := h_running
   obtain ⟨idx, h_idx⟩ := List.mem_iff_getElem?.mp h_in
   -- The post-state advances the running bridge tool to `.completed`,
   -- preserving every other field (including `childRequestId`).
@@ -233,10 +446,6 @@ theorem bridged_child_completion_propagates
   -- We need the index bound for `List.mem_set`.
   have h_lt : idx < pre.parent.tools.length :=
     (List.getElem?_eq_some_iff.mp h_idx).1
-  -- Recover `h_running` for the constructor (un-destructured form).
-  have h_running' : ∃ t ∈ pre.parent.tools,
-                       t.callId = pre.bridgeCallId ∧ t.state = .running :=
-    ⟨tPre, h_in, h_id, h_run_state⟩
   -- The post bridge tool exists in post.parent.tools (it's the .set element).
   have h_tPost_in : tPost ∈ postParent.tools :=
     List.mem_set pre.parent.tools idx h_lt tPost
@@ -245,51 +454,29 @@ theorem bridged_child_completion_propagates
   · -- One-step trace via bridge_complete.
     refine Trace.step ?_ Trace.refl
     refine Transition.bridge_complete
+      (idx := idx) (tPre := tPre) (tPost := tPost)
       h_child_done
-      h_running'
-      h_persisted
-      ?_   -- h_post_tool
-      ?_   -- h_others_eq
+      h_idx
+      h_id
+      h_run_state
+      h_committed
+      h_child_id
+      ?_   -- h_post_callId
+      ?_   -- h_post_state
+      ?_   -- h_post_child
+      rfl  -- h_tools_set       (post.parent.tools = pre.parent.tools.set idx tPost)
       rfl  -- h_request_eq      (post.parent.request = pre.parent.request)
       rfl  -- h_child_eq        (post.child = pre.child)
       rfl  -- h_bridgeId_eq     (post.bridgeCallId = pre.bridgeCallId)
       rfl  -- h_parent_id_eq    (post.parent.requestId = pre.parent.requestId)
-    · -- h_post_tool: tPost ∈ post.parent.tools, callId, state = .completed,
-      --              childRequestId = some pre.child.requestId.
-      refine ⟨tPost, h_tPost_in, ?_, rfl, ?_⟩
-      · -- tPost.callId = pre.bridgeCallId  (tPost shares tPre's callId).
-        show tPre.callId = pre.bridgeCallId
-        exact h_id
-      · -- tPost.childRequestId = some pre.child.requestId.
-        show tPre.childRequestId = some pre.child.requestId
-        exact h_child_id
-    · -- h_others_eq: every non-bridge tool in pre is preserved in post.
-      intro t h_t_in h_t_ne
-      -- post.parent.tools = pre.parent.tools.set idx tPost. A non-bridge tool
-      -- t ≠ tPre (because tPre.callId = pre.bridgeCallId and t.callId ≠
-      -- pre.bridgeCallId). So t survives the .set unchanged.
-      show t ∈ postParent.tools
-      have h_set_subset :
-          ∀ x ∈ pre.parent.tools, x ≠ tPre →
-            x ∈ pre.parent.tools.set idx tPost := by
-        intro x hx hx_ne
-        -- x is in the original list; either its index = idx (then x = tPre,
-        -- contradicting hx_ne) or its index ≠ idx (then .set preserves it).
-        rcases List.mem_iff_getElem?.mp hx with ⟨j, hj⟩
-        by_cases h_eq : j = idx
-        · -- j = idx ⇒ x = tPre via h_idx, hj.
-          subst h_eq
-          have : some x = some tPre := by rw [← hj, h_idx]
-          exact absurd (Option.some.inj this) hx_ne
-        · -- j ≠ idx ⇒ x ∈ pre.parent.tools.set idx tPost.
-          apply List.mem_iff_getElem?.mpr
-          refine ⟨j, ?_⟩
-          rw [List.getElem?_set_ne (by exact fun h => h_eq h.symm)]
-          exact hj
-      apply h_set_subset t h_t_in
-      intro h_eq
-      apply h_t_ne
-      rw [h_eq]; exact h_id
+    · -- h_post_callId: tPost.callId = pre.bridgeCallId.
+      show tPre.callId = pre.bridgeCallId
+      exact h_id
+    · -- h_post_state: tPost.state = .completed.
+      rfl
+    · -- h_post_child: tPost.childRequestId = some pre.child.requestId.
+      show tPre.childRequestId = some pre.child.requestId
+      exact h_child_id
   · -- Bridge tool ∈ post.parent.tools.
     exact h_tPost_in
   · -- tPost.callId = pre.bridgeCallId.
@@ -339,12 +526,6 @@ theorem bridged_child_failure_projects
   -- Index bound for `List.mem_set`.
   have h_lt : idx < pre.parent.tools.length :=
     (List.getElem?_eq_some_iff.mp h_idx).1
-  -- Recover the `bridge_failure` running-tool form (un-destructured, 4 conjuncts
-  -- with the trailing childRequestId dropped — the constructor takes the
-  -- 2-conjunct form just as B1 did with `h_running'`).
-  have h_running' : ∃ t ∈ pre.parent.tools,
-                       t.callId = pre.bridgeCallId ∧ t.state = .running :=
-    ⟨tPre, h_in, h_id, h_run_state⟩
   -- The post bridge tool ∈ post.parent.tools (it's the .set element).
   have h_tPost_in : tPost ∈ postParent.tools :=
     List.mem_set pre.parent.tools idx h_lt tPost
@@ -366,46 +547,29 @@ theorem bridged_child_failure_projects
   · -- One-step trace via bridge_failure.
     refine Trace.step ?_ Trace.refl
     refine Transition.bridge_failure
+      (idx := idx) (tPre := tPre) (tPost := tPost)
       h_child_term
-      h_running'
-      ?_   -- h_post_tool
-      ?_   -- h_others_eq
+      h_idx
+      h_id
+      h_run_state
+      h_child_id
+      ?_   -- h_post_callId
+      ?_   -- h_post_state
+      ?_   -- h_post_child
+      rfl  -- h_tools_set       (post.parent.tools = pre.parent.tools.set idx tPost)
       rfl  -- h_request_eq      (post.parent.request = pre.parent.request)
       rfl  -- h_child_eq        (post.child = pre.child)
       rfl  -- h_bridgeId_eq     (post.bridgeCallId = pre.bridgeCallId)
       rfl  -- h_parent_id_eq    (post.parent.requestId = pre.parent.requestId)
-    · -- h_post_tool: tPost ∈ post.parent.tools, callId, state ∈ {failed,cancelled},
-      --              childRequestId = some pre.child.requestId.
-      refine ⟨tPost, h_tPost_in, ?_, ?_, ?_⟩
-      · -- tPost.callId = pre.bridgeCallId.
-        show tPre.callId = pre.bridgeCallId
-        exact h_id
-      · -- tPost.state ∈ {.failed, .cancelled}.
-        show projectedState = .failed ∨ projectedState = .cancelled
-        exact h_proj
-      · -- tPost.childRequestId = some pre.child.requestId.
-        show tPre.childRequestId = some pre.child.requestId
-        exact h_child_id
-    · -- h_others_eq: every non-bridge tool in pre survives unchanged in post.
-      intro t h_t_in h_t_ne
-      show t ∈ postParent.tools
-      have h_set_subset :
-          ∀ x ∈ pre.parent.tools, x ≠ tPre →
-            x ∈ pre.parent.tools.set idx tPost := by
-        intro x hx hx_ne
-        rcases List.mem_iff_getElem?.mp hx with ⟨j, hj⟩
-        by_cases h_eq : j = idx
-        · subst h_eq
-          have : some x = some tPre := by rw [← hj, h_idx]
-          exact absurd (Option.some.inj this) hx_ne
-        · apply List.mem_iff_getElem?.mpr
-          refine ⟨j, ?_⟩
-          rw [List.getElem?_set_ne (by exact fun h => h_eq h.symm)]
-          exact hj
-      apply h_set_subset t h_t_in
-      intro h_eq
-      apply h_t_ne
-      rw [h_eq]; exact h_id
+    · -- h_post_callId: tPost.callId = pre.bridgeCallId.
+      show tPre.callId = pre.bridgeCallId
+      exact h_id
+    · -- h_post_state: tPost.state ∈ {.failed, .cancelled}.
+      show projectedState = .failed ∨ projectedState = .cancelled
+      exact h_proj
+    · -- h_post_child: tPost.childRequestId = some pre.child.requestId.
+      show tPre.childRequestId = some pre.child.requestId
+      exact h_child_id
   · -- tPost.callId = pre.bridgeCallId.
     show tPre.callId = pre.bridgeCallId
     exact h_id
@@ -469,6 +633,7 @@ theorem cascade_cancels_child
         ?_                             -- h_child_caused_req_eq
         ?_                             -- h_child_caused_tool_eq
         ?_                             -- h_child_depth_eq
+        rfl                            -- h_child_tools_eq
       · -- mid.child.request.interruptRequestedAt.isSome.
         show midChildReq.interruptRequestedAt.isSome
         simp [midChildReq]
@@ -565,26 +730,14 @@ theorem cascade_cancels_child
     show postChildReq.state = .interrupted
     rfl
 
-/-! ### INV-UNIQUE: BridgedState-level note
+/-! ### INV-UNIQUE: BridgedState-level lift
 
-`ComposedState.UniqueCallIds` is preserved by every `ComposedState.Transition`
-(see `ComposedState.uniqueCallIds_preserved`). Lifting this to a full
-`BridgedState`-level "parent and child both satisfy UniqueCallIds across any
-trace" theorem requires tightening the `bridge_complete`/`bridge_failure`
-constructors: today they only specify `h_post_tool` (a witness) and
-`h_others_eq` (non-bridge tools survive), which underdetermines
-`post.parent.tools`. A deduction like
-
-  post.parent.tools = pre.parent.tools.set idx tPost
-
-(or an equivalent shape constraint) would close the preservation proof.
-This is a follow-up tightening, not in scope here. The `bridge_spawn` arm
-already has its freshness precondition (`h_callId_fresh`) added in this
-pass.
-
-The substantive consequence — B3' is a property of any state whose parent
-satisfies UniqueCallIds, and UniqueCallIds is preserved by every composed
-transition — is established by the existing parts above.
+The BridgedState-level `bridgedUniqueCallIds_preserved` theorem (above)
+proves that `ComposedState.UniqueCallIds` is preserved on both parent
+and child across any reachable bridge `Trace`. Per-step preservation
+relies on the set-style descriptions of `post.parent.tools` carried by
+`bridge_complete`, `bridge_failure`, and `bridge_spawn` (the latter via
+append + a freshness precondition on the new tool's callId).
 -/
 
 /-! ### B3': detach does not cascade -/
@@ -668,7 +821,7 @@ theorem detach_does_not_cancel_child
       rw [h_req]
     | tool_step _ _ _ h_req _ _ _ _ =>
       rw [h_req]
-  | bridge_spawn h_parent_proc _ _ h_post_child h_request_eq _ =>
+  | bridge_spawn h_parent_proc _ _ _ _ _ h_post_child _ h_request_eq _ _ =>
     -- bridge_spawn now guarantees post.child.request.interruptRequestedAt = none
     -- (the new conjunct in h_post_child). Under h_no_other, the pre-state also
     -- has interruptRequestedAt = none (proved by cases on the Option). Both
@@ -680,11 +833,11 @@ theorem detach_does_not_cancel_child
       | none => rfl
       | some _ => simp [h] at h_no_other
     rw [h_post_none, h_pre_none]
-  | bridge_complete _ _ _ _ _ _ h_child_eq _ _ =>
+  | bridge_complete _ _ _ _ _ _ _ _ _ _ _ h_child_eq _ _ =>
     rw [h_child_eq]
-  | bridge_failure _ _ _ _ _ h_child_eq _ _ =>
+  | bridge_failure _ _ _ _ _ _ _ _ _ _ h_child_eq _ _ =>
     rw [h_child_eq]
-  | bridge_cancel_cascade _ h_cascade _ _ _ _ _ _ _ =>
+  | bridge_cancel_cascade _ h_cascade _ _ _ _ _ _ _ _ =>
     -- Bridge tool with cascade policy contradicts h_detach (the same callId
     -- carries cancelPolicy = .detach). Use h_uniq (UniqueCallIds) to identify
     -- the two tools as equal: both carry callId = pre.bridgeCallId.
@@ -770,13 +923,13 @@ theorem foreground_blocks_parent_advance
       constructor <;> rw [h_req]
   | child_step _ h_parent_eq _ _ _ =>
     constructor <;> rw [h_parent_eq]
-  | bridge_spawn _ _ _ _ h_request_eq _ =>
+  | bridge_spawn _ _ _ _ _ _ _ _ h_request_eq _ _ =>
     constructor <;> rw [h_request_eq]
-  | bridge_complete _ _ _ _ _ h_request_eq _ _ _ =>
+  | bridge_complete _ _ _ _ _ _ _ _ _ _ h_request_eq _ _ _ =>
     constructor <;> rw [h_request_eq]
-  | bridge_failure _ _ _ _ h_request_eq _ _ _ =>
+  | bridge_failure _ _ _ _ _ _ _ _ _ h_request_eq _ _ _ =>
     constructor <;> rw [h_request_eq]
-  | bridge_cancel_cascade _ _ _ h_parent_eq _ _ _ _ _ =>
+  | bridge_cancel_cascade _ _ _ h_parent_eq _ _ _ _ _ _ =>
     constructor <;> rw [h_parent_eq]
 
 /-- B4: Subagent depth bound. Restated standalone for prominence; alias of `inv_depth`. -/

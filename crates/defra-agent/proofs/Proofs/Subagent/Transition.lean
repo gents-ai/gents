@@ -37,14 +37,18 @@ inductive Transition : BridgedState → BridgedState → Prop where
       : Transition pre post
 
   | bridge_spawn {pre post : BridgedState}
+      {newTool : ToolExecution.ToolCallContext}
       (h_parent_proc   : pre.parent.request.state = .processing)
       (h_depth_ok      : pre.parent.request.subagentDepth + 1 ≤ maxSubagentDepth)
       -- new parent tool with the right shape:
-      (h_post_parent_tool :
-         ∃ t ∈ post.parent.tools,
-           t.callId = post.bridgeCallId ∧
-           t.state = .pending ∧
-           t.childRequestId = some post.child.requestId)
+      (h_newTool_callId : newTool.callId = post.bridgeCallId)
+      (h_newTool_state  : newTool.state = .pending)
+      (h_newTool_child  : newTool.childRequestId = some post.child.requestId)
+      -- post.parent.tools is fully described by appending the new bridge tool.
+      -- Set-style/append-style description: closes the underdetermination
+      -- that would otherwise allow adversarial duplicates to slip into
+      -- post.parent.tools, supporting INV-UNIQUE preservation.
+      (h_tools_append  : post.parent.tools = pre.parent.tools ++ [newTool])
       -- new child request with parent linkage and depth = parent depth + 1:
       (h_post_child :
          post.child.request.state = .pending ∧
@@ -52,6 +56,10 @@ inductive Transition : BridgedState → BridgedState → Prop where
          post.child.request.causedByParentToolCallId = some post.bridgeCallId ∧
          post.child.request.subagentDepth = pre.parent.request.subagentDepth + 1 ∧
          post.child.request.interruptRequestedAt = none)
+      -- structural-identity guard: the new child request is freshly minted
+      -- with no tools yet. Required for INV-UNIQUE preservation on the child
+      -- side (an empty tool list trivially satisfies `UniqueCallIds`).
+      (h_post_child_tools : post.child.tools = [])
       -- spawn doesn't progress the parent's narrative:
       (h_request_eq    : post.parent.request = pre.parent.request)
       -- structural-identity guard: the parent's top-level requestId is
@@ -66,20 +74,26 @@ inductive Transition : BridgedState → BridgedState → Prop where
       : Transition pre post
 
   | bridge_complete {pre post : BridgedState}
+      {idx : Nat} {tPre tPost : ToolExecution.ToolCallContext}
       (h_child_done    : pre.child.request.state = .completed)
-      (h_running       : ∃ t ∈ pre.parent.tools,
-                           t.callId = pre.bridgeCallId ∧ t.state = .running)
-      (h_persisted     : ∃ t ∈ pre.parent.tools,
-                           t.callId = pre.bridgeCallId ∧
-                           t.persistence = .committed)
-      -- post bridge tool: state advances to .completed; childRequestId is
-      -- preserved (the bridge tool retains its link to the spawned child).
-      (h_post_tool     : ∃ t ∈ post.parent.tools,
-                           t.callId = pre.bridgeCallId ∧
-                           t.state = .completed ∧
-                           t.childRequestId = some pre.child.requestId)
-      (h_others_eq     : ∀ t ∈ pre.parent.tools, t.callId ≠ pre.bridgeCallId →
-                          t ∈ post.parent.tools)
+      -- pre bridge tool, located at a specific index. Pinning the index +
+      -- describing post.parent.tools via .set fully determines the post-state
+      -- (matches `tool_step`'s pattern), which is what makes
+      -- `UniqueCallIds`-style invariants liftable to `BridgedState`.
+      (h_idx_pre       : pre.parent.tools[idx]? = some tPre)
+      (h_pre_callId    : tPre.callId = pre.bridgeCallId)
+      (h_pre_state     : tPre.state = .running)
+      (h_pre_persisted : tPre.persistence = .committed)
+      (h_pre_child     : tPre.childRequestId = some pre.child.requestId)
+      -- post bridge tool: state advances to .completed; callId and childRequestId
+      -- are preserved (the bridge tool retains its identity and link).
+      (h_post_callId   : tPost.callId = pre.bridgeCallId)
+      (h_post_state    : tPost.state = .completed)
+      (h_post_child    : tPost.childRequestId = some pre.child.requestId)
+      -- post.parent.tools is fully described by replacing the bridge tool at
+      -- idx with tPost. Closes the underdetermination that would otherwise
+      -- allow adversarial duplicates to slip into post.parent.tools.
+      (h_tools_set     : post.parent.tools = pre.parent.tools.set idx tPost)
       (h_request_eq    : post.parent.request = pre.parent.request)
       (h_child_eq      : post.child = pre.child)
       (h_bridgeId_eq   : post.bridgeCallId = pre.bridgeCallId)
@@ -89,20 +103,24 @@ inductive Transition : BridgedState → BridgedState → Prop where
       : Transition pre post
 
   | bridge_failure {pre post : BridgedState}
+      {idx : Nat} {tPre tPost : ToolExecution.ToolCallContext}
       (h_child_term    : pre.child.request.state = .failed ∨
                          pre.child.request.state = .dead ∨
                          pre.child.request.state = .interrupted ∨
                          pre.child.request.state = .superseded)
-      (h_running       : ∃ t ∈ pre.parent.tools,
-                           t.callId = pre.bridgeCallId ∧ t.state = .running)
-      -- post bridge tool: state moves to .failed/.cancelled; childRequestId
-      -- preserved (the bridge tool retains its link to the spawned child).
-      (h_post_tool     : ∃ t ∈ post.parent.tools,
-                           t.callId = pre.bridgeCallId ∧
-                           (t.state = .failed ∨ t.state = .cancelled) ∧
-                           t.childRequestId = some pre.child.requestId)
-      (h_others_eq     : ∀ t ∈ pre.parent.tools, t.callId ≠ pre.bridgeCallId →
-                          t ∈ post.parent.tools)
+      -- pre bridge tool, located at a specific index. Same set-style description
+      -- as `bridge_complete` — see the comment there.
+      (h_idx_pre       : pre.parent.tools[idx]? = some tPre)
+      (h_pre_callId    : tPre.callId = pre.bridgeCallId)
+      (h_pre_state     : tPre.state = .running)
+      (h_pre_child     : tPre.childRequestId = some pre.child.requestId)
+      -- post bridge tool: state moves to .failed/.cancelled; callId and
+      -- childRequestId preserved.
+      (h_post_callId   : tPost.callId = pre.bridgeCallId)
+      (h_post_state    : tPost.state = .failed ∨ tPost.state = .cancelled)
+      (h_post_child    : tPost.childRequestId = some pre.child.requestId)
+      -- Set-style description of post.parent.tools.
+      (h_tools_set     : post.parent.tools = pre.parent.tools.set idx tPost)
       (h_request_eq    : post.parent.request = pre.parent.request)
       (h_child_eq      : post.child = pre.child)
       (h_bridgeId_eq   : post.bridgeCallId = pre.bridgeCallId)
@@ -136,6 +154,11 @@ inductive Transition : BridgedState → BridgedState → Prop where
            pre.child.request.causedByParentToolCallId)
       (h_child_depth_eq :
          post.child.request.subagentDepth = pre.child.request.subagentDepth)
+      -- structural-identity guard: child's tool list is unchanged. The cascade
+      -- step is operationally a single-field update on `interruptRequestedAt`;
+      -- child tools survive verbatim. Required for INV-UNIQUE preservation
+      -- (and would also be required for any future child-tools invariant).
+      (h_child_tools_eq : post.child.tools = pre.child.tools)
       : Transition pre post
 
 /-- Reflexive-transitive closure for liveness statements. -/
