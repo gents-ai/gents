@@ -37,6 +37,7 @@ pub async fn run_openai_oneshot_with_tools(
     prompt: &str,
 ) -> Result<OneshotRunResult> {
     ensure_schemas(node.as_ref()).await?;
+    crate::migration::ensure_tool_call_migrations(node.clone()).await?;
 
     let api_key = behavior.completion_client_api_key()?;
     let tool_runtime = ToolRuntimeContext::oneshot(node.clone());

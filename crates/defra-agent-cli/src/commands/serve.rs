@@ -126,6 +126,7 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
             .context("building embedded defra node")?,
     );
     ensure_runtime_schemas(node.as_ref()).await?;
+    defra_agent::migration::ensure_tool_call_migrations(node.clone()).await?;
     let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
 
     let agent = DefraAgent::from_default_behavior_documents(
