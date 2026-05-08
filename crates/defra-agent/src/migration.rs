@@ -23,6 +23,29 @@ use tempfile::NamedTempFile;
 
 const ADD_LIFECYCLE_STATE_PATCH: &str = r#"[{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"lifecycle_state","Kind":11}}]"#;
 
+#[allow(dead_code)]
+const ADD_AGENT_TOOL_CALL_SUBAGENT_PATCH: &str = r#"[
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"await_mode","Kind":11}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"cancel_policy","Kind":11}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"child_request_id","Kind":11}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"request_id","Kind":11}}
+]"#;
+
+#[allow(dead_code)]
+const ADD_AGENT_REQUEST_SUBAGENT_PATCH: &str = r#"[
+    {"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"subagent_depth","Kind":5}},
+    {"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"caused_by_parent_request_id","Kind":11}},
+    {"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"caused_by_parent_tool_call_id","Kind":11}}
+]"#;
+
+#[allow(dead_code)]
+const ADD_TOOL_SELECTION_SUBAGENT_PATCH: &str = r#"[
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_targets","Kind":17}},
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_spawn_enabled","Kind":2}},
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_steering_enabled","Kind":2}},
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_background_enabled","Kind":2}}
+]"#;
+
 /// WASM lens bytes embedded at compile time. Built by build.rs.
 const LENS_WASM_BYTES: &[u8] =
     include_bytes!(env!("AGENT_TOOL_CALL_LIFECYCLE_V1_TO_V2_LENS_WASM_PATH"));

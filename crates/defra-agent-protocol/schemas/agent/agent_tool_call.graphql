@@ -14,4 +14,8 @@ type AgentToolCall @branchable {
     selected_tool_name: String
     tool_failure_class: String
     latency_ms: Int
+    await_mode: String
+    cancel_policy: String
+    child_request_id: String @index
+    request_id: String @index
 }

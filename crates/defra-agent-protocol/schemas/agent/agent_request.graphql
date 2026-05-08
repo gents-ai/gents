@@ -26,4 +26,7 @@ type AgentRequest @branchable {
     max_retries: Int
     interrupt_requested_at: String       # NEW: RFC3339; null until interrupt requested
     valid_until: String                  # NEW: RFC3339; null = no TTL
+    subagent_depth: Int
+    caused_by_parent_request_id: String @index
+    caused_by_parent_tool_call_id: String @index
 }
