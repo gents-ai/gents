@@ -66,7 +66,8 @@ fn session_state_for_test() -> SessionState {
         agent_name: "agent".to_string(),
         sequence: 0,
         transcript_turn: TranscriptTurnState::Idle,
-        persisted_tool_result_ids: std::collections::HashSet::new(),
+        persisted_tool_result_keys: std::collections::HashSet::new(),
+        tool_result_identities: std::collections::HashMap::new(),
         initialized: true,
     }
 }
@@ -93,8 +94,12 @@ fn transcript_turn_state_allocates_new_assistant_after_saved_turn() {
     assert_eq!(state.begin_or_continue_assistant_turn(), 1);
     assert_eq!(state.begin_or_continue_assistant_turn(), 1);
     assert_eq!(state.persist_assistant_turn().unwrap(), 1);
-    assert!(state.mark_stream_tool_result_seen("call-1").unwrap());
-    assert!(!state.mark_stream_tool_result_seen("call-1").unwrap());
+    assert!(state
+        .mark_stream_tool_result_seen("call-1", "call-1", None)
+        .unwrap());
+    assert!(!state
+        .mark_stream_tool_result_seen("call-1", "call-1", None)
+        .unwrap());
 
     state.reset_after_user_message();
     assert_eq!(state.begin_or_continue_assistant_turn(), 2);
@@ -105,11 +110,31 @@ fn transcript_turn_state_allocates_new_assistant_after_saved_turn() {
 fn transcript_turn_state_rejects_stream_result_before_assistant_is_saved() {
     let mut state = session_state_for_test();
 
-    assert!(state.mark_stream_tool_result_seen("call-1").is_err());
+    assert!(state
+        .mark_stream_tool_result_seen("call-1", "call-1", None)
+        .is_err());
     assert_eq!(state.begin_or_continue_assistant_turn(), 1);
-    assert!(state.mark_stream_tool_result_seen("call-1").is_err());
+    assert!(state
+        .mark_stream_tool_result_seen("call-1", "call-1", None)
+        .is_err());
     assert_eq!(state.persist_assistant_turn().unwrap(), 1);
-    assert!(state.mark_stream_tool_result_seen("call-1").unwrap());
+    assert!(state
+        .mark_stream_tool_result_seen("call-1", "call-1", None)
+        .unwrap());
+}
+
+#[test]
+fn transcript_turn_state_preserves_distinct_tool_results() {
+    let mut state = session_state_for_test();
+
+    assert_eq!(state.begin_or_continue_assistant_turn(), 1);
+    assert_eq!(state.persist_assistant_turn().unwrap(), 1);
+    assert!(state
+        .mark_stream_tool_result_seen("internal-1", "result-1", Some("call-1"))
+        .unwrap());
+    assert!(state
+        .mark_stream_tool_result_seen("internal-2", "result-2", Some("call-2"))
+        .unwrap());
 }
 
 #[test]

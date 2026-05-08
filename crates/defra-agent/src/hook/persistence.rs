@@ -55,7 +55,11 @@ impl DefraSessionHook {
 
         let should_persist = {
             let mut state = self.state.lock().await;
-            state.mark_stream_tool_result_seen(internal_call_id)?
+            state.mark_stream_tool_result_seen(
+                internal_call_id,
+                &tool_result.id,
+                tool_result.call_id.as_deref(),
+            )?
         };
         if !should_persist {
             return Ok(());
@@ -160,13 +164,18 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
     async fn on_tool_call(
         &self,
         tool_name: &str,
-        _tool_call_id: Option<String>,
+        tool_call_id: Option<String>,
         internal_call_id: &str,
         args: &str,
     ) -> ToolCallHookAction {
         let result: anyhow::Result<()> = async {
             let (session_id, seq) = self.ensure_assistant_turn_sequence().await?;
             let storage_id = internal_call_id.to_string();
+            self.state.lock().await.register_tool_result_identity(
+                internal_call_id,
+                None,
+                tool_call_id.as_deref(),
+            );
             session::save_tool_call(
                 &self.node,
                 &session_id,
@@ -205,15 +214,25 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
         result: &str,
     ) -> HookAction {
         let persist_result: anyhow::Result<()> = async {
-            let (session_id, should_persist_message) = {
+            let (session_id, should_persist_message, persisted_result_id, persisted_call_id) = {
                 let mut state = self.state.lock().await;
                 let session_id = state
                     .session_id
                     .clone()
                     .ok_or_else(|| anyhow::anyhow!("session hook missing session id"))?;
-                let should_persist_message =
-                    state.mark_tool_result_seen_for_persisted_turn(internal_call_id);
-                (session_id, should_persist_message)
+                let should_persist_message = state.mark_tool_result_seen_for_persisted_turn(
+                    internal_call_id,
+                    None,
+                    tool_call_id.as_deref(),
+                );
+                let (persisted_result_id, persisted_call_id) =
+                    state.tool_result_message_identity(internal_call_id, tool_call_id.as_deref());
+                (
+                    session_id,
+                    should_persist_message,
+                    persisted_result_id,
+                    persisted_call_id,
+                )
             };
 
             let truncator =
@@ -242,8 +261,8 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
             if should_persist_message {
                 let tool_result_message = Message::User {
                     content: OneOrMany::one(UserContent::ToolResult(ToolResult {
-                        id: internal_call_id.to_string(),
-                        call_id: tool_call_id,
+                        id: persisted_result_id,
+                        call_id: persisted_call_id,
                         content: OneOrMany::one(ToolResultContent::Text(Text {
                             text: truncated.text.clone(),
                         })),

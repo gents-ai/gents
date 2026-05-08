@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -38,13 +38,20 @@ enum TranscriptTurnState {
     AssistantPersisted { sequence: u32 },
 }
 
+#[derive(Debug, Clone, Default)]
+struct ToolResultIdentity {
+    result_id: Option<String>,
+    call_id: Option<String>,
+}
+
 struct SessionState {
     session_id: Option<String>,
     current_request_id: Option<String>,
     agent_name: String,
     sequence: u32,
     transcript_turn: TranscriptTurnState,
-    persisted_tool_result_ids: HashSet<String>,
+    persisted_tool_result_keys: HashSet<String>,
+    tool_result_identities: HashMap<String, ToolResultIdentity>,
     initialized: bool,
 }
 
@@ -80,28 +87,132 @@ impl SessionState {
         Ok(sequence)
     }
 
-    fn mark_tool_result_seen_for_persisted_turn(&mut self, internal_call_id: &str) -> bool {
-        matches!(
-            self.transcript_turn,
-            TranscriptTurnState::AssistantPersisted { .. }
-        ) && self
-            .persisted_tool_result_ids
-            .insert(internal_call_id.to_string())
+    fn register_tool_result_identity(
+        &mut self,
+        internal_call_id: &str,
+        result_id: Option<&str>,
+        call_id: Option<&str>,
+    ) {
+        let identity = self
+            .tool_result_identities
+            .entry(internal_call_id.to_string())
+            .or_default();
+        if let Some(result_id) = non_empty(result_id) {
+            identity.result_id = Some(result_id.to_string());
+        }
+        if let Some(call_id) = non_empty(call_id) {
+            identity.call_id = Some(call_id.to_string());
+        }
     }
 
-    fn mark_stream_tool_result_seen(&mut self, internal_call_id: &str) -> anyhow::Result<bool> {
+    fn tool_result_message_identity(
+        &self,
+        internal_call_id: &str,
+        call_id: Option<&str>,
+    ) -> (String, Option<String>) {
+        let registered = self.tool_result_identities.get(internal_call_id);
+        let result_id = registered
+            .and_then(|identity| identity.result_id.clone())
+            .or_else(|| non_empty(call_id).map(ToOwned::to_owned))
+            .unwrap_or_else(|| internal_call_id.to_string());
+        let call_id = registered
+            .and_then(|identity| identity.call_id.clone())
+            .or_else(|| non_empty(call_id).map(ToOwned::to_owned));
+
+        (result_id, call_id)
+    }
+
+    fn mark_tool_result_seen_for_persisted_turn(
+        &mut self,
+        internal_call_id: &str,
+        result_id: Option<&str>,
+        call_id: Option<&str>,
+    ) -> bool {
+        self.register_tool_result_identity(internal_call_id, result_id, call_id);
         if !matches!(
             self.transcript_turn,
             TranscriptTurnState::AssistantPersisted { .. }
         ) {
+            return false;
+        }
+
+        let keys = self.tool_result_dedupe_keys(internal_call_id, result_id, call_id);
+        self.mark_tool_result_keys_seen(keys)
+    }
+
+    fn mark_stream_tool_result_seen(
+        &mut self,
+        internal_call_id: &str,
+        result_id: &str,
+        call_id: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        self.register_tool_result_identity(internal_call_id, Some(result_id), call_id);
+        let keys = self.tool_result_dedupe_keys(internal_call_id, Some(result_id), call_id);
+        if !matches!(
+            self.transcript_turn,
+            TranscriptTurnState::AssistantPersisted { .. }
+        ) {
+            if self.tool_result_keys_already_seen(&keys) {
+                self.persist_tool_result_keys(keys);
+                return Ok(false);
+            }
             anyhow::bail!(
                 "cannot persist streamed tool result before its assistant turn is persisted"
             );
         }
-        Ok(self
-            .persisted_tool_result_ids
-            .insert(internal_call_id.to_string()))
+        Ok(self.mark_tool_result_keys_seen(keys))
     }
+
+    fn tool_result_dedupe_keys(
+        &self,
+        internal_call_id: &str,
+        result_id: Option<&str>,
+        call_id: Option<&str>,
+    ) -> Vec<String> {
+        // The hook, stream item, and transcript can expose different IDs for
+        // the same tool result. Persist all known aliases and skip when any
+        // alias has already materialized the result message.
+        let mut keys = Vec::new();
+        push_tool_result_key(&mut keys, "internal", Some(internal_call_id));
+
+        if let Some(identity) = self.tool_result_identities.get(internal_call_id) {
+            push_tool_result_key(&mut keys, "result", identity.result_id.as_deref());
+            push_tool_result_key(&mut keys, "call", identity.call_id.as_deref());
+        }
+        push_tool_result_key(&mut keys, "result", result_id);
+        push_tool_result_key(&mut keys, "call", call_id);
+
+        keys
+    }
+
+    fn mark_tool_result_keys_seen(&mut self, keys: Vec<String>) -> bool {
+        let already_seen = self.tool_result_keys_already_seen(&keys);
+        self.persist_tool_result_keys(keys);
+        !already_seen
+    }
+
+    fn tool_result_keys_already_seen(&self, keys: &[String]) -> bool {
+        keys.iter()
+            .any(|key| self.persisted_tool_result_keys.contains(key))
+    }
+
+    fn persist_tool_result_keys(&mut self, keys: Vec<String>) {
+        self.persisted_tool_result_keys.extend(keys);
+    }
+}
+
+fn push_tool_result_key(keys: &mut Vec<String>, namespace: &str, value: Option<&str>) {
+    let Some(value) = non_empty(value) else {
+        return;
+    };
+    let key = format!("{namespace}:{value}");
+    if !keys.iter().any(|existing| existing == &key) {
+        keys.push(key);
+    }
+}
+
+fn non_empty(value: Option<&str>) -> Option<&str> {
+    value.and_then(|value| (!value.is_empty()).then_some(value))
 }
 
 #[derive(Clone)]
@@ -141,7 +252,8 @@ impl DefraSessionHook {
                 agent_name: agent_name.to_string(),
                 sequence: 0,
                 transcript_turn: TranscriptTurnState::Idle,
-                persisted_tool_result_ids: HashSet::new(),
+                persisted_tool_result_keys: HashSet::new(),
+                tool_result_identities: HashMap::new(),
                 initialized: false,
             })),
         }
@@ -172,7 +284,8 @@ impl DefraSessionHook {
                 agent_name: agent_name.to_string(),
                 sequence: max_seq,
                 transcript_turn: TranscriptTurnState::Idle,
-                persisted_tool_result_ids: HashSet::new(),
+                persisted_tool_result_keys: HashSet::new(),
+                tool_result_identities: HashMap::new(),
                 initialized: true,
             })),
         })
@@ -228,6 +341,19 @@ impl DefraSessionHook {
 
     pub async fn set_active_request_id(&self, request_id: Option<String>) {
         self.state.lock().await.current_request_id = request_id;
+    }
+
+    pub(crate) async fn register_stream_tool_call_identity(
+        &self,
+        internal_call_id: &str,
+        result_id: &str,
+        call_id: Option<&str>,
+    ) {
+        self.state.lock().await.register_tool_result_identity(
+            internal_call_id,
+            Some(result_id),
+            call_id,
+        );
     }
 
     pub async fn mark_current_response_materialized(&self, sequence: u32) -> anyhow::Result<()> {

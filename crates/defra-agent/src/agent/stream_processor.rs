@@ -95,10 +95,17 @@ impl<'a> StreamProcessor<'a> {
             }
             Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall {
                 tool_call,
-                ..
+                internal_call_id,
             })) => {
                 let _ = self.stream_writer.flush_pending(self.doc_id).await?;
                 self.lifecycle.advance().await?;
+                self.persistence_hook
+                    .register_stream_tool_call_identity(
+                        &internal_call_id,
+                        &tool_call.id,
+                        tool_call.call_id.as_deref(),
+                    )
+                    .await;
                 self.assistant_turn.push_tool_call(tool_call);
                 Ok(StreamAction::Continue)
             }
