@@ -226,4 +226,59 @@ mod tests {
             String,
         ) -> ToolCallLifecycle = ToolCallLifecycle::new;
     }
+
+    use crate::lean_vocab_test::{
+        assert_lean_contract_vocabulary_matches,
+        assert_state_machine_contract_is_complete,
+        lean_state_machine_contract,
+        LeanContractVocabulary,
+    };
+
+    #[test]
+    fn rust_tool_call_state_vocabulary_matches_lean_model() {
+        let rust_states = ToolCallState::ALL
+            .iter()
+            .copied()
+            .map(ToolCallState::as_str)
+            .collect::<Vec<_>>();
+        assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
+            domain: "ToolCallState",
+            rust_source: "ToolCallState::ALL",
+            rust_values: &rust_states,
+        });
+    }
+
+    #[test]
+    fn rust_failure_class_vocabulary_matches_lean_model() {
+        let rust_classes = FailureClass::ALL
+            .iter()
+            .copied()
+            .map(FailureClass::as_str)
+            .collect::<Vec<_>>();
+        assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
+            domain: "ToolFailureClass",
+            rust_source: "FailureClass::ALL",
+            rust_values: &rust_classes,
+        });
+    }
+
+    #[test]
+    fn tool_call_state_machine_contract_is_complete() {
+        assert_state_machine_contract_is_complete("ToolCall");
+    }
+
+    #[test]
+    fn tool_call_terminal_partition_matches_lean_contract() {
+        let machine = lean_state_machine_contract("ToolCall");
+        let terminal = ToolCallState::ALL
+            .iter()
+            .copied()
+            .filter(|s| s.is_terminal())
+            .map(ToolCallState::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            terminal,
+            machine.terminal_states.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+    }
 }
