@@ -16,7 +16,7 @@ The spec left several formulation choices open. The plan commits to defaults bel
 
 1. **Tooling: TLC.** Bounded model-checking is sufficient for the parameters we care about. Apalache (symbolic, SMT-based) is more expressive but has a steeper on-ramp; defer until TLC hits a wall.
 2. **Directory: `crates/defra-agent/proofs/tla/`.** Sibling to the existing Lean `Proofs/` directory under one verification root.
-3. **OperatorWrite/Reconcile window: composite action.** First-pass model treats `OperatorWrite + immediate-Reconcile` as a single atomic action (`OperatorWriteAndReconcile`). The supporting invariant from the spec then holds in every reachable state — no phase variable needed. Phase-variable formulation deferred; see the spec's supporting-invariant subsection.
+3. **OperatorWrite and Reconcile: separate actions.** `OperatorWrite(n, p, S)` atomically updates `desired` only — no RPCs emitted. `Reconcile(n)` emits Install/Teardown RPCs to bridge `desired ↔ replicator` gaps and may fire from any state, not only after operator action. This matches the spec's action signatures and supports crash recovery: a `Reconcile` fires after a `Crash` (when `inFlight` is cleared and any in-transit RPCs may have been dropped) to re-emit RPCs lost during the crash window. The supporting invariant from the spec is qualified to "states where Reconcile is not enabled" per the spec's supporting-invariant subsection. Phase-variable formulation (which would track the OperatorWrite/Reconcile window explicitly as state) deferred.
 4. **`messages` is a set, not a multiset.** RPC IDs are unique per attempt, so set semantics suffice; duplicate-message scenarios remain modelable via `Send` re-emitting under different IDs. Saves complexity for first pass.
 5. **Provenance via history variable: deferred.** Provenance is the right structural safety property but TLC's auxiliary-history support is awkward and inflates state. Cover later via TLAPS proof or post-hoc trace inspection.
 6. **Bounded parameters: 2 nodes × 2 collections × ≤ 2 crashes per node.** Keeps state space tractable for laptop-grade TLC runs (target: < 5 minutes for safety; < 15 minutes for liveness).
@@ -522,114 +522,146 @@ EOF
 
 ---
 
-## Task 3: OperatorWriteAndReconcile (composite action)
+## Task 3: OperatorWrite and Reconcile (separate actions)
 
-Per decision 3, the first-pass model treats operator changes to `desired` and the immediately-following `Reconcile` as a single atomic action. This collapses the spec's "OperatorWrite/Reconcile window" so the supporting invariant holds in every reachable state.
+Per decision 3, operator intent and reconciliation fire independently. `OperatorWrite(n, p, S)` atomically updates `desired` only. `Reconcile(n)` emits one Install or Teardown RPC per firing to bridge a `desired ↔ replicator` gap and can fire from any state — including post-`Crash` recovery, when `inFlight` has been cleared and the persisted gap survives.
+
+Single-RPC-per-firing keeps the action simple and tractable for TLC; multiple disagreements get reconciled across multiple firings, with fairness on `Reconcile` (added in Task 10) ensuring eventual progress.
 
 **Files:**
 - Modify: `crates/defra-agent/proofs/tla/ReversePairing.tla`
 
-- [ ] **Step 1: Add a fresh-RPC-id helper**
+- [ ] **Step 1: Add helpers above any actions**
 
-Append to `ReversePairing.tla` (above `Next`):
+`Range` is defined before its first use to avoid a forward reference.
+
+Append to `ReversePairing.tla` (above the placeholder `Next`):
 
 ```tla
 (***************************************************************************)
 (* Helpers                                                                 *)
 (***************************************************************************)
 
+Range(f) == { f[x] : x \in DOMAIN f }
+
 FreshIds(k) ==
   \* True when there are at least k unused RPC ids available
   Cardinality(RPCId \ rpcIdsUsed) >= k
 
-PickFresh(k) ==
-  \* Pick k unused RPC ids non-deterministically
-  CHOOSE S \in SUBSET (RPCId \ rpcIdsUsed) : Cardinality(S) = k
+PendingInstallFor(n, p, c) ==
+  \E rpc \in inFlight[n] :
+    /\ rpc.kind = "Install"
+    /\ rpc.tgt = p
+    /\ rpc.collection = c
+
+PendingTeardownFor(n, p, c) ==
+  \E rpc \in inFlight[n] :
+    /\ rpc.kind = "Teardown"
+    /\ rpc.tgt = p
+    /\ rpc.collection = c
 ```
 
-- [ ] **Step 2: Add the composite action**
+- [ ] **Step 2: Add `OperatorWrite` action**
 
 Append:
 
 ```tla
 (***************************************************************************)
-(* OperatorWriteAndReconcile(n, p, S):                                     *)
-(*   Operator on node n sets desired[n][p] = S, atomically followed by     *)
-(*   reconcile that emits Install/Teardown RPCs to bridge any gap with     *)
-(*   replicator[p][n].                                                     *)
+(* OperatorWrite(n, p, S): operator on node n sets desired[n][p] = S.      *)
+(* Atomic update of desired only — no RPCs emitted. Reconcile fires        *)
+(* separately to bridge any resulting gap.                                 *)
 (*                                                                         *)
-(* This is the composite-action formulation (decision 3): the spec's       *)
-(* OperatorWrite/Reconcile window is collapsed to a single transition.     *)
+(* The S # desired[n][p] precondition prunes stutter steps where the       *)
+(* operator writes the same value already present.                         *)
 (***************************************************************************)
 
-OperatorWriteAndReconcile(n, p, S) ==
-  LET
-    toInstall  == S \ replicator[p][n]                  \* in S, not yet on p
-    toTeardown == replicator[p][n] \ S                  \* on p, no longer wanted
-    needed     == Cardinality(toInstall) + Cardinality(toTeardown)
-    freshIds   == PickFresh(needed)
-    \* assign one fresh id to each operation, deterministically by collection
-    installRPCs ==
-      LET assign == CHOOSE f \in [toInstall -> freshIds] : Cardinality(Range(f)) = Cardinality(toInstall)
-      IN { [id |-> assign[c], kind |-> "Install", src |-> n, tgt |-> p,
-            collection |-> c, of |-> NoOf] : c \in toInstall }
-    teardownIds == freshIds \ { rpc.id : rpc \in installRPCs }
-    teardownRPCs ==
-      LET assign == CHOOSE f \in [toTeardown -> teardownIds] : Cardinality(Range(f)) = Cardinality(toTeardown)
-      IN { [id |-> assign[c], kind |-> "Teardown", src |-> n, tgt |-> p,
-            collection |-> c, of |-> NoOf] : c \in toTeardown }
-    newRPCs == installRPCs \cup teardownRPCs
-  IN
-    /\ p # n                                            \* peer must be a different node
-    /\ FreshIds(needed)                                 \* enough unused RPC ids
-    /\ desired' = [desired EXCEPT ![n] = [@ EXCEPT ![p] = S]]
-    /\ inFlight' = [inFlight EXCEPT ![n] = @ \cup newRPCs]
-    /\ messages' = messages \cup newRPCs
-    /\ rpcIdsUsed' = rpcIdsUsed \cup { rpc.id : rpc \in newRPCs }
-    /\ UNCHANGED <<replicator, pendingInbound, crashCount>>
-
-Range(f) == { f[x] : x \in DOMAIN f }
+OperatorWrite(n, p, S) ==
+  /\ p # n
+  /\ S # desired[n][p]
+  /\ desired' = [desired EXCEPT ![n] = [@ EXCEPT ![p] = S]]
+  /\ UNCHANGED <<replicator, inFlight, pendingInbound, messages, crashCount, rpcIdsUsed>>
 ```
 
-- [ ] **Step 3: Replace placeholder `Next` with a quantified disjunction**
+- [ ] **Step 3: Add `Reconcile` action**
 
-Replace the `Next == UNCHANGED vars` line:
+Append:
+
+```tla
+(***************************************************************************)
+(* Reconcile(n): emit ONE Install or Teardown RPC for some (p, c) pair    *)
+(* where desired[n][p] and replicator[p][n] disagree, provided no matching *)
+(* RPC is already in flight. Fires from any state (including post-Crash    *)
+(* recovery, when inFlight has been cleared but the persisted gap          *)
+(* survives).                                                              *)
+(*                                                                         *)
+(* Per-firing scope is one (p, c); multiple disagreements get reconciled   *)
+(* across multiple firings under fairness.                                 *)
+(***************************************************************************)
+
+ReconcileInstall(n, p, c) ==
+  /\ p # n
+  /\ c \in desired[n][p]
+  /\ c \notin replicator[p][n]
+  /\ ~PendingInstallFor(n, p, c)
+  /\ FreshIds(1)
+  /\ LET id == CHOOSE i \in RPCId \ rpcIdsUsed : TRUE
+         rpc == [id |-> id, kind |-> "Install", src |-> n, tgt |-> p,
+                 collection |-> c, of |-> NoOf]
+     IN /\ inFlight'    = [inFlight EXCEPT ![n] = @ \cup {rpc}]
+        /\ messages'    = messages \cup {rpc}
+        /\ rpcIdsUsed'  = rpcIdsUsed \cup {id}
+  /\ UNCHANGED <<desired, replicator, pendingInbound, crashCount>>
+
+ReconcileTeardown(n, p, c) ==
+  /\ p # n
+  /\ c \in replicator[p][n]
+  /\ c \notin desired[n][p]
+  /\ ~PendingTeardownFor(n, p, c)
+  /\ FreshIds(1)
+  /\ LET id == CHOOSE i \in RPCId \ rpcIdsUsed : TRUE
+         rpc == [id |-> id, kind |-> "Teardown", src |-> n, tgt |-> p,
+                 collection |-> c, of |-> NoOf]
+     IN /\ inFlight'    = [inFlight EXCEPT ![n] = @ \cup {rpc}]
+        /\ messages'    = messages \cup {rpc}
+        /\ rpcIdsUsed'  = rpcIdsUsed \cup {id}
+  /\ UNCHANGED <<desired, replicator, pendingInbound, crashCount>>
+
+Reconcile(n) ==
+  \/ \E p \in Node, c \in Collection : ReconcileInstall(n, p, c)
+  \/ \E p \in Node, c \in Collection : ReconcileTeardown(n, p, c)
+```
+
+- [ ] **Step 4: Replace placeholder `Next` with the two actions**
+
+Replace `Next == UNCHANGED vars`:
 
 ```tla
 Next ==
-  \/ \E n, p \in Node, S \in SUBSET Collection :
-       OperatorWriteAndReconcile(n, p, S)
+  \/ \E n \in Node, p \in Node, S \in SUBSET Collection : OperatorWrite(n, p, S)
+  \/ \E n \in Node : Reconcile(n)
 ```
 
-- [ ] **Step 4: Run TLC; expect a small reachable state space**
+- [ ] **Step 5: Disable deadlock check in MC config**
+
+`OperatorWrite` and `Reconcile` may both eventually become disabled (operator stops writing, no remaining gaps, or `RPCId` pool exhausted). TLC would otherwise flag deadlock. Edit `MCReversePairing.cfg`, append:
+
+```
+CHECK_DEADLOCK FALSE
+```
+
+- [ ] **Step 6: Run TLC; verify TypeOK across the new state space**
 
 ```bash
 cd crates/defra-agent/proofs/tla && ./scripts/run-tlc.sh MCReversePairing
 ```
 
 Expected:
-- TLC explores reachable states via OperatorWriteAndReconcile
+- TLC explores via `OperatorWrite` and `Reconcile`, including the OperatorWrite/Reconcile window where `desired` has changed but no RPC has been emitted yet
 - `TypeOK` holds in every state
-- State count is finite (bounded by 2 nodes × 2 nodes × 2^2 collection subsets × bounded RPC id usage)
+- State space is finite, bounded by `RPCId` pool exhaustion
 - `Model checking completed. No error has been found.`
 
-If TLC reports `Deadlock reached`, that's expected at this stage — once `rpcIdsUsed` exhausts the bounded `RPCId`, no further `OperatorWriteAndReconcile` can fire. Add to MC config: `CHECK_DEADLOCK FALSE`.
-
-- [ ] **Step 5: Disable deadlock check in MC config**
-
-Edit `MCReversePairing.cfg`, append:
-
-```
-CHECK_DEADLOCK FALSE
-```
-
-- [ ] **Step 6: Re-run TLC; verify clean**
-
-```bash
-cd crates/defra-agent/proofs/tla && ./scripts/run-tlc.sh MCReversePairing
-```
-
-Expected: clean finish, `TypeOK` invariant holds, no error.
+If TLC reports `RPCId pool exhausted` (deadlock-style stuck state), that's the bounded-model artifact and is fine — `CHECK_DEADLOCK FALSE` suppresses the report.
 
 - [ ] **Step 7: Commit**
 
@@ -637,13 +669,14 @@ Expected: clean finish, `TypeOK` invariant holds, no error.
 git add crates/defra-agent/proofs/tla/ReversePairing.tla \
         crates/defra-agent/proofs/tla/MCReversePairing.cfg
 git commit -m "$(cat <<'EOF'
-Add OperatorWriteAndReconcile composite action
+Add OperatorWrite and Reconcile as separate actions
 
-Per spec decision 3, operator-write and the immediately-following
-reconcile fire as a single atomic transition: desired updates and
-the corresponding Install/Teardown RPCs are emitted together. This
-collapses the OperatorWrite/Reconcile window, so the supporting
-invariant will hold in every reachable state.
+Per spec decision 3, operator-write and reconcile fire independently.
+OperatorWrite atomically updates desired only (with stutter-write
+pruning). Reconcile emits one Install or Teardown RPC for a single
+(p, c) gap, can fire from any state including post-Crash recovery.
+Helpers (Range, FreshIds, PendingInstallFor, PendingTeardownFor)
+defined before use.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -654,7 +687,7 @@ EOF
 
 ## Task 4: Network actions — Deliver and Drop
 
-The model treats `messages` as an in-transit set. `Send` already happens inside `OperatorWriteAndReconcile` (and later inside `Process` for acks); separate actions handle delivery and loss.
+The model treats `messages` as an in-transit set. `Send` already happens inside `Reconcile` (and later inside `Process` for acks); separate actions handle delivery and loss.
 
 **Files:**
 - Modify: `crates/defra-agent/proofs/tla/ReversePairing.tla`
@@ -698,8 +731,8 @@ Replace the `Next` definition:
 
 ```tla
 Next ==
-  \/ \E n, p \in Node, S \in SUBSET Collection :
-       OperatorWriteAndReconcile(n, p, S)
+  \/ \E n \in Node, p \in Node, S \in SUBSET Collection : OperatorWrite(n, p, S)
+  \/ \E n \in Node : Reconcile(n)
   \/ \E rpc \in messages : Deliver(rpc)
   \/ \E rpc \in messages : Drop(rpc)
 ```
@@ -785,8 +818,8 @@ Process(recv, rpc) ==
 
 ```tla
 Next ==
-  \/ \E n, p \in Node, S \in SUBSET Collection :
-       OperatorWriteAndReconcile(n, p, S)
+  \/ \E n \in Node, p \in Node, S \in SUBSET Collection : OperatorWrite(n, p, S)
+  \/ \E n \in Node : Reconcile(n)
   \/ \E rpc \in messages : Deliver(rpc)
   \/ \E rpc \in messages : Drop(rpc)
   \/ \E recv \in Node, rpc \in pendingInbound[recv] : Process(recv, rpc)
@@ -810,11 +843,11 @@ Edit `MCReversePairing.cfg`:
 CONSTANTS
   Node = {A, B}
   Collection = {c1, c2}
-  RPCId = {r1, r2, r3, r4, r5, r6, r7, r8}
+  RPCId = {r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15, r16}
   MaxCrashes = 2
 ```
 
-(Eight RPC ids accommodate up to four request/ack pairs; sufficient for the bounded scenarios.)
+Sixteen RPC ids cover: up to 4 distinct (n, p, c) tuples × 2 directions (Install + Teardown) × 2 (original + ack) = 16 base, plus headroom for crash-driven re-emission. Bump higher (24+) if liveness check still reports id-pool exhaustion under fairness; lower if state space is too large.
 
 Re-run TLC:
 
@@ -848,7 +881,7 @@ EOF
 
 ## Task 6: ReceiveAck and Timeout
 
-`ReceiveAck` removes an RPC from the caller's `inFlight` once the matching `Ack` has been delivered. `Timeout` removes it without an ack — caller will re-issue on next reconcile (which, in the composite-action model, only fires from a new `OperatorWriteAndReconcile`; this is a known gap addressed under "Open questions" in this plan).
+`ReceiveAck` removes an RPC from the caller's `inFlight` once the matching `Ack` has been delivered. `Timeout` removes it without an ack — caller will re-issue on the next `Reconcile(n)` firing once `~PendingInstallFor(n, p, c)` (or teardown) holds again, since the corresponding RPC is no longer in `inFlight[n]`.
 
 **Files:**
 - Modify: `crates/defra-agent/proofs/tla/ReversePairing.tla`
@@ -897,8 +930,8 @@ Timeout(n, rpc) ==
 
 ```tla
 Next ==
-  \/ \E n, p \in Node, S \in SUBSET Collection :
-       OperatorWriteAndReconcile(n, p, S)
+  \/ \E n \in Node, p \in Node, S \in SUBSET Collection : OperatorWrite(n, p, S)
+  \/ \E n \in Node : Reconcile(n)
   \/ \E rpc \in messages : Deliver(rpc)
   \/ \E rpc \in messages : Drop(rpc)
   \/ \E recv \in Node, rpc \in pendingInbound[recv] : Process(recv, rpc)
@@ -934,7 +967,7 @@ EOF
 
 ## Task 7: Crash and Recover
 
-`Crash(n)` clears `n`'s in-memory state (`inFlight`, `pendingInbound`) and increments its crash count. Persisted state (`desired`, `replicator`) is preserved. `Recover(n)` is a no-op on persisted state — convergence after recovery relies on a follow-up `OperatorWriteAndReconcile` re-deriving any needed RPCs from the surviving `desired`/`replicator` (composite-action model). Crashes are bounded by `MaxCrashes` to keep the state space finite.
+`Crash(n)` clears `n`'s in-memory state (`inFlight`, `pendingInbound`) and increments its crash count. Persisted state (`desired`, `replicator`) is preserved. Recovery is implicit via `Reconcile`: after `Crash` clears `inFlight[n]`, the next `Reconcile(n)` firing re-emits any RPCs needed to bridge the surviving `desired ↔ replicator` gap — including for messages that were `Drop`'d during the crash window. No explicit `Recover` step is needed because `Reconcile` fires from any state; fairness on `Reconcile` (Task 10) guarantees recovery completes. Crashes are bounded by `MaxCrashes` to keep the state space finite.
 
 **Files:**
 - Modify: `crates/defra-agent/proofs/tla/ReversePairing.tla`
@@ -962,8 +995,8 @@ Crash(n) ==
 
 ```tla
 Next ==
-  \/ \E n, p \in Node, S \in SUBSET Collection :
-       OperatorWriteAndReconcile(n, p, S)
+  \/ \E n \in Node, p \in Node, S \in SUBSET Collection : OperatorWrite(n, p, S)
+  \/ \E n \in Node : Reconcile(n)
   \/ \E rpc \in messages : Deliver(rpc)
   \/ \E rpc \in messages : Drop(rpc)
   \/ \E recv \in Node, rpc \in pendingInbound[recv] : Process(recv, rpc)
@@ -972,7 +1005,7 @@ Next ==
   \/ \E n \in Node : Crash(n)
 ```
 
-(`Recover` is implicit: after `Crash`, the next operator action re-derives any state changes from persisted `desired` vs. `replicator`. No explicit `Recover` step is needed in the composite-action model.)
+(`Recover` is implicit: after `Crash`, the next `Reconcile(n)` re-emits any RPCs needed to bridge the surviving `desired ↔ replicator` gap. No explicit `Recover` step is needed because `Reconcile` is the recovery path.)
 
 - [ ] **Step 3: Run TLC; expect a noticeably larger state space**
 
@@ -991,9 +1024,9 @@ Add Crash action with bounded crash budget
 
 Clears in-memory state on the crashed node (inFlight, pendingInbound)
 and increments a per-node crash counter capped at MaxCrashes. desired
-and replicator survive. Recovery is implicit in the composite-action
-model: the next OperatorWriteAndReconcile re-derives any RPCs needed
-to bridge desired and replicator.
+and replicator survive. Recovery is implicit via Reconcile: the next
+Reconcile(n) firing re-emits any RPCs needed to bridge the surviving
+desired/replicator gap, including any Drop'd during the crash window.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -1088,9 +1121,9 @@ EOF
 
 ---
 
-## Task 9: Supporting invariant — in-flight justification
+## Task 9: Supporting invariant — in-flight justification (qualified)
 
-Per the spec's "Supporting invariant: in-flight justification" subsection: in the composite-action model, every reachable state has the property that any disagreement between `desired[n][p]` and `replicator[p][n]` has a corresponding in-flight RPC. This is the inductive invariant supporting the leads-to liveness proof.
+Per the spec's "Supporting invariant: in-flight justification" subsection: every reachable state has the property that a disagreement between `desired[n][p]` and `replicator[p][n]` is *either* matched by a reconciling RPC somewhere in the system, *or* `Reconcile` is enabled to emit one. The disjunctive form qualifies the invariant for the OperatorWrite/Reconcile window — a state reached immediately after `OperatorWrite` (before `Reconcile` has fired) where the disagreement exists but no RPC has been emitted yet.
 
 **Files:**
 - Modify: `crates/defra-agent/proofs/tla/ReversePairing.tla`
@@ -1104,30 +1137,44 @@ Append to `ReversePairing.tla` (above `Spec`):
 (***************************************************************************)
 (* Supporting invariant: in-flight justification.                          *)
 (*                                                                         *)
-(* In the composite-action model (decision 3), every reachable state has   *)
-(* the property that a disagreement between desired[n][p] and              *)
-(* replicator[p][n] is matched by a reconciling Install or Teardown RPC    *)
-(* somewhere in the system: in n's inFlight, in transit (messages), or in  *)
-(* p's pendingInbound.                                                     *)
+(* For every reachable state, every desired/replicator disagreement is     *)
+(* either matched by a reconciling RPC anywhere in the system (inFlight,   *)
+(* messages, or pendingInbound), OR ReconcileInstall/ReconcileTeardown is  *)
+(* enabled — meaning the system is one Reconcile firing away from emitting *)
+(* the resolving RPC. The second disjunct qualifies the invariant for the  *)
+(* OperatorWrite/Reconcile window and for post-Crash states where the gap  *)
+(* exists but no RPC is in flight yet.                                     *)
+(*                                                                         *)
+(* This is the inductive invariant supporting the leads-to liveness        *)
+(* property; under fairness on Reconcile, the second disjunct collapses    *)
+(* to the first within finitely many steps.                                *)
+(*                                                                         *)
+(* Note: in pool-exhausted states (where ~FreshIds(1)) the second disjunct *)
+(* fails. If TLC reports a violation only in exhausted-pool states, that's *)
+(* a TLC-bounding artifact, not a model bug — bump RPCId in the .cfg.      *)
 (***************************************************************************)
 
 InstallJustified ==
   \A n, p \in Node, c \in Collection :
     (n # p /\ c \in desired[n][p] /\ c \notin replicator[p][n])
-    => \E rpc \in inFlight[n] \cup messages \cup pendingInbound[p] :
-         /\ rpc.kind = "Install"
-         /\ rpc.src = n
-         /\ rpc.tgt = p
-         /\ rpc.collection = c
+    => \/ \E rpc \in inFlight[n] \cup messages \cup pendingInbound[p] :
+            /\ rpc.kind = "Install"
+            /\ rpc.src = n
+            /\ rpc.tgt = p
+            /\ rpc.collection = c
+       \/ /\ ~PendingInstallFor(n, p, c)
+          /\ FreshIds(1)
 
 TeardownJustified ==
   \A n, p \in Node, c \in Collection :
     (n # p /\ c \in replicator[p][n] /\ c \notin desired[n][p])
-    => \E rpc \in inFlight[n] \cup messages \cup pendingInbound[p] :
-         /\ rpc.kind = "Teardown"
-         /\ rpc.src = n
-         /\ rpc.tgt = p
-         /\ rpc.collection = c
+    => \/ \E rpc \in inFlight[n] \cup messages \cup pendingInbound[p] :
+            /\ rpc.kind = "Teardown"
+            /\ rpc.src = n
+            /\ rpc.tgt = p
+            /\ rpc.collection = c
+       \/ /\ ~PendingTeardownFor(n, p, c)
+          /\ FreshIds(1)
 
 InFlightJustified == InstallJustified /\ TeardownJustified
 ```
@@ -1151,10 +1198,11 @@ Expected: clean, all invariants hold including `InFlightJustified`.
 - [ ] **Step 4: If TLC reports `InFlightJustified is violated`, inspect the trace**
 
 The most likely failure modes:
-- `Process` fired but `replicator` updated *before* `pendingInbound` removal observable; check that the action is atomic. If TLC reports the violation at a state where `Process` has just fired, the invariant transition logic is correct but the property is over-stated relative to what `Process` guarantees mid-step. Re-examine the action's UNCHANGED clauses.
-- A `Crash` clears `inFlight` and `pendingInbound` while `messages` may still hold the RPC; the invariant should still be satisfied via the `messages` disjunct. If not, the `Crash` action incorrectly clears `messages`.
+- **Pool-exhausted state.** `~FreshIds(1)` AND no RPC anywhere AND a disagreement persists. This is a bounded-model artifact: TLC explored to id-pool exhaustion. Bump `RPCId` in `.cfg`.
+- **`Process` atomicity.** `Process` should atomically update `replicator` and emit the ack. If TLC reports a violation at a state where `Process` has just fired, re-examine the action's `UNCHANGED` clauses to ensure the persisted change and ack-emission are in the same conjunctive step.
+- **Crash leaving messages but clearing inFlight.** `Crash` clears `inFlight` and `pendingInbound` while `messages` may still hold the RPC. The invariant should still be satisfied via the `messages` disjunct (case 1) or via `Reconcile` enablement (case 2). If neither, the `Crash` action is over-clearing.
 
-In either case: fix the model, do not weaken the invariant. The invariant is the load-bearing claim about composite-action reachability.
+In all cases: fix the model, do not weaken the invariant. The invariant is the load-bearing claim that the model can always make progress toward convergence.
 
 - [ ] **Step 5: Commit**
 
@@ -1162,13 +1210,14 @@ In either case: fix the model, do not weaken the invariant. The invariant is the
 git add crates/defra-agent/proofs/tla/ReversePairing.tla \
         crates/defra-agent/proofs/tla/MCReversePairing.cfg
 git commit -m "$(cat <<'EOF'
-Add supporting invariant: in-flight justification
+Add supporting invariant: in-flight justification (qualified)
 
-InFlightJustified asserts that every disagreement between desired
-and replicator is matched by a reconciling Install or Teardown RPC
-somewhere in the system. Holds globally in the composite-action
-model. This is the inductive invariant supporting the leads-to
-liveness property to be added next.
+InFlightJustified asserts that for every desired/replicator
+disagreement, either a reconciling RPC exists somewhere in the
+system, OR Reconcile is enabled to emit one. The disjunctive form
+qualifies the invariant for the OperatorWrite/Reconcile window and
+for post-Crash recovery states. Inductive invariant supporting the
+leads-to liveness property to be added next.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -1179,7 +1228,7 @@ EOF
 
 ## Task 10: Fairness annotations and leads-to liveness
 
-Per the spec's liveness section: under fairness on `Deliver`, `Process`, `ReceiveAck`, and `OperatorWriteAndReconcile`, every disagreement leads-to convergence. TLC checks liveness using the temporal property syntax with `~>` (leads-to).
+Per the spec's liveness section: under fairness on `Deliver`, `Process`, `ReceiveAck`, and `Reconcile`, every disagreement leads-to convergence. TLC checks liveness using the temporal property syntax with `~>` (leads-to).
 
 **Files:**
 - Modify: `crates/defra-agent/proofs/tla/ReversePairing.tla`
@@ -1191,14 +1240,19 @@ Edit the `Spec` line in `ReversePairing.tla`:
 
 ```tla
 Fairness ==
-  /\ \A rpc \in RPC : WF_vars(Deliver(rpc))
-  /\ \A recv \in Node, rpc \in RPC : WF_vars(Process(recv, rpc))
-  /\ \A n \in Node, ack \in RPC : WF_vars(ReceiveAck(n, ack))
+  /\ WF_vars(\E rpc \in messages : Deliver(rpc))
+  /\ WF_vars(\E recv \in Node, rpc \in pendingInbound[recv] : Process(recv, rpc))
+  /\ WF_vars(\E n \in Node, ack \in pendingInbound[n] : ReceiveAck(n, ack))
+  /\ \A n \in Node : WF_vars(Reconcile(n))
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 ```
 
-Note: weak fairness on `Drop`, `Timeout`, `Crash`, and `OperatorWriteAndReconcile` is NOT enabled — those are voluntary actions that the model should be allowed to skip.
+Notes on the fairness formulation:
+- `WF_vars(\E x : Action(x))` — the standard idiom for parameterized actions: "eventually some Action fires" rather than the over-strong "every Action(x) for every x is fair." Quantifier scope inside `WF_vars` (not outside) is what's required.
+- `\A n \in Node : WF_vars(Reconcile(n))` — per-node fairness on `Reconcile` is sufficient because each node's reconcile handles its own outbound RPCs; per-(p, c) granularity isn't needed.
+- Weak fairness on `Drop`, `Timeout`, `Crash`, and `OperatorWrite` is NOT enabled — those are voluntary network/operator/crash actions that the model should be allowed to skip.
+- `Reconcile` fairness is essential: without it, post-`Crash` recovery scenarios (where in-flight is cleared and any in-transit RPCs were `Drop`'d) have no progress mechanism and liveness fails.
 
 - [ ] **Step 2: Add the leads-to liveness property**
 
@@ -1245,9 +1299,10 @@ Expected: longer runtime (target: < 15 minutes). Final output: `Model checking c
 - [ ] **Step 5: If liveness fails, diagnose**
 
 Common failure modes:
-- **Stuttering execution.** If TLC reports a counterexample where the system stutters indefinitely after a disagreement, fairness on the wrong action set is the cause. Verify `WF_vars(Deliver)`, `WF_vars(Process)`, and `WF_vars(ReceiveAck)` cover the actions needed for convergence.
-- **Unbounded crashes.** If `MaxCrashes` is too high, the crash budget might allow infinitely many crashes in the abstract semantics (TLC respects the budget but liveness needs *eventual* quiescence). Lower to 1 if needed.
+- **Stuttering execution.** If TLC reports a counterexample where the system stutters indefinitely after a disagreement, fairness on the wrong action set is the cause. Verify the four `WF_vars` clauses cover Deliver, Process, ReceiveAck, AND Reconcile (the last being essential for post-`Crash` recovery).
+- **Unbounded crashes.** If `MaxCrashes` is too high, the crash budget might allow many crashes in the abstract semantics (TLC respects the budget but liveness needs *eventual* quiescence between crashes). Lower to 1 if needed.
 - **Drop without bound.** TLC's weak fairness on `Drop` is intentionally absent, but if `Drop` can fire infinitely on a specific message and `Deliver` is never enabled (e.g., `Drop` happens immediately after every `Send`), liveness fails. The fairness on `Deliver` should override this; if not, investigate enabling-condition mismatches.
+- **RPCId pool exhausted under fairness.** If `Reconcile` fairness forces firing whenever enabled and the model exhausts `RPCId` partway through, the system gets stuck and liveness reports a counterexample. Fix: bump `RPCId` cardinality in `.cfg`.
 
 In all cases: do NOT add fairness to `Drop`. Drops are unreliable network behavior; fairness on `Deliver` is what guarantees eventual delivery.
 
@@ -1259,8 +1314,9 @@ git add crates/defra-agent/proofs/tla/ReversePairing.tla \
 git commit -m "$(cat <<'EOF'
 Add fairness and leads-to convergence liveness
 
-Weak fairness on Deliver, Process, and ReceiveAck. InstallConverges
-and TeardownConverges express that any desired/replicator disagreement
+Weak fairness on Deliver, Process, ReceiveAck, and Reconcile (the
+last essential for post-Crash recovery). InstallConverges and
+TeardownConverges express that any desired/replicator disagreement
 eventually resolves. TLC verifies under bounded parameters.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
@@ -1363,9 +1419,9 @@ Interpret the trace by reading the actions taken between states and identifying 
 
 ## Known limitations and deferred work
 
-- **Composite-action formulation.** `OperatorWrite` and the immediately-following `Reconcile` fire as a single TLA+ action. The window where disagreement exists without a corresponding in-flight RPC (per the spec's supporting-invariant subsection) is collapsed. Phase-variable formulation is deferred.
+- **Single-RPC-per-Reconcile-firing.** `Reconcile` emits at most one Install or Teardown RPC per firing. Multiple disagreements get reconciled across multiple firings under fairness. Real defra-agent reconciles a batch per cycle; the model approximates with multiple firings.
+- **Supporting invariant qualified.** `InFlightJustified` allows a disjunctive case "Reconcile is enabled" so the invariant holds in the OperatorWrite/Reconcile window and after `Crash` + `Drop`. Phase-variable formulation (where the window is explicit state) deferred.
 - **Provenance.** Not modeled here. The structural-safety invariants check that state changes are mediated only by the right actions, but a full provenance proof — every replicator entry traces back to a prior `desired`-then-`Process` chain — is deferred to a future TLAPS proof or trace-inspection harness.
-- **Single composite reconcile per operator write.** Real defra-agent reconciles continuously. The model's composite action approximates this for a first pass.
 - **Set semantics for `messages`** rather than multiset; assumes RPC ids are unique (which the model enforces). Real network duplicates can be modeled via `Send` re-emitting under different ids.
 - **No N > 2 fanout, no data-plane replication, no authorization correctness.** All explicit non-goals from the spec.
 
@@ -1395,8 +1451,8 @@ git commit -m "$(cat <<'EOF'
 Document ReversePairing TLA+ spec — README, parameters, limitations
 
 Captures how to run, what parameters control, expected output shape,
-and the known limitations of the first-pass model (composite-action
-formulation, no provenance, set-semantics messages, two-peer scope).
+and the known limitations of the first-pass model (single-RPC-per-
+Reconcile, no provenance, set-semantics messages, two-peer scope).
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -1413,24 +1469,25 @@ EOF
 |---|---|
 | State variables (`desired`, `replicator`, `inFlight`, `pendingInbound`, `messages`) | Task 2 |
 | RPC kinds (Install, Teardown, Ack) | Task 2 |
-| `Reconcile` for both install and teardown directions | Task 3 (composite action) |
-| `Send` / `Deliver` / `Drop` | Tasks 3 (Send via composite), 4 (Deliver, Drop) |
+| `OperatorWrite` (atomic update of `desired` only) | Task 3 |
+| `Reconcile` for both install and teardown directions, fires from any state | Task 3 |
+| `Send` / `Deliver` / `Drop` | Tasks 3 (Send via Reconcile), 4 (Deliver, Drop) |
 | `Process` with persist-before-ack | Task 5 |
 | `ReceiveAck` (no persisted state change on caller) | Task 6 |
-| `Timeout` (liveness-only, no state change) | Task 6 |
-| `Crash` (clears in-memory; preserves persisted) | Task 7 |
+| `Timeout` (liveness-only, no state change beyond `inFlight`) | Task 6 |
+| `Crash` (clears in-memory; preserves persisted; recovery via Reconcile) | Task 7 |
 | Modeling assumptions: handler idempotency, persist-before-ack, eventually-healthy network, finite crashes | Tasks 5 (idempotency built into Process), 5 (persist-before-ack atomic), 10 (fairness on Deliver), 7 (MaxCrashes) |
 | Safety: structural and provenance invariants | Task 8 (structural; provenance deferred per decision 5) |
-| Liveness: leads-to convergence | Task 10 |
-| Supporting invariant: in-flight justification (post-Reconcile states) | Task 9 |
+| Liveness: leads-to convergence (with fairness on `Reconcile`) | Task 10 |
+| Supporting invariant: in-flight justification (qualified disjunctively) | Task 9 |
 | Boundary discipline on timeouts | Task 6 (Timeout has no state change beyond `inFlight`) |
 
 **Placeholder scan.** No "TBD" or "implement later" in this plan. All TLA+ code is concrete; all commands have explicit expected output.
 
-**Type consistency.** Variable names match across tasks (`desired`, `replicator`, `inFlight`, `pendingInbound`, `messages`, `crashCount`, `rpcIdsUsed`). Action signatures match. RPC field names (`id`, `kind`, `src`, `tgt`, `collection`, `of`) consistent across `OperatorWriteAndReconcile`, `Process`, `ackOf`, and the invariant predicates.
+**Type consistency.** Variable names match across tasks (`desired`, `replicator`, `inFlight`, `pendingInbound`, `messages`, `crashCount`, `rpcIdsUsed`). Action signatures match. RPC field names (`id`, `kind`, `src`, `tgt`, `collection`, `of`) consistent across `OperatorWrite`, `Reconcile{Install,Teardown}`, `Process`, `ackOf`, and the invariant predicates.
 
 **Known plan-level concerns to surface during execution:**
 
-- The composite-action approach in Task 3 may produce a state space that's awkwardly large because it bundles `OperatorWrite` and full reconciliation into one step. If TLC times out, the fallback is to split into two actions and add a phase variable; this is a known refactor.
-- `PickFresh` and `CHOOSE` interactions in `OperatorWriteAndReconcile` may produce TLC parser confusion. If so, the simplest workaround is to inline the assignment via a recursive helper or restrict to single-collection-per-operator-write, accepting that batched changes need multiple steps.
-- `WF_vars(Process(recv, rpc))` quantified over all `RPC` may be misinterpreted by TLC if the action enabling condition is not exactly representable. The fallback is `WF_vars(\E recv \in Node, rpc \in pendingInbound[recv] : Process(recv, rpc))`.
+- **State-space size.** Splitting `OperatorWrite` and `Reconcile` into independent actions enlarges the reachable state space (the OperatorWrite/Reconcile window adds states). If TLC times out under default parameters, lower `MaxCrashes` to 1 first, then reduce `RPCId` cardinality, then drop a collection.
+- **`CHOOSE i \in RPCId \ rpcIdsUsed : TRUE`** is deterministic per state. With a single Reconcile firing per step, this is fine. If a future refactor allows multiple RPCs per firing, replace with a non-deterministic id-assignment pattern.
+- **Reconcile fairness via `\A n \in Node : WF_vars(Reconcile(n))`.** Per-node weak fairness means each node's reconcile eventually fires when enabled. If TLC reports a liveness counterexample where one node never reconciles despite being enabled, verify the per-node quantifier is outside `WF_vars` (correct: `\A n : WF_vars(Reconcile(n))`) rather than inside (incorrect: `WF_vars(\A n : Reconcile(n))` would mean a different thing).
