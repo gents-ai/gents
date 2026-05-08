@@ -28,5 +28,13 @@ theorem terminal_irreversible
   | timeAdvance _ _ h_post          => simp_all
   | persistenceStep _ _ _ h_post    => simp_all
 
+
+/-- T4: A call is cancellable iff its state is non-terminal. Operational
+    meaning: any in-flight call accepts a cancel transition. -/
+theorem cancellable_iff_non_terminal (c : ToolCallContext) :
+    c.cancellable ↔ ¬ isTerminal c.state := by
+  unfold cancellable
+  cases c.state <;> simp [isTerminal]
+
 end ToolCallContext
 end ToolExecution
