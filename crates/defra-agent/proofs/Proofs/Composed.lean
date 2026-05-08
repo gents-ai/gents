@@ -126,6 +126,17 @@ inductive Transition : ComposedState → ComposedState → Prop where
       -- request. Other tools in `pre.tools` are unconstrained at this
       -- layer; Tasks 7+ may add list-level invariants if needed.
       Coherent pre toolPre →
+      -- INV-FG composition guard: a background → foreground flip is only
+      -- legal when the pre-state has no other foreground non-terminal tool.
+      -- The antecedent fires only for the inner `foreground` constructor
+      -- (the lone constructor that flips awaitMode background → foreground);
+      -- every other inner transition either preserves awaitMode or already
+      -- requires foreground in the pre-state, so the antecedent is false
+      -- and the implication is vacuously discharged. Together with INV-FG
+      -- itself (count ≤ 1), this guard makes `invFG_preserved` provable.
+      (toolPre.awaitMode = .background → toolPost.awaitMode = .foreground →
+        ¬ ∃ t ∈ pre.tools, t.awaitMode = .foreground ∧
+                            ¬ isTerminal t.state) →
       Transition pre post
 
 /-- A trace is a sequence of valid composed transitions. -/
@@ -229,8 +240,13 @@ theorem interrupted_request_cancels_live_linked_tools
     let post : ComposedState := { pre with tools := pre.tools.set idx toolPost }
     refine ⟨post, toolPost, ?_, ?_, rfl, h_linked⟩
     · refine Trace.step ?_ Trace.refl
-      exact Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
+      -- Discharge the foreground-flip guard: `cancelBeforeDispatch` only changes
+      -- `state`, so `toolPost.awaitMode = toolPre.awaitMode`. If `toolPre` is
+      -- background, `toolPost` is too — the consequent is unreachable.
+      refine Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
               ⟨h_linked, h_deadline_eq, h_time_eq⟩
+              (fun h_bg h_fg => ?_)
+      simp [toolPost, h_bg] at h_fg
     · have h_lt : idx < pre.tools.length := (List.getElem?_eq_some_iff.mp h_idx).1
       simpa [post, toolPost] using List.mem_set pre.tools idx h_lt toolPost
   | inr h_running =>
@@ -241,8 +257,10 @@ theorem interrupted_request_cancels_live_linked_tools
     let post : ComposedState := { pre with tools := pre.tools.set idx toolPost }
     refine ⟨post, toolPost, ?_, ?_, rfl, h_linked⟩
     · refine Trace.step ?_ Trace.refl
-      exact Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
+      refine Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
               ⟨h_linked, h_deadline_eq, h_time_eq⟩
+              (fun h_bg h_fg => ?_)
+      simp [toolPost, h_bg] at h_fg
     · have h_lt : idx < pre.tools.length := (List.getElem?_eq_some_iff.mp h_idx).1
       simpa [post, toolPost] using List.mem_set pre.tools idx h_lt toolPost
 
@@ -282,9 +300,12 @@ theorem deadline_exceeded_request_timesOut_running_tools
   refine ⟨post, toolPost, ?_, ?_, rfl, rfl, h_linked⟩
   · -- One-step trace via tool_step
     refine Trace.step ?_ Trace.refl
-    -- Pass h_coherent directly as the Coherent witness
-    exact Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
+    -- Pass h_coherent directly as the Coherent witness; discharge the
+    -- foreground-flip guard vacuously (timeout preserves awaitMode).
+    refine Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
       ⟨h_linked, h_deadline_eq, h_time_eq⟩
+      (fun h_bg h_fg => ?_)
+    simp [toolPost, h_bg] at h_fg
   · -- toolPost ∈ post.tools — follows from `pre.tools.set idx toolPost`
     show toolPost ∈ pre.tools.set idx toolPost
     have h_lt : idx < pre.tools.length :=
@@ -322,8 +343,10 @@ theorem deadline_exceeded_request_cancels_pending_tools
   let post : ComposedState := { pre with tools := pre.tools.set idx toolPost }
   refine ⟨post, toolPost, ?_, ?_, rfl, h_linked⟩
   · refine Trace.step ?_ Trace.refl
-    exact Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
+    refine Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
             ⟨h_linked, h_deadline_eq, h_time_eq⟩
+            (fun h_bg h_fg => ?_)
+    simp [toolPost, h_bg] at h_fg
   · -- toolPost ∈ post.tools via List.mem_set
     have h_lt : idx < pre.tools.length := (List.getElem?_eq_some_iff.mp h_idx).1
     simpa [post, toolPost] using List.mem_set pre.tools idx h_lt toolPost
@@ -384,6 +407,75 @@ def invFG (s : ComposedState) : Prop :=
   (s.tools.filter (fun t => decide (t.awaitMode = .foreground) ∧
                               ¬ isTerminal t.state)).length ≤ 1
 
+/-- Helper: setting at index `i` to a value `b` whose filter classification is
+    implied by `a`'s never grows the filtered length. Concretely, if the new
+    element passes the predicate, the old one did too — so the filter can only
+    keep the same or fewer elements after `set`. -/
+private lemma length_filter_set_le {α : Type _} (p : α → Bool) :
+    ∀ (l : List α) (i : Nat) (a b : α),
+      l[i]? = some a →
+      (p b = true → p a = true) →
+      ((l.set i b).filter p).length ≤ (l.filter p).length := by
+  intro l
+  induction l with
+  | nil => intro i a b h _; simp at h
+  | cons x xs ih =>
+    intro i a b h_idx h_imp
+    cases i with
+    | zero =>
+      -- l[0] = x, so a = x. set 0 = b :: xs.
+      have hxa : x = a := by simpa using h_idx
+      subst hxa
+      simp only [List.set_cons_zero, List.filter_cons]
+      by_cases hb : p b = true
+      · -- p b true: both branches keep one element
+        have ha : p x = true := h_imp hb
+        simp [hb, ha]
+      · -- p b false: post drops the element
+        by_cases ha : p x = true
+        · rw [if_neg hb, if_pos ha, List.length_cons]; omega
+        · rw [if_neg hb, if_neg ha]
+    | succ j =>
+      -- Recurse on tail.
+      simp only [List.set_cons_succ, List.filter_cons]
+      have h_tail : xs[j]? = some a := by simpa using h_idx
+      have ih' : ((xs.set j b).filter p).length ≤ (xs.filter p).length :=
+        ih j a b h_tail h_imp
+      by_cases hx : p x = true
+      · rw [if_pos hx, if_pos hx, List.length_cons, List.length_cons]; omega
+      · rw [if_neg hx, if_neg hx]; exact ih'
+
+/-- Helper: setting at index `i` to a value `b` increases the filtered length
+    by at most one — the old element either passed the filter (count
+    unchanged or decreases) or didn't (count grows by ≤ 1). Together with
+    the foreground-flip guard's "pre count = 0" precondition, this bounds
+    `post.invFG` for the foreground constructor. -/
+private lemma length_filter_set_le_succ {α : Type _} (p : α → Bool) :
+    ∀ (l : List α) (i : Nat) (b : α),
+      ((l.set i b).filter p).length ≤ (l.filter p).length + 1 := by
+  intro l
+  induction l with
+  | nil => intro i b; simp
+  | cons x xs ih =>
+    intro i b
+    cases i with
+    | zero =>
+      simp only [List.set_cons_zero, List.filter_cons]
+      by_cases hb : p b = true
+      · by_cases hx : p x = true
+        · rw [if_pos hb, if_pos hx]; simp [List.length_cons]
+        · rw [if_pos hb, if_neg hx, List.length_cons]
+      · by_cases hx : p x = true
+        · rw [if_neg hb, if_pos hx, List.length_cons]; omega
+        · rw [if_neg hb, if_neg hx]; omega
+    | succ j =>
+      simp only [List.set_cons_succ, List.filter_cons]
+      have ih' : ((xs.set j b).filter p).length ≤ (xs.filter p).length + 1 :=
+        ih j b
+      by_cases hx : p x = true
+      · rw [if_pos hx, if_pos hx]; simp [List.length_cons]; omega
+      · rw [if_neg hx, if_neg hx]; exact ih'
+
 /-- INV-FG is preserved by any composed-state transition. -/
 theorem invFG_preserved
     {pre post : ComposedState}
@@ -399,14 +491,103 @@ theorem invFG_preserved
     unfold invFG; rw [h_tools]; exact h_inv
   | call_step _ _ _ h_tools _ =>
     unfold invFG; rw [h_tools]; exact h_inv
-  | tool_step _ _ _ _ _ _ _ _ =>
-    -- A single tool transitions; the count of foreground non-terminal tools
-    -- can only stay the same or decrease (state advancing toward terminal,
-    -- background flipping awaitMode away from foreground), or — in the
-    -- foreground-flip case — INV-FG in the pre-state forces the count to
-    -- have been 0 (since pre.toolPre had awaitMode := .background), so the
-    -- post count is ≤ 1. Closing this is intricate and not load-bearing
-    -- for any current C-theorem. Tracked as future work.
-    sorry
+  | @tool_step idx toolPre toolPost h_idx h_t_step h_tools _ _ _ _ _ h_fg_guard =>
+    -- A single tool transitions. Case-split on the inner ToolCallContext.Transition.
+    -- For all 11 non-`foreground` constructors: `toolPost.awaitMode = toolPre.awaitMode`
+    -- AND if toolPost passes the filter (foreground + non-terminal) then so does
+    -- toolPre. Hence by `length_filter_set_le`, post count ≤ pre count ≤ 1.
+    -- For `foreground`: the guard `h_fg_guard` fires, forcing the pre-state to
+    -- have no foreground non-terminal tool, i.e. `pre.filter ... = []`. By
+    -- `length_filter_set_le_succ`, post count ≤ 0 + 1 = 1.
+    unfold invFG
+    rw [h_tools]
+    set p : ToolExecution.ToolCallContext → Bool :=
+      fun t => decide (t.awaitMode = .foreground) ∧ ¬ isTerminal t.state with hp
+    -- Helper: every non-foreground inner constructor has the property that
+    -- p toolPost → p toolPre, so `length_filter_set_le` closes the case.
+    -- The `foreground` constructor is the lone exception, handled by the guard.
+    cases h_t_step with
+    | dispatch h_state h_post =>
+      -- toolPost = { toolPre with state := .running, ... }. awaitMode preserved.
+      refine le_trans (length_filter_set_le p pre.tools idx toolPre toolPost h_idx ?_) h_inv
+      intro h_post_p
+      simp [hp, h_post] at h_post_p ⊢
+      refine ⟨h_post_p.1, ?_⟩
+      intro h_term
+      rw [h_state] at h_term
+      rcases h_term with h' | h' | h' | h' <;> cases h'
+    | spawnFailed failure h_state h_post =>
+      -- toolPost.state = .failed (terminal); p toolPost = false.
+      refine le_trans (length_filter_set_le p pre.tools idx toolPre toolPost h_idx ?_) h_inv
+      intro h_post_p
+      simp [hp, h_post] at h_post_p
+      exact absurd h_post_p.2 (fun h => h (Or.inr (Or.inl rfl)))
+    | complete h_state _ _ h_post =>
+      refine le_trans (length_filter_set_le p pre.tools idx toolPre toolPost h_idx ?_) h_inv
+      intro h_post_p
+      simp [hp, h_post] at h_post_p
+      exact absurd h_post_p.2 (fun h => h (Or.inl rfl))
+    | fail failure h_state h_post =>
+      refine le_trans (length_filter_set_le p pre.tools idx toolPre toolPost h_idx ?_) h_inv
+      intro h_post_p
+      simp [hp, h_post] at h_post_p
+      exact absurd h_post_p.2 (fun h => h (Or.inr (Or.inl rfl)))
+    | timeout h_state _ h_post =>
+      refine le_trans (length_filter_set_le p pre.tools idx toolPre toolPost h_idx ?_) h_inv
+      intro h_post_p
+      simp [hp, h_post] at h_post_p
+      exact absurd h_post_p.2 (fun h => h (Or.inr (Or.inr (Or.inl rfl))))
+    | cancelBeforeDispatch h_state h_post =>
+      refine le_trans (length_filter_set_le p pre.tools idx toolPre toolPost h_idx ?_) h_inv
+      intro h_post_p
+      simp [hp, h_post] at h_post_p
+      exact absurd h_post_p.2 (fun h => h (Or.inr (Or.inr (Or.inr rfl))))
+    | cancelDuringRun h_state h_post =>
+      refine le_trans (length_filter_set_le p pre.tools idx toolPre toolPost h_idx ?_) h_inv
+      intro h_post_p
+      simp [hp, h_post] at h_post_p
+      exact absurd h_post_p.2 (fun h => h (Or.inr (Or.inr (Or.inr rfl))))
+    | background h_state h_mode h_post =>
+      -- toolPost.awaitMode = .background; p toolPost = false (foreground required).
+      refine le_trans (length_filter_set_le p pre.tools idx toolPre toolPost h_idx ?_) h_inv
+      intro h_post_p
+      -- After simp, h_post_p will simplify to False (awaitMode = .background ≠ .foreground)
+      -- so this branch becomes unreachable; absurd via False.elim.
+      exfalso
+      simp [hp, h_post] at h_post_p
+    | foreground h_state h_mode h_post =>
+      -- The lone case where post passes the filter but pre doesn't. Use the
+      -- foreground-flip guard `h_fg_guard` to conclude pre's filter is empty.
+      have h_post_fg : toolPost.awaitMode = .foreground := by simp [h_post]
+      have h_no_other : ¬ ∃ t ∈ pre.tools, t.awaitMode = .foreground ∧
+                            ¬ isTerminal t.state :=
+        h_fg_guard h_mode h_post_fg
+      have h_filter_nil : pre.tools.filter p = [] := by
+        rw [List.filter_eq_nil_iff]
+        intro t h_in h_pt
+        apply h_no_other
+        refine ⟨t, h_in, ?_, ?_⟩
+        · simp [hp] at h_pt; exact h_pt.1
+        · simp [hp] at h_pt; exact h_pt.2
+      have h_pre_zero : (pre.tools.filter p).length = 0 := by
+        rw [h_filter_nil]; rfl
+      have h_le := length_filter_set_le_succ p pre.tools idx toolPost
+      omega
+    | detach h_live h_pol h_post =>
+      refine le_trans (length_filter_set_le p pre.tools idx toolPre toolPost h_idx ?_) h_inv
+      intro h_post_p
+      -- toolPost = { toolPre with cancelPolicy := .detach }; awaitMode and state preserved.
+      simp only [hp, h_post] at h_post_p ⊢
+      exact h_post_p
+    | timeAdvance t h_le h_post =>
+      refine le_trans (length_filter_set_le p pre.tools idx toolPre toolPost h_idx ?_) h_inv
+      intro h_post_p
+      simp only [hp, h_post] at h_post_p ⊢
+      exact h_post_p
+    | persistenceStep policy next h_p_step h_post =>
+      refine le_trans (length_filter_set_le p pre.tools idx toolPre toolPost h_idx ?_) h_inv
+      intro h_post_p
+      simp only [hp, h_post] at h_post_p ⊢
+      exact h_post_p
 
 end ComposedState
