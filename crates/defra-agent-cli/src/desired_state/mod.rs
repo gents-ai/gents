@@ -114,6 +114,8 @@ pub(crate) struct DesiredToolSelection {
     pub(crate) cli_tool_names: Vec<String>,
     pub(crate) enable_meta_tools: bool,
     #[serde(default)]
+    pub(crate) allowed_mcp_service_ids: Vec<String>,
+    #[serde(default)]
     pub(crate) delegate_to: Vec<String>,
 }
 

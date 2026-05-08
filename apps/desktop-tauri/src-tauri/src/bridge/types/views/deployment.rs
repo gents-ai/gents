@@ -97,6 +97,7 @@ pub(crate) struct ToolSelectionView {
     pub command_network_mode: Option<String>,
     pub cli_tool_names: Vec<String>,
     pub enable_meta_tools: Option<bool>,
+    pub allowed_mcp_service_ids: Vec<String>,
     pub delegate_to: Vec<String>,
 }
 

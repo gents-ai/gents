@@ -167,6 +167,7 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     command_network_mode: normalize_optional(row.command_network_mode.as_deref()),
                     cli_tool_names: row.cli_tool_names.clone(),
                     enable_meta_tools: row.enable_meta_tools,
+                    allowed_mcp_service_ids: row.allowed_mcp_service_ids.clone(),
                     delegate_to: row.delegate_to.clone(),
                 })
                 .collect::<Vec<_>>();

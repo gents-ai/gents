@@ -299,6 +299,10 @@ pub(crate) fn tool_selection_from_document(
         command_policy: command_policy_from_document(selection, bash)?,
         cli_tool_names: selection.cli_tool_names.clone().unwrap_or_default(),
         enable_meta_tools: selection.enable_meta_tools.unwrap_or(true),
+        allowed_mcp_service_ids: selection
+            .allowed_mcp_service_ids
+            .clone()
+            .unwrap_or_default(),
         delegate_to: selection.delegate_to.clone().unwrap_or_default(),
     })
 }

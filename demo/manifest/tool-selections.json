@@ -10,6 +10,7 @@
     "bash_mode": "Unrestricted",
     "cli_tool_names": [],
     "enable_meta_tools": true,
+    "allowed_mcp_service_ids": [],
     "delegate_to": []
   }
 ]

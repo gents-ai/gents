@@ -120,10 +120,19 @@ export function ToolSelectionConfigEditor({
   const [bashMode, setBashMode] = useState("ReadOnly");
   const [cliToolNames, setCliToolNames] = useState("");
   const [enableMetaTools, setEnableMetaTools] = useState(false);
+  const [allowedMcpServiceIds, setAllowedMcpServiceIds] = useState("");
   const [delegateTo, setDelegateTo] = useState("");
   const ceiling = normalizeToolCeiling(toolCeiling);
   const fileToolsDisabledByCeiling = ceiling === "MetaOnly";
   const writeToolsDisabledByCeiling = ceiling !== "Readwrite";
+  const toolServiceIdKey = useMemo(
+    () =>
+      toolServiceRegistries
+        .map((service) => service.serviceId)
+        .sort()
+        .join("\n"),
+    [toolServiceRegistries],
+  );
 
   useEffect(() => {
     setSelectionId(toolSelection?.selectionId ?? "");
@@ -139,17 +148,36 @@ export function ToolSelectionConfigEditor({
     );
     setCliToolNames((toolSelection?.cliToolNames ?? []).join("\n"));
     setEnableMetaTools(toolSelection?.enableMetaTools ?? false);
-    setDelegateTo((toolSelection?.delegateTo ?? []).join("\n"));
-  }, [toolSelection]);
+    const knownServiceIds = new Set(
+      toolServiceIdKey.split("\n").filter(Boolean),
+    );
+    const existingAllowedServiceIds = toolSelection?.allowedMcpServiceIds ?? [];
+    const existingDelegateTo = toolSelection?.delegateTo ?? [];
+    const legacyServiceDelegates =
+      existingAllowedServiceIds.length === 0
+        ? existingDelegateTo.filter((value) => knownServiceIds.has(value))
+        : [];
+    setAllowedMcpServiceIds(
+      (existingAllowedServiceIds.length > 0
+        ? existingAllowedServiceIds
+        : legacyServiceDelegates
+      ).join("\n"),
+    );
+    setDelegateTo(
+      existingDelegateTo
+        .filter((value) => !knownServiceIds.has(value))
+        .join("\n"),
+    );
+  }, [toolSelection, toolServiceIdKey]);
 
-  function toggleDelegateTo(serviceId: string, checked: boolean) {
-    const values = new Set(linesToArray(delegateTo));
+  function toggleAllowedMcpService(serviceId: string, checked: boolean) {
+    const values = new Set(linesToArray(allowedMcpServiceIds));
     if (checked) {
       values.add(serviceId);
     } else {
       values.delete(serviceId);
     }
-    setDelegateTo(Array.from(values).sort().join("\n"));
+    setAllowedMcpServiceIds(Array.from(values).sort().join("\n"));
   }
 
   async function submitToolSelection(event: FormEvent) {
@@ -177,6 +205,7 @@ export function ToolSelectionConfigEditor({
       bashMode: effectiveBashMode,
       cliToolNames: linesToArray(cliToolNames),
       enableMetaTools,
+      allowedMcpServiceIds: linesToArray(allowedMcpServiceIds),
       delegateTo: linesToArray(delegateTo),
     });
     onSaved(nextId);
@@ -312,19 +341,22 @@ export function ToolSelectionConfigEditor({
           <span>Meta tools</span>
         </label>
         <div className="field">
-          <span>Linked HTTP MCP services</span>
-          <div className="linked-doc-list" data-testid="tool-delegate-to">
+          <span>MCP service allowlist</span>
+          <div className="linked-doc-list" data-testid="tool-allowed-mcp-services">
             {toolServiceRegistries.map((service) => {
               const serviceId = service.serviceId;
-              const checked = linesToArray(delegateTo).includes(serviceId);
+              const checked = linesToArray(allowedMcpServiceIds).includes(serviceId);
               return (
                 <label className="checkbox" key={serviceId}>
                   <input
                     checked={checked}
-                    data-testid={`tool-delegate-${serviceId}`}
+                    data-testid={`tool-allowed-mcp-service-${serviceId}`}
                     disabled={!enableMetaTools}
                     onChange={(event) =>
-                      toggleDelegateTo(serviceId, event.currentTarget.checked)
+                      toggleAllowedMcpService(
+                        serviceId,
+                        event.currentTarget.checked,
+                      )
                     }
                     type="checkbox"
                   />
@@ -338,6 +370,15 @@ export function ToolSelectionConfigEditor({
           </div>
         </div>
       </div>
+      <label className="field">
+        <span>Delegate agent DIDs</span>
+        <textarea
+          className="config-small-textarea"
+          data-testid="tool-delegate-to"
+          onChange={(event) => setDelegateTo(event.currentTarget.value)}
+          value={delegateTo}
+        />
+      </label>
       <div className="config-actions">
         <button
           className="primary-button"

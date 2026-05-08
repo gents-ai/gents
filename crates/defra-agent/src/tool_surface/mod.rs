@@ -24,6 +24,7 @@ const DEFAULT_CLI_TIMEOUT_SECS: u64 = 10;
 pub struct ToolSurface {
     host_tools: ToolSet,
     include_meta_tools: bool,
+    allowed_mcp_service_ids: Vec<String>,
     delegate_to: Vec<String>,
     custom_tools: Vec<CustomToolFactory>,
 }
@@ -35,6 +36,10 @@ impl ToolSurface {
 
     pub fn includes_meta_tools(&self) -> bool {
         self.include_meta_tools
+    }
+
+    pub fn allowed_mcp_service_ids(&self) -> &[String] {
+        &self.allowed_mcp_service_ids
     }
 
     pub fn delegate_to(&self) -> &[String] {
@@ -68,6 +73,7 @@ impl ToolSurface {
                 runtime.health_map.clone(),
                 runtime.local_hostname.clone(),
                 runtime.local_subnet.clone(),
+                self.allowed_mcp_service_ids.clone(),
             ));
         }
         for tool in &self.custom_tools {
@@ -82,6 +88,7 @@ impl std::fmt::Debug for ToolSurface {
         f.debug_struct("ToolSurface")
             .field("host_tools", &self.host_tools)
             .field("include_meta_tools", &self.include_meta_tools)
+            .field("allowed_mcp_service_ids", &self.allowed_mcp_service_ids)
             .field("delegate_to", &self.delegate_to)
             .field(
                 "custom_tools",

@@ -622,6 +622,8 @@ pub(crate) struct ToolSelectionUpsertArgs {
     pub(crate) cli_tool_names: Vec<String>,
     #[arg(long, default_value_t = true)]
     pub(crate) enable_meta_tools: bool,
+    #[arg(long = "allowed-mcp-service-id")]
+    pub(crate) allowed_mcp_service_ids: Vec<String>,
     #[arg(long = "delegate-to")]
     pub(crate) delegate_to: Vec<String>,
 }

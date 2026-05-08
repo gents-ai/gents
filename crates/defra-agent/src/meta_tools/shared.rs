@@ -15,6 +15,34 @@ pub struct MetaToolContext {
     pub health: ServiceHealthMap,
     pub local_hostname: String,
     pub local_subnet: Option<String>,
+    pub allowed_mcp_service_ids: Vec<String>,
+}
+
+impl MetaToolContext {
+    pub(super) fn is_mcp_service_allowed(&self, service_id: &str) -> bool {
+        mcp_service_allowed(&self.allowed_mcp_service_ids, service_id)
+    }
+
+    pub(super) fn blocked_service_error(
+        &self,
+        service_id: &str,
+        tool_name: &str,
+    ) -> Option<StructuredToolError> {
+        (!self.is_mcp_service_allowed(service_id)).then(|| {
+            StructuredToolError::tool_not_allowed(
+                service_id,
+                tool_name,
+                self.allowed_mcp_service_ids.clone(),
+            )
+        })
+    }
+}
+
+pub(super) fn mcp_service_allowed(allowed_mcp_service_ids: &[String], service_id: &str) -> bool {
+    allowed_mcp_service_ids.is_empty()
+        || allowed_mcp_service_ids
+            .iter()
+            .any(|allowed| allowed == service_id)
 }
 
 #[derive(Debug)]
@@ -51,6 +79,8 @@ pub(super) struct StructuredToolError {
     pub(super) requested_tool_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) available_tools: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) allowed_mcp_service_ids: Option<Vec<String>>,
 }
 
 impl StructuredToolError {
@@ -70,6 +100,7 @@ impl StructuredToolError {
             tool_name: tool_name.to_string(),
             requested_tool_name: None,
             available_tools: None,
+            allowed_mcp_service_ids: None,
         }
     }
 
@@ -88,6 +119,7 @@ impl StructuredToolError {
             tool_name: tool_name.to_string(),
             requested_tool_name: None,
             available_tools: Some(available_tools),
+            allowed_mcp_service_ids: None,
         }
     }
 
@@ -114,6 +146,7 @@ impl StructuredToolError {
             tool_name: requested_tool_name.to_string(),
             requested_tool_name: Some(requested_tool_name.to_string()),
             available_tools: Some(available_tools),
+            allowed_mcp_service_ids: None,
         }
     }
 
@@ -133,6 +166,29 @@ impl StructuredToolError {
             tool_name: requested_tool_name.to_string(),
             requested_tool_name: Some(requested_tool_name.to_string()),
             available_tools: None,
+            allowed_mcp_service_ids: None,
+        }
+    }
+
+    pub(super) fn tool_not_allowed(
+        service_id: &str,
+        requested_tool_name: &str,
+        allowed_mcp_service_ids: Vec<String>,
+    ) -> Self {
+        Self {
+            ok: false,
+            failure_class: "tool_not_allowed",
+            path: "/service_id".to_string(),
+            message: format!(
+                "service '{service_id}' is not allowed for this behavior; allowed services: {}",
+                allowed_mcp_service_ids.join(", ")
+            ),
+            retryable: false,
+            service_id: service_id.to_string(),
+            tool_name: requested_tool_name.to_string(),
+            requested_tool_name: Some(requested_tool_name.to_string()),
+            available_tools: None,
+            allowed_mcp_service_ids: Some(allowed_mcp_service_ids),
         }
     }
 

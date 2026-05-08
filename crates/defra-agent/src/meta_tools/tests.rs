@@ -1,4 +1,7 @@
-use super::shared::{escape_graphql, extract_text, lookup_service_query, MetaToolError};
+use super::shared::{
+    escape_graphql, extract_text, lookup_service_query, mcp_service_allowed, MetaToolError,
+    StructuredToolError,
+};
 
 fn make_call_result(texts: &[&str]) -> rmcp::model::CallToolResult {
     use rmcp::model::CallToolResult;
@@ -49,6 +52,38 @@ fn lookup_service_query_prefers_latest_online_row() {
 fn lookup_service_query_escapes_service_id() {
     let query = lookup_service_query("x\"data");
     assert!(query.contains(r#"service_id: { _eq: "x\"data" }"#));
+}
+
+#[test]
+fn empty_mcp_allowlist_allows_any_service() {
+    assert!(mcp_service_allowed(&[], "x-data"));
+    assert!(mcp_service_allowed(&[], "observability-mcp"));
+}
+
+#[test]
+fn mcp_allowlist_matches_service_id_exactly() {
+    let allowlist = vec!["x-data".to_string(), "hf-data".to_string()];
+
+    assert!(mcp_service_allowed(&allowlist, "x-data"));
+    assert!(!mcp_service_allowed(&allowlist, "observability-mcp"));
+}
+
+#[test]
+fn blocked_mcp_service_returns_tool_not_allowed_error() {
+    let error = StructuredToolError::tool_not_allowed(
+        "observability-mcp",
+        "query_metrics",
+        vec!["x-data".to_string()],
+    );
+
+    assert_eq!(error.failure_class, "tool_not_allowed");
+    assert_eq!(error.path, "/service_id");
+    assert!(!error.retryable);
+    assert_eq!(error.service_id, "observability-mcp");
+    assert_eq!(
+        error.allowed_mcp_service_ids,
+        Some(vec!["x-data".to_string()])
+    );
 }
 
 #[test]

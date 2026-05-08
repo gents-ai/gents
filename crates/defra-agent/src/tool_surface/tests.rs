@@ -21,6 +21,7 @@ fn selection_file_tool_root_clamps_within_operator_root() {
             command_policy: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
+            allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root.clone()),
@@ -74,6 +75,7 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
             command_policy: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
+            allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root),
@@ -101,6 +103,7 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
             command_policy: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
+            allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
         },
         &ToolCeiling::readonly_at(operator_root),
@@ -128,6 +131,7 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
             command_policy: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
+            allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
         },
         &ToolCeiling::meta_only(),
@@ -152,6 +156,7 @@ fn selection_without_root_inherits_operator_root() {
             command_policy: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
+            allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root.clone()),
@@ -188,6 +193,7 @@ fn selection_cli_tools_require_ceiling_entries() {
             command_policy: None,
             cli_tool_names: vec!["rg".to_string()],
             enable_meta_tools: false,
+            allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root),
@@ -221,6 +227,7 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
             command_policy: None,
             cli_tool_names: vec!["rg".to_string(), "cargo".to_string()],
             enable_meta_tools: false,
+            allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
         },
         &ceiling,
@@ -242,6 +249,35 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
     );
 }
 
+#[test]
+fn selection_mcp_service_allowlist_is_deduped() {
+    let config = BehaviorToolConfig::from_selection(
+        "ops",
+        ToolSelection {
+            file_tools: FileToolMode::Off,
+            file_tool_root: None,
+            bash: BashMode::Off,
+            command_policy: None,
+            cli_tool_names: Vec::new(),
+            enable_meta_tools: true,
+            allowed_mcp_service_ids: vec![
+                "x-data".to_string(),
+                "x-data".to_string(),
+                "observability-mcp".to_string(),
+            ],
+            delegate_to: Vec::new(),
+        },
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        config.allowed_mcp_service_ids(),
+        &["x-data".to_string(), "observability-mcp".to_string()]
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
@@ -259,6 +295,7 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
             command_policy: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
+            allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root),

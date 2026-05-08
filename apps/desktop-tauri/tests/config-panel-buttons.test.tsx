@@ -370,7 +370,7 @@ describe("config panel action buttons", () => {
     );
   });
 
-  it("makes tool service delegates explicit in tool selections", async () => {
+  it("makes MCP service allowlists explicit in tool selections", async () => {
     const onSaveToolSelectionConfig = vi.fn<
       [(request: ToolSelectionSaveRequest) => Promise<unknown>]
     >(() => Promise.resolve());
@@ -385,6 +385,7 @@ describe("config panel action buttons", () => {
         toolSelection={{
           ...toolSelection,
           enableMetaTools: false,
+          allowedMcpServiceIds: [],
           delegateTo: [],
         }}
         toolServiceRegistries={[toolService]}
@@ -393,17 +394,53 @@ describe("config panel action buttons", () => {
       />,
     );
 
-    expect(screen.getByTestId("tool-delegate-mcp-local")).toBeDisabled();
+    expect(screen.getByTestId("tool-allowed-mcp-service-mcp-local")).toBeDisabled();
     fireEvent.click(screen.getByTestId("tool-enable-meta-tools"));
-    expect(screen.getByTestId("tool-delegate-mcp-local")).not.toBeDisabled();
-    fireEvent.click(screen.getByTestId("tool-delegate-mcp-local"));
+    expect(screen.getByTestId("tool-allowed-mcp-service-mcp-local")).not.toBeDisabled();
+    fireEvent.click(screen.getByTestId("tool-allowed-mcp-service-mcp-local"));
     fireEvent.click(screen.getByTestId("tool-selection-save"));
 
     await waitFor(() =>
       expect(onSaveToolSelectionConfig).toHaveBeenCalledWith(
         expect.objectContaining({
           enableMetaTools: true,
-          delegateTo: ["mcp-local"],
+          allowedMcpServiceIds: ["mcp-local"],
+        }),
+      ),
+    );
+  });
+
+  it("migrates legacy service delegates into the MCP allowlist on save", async () => {
+    const onSaveToolSelectionConfig = vi.fn<
+      [(request: ToolSelectionSaveRequest) => Promise<unknown>]
+    >(() => Promise.resolve());
+
+    render(
+      <ToolSelectionConfigEditor
+        agentDid="did:key:z6MkAgent"
+        savedStatus={null}
+        saving={false}
+        toolCeiling="Readwrite"
+        toolRoot="/tmp/work"
+        toolSelection={{
+          ...toolSelection,
+          allowedMcpServiceIds: [],
+          delegateTo: ["mcp-local", "did:key:zDelegate"],
+        }}
+        toolServiceRegistries={[toolService]}
+        onSaveToolSelectionConfig={onSaveToolSelectionConfig}
+        onSaved={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("tool-allowed-mcp-service-mcp-local")).toBeChecked();
+    fireEvent.click(screen.getByTestId("tool-selection-save"));
+
+    await waitFor(() =>
+      expect(onSaveToolSelectionConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          allowedMcpServiceIds: ["mcp-local"],
+          delegateTo: ["did:key:zDelegate"],
         }),
       ),
     );

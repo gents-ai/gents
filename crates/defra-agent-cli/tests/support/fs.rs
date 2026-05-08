@@ -174,6 +174,7 @@ pub fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<
             "command_network_mode",
             "cli_tool_names",
             "enable_meta_tools",
+            "allowed_mcp_service_ids",
             "delegate_to",
         ],
     )?;
@@ -375,6 +376,7 @@ pub async fn assert_runtime_init_state(
                 enable_bash
                 bash_mode
                 enable_meta_tools
+                allowed_mcp_service_ids
             }}
         }}"#,
         escape_graphql_string(agent_did),
@@ -507,6 +509,13 @@ pub async fn assert_runtime_init_state(
             .get("enable_meta_tools")
             .and_then(Value::as_bool),
         Some(true)
+    );
+    assert!(
+        tool_selection
+            .get("allowed_mcp_service_ids")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty),
+        "expected default tool selection MCP allowlist to be empty: {tool_selection}"
     );
 
     Ok(())

@@ -93,8 +93,23 @@ impl Tool for DiscoverToolsTool {
             }
         };
 
+        let services = services
+            .into_iter()
+            .filter(|svc| {
+                svc.get("service_id")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|service_id| self.ctx.is_mcp_service_allowed(service_id))
+            })
+            .collect::<Vec<_>>();
+
         if services.is_empty() {
-            return Ok("No data services are currently online.".to_string());
+            if self.ctx.allowed_mcp_service_ids.is_empty() {
+                return Ok("No data services are currently online.".to_string());
+            }
+            return Ok(format!(
+                "No allowed data services are currently online. Allowed services: {}.",
+                self.ctx.allowed_mcp_service_ids.join(", ")
+            ));
         }
 
         let query_lower = args.query.as_deref().map(|q| q.to_lowercase());
@@ -216,5 +231,63 @@ impl Tool for DiscoverToolsTool {
         } else {
             Ok(out)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::health_checker::ServiceHealthMap;
+    use crate::mcp_pool::McpPool;
+
+    #[tokio::test]
+    async fn discover_filters_out_disallowed_registry_services() {
+        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let mutation = r#"mutation {
+            upsert_ToolServiceRegistry(
+                filter: { service_id: { _eq: "observability-mcp" } },
+                add: {
+                    service_id: "observability-mcp",
+                    display_name: "Observability",
+                    description: "Metrics and logs",
+                    hostname: "localhost",
+                    tailscale_ip: "",
+                    lan_ip: "",
+                    mcp_port: 1,
+                    mcp_path: "/mcp",
+                    status: "online"
+                },
+                update: { status: "online" }
+            ) { _docID }
+        }"#;
+        let response = node.execute(mutation).await;
+        assert!(
+            !response.has_errors(),
+            "registry insert failed: {:?}",
+            response.errors
+        );
+
+        let tool = DiscoverToolsTool::new(MetaToolContext {
+            node,
+            mcp_pool: McpPool::new(),
+            health: ServiceHealthMap::new(),
+            local_hostname: "studio-1".to_string(),
+            local_subnet: None,
+            allowed_mcp_service_ids: vec!["x-data".to_string()],
+        });
+
+        let output = tool
+            .call(DiscoverToolsArgs { query: None })
+            .await
+            .expect("discover should return model-readable text");
+
+        assert_eq!(
+            output,
+            "No allowed data services are currently online. Allowed services: x-data."
+        );
+        assert!(!output.contains("observability-mcp"));
     }
 }

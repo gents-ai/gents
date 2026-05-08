@@ -106,7 +106,7 @@ describeLive("Tauri app live bridge runner config flow", () => {
         await driver.setChecked("tool-enable-file-tools", true);
         await driver.setChecked("tool-enable-bash", true);
         await driver.setChecked("tool-enable-meta-tools", true);
-        await driver.setChecked(`tool-delegate-${toolServiceId}`, true);
+        await driver.setChecked(`tool-allowed-mcp-service-${toolServiceId}`, true);
         await driver.replaceInput(
           "tool-file-tool-root",
           fileToolRoot,
@@ -117,7 +117,7 @@ describeLive("Tauri app live bridge runner config flow", () => {
           const selection = current.toolSelections.find(
             (selection) => selection.selectionId === toolSelectionId,
           );
-          expect(selection?.delegateTo).toContain(toolServiceId);
+          expect(selection?.allowedMcpServiceIds).toContain(toolServiceId);
           expect(selection?.fileToolRoot).toBe(fileToolRoot);
         });
 

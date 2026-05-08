@@ -13,5 +13,6 @@ type ToolSelection {
     command_network_mode: String
     cli_tool_names: [String]
     enable_meta_tools: Boolean
+    allowed_mcp_service_ids: [String]
     delegate_to: [String]
 }

@@ -31,6 +31,7 @@ pub(super) async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<
         command_network_mode: None,
         cli_tool_names: Some(args.cli_tool_names.clone()),
         enable_meta_tools: Some(args.enable_meta_tools),
+        allowed_mcp_service_ids: Some(args.allowed_mcp_service_ids.clone()),
         delegate_to: Some(args.delegate_to.clone()),
     };
     let doc_id = write_tool_selection_document(&access, &selection).await?;
@@ -45,6 +46,7 @@ pub(super) async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<
         "bash_mode": bash_mode,
         "cli_tool_names": args.cli_tool_names,
         "enable_meta_tools": args.enable_meta_tools,
+        "allowed_mcp_service_ids": args.allowed_mcp_service_ids,
         "delegate_to": args.delegate_to,
     });
     print_json(&output)?;

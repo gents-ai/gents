@@ -493,6 +493,8 @@ pub struct ToolSelectionRow {
     #[serde(default)]
     pub enable_meta_tools: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
+    pub allowed_mcp_service_ids: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub delegate_to: Vec<String>,
 }
 
@@ -623,6 +625,7 @@ mod tests {
         }"#;
         let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
         assert!(row.cli_tool_names.is_empty());
+        assert!(row.allowed_mcp_service_ids.is_empty());
         assert!(row.delegate_to.is_empty());
     }
 
@@ -632,10 +635,12 @@ mod tests {
             "selection_id": "sel-2",
             "agent_did": "did:defra:amy",
             "cli_tool_names": null,
+            "allowed_mcp_service_ids": null,
             "delegate_to": null
         }"#;
         let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
         assert!(row.cli_tool_names.is_empty());
+        assert!(row.allowed_mcp_service_ids.is_empty());
         assert!(row.delegate_to.is_empty());
     }
 
@@ -645,10 +650,12 @@ mod tests {
             "selection_id": "sel-3",
             "agent_did": "did:defra:amy",
             "cli_tool_names": "",
+            "allowed_mcp_service_ids": "",
             "delegate_to": ""
         }"#;
         let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
         assert!(row.cli_tool_names.is_empty());
+        assert!(row.allowed_mcp_service_ids.is_empty());
         assert!(row.delegate_to.is_empty());
     }
 }

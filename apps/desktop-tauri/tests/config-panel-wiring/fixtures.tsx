@@ -108,7 +108,8 @@ export const deployment: DeploymentView = {
       bashMode: "ReadOnly",
       cliToolNames: ["grep"],
       enableMetaTools: true,
-      delegateTo: ["service-a"],
+      allowedMcpServiceIds: ["service-a"],
+      delegateTo: [],
     },
     {
       selectionId: "tools-b",
@@ -120,6 +121,7 @@ export const deployment: DeploymentView = {
       bashMode: "ReadOnly",
       cliToolNames: [],
       enableMetaTools: false,
+      allowedMcpServiceIds: [],
       delegateTo: [],
     },
   ],

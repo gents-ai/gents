@@ -76,6 +76,10 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
                 .and_then(|values| string_list_field("cli_tool_names", values)),
             optional_bool_field("enable_meta_tools", selection.enable_meta_tools),
             selection
+                .allowed_mcp_service_ids
+                .as_ref()
+                .and_then(|values| string_list_field("allowed_mcp_service_ids", values)),
+            selection
                 .delegate_to
                 .as_ref()
                 .and_then(|values| string_list_field("delegate_to", values)),

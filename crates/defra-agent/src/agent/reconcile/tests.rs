@@ -368,6 +368,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
                 command_policy: None,
                 cli_tool_names: Vec::new(),
                 enable_meta_tools: false,
+                allowed_mcp_service_ids: Vec::new(),
                 delegate_to: Vec::new(),
             },
             &ToolCeiling::readonly(),
