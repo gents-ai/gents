@@ -273,6 +273,63 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
+    /// Running → Completed for bridge (subagent) tools.
+    ///
+    /// Lean parity: bridge_complete. Parent tool .running → .completed when
+    /// the caller has verified the linked child request reached .completed.
+    /// Persists child_result as the row's `result` field; sets state,
+    /// completed_at, latency_ms following R1's complete() persistence pattern.
+    ///
+    /// Trust boundary: bridge_complete does NOT verify the child's terminal
+    /// state internally (Lean's precondition is on the caller). R3's
+    /// SubagentSource will be the natural place for that check.
+    pub async fn bridge_complete(&mut self, child_result: String) -> Result<()> {
+        self.ensure_state(&[ToolCallState::Running], "bridge_complete")?;
+        if self.child_request_id.is_none() {
+            return Err(IllegalToolCallTransition::BridgeCompleteRequiresChildLink.into());
+        }
+
+        let doc_id = self
+            .doc_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("bridge_complete called before start_running persisted a row"))?;
+        let now = Utc::now();
+        let started_at = self
+            .started_at
+            .ok_or_else(|| anyhow!("bridge_complete called without started_at set"))?;
+        let latency_ms = (now - started_at).num_milliseconds();
+
+        let escaped_result = escape_graphql_string(&child_result);
+        let escaped_doc_id = escape_graphql_string(doc_id);
+        let now_str = now.to_rfc3339();
+        // DefraDB requires DateTime fields to be re-supplied on update to
+        // avoid a type-mismatch error when re-validating the document.
+        let started_at_str = started_at.to_rfc3339();
+
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentToolCall(
+                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    input: {{
+                        result: "{escaped_result}",
+                        status: "completed",
+                        lifecycle_state: "completed",
+                        started_at: "{started_at_str}",
+                        completed_at: "{now_str}",
+                        latency_ms: {latency_ms}
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+
+        execute_mutation_with_retry(&self.node, &mutation, "bridge_complete")
+            .await
+            .context("bridge_complete mutation")?;
+
+        self.state = ToolCallState::Completed;
+        Ok(())
+    }
+
     /// Running → TimedOut. R1 does not call this from runtime code; R3 wires
     /// it up to fire on deadline expiry. Defined here so the API surface
     /// matches the Lean spec.
@@ -753,6 +810,60 @@ mod tests {
         lc.set_started_at(Some(chrono::Utc::now()));
 
         let err = lc.detach().await.unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::BadState { .. })
+            ),
+            "expected BadState, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_complete_rejects_native_tool() {
+        // Native tool: constructed with new() — no child_request_id.
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new(
+            node,
+            "sess-bc-1".to_string(),
+            "tc-bc-1".to_string(),
+            0,
+            "native_tool".to_string(),
+            "{}".to_string(),
+        );
+        lc.set_state(ToolCallState::Running);
+        lc.set_doc_id(Some("fake-doc-id-bc-1".to_string()));
+        lc.set_started_at(Some(chrono::Utc::now()));
+
+        let err = lc.bridge_complete("x".to_string()).await.unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::BridgeCompleteRequiresChildLink)
+            ),
+            "expected BridgeCompleteRequiresChildLink, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_complete_rejects_pending_state() {
+        // Subagent tool, but never advanced to Running.
+        let node = test_node().await;
+        let lc_base = ToolCallLifecycle::new_subagent(
+            node,
+            "sess-bc-2".to_string(),
+            "tc-bc-2".to_string(),
+            0,
+            "spawn_agent".to_string(),
+            "{}".to_string(),
+            AwaitMode::Foreground,
+            CancelPolicy::Cascade,
+            "child-1".to_string(),
+        );
+        // Leave state as Pending (default); do not call start_running.
+        let mut lc = lc_base;
+
+        let err = lc.bridge_complete("x".to_string()).await.unwrap_err();
         assert!(
             matches!(
                 err.downcast_ref::<IllegalToolCallTransition>(),
