@@ -274,11 +274,21 @@ fn tool_call_item(
     args_json: &str,
     internal_id: &str,
 ) -> Result<MultiTurnStreamItem<()>, rig::agent::StreamingError> {
+    tool_call_item_with_ids(name, args_json, internal_id, internal_id, None)
+}
+
+fn tool_call_item_with_ids(
+    name: &str,
+    args_json: &str,
+    tool_id: &str,
+    internal_id: &str,
+    call_id: Option<&str>,
+) -> Result<MultiTurnStreamItem<()>, rig::agent::StreamingError> {
     Ok(MultiTurnStreamItem::StreamAssistantItem(
         StreamedAssistantContent::ToolCall {
             tool_call: ToolCall {
-                id: internal_id.to_string(),
-                call_id: None,
+                id: tool_id.to_string(),
+                call_id: call_id.map(ToOwned::to_owned),
                 function: ToolFunction {
                     name: name.to_string(),
                     arguments: serde_json::from_str(args_json).unwrap(),
@@ -296,11 +306,20 @@ fn tool_result_item(
     result_json: &str,
     internal_id: &str,
 ) -> Result<MultiTurnStreamItem<()>, rig::agent::StreamingError> {
+    tool_result_item_with_call_id(tool_id, None, result_json, internal_id)
+}
+
+fn tool_result_item_with_call_id(
+    tool_id: &str,
+    call_id: Option<&str>,
+    result_json: &str,
+    internal_id: &str,
+) -> Result<MultiTurnStreamItem<()>, rig::agent::StreamingError> {
     Ok(MultiTurnStreamItem::StreamUserItem(
         StreamedUserContent::ToolResult {
             tool_result: ToolResult {
                 id: tool_id.to_string(),
-                call_id: None,
+                call_id: call_id.map(ToOwned::to_owned),
                 content: OneOrMany::one(ToolResultContent::Text(Text {
                     text: result_json.to_string(),
                 })),
@@ -315,6 +334,169 @@ fn final_item(response_text: &str) -> Result<MultiTurnStreamItem<()>, rig::agent
         response_text,
         rig::completion::Usage::new(),
     ))
+}
+
+#[tokio::test]
+async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
+    let data_path = std::env::temp_dir().join(format!(
+        "agent-stream-processor-tool-dedupe-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = crate::hook::DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:test",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        PromptHook::<TestModel>::on_completion_call(
+            &hook,
+            &user_text_message("discover available tools"),
+            &[]
+        )
+        .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
+    let request = AgentRequest {
+        doc_id: request_doc_id,
+        request_id: request_id.clone(),
+        agent_did: "did:defra-agent:test".to_string(),
+        behavior_id: Some("general".to_string()),
+        session_id: session_id.clone(),
+        content: "discover available tools".to_string(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        max_tokens: None,
+        metadata: None,
+        execution_origin: None,
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        "general",
+        "did:defra-agent:test",
+        request,
+        30,
+        ExecutionOrigin::Interactive,
+        "test-backend",
+    );
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+
+    let stream_writer = DefraStreamWriter::new(
+        node.clone(),
+        "did:defra-agent:test",
+        Duration::from_millis(0),
+    );
+    let response_doc_id = stream_writer
+        .begin(&session_id, &request_id, "general")
+        .await
+        .unwrap();
+    lifecycle.set_response_doc_id(&response_doc_id);
+
+    let mut processor =
+        StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+
+    let stored_call_id = "OaoTQYzCdoptKiK_mdhBA";
+    let model_result_id = "c6b8bdeb-ab92-4481-b763-bdafbd463904";
+    let tool_args = r#"{"tool":"discover_tools"}"#;
+    let tool_result = r#"{"tools":["discover_tools","describe_tool"]}"#;
+
+    processor
+        .process_item(tool_call_item_with_ids(
+            "discover_tools",
+            tool_args,
+            model_result_id,
+            model_result_id,
+            Some(model_result_id),
+        ))
+        .await
+        .unwrap();
+    assert!(matches!(
+        PromptHook::<TestModel>::on_tool_call(
+            &hook,
+            "discover_tools",
+            Some(model_result_id.to_string()),
+            stored_call_id,
+            tool_args,
+        )
+        .await,
+        rig::agent::ToolCallHookAction::Continue
+    ));
+    assert!(processor
+        .persist_partial_turn("persist streamed assistant tool call")
+        .await
+        .unwrap());
+    assert!(matches!(
+        PromptHook::<TestModel>::on_tool_result(
+            &hook,
+            "discover_tools",
+            Some(model_result_id.to_string()),
+            stored_call_id,
+            tool_args,
+            tool_result,
+        )
+        .await,
+        HookAction::Continue
+    ));
+
+    processor
+        .process_item(tool_result_item_with_call_id(
+            model_result_id,
+            Some(model_result_id),
+            tool_result,
+            model_result_id,
+        ))
+        .await
+        .unwrap();
+
+    let history = crate::session::load_history(&node, &session_id)
+        .await
+        .unwrap();
+    let tool_results = history
+        .iter()
+        .filter_map(|message| match message {
+            Message::User { content } => match content.first_ref() {
+                UserContent::ToolResult(tool_result) => Some(tool_result),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        tool_results.len(),
+        1,
+        "hook and stream paths must materialize one logical tool result"
+    );
+    assert_eq!(tool_results[0].id, model_result_id);
+    assert_eq!(tool_results[0].call_id.as_deref(), Some(model_result_id));
+    assert!(matches!(
+        tool_results[0].content.first_ref(),
+        ToolResultContent::Text(Text { text }) if text == tool_result
+    ));
+    assert_eq!(
+        crate::session::load_tool_call_result(&node, &session_id, stored_call_id)
+            .await
+            .unwrap(),
+        tool_result
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
