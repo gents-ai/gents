@@ -12,6 +12,7 @@ import {
   shouldAutoRestartP2P,
   timingConfig,
 } from "./desktopShellRuntime";
+import { setSelectedAgent } from "../lib/desktop-api";
 import { listenToDesktopClientUpdates } from "../lib/desktop-events";
 
 type DesktopShellEffectsArgs = {
@@ -34,6 +35,7 @@ type DesktopShellEffectsArgs = {
   selectedTrackedRequestId: string | null;
   sending: boolean;
   setLocalWorkflow: (workflow: ChatWorkflowState) => void;
+  setError: (error: string | null) => void;
   setSelectedAgentDid: (agentDid: string | null) => void;
   setSelectedBehaviorId: (behaviorId: string | null) => void;
   setSelectedSessionId: (sessionId: string | null) => void;
@@ -72,6 +74,7 @@ export function useDesktopShellEffects({
   selectedTrackedRequestId,
   sending,
   setLocalWorkflow,
+  setError,
   setSelectedAgentDid,
   setSelectedBehaviorId,
   setSelectedSessionId,
@@ -80,6 +83,8 @@ export function useDesktopShellEffects({
   stopping,
   onStartClient,
 }: DesktopShellEffectsArgs) {
+  const clientAvailable = Boolean(snapshot?.client);
+
   useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId;
   }, [selectedSessionId, selectedSessionIdRef]);
@@ -200,6 +205,24 @@ export function useDesktopShellEffects({
 
     setSelectedAgentDid(deployments[0].agentDid);
   }, [deployments, selectedAgentDid, setSelectedAgentDid]);
+
+  useEffect(() => {
+    if (!clientAvailable) {
+      return;
+    }
+
+    let disposed = false;
+    void setSelectedAgent(selectedAgentDid).catch((err) => {
+      if (disposed) {
+        return;
+      }
+      setError(String(err));
+    });
+
+    return () => {
+      disposed = true;
+    };
+  }, [clientAvailable, selectedAgentDid, setError]);
 
   useEffect(() => {
     if (!selectedDeployment) {

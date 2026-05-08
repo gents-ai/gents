@@ -563,6 +563,8 @@ pub fn turn_state_query(request_id: &str) -> String {
                 retry_parent_request
                 superseded_by_request
                 lifecycle_state
+                interrupt_requested_at
+                valid_until
             }}
             AgentResponse(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
                 response_key
@@ -572,6 +574,7 @@ pub fn turn_state_query(request_id: &str) -> String {
                 error_message
                 materialized_message_sequence
                 materialized_at
+                interrupted_at
             }}
         }}"#
     )
@@ -612,6 +615,7 @@ pub fn session_shape_query(session_id: &str) -> String {
                 truncation_metadata
                 conversation_doc_id
                 created_at
+                discarded_because_interrupted
             }}
         }}"#
     )
@@ -777,6 +781,21 @@ mod tests {
             }
         });
         assert_eq!(graphql_rows_from_response(&value, "Thing").len(), 2);
+    }
+
+    #[test]
+    fn shared_graphql_queries_include_recent_row_fields() {
+        let turn_query = turn_state_query("req-1");
+        assert!(turn_query.contains("interrupt_requested_at"));
+        assert!(turn_query.contains("valid_until"));
+        assert!(turn_query.contains("interrupted_at"));
+
+        let session_query = session_shape_query("session-1");
+        assert!(session_query.contains("selected_service_id"));
+        assert!(session_query.contains("selected_tool_name"));
+        assert!(session_query.contains("tool_failure_class"));
+        assert!(session_query.contains("latency_ms"));
+        assert!(session_query.contains("discarded_because_interrupted"));
     }
 
     #[test]

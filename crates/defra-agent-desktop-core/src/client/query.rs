@@ -12,8 +12,8 @@ use defra_agent_protocol::schemas::{
     AGENT_BEHAVIOR_NAME, AGENT_CONVERSATION_NAME, AGENT_MESSAGE_NAME, AGENT_PRINCIPAL_NAME,
     AGENT_REQUEST_NAME, AGENT_RESPONSE_NAME, AGENT_RUNTIME_NAME, AGENT_SESSION_NAME,
     AGENT_TOOL_CALL_NAME, AGENT_TOOL_RESULT_NAME, COMPACTION_ENTRY_NAME, EVENT_TRIGGER_NAME,
-    INFERENCE_BACKEND_NAME, INFERENCE_PROFILE_NAME, SCHEDULE_NAME, TASK_NAME,
-    TOOL_SELECTION_NAME, TOOL_SERVICE_REGISTRY_NAME,
+    INFERENCE_BACKEND_NAME, INFERENCE_PROFILE_NAME, SCHEDULE_NAME, TASK_NAME, TOOL_SELECTION_NAME,
+    TOOL_SERVICE_REGISTRY_NAME,
 };
 use defra_node::EmbeddedNode;
 use serde::de::DeserializeOwned;
@@ -25,7 +25,8 @@ use super::store::{ClientStore, ClientStoreRows};
 
 const REMOTE_SNAPSHOT_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-const AGENT_PRINCIPAL_FIELDS: &str = "agent_did display_name default_behavior_id enabled created_at created_by";
+const AGENT_PRINCIPAL_FIELDS: &str =
+    "agent_did display_name default_behavior_id enabled created_at created_by";
 const AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled created_at";
 const AGENT_RUNTIME_FIELDS: &str = "agent_did process_state reconcile_phase active_generation router_generation default_behavior_id runnable_behavior_count unavailable_behavior_count last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at";
 const AGENT_CONVERSATION_FIELDS: &str = "session_id agent_name agent_did behavior_id title title_source preview_text status created_at updated_at latest_request_id";
@@ -604,7 +605,7 @@ query DesktopRemoteChatPatch {{
   AgentResponse(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at }}
   AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ message_key session_id sequence role content timestamp }}
   AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ session_id agent_name behavior_id started ended status }}
-  AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ tool_call_key session_id message_sequence tool_name tool_call_id args result status started_at completed_at }}
+  AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_TOOL_CALL_FIELDS} }}
   AgentToolResult(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ agent_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted }}
   CompactionEntry(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ compaction_key session_id sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at }}
 }}
@@ -622,7 +623,7 @@ query DesktopRemoteSnapshot {
   AgentResponse { response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at }
   AgentMessage { message_key session_id sequence role content timestamp }
   AgentSession { session_id agent_name behavior_id started ended status }
-  AgentToolCall { tool_call_key session_id message_sequence tool_name tool_call_id args result status started_at completed_at }
+  AgentToolCall { tool_call_key session_id message_sequence tool_name tool_call_id args result status started_at completed_at selected_service_id selected_tool_name tool_failure_class latency_ms }
   AgentToolResult { agent_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted }
   CompactionEntry { compaction_key session_id sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at }
   Task { task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at }
@@ -842,7 +843,9 @@ pub async fn load_agent_scoped_snapshot(
     let conversations: Vec<AgentConversationRow> = load_rows(
         node,
         AGENT_CONVERSATION_NAME,
-        &format!("query {{ {AGENT_CONVERSATION_NAME}({did_filter}) {{ {AGENT_CONVERSATION_FIELDS} }} }}"),
+        &format!(
+            "query {{ {AGENT_CONVERSATION_NAME}({did_filter}) {{ {AGENT_CONVERSATION_FIELDS} }} }}"
+        ),
     )
     .await?;
     let requests: Vec<AgentRequestRow> = load_rows(
@@ -860,7 +863,9 @@ pub async fn load_agent_scoped_snapshot(
     let tool_results: Vec<AgentToolResultRow> = load_rows(
         node,
         AGENT_TOOL_RESULT_NAME,
-        &format!("query {{ {AGENT_TOOL_RESULT_NAME}({did_filter}) {{ {AGENT_TOOL_RESULT_FIELDS} }} }}"),
+        &format!(
+            "query {{ {AGENT_TOOL_RESULT_NAME}({did_filter}) {{ {AGENT_TOOL_RESULT_FIELDS} }} }}"
+        ),
     )
     .await?;
     let tool_selections: Vec<ToolSelectionRow> = load_rows(
@@ -894,13 +899,17 @@ pub async fn load_agent_scoped_snapshot(
         let messages: Vec<AgentMessageRow> = load_rows(
             node,
             AGENT_MESSAGE_NAME,
-            &format!("query {{ {AGENT_MESSAGE_NAME}({session_filter}) {{ {AGENT_MESSAGE_FIELDS} }} }}"),
+            &format!(
+                "query {{ {AGENT_MESSAGE_NAME}({session_filter}) {{ {AGENT_MESSAGE_FIELDS} }} }}"
+            ),
         )
         .await?;
         let sessions: Vec<AgentSessionRow> = load_rows(
             node,
             AGENT_SESSION_NAME,
-            &format!("query {{ {AGENT_SESSION_NAME}({session_filter}) {{ {AGENT_SESSION_FIELDS} }} }}"),
+            &format!(
+                "query {{ {AGENT_SESSION_NAME}({session_filter}) {{ {AGENT_SESSION_FIELDS} }} }}"
+            ),
         )
         .await?;
         let tool_calls: Vec<AgentToolCallRow> = load_rows(
@@ -960,7 +969,9 @@ mod tests {
     #[tokio::test]
     async fn fetch_doc_patch_returns_only_matching_rows() {
         let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
-        ensure_runtime_schemas(node.as_ref()).await.expect("schemas");
+        ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("schemas");
 
         let mutation = r#"mutation {
             create_AgentMessage(input: {
@@ -1013,7 +1024,9 @@ mod tests {
     #[tokio::test]
     async fn fetch_doc_patch_returns_empty_store_for_no_matches() {
         let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
-        ensure_runtime_schemas(node.as_ref()).await.expect("schemas");
+        ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("schemas");
 
         let patch = fetch_doc_patch(node.as_ref(), AGENT_MESSAGE_NAME, &["never-existed"])
             .await
@@ -1024,7 +1037,9 @@ mod tests {
     #[tokio::test]
     async fn fetch_doc_patch_empty_input_is_no_op() {
         let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
-        ensure_runtime_schemas(node.as_ref()).await.expect("schemas");
+        ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("schemas");
 
         let patch = fetch_doc_patch(node.as_ref(), AGENT_MESSAGE_NAME, &[])
             .await
@@ -1035,7 +1050,9 @@ mod tests {
     #[tokio::test]
     async fn fetch_doc_patch_unknown_collection_errors() {
         let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
-        ensure_runtime_schemas(node.as_ref()).await.expect("schemas");
+        ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("schemas");
 
         let result = fetch_doc_patch(node.as_ref(), "NotARealCollection", &["x"]).await;
         assert!(result.is_err());
@@ -1044,7 +1061,9 @@ mod tests {
     #[tokio::test]
     async fn load_agent_scoped_snapshot_excludes_other_agents() {
         let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
-        ensure_runtime_schemas(node.as_ref()).await.expect("schemas");
+        ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("schemas");
 
         let mutation = r#"mutation {
             alpha: create_AgentConversation(input: {
@@ -1088,5 +1107,20 @@ mod tests {
             dids.iter().all(|d| *d == "did:alpha"),
             "expected only did:alpha conversations; got {dids:?}"
         );
+    }
+
+    #[test]
+    fn remote_tool_call_queries_include_local_field_set() {
+        let chat_patch = remote_chat_patch_query("sess-1");
+        for field in AGENT_TOOL_CALL_FIELDS.split_whitespace() {
+            assert!(
+                chat_patch.contains(field),
+                "remote chat patch missing AgentToolCall field {field}"
+            );
+            assert!(
+                REMOTE_SNAPSHOT_QUERY.contains(field),
+                "remote snapshot missing AgentToolCall field {field}"
+            );
+        }
     }
 }

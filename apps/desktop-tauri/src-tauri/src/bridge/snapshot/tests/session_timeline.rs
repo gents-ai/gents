@@ -103,6 +103,10 @@ fn session_snapshot_orders_pending_turn_before_orphan_tool_groups_and_live_overl
             status: Some("running".to_string()),
             started_at: Some("2026-04-21T12:01:02Z".to_string()),
             completed_at: None,
+            selected_service_id: None,
+            selected_tool_name: None,
+            tool_failure_class: None,
+            latency_ms: None,
         }],
         ..ClientStoreRows::default()
     });
@@ -395,6 +399,10 @@ fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
             status: Some("completed".to_string()),
             started_at: Some("2026-04-21T12:00:01Z".to_string()),
             completed_at: Some("2026-04-21T12:00:02Z".to_string()),
+            selected_service_id: None,
+            selected_tool_name: None,
+            tool_failure_class: None,
+            latency_ms: None,
         }],
         ..ClientStoreRows::default()
     });

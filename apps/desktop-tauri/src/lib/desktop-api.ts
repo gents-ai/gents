@@ -60,6 +60,7 @@ export type DesktopApiAdapter = {
   }) => Promise<InitSummary>;
   startDesktopClient: () => Promise<DesktopClientSnapshot>;
   shutdownDesktopClient: () => Promise<DesktopClientSnapshot>;
+  setSelectedAgent: (agentDid: string | null) => Promise<void>;
   addPeer: (request: PeerAddRequest) => Promise<DesktopClientSnapshot>;
   fetchPeerStatus: (serverAddress: string) => Promise<unknown>;
   repairP2P: () => Promise<DesktopClientSnapshot>;
@@ -122,6 +123,9 @@ const defaultDesktopApiAdapter: DesktopApiAdapter = {
   },
   shutdownDesktopClient() {
     return invokeDesktop<DesktopClientSnapshot>("desktop_client_shutdown");
+  },
+  setSelectedAgent(agentDid) {
+    return invokeDesktop<void>("desktop_set_selected_agent", { agentDid });
   },
   addPeer(request) {
     return invokeDesktop<DesktopClientSnapshot>("desktop_peer_add", { request });
@@ -227,6 +231,10 @@ export async function startDesktopClient() {
 
 export async function shutdownDesktopClient() {
   return desktopApiAdapter().shutdownDesktopClient();
+}
+
+export async function setSelectedAgent(agentDid: string | null) {
+  return desktopApiAdapter().setSelectedAgent(agentDid);
 }
 
 export async function addPeer(request: PeerAddRequest) {

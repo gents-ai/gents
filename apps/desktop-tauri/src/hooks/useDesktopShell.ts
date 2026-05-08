@@ -238,6 +238,7 @@ export function useDesktopShell() {
     selectedTrackedRequestId,
     sending,
     setLocalWorkflow,
+    setError,
     setSelectedAgentDid,
     setSelectedBehaviorId,
     setSelectedSessionId,
