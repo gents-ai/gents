@@ -67,6 +67,7 @@ export type ToolSelectionView = {
   bashMode?: string | null;
   cliToolNames: string[];
   enableMetaTools?: boolean | null;
+  allowedMcpServiceIds: string[];
   delegateTo: string[];
 };
 

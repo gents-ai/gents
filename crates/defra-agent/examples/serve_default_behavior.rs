@@ -134,6 +134,7 @@ async fn seed_demo_documents(
             command_network_mode: None,
             cli_tool_names: Some(Vec::new()),
             enable_meta_tools: Some(true),
+            allowed_mcp_service_ids: Some(Vec::new()),
             delegate_to: Some(Vec::new()),
         },
     )

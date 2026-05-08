@@ -121,6 +121,7 @@ async fn seed_live_behavior_documents(
         command_network_mode: None,
         cli_tool_names: vec!["rg".to_string()],
         enable_meta_tools: Some(false),
+        allowed_mcp_service_ids: Vec::new(),
         delegate_to: vec![],
     })
     .await?;

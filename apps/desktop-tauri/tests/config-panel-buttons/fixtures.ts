@@ -39,7 +39,8 @@ export const toolSelection: ToolSelectionView = {
   bashMode: "ReadOnly",
   cliToolNames: ["grep"],
   enableMetaTools: true,
-  delegateTo: ["mcp-local"],
+  allowedMcpServiceIds: ["mcp-local"],
+  delegateTo: [],
 };
 
 export const toolService: ToolServiceRegistryView = {

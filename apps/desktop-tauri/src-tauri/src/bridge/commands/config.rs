@@ -226,6 +226,7 @@ pub(crate) async fn save_tool_selection_config(
             command_network_mode: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: Some(false),
+            allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
         });
     row.agent_did = Some(agent_did);
@@ -256,6 +257,12 @@ pub(crate) async fn save_tool_selection_config(
         .filter(|value| !value.is_empty())
         .collect();
     row.enable_meta_tools = request.enable_meta_tools.or(row.enable_meta_tools);
+    row.allowed_mcp_service_ids = request
+        .allowed_mcp_service_ids
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect();
     row.delegate_to = request
         .delegate_to
         .into_iter()

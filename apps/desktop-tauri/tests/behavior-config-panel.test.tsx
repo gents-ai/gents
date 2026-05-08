@@ -50,6 +50,9 @@ const toolSelections: ToolSelectionView[] = [
   {
     selectionId: "default-tools",
     displayName: "Default Tools",
+    cliToolNames: [],
+    allowedMcpServiceIds: [],
+    delegateTo: [],
   },
 ];
 

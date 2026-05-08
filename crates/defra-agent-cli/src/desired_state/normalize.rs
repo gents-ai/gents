@@ -51,6 +51,8 @@ pub(crate) fn normalize_manifest(manifest: &mut DesiredStateManifest) {
         selection.command_forbidden_argv_prefixes.dedup();
         selection.cli_tool_names.sort();
         selection.cli_tool_names.dedup();
+        selection.allowed_mcp_service_ids.sort();
+        selection.allowed_mcp_service_ids.dedup();
         selection.delegate_to.sort();
         selection.delegate_to.dedup();
     }

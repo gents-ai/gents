@@ -67,6 +67,13 @@ impl Tool for DescribeToolTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        if let Some(error) = self
+            .ctx
+            .blocked_service_error(&args.service_id, &args.tool_name)
+        {
+            return Ok(error.to_result_text());
+        }
+
         if let Err(error) = enforce_health_gate(&self.ctx.health, &args.service_id).await {
             return Ok(StructuredToolError::service_unavailable(
                 &args.service_id,
@@ -931,6 +938,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn disallowed_service_returns_before_registry_lookup() {
+        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let tool = DescribeToolTool::new(MetaToolContext {
+            node,
+            mcp_pool: McpPool::new(),
+            health: ServiceHealthMap::new(),
+            local_hostname: "studio-1".to_string(),
+            local_subnet: None,
+            allowed_mcp_service_ids: vec!["x-data".to_string()],
+        });
+
+        let output = tool
+            .call(DescribeToolArgs {
+                service_id: "observability-mcp".to_string(),
+                tool_name: "query_metrics".to_string(),
+                raw_schema: false,
+            })
+            .await
+            .expect("disallowed service should be model-readable");
+        let value: Value = serde_json::from_str(&output).expect("structured json");
+
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["failure_class"], "tool_not_allowed");
+        assert_eq!(value["path"], "/service_id");
+        assert_eq!(value["retryable"], false);
+        assert_eq!(value["service_id"], "observability-mcp");
+        assert_eq!(value["requested_tool_name"], "query_metrics");
+        assert_eq!(value["allowed_mcp_service_ids"], json!(["x-data"]));
+    }
+
+    #[tokio::test]
     async fn missing_service_returns_structured_envelope() {
         let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -940,6 +978,7 @@ mod tests {
             health: ServiceHealthMap::new(),
             local_hostname: "studio-1".to_string(),
             local_subnet: None,
+            allowed_mcp_service_ids: Vec::new(),
         });
 
         let output = tool

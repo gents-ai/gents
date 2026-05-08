@@ -50,6 +50,8 @@ async fn tool_selection_upsert_defaults_enabled_modes_to_readonly() -> Result<()
             &selection_id,
             "--enable-file-tools",
             "--enable-bash",
+            "--allowed-mcp-service-id",
+            "x-data",
         ],
     )?;
     let doc_id = output
@@ -64,6 +66,12 @@ async fn tool_selection_upsert_defaults_enabled_modes_to_readonly() -> Result<()
         output.get("bash_mode").and_then(Value::as_str),
         Some("ReadOnly")
     );
+    assert_eq!(
+        output
+            .pointer("/allowed_mcp_service_ids/0")
+            .and_then(Value::as_str),
+        Some("x-data")
+    );
 
     let query = format!(
         r#"{{
@@ -74,6 +82,7 @@ async fn tool_selection_upsert_defaults_enabled_modes_to_readonly() -> Result<()
                 file_tool_root
                 enable_bash
                 bash_mode
+                allowed_mcp_service_ids
             }}
         }}"#,
         escape_graphql_string(doc_id),
@@ -97,6 +106,11 @@ async fn tool_selection_upsert_defaults_enabled_modes_to_readonly() -> Result<()
     assert_eq!(
         row.get("bash_mode").and_then(Value::as_str),
         Some("ReadOnly")
+    );
+    assert_eq!(
+        row.pointer("/allowed_mcp_service_ids/0")
+            .and_then(Value::as_str),
+        Some("x-data")
     );
 
     Ok(())

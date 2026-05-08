@@ -101,6 +101,7 @@ async fn load_document_runtime_view_includes_referenced_documents() {
             command_network_mode: None,
             cli_tool_names: Some(Vec::new()),
             enable_meta_tools: Some(false),
+            allowed_mcp_service_ids: Some(Vec::new()),
             delegate_to: Some(Vec::new()),
         },
     )
@@ -166,6 +167,7 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
             command_network_mode: None,
             cli_tool_names: Some(Vec::new()),
             enable_meta_tools: Some(false),
+            allowed_mcp_service_ids: Some(Vec::new()),
             delegate_to: Some(Vec::new()),
         },
     )

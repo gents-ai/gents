@@ -15,6 +15,7 @@ use super::ToolSurface;
 pub struct BehaviorToolConfig {
     host_tools: ToolSet,
     enable_meta_tools: bool,
+    allowed_mcp_service_ids: Vec<String>,
     delegate_to: Vec<String>,
     custom_tools: Vec<CustomToolFactory>,
 }
@@ -24,6 +25,7 @@ impl BehaviorToolConfig {
         Self {
             host_tools: ToolSet::meta_only(),
             enable_meta_tools: true,
+            allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
             custom_tools: Vec::new(),
         }
@@ -42,6 +44,7 @@ impl BehaviorToolConfig {
             command_policy,
             cli_tool_names,
             enable_meta_tools,
+            allowed_mcp_service_ids,
             delegate_to,
         } = selection;
         let file_tools =
@@ -60,6 +63,7 @@ impl BehaviorToolConfig {
         Ok(Self {
             host_tools,
             enable_meta_tools,
+            allowed_mcp_service_ids: dedupe_strings(allowed_mcp_service_ids),
             delegate_to: dedupe_strings(delegate_to),
             custom_tools,
         })
@@ -71,6 +75,10 @@ impl BehaviorToolConfig {
 
     pub fn meta_tools_requested(&self) -> bool {
         self.enable_meta_tools
+    }
+
+    pub fn allowed_mcp_service_ids(&self) -> &[String] {
+        &self.allowed_mcp_service_ids
     }
 
     pub fn delegate_to(&self) -> &[String] {
@@ -94,6 +102,7 @@ impl BehaviorToolConfig {
         Ok(ToolSurface {
             host_tools: self.host_tools.clone(),
             include_meta_tools,
+            allowed_mcp_service_ids: self.allowed_mcp_service_ids.clone(),
             delegate_to: self.delegate_to.clone(),
             custom_tools: self.custom_tools.clone(),
         })
@@ -111,6 +120,7 @@ impl std::fmt::Debug for BehaviorToolConfig {
         f.debug_struct("BehaviorToolConfig")
             .field("host_tools", &self.host_tools)
             .field("enable_meta_tools", &self.enable_meta_tools)
+            .field("allowed_mcp_service_ids", &self.allowed_mcp_service_ids)
             .field("delegate_to", &self.delegate_to)
             .field(
                 "custom_tools",

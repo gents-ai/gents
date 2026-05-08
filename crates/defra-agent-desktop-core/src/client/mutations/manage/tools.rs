@@ -79,6 +79,10 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
             "enable_meta_tools",
             row.enable_meta_tools,
         )),
+        Some(graphql_string_list_field(
+            "allowed_mcp_service_ids",
+            &row.allowed_mcp_service_ids,
+        )),
         Some(graphql_string_list_field("delegate_to", &row.delegate_to)),
     ];
     let update_fields = [
@@ -127,6 +131,10 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
         Some(graphql_optional_bool_field(
             "enable_meta_tools",
             row.enable_meta_tools,
+        )),
+        Some(graphql_string_list_field(
+            "allowed_mcp_service_ids",
+            &row.allowed_mcp_service_ids,
         )),
         Some(graphql_string_list_field("delegate_to", &row.delegate_to)),
     ];

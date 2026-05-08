@@ -72,10 +72,15 @@ export function toolCeilingIcons(
       .filter((selection) => selection.enableBash)
       .map((selection) => selection.bashMode),
   );
-  const metaDelegates = uniqueValues(
+  const allowedMetaServices = uniqueValues(
     source
       .filter((selection) => selection.enableMetaTools)
-      .flatMap((selection) => selection.delegateTo),
+      .flatMap((selection) => selection.allowedMcpServiceIds ?? []),
+  );
+  const unrestrictedMetaServices = source.some(
+    (selection) =>
+      selection.enableMetaTools &&
+      (selection.allowedMcpServiceIds ?? []).length === 0,
   );
   const cliTools = uniqueValues(
     source.flatMap((selection) => selection.cliToolNames),
@@ -99,11 +104,13 @@ export function toolCeilingIcons(
       }. Server ceiling: ${ceilingLabel}.`,
     });
   }
-  if (metaDelegates.length) {
+  if (allowedMetaServices.length || unrestrictedMetaServices) {
     icons.push({
       kind: "meta",
       tone: "meta",
-      title: `Delegation: call configured MCP delegates (${metaDelegates.join(", ")}).`,
+      title: unrestrictedMetaServices
+        ? "MCP services: discover and call all online MCP services."
+        : `MCP services: discover and call ${allowedMetaServices.join(", ")}.`,
     });
   }
   if (cliTools.length) {

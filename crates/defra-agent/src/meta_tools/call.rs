@@ -68,6 +68,13 @@ impl Tool for CallToolTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        if let Some(error) = self
+            .ctx
+            .blocked_service_error(&args.service_id, &args.tool_name)
+        {
+            return Ok(error.to_result_text());
+        }
+
         let arguments =
             match normalize_arguments(&args.service_id, &args.tool_name, &args.arguments) {
                 Ok(arguments) => arguments,
@@ -354,9 +361,11 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use serde_json::json;
+    use std::sync::Arc;
 
     use crate::health_checker::{HealthStatus, ServiceHealth, ServiceHealthMap};
     use crate::lean_vocab_test::{lean_tool_preflight_cases, LeanToolPreflightCase};
+    use crate::mcp_pool::McpPool;
 
     fn search_schema() -> Map<String, Value> {
         json!({
@@ -453,6 +462,37 @@ mod tests {
             "unreachable" => HealthStatus::Unreachable,
             other => panic!("unknown Lean health status {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn disallowed_service_returns_before_argument_validation() {
+        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let tool = CallToolTool::new(MetaToolContext {
+            node,
+            mcp_pool: McpPool::new(),
+            health: ServiceHealthMap::new(),
+            local_hostname: "studio-1".to_string(),
+            local_subnet: None,
+            allowed_mcp_service_ids: vec!["x-data".to_string()],
+        });
+
+        let output = tool
+            .call(CallToolArgs {
+                service_id: "observability-mcp".to_string(),
+                tool_name: "query_metrics".to_string(),
+                arguments: json!("not an object"),
+            })
+            .await
+            .expect("disallowed service should return structured text");
+        let value: Value = serde_json::from_str(&output).expect("structured json");
+
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["failure_class"], "tool_not_allowed");
+        assert_eq!(value["path"], "/service_id");
+        assert_eq!(value["retryable"], false);
+        assert_eq!(value["service_id"], "observability-mcp");
+        assert_eq!(value["tool_name"], "query_metrics");
+        assert_eq!(value["allowed_mcp_service_ids"], json!(["x-data"]));
     }
 
     #[test]

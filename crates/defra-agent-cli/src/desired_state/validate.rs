@@ -120,6 +120,12 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             &selection.command_forbidden_argv_prefixes,
             errors,
         );
+        validate_non_empty_values(
+            &selection.selection_id,
+            "allowed_mcp_service_ids",
+            &selection.allowed_mcp_service_ids,
+            errors,
+        );
     }
 
     for profile in &manifest.inference_profiles {
@@ -583,6 +589,21 @@ fn validate_argv_prefixes(
                     "tool selection {selection_id} {field} JSON entry is invalid: {error}"
                 )),
             }
+        }
+    }
+}
+
+fn validate_non_empty_values(
+    selection_id: &str,
+    field: &str,
+    values: &[String],
+    errors: &mut Vec<String>,
+) {
+    for value in values {
+        if value.trim().is_empty() {
+            errors.push(format!(
+                "tool selection {selection_id} has an empty {field} entry"
+            ));
         }
     }
 }

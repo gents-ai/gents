@@ -38,6 +38,11 @@ pub struct ToolSelectionDocument {
         default,
         deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
     )]
+    pub allowed_mcp_service_ids: Option<Vec<String>>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
+    )]
     pub delegate_to: Option<Vec<String>>,
 }
 
@@ -80,6 +85,7 @@ pub(crate) async fn load_tool_selection_record(
                 command_network_mode
                 cli_tool_names
                 enable_meta_tools
+                allowed_mcp_service_ids
                 delegate_to
             }}
         }}"#
@@ -122,6 +128,7 @@ pub(crate) async fn load_tool_selection_by_doc_id(
                 command_network_mode
                 cli_tool_names
                 enable_meta_tools
+                allowed_mcp_service_ids
                 delegate_to
             }}
         }}"#
@@ -164,6 +171,7 @@ pub(crate) async fn list_tool_selection_records(
                 command_network_mode
                 cli_tool_names
                 enable_meta_tools
+                allowed_mcp_service_ids
                 delegate_to
             }}
         }}"#
@@ -200,6 +208,7 @@ pub(crate) async fn list_all_tool_selection_records(
                 command_network_mode
                 cli_tool_names
                 enable_meta_tools
+                allowed_mcp_service_ids
                 delegate_to
             }
         }"#;
@@ -264,6 +273,10 @@ pub async fn upsert_tool_selection(
             "enable_meta_tools",
             selection.enable_meta_tools,
         ),
+        graphql_fields::graphql_string_list_field(
+            "allowed_mcp_service_ids",
+            selection.allowed_mcp_service_ids.as_deref(),
+        ),
         graphql_fields::graphql_string_list_field("delegate_to", selection.delegate_to.as_deref()),
     ]
     .into_iter()
@@ -311,6 +324,10 @@ pub async fn upsert_tool_selection(
         graphql_fields::graphql_optional_bool_field(
             "enable_meta_tools",
             selection.enable_meta_tools,
+        ),
+        graphql_fields::graphql_string_list_field(
+            "allowed_mcp_service_ids",
+            selection.allowed_mcp_service_ids.as_deref(),
         ),
         graphql_fields::graphql_string_list_field("delegate_to", selection.delegate_to.as_deref()),
     ]

@@ -71,6 +71,7 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
                 "command_forbidden_argv_prefixes": ["git commit"],
                 "cli_tool_names": [],
                 "enable_meta_tools": true,
+                "allowed_mcp_service_ids": ["x-data"],
                 "delegate_to": []
             }),
         )?;

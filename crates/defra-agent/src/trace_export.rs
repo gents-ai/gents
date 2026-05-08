@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 pub enum ToolFailureClass {
     ServiceUnavailable,
     ToolNotFound,
+    ToolNotAllowed,
     ResourceNotFound,
     ServiceSchemaDrift,
     InvalidToolArguments,
@@ -565,6 +566,7 @@ fn failure_class_code(failure_class: ToolFailureClass) -> &'static str {
     match failure_class {
         ToolFailureClass::ServiceUnavailable => "service_unavailable",
         ToolFailureClass::ToolNotFound => "tool_not_found",
+        ToolFailureClass::ToolNotAllowed => "tool_not_allowed",
         ToolFailureClass::ResourceNotFound => "resource_not_found",
         ToolFailureClass::ServiceSchemaDrift => "service_schema_drift",
         ToolFailureClass::InvalidToolArguments => "invalid_tool_arguments",
@@ -726,7 +728,8 @@ fn retryable_for_failure_class(failure_class: ToolFailureClass) -> Option<bool> 
         | ToolFailureClass::InvalidJsonArguments
         | ToolFailureClass::ArgumentsNotObject
         | ToolFailureClass::ToolNotFound => Some(true),
-        ToolFailureClass::ResourceNotFound
+        ToolFailureClass::ToolNotAllowed
+        | ToolFailureClass::ResourceNotFound
         | ToolFailureClass::ServiceSchemaDrift
         | ToolFailureClass::NonzeroCommandExit => Some(false),
         ToolFailureClass::ToolRuntimeError | ToolFailureClass::Unclassified => None,
@@ -1080,6 +1083,42 @@ mod tests {
             error.available_tools,
             Some(vec!["search_posts".to_string()])
         );
+    }
+
+    #[test]
+    fn structured_tool_not_allowed_is_non_retryable() {
+        let result = json!({
+            "ok": false,
+            "failure_class": "tool_not_allowed",
+            "path": "/service_id",
+            "message": "service 'observability-mcp' is not allowed for this behavior",
+            "retryable": false,
+            "service_id": "observability-mcp",
+            "tool_name": "query_metrics",
+            "requested_tool_name": "query_metrics",
+            "allowed_mcp_service_ids": ["x-data"]
+        })
+        .to_string();
+        let analysis = analyze_tool_call(
+            "call_tool",
+            r#"{"service_id":"observability-mcp","tool_name":"query_metrics","arguments":{}}"#,
+            &result,
+            "completed",
+        );
+
+        assert!(!analysis.tool_result_ok);
+        assert_eq!(
+            analysis.tool_failure_class,
+            Some(ToolFailureClass::ToolNotAllowed)
+        );
+        assert_eq!(analysis.validation_errors[0].code, "tool_not_allowed");
+        assert_eq!(analysis.validation_errors[0].path, "/service_id");
+        assert_eq!(analysis.validation_errors[0].retryable, false);
+        let error = analysis.tool_error.as_ref().expect("tool error");
+        assert_eq!(error.failure_class, ToolFailureClass::ToolNotAllowed);
+        assert_eq!(error.service_id.as_deref(), Some("observability-mcp"));
+        assert_eq!(error.tool_name.as_deref(), Some("query_metrics"));
+        assert_eq!(error.retryable, Some(false));
     }
 
     #[test]

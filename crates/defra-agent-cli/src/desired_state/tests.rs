@@ -60,6 +60,27 @@ fn sample_task(task_id: &str) -> DesiredTask {
     }
 }
 
+fn sample_tool_selection(selection_id: &str) -> DesiredToolSelection {
+    DesiredToolSelection {
+        selection_id: selection_id.to_string(),
+        agent_did: "did:defra-agent:test".to_string(),
+        display_name: None,
+        enable_file_tools: false,
+        file_tools_mode: "ReadOnly".to_string(),
+        file_tool_root: None,
+        enable_bash: false,
+        bash_mode: "ReadOnly".to_string(),
+        command_execution_policy: None,
+        command_allowed_argv_prefixes: Vec::new(),
+        command_forbidden_argv_prefixes: Vec::new(),
+        command_network_mode: None,
+        cli_tool_names: Vec::new(),
+        enable_meta_tools: true,
+        allowed_mcp_service_ids: Vec::new(),
+        delegate_to: Vec::new(),
+    }
+}
+
 fn sample_schedule(schedule_id: &str, task_id: &str) -> DesiredSchedule {
     DesiredSchedule {
         schedule_id: schedule_id.to_string(),
@@ -516,6 +537,34 @@ fn diff_manifests_marks_task_update_when_prompt_changes() {
     assert!(report.collections.tasks.create.is_empty());
     assert!(report.collections.tasks.unchanged.is_empty());
     assert_eq!(report.counts.tasks.update, 1);
+}
+
+#[test]
+fn diff_manifests_marks_tool_selection_update_when_mcp_allowlist_changes() {
+    let mut desired = empty_manifest("did:defra-agent:test");
+    let mut desired_selection = sample_tool_selection("service-tools");
+    desired_selection.allowed_mcp_service_ids = vec!["x-data".to_string()];
+    desired.tool_selections.push(desired_selection);
+
+    let mut live = empty_manifest("did:defra-agent:test");
+    live.tool_selections
+        .push(sample_tool_selection("service-tools"));
+
+    let report = diff_manifests(
+        &PathBuf::from("/tmp/fake-root"),
+        "local",
+        &desired,
+        Some(&live.agent_principal),
+        &live,
+    );
+
+    assert_eq!(
+        report.collections.tool_selections.update,
+        vec!["service-tools"]
+    );
+    assert!(report.collections.tool_selections.create.is_empty());
+    assert!(report.collections.tool_selections.unchanged.is_empty());
+    assert_eq!(report.counts.tool_selections.update, 1);
 }
 
 #[test]

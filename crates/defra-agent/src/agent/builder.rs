@@ -245,6 +245,16 @@ impl BehaviorBuilder {
         self
     }
 
+    pub fn allowed_mcp_service_ids<I, S>(mut self, service_ids: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.behavior.tool_selection.allowed_mcp_service_ids =
+            service_ids.into_iter().map(Into::into).collect();
+        self
+    }
+
     pub fn delegate_to<I, S>(mut self, delegate_to: I) -> Self
     where
         I: IntoIterator<Item = S>,

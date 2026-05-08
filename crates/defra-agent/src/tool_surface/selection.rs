@@ -17,6 +17,7 @@ pub struct ToolSelection {
     pub command_policy: Option<CommandExecutionPolicy>,
     pub cli_tool_names: Vec<String>,
     pub enable_meta_tools: bool,
+    pub allowed_mcp_service_ids: Vec<String>,
     pub delegate_to: Vec<String>,
 }
 
@@ -29,6 +30,7 @@ impl Default for ToolSelection {
             command_policy: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: true,
+            allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
         }
     }

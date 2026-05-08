@@ -222,6 +222,7 @@ async fn control_watcher_resolves_tool_selection_into_reconciled_tool_surface() 
             command_network_mode: None,
             cli_tool_names: Some(Vec::new()),
             enable_meta_tools: Some(false),
+            allowed_mcp_service_ids: Some(Vec::new()),
             delegate_to: Some(Vec::new()),
         },
     )
