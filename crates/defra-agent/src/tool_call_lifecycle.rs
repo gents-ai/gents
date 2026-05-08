@@ -228,10 +228,8 @@ mod tests {
     }
 
     use crate::lean_vocab_test::{
-        assert_lean_contract_vocabulary_matches,
-        assert_state_machine_contract_is_complete,
-        lean_state_machine_contract,
-        LeanContractVocabulary,
+        assert_lean_contract_vocabulary_matches, assert_state_machine_contract_is_complete,
+        lean_state_machine_contract, LeanContractVocabulary,
     };
 
     #[test]
@@ -278,7 +276,11 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             terminal,
-            machine.terminal_states.iter().map(String::as_str).collect::<Vec<_>>()
+            machine
+                .terminal_states
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
         );
     }
 }

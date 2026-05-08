@@ -18,6 +18,7 @@ mod sessions;
 #[cfg(test)]
 mod tests;
 
+pub use crate::tool_call_lifecycle::query::load_tool_call_result;
 pub use compaction_entries::{load_compaction_entries, save_compaction_entry};
 #[allow(unused_imports)]
 pub(crate) use conversation::{
@@ -39,7 +40,6 @@ pub(crate) use sessions::{
     create_session_with_behavior_id, create_session_with_id, ensure_session,
     ensure_session_with_behavior_id, max_sequence,
 };
-pub use crate::tool_call_lifecycle::query::load_tool_call_result;
 
 const MAX_MUTATION_RETRIES: u32 = 3;
 const INITIAL_RETRY_BACKOFF_MS: u64 = 100;

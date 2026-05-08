@@ -87,7 +87,6 @@ async fn compaction_entries_track_files_cumulatively() {
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
-
 #[tokio::test]
 async fn close_session_preserves_started_datetime() {
     let data_path =
@@ -153,7 +152,6 @@ async fn close_session_preserves_started_datetime() {
 
     let _ = std::fs::remove_dir_all(&data_path);
 }
-
 
 #[tokio::test]
 async fn create_session_with_id_is_idempotent() {

@@ -28,7 +28,9 @@ pub fn compute_v2_fields(
         (Some("completed"), Some("tool_timeout")) => ("timedOut".to_string(), None),
         // Other completion-with-failure: state becomes failed, failure class
         // rebucketed to the Lean 5-variant vocabulary.
-        (Some("completed"), Some(legacy)) => ("failed".to_string(), Some(rebucket_failure_class(legacy))),
+        (Some("completed"), Some(legacy)) => {
+            ("failed".to_string(), Some(rebucket_failure_class(legacy)))
+        }
         // Unrecognized status: preserve, do not migrate.
         (Some(s), legacy) => (s.to_string(), legacy.map(rebucket_failure_class)),
         (None, _) => ("running".to_string(), None),
@@ -121,14 +123,16 @@ fn try_transform(
             None => return Ok(StreamOption::None),
         };
 
-        let status = input.get("status").and_then(|v| v.as_str()).map(str::to_string);
+        let status = input
+            .get("status")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
         let legacy_fc = input
             .get("tool_failure_class")
             .and_then(|v| v.as_str())
             .map(str::to_string);
 
-        let (lifecycle_state, new_fc) =
-            compute_v2_fields(status.as_deref(), legacy_fc.as_deref());
+        let (lifecycle_state, new_fc) = compute_v2_fields(status.as_deref(), legacy_fc.as_deref());
 
         input.insert(
             "lifecycle_state".to_string(),

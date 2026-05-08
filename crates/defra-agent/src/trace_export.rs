@@ -553,10 +553,11 @@ fn failure_class_from_str(raw: &str) -> Option<ToolFailureClass> {
         "toolReturnedError" => Some(ToolFailureClass::ToolReturnedError),
         "external" => Some(ToolFailureClass::External),
         // Legacy snake_case strings — rebucketed to 5-variant spec.
-        "service_unavailable" | "tool_not_found" | "tool_not_allowed"
-        | "resource_not_found" | "service_schema_drift" => {
-            Some(ToolFailureClass::ServiceUnavailable)
-        }
+        "service_unavailable"
+        | "tool_not_found"
+        | "tool_not_allowed"
+        | "resource_not_found"
+        | "service_schema_drift" => Some(ToolFailureClass::ServiceUnavailable),
         "invalid_tool_arguments" | "invalid_json_arguments" | "arguments_not_object" => {
             Some(ToolFailureClass::ArgumentInvalid)
         }
