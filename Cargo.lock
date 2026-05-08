@@ -114,6 +114,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-tool-call-lifecycle-v1-to-v2-lens"
+version = "0.1.0"
+dependencies = [
+ "lens_sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ahash"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7134,6 +7143,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lens_sdk"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "625120ee4d0acf03ce8cefd2b6223aae4907c113c3c9da96e7a91393c5578836"
+dependencies = [
+ "byteorder",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "libappindicator"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8794,7 +8814,7 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
 dependencies = [
- "proc-macro-crate 2.0.2",
+ "proc-macro-crate 3.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
