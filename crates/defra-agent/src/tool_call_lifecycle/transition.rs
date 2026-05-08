@@ -141,6 +141,50 @@ impl ToolCallLifecycle {
         self.state = ToolCallState::Completed;
         Ok(())
     }
+
+    /// Running → Failed. For tool errors during execution. Sets failure_class.
+    pub async fn fail(&mut self, result: &str, failure: super::FailureClass) -> Result<()> {
+        self.ensure_state(&[ToolCallState::Running], "fail")?;
+
+        let doc_id = self
+            .doc_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("fail called before start_running persisted a row"))?;
+        let now = Utc::now();
+        let started_at = self
+            .started_at
+            .ok_or_else(|| anyhow!("fail called without started_at set"))?;
+        let latency_ms = (now - started_at).num_milliseconds();
+
+        let escaped_result = escape_graphql_string(result);
+        let escaped_doc_id = escape_graphql_string(doc_id);
+        let now_str = now.to_rfc3339();
+        let failure_class_str = failure.as_str();
+
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentToolCall(
+                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    input: {{
+                        result: "{escaped_result}",
+                        status: "completed",
+                        lifecycle_state: "failed",
+                        completed_at: "{now_str}",
+                        tool_failure_class: "{failure_class_str}",
+                        latency_ms: {latency_ms}
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+
+        execute_mutation_with_retry(&self.node, &mutation, "fail")
+            .await
+            .context("fail mutation")?;
+
+        self.state = ToolCallState::Failed;
+        self.failure_class = Some(failure);
+        Ok(())
+    }
 }
 
 /// Helper to extract `_docID` from a `create_*` mutation response.
