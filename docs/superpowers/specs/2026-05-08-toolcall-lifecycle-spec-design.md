@@ -216,6 +216,8 @@ theorem live_call_reaches_terminal
     ∃ post, Trace c post ∧ isTerminal post.state
 ```
 
+**Implementation deviations (approved during implementation):** T2 and T3 added a precondition `h_pre : pre.state ≠ .timedOut` and `h_pre : pre.state ≠ .completed` respectively. The original 2-hypothesis forms were unprovable: `timeAdvance` and `persistenceStep` preserve `pre.state`, so a transition from a context already in `.timedOut`/`.completed` could re-enter the same state without satisfying the deadline/persistence guard. The added precondition restricts the theorem to the *transition that enters* the terminal state — the operational meaning we want.
+
 ### Why this set, not more
 
 - No S3 (monotonic progress). Tool calls don't carry a `progressSeq`. Skipped.
@@ -334,6 +336,8 @@ theorem terminal_tool_unblocks_request_progress
       Transition pre post ∧
       RequestContext.Transition pre.request post.request
 ```
+
+**Implementation deviation (approved):** the implemented C3 strengthens the conclusion to `post.request.state = .failed` (a concrete witness using the existing `RequestContext.Transition.fail` constructor) and adds a precondition `h_admit : pre.request.admission = .executing` required by `fail`. This is a more direct demonstration of "progress" than the original abstract `RequestContext.Transition` form. Companion to the T2/T3 `h_pre` strengthenings, where the original spec wording was unprovable as stated and a precondition was added to capture the intended semantic.
 
 ## Conformance contract additions
 

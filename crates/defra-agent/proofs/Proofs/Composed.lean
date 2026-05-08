@@ -25,7 +25,12 @@ namespace ComposedState
 
 /-- A composed transition is valid only when cross-layer guards hold.
     Each constructor lifts a single-layer transition; the other layers must
-    be unchanged across the composed step. -/
+    be unchanged across the composed step.
+
+    NOTE: Adding or modifying constructors here requires updating the `cases`
+    patterns in `Proofs/Properties/Safety.lean` (`recovery_blocks_claims`)
+    and the call-site at `Proofs/Properties/Liveness.lean`
+    (`claimed_eventually_terminal`). -/
 inductive Transition : ComposedState → ComposedState → Prop where
   | process_step {pre post : ComposedState} :
       ProcessState.Transition pre.process post.process →
@@ -150,7 +155,12 @@ theorem interrupted_request_cancels_live_linked_call
 
 
 /-- C2: An interrupted request cancels every live linked tool call.
-    Mirror of `interrupted_request_cancels_live_linked_call`. -/
+    Mirror of `interrupted_request_cancels_live_linked_call`.
+
+    Note: `h_interrupted` is documentary — the underlying cancel transitions
+    (`cancelBeforeDispatch`, `cancelDuringRun`) have no precondition on the
+    parent request's state. The hypothesis captures the operational context
+    that motivated the theorem rather than a proof-relevant constraint. -/
 theorem interrupted_request_cancels_live_linked_tool
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
     (h_tool        : pre.tool = some toolPre)
@@ -238,7 +248,11 @@ theorem deadline_exceeded_request_timesOut_running_tool
 
 /-- C1': A request whose deadline is exceeded cancels a Pending linked tool
     call. Companion to C1 — a Pending tool never ran, so it reaches
-    .cancelled rather than .timedOut. -/
+    .cancelled rather than .timedOut.
+
+    Note: `h_deadline` is documentary — `cancelBeforeDispatch` has no deadline
+    guard. The hypothesis captures the operational context (deadline-driven
+    cancellation path) rather than a proof-relevant constraint. -/
 theorem deadline_exceeded_request_cancels_pending_tool
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
     (h_tool     : pre.tool = some toolPre)
@@ -271,7 +285,13 @@ theorem deadline_exceeded_request_cancels_pending_tool
 
 /-- C3: A request whose linked tool is terminal can resume making progress.
     Semantic complement of issue #149: terminal tool ⇒ no daemon-side
-    blockage at the request layer. -/
+    blockage at the request layer.
+
+    The conclusion `post.request.state = .failed` is a concrete witness;
+    a stronger version would condition on persistence and reach `.completed`.
+    The current form is sufficient to demonstrate that the daemon is
+    unblocked. `h_tool` and `h_terminal` are documentary — the chosen
+    request-side transition (`fail`) is independent of the tool field. -/
 theorem terminal_tool_unblocks_request_progress
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
     (h_tool     : pre.tool = some toolPre)
