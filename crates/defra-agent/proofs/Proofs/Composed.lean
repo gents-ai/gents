@@ -329,29 +329,40 @@ theorem deadline_exceeded_request_cancels_pending_tools
     simpa [post, toolPost] using List.mem_set pre.tools idx h_lt toolPost
 
 
-/-- C3: A request whose linked tool is terminal can resume making progress.
-    Semantic complement of issue #149: terminal tool ⇒ no daemon-side
-    blockage at the request layer.
-
-    The conclusion `post.request.state = .failed` is a concrete witness;
-    a stronger version would condition on persistence and reach `.completed`.
-    The current form is sufficient to demonstrate that the daemon is
-    unblocked. `h_tool` and `h_terminal` are documentary — the chosen
-    request-side transition (`fail`) is independent of the tool field.
-
-    STUBBED for Task 6 (multi-flight refactor). Task 10 restates this as
-    `all_tools_terminal_unblocks_request_progress`, quantifying over
-    every element of `pre.tools`, with a fresh proof. -/
-theorem terminal_tool_unblocks_request_progress
-    {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
-    (h_tool     : pre.tools = [toolPre])
-    (h_terminal : isTerminal toolPre.state)
-    (h_proc     : pre.request.state = .processing)
-    (h_admit    : pre.request.admission = .executing) :
-    ∃ post : ComposedState,
+/-- C3: A request whose linked tools are all terminal can resume making progress.
+    Multi-flight form: ∀-quantified over `pre.tools`. Semantic complement of
+    issue #149: when every linked tool is terminal, the foreground-blocking
+    guard on `request_step` is satisfied and the request can `advance`. -/
+theorem all_tools_terminal_unblocks_request_progress
+    {pre : ComposedState}
+    (h_all_terminal : ∀ t ∈ pre.tools, isTerminal t.state)
+    (h_proc         : pre.request.state = .processing)
+    (h_admission    : pre.request.admission = .executing) :
+    ∃ post,
       Transition pre post ∧
-      post.request.state = .failed := by
-  sorry
+      RequestContext.Transition pre.request post.request := by
+  -- Build the post-state by firing `advance` on the request layer.
+  let postReq : RequestContext :=
+    { pre.request with progressSeq := pre.request.progressSeq + 1 }
+  let post : ComposedState := { pre with request := postReq }
+  -- Inner advance transition.
+  have h_inner : RequestContext.Transition pre.request postReq :=
+    RequestContext.Transition.advance h_proc h_admission rfl
+  refine ⟨post, ?_, h_inner⟩
+  -- Build the request_step lift. After Task 11, request_step takes:
+  --   h_req, then 4 cross-layer rfls (process, call, tools, requestId),
+  --   then the pending→acceptsWork gate, then h_no_block.
+  refine Transition.request_step h_inner rfl rfl rfl rfl ?_ ?_
+  · -- Pending gate: pre.request.state = .processing, not .pending — the
+    -- antecedent is false, so the implication is vacuous.
+    intro h_pending
+    rw [h_proc] at h_pending
+    cases h_pending
+  · -- Discharge h_no_block: any candidate live-foreground tool is contradicted
+    -- by h_all_terminal directly.
+    intro _h_advance
+    intro ⟨t, h_in, _h_fg, h_nt⟩
+    exact h_nt (h_all_terminal t h_in)
 
 /-!
 ## INV-FG: foreground-blocking structural invariant
