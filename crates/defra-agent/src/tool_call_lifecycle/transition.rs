@@ -279,6 +279,51 @@ impl ToolCallLifecycle {
         self.state = ToolCallState::TimedOut;
         Ok(())
     }
+
+    /// Pending → Cancelled. R1 does not call from runtime code; R4 wires up.
+    pub async fn cancel_before_dispatch(&mut self) -> Result<()> {
+        self.ensure_state(&[ToolCallState::Pending], "cancel_before_dispatch")?;
+
+        // Pending: row may not exist yet. Create directly in Cancelled.
+        let now = Utc::now();
+        let started_at_str = now.to_rfc3339();
+        let escaped_session_id = escape_graphql_string(&self.session_id);
+        let escaped_tool_call_id = escape_graphql_string(&self.tool_call_id);
+        let escaped_tool_name = escape_graphql_string(&self.tool_name);
+        let escaped_args = escape_graphql_string(&self.args);
+        let tool_call_key = format!("{escaped_session_id}:{escaped_tool_call_id}");
+        let message_sequence = self.message_sequence;
+
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentToolCall(input: {{
+                    tool_call_key: "{tool_call_key}",
+                    session_id: "{escaped_session_id}",
+                    message_sequence: {message_sequence},
+                    tool_name: "{escaped_tool_name}",
+                    tool_call_id: "{escaped_tool_call_id}",
+                    args: "{escaped_args}",
+                    result: "",
+                    status: "completed",
+                    lifecycle_state: "cancelled",
+                    started_at: "{started_at_str}",
+                    completed_at: "{started_at_str}",
+                    latency_ms: 0
+                }}) {{ _docID }}
+            }}"#
+        );
+
+        let resp = execute_mutation_with_retry(&self.node, &mutation, "cancel_before_dispatch")
+            .await
+            .context("cancel_before_dispatch mutation")?;
+        let doc_id = extract_doc_id_from_create_response(&resp)
+            .ok_or_else(|| anyhow!("create_AgentToolCall returned no _docID"))?;
+
+        self.doc_id = Some(doc_id);
+        self.state = ToolCallState::Cancelled;
+        self.started_at = Some(now);
+        Ok(())
+    }
 }
 
 /// Helper to extract `_docID` from a `create_*` mutation response.
