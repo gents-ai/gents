@@ -78,7 +78,7 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
     );
     assert_eq!(
         failed.get("tool_failure_class").and_then(Value::as_str),
-        Some("nonzero_command_exit")
+        Some("toolReturnedError")
     );
     assert_eq!(
         failed
@@ -89,7 +89,7 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
     );
     assert_eq!(
         failed.get("failure_class").and_then(Value::as_str),
-        Some("nonzero_command_exit")
+        Some("toolReturnedError")
     );
     assert!(failed
         .get("request_failure_class")
@@ -155,7 +155,7 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
         missing_tool
             .get("tool_failure_class")
             .and_then(Value::as_str),
-        Some("tool_not_found")
+        Some("serviceUnavailable")
     );
     assert_eq!(
         missing_tool
