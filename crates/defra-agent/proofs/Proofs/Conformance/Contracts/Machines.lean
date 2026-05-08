@@ -344,12 +344,14 @@ classes of edge that the plain `(source, target)` pairs in
   carries `pre.childRequestId = none` as a precondition (and `step?` mirrors
   it); `requires_native: true` lets the Rust matrix test reject calling
   these on a subagent-typed tool.
-* mode-flip edges: `background`, `foreground`, `detach` are state-
-  preserving on `ToolCallState` and so don't appear in the
-  pair-based `legalTransitions` list. They live in
+* mode-flip edges: `background`, `foreground`, `detach_running`,
+  `detach_pending` are state-preserving on `ToolCallState` and so don't
+  appear in the pair-based `legalTransitions` list. They live in
   `ToolCallContext.Transition` (subagent extensions in `State.lean`) and
-  flip `awaitMode`/`cancelPolicy` while leaving `state := .running`
-  (or `pending` for `detach`).
+  flip `awaitMode`/`cancelPolicy` while leaving `state` unchanged.
+  `detach` is split into two rows (`detach_running`, `detach_pending`)
+  mirroring the `bridge_failure` split pattern, because its
+  `h_live` precondition permits both `.pending` and `.running`.
 * bridge edges: `bridge_complete`, `bridge_failure`,
   `bridge_cancel_cascade`. These are defined relationally on
   `Subagent.BridgedState.Transition`, not on `ToolCallContext.Transition`,
@@ -378,9 +380,12 @@ def toolCallNamedTransitions : List NamedTransition :=
   , { name := "foreground"
     , source := "running"
     , target := "running" }
-  , { name := "detach"
+  , { name := "detach_running"
     , source := "running"
     , target := "running" }
+  , { name := "detach_pending"
+    , source := "pending"
+    , target := "pending" }
     -- bridge edges (subagent-typed tools only):
   , { name := "bridge_complete"
     , source := "running"
