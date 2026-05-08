@@ -17,7 +17,7 @@ use defra_node::QueryResponse;
 use crate::graphql::escape_graphql_string;
 use crate::session::execute_mutation_with_retry;
 
-use super::{AwaitMode, ToolCallLifecycle, ToolCallState};
+use super::{AwaitMode, CancelPolicy, ToolCallLifecycle, ToolCallState};
 
 /// Error returned when a transition method is called from an illegal
 /// pre-state, or when a subagent-specific guard is violated.
@@ -433,6 +433,42 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
+    /// Pending|Running policy-flip: cancel_policy Cascade → Detach.
+    ///
+    /// Lean parity: ToolCallContext.Transition.detach. Allowed in both Pending
+    /// and Running states (h_live : pre.state = .pending ∨ pre.state = .running).
+    /// Returns `PolicyAlreadyDetach` if already in Detach policy. One-way — no
+    /// inverse method (matches Lean's structural irreversibility).
+    pub async fn detach(&mut self) -> Result<()> {
+        self.ensure_state(&[ToolCallState::Pending, ToolCallState::Running], "detach")?;
+        if self.cancel_policy == CancelPolicy::Detach {
+            return Err(IllegalToolCallTransition::PolicyAlreadyDetach.into());
+        }
+
+        let doc_id = self
+            .doc_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("doc_id must be set before policy-flip"))?;
+
+        let escaped_doc_id = escape_graphql_string(doc_id);
+
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentToolCall(
+                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    input: {{ cancel_policy: "detach" }}
+                ) {{ _docID }}
+            }}"#
+        );
+
+        execute_mutation_with_retry(&self.node, &mutation, "detach")
+            .await
+            .context("detach mutation")?;
+
+        self.cancel_policy = CancelPolicy::Detach;
+        Ok(())
+    }
+
     /// Running → Cancelled. R1 does not call from runtime code; R4 wires up.
     pub async fn cancel_during_run(&mut self) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "cancel_during_run")?;
@@ -661,6 +697,62 @@ mod tests {
         // state is Pending (default); do not advance it
 
         let err = lc.foreground().await.unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::BadState { .. })
+            ),
+            "expected BadState, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn detach_rejects_already_detach() {
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new_subagent(
+            node,
+            "sess-detach-1".to_string(),
+            "tc-detach-1".to_string(),
+            1,
+            "spawn_subagent".to_string(),
+            "{}".to_string(),
+            AwaitMode::Foreground,
+            CancelPolicy::Detach, // already in Detach policy
+            "child-req-detach-1".to_string(),
+        );
+        lc.set_state(ToolCallState::Running);
+        lc.set_doc_id(Some("fake-doc-id-detach-1".to_string()));
+        lc.set_started_at(Some(chrono::Utc::now()));
+
+        let err = lc.detach().await.unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::PolicyAlreadyDetach)
+            ),
+            "expected PolicyAlreadyDetach, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn detach_rejects_terminal_state() {
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new_subagent(
+            node,
+            "sess-detach-2".to_string(),
+            "tc-detach-2".to_string(),
+            1,
+            "spawn_subagent".to_string(),
+            "{}".to_string(),
+            AwaitMode::Foreground,
+            CancelPolicy::Cascade,
+            "child-req-detach-2".to_string(),
+        );
+        lc.set_state(ToolCallState::Cancelled); // terminal state
+        lc.set_doc_id(Some("fake-doc-id-detach-2".to_string()));
+        lc.set_started_at(Some(chrono::Utc::now()));
+
+        let err = lc.detach().await.unwrap_err();
         assert!(
             matches!(
                 err.downcast_ref::<IllegalToolCallTransition>(),
