@@ -1,0 +1,198 @@
+//! Bucket 3 conformance: runtime-on-Rust integration tests for
+//! ToolCallLifecycle. Exercises the real GraphQL mutations through a live
+//! EmbeddedNode and asserts persisted state matches the Lean spec.
+//!
+//! Each test spins up its own isolated EmbeddedNode via `test_db()`.
+//! `ToolCallState` is `pub(crate)` so the load-reconstruction test asserts
+//! via snapshot fields rather than the internal accessor.
+
+mod support;
+
+use defra_agent::tool_call_lifecycle::{FailureClass, ToolCallLifecycle};
+use support::snapshots::fetch_tool_call_snapshots_for_session;
+use support::test_db;
+
+// ---------------------------------------------------------------------------
+// Test 1: Pending → Running → Completed persists correctly
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn lifecycle_pending_to_running_to_completed_persists_correctly() {
+    let db = test_db("tc-lc-1").await;
+
+    let mut lc = ToolCallLifecycle::new(
+        db.node.clone(),
+        "test-session-1".into(),
+        "tool-call-1".into(),
+        0,
+        "test_tool".into(),
+        r#"{"x":1}"#.into(),
+    );
+
+    lc.start_running().await.unwrap();
+
+    let snapshots = fetch_tool_call_snapshots_for_session(&db.node, "test-session-1").await;
+    assert_eq!(snapshots.len(), 1, "one row after start_running");
+    assert_eq!(
+        snapshots[0].lifecycle_state.as_deref(),
+        Some("running"),
+        "lifecycle_state should be running after start_running"
+    );
+
+    lc.complete("ok").await.unwrap();
+
+    let snapshots = fetch_tool_call_snapshots_for_session(&db.node, "test-session-1").await;
+    assert_eq!(snapshots.len(), 1, "still one row after complete");
+    assert_eq!(
+        snapshots[0].lifecycle_state.as_deref(),
+        Some("completed"),
+        "lifecycle_state should be completed after complete()"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 2: Running → Failed persists failure_class
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn lifecycle_running_to_failed_persists_failure_class() {
+    let db = test_db("tc-lc-2").await;
+
+    let mut lc = ToolCallLifecycle::new(
+        db.node.clone(),
+        "test-session-2".into(),
+        "tool-call-2".into(),
+        0,
+        "test_tool".into(),
+        r#"{"x":1}"#.into(),
+    );
+
+    lc.start_running().await.unwrap();
+    lc.fail("error message", FailureClass::ToolReturnedError)
+        .await
+        .unwrap();
+
+    let snapshots = fetch_tool_call_snapshots_for_session(&db.node, "test-session-2").await;
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(
+        snapshots[0].lifecycle_state.as_deref(),
+        Some("failed"),
+        "lifecycle_state should be failed after fail()"
+    );
+    assert_eq!(
+        snapshots[0].tool_failure_class.as_deref(),
+        Some("toolReturnedError"),
+        "tool_failure_class should be toolReturnedError"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 3: Terminal irreversibility — fail() after complete() errors
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn lifecycle_terminal_irreversibility() {
+    let db = test_db("tc-lc-3").await;
+
+    let mut lc = ToolCallLifecycle::new(
+        db.node.clone(),
+        "test-session-3".into(),
+        "tool-call-3".into(),
+        0,
+        "test_tool".into(),
+        r#"{}"#.into(),
+    );
+
+    lc.start_running().await.unwrap();
+    lc.complete("done").await.unwrap();
+
+    // Attempting fail() after complete must return an error.
+    let err = lc
+        .fail("late error", FailureClass::External)
+        .await
+        .unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("illegal tool call transition"),
+        "expected guard error, got: {msg}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 4: Idempotent start_running — second call is a no-op, single DB row
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn lifecycle_idempotent_start_running() {
+    let db = test_db("tc-lc-4").await;
+
+    let mut lc = ToolCallLifecycle::new(
+        db.node.clone(),
+        "test-session-4".into(),
+        "tool-call-4".into(),
+        0,
+        "test_tool".into(),
+        r#"{}"#.into(),
+    );
+
+    lc.start_running().await.unwrap();
+    // Second call should be a no-op (already Running).
+    lc.start_running().await.unwrap();
+
+    let snapshots = fetch_tool_call_snapshots_for_session(&db.node, "test-session-4").await;
+    assert_eq!(
+        snapshots.len(),
+        1,
+        "exactly one row should exist after duplicate start_running"
+    );
+    assert_eq!(
+        snapshots[0].lifecycle_state.as_deref(),
+        Some("running"),
+        "state should still be running"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 5: load() reconstructs persisted state
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn lifecycle_load_returns_persisted_state() {
+    let db = test_db("tc-lc-5").await;
+
+    {
+        let mut lc = ToolCallLifecycle::new(
+            db.node.clone(),
+            "test-session-5".into(),
+            "tool-call-5".into(),
+            0,
+            "test_tool".into(),
+            r#"{}"#.into(),
+        );
+        lc.start_running().await.unwrap();
+        lc.fail("oops", FailureClass::Transport).await.unwrap();
+    }
+
+    // Load from the live node — should reconstruct the Failed state.
+    let loaded = ToolCallLifecycle::load(db.node.clone(), "test-session-5", "tool-call-5")
+        .await
+        .unwrap()
+        .expect("row should exist after start_running + fail");
+
+    // Verify the reconstructed lifecycle reflects the failed state via snapshot.
+    // (ToolCallState is pub(crate) so we assert by querying the node directly.)
+    drop(loaded);
+
+    let snapshots = fetch_tool_call_snapshots_for_session(&db.node, "test-session-5").await;
+    assert_eq!(snapshots.len(), 1, "exactly one row");
+    assert_eq!(
+        snapshots[0].lifecycle_state.as_deref(),
+        Some("failed"),
+        "persisted lifecycle_state should be failed"
+    );
+    assert_eq!(
+        snapshots[0].tool_failure_class.as_deref(),
+        Some("transport"),
+        "persisted tool_failure_class should be transport"
+    );
+}

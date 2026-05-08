@@ -95,6 +95,14 @@ def vocabularyCoverage : List CoverageEntry :=
       "vocabulary"
       "ToolRetryDisposition"
       "mcp_pool::tests::tool_retry_disposition_contract_cases_match_mcp_pool_policy"
+  , consumerCoverage
+      "vocabulary"
+      "ToolCallState"
+      "tool_call_lifecycle::tests::rust_tool_call_state_vocabulary_matches_lean_model"
+  , consumerCoverage
+      "vocabulary"
+      "ToolFailureClass"
+      "tool_call_lifecycle::tests::rust_failure_class_vocabulary_matches_lean_model"
   ]
 
 def stateMachineCoverage : List CoverageEntry :=
@@ -138,6 +146,10 @@ def stateMachineCoverage : List CoverageEntry :=
       "state_machine"
       "InferenceCall"
       "admission::tests::rust_inference_call_transition_table_matches_lean_contract"
+  , consumerCoverage
+      "state_machine"
+      "ToolCall"
+      "tool_call_lifecycle::tests::tool_call_state_machine_contract_is_complete"
   ]
 
 def caseCoverage : List CoverageEntry :=
