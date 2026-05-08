@@ -72,3 +72,48 @@ instance : HasTerminal ToolCallState where
 end ToolCallState
 
 end ToolExecution
+
+namespace ToolExecution
+
+/-- Identifier for an individual tool-call row. -/
+abbrev ToolCallId := Nat
+
+/-- Mutable per-tool-call context that transitions carry along. -/
+structure ToolCallContext where
+  callId       : ToolCallId
+  requestId    : RequestId
+  state        : ToolCallState
+  operation    : ToolOperation
+  deadline     : Time
+  startedAt    : Option Time := none
+  currentTime  : Time
+  failureClass : Option FailureClass := none
+  persistence  : PersistenceState
+  deriving Repr
+
+namespace ToolCallContext
+
+/-- Whether the tool's deadline has been exceeded. -/
+def deadlineExceeded (c : ToolCallContext) : Prop :=
+  c.currentTime > c.deadline
+
+instance (c : ToolCallContext) : Decidable c.deadlineExceeded :=
+  Nat.decLt c.deadline c.currentTime
+
+/-- A call is cancellable iff it is in a non-terminal pre-state. -/
+def cancellable (c : ToolCallContext) : Prop :=
+  c.state = .pending ∨ c.state = .running
+
+instance (c : ToolCallContext) : Decidable c.cancellable := by
+  unfold cancellable; infer_instance
+
+/-- Linkage to a parent request. -/
+def linkedTo (c : ToolCallContext) (rid : RequestId) : Prop :=
+  c.requestId = rid
+
+instance (c : ToolCallContext) (rid : RequestId) : Decidable (c.linkedTo rid) := by
+  unfold linkedTo; infer_instance
+
+end ToolCallContext
+
+end ToolExecution
