@@ -25,6 +25,7 @@ def toDefraDB : AwaitMode → String
   | .foreground => "foreground"
   | .background => "background"
 
+/-- Parse the persisted vocabulary. -/
 def fromDefraDB? : String → Option AwaitMode
   | "foreground" => some .foreground
   | "background" => some .background
@@ -54,6 +55,7 @@ def toDefraDB : CancelPolicy → String
   | .cascade => "cascade"
   | .detach  => "detach"
 
+/-- Parse the persisted vocabulary. -/
 def fromDefraDB? : String → Option CancelPolicy
   | "cascade" => some .cascade
   | "detach"  => some .detach
