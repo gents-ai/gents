@@ -330,6 +330,85 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
+    /// Running → Failed (or Cancelled for ChildTerminal::Interrupted).
+    ///
+    /// Lean parity: bridge_failure. Parent tool .running → .failed (or
+    /// .cancelled for ChildTerminal::Interrupted). Projection per
+    /// ChildTerminal::projected_state(). Persists lifecycle_state,
+    /// completed_at, latency_ms; conditionally persists tool_failure_class
+    /// and result when the child reached .failed.
+    ///
+    /// Returns BridgeFailureRequiresChildLink for native tools (no
+    /// child_request_id).
+    pub async fn bridge_failure(&mut self, child_terminal: super::ChildTerminal) -> Result<()> {
+        self.ensure_state(&[ToolCallState::Running], "bridge_failure")?;
+        if self.child_request_id.is_none() {
+            return Err(IllegalToolCallTransition::BridgeFailureRequiresChildLink.into());
+        }
+
+        let projected = child_terminal.projected_state();
+        let (failure_class_for_persist, reason_for_persist) = match &child_terminal {
+            super::ChildTerminal::Failed { reason, failure_class } => {
+                (Some(*failure_class), Some(reason.clone()))
+            }
+            _ => (None, None),
+        };
+
+        let doc_id = self
+            .doc_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("bridge_failure called before start_running persisted a row"))?;
+        let now = Utc::now();
+        let started_at = self
+            .started_at
+            .ok_or_else(|| anyhow!("bridge_failure called without started_at set"))?;
+        let latency_ms = (now - started_at).num_milliseconds();
+
+        let escaped_doc_id = escape_graphql_string(doc_id);
+        let now_str = now.to_rfc3339();
+        // DefraDB requires DateTime fields to be re-supplied on update.
+        let started_at_str = started_at.to_rfc3339();
+        let lifecycle_state_str = projected.as_str();
+
+        // Build conditional fields: tool_failure_class and result are only
+        // set when the child reached .failed (mirrors R1's fail() pattern).
+        let optional_fields = match (failure_class_for_persist, reason_for_persist.as_deref()) {
+            (Some(fc), Some(reason)) => {
+                let escaped_reason = escape_graphql_string(reason);
+                let fc_str = fc.as_str();
+                format!(
+                    r#"result: "{escaped_reason}",
+                        tool_failure_class: "{fc_str}","#
+                )
+            }
+            _ => String::new(),
+        };
+
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentToolCall(
+                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    input: {{
+                        {optional_fields}
+                        status: "completed",
+                        lifecycle_state: "{lifecycle_state_str}",
+                        started_at: "{started_at_str}",
+                        completed_at: "{now_str}",
+                        latency_ms: {latency_ms}
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+
+        execute_mutation_with_retry(&self.node, &mutation, "bridge_failure")
+            .await
+            .context("bridge_failure mutation")?;
+
+        self.state = projected;
+        self.failure_class = failure_class_for_persist;
+        Ok(())
+    }
+
     /// Running → TimedOut. R1 does not call this from runtime code; R3 wires
     /// it up to fire on deadline expiry. Defined here so the API surface
     /// matches the Lean spec.
@@ -816,6 +895,96 @@ mod tests {
                 Some(IllegalToolCallTransition::BadState { .. })
             ),
             "expected BadState, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_failure_rejects_native_tool() {
+        // Native tool: constructed with new() — no child_request_id.
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new(
+            node,
+            "sess-bf-1".to_string(),
+            "tc-bf-1".to_string(),
+            0,
+            "native_tool".to_string(),
+            "{}".to_string(),
+        );
+        lc.set_state(ToolCallState::Running);
+        lc.set_doc_id(Some("fake-doc-id-bf-1".to_string()));
+        lc.set_started_at(Some(chrono::Utc::now()));
+
+        let err = lc
+            .bridge_failure(super::super::ChildTerminal::Dead)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::BridgeFailureRequiresChildLink)
+            ),
+            "expected BridgeFailureRequiresChildLink, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_failure_rejects_pending_state() {
+        // Subagent tool, but never advanced to Running.
+        let node = test_node().await;
+        let lc_base = ToolCallLifecycle::new_subagent(
+            node,
+            "sess-bf-2".to_string(),
+            "tc-bf-2".to_string(),
+            0,
+            "spawn_agent".to_string(),
+            "{}".to_string(),
+            AwaitMode::Foreground,
+            CancelPolicy::Cascade,
+            "child-1".to_string(),
+        );
+        // Leave state as Pending (default); do not call start_running.
+        let mut lc = lc_base;
+
+        let err = lc
+            .bridge_failure(super::super::ChildTerminal::Dead)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::BadState { .. })
+            ),
+            "expected BadState, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_failure_projected_state_interrupted_is_cancelled() {
+        use super::super::ChildTerminal;
+        assert_eq!(
+            ChildTerminal::Interrupted.projected_state(),
+            ToolCallState::Cancelled
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_failure_projected_state_failed_is_failed() {
+        use super::super::{ChildTerminal, FailureClass};
+        assert_eq!(
+            ChildTerminal::Failed {
+                reason: "error".to_string(),
+                failure_class: FailureClass::External,
+            }
+            .projected_state(),
+            ToolCallState::Failed
+        );
+        assert_eq!(
+            ChildTerminal::Dead.projected_state(),
+            ToolCallState::Failed
+        );
+        assert_eq!(
+            ChildTerminal::Superseded.projected_state(),
+            ToolCallState::Failed
         );
     }
 
