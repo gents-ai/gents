@@ -7,27 +7,41 @@
 //!
 //! Idempotent: re-running on a v2 deployment is a no-op (collection already
 //! patched, migration already registered).
+//!
+//! The WASM lens artifact is embedded into the binary at compile time via
+//! `include_bytes!` (built by `build.rs`). At runtime the bytes are written
+//! to a process-lifetime temp file so DefraDB can load them via filesystem
+//! path. The temp file is held alive in a static OnceLock so the path stays
+//! valid for the lens runtime's lazy access.
 
-use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 use defra_node::{EmbeddedNode, LensConfig, LensModule};
+use tempfile::NamedTempFile;
 
 const ADD_LIFECYCLE_STATE_PATCH: &str = r#"[{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"lifecycle_state","Kind":11}}]"#;
 
-/// Resolve the path to the bundled WASM lens artifact. The lens crate is built
-/// as part of the workspace; the path is relative to the daemon binary's
-/// location at install time.
-///
-/// Production deployments ship the WASM file alongside the binary; tests use
-/// the workspace target directory.
-fn lens_wasm_path() -> PathBuf {
-    // Test/dev path: workspace target dir.
-    // TODO follow-up issue: production deployments need a bundled artifact path
-    // resolved from std::env::current_exe(). Tracked separately.
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/wasm32-unknown-unknown/release/agent_tool_call_lifecycle_v1_to_v2_lens.wasm")
+/// WASM lens bytes embedded at compile time. Built by build.rs.
+const LENS_WASM_BYTES: &[u8] =
+    include_bytes!(env!("AGENT_TOOL_CALL_LIFECYCLE_V1_TO_V2_LENS_WASM_PATH"));
+
+/// Process-wide temp file holding the unpacked WASM bytes. Held alive (never
+/// dropped) so DefraDB's lazy lens loader can always reach the path.
+static LENS_TEMP_FILE: OnceLock<NamedTempFile> = OnceLock::new();
+
+/// Return the filesystem path to the embedded WASM lens, unpacking it on first
+/// call. Subsequent calls return the same path.
+fn lens_wasm_path() -> Result<String> {
+    let temp = LENS_TEMP_FILE.get_or_init(|| {
+        let mut tf = NamedTempFile::new().expect("create lens temp file");
+        std::io::Write::write_all(tf.as_file_mut(), LENS_WASM_BYTES)
+            .expect("write embedded lens bytes to temp file");
+        tf
+    });
+    let path = temp.path().to_string_lossy().to_string();
+    Ok(path)
 }
 
 /// Run all pending tool-call migrations against the embedded node.
@@ -72,18 +86,14 @@ pub async fn ensure_tool_call_migrations(node: Arc<EmbeddedNode>) -> Result<()> 
         .context("set_active_collection_version v2")?;
 
     // 4. Register the forward Lens v1 -> v2.
-    let lens_path = lens_wasm_path();
-    let lens_path_str = lens_path
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("non-utf8 lens path"))?;
-
-    let forward_config = LensConfig::new(
+    let lens_path = lens_wasm_path().context("unpack embedded lens WASM")?;
+    let lens_config = LensConfig::new(
         v1_version_id.clone(),
         v2_version_id.clone(),
-        LensModule::from_path(lens_path_str),
+        LensModule::from_path(lens_path),
     );
 
-    node.set_migration(forward_config)
+    node.set_migration(lens_config)
         .await
         .context("set_migration forward v1 -> v2")?;
 

@@ -36,11 +36,11 @@ rig-core.workspace = true
 reqwest.workspace = true
 rmcp = { version = "1.2.0", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
 tokio-util = "0.7"
+tempfile = "3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = { version = "3.7.0", features = ["OSX_10_15"] }
 
 [dev-dependencies]
-tempfile = "3"
 proptest = "1"
 agent-tool-call-lifecycle-v1-to-v2-lens = { path = "../defra-agent-lenses/agent_tool_call_lifecycle_v1_to_v2", default-features = false }
