@@ -675,5 +675,82 @@ theorem detach_does_not_cancel_child
     -- h_pol_d : CancelPolicy.cascade = CancelPolicy.detach. Contradiction.
     cases h_pol_d
 
+/-! ### B6: foreground blocks parent advance -/
+
+/-- B6: A live foreground tool on the parent prevents the parent's
+    `progressSeq` from advancing across any single bridge `Transition`.
+    Restates the `no_blocking_foreground` guard at the BridgedState layer. -/
+theorem foreground_blocks_parent_advance
+    (pre post : BridgedState)
+    (h_fg     : ∃ t ∈ pre.parent.tools,
+                  t.awaitMode = .foreground ∧
+                  ¬ isTerminal t.state)
+    (h_step   : Transition pre post) :
+    pre.parent.request.progressSeq = post.parent.request.progressSeq := by
+  cases h_step with
+  | parent_step h_inner h_child_eq h_bridge_eq _ _ =>
+    -- Inner ComposedState.Transition. Case-split.
+    cases h_inner with
+    | request_step h_req _ _ h_tools _ _ h_no_block =>
+      -- The h_no_block guard says: if reqPost.progressSeq > pre.parent.request.progressSeq
+      -- OR (claimed → processing), THEN no live foreground tool. h_fg directly contradicts
+      -- the consequent. So the antecedent must be false: progressSeq cannot increase
+      -- and we cannot transition claimed → processing. Case-split on h_req.
+      cases h_req with
+      | claim _ _ _ h_post =>
+        rw [h_post]
+      | dedup_lose _ _ h_post =>
+        rw [h_post]
+      | begin_inference h_pre_claimed _ h_post =>
+        -- begin_inference transitions claimed → processing; h_no_block fires
+        -- via Or.inr ⟨pre.state = .claimed, post.state = .processing⟩, giving
+        -- ¬ ∃ live foreground tool, contradicting h_fg.
+        exfalso
+        apply h_no_block
+        · refine Or.inr ⟨h_pre_claimed, ?_⟩
+          rw [h_post]
+        · -- Reconstruct h_fg in pre.tools (which equals pre.parent.tools).
+          exact h_fg
+      | advance _ _ h_post =>
+        -- advance increases progressSeq; h_no_block fires via Or.inl, contradicting h_fg.
+        exfalso
+        apply h_no_block
+        · refine Or.inl ?_
+          rw [h_post]
+          exact Nat.lt_succ_self _
+        · exact h_fg
+      | finish _ _ h_post =>
+        rw [h_post]
+      | fail _ _ h_post =>
+        rw [h_post]
+      | fail_before_stream _ _ h_post =>
+        rw [h_post]
+      | expire _ _ _ _ h_post =>
+        rw [h_post]
+      | interrupt_before_claim _ _ _ h_post =>
+        rw [h_post]
+      | interrupt_claimed _ _ _ h_post =>
+        rw [h_post]
+      | interrupt_processing _ _ _ h_post =>
+        rw [h_post]
+    | tool_step _ _ _ h_req_eq _ _ _ _ =>
+      rw [h_req_eq]
+    | process_step _ h_req _ _ _ =>
+      rw [h_req]
+    | persistence_step _ _ _ h_req _ _ _ _ =>
+      rw [h_req]
+    | call_step _ h_req _ _ _ =>
+      rw [h_req]
+  | child_step _ h_parent_eq _ _ _ =>
+    rw [h_parent_eq]
+  | bridge_spawn _ _ _ _ h_request_eq _ =>
+    rw [h_request_eq]
+  | bridge_complete _ _ _ _ _ h_request_eq _ _ _ =>
+    rw [h_request_eq]
+  | bridge_failure _ _ _ _ h_request_eq _ _ _ =>
+    rw [h_request_eq]
+  | bridge_cancel_cascade _ _ _ h_parent_eq _ _ _ _ _ =>
+    rw [h_parent_eq]
+
 end BridgedState
 end Subagent
