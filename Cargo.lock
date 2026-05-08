@@ -3620,6 +3620,7 @@ dependencies = [
 name = "defra-agent"
 version = "0.1.5"
 dependencies = [
+ "agent-tool-call-lifecycle-v1-to-v2-lens",
  "anyhow",
  "async-trait",
  "chrono",
