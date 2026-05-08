@@ -182,8 +182,9 @@ examples in `crates/defra-agent/proofs/client-state-machine.md`.
   — replace the call to `live_overlay_suffix(...)` with a direct read of
   `overlay.content` / `overlay.reasoning`.
 - `apps/desktop-tauri/src-tauri/src/bridge/snapshot/session.rs:110-126`
-  (`active_response_overlay` filter) — keep; it already implements the hide
-  rule. No code change once cumulative semantics are gone.
+  (`active_response_overlay` filter) — tighten to the canonical hide rule:
+  only `WaitingForClaim` / `Streaming` turns, non-terminal response status, no
+  materialization, and a non-empty tail.
 - `apps/desktop-tauri/src/components/Transcript.tsx:181-198`
   (`liveAssistant` rendering) — no change; already renders the overlay
   block correctly given the bridge inputs.

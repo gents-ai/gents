@@ -38,6 +38,7 @@ export type ResponseView = {
   tokenCount?: number | null;
   materializedMessageSequence?: number | null;
   materializedAt?: string | null;
+  interruptedAt?: string | null;
   completedAt?: string | null;
 };
 

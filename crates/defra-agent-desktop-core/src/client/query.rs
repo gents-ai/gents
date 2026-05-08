@@ -143,7 +143,7 @@ pub async fn load_agent_requests(node: &EmbeddedNode) -> Result<Vec<AgentRequest
     load_rows(
         node,
         "AgentRequest",
-        "query { AgentRequest { request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind failure_reason created_at claimed_at deadline retry_count max_retries } }",
+        "query { AgentRequest { request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind failure_reason created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until } }",
     )
     .await
 }
@@ -152,7 +152,7 @@ pub async fn load_agent_responses(node: &EmbeddedNode) -> Result<Vec<AgentRespon
     load_rows(
         node,
         "AgentResponse",
-        "query { AgentResponse { response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at } }",
+        "query { AgentResponse { response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at } }",
     )
     .await
 }

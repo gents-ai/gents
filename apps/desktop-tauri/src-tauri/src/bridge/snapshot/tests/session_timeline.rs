@@ -208,7 +208,7 @@ fn session_snapshot_orders_pending_turn_before_orphan_tool_groups_and_live_overl
 }
 
 #[test]
-fn session_snapshot_keeps_failed_unmaterialized_response_overlay() {
+fn session_snapshot_hides_failed_unmaterialized_response_overlay() {
     let store = ClientStore::from_rows(ClientStoreRows {
         conversations: vec![AgentConversationRow {
             session_id: "session-1".to_string(),
@@ -280,19 +280,13 @@ fn session_snapshot_keeps_failed_unmaterialized_response_overlay() {
         .expect("session snapshot");
 
     assert_eq!(snapshot.turn_state.as_deref(), Some("failed"));
-    assert_eq!(
-        snapshot
-            .active_response_overlay
-            .as_ref()
-            .and_then(|overlay| overlay.content.as_deref()),
-        Some("partial answer before timeout")
-    );
+    assert!(snapshot.active_response_overlay.is_none());
 
-    let live_content = snapshot.timeline_items.iter().find_map(|item| match item {
-        RenderedTimelineItem::LiveAssistant { content, .. } => content.as_deref(),
-        _ => None,
-    });
-    assert_eq!(live_content, Some("partial answer before timeout"));
+    let has_live = snapshot
+        .timeline_items
+        .iter()
+        .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. }));
+    assert!(!has_live, "failed turns must not render live overlays");
 }
 
 #[test]

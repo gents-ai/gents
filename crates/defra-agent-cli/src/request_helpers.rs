@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_agent::graphql::escape_graphql_string;
+use defra_agent_protocol::transcript::present_persisted_message;
 use serde_json::Value;
 
 use crate::{optional_f64_field, optional_i64_field, post_graphql, require_non_empty};
@@ -51,11 +52,32 @@ pub(crate) fn response_query(request_id: &str) -> String {
                 error_message
                 token_count
                 progress_seq
+                materialized_message_sequence
+                materialized_at
                 completed_at
                 interrupted_at
             }}
         }}"#,
         request_id = escape_graphql_string(request_id),
+    )
+}
+
+pub(crate) fn materialized_message_query(session_id: &str, sequence: i64) -> String {
+    format!(
+        r#"{{
+            AgentMessage(
+                filter: {{
+                    session_id: {{ _eq: "{session_id}" }},
+                    sequence: {{ _eq: {sequence} }}
+                }},
+                limit: 1
+            ) {{
+                role
+                content
+                sequence
+            }}
+        }}"#,
+        session_id = escape_graphql_string(session_id),
     )
 }
 
@@ -90,6 +112,82 @@ pub(crate) fn is_terminal_lifecycle_state(state: &str) -> bool {
         state,
         "completed" | "failed" | "superseded" | "dead" | "interrupted"
     )
+}
+
+fn response_field_is_blank(response: &Value, field: &str) -> bool {
+    response
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .is_empty()
+}
+
+fn response_materialized_sequence(response: &Value) -> Option<i64> {
+    response
+        .get("materialized_message_sequence")
+        .and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+        })
+}
+
+pub(crate) async fn hydrate_materialized_response_content(
+    graphql: &str,
+    response: &mut Value,
+) -> Result<bool> {
+    let content_blank = response_field_is_blank(response, "content");
+    let reasoning_blank = response_field_is_blank(response, "reasoning");
+    if !content_blank && !reasoning_blank {
+        return Ok(true);
+    }
+
+    let Some(sequence) = response_materialized_sequence(response) else {
+        return Ok(!content_blank || !reasoning_blank);
+    };
+    let Some(session_id) = response.get("session_id").and_then(Value::as_str) else {
+        return Ok(!content_blank || !reasoning_blank);
+    };
+
+    let query = materialized_message_query(session_id, sequence);
+    let message_response = post_graphql(graphql, &query).await?;
+    let Some(message) = message_response
+        .pointer("/data/AgentMessage")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+    else {
+        return Ok(false);
+    };
+    let Some(role) = message.get("role").and_then(Value::as_str) else {
+        return Ok(false);
+    };
+    let Some(content) = message.get("content").and_then(Value::as_str) else {
+        return Ok(false);
+    };
+
+    let presentation = present_persisted_message(role, content);
+    let Some(object) = response.as_object_mut() else {
+        return Ok(false);
+    };
+
+    if content_blank && !presentation.body_markdown.trim().is_empty() {
+        object.insert(
+            "content".to_string(),
+            Value::String(presentation.body_markdown),
+        );
+    }
+    if reasoning_blank {
+        if let Some(reasoning) = presentation
+            .reasoning_markdown
+            .filter(|value| !value.trim().is_empty())
+        {
+            object.insert("reasoning".to_string(), Value::String(reasoning));
+        }
+    }
+
+    Ok(!response_field_is_blank(response, "content")
+        || !response_field_is_blank(response, "reasoning"))
 }
 
 pub(crate) async fn create_agent_request(
@@ -220,7 +318,10 @@ pub(crate) async fn create_agent_request(
 ///
 /// The returned JSON is backward-compatible with the old response-only shape:
 /// all previous `AgentResponse` fields remain at the top level, and a new
-/// `request` field carries the lifecycle view for callers that want it.
+/// `request` field carries the lifecycle view for callers that want it. For
+/// completed live-tail responses, `content`/`reasoning` are hydrated from the
+/// materialized `AgentMessage` in the returned JSON only; the persisted
+/// `AgentResponse` row remains the live-tail surface.
 pub(crate) async fn wait_for_terminal_response(
     graphql: &str,
     request_id: &str,
@@ -277,6 +378,12 @@ pub(crate) async fn wait_for_terminal_response(
             .and_then(|row| row.get("status"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
+        let should_wait_for_materialized_content =
+            matches!(response_status, "complete" | "completed")
+                && response_row.as_ref().is_some_and(|row| {
+                    response_field_is_blank(row, "content")
+                        && response_materialized_sequence(row).is_some()
+                });
 
         let terminal_by_request = is_terminal_lifecycle_state(lifecycle_state);
         let terminal_by_response = matches!(response_status, "complete" | "error");
@@ -293,6 +400,17 @@ pub(crate) async fn wait_for_terminal_response(
                     "content": null,
                 })
             });
+            let hydrated = hydrate_materialized_response_content(graphql, &mut envelope).await?;
+            if should_wait_for_materialized_content && !hydrated {
+                if last_progress_at.elapsed() >= idle_timeout {
+                    anyhow::bail!(
+                        "timed out waiting for materialized AgentMessage {request_id} after {timeout_secs}s of inactivity\n{}",
+                        request_diagnostic_hint(request_id)
+                    );
+                }
+                tokio::time::sleep(Duration::from_secs(poll_secs)).await;
+                continue;
+            }
             if let Some(object) = envelope.as_object_mut() {
                 object.insert(
                     "request".to_string(),

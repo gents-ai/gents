@@ -93,6 +93,82 @@ fn session_snapshot_hides_live_overlay_once_turn_is_terminal_even_if_response_is
 }
 
 #[test]
+fn session_snapshot_hides_live_overlay_once_response_is_interrupted() {
+    let store = ClientStore::from_rows(ClientStoreRows {
+        conversations: vec![AgentConversationRow {
+            session_id: "session-1".to_string(),
+            agent_name: Some("Amy".to_string()),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            title: Some("conversation".to_string()),
+            title_source: Some("generated".to_string()),
+            preview_text: Some("turn one".to_string()),
+            status: Some("active".to_string()),
+            created_at: Some("2026-04-21T12:00:00Z".to_string()),
+            updated_at: Some("2026-04-21T12:02:00Z".to_string()),
+            latest_request_id: Some("req-1".to_string()),
+        }],
+        requests: vec![AgentRequestRow {
+            request_id: "req-1".to_string(),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            session_id: Some("session-1".to_string()),
+            retry_parent_request: None,
+            retry_root_request: None,
+            superseded_by_request: None,
+            content: Some("turn one".to_string()),
+            status: Some("processing".to_string()),
+            lifecycle_state: Some("processing".to_string()),
+            backend_id: None,
+            execution_origin: Some("interactive".to_string()),
+            failure_reason: None,
+            created_at: Some("2026-04-21T12:00:00Z".to_string()),
+            claimed_at: Some("2026-04-21T12:00:01Z".to_string()),
+            deadline: None,
+            retry_count: Some(0),
+            max_retries: Some(3),
+            caused_by_trigger_id: None,
+            caused_by_trigger_kind: None,
+            interrupt_requested_at: Some("2026-04-21T12:00:02Z".to_string()),
+            valid_until: None,
+        }],
+        responses: vec![AgentResponseRow {
+            response_key: "resp-1".to_string(),
+            request_id: Some("req-1".to_string()),
+            agent_did: Some("did:defra:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            session_id: Some("session-1".to_string()),
+            content: Some("partial answer before interrupt".to_string()),
+            reasoning: None,
+            status: Some("streaming".to_string()),
+            error_message: None,
+            token_count: Some(12),
+            progress_seq: Some(2),
+            materialized_message_sequence: None,
+            materialized_at: None,
+            created_at: Some("2026-04-21T12:00:01Z".to_string()),
+            completed_at: None,
+            interrupted_at: Some("2026-04-21T12:00:02Z".to_string()),
+        }],
+        ..ClientStoreRows::default()
+    });
+
+    let snapshot = build_session_snapshot_from_store(&store, "session-1", Some("req-1"))
+        .expect("session snapshot");
+    assert_eq!(snapshot.turn_state.as_deref(), Some("streaming"));
+    assert!(snapshot
+        .latest_response
+        .as_ref()
+        .and_then(|response| response.interrupted_at.as_deref())
+        .is_some());
+    assert!(snapshot.active_response_overlay.is_none());
+    assert!(!snapshot
+        .timeline_items
+        .iter()
+        .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })));
+}
+
+#[test]
 fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_rows() {
     let store = ClientStore::from_rows(ClientStoreRows {
         conversations: vec![AgentConversationRow {

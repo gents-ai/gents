@@ -22,6 +22,26 @@ export function ChatTranscriptPanel({
         sessionId: selectedSessionId,
         timelineLength: session?.timelineItems.length ?? 0,
         timelineKinds: session?.timelineItems.map((item) => item.kind) ?? [],
+        timelineContentLengths:
+          session?.timelineItems.map((item) => {
+            switch (item.kind) {
+              case "assistantMessage":
+              case "liveAssistant":
+                return [
+                  item.content?.length ?? 0,
+                  item.reasoning?.length ?? 0,
+                ];
+              case "userMessage":
+              case "pendingUserTurn":
+                return item.content.length;
+              case "toolGroup":
+                return item.tools.map((tool) => [
+                  tool.status?.length ?? 0,
+                  tool.args?.rawText.length ?? 0,
+                  tool.result?.rawText.length ?? 0,
+                ]);
+            }
+          }) ?? [],
         turnState: session?.turnState ?? "",
       }),
     [selectedSessionId, session?.timelineItems, session?.turnState],

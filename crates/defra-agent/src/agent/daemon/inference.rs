@@ -206,6 +206,17 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 _ = interrupt_rx.changed() => {
                                     request_token.cancel();
                                     inference_token.cancel();
+                                    if let Err(error) = processor
+                                        .persist_partial_turn("persist interrupted assistant turn")
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            request_id = %request_id,
+                                            session_id = %session_id,
+                                            error = %error,
+                                            "failed to persist interrupted assistant turn before terminal transition"
+                                        );
+                                    }
                                     return Err(anyhow!("request interrupted during inference"));
                                 }
                                 result = await_with_request_deadline(

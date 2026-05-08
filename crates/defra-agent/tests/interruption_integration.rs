@@ -13,6 +13,7 @@ use std::sync::Arc;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::lifecycle::{ClaimOutcome, ExecutionOrigin};
 use defra_agent::{interrupt_request, AgentIdentity, DefraAgent, RequestLifecycle, ToolCeiling};
+use defra_agent_protocol::transcript::present_persisted_message;
 
 use support::fixtures::test_identity;
 use support::interrupt::{
@@ -21,8 +22,8 @@ use support::interrupt::{
     BootedAgent,
 };
 use support::snapshots::{
-    fetch_request_snapshot, fetch_response_content, fetch_response_interrupted_at,
-    fetch_response_snapshot,
+    fetch_message_snapshots_for_session, fetch_request_snapshot, fetch_response_content,
+    fetch_response_interrupted_at, fetch_response_snapshot,
 };
 use support::streaming_backend::{MockStreamingBackend, StreamScript};
 use support::{
@@ -251,8 +252,17 @@ async fn interrupt_mid_stream_preserves_partial_and_cancels_inference_call() {
 
     let content = fetch_response_content(&db.node, &response_doc_id).await;
     assert_eq!(
-        content, TARGET_PARTIAL,
-        "daemon interrupt must preserve already streamed response content"
+        content, "",
+        "daemon interrupt must clear the live tail after persisting partial content"
+    );
+    let messages = fetch_message_snapshots_for_session(&db.node, session_id).await;
+    assert!(
+        messages.iter().any(|message| {
+            message.role == "assistant"
+                && present_persisted_message(&message.role, &message.content).body_markdown
+                    == TARGET_PARTIAL.trim()
+        }),
+        "daemon interrupt must preserve already streamed response content in AgentMessage"
     );
     assert!(
         fetch_response_interrupted_at(&db.node, &response_doc_id)
@@ -349,7 +359,20 @@ async fn interrupting_one_request_does_not_affect_another() {
     let survivor_response = fetch_response_snapshot(&db.node, &survivor_response_doc_id).await;
     assert_eq!(survivor_response.status, "complete");
     let survivor_content = fetch_response_content(&db.node, &survivor_response_doc_id).await;
-    assert_eq!(survivor_content, SURVIVOR_PARTIAL);
+    assert_eq!(
+        survivor_content, "",
+        "completed response must leave AgentResponse.content as an empty live tail"
+    );
+    let survivor_messages =
+        fetch_message_snapshots_for_session(&db.node, survivor_session_id).await;
+    assert!(
+        survivor_messages.iter().any(|message| {
+            message.role == "assistant"
+                && present_persisted_message(&message.role, &message.content).body_markdown
+                    == SURVIVOR_PARTIAL.trim()
+        }),
+        "completed survivor response must be preserved in AgentMessage"
+    );
     assert!(
         fetch_response_interrupted_at(&db.node, &survivor_response_doc_id)
             .await
