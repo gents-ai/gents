@@ -9,6 +9,20 @@ members = [
     "crates/defra-agent-lenses/agent_tool_call_lifecycle_v1_to_v2",
     "crates/defra-agent-protocol",
 ]
+# Exclude the WASM lens crate from default workspace builds. Its cdylib target
+# relies on `lens_sdk::define!` which imports an `extern "C" fn next()` only
+# resolvable at WASM-load time by the lens host runtime. Build it explicitly
+# via `cargo build -p agent-tool-call-lifecycle-v1-to-v2-lens --target
+# wasm32-unknown-unknown`. The rlib target (used by tests via the
+# default-features=false dev-dep) is unaffected.
+default-members = [
+    "apps/desktop-tauri/src-tauri",
+    "crates/defra-agent",
+    "crates/defra-agent-cli",
+    "crates/defra-agent-desktop",
+    "crates/defra-agent-desktop-core",
+    "crates/defra-agent-protocol",
+]
 
 [workspace.package]
 version = "0.1.5"
