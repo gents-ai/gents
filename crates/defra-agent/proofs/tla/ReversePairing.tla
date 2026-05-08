@@ -73,8 +73,6 @@ Init ==
 (* Helpers                                                                 *)
 (***************************************************************************)
 
-Range(f) == { f[x] : x \in DOMAIN f }
-
 FreshIds(k) ==
   \* True when there are at least k unused RPC ids available
   Cardinality(RPCId \ rpcIdsUsed) >= k

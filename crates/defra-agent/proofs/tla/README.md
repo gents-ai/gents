@@ -93,9 +93,7 @@ For default parameters: ~M in the high hundreds of thousands, runtime under 60 s
 
 ### Full run with liveness (default)
 
-Same final line, plus a "Checking temporal properties" phase. Total runtime: under 5 minutes at default parameters.
-
-Last clean run: 322,560 distinct states, depth 19, 3min 21s, no errors.
+Same final line, plus a "Checking temporal properties" phase. Total runtime: completes in under 5 minutes on a 2024 laptop at default parameters.
 
 A failure looks like:
 
