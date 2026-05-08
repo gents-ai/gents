@@ -114,6 +114,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-subagent-v2-to-v3-lens"
+version = "0.1.0"
+dependencies = [
+ "lens_sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "agent-tool-call-lifecycle-v1-to-v2-lens"
 version = "0.1.0"
 dependencies = [
