@@ -128,5 +128,62 @@ theorem live_call_reaches_terminal
   | .timedOut  => exact absurd (Or.inr (Or.inr (Or.inl h_state))) h_live
   | .cancelled => exact absurd (Or.inr (Or.inr (Or.inr h_state))) h_live
 
+
+/-- Helper: every Transition preserves `requestId`. Parity with
+    `InferenceCall.transition_preserves_requestId`. -/
+theorem transition_preserves_requestId
+    {pre post : ToolCallContext}
+    (h_step : Transition pre post) :
+    post.requestId = pre.requestId := by
+  cases h_step with
+  | dispatch _ h_post              => rw [h_post]
+  | spawnFailed _ _ h_post         => rw [h_post]
+  | complete _ _ h_post            => rw [h_post]
+  | fail _ _ h_post                => rw [h_post]
+  | timeout _ _ h_post             => rw [h_post]
+  | cancelBeforeDispatch _ h_post  => rw [h_post]
+  | cancelDuringRun _ h_post       => rw [h_post]
+  | timeAdvance _ _ h_post         => rw [h_post]
+  | persistenceStep _ _ _ h_post   => rw [h_post]
+
+/-- Helper: `dispatch` sets `startedAt` to `some pre.currentTime`. -/
+theorem dispatch_sets_startedAt
+    {pre post : ToolCallContext}
+    (h_step : Transition pre post)
+    (h_pre  : pre.state = .pending)
+    (h_post : post.state = .running) :
+    post.startedAt = some pre.currentTime := by
+  cases h_step with
+  | dispatch _ h_post'              => simp [h_post']
+  | spawnFailed _ _ h_post'         => exfalso; rw [h_post'] at h_post; simp at h_post
+  | complete h_state _ h_post'      => exfalso; simp_all
+  | fail _ h_state h_post'           => exfalso; simp_all
+  | timeout h_state _ h_post'       => exfalso; simp_all
+  | cancelBeforeDispatch _ h_post'  => exfalso; rw [h_post'] at h_post; simp at h_post
+  | cancelDuringRun h_state h_post' => exfalso; simp_all
+  | timeAdvance _ _ h_post'         => exfalso; rw [h_post'] at h_post; simp_all
+  | persistenceStep _ _ _ h_post'   => exfalso; rw [h_post'] at h_post; simp_all
+
+/-- Helper: a transition that does not change `state` from `.pending` to `.running`
+    preserves `startedAt`. Captures "only dispatch writes startedAt." -/
+theorem startedAt_preserved_outside_dispatch
+    {pre post : ToolCallContext}
+    (h_step  : Transition pre post)
+    (h_not   : ¬ (pre.state = .pending ∧ post.state = .running)) :
+    post.startedAt = pre.startedAt := by
+  cases h_step with
+  | dispatch h_state h_post' =>
+      exfalso
+      apply h_not
+      exact ⟨h_state, by rw [h_post']⟩
+  | spawnFailed _ _ h_post'         => rw [h_post']
+  | complete _ _ h_post'            => rw [h_post']
+  | fail _ _ h_post'                => rw [h_post']
+  | timeout _ _ h_post'             => rw [h_post']
+  | cancelBeforeDispatch _ h_post'  => rw [h_post']
+  | cancelDuringRun _ h_post'       => rw [h_post']
+  | timeAdvance _ _ h_post'         => rw [h_post']
+  | persistenceStep _ _ _ h_post'   => rw [h_post']
+
 end ToolCallContext
 end ToolExecution
