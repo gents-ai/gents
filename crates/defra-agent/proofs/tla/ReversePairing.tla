@@ -149,9 +149,32 @@ Reconcile(n) ==
   \/ \E p \in Node, c \in Collection : ReconcileInstall(n, p, c)
   \/ \E p \in Node, c \in Collection : ReconcileTeardown(n, p, c)
 
+(***************************************************************************)
+(* Deliver(rpc): network delivers an in-transit message to its destination *)
+(* node's pendingInbound queue.                                            *)
+(***************************************************************************)
+
+Deliver(rpc) ==
+  /\ rpc \in messages
+  /\ messages' = messages \ {rpc}
+  /\ pendingInbound' = [pendingInbound EXCEPT ![rpc.tgt] = @ \cup {rpc}]
+  /\ UNCHANGED <<desired, replicator, inFlight, crashCount, rpcIdsUsed>>
+
+(***************************************************************************)
+(* Drop(rpc): network loses an in-transit message. Bounded by fairness so  *)
+(* infinitely many drops do not occur in any execution; see liveness task. *)
+(***************************************************************************)
+
+Drop(rpc) ==
+  /\ rpc \in messages
+  /\ messages' = messages \ {rpc}
+  /\ UNCHANGED <<desired, replicator, inFlight, pendingInbound, crashCount, rpcIdsUsed>>
+
 Next ==
   \/ \E n \in Node, p \in Node, S \in SUBSET Collection : OperatorWrite(n, p, S)
   \/ \E n \in Node : Reconcile(n)
+  \/ \E rpc \in messages : Deliver(rpc)
+  \/ \E rpc \in messages : Drop(rpc)
 
 Spec == Init /\ [][Next]_vars
 
