@@ -259,6 +259,30 @@ Next ==
   \/ \E n \in Node : \E rpc \in inFlight[n] : Timeout(n, rpc)
   \/ \E n \in Node : Crash(n)
 
+(***************************************************************************)
+(* Structural safety invariants                                            *)
+(***************************************************************************)
+
+(* Every RPC in messages or pendingInbound or inFlight has a unique id and *)
+(* that id appears in rpcIdsUsed.                                          *)
+RPCIdsTracked ==
+  /\ \A rpc \in messages : rpc.id \in rpcIdsUsed
+  /\ \A n \in Node : \A rpc \in inFlight[n] : rpc.id \in rpcIdsUsed
+  /\ \A n \in Node : \A rpc \in pendingInbound[n] : rpc.id \in rpcIdsUsed
+
+(* Every Install or Teardown RPC has src # tgt, kind in the right set, and *)
+(* of = NoOf. Every Ack has of \in rpcIdsUsed.                            *)
+RPCWellFormed ==
+  LET allRPCs == messages \cup UNION { inFlight[n] : n \in Node }
+                           \cup UNION { pendingInbound[n] : n \in Node }
+  IN \A rpc \in allRPCs :
+       /\ rpc.src # rpc.tgt
+       /\ rpc.kind \in RPCKind
+       /\ \/ /\ rpc.kind \in {"Install", "Teardown"}
+             /\ rpc.of = NoOf
+          \/ /\ rpc.kind = "Ack"
+             /\ rpc.of \in rpcIdsUsed
+
 Spec == Init /\ [][Next]_vars
 
 ====
