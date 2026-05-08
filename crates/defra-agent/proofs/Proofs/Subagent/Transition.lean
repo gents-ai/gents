@@ -50,7 +50,8 @@ inductive Transition : BridgedState → BridgedState → Prop where
          post.child.request.state = .pending ∧
          post.child.request.causedByParentRequestId = some pre.parent.requestId ∧
          post.child.request.causedByParentToolCallId = some post.bridgeCallId ∧
-         post.child.request.subagentDepth = pre.parent.request.subagentDepth + 1)
+         post.child.request.subagentDepth = pre.parent.request.subagentDepth + 1 ∧
+         post.child.request.interruptRequestedAt = none)
       -- spawn doesn't progress the parent's narrative:
       (h_request_eq    : post.parent.request = pre.parent.request)
       -- structural-identity guard: the parent's top-level requestId is

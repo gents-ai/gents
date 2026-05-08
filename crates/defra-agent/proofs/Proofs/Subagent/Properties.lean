@@ -99,7 +99,7 @@ private theorem inv_depth_step
   | bridge_spawn _ h_depth _ h_post_child h_request_eq _ =>
     refine ⟨?_, ?_⟩
     · rw [h_request_eq]; exact h_init.1
-    · rw [h_post_child.2.2.2]; exact h_depth
+    · rw [h_post_child.2.2.2.1]; exact h_depth
   | bridge_complete _ _ _ _ _ h_request_eq h_child_eq _ _ =>
     refine ⟨?_, ?_⟩
     · rw [h_request_eq]; exact h_init.1
@@ -646,26 +646,17 @@ theorem detach_does_not_cancel_child
     | tool_step _ _ _ h_req _ _ _ _ =>
       rw [h_req]
   | bridge_spawn h_parent_proc _ _ h_post_child h_request_eq _ =>
-    -- bridge_spawn introduces the bridge tool on the parent, not on the
-    -- child side. Yet B3' is about a *pre-existing* detach tool, and
-    -- bridge_spawn moves child from "pre.child" (whatever it is) to a new
-    -- pending child. This step *replaces* the child entirely; the resulting
-    -- post.child is a fresh request with no interruptRequestedAt set
-    -- (default). However, the theorem statement only relates post.child.iRA
-    -- to pre.child.iRA — bridge_spawn doesn't preserve this in general
-    -- (a fresh child has iRA = none, regardless of pre.child.iRA).
-    --
-    -- BUT: under h_no_other (pre.child.iRA = none), and given that
-    -- bridge_spawn produces a fresh child with default fields (including
-    -- interruptRequestedAt = none), we *do* have post.child.iRA = none =
-    -- pre.child.iRA. The post-condition `post.child.request.state = .pending`
-    -- doesn't constrain `interruptRequestedAt` directly, so this case
-    -- requires reading more guards from `h_post_child`.
-    --
-    -- Without an explicit guard tying post.child.iRA to pre.child.iRA in
-    -- the bridge_spawn constructor, this case cannot be discharged purely
-    -- from the given hypotheses. We leave a sorry.
-    sorry
+    -- bridge_spawn now guarantees post.child.request.interruptRequestedAt = none
+    -- (the new conjunct in h_post_child). Under h_no_other, the pre-state also
+    -- has interruptRequestedAt = none (proved by cases on the Option). Both
+    -- sides are none, so they are equal.
+    have h_post_none : post.child.request.interruptRequestedAt = none :=
+      h_post_child.2.2.2.2
+    have h_pre_none : pre.child.request.interruptRequestedAt = none := by
+      cases h : pre.child.request.interruptRequestedAt with
+      | none => rfl
+      | some _ => simp [h] at h_no_other
+    rw [h_post_none, h_pre_none]
   | bridge_complete _ _ _ _ _ _ h_child_eq _ _ =>
     rw [h_child_eq]
   | bridge_failure _ _ _ _ _ h_child_eq _ _ =>
