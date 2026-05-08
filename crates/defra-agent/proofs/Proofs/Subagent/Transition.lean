@@ -4,13 +4,13 @@ import Proofs.Subagent.Bridge
 /-!
 # Subagent Bridge Transitions
 
-Six transitions on `BridgedState`. Three landed here:
-  • parent_step  — lift any ComposedState transition on the parent
-  • child_step   — lift any ComposedState transition on the child
-  • bridge_spawn — materialize the bridge edge (new parent tool + new child request)
-
-The other three (bridge_complete, bridge_failure, bridge_cancel_cascade) land
-in the next task.
+Six transitions on `BridgedState`:
+  • parent_step           — lift any ComposedState transition on the parent
+  • child_step            — lift any ComposedState transition on the child
+  • bridge_spawn          — materialize the bridge edge (new parent tool + new child request)
+  • bridge_complete       — child .completed → parent tool .completed (with persistence)
+  • bridge_failure        — child non-.completed terminal → parent tool .failed/.cancelled
+  • bridge_cancel_cascade — parent terminal w/ cascade → child interruptRequestedAt set
 
 Plus `Trace`, the reflexive-transitive closure used in liveness statements.
 -/
@@ -53,6 +53,52 @@ inductive Transition : BridgedState → BridgedState → Prop where
          post.child.request.subagentDepth = pre.parent.request.subagentDepth + 1)
       -- spawn doesn't progress the parent's narrative:
       (h_request_eq    : post.parent.request = pre.parent.request)
+      : Transition pre post
+
+  | bridge_complete {pre post : BridgedState}
+      (h_child_done    : pre.child.request.state = .completed)
+      (h_running       : ∃ t ∈ pre.parent.tools,
+                           t.callId = pre.bridgeCallId ∧ t.state = .running)
+      (h_persisted     : ∃ t ∈ pre.parent.tools,
+                           t.callId = pre.bridgeCallId ∧
+                           t.persistence = .committed)
+      (h_post_tool     : ∃ t ∈ post.parent.tools,
+                           t.callId = pre.bridgeCallId ∧ t.state = .completed)
+      (h_others_eq     : ∀ t ∈ pre.parent.tools, t.callId ≠ pre.bridgeCallId →
+                          t ∈ post.parent.tools)
+      (h_request_eq    : post.parent.request = pre.parent.request)
+      (h_child_eq      : post.child = pre.child)
+      (h_bridgeId_eq   : post.bridgeCallId = pre.bridgeCallId)
+      : Transition pre post
+
+  | bridge_failure {pre post : BridgedState}
+      (h_child_term    : pre.child.request.state = .failed ∨
+                         pre.child.request.state = .dead ∨
+                         pre.child.request.state = .interrupted ∨
+                         pre.child.request.state = .superseded)
+      (h_running       : ∃ t ∈ pre.parent.tools,
+                           t.callId = pre.bridgeCallId ∧ t.state = .running)
+      (h_post_tool     : ∃ t ∈ post.parent.tools,
+                           t.callId = pre.bridgeCallId ∧
+                           (t.state = .failed ∨ t.state = .cancelled))
+      (h_others_eq     : ∀ t ∈ pre.parent.tools, t.callId ≠ pre.bridgeCallId →
+                          t ∈ post.parent.tools)
+      (h_request_eq    : post.parent.request = pre.parent.request)
+      (h_child_eq      : post.child = pre.child)
+      (h_bridgeId_eq   : post.bridgeCallId = pre.bridgeCallId)
+      : Transition pre post
+
+  | bridge_cancel_cascade {pre post : BridgedState}
+      (h_parent_term   : isTerminal pre.parent.request.state ∨
+                         (∃ t ∈ pre.parent.tools,
+                            t.callId = pre.bridgeCallId ∧
+                            t.state = .cancelled))
+      (h_cascade_pol   : ∃ t ∈ pre.parent.tools,
+                           t.callId = pre.bridgeCallId ∧
+                           t.cancelPolicy = .cascade)
+      (h_interrupt_set : post.child.request.interruptRequestedAt.isSome)
+      (h_parent_eq     : post.parent = pre.parent)
+      (h_bridgeId_eq   : post.bridgeCallId = pre.bridgeCallId)
       : Transition pre post
 
 /-- Reflexive-transitive closure for liveness statements. -/
