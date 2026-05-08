@@ -99,6 +99,48 @@ impl ToolCallLifecycle {
         self.started_at = Some(now);
         Ok(())
     }
+
+    /// Running → Completed. Writes the tool result; sets completed_at,
+    /// latency_ms.
+    pub async fn complete(&mut self, result: &str) -> Result<()> {
+        self.ensure_state(&[ToolCallState::Running], "complete")?;
+
+        let doc_id = self
+            .doc_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("complete called before start_running persisted a row"))?;
+        let now = Utc::now();
+        let started_at = self
+            .started_at
+            .ok_or_else(|| anyhow!("complete called without started_at set"))?;
+        let latency_ms = (now - started_at).num_milliseconds();
+
+        let escaped_result = escape_graphql_string(result);
+        let escaped_doc_id = escape_graphql_string(doc_id);
+        let now_str = now.to_rfc3339();
+
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentToolCall(
+                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    input: {{
+                        result: "{escaped_result}",
+                        status: "completed",
+                        lifecycle_state: "completed",
+                        completed_at: "{now_str}",
+                        latency_ms: {latency_ms}
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+
+        execute_mutation_with_retry(&self.node, &mutation, "complete")
+            .await
+            .context("complete mutation")?;
+
+        self.state = ToolCallState::Completed;
+        Ok(())
+    }
 }
 
 /// Helper to extract `_docID` from a `create_*` mutation response.
