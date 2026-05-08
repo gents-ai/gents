@@ -44,6 +44,13 @@ struct SessionSnapshotRequest {
     request_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SelectedAgentRequest {
+    #[serde(default)]
+    agent_did: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct VersionResponse {
@@ -171,6 +178,20 @@ fn handle_request(
             })
             .to_string(),
         )),
+        ("POST", "/desktop/selected-agent") => {
+            let request = serde_json::from_str::<SelectedAgentRequest>(&request.body)
+                .context("decoding selected agent request")?;
+            let did = request
+                .agent_did
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+            let core = fixture.desktop_core();
+            core.set_selected_agent_did(did.clone());
+            if let Some(did) = did {
+                runtime.block_on(core.ensure_agent_loaded(&did))?;
+            }
+            Ok(HttpResponse::json_ok(serde_json::json!({}).to_string()))
+        }
         ("POST", "/desktop/peer/add") => {
             let request = serde_json::from_str::<PeerAddRequest>(&request.body)
                 .context("decoding peer add request")?;

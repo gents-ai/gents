@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use anyhow::{anyhow, bail, Context, Result};
 use defra_agent_protocol::graphql::escape_graphql_string;
 use defra_agent_protocol::row::{
@@ -5,6 +7,13 @@ use defra_agent_protocol::row::{
     AgentResponseRow, AgentRuntimeRow, AgentSessionRow, AgentToolCallRow, AgentToolResultRow,
     CompactionEntryRow, EventTriggerRow, InferenceBackendRow, InferenceProfileRow, ScheduleRow,
     TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
+};
+use defra_agent_protocol::schemas::{
+    AGENT_BEHAVIOR_NAME, AGENT_CONVERSATION_NAME, AGENT_MESSAGE_NAME, AGENT_PRINCIPAL_NAME,
+    AGENT_REQUEST_NAME, AGENT_RESPONSE_NAME, AGENT_RUNTIME_NAME, AGENT_SESSION_NAME,
+    AGENT_TOOL_CALL_NAME, AGENT_TOOL_RESULT_NAME, COMPACTION_ENTRY_NAME, EVENT_TRIGGER_NAME,
+    INFERENCE_BACKEND_NAME, INFERENCE_PROFILE_NAME, SCHEDULE_NAME, TASK_NAME, TOOL_SELECTION_NAME,
+    TOOL_SERVICE_REGISTRY_NAME,
 };
 use defra_node::EmbeddedNode;
 use serde::de::DeserializeOwned;
@@ -15,6 +24,26 @@ use super::peer_directory::PeerRecord;
 use super::store::{ClientStore, ClientStoreRows};
 
 const REMOTE_SNAPSHOT_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+const AGENT_PRINCIPAL_FIELDS: &str =
+    "agent_did display_name default_behavior_id enabled created_at created_by";
+const AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled created_at";
+const AGENT_RUNTIME_FIELDS: &str = "agent_did process_state reconcile_phase active_generation router_generation default_behavior_id runnable_behavior_count unavailable_behavior_count last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at";
+const AGENT_CONVERSATION_FIELDS: &str = "session_id agent_name agent_did behavior_id title title_source preview_text status created_at updated_at latest_request_id";
+const AGENT_REQUEST_FIELDS: &str = "request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind failure_reason created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until";
+const AGENT_RESPONSE_FIELDS: &str = "response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at";
+const AGENT_MESSAGE_FIELDS: &str = "message_key session_id sequence role content timestamp";
+const AGENT_SESSION_FIELDS: &str = "session_id agent_name behavior_id started ended status";
+const AGENT_TOOL_CALL_FIELDS: &str = "tool_call_key session_id message_sequence tool_name tool_call_id args result status started_at completed_at selected_service_id selected_tool_name tool_failure_class latency_ms";
+const AGENT_TOOL_RESULT_FIELDS: &str = "agent_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted";
+const COMPACTION_ENTRY_FIELDS: &str = "compaction_key session_id sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at";
+const TASK_FIELDS: &str = "task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at";
+const SCHEDULE_FIELDS: &str = "schedule_id task_id interval_secs enabled concurrency next_run_at last_attempt_at last_status last_error fire_count created_at updated_at";
+const EVENT_TRIGGER_FIELDS: &str = "trigger_id task_id source_collection event_kind filter enabled concurrency created_at updated_at last_attempt_at last_fired_source_doc_id last_status last_error fire_count";
+const TOOL_SELECTION_FIELDS: &str = "selection_id agent_did display_name enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode command_execution_policy command_allowed_argv_prefixes command_forbidden_argv_prefixes command_network_mode cli_tool_names enable_meta_tools delegate_to";
+const INFERENCE_BACKEND_FIELDS: &str = "backend_id name provider_kind endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models last_probe probe_status";
+const INFERENCE_PROFILE_FIELDS: &str = "profile_id display_name context_window max_output_tokens max_turns temperature stream_batch_ms deadline_duration_secs";
+const TOOL_SERVICE_REGISTRY_FIELDS: &str = "service_id display_name description hostname tailscale_ip lan_ip mcp_port mcp_path status version updated_at";
 
 pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
     Ok(ClientStore::from_rows(ClientStoreRows {
@@ -142,8 +171,8 @@ pub async fn load_agent_conversations(node: &EmbeddedNode) -> Result<Vec<AgentCo
 pub async fn load_agent_requests(node: &EmbeddedNode) -> Result<Vec<AgentRequestRow>> {
     load_rows(
         node,
-        "AgentRequest",
-        "query { AgentRequest { request_id agent_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind failure_reason created_at claimed_at deadline retry_count max_retries } }",
+        AGENT_REQUEST_NAME,
+        &format!("query {{ {AGENT_REQUEST_NAME} {{ {AGENT_REQUEST_FIELDS} }} }}"),
     )
     .await
 }
@@ -151,8 +180,8 @@ pub async fn load_agent_requests(node: &EmbeddedNode) -> Result<Vec<AgentRequest
 pub async fn load_agent_responses(node: &EmbeddedNode) -> Result<Vec<AgentResponseRow>> {
     load_rows(
         node,
-        "AgentResponse",
-        "query { AgentResponse { response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at } }",
+        AGENT_RESPONSE_NAME,
+        &format!("query {{ {AGENT_RESPONSE_NAME} {{ {AGENT_RESPONSE_FIELDS} }} }}"),
     )
     .await
 }
@@ -179,7 +208,7 @@ pub async fn load_agent_tool_calls(node: &EmbeddedNode) -> Result<Vec<AgentToolC
     load_rows(
         node,
         "AgentToolCall",
-        "query { AgentToolCall { tool_call_key session_id message_sequence tool_name tool_call_id args result status started_at completed_at } }",
+        &format!("query {{ AgentToolCall {{ {AGENT_TOOL_CALL_FIELDS} }} }}"),
     )
     .await
 }
@@ -187,8 +216,8 @@ pub async fn load_agent_tool_calls(node: &EmbeddedNode) -> Result<Vec<AgentToolC
 pub async fn load_agent_tool_results(node: &EmbeddedNode) -> Result<Vec<AgentToolResultRow>> {
     load_rows(
         node,
-        "AgentToolResult",
-        "query { AgentToolResult { agent_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at } }",
+        AGENT_TOOL_RESULT_NAME,
+        &format!("query {{ {AGENT_TOOL_RESULT_NAME} {{ {AGENT_TOOL_RESULT_FIELDS} }} }}"),
     )
     .await
 }
@@ -576,7 +605,7 @@ query DesktopRemoteChatPatch {{
   AgentResponse(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at }}
   AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ message_key session_id sequence role content timestamp }}
   AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ session_id agent_name behavior_id started ended status }}
-  AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ tool_call_key session_id message_sequence tool_name tool_call_id args result status started_at completed_at }}
+  AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_TOOL_CALL_FIELDS} }}
   AgentToolResult(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ agent_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted }}
   CompactionEntry(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ compaction_key session_id sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at }}
 }}
@@ -594,7 +623,7 @@ query DesktopRemoteSnapshot {
   AgentResponse { response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at }
   AgentMessage { message_key session_id sequence role content timestamp }
   AgentSession { session_id agent_name behavior_id started ended status }
-  AgentToolCall { tool_call_key session_id message_sequence tool_name tool_call_id args result status started_at completed_at }
+  AgentToolCall { tool_call_key session_id message_sequence tool_name tool_call_id args result status started_at completed_at selected_service_id selected_tool_name tool_failure_class latency_ms }
   AgentToolResult { agent_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted }
   CompactionEntry { compaction_key session_id sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at }
   Task { task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at }
@@ -606,3 +635,492 @@ query DesktopRemoteSnapshot {
   ToolServiceRegistry { service_id display_name description hostname tailscale_ip lan_ip mcp_port mcp_path status version updated_at }
 }
 "#;
+
+/// Fetch the rows for a specific set of `(collection, doc_id)` pairs and
+/// return them as a single-collection `ClientStore` patch suitable for
+/// `ObservedStore::merge_snapshot`. Empty `doc_ids` returns an empty store.
+/// Unknown `collection_name` errors so callers can fall back to a scoped
+/// reload.
+pub async fn fetch_doc_patch(
+    node: &EmbeddedNode,
+    collection_name: &str,
+    doc_ids: &[&str],
+) -> Result<ClientStore> {
+    if doc_ids.is_empty() {
+        return Ok(ClientStore::default());
+    }
+
+    let in_clause = doc_ids
+        .iter()
+        .map(|id| format!("\"{}\"", escape_graphql_string(id)))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let mut rows = ClientStoreRows::default();
+    match collection_name {
+        AGENT_PRINCIPAL_NAME => {
+            rows.agent_principals = load_rows(
+                node,
+                AGENT_PRINCIPAL_NAME,
+                &format!("query {{ {AGENT_PRINCIPAL_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_PRINCIPAL_FIELDS} }} }}"),
+            )
+            .await?;
+        }
+        AGENT_BEHAVIOR_NAME => {
+            rows.behaviors = load_rows(
+                node,
+                AGENT_BEHAVIOR_NAME,
+                &format!("query {{ {AGENT_BEHAVIOR_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_BEHAVIOR_FIELDS} }} }}"),
+            )
+            .await?;
+        }
+        AGENT_RUNTIME_NAME => {
+            rows.runtimes = load_rows(
+                node,
+                AGENT_RUNTIME_NAME,
+                &format!("query {{ {AGENT_RUNTIME_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_RUNTIME_FIELDS} }} }}"),
+            )
+            .await?;
+        }
+        AGENT_CONVERSATION_NAME => {
+            rows.conversations = load_rows(
+                node,
+                AGENT_CONVERSATION_NAME,
+                &format!("query {{ {AGENT_CONVERSATION_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_CONVERSATION_FIELDS} }} }}"),
+            )
+            .await?;
+        }
+        AGENT_REQUEST_NAME => {
+            rows.requests = load_rows(
+                node,
+                AGENT_REQUEST_NAME,
+                &format!("query {{ {AGENT_REQUEST_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_REQUEST_FIELDS} }} }}"),
+            )
+            .await?;
+        }
+        AGENT_RESPONSE_NAME => {
+            rows.responses = load_rows(
+                node,
+                AGENT_RESPONSE_NAME,
+                &format!("query {{ {AGENT_RESPONSE_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_RESPONSE_FIELDS} }} }}"),
+            )
+            .await?;
+        }
+        AGENT_MESSAGE_NAME => {
+            rows.messages = load_rows(
+                node,
+                AGENT_MESSAGE_NAME,
+                &format!("query {{ {AGENT_MESSAGE_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"),
+            )
+            .await?;
+        }
+        AGENT_SESSION_NAME => {
+            rows.sessions = load_rows(
+                node,
+                AGENT_SESSION_NAME,
+                &format!("query {{ {AGENT_SESSION_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_SESSION_FIELDS} }} }}"),
+            )
+            .await?;
+        }
+        AGENT_TOOL_CALL_NAME => {
+            rows.tool_calls = load_rows(
+                node,
+                AGENT_TOOL_CALL_NAME,
+                &format!("query {{ {AGENT_TOOL_CALL_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_TOOL_CALL_FIELDS} }} }}"),
+            )
+            .await?;
+        }
+        AGENT_TOOL_RESULT_NAME => {
+            rows.tool_results = load_rows(
+                node,
+                AGENT_TOOL_RESULT_NAME,
+                &format!("query {{ {AGENT_TOOL_RESULT_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_TOOL_RESULT_FIELDS} }} }}"),
+            )
+            .await?;
+        }
+        COMPACTION_ENTRY_NAME => {
+            rows.compaction_entries = load_rows(
+                node,
+                COMPACTION_ENTRY_NAME,
+                &format!("query {{ {COMPACTION_ENTRY_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {COMPACTION_ENTRY_FIELDS} }} }}"),
+            )
+            .await?;
+        }
+        TASK_NAME => {
+            rows.tasks = load_rows(
+                node,
+                TASK_NAME,
+                &format!("query {{ {TASK_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {TASK_FIELDS} }} }}"),
+            )
+            .await?;
+        }
+        SCHEDULE_NAME => {
+            rows.schedules = load_rows(
+                node,
+                SCHEDULE_NAME,
+                &format!("query {{ {SCHEDULE_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {SCHEDULE_FIELDS} }} }}"),
+            )
+            .await?;
+        }
+        EVENT_TRIGGER_NAME => {
+            rows.event_triggers = load_rows(
+                node,
+                EVENT_TRIGGER_NAME,
+                &format!("query {{ {EVENT_TRIGGER_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {EVENT_TRIGGER_FIELDS} }} }}"),
+            )
+            .await?;
+        }
+        TOOL_SELECTION_NAME => {
+            rows.tool_selections = load_rows(
+                node,
+                TOOL_SELECTION_NAME,
+                &format!("query {{ {TOOL_SELECTION_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {TOOL_SELECTION_FIELDS} }} }}"),
+            )
+            .await?;
+        }
+        INFERENCE_BACKEND_NAME => {
+            rows.inference_backends = load_rows(
+                node,
+                INFERENCE_BACKEND_NAME,
+                &format!("query {{ {INFERENCE_BACKEND_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {INFERENCE_BACKEND_FIELDS} }} }}"),
+            )
+            .await?;
+        }
+        INFERENCE_PROFILE_NAME => {
+            rows.inference_profiles = load_rows(
+                node,
+                INFERENCE_PROFILE_NAME,
+                &format!("query {{ {INFERENCE_PROFILE_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {INFERENCE_PROFILE_FIELDS} }} }}"),
+            )
+            .await?;
+        }
+        TOOL_SERVICE_REGISTRY_NAME => {
+            rows.tool_service_registries = load_rows(
+                node,
+                TOOL_SERVICE_REGISTRY_NAME,
+                &format!("query {{ {TOOL_SERVICE_REGISTRY_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {TOOL_SERVICE_REGISTRY_FIELDS} }} }}"),
+            )
+            .await?;
+        }
+        other => bail!("fetch_doc_patch: unknown collection {other}"),
+    }
+    Ok(ClientStore::from_rows(rows))
+}
+
+/// Load a snapshot of all rows for a specific `agent_did`. Agent-keyed
+/// collections are filtered by `agent_did`; transcript collections
+/// (Message, Session, ToolCall, CompactionEntry) are filtered by the
+/// session_id list derived from the agent's conversations. Control-plane
+/// collections (InferenceBackend, InferenceProfile, ToolServiceRegistry,
+/// Task, Schedule, EventTrigger) load in full — they're operator-authored
+/// and small.
+pub async fn load_agent_scoped_snapshot(
+    node: &EmbeddedNode,
+    agent_did: &str,
+) -> Result<ClientStore> {
+    let did = escape_graphql_string(agent_did);
+    let did_filter = format!("filter: {{ agent_did: {{ _eq: \"{did}\" }} }}");
+
+    // Agent-keyed collections.
+    let agent_principals: Vec<AgentPrincipalRow> = load_rows(
+        node,
+        AGENT_PRINCIPAL_NAME,
+        &format!("query {{ {AGENT_PRINCIPAL_NAME}({did_filter}) {{ {AGENT_PRINCIPAL_FIELDS} }} }}"),
+    )
+    .await?;
+    let behaviors: Vec<AgentBehaviorRow> = load_rows(
+        node,
+        AGENT_BEHAVIOR_NAME,
+        &format!("query {{ {AGENT_BEHAVIOR_NAME}({did_filter}) {{ {AGENT_BEHAVIOR_FIELDS} }} }}"),
+    )
+    .await?;
+    let runtimes: Vec<AgentRuntimeRow> = load_rows(
+        node,
+        AGENT_RUNTIME_NAME,
+        &format!("query {{ {AGENT_RUNTIME_NAME}({did_filter}) {{ {AGENT_RUNTIME_FIELDS} }} }}"),
+    )
+    .await?;
+    let conversations: Vec<AgentConversationRow> = load_rows(
+        node,
+        AGENT_CONVERSATION_NAME,
+        &format!(
+            "query {{ {AGENT_CONVERSATION_NAME}({did_filter}) {{ {AGENT_CONVERSATION_FIELDS} }} }}"
+        ),
+    )
+    .await?;
+    let requests: Vec<AgentRequestRow> = load_rows(
+        node,
+        AGENT_REQUEST_NAME,
+        &format!("query {{ {AGENT_REQUEST_NAME}({did_filter}) {{ {AGENT_REQUEST_FIELDS} }} }}"),
+    )
+    .await?;
+    let responses: Vec<AgentResponseRow> = load_rows(
+        node,
+        AGENT_RESPONSE_NAME,
+        &format!("query {{ {AGENT_RESPONSE_NAME}({did_filter}) {{ {AGENT_RESPONSE_FIELDS} }} }}"),
+    )
+    .await?;
+    let tool_results: Vec<AgentToolResultRow> = load_rows(
+        node,
+        AGENT_TOOL_RESULT_NAME,
+        &format!(
+            "query {{ {AGENT_TOOL_RESULT_NAME}({did_filter}) {{ {AGENT_TOOL_RESULT_FIELDS} }} }}"
+        ),
+    )
+    .await?;
+    let tool_selections: Vec<ToolSelectionRow> = load_rows(
+        node,
+        TOOL_SELECTION_NAME,
+        &format!("query {{ {TOOL_SELECTION_NAME}({did_filter}) {{ {TOOL_SELECTION_FIELDS} }} }}"),
+    )
+    .await?;
+
+    // Derive session_id list from the agent's conversations and sessions.
+    let mut session_ids: HashSet<String> = HashSet::new();
+    for c in &conversations {
+        session_ids.insert(c.session_id.clone());
+    }
+    for r in &requests {
+        if let Some(sid) = r.session_id.as_deref() {
+            session_ids.insert(sid.to_string());
+        }
+    }
+
+    // Session-keyed collections.
+    let (messages, sessions, tool_calls, compaction_entries) = if session_ids.is_empty() {
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new())
+    } else {
+        let session_in = session_ids
+            .iter()
+            .map(|s| format!("\"{}\"", escape_graphql_string(s)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let session_filter = format!("filter: {{ session_id: {{ _in: [{session_in}] }} }}");
+        let messages: Vec<AgentMessageRow> = load_rows(
+            node,
+            AGENT_MESSAGE_NAME,
+            &format!(
+                "query {{ {AGENT_MESSAGE_NAME}({session_filter}) {{ {AGENT_MESSAGE_FIELDS} }} }}"
+            ),
+        )
+        .await?;
+        let sessions: Vec<AgentSessionRow> = load_rows(
+            node,
+            AGENT_SESSION_NAME,
+            &format!(
+                "query {{ {AGENT_SESSION_NAME}({session_filter}) {{ {AGENT_SESSION_FIELDS} }} }}"
+            ),
+        )
+        .await?;
+        let tool_calls: Vec<AgentToolCallRow> = load_rows(
+            node,
+            AGENT_TOOL_CALL_NAME,
+            &format!("query {{ {AGENT_TOOL_CALL_NAME}({session_filter}) {{ {AGENT_TOOL_CALL_FIELDS} }} }}"),
+        )
+        .await?;
+        let compaction_entries: Vec<CompactionEntryRow> = load_rows(
+            node,
+            COMPACTION_ENTRY_NAME,
+            &format!("query {{ {COMPACTION_ENTRY_NAME}({session_filter}) {{ {COMPACTION_ENTRY_FIELDS} }} }}"),
+        )
+        .await?;
+        (messages, sessions, tool_calls, compaction_entries)
+    };
+
+    // Control-plane (load in full; small).
+    let tasks = load_tasks(node).await?;
+    let schedules = load_schedules(node).await?;
+    let event_triggers = load_event_triggers(node).await?;
+    let inference_backends = load_inference_backends(node).await?;
+    let inference_profiles = load_inference_profiles(node).await?;
+    let tool_service_registries = load_tool_service_registries(node).await?;
+
+    Ok(ClientStore::from_rows(ClientStoreRows {
+        agent_principals,
+        behaviors,
+        runtimes,
+        conversations,
+        requests,
+        responses,
+        messages,
+        sessions,
+        tool_calls,
+        tool_results,
+        compaction_entries,
+        tasks,
+        schedules,
+        event_triggers,
+        tool_selections,
+        inference_backends,
+        inference_profiles,
+        tool_service_registries,
+        ..ClientStoreRows::default()
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::schema::ensure_runtime_schemas;
+    use defra_agent_protocol::schemas::AGENT_MESSAGE_NAME;
+    use defra_node::NodeBuilder;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn fetch_doc_patch_returns_only_matching_rows() {
+        let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+        ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("schemas");
+
+        let mutation = r#"mutation {
+            create_AgentMessage(input: {
+                message_key: "sess-1:1",
+                session_id: "sess-1",
+                sequence: 1,
+                role: "user",
+                content: "hello",
+                timestamp: "2026-05-07T00:00:00Z"
+            }) { _docID }
+            second: create_AgentMessage(input: {
+                message_key: "sess-1:2",
+                session_id: "sess-1",
+                sequence: 2,
+                role: "assistant",
+                content: "hi",
+                timestamp: "2026-05-07T00:00:01Z"
+            }) { _docID }
+        }"#;
+        let response = node.execute(mutation).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+
+        // DefraDB's create_* mutations return an array, so each value is
+        // [{_docID: "..."}] rather than {_docID: "..."}.
+        let doc_ids: Vec<String> = response
+            .data
+            .as_ref()
+            .and_then(|d| d.as_object())
+            .map(|o| {
+                o.values()
+                    .filter_map(|v| {
+                        v.as_array()
+                            .and_then(|a| a.first())
+                            .and_then(|x| x.get("_docID"))
+                            .and_then(|x| x.as_str())
+                            .map(String::from)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(doc_ids.len(), 2);
+
+        let target_id = doc_ids[0].clone();
+        let patch = fetch_doc_patch(node.as_ref(), AGENT_MESSAGE_NAME, &[&target_id])
+            .await
+            .expect("fetch_doc_patch");
+        assert_eq!(patch.messages.len(), 1, "expected exactly one row");
+    }
+
+    #[tokio::test]
+    async fn fetch_doc_patch_returns_empty_store_for_no_matches() {
+        let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+        ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("schemas");
+
+        let patch = fetch_doc_patch(node.as_ref(), AGENT_MESSAGE_NAME, &["never-existed"])
+            .await
+            .expect("fetch_doc_patch");
+        assert_eq!(patch.messages.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn fetch_doc_patch_empty_input_is_no_op() {
+        let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+        ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("schemas");
+
+        let patch = fetch_doc_patch(node.as_ref(), AGENT_MESSAGE_NAME, &[])
+            .await
+            .expect("fetch_doc_patch");
+        assert_eq!(patch.row_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn fetch_doc_patch_unknown_collection_errors() {
+        let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+        ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("schemas");
+
+        let result = fetch_doc_patch(node.as_ref(), "NotARealCollection", &["x"]).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn load_agent_scoped_snapshot_excludes_other_agents() {
+        let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+        ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("schemas");
+
+        let mutation = r#"mutation {
+            alpha: create_AgentConversation(input: {
+                session_id: "alpha-1",
+                agent_did: "did:alpha",
+                behavior_id: "default",
+                title: "alpha",
+                title_source: "user",
+                preview_text: "",
+                status: "active",
+                created_at: "2026-05-07T00:00:00Z",
+                updated_at: "2026-05-07T00:00:00Z",
+                latest_request_id: ""
+            }) { _docID }
+            beta: create_AgentConversation(input: {
+                session_id: "beta-1",
+                agent_did: "did:beta",
+                behavior_id: "default",
+                title: "beta",
+                title_source: "user",
+                preview_text: "",
+                status: "active",
+                created_at: "2026-05-07T00:00:00Z",
+                updated_at: "2026-05-07T00:00:00Z",
+                latest_request_id: ""
+            }) { _docID }
+        }"#;
+        let response = node.execute(mutation).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+
+        let store = load_agent_scoped_snapshot(node.as_ref(), "did:alpha")
+            .await
+            .expect("load_agent_scoped_snapshot");
+
+        let dids: Vec<&str> = store
+            .conversations
+            .iter()
+            .filter_map(|c| c.agent_did.as_deref())
+            .collect();
+        assert!(
+            dids.iter().all(|d| *d == "did:alpha"),
+            "expected only did:alpha conversations; got {dids:?}"
+        );
+    }
+
+    #[test]
+    fn remote_tool_call_queries_include_local_field_set() {
+        let chat_patch = remote_chat_patch_query("sess-1");
+        for field in AGENT_TOOL_CALL_FIELDS.split_whitespace() {
+            assert!(
+                chat_patch.contains(field),
+                "remote chat patch missing AgentToolCall field {field}"
+            );
+            assert!(
+                REMOTE_SNAPSHOT_QUERY.contains(field),
+                "remote snapshot missing AgentToolCall field {field}"
+            );
+        }
+    }
+}

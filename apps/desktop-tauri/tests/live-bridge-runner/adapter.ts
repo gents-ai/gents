@@ -20,6 +20,9 @@ export function createRunnerAdapter(runner: LiveBridgeRunner): DesktopApiAdapter
       runner.postJson<DesktopClientSnapshot>("/desktop/client/start", {}),
     shutdownDesktopClient: async () =>
       runner.postJson<DesktopClientSnapshot>("/desktop/client/shutdown", {}),
+    setSelectedAgent: async (agentDid) => {
+      await runner.postJson("/desktop/selected-agent", { agentDid });
+    },
     addPeer: async (request) =>
       runner.postJson<DesktopClientSnapshot>("/desktop/peer/add", request),
     fetchPeerStatus: async (serverAddress) => {

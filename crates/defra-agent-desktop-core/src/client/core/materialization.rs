@@ -11,7 +11,7 @@ use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
 use super::super::observe::ObservedStore;
-use super::super::query::load_full_snapshot;
+use super::super::query::{load_agent_scoped_snapshot, load_full_snapshot};
 use super::super::store::ClientStore;
 use super::p2p_ops::p2p_sync_branchable_collection;
 
@@ -38,6 +38,7 @@ struct MaterializationSignature {
 struct MaterializationCandidate {
     session_id: String,
     request_id: String,
+    agent_did: Option<String>,
     signature: MaterializationSignature,
 }
 
@@ -58,6 +59,7 @@ struct MaterializationTracker {
 struct MaterializationRepair {
     session_id: String,
     request_id: String,
+    agent_did: Option<String>,
     stalled_for: Duration,
 }
 
@@ -117,9 +119,13 @@ pub(super) fn spawn_materialization_supervisor_task(
                             "desktop repaired stalled materialization"
                         );
                         tokio::time::sleep(MATERIALIZATION_REFRESH_DELAY).await;
-                        match load_full_snapshot(node.as_ref()).await {
+                        let snapshot_result = match repair.agent_did.as_deref() {
+                            Some(did) => load_agent_scoped_snapshot(node.as_ref(), did).await,
+                            None => load_full_snapshot(node.as_ref()).await,
+                        };
+                        match snapshot_result {
                             Ok(snapshot) => {
-                                store.replace_snapshot(snapshot);
+                                store.merge_snapshot(snapshot);
                             }
                             Err(error) => {
                                 tracing::warn!(
@@ -201,6 +207,7 @@ impl MaterializationTracker {
             repairs.push(MaterializationRepair {
                 session_id: candidate.session_id,
                 request_id: candidate.request_id,
+                agent_did: candidate.agent_did,
                 stalled_for,
             });
         }
@@ -239,6 +246,8 @@ fn streaming_materialization_candidates(store: &ClientStore) -> Vec<Materializat
         };
         let session_id = nonempty(request.session_id.as_deref())
             .unwrap_or_else(|| conversation.session_id.clone());
+        let agent_did = nonempty(request.agent_did.as_deref())
+            .or_else(|| nonempty(conversation.agent_did.as_deref()));
         let transcript = store.transcript(&session_id);
         let completed_tool_call_count = transcript
             .tool_calls
@@ -249,6 +258,7 @@ fn streaming_materialization_candidates(store: &ClientStore) -> Vec<Materializat
         candidates.push(MaterializationCandidate {
             session_id,
             request_id,
+            agent_did,
             signature: MaterializationSignature {
                 response_status: response.status.clone(),
                 progress_seq: response.progress_seq,
@@ -567,6 +577,7 @@ mod tests {
                 repairs.push(MaterializationRepair {
                     session_id: candidate.session_id,
                     request_id: candidate.request_id,
+                    agent_did: candidate.agent_did,
                     stalled_for,
                 });
             }
@@ -582,6 +593,7 @@ mod tests {
         MaterializationCandidate {
             session_id: "sess-1".to_string(),
             request_id: "req-1".to_string(),
+            agent_did: Some("did:amy".to_string()),
             signature: MaterializationSignature {
                 response_status: Some("streaming".to_string()),
                 progress_seq: Some(progress_seq),
@@ -705,5 +717,71 @@ mod tests {
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].request_id, "req-1");
         assert_eq!(candidates[0].signature.response_content_len, 7);
+    }
+
+    #[test]
+    fn streaming_materialization_candidates_carries_agent_did() {
+        let store = ClientStore::from_rows(ClientStoreRows {
+            conversations: vec![AgentConversationRow {
+                session_id: "sess-1".to_string(),
+                agent_name: None,
+                agent_did: Some("did:amy".to_string()),
+                behavior_id: Some("default".to_string()),
+                title: None,
+                title_source: None,
+                preview_text: None,
+                status: Some("active".to_string()),
+                created_at: None,
+                updated_at: None,
+                latest_request_id: Some("req-1".to_string()),
+            }],
+            requests: vec![AgentRequestRow {
+                request_id: "req-1".to_string(),
+                agent_did: Some("did:amy".to_string()),
+                behavior_id: Some("default".to_string()),
+                session_id: Some("sess-1".to_string()),
+                retry_parent_request: None,
+                retry_root_request: None,
+                superseded_by_request: None,
+                content: None,
+                status: Some("processing".to_string()),
+                lifecycle_state: Some("processing".to_string()),
+                backend_id: None,
+                execution_origin: None,
+                caused_by_trigger_id: None,
+                caused_by_trigger_kind: None,
+                failure_reason: None,
+                created_at: None,
+                claimed_at: None,
+                deadline: None,
+                retry_count: None,
+                max_retries: None,
+                interrupt_requested_at: None,
+                valid_until: None,
+            }],
+            responses: vec![AgentResponseRow {
+                response_key: "req-1".to_string(),
+                request_id: Some("req-1".to_string()),
+                agent_did: Some("did:amy".to_string()),
+                behavior_id: Some("default".to_string()),
+                session_id: Some("sess-1".to_string()),
+                content: Some("partial".to_string()),
+                reasoning: None,
+                status: Some("streaming".to_string()),
+                error_message: None,
+                token_count: Some(1),
+                progress_seq: Some(3),
+                materialized_message_sequence: None,
+                materialized_at: None,
+                created_at: None,
+                completed_at: None,
+                interrupted_at: None,
+            }],
+            ..ClientStoreRows::default()
+        });
+
+        let candidates = streaming_materialization_candidates(&store);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].agent_did.as_deref(), Some("did:amy"));
     }
 }
