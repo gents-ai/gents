@@ -36,6 +36,7 @@ pub mod session;
 pub mod streaming;
 pub mod template;
 pub mod tool_call_lifecycle;
+mod migration;
 pub mod tool_surface;
 pub mod toolset;
 pub mod trace_export;
