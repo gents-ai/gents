@@ -170,11 +170,50 @@ Drop(rpc) ==
   /\ messages' = messages \ {rpc}
   /\ UNCHANGED <<desired, replicator, inFlight, pendingInbound, crashCount, rpcIdsUsed>>
 
+(***************************************************************************)
+(* Process(recv, rpc): receiver runs its handler.                          *)
+(*   Install:  replicator[recv][rpc.src] gains rpc.collection.             *)
+(*   Teardown: replicator[recv][rpc.src] loses rpc.collection.             *)
+(* In both cases an Ack RPC is enqueued to messages atomically with the    *)
+(* persisted change (modeling the persist-before-ack derived requirement). *)
+(*                                                                         *)
+(* Idempotent: Install for a collection already present is a state no-op   *)
+(* (still emits an ack). Symmetric for Teardown. (Decision: model handlers *)
+(* as inherently idempotent rather than parameterizing.)                   *)
+(***************************************************************************)
+
+ackOf(rpc) ==
+  LET ackId == CHOOSE id \in RPCId \ rpcIdsUsed : TRUE  \* fresh id for the ack
+  IN [ id         |-> ackId,
+       kind       |-> "Ack",
+       src        |-> rpc.tgt,
+       tgt        |-> rpc.src,
+       collection |-> rpc.collection,
+       of         |-> rpc.id ]
+
+Process(recv, rpc) ==
+  /\ rpc \in pendingInbound[recv]
+  /\ rpc.tgt = recv
+  /\ rpc.kind \in {"Install", "Teardown"}
+  /\ FreshIds(1)                                          \* ack needs an id
+  /\ pendingInbound' = [pendingInbound EXCEPT ![recv] = @ \ {rpc}]
+  /\ \/ /\ rpc.kind = "Install"
+        /\ replicator' =
+             [replicator EXCEPT ![recv] = [@ EXCEPT ![rpc.src] = @ \cup {rpc.collection}]]
+     \/ /\ rpc.kind = "Teardown"
+        /\ replicator' =
+             [replicator EXCEPT ![recv] = [@ EXCEPT ![rpc.src] = @ \ {rpc.collection}]]
+  /\ LET ack == ackOf(rpc) IN
+       /\ messages'    = messages \cup {ack}
+       /\ rpcIdsUsed'  = rpcIdsUsed \cup {ack.id}
+  /\ UNCHANGED <<desired, inFlight, crashCount>>
+
 Next ==
   \/ \E n \in Node, p \in Node, S \in SUBSET Collection : OperatorWrite(n, p, S)
   \/ \E n \in Node : Reconcile(n)
   \/ \E rpc \in messages : Deliver(rpc)
   \/ \E rpc \in messages : Drop(rpc)
+  \/ \E recv \in Node : \E rpc \in pendingInbound[recv] : Process(recv, rpc)
 
 Spec == Init /\ [][Next]_vars
 
