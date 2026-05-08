@@ -227,7 +227,7 @@ impl ToolCallLifecycle {
                     result: "{escaped_result}",
                     status: "completed",
                     lifecycle_state: "failed",
-                    started_at: "{started_at_str}",
+                    started_at: null,
                     completed_at: "{started_at_str}",
                     tool_failure_class: "{failure_class_str}",
                     latency_ms: 0
@@ -245,7 +245,6 @@ impl ToolCallLifecycle {
         self.doc_id = Some(doc_id);
         self.state = ToolCallState::Failed;
         self.failure_class = Some(failure);
-        self.started_at = Some(now);
         Ok(())
     }
 
@@ -316,7 +315,7 @@ impl ToolCallLifecycle {
                     result: "",
                     status: "completed",
                     lifecycle_state: "cancelled",
-                    started_at: "{started_at_str}",
+                    started_at: null,
                     completed_at: "{started_at_str}",
                     latency_ms: 0
                 }}) {{ _docID }}
@@ -331,7 +330,6 @@ impl ToolCallLifecycle {
 
         self.doc_id = Some(doc_id);
         self.state = ToolCallState::Cancelled;
-        self.started_at = Some(now);
         Ok(())
     }
 
