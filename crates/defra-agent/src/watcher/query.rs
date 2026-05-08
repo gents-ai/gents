@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use super::{AgentRequest, DefraWatcher};
+use super::{validate_agent_request_subagent_coherence, AgentRequest, DefraWatcher};
 
 const AGENT_REQUEST_FIELDS: &str = r#"
                     _docID
@@ -44,10 +44,11 @@ impl DefraWatcher {
             anyhow::bail!("watcher query failed: {:?}", resp.errors);
         }
 
-        Ok(agent_request_rows(resp.data.as_ref())?
+        agent_request_rows(resp.data.as_ref())?
             .into_iter()
             .next()
-            .map(AgentRequestRow::into_agent_request))
+            .map(AgentRequestRow::into_agent_request)
+            .transpose()
     }
 
     pub(super) async fn pending_requests(&self) -> anyhow::Result<Vec<AgentRequest>> {
@@ -71,10 +72,10 @@ impl DefraWatcher {
             anyhow::bail!("watcher pending-request query failed: {:?}", resp.errors);
         }
 
-        Ok(agent_request_rows(resp.data.as_ref())?
+        agent_request_rows(resp.data.as_ref())?
             .into_iter()
             .map(AgentRequestRow::into_agent_request)
-            .collect())
+            .collect()
     }
 }
 
@@ -114,8 +115,8 @@ struct AgentRequestRow {
 }
 
 impl AgentRequestRow {
-    fn into_agent_request(self) -> AgentRequest {
-        AgentRequest {
+    fn into_agent_request(self) -> anyhow::Result<AgentRequest> {
+        let req = AgentRequest {
             doc_id: self.doc_id,
             request_id: self.request_id,
             agent_did: self.agent_did,
@@ -132,6 +133,8 @@ impl AgentRequestRow {
             subagent_depth: self.subagent_depth.unwrap_or(0),
             caused_by_parent_request_id: self.caused_by_parent_request_id,
             caused_by_parent_tool_call_id: self.caused_by_parent_tool_call_id,
-        }
+        };
+        validate_agent_request_subagent_coherence(&req)?;
+        Ok(req)
     }
 }

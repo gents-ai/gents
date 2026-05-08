@@ -66,6 +66,7 @@ pub(crate) async fn apply_control_update(
         if selection.agent_did != agent_did {
             return Ok(ControlUpdateOutcome::Irrelevant);
         }
+        selection.validate()?;
         view.remove_tool_selection_by_doc_id(doc_id);
         view.tool_selections.insert(
             selection.selection_id.clone(),

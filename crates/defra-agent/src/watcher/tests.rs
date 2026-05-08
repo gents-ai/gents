@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -146,4 +147,115 @@ fn request(request_id: &str, session_id: &str) -> AgentRequest {
         caused_by_parent_request_id: None,
         caused_by_parent_tool_call_id: None,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Integration tests: validate_agent_request_subagent_coherence wired into
+// the query path.  These tests write incoherent AgentRequest rows directly
+// into DefraDB and verify that the watcher rejects them at query time.
+// ---------------------------------------------------------------------------
+
+async fn test_node() -> Arc<defra_node::EmbeddedNode> {
+    Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap())
+}
+
+/// Insert an AgentRequest row with an incoherent parent linkage into DefraDB
+/// and return its `_docID`.
+///
+/// `subagent_depth` = 1, `caused_by_parent_request_id` is set, but
+/// `caused_by_parent_tool_call_id` is absent — one half of the pair is
+/// missing, which the validator must reject.
+async fn insert_incoherent_agent_request(
+    node: &defra_node::EmbeddedNode,
+    agent_did: &str,
+    request_id: &str,
+) -> String {
+    use crate::graphql::escape_graphql_string;
+
+    let escaped_request_id = escape_graphql_string(request_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let created_at = chrono::Utc::now().to_rfc3339();
+
+    // subagent_depth = 1 but only caused_by_parent_request_id is set;
+    // caused_by_parent_tool_call_id is absent.  This is the coherence
+    // violation the validator checks for.
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{escaped_request_id}",
+                agent_did: "{escaped_agent_did}",
+                session_id: "sess-incoherent",
+                content: "test",
+                status: "pending",
+                lifecycle_state: "pending",
+                backend_id: "",
+                created_at: "{created_at}",
+                retry_count: 0,
+                max_retries: 0,
+                subagent_depth: 1,
+                caused_by_parent_request_id: "parent-req-exists"
+            }}) {{ _docID }}
+        }}"#
+    );
+
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create_AgentRequest (incoherent) failed: {:?}",
+        response.errors
+    );
+
+    let lookup = format!(
+        r#"{{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
+                _docID
+            }}
+        }}"#
+    );
+    let response = node.execute(&lookup).await;
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|rows| rows.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned)
+        .expect("AgentRequest _docID")
+}
+
+#[tokio::test]
+async fn pending_requests_rejects_incoherent_subagent_linkage() {
+    let node = test_node().await;
+    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let agent_did = "did:key:z-watcher-coherence-pending";
+    insert_incoherent_agent_request(node.as_ref(), agent_did, "req-incoherent-pending").await;
+
+    let watcher = DefraWatcher::new(node.clone(), agent_did);
+    let result = watcher.pending_requests().await;
+    assert!(
+        result.is_err(),
+        "pending_requests must fail for incoherent subagent linkage, got: {:?}",
+        result
+    );
+}
+
+#[tokio::test]
+async fn try_fetch_request_rejects_incoherent_subagent_linkage() {
+    let node = test_node().await;
+    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let agent_did = "did:key:z-watcher-coherence-fetch";
+    let doc_id =
+        insert_incoherent_agent_request(node.as_ref(), agent_did, "req-incoherent-fetch").await;
+
+    let watcher = DefraWatcher::new(node.clone(), agent_did);
+    let result = watcher.try_fetch_request(&doc_id).await;
+    assert!(
+        result.is_err(),
+        "try_fetch_request must fail for incoherent subagent linkage, got: {:?}",
+        result
+    );
 }
