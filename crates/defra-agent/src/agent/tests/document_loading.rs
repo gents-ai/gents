@@ -132,6 +132,7 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
             enable_meta_tools: Some(false),
             allowed_mcp_service_ids: Some(Vec::new()),
             delegate_to: Some(vec!["did:defra-agent:amy-code".to_string()]),
+            ..Default::default()
         },
     )
     .await

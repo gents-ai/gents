@@ -6,9 +6,11 @@ use super::graphql_fields;
 use super::serde_helpers;
 use crate::graphql::escape_graphql_string;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ToolSelectionDocument {
+    #[serde(default)]
     pub selection_id: String,
+    #[serde(default)]
     pub agent_did: String,
     pub display_name: Option<String>,
     pub enable_file_tools: Option<bool>,
@@ -44,6 +46,30 @@ pub struct ToolSelectionDocument {
         deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
     )]
     pub delegate_to: Option<Vec<String>>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
+    )]
+    pub subagent_targets: Option<Vec<String>>,
+    pub subagent_spawn_enabled: Option<bool>,
+    pub subagent_steering_enabled: Option<bool>,
+    pub subagent_background_enabled: Option<bool>,
+}
+
+impl ToolSelectionDocument {
+    pub fn validate(&self) -> Result<()> {
+        if let Some(targets) = &self.subagent_targets {
+            for (i, target) in targets.iter().enumerate() {
+                if target.is_empty() {
+                    return Err(anyhow::anyhow!(
+                        "subagent_targets[{}] is empty; behavior IDs must be non-empty strings",
+                        i
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 pub fn default_tool_selection_id_for_behavior(behavior_id: &str) -> String {
@@ -87,6 +113,10 @@ pub(crate) async fn load_tool_selection_record(
                 enable_meta_tools
                 allowed_mcp_service_ids
                 delegate_to
+                subagent_targets
+                subagent_spawn_enabled
+                subagent_steering_enabled
+                subagent_background_enabled
             }}
         }}"#
     );
@@ -130,6 +160,10 @@ pub(crate) async fn load_tool_selection_by_doc_id(
                 enable_meta_tools
                 allowed_mcp_service_ids
                 delegate_to
+                subagent_targets
+                subagent_spawn_enabled
+                subagent_steering_enabled
+                subagent_background_enabled
             }}
         }}"#
     );
@@ -173,6 +207,10 @@ pub(crate) async fn list_tool_selection_records(
                 enable_meta_tools
                 allowed_mcp_service_ids
                 delegate_to
+                subagent_targets
+                subagent_spawn_enabled
+                subagent_steering_enabled
+                subagent_background_enabled
             }}
         }}"#
     );
@@ -210,6 +248,10 @@ pub(crate) async fn list_all_tool_selection_records(
                 enable_meta_tools
                 allowed_mcp_service_ids
                 delegate_to
+                subagent_targets
+                subagent_spawn_enabled
+                subagent_steering_enabled
+                subagent_background_enabled
             }
         }"#;
 
@@ -278,6 +320,22 @@ pub async fn upsert_tool_selection(
             selection.allowed_mcp_service_ids.as_deref(),
         ),
         graphql_fields::graphql_string_list_field("delegate_to", selection.delegate_to.as_deref()),
+        graphql_fields::graphql_string_list_field(
+            "subagent_targets",
+            selection.subagent_targets.as_deref(),
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "subagent_spawn_enabled",
+            selection.subagent_spawn_enabled,
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "subagent_steering_enabled",
+            selection.subagent_steering_enabled,
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "subagent_background_enabled",
+            selection.subagent_background_enabled,
+        ),
     ]
     .into_iter()
     .flatten()
@@ -330,6 +388,22 @@ pub async fn upsert_tool_selection(
             selection.allowed_mcp_service_ids.as_deref(),
         ),
         graphql_fields::graphql_string_list_field("delegate_to", selection.delegate_to.as_deref()),
+        graphql_fields::graphql_string_list_field(
+            "subagent_targets",
+            selection.subagent_targets.as_deref(),
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "subagent_spawn_enabled",
+            selection.subagent_spawn_enabled,
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "subagent_steering_enabled",
+            selection.subagent_steering_enabled,
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "subagent_background_enabled",
+            selection.subagent_background_enabled,
+        ),
     ]
     .into_iter()
     .flatten()

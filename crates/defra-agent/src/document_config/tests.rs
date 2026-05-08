@@ -51,3 +51,34 @@ fn tool_selection_document_accepts_string_array_values() {
         Some(vec!["did:defra-agent:other".to_string()])
     );
 }
+
+#[test]
+fn validate_rejects_empty_string_in_subagent_targets() {
+    let doc = ToolSelectionDocument {
+        selection_id: "test-tools".to_string(),
+        agent_did: "did:defra-agent:test".to_string(),
+        subagent_targets: Some(vec!["".to_string()]),
+        subagent_spawn_enabled: Some(true),
+        ..Default::default()
+    };
+    let result = doc.validate();
+    assert!(result.is_err());
+    assert!(
+        format!("{}", result.unwrap_err()).contains("subagent_targets"),
+        "error message must mention subagent_targets"
+    );
+}
+
+#[test]
+fn validate_accepts_well_formed_subagent_targets() {
+    let doc = ToolSelectionDocument {
+        selection_id: "test-tools".to_string(),
+        agent_did: "did:defra-agent:test".to_string(),
+        subagent_targets: Some(vec!["amy-code".to_string(), "amy-research".to_string()]),
+        subagent_spawn_enabled: Some(true),
+        subagent_steering_enabled: Some(false),
+        subagent_background_enabled: Some(true),
+        ..Default::default()
+    };
+    assert!(doc.validate().is_ok());
+}

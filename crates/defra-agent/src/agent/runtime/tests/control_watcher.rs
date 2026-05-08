@@ -224,6 +224,7 @@ async fn control_watcher_resolves_tool_selection_into_reconciled_tool_surface() 
             enable_meta_tools: Some(false),
             allowed_mcp_service_ids: Some(Vec::new()),
             delegate_to: Some(Vec::new()),
+            ..Default::default()
         },
     )
     .await
