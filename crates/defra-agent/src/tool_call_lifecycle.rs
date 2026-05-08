@@ -6,6 +6,17 @@
 //!
 //! Lifecycle is daemon-visible only; subprocess kill mechanics, output
 //! streaming, and persistent processes are out of scope.
+//!
+//! ## R2 maintenance obligations
+//!
+//! This module implements R2 ("Rust subagent data plane"). Per the spec at
+//! `docs/superpowers/specs/2026-05-08-r2-rust-subagent-data-plane-design.md`:
+//!
+//! - SubagentSource (R3) consumes `create_subagent_request` and the bridge methods.
+//! - Agent-facing tools (R4) are routed via hook integration that uses
+//!   `new_subagent` and recognizes spawn_subagent / wait_task / etc. tool names.
+//! - Cross-reference validation (target resolution, parent existence) lands in R3.
+//! - Cross-principal delegation (R6) lands with sourcenetwork/defra-agent#9.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ToolCallState {
