@@ -36,5 +36,27 @@ theorem cancellable_iff_non_terminal (c : ToolCallContext) :
   unfold cancellable
   cases c.state <;> simp [isTerminal]
 
+
+/-- T2: TimedOut is reachable only when deadline is exceeded.
+    The property whose absence in the runtime caused issue #149.
+    The `h_pre` guard excludes `timeAdvance`/`persistenceStep`, which preserve
+    state — they cannot be the transition that *enters* `.timedOut`. -/
+theorem timedOut_requires_deadline_exceeded
+    {pre post : ToolCallContext}
+    (h_step : Transition pre post)
+    (h_pre  : pre.state ≠ .timedOut)
+    (h_post : post.state = .timedOut) :
+    pre.deadlineExceeded := by
+  cases h_step with
+  | dispatch _ h_post'              => simp_all
+  | spawnFailed _ _ h_post'         => simp_all
+  | complete _ _ h_post'            => simp_all
+  | fail _ _ h_post'                => simp_all
+  | timeout _ h_deadline _          => exact h_deadline
+  | cancelBeforeDispatch _ h_post'  => simp_all
+  | cancelDuringRun _ h_post'       => simp_all
+  | timeAdvance _ _ h_post'         => simp_all
+  | persistenceStep _ _ _ h_post'   => simp_all
+
 end ToolCallContext
 end ToolExecution
