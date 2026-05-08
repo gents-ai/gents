@@ -293,5 +293,119 @@ theorem bridged_child_completion_propagates
   · -- Bridge tool ∈ post.parent.tools.
     exact h_tPost_in
 
+/-! ### B2: child non-completed terminal projects to parent ToolCall failure -/
+
+/-- B2: A child Request reaching a non-`.completed` terminal projects to
+    the parent ToolCall reaching `.failed` (for child `.failed`/`.dead`/
+    `.superseded`) or `.cancelled` (for child `.interrupted`).
+
+    Same hypothesis-bundling pattern as B1: the running-tool witness carries
+    the bridge callId, the `.running` state, and the child link, so we step
+    the same tool we know is bridge-linked. No persistence guard here —
+    `bridge_failure` does not require the bridge tool to be `.committed`. -/
+theorem bridged_child_failure_projects
+    (pre : BridgedState)
+    (h_running    : ∃ t ∈ pre.parent.tools,
+                      t.callId = pre.bridgeCallId ∧
+                      t.state = .running ∧
+                      t.childRequestId = some pre.child.requestId)
+    (h_child_term : pre.child.request.state = .failed ∨
+                    pre.child.request.state = .dead ∨
+                    pre.child.request.state = .interrupted ∨
+                    pre.child.request.state = .superseded) :
+    ∃ post, Trace pre post ∧
+            ∃ t ∈ post.parent.tools,
+              t.callId = pre.bridgeCallId ∧
+              (t.state = .failed ∨ t.state = .cancelled) := by
+  -- Pull out the running bridge tool and its index in pre.parent.tools.
+  obtain ⟨tPre, h_in, h_id, h_run_state, h_child_id⟩ := h_running
+  obtain ⟨idx, h_idx⟩ := List.mem_iff_getElem?.mp h_in
+  -- Project the child terminal to a parent-tool terminal:
+  --   .interrupted → .cancelled  (child interrupted, parent cancels in sympathy)
+  --   everything else → .failed
+  -- Use a `match` on the four-element disjunction so that each `cases`-branch
+  -- below reduces `projectedState` definitionally.
+  let projectedState : ToolExecution.ToolCallState :=
+    match h_child_term with
+    | Or.inl _                            => .failed       -- .failed
+    | Or.inr (Or.inl _)                   => .failed       -- .dead
+    | Or.inr (Or.inr (Or.inl _))          => .cancelled    -- .interrupted
+    | Or.inr (Or.inr (Or.inr _))          => .failed       -- .superseded
+  let tPost : ToolExecution.ToolCallContext := { tPre with state := projectedState }
+  let postParent : ComposedState :=
+    { pre.parent with tools := pre.parent.tools.set idx tPost }
+  let post : BridgedState := { pre with parent := postParent }
+  -- Index bound for `List.mem_set`.
+  have h_lt : idx < pre.parent.tools.length :=
+    (List.getElem?_eq_some_iff.mp h_idx).1
+  -- Recover the `bridge_failure` running-tool form (un-destructured, 4 conjuncts
+  -- with the trailing childRequestId dropped — the constructor takes the
+  -- 2-conjunct form just as B1 did with `h_running'`).
+  have h_running' : ∃ t ∈ pre.parent.tools,
+                       t.callId = pre.bridgeCallId ∧ t.state = .running :=
+    ⟨tPre, h_in, h_id, h_run_state⟩
+  -- The post bridge tool ∈ post.parent.tools (it's the .set element).
+  have h_tPost_in : tPost ∈ postParent.tools :=
+    List.mem_set pre.parent.tools idx h_lt tPost
+  -- Show projectedState is .failed ∨ .cancelled (used both inside the
+  -- constructor's h_post_tool and in the final goal). Case-split on the
+  -- four-way child-terminal disjunction.
+  have h_proj : projectedState = .failed ∨ projectedState = .cancelled := by
+    rcases h_child_term with h | h | h | h
+    · left;  rfl
+    · left;  rfl
+    · right; rfl
+    · left;  rfl
+  refine ⟨post, ?_, tPost, h_tPost_in, ?_, ?_⟩
+  · -- One-step trace via bridge_failure.
+    refine Trace.step ?_ Trace.refl
+    refine Transition.bridge_failure
+      h_child_term
+      h_running'
+      ?_   -- h_post_tool
+      ?_   -- h_others_eq
+      rfl  -- h_request_eq      (post.parent.request = pre.parent.request)
+      rfl  -- h_child_eq        (post.child = pre.child)
+      rfl  -- h_bridgeId_eq     (post.bridgeCallId = pre.bridgeCallId)
+      rfl  -- h_parent_id_eq    (post.parent.requestId = pre.parent.requestId)
+    · -- h_post_tool: tPost ∈ post.parent.tools, callId, state ∈ {failed,cancelled},
+      --              childRequestId = some pre.child.requestId.
+      refine ⟨tPost, h_tPost_in, ?_, ?_, ?_⟩
+      · -- tPost.callId = pre.bridgeCallId.
+        show tPre.callId = pre.bridgeCallId
+        exact h_id
+      · -- tPost.state ∈ {.failed, .cancelled}.
+        show projectedState = .failed ∨ projectedState = .cancelled
+        exact h_proj
+      · -- tPost.childRequestId = some pre.child.requestId.
+        show tPre.childRequestId = some pre.child.requestId
+        exact h_child_id
+    · -- h_others_eq: every non-bridge tool in pre survives unchanged in post.
+      intro t h_t_in h_t_ne
+      show t ∈ postParent.tools
+      have h_set_subset :
+          ∀ x ∈ pre.parent.tools, x ≠ tPre →
+            x ∈ pre.parent.tools.set idx tPost := by
+        intro x hx hx_ne
+        rcases List.mem_iff_getElem?.mp hx with ⟨j, hj⟩
+        by_cases h_eq : j = idx
+        · subst h_eq
+          have : some x = some tPre := by rw [← hj, h_idx]
+          exact absurd (Option.some.inj this) hx_ne
+        · apply List.mem_iff_getElem?.mpr
+          refine ⟨j, ?_⟩
+          rw [List.getElem?_set_ne (by exact fun h => h_eq h.symm)]
+          exact hj
+      apply h_set_subset t h_t_in
+      intro h_eq
+      apply h_t_ne
+      rw [h_eq]; exact h_id
+  · -- tPost.callId = pre.bridgeCallId.
+    show tPre.callId = pre.bridgeCallId
+    exact h_id
+  · -- tPost.state ∈ {.failed, .cancelled}.
+    show projectedState = .failed ∨ projectedState = .cancelled
+    exact h_proj
+
 end BridgedState
 end Subagent
