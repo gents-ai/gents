@@ -335,8 +335,9 @@ async fn copy_tool_calls(
                 }},
                 order: {{ message_sequence: ASC }}
             ) {{
-                message_sequence tool_name tool_call_id args result status started_at completed_at
-                selected_service_id selected_tool_name tool_failure_class latency_ms
+                message_sequence tool_name tool_call_id args result status lifecycle_state
+                started_at completed_at selected_service_id selected_tool_name tool_failure_class
+                latency_ms
             }}
         }}"#
     );
@@ -366,6 +367,7 @@ async fn copy_tool_calls(
         let args = row.get("args").and_then(|v| v.as_str()).unwrap_or("");
         let result = row.get("result").and_then(|v| v.as_str()).unwrap_or("");
         let status = row.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        let lifecycle_state = row.get("lifecycle_state").and_then(|v| v.as_str());
         let started_at = row.get("started_at").and_then(|v| v.as_str()).unwrap_or("");
         let completed_at = row
             .get("completed_at")
@@ -387,6 +389,7 @@ async fn copy_tool_calls(
                     args: "{args_escaped}",
                     result: "{result_escaped}",
                     status: "{status_escaped}",
+                    lifecycle_state: {lifecycle_state},
                     started_at: "{started_at_escaped}",
                     completed_at: "{completed_at_escaped}",
                     selected_service_id: {selected_service_id},
@@ -399,6 +402,7 @@ async fn copy_tool_calls(
             args_escaped = escape_graphql_string(args),
             result_escaped = escape_graphql_string(result),
             status_escaped = escape_graphql_string(status),
+            lifecycle_state = nullable_string_literal(lifecycle_state),
             started_at_escaped = escape_graphql_string(started_at),
             completed_at_escaped = escape_graphql_string(completed_at),
             selected_service_id = nullable_string_literal(selected_service_id),
