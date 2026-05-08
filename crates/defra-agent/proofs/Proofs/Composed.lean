@@ -196,4 +196,43 @@ theorem interrupted_request_cancels_live_linked_tool
     unfold ToolExecution.ToolCallContext.linkedTo at *
     exact h_linked
 
+
+/-- C1: A request whose deadline is exceeded times out a Running linked
+    tool call via the timeout transition. The composition theorem whose
+    absence in the runtime caused issue #149. -/
+theorem deadline_exceeded_request_timesOut_running_tool
+    {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
+    (h_tool     : pre.tool = some toolPre)
+    (h_running  : toolPre.state = .running)
+    (h_linked   : toolPre.linkedTo pre.requestId)
+    (h_deadline : pre.request.deadlineExceeded)
+    (h_synced   : toolPre.requestId = pre.requestId ∧
+                  toolPre.deadline = pre.request.deadline ∧
+                  toolPre.currentTime = pre.request.currentTime) :
+    ∃ post toolPost,
+      Trace pre post ∧
+      post.tool = some toolPost ∧
+      post.request = pre.request ∧
+      toolPost.state = .timedOut ∧
+      toolPost.linkedTo pre.requestId := by
+  obtain ⟨h_sync_id, h_sync_deadline, h_sync_time⟩ := h_synced
+  -- Tool deadline is exceeded because the request deadline is exceeded
+  -- and they're synced.
+  have h_tool_deadline : toolPre.deadlineExceeded := by
+    unfold ToolExecution.ToolCallContext.deadlineExceeded
+    rw [h_sync_time, h_sync_deadline]
+    exact h_deadline
+  let toolPost : ToolExecution.ToolCallContext :=
+    { toolPre with state := .timedOut }
+  let post : ComposedState := { pre with tool := some toolPost }
+  have h_t_step : ToolExecution.ToolCallContext.Transition toolPre toolPost :=
+    ToolExecution.ToolCallContext.Transition.timeout
+      (h_state := h_running) (h_deadline := h_tool_deadline) (h_post := rfl)
+  have h_step : Transition pre post :=
+    Transition.tool_step h_tool h_t_step rfl rfl rfl rfl rfl
+      h_sync_id h_sync_deadline h_sync_time
+  refine ⟨post, toolPost, Trace.step h_step Trace.refl, rfl, rfl, rfl, ?_⟩
+  unfold ToolExecution.ToolCallContext.linkedTo at *
+  exact h_linked
+
 end ComposedState
