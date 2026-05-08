@@ -1,5 +1,5 @@
 ---- MODULE ReversePairing ----
-EXTENDS Naturals, FiniteSets, Sequences, TLC
+EXTENDS Naturals, FiniteSets, TLC
 
 (***************************************************************************)
 (* Reverse-pairing subscription/replicator convergence between two peers.  *)
