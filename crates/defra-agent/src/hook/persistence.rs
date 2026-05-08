@@ -170,22 +170,26 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
     ) -> ToolCallHookAction {
         let result: anyhow::Result<()> = async {
             let (session_id, seq) = self.ensure_assistant_turn_sequence().await?;
-            let storage_id = internal_call_id.to_string();
             self.state.lock().await.register_tool_result_identity(
                 internal_call_id,
                 None,
                 tool_call_id.as_deref(),
             );
-            session::save_tool_call(
-                &self.node,
-                &session_id,
+
+            let mut lc = crate::tool_call_lifecycle::ToolCallLifecycle::new(
+                self.node.clone(),
+                session_id,
+                internal_call_id.to_string(),
                 seq,
-                tool_name,
-                &storage_id,
-                args,
-                "called",
-            )
-            .await?;
+                tool_name.to_string(),
+                args.to_string(),
+            );
+            lc.start_running().await?;
+
+            self.in_flight_lifecycles
+                .lock()
+                .await
+                .insert(internal_call_id.to_string(), lc);
 
             Ok(())
         }
@@ -248,15 +252,18 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                 )
                 .await?;
 
-            let storage_id = internal_call_id.to_string();
-            session::complete_tool_call(
-                &self.node,
-                &session_id,
-                &storage_id,
-                &truncated.text,
-                "completed",
-            )
-            .await?;
+            let mut lc = self
+                .in_flight_lifecycles
+                .lock()
+                .await
+                .remove(internal_call_id)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "on_tool_result: no in-flight lifecycle for tool_call_id={internal_call_id}"
+                    )
+                })?;
+
+            lc.complete(&truncated.text).await?;
 
             if should_persist_message {
                 let tool_result_message = Message::User {
@@ -307,4 +314,23 @@ fn render_tool_result_text(tool_result: &ToolResult) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Classify a runtime error string into a FailureClass. Defaults to
+/// ToolReturnedError for unknown shapes. Placeholder bridge until R3
+/// introduces structured error classification.
+#[allow(dead_code)]
+fn classify_runtime_error(err: &str) -> crate::tool_call_lifecycle::FailureClass {
+    use crate::tool_call_lifecycle::FailureClass;
+    if err.contains("timeout") || err.contains("deadline") {
+        FailureClass::External // R3 will reroute to lifecycle.timeout()
+    } else if err.contains("invalid argument") || err.contains("parse") {
+        FailureClass::ArgumentInvalid
+    } else if err.contains("unavailable") || err.contains("not found") {
+        FailureClass::ServiceUnavailable
+    } else if err.contains("transport") || err.contains("connection") {
+        FailureClass::Transport
+    } else {
+        FailureClass::ToolReturnedError
+    }
 }

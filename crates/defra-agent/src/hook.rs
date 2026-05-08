@@ -7,6 +7,7 @@ use rig::agent::{HookAction, ToolCallHookAction};
 use tokio::sync::Mutex;
 
 use crate::session;
+use crate::tool_call_lifecycle::ToolCallLifecycle;
 use crate::truncation::TruncationLimits;
 
 mod persistence;
@@ -223,6 +224,7 @@ pub struct DefraSessionHook {
     failure_policy: FailurePolicy,
     counters: Arc<HookCounters>,
     state: Arc<Mutex<SessionState>>,
+    in_flight_lifecycles: Arc<Mutex<HashMap<String, ToolCallLifecycle>>>,
 }
 
 enum PolicyDecision {
@@ -256,6 +258,7 @@ impl DefraSessionHook {
                 tool_result_identities: HashMap::new(),
                 initialized: false,
             })),
+            in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -288,6 +291,7 @@ impl DefraSessionHook {
                 tool_result_identities: HashMap::new(),
                 initialized: true,
             })),
+            in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -386,6 +390,17 @@ impl DefraSessionHook {
                 PolicyDecision::Continue => Ok(()),
                 PolicyDecision::Terminate(_) => Err(e),
             },
+        }
+    }
+}
+
+impl Drop for DefraSessionHook {
+    fn drop(&mut self) {
+        // Drain the in-flight map. Lifecycles dropped without completing a
+        // transition leave their AgentToolCall row in state Running on disk —
+        // startup recovery (future R) will sweep these.
+        if let Ok(mut map) = self.in_flight_lifecycles.try_lock() {
+            map.clear();
         }
     }
 }
