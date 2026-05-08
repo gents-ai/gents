@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use crate::graphql::escape_graphql_string;
 
-use super::{FailureClass, ToolCallLifecycle, ToolCallState};
+use super::{AwaitMode, CancelPolicy, FailureClass, ToolCallLifecycle, ToolCallState};
 
 #[derive(Debug, Clone, Deserialize)]
 struct ToolCallResultRow {
@@ -74,6 +74,10 @@ struct ToolCallRow {
     lifecycle_state: Option<String>,
     started_at: Option<String>,
     tool_failure_class: Option<String>,
+    // v3 subagent fields — nullable for v2 rows that pre-date the schema migration.
+    await_mode: Option<String>,
+    cancel_policy: Option<String>,
+    child_request_id: Option<String>,
 }
 
 impl ToolCallLifecycle {
@@ -102,6 +106,9 @@ impl ToolCallLifecycle {
                     lifecycle_state
                     started_at
                     tool_failure_class
+                    await_mode
+                    cancel_policy
+                    child_request_id
                 }}
             }}"#
         );
@@ -143,18 +150,36 @@ impl ToolCallLifecycle {
             .as_deref()
             .and_then(FailureClass::from_persisted);
 
-        let mut lc = Self::new(
+        // v3 subagent fields. v2 rows (where these columns are null) fall back
+        // to the same defaults that Self::new() uses, preserving backwards compat.
+        let await_mode = row
+            .await_mode
+            .as_deref()
+            .and_then(AwaitMode::from_persisted)
+            .unwrap_or(AwaitMode::Foreground);
+
+        let cancel_policy = row
+            .cancel_policy
+            .as_deref()
+            .and_then(CancelPolicy::from_persisted)
+            .unwrap_or(CancelPolicy::Cascade);
+
+        let child_request_id = row.child_request_id.filter(|s| !s.is_empty());
+
+        Ok(Some(Self {
             node,
-            session_id.to_string(),
-            tool_call_id.to_string(),
-            row.message_sequence,
-            row.tool_name,
-            row.args,
-        );
-        lc.set_doc_id(Some(row.doc_id));
-        lc.set_state(state);
-        lc.set_started_at(started_at);
-        lc.set_failure_class(failure_class);
-        Ok(Some(lc))
+            session_id: session_id.to_string(),
+            tool_call_id: tool_call_id.to_string(),
+            message_sequence: row.message_sequence,
+            tool_name: row.tool_name,
+            args: row.args,
+            doc_id: Some(row.doc_id),
+            state,
+            started_at,
+            failure_class,
+            await_mode,
+            cancel_policy,
+            child_request_id,
+        }))
     }
 }
