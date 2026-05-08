@@ -17,7 +17,7 @@ use defra_node::QueryResponse;
 use crate::graphql::escape_graphql_string;
 use crate::session::execute_mutation_with_retry;
 
-use super::{ToolCallLifecycle, ToolCallState};
+use super::{AwaitMode, ToolCallLifecycle, ToolCallState};
 
 /// Error returned when a transition method is called from an illegal
 /// pre-state, or when a subagent-specific guard is violated.
@@ -361,6 +361,42 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
+    /// Running mode-flip: await_mode Foreground → Background.
+    ///
+    /// Lean parity: ToolCallContext.Transition.background.
+    /// Requires Running state. Returns `ModeAlreadyBackground` if already in
+    /// Background mode. Persists the new await_mode to the row, then updates
+    /// the in-memory field on success.
+    pub async fn background(&mut self) -> Result<()> {
+        self.ensure_state(&[ToolCallState::Running], "background")?;
+        if self.await_mode == AwaitMode::Background {
+            return Err(IllegalToolCallTransition::ModeAlreadyBackground.into());
+        }
+
+        let doc_id = self
+            .doc_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("background called before start_running persisted a row"))?;
+
+        let escaped_doc_id = escape_graphql_string(doc_id);
+
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentToolCall(
+                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    input: {{ await_mode: "background" }}
+                ) {{ _docID }}
+            }}"#
+        );
+
+        execute_mutation_with_retry(&self.node, &mutation, "background")
+            .await
+            .context("background mutation")?;
+
+        self.await_mode = AwaitMode::Background;
+        Ok(())
+    }
+
     /// Running → Cancelled. R1 does not call from runtime code; R4 wires up.
     pub async fn cancel_during_run(&mut self) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "cancel_during_run")?;
@@ -493,6 +529,57 @@ mod tests {
                 Some(IllegalToolCallTransition::NativeFailOnSubagentTool)
             ),
             "expected NativeFailOnSubagentTool, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn background_rejects_already_background() {
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new_subagent(
+            node,
+            "sess-bg-2".to_string(),
+            "tc-bg-2".to_string(),
+            1,
+            "spawn_subagent".to_string(),
+            "{}".to_string(),
+            AwaitMode::Background, // start already in Background
+            CancelPolicy::Cascade,
+            "child-req-bg-2".to_string(),
+        );
+        lc.set_state(ToolCallState::Running);
+        lc.set_doc_id(Some("fake-doc-id-bg-2".to_string()));
+        lc.set_started_at(Some(chrono::Utc::now()));
+
+        let err = lc.background().await.unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::ModeAlreadyBackground)
+            ),
+            "expected ModeAlreadyBackground, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn background_rejects_pending_state() {
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new(
+            node,
+            "sess-bg-3".to_string(),
+            "tc-bg-3".to_string(),
+            1,
+            "spawn_subagent".to_string(),
+            "{}".to_string(),
+        );
+        // state is Pending (default); do not advance it
+
+        let err = lc.background().await.unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::BadState { .. })
+            ),
+            "expected BadState, got: {err:?}"
         );
     }
 }
