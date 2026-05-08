@@ -68,6 +68,7 @@ fn session_state_for_test() -> SessionState {
         sequence: 0,
         transcript_turn: TranscriptTurnState::Idle,
         persisted_tool_result_keys: std::collections::HashSet::new(),
+        persisted_tool_result_message_sequences: std::collections::HashMap::new(),
         tool_result_identities: std::collections::HashMap::new(),
         initialized: true,
     }
@@ -989,6 +990,236 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
         row.get("status").and_then(|value| value.as_str()),
         Some("completed")
     );
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
+    let data_path = std::env::temp_dir().join(format!(
+        "agent-hook-tool-result-message-dedupe-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:general",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        PromptHook::<TestModel>::on_completion_call(
+            &hook,
+            &user_text_message("Inspect /tmp/main.rs"),
+            &[]
+        )
+        .await,
+        HookAction::Continue
+    ));
+
+    let stored_call_id = "OaoTQYzCdoptKiK_mdhBA";
+    let model_result_id = "c6b8bdeb-ab92-4481-b763-bdafbd463904";
+    let tool_args = r#"{"file_path":"/tmp/main.rs"}"#;
+    let tool_result_text = "fn main() {}\n";
+
+    assert!(matches!(
+        PromptHook::<TestModel>::on_tool_call(
+            &hook,
+            "read",
+            Some(model_result_id.to_string()),
+            stored_call_id,
+            tool_args,
+        )
+        .await,
+        ToolCallHookAction::Continue
+    ));
+
+    hook.persist_message(&Message::Assistant {
+        id: None,
+        content: OneOrMany::one(AssistantContent::ToolCall(ToolCall {
+            id: model_result_id.to_string(),
+            call_id: Some(model_result_id.to_string()),
+            function: ToolFunction {
+                name: "read".to_string(),
+                arguments: json!({ "file_path": "/tmp/main.rs" }),
+            },
+            signature: None,
+            additional_params: None,
+        })),
+    })
+    .await
+    .unwrap();
+
+    assert!(matches!(
+        PromptHook::<TestModel>::on_tool_result(
+            &hook,
+            "read",
+            Some(model_result_id.to_string()),
+            stored_call_id,
+            tool_args,
+            tool_result_text,
+        )
+        .await,
+        HookAction::Continue
+    ));
+
+    let duplicate_tool_result_message = Message::User {
+        content: OneOrMany::one(UserContent::ToolResult(ToolResult {
+            id: model_result_id.to_string(),
+            call_id: Some(model_result_id.to_string()),
+            content: OneOrMany::one(ToolResultContent::Text(Text {
+                text: tool_result_text.to_string(),
+            })),
+        })),
+    };
+    let reused_sequence = hook
+        .persist_message(&duplicate_tool_result_message)
+        .await
+        .unwrap();
+    assert_eq!(
+        reused_sequence, 3,
+        "a duplicate observation must reuse the first tool-result message sequence"
+    );
+
+    let session_id = hook.session_id().await.expect("session id");
+    let history = crate::session::load_history(&node, &session_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        history.len(),
+        3,
+        "transcript should contain user prompt, assistant tool call, and one tool result"
+    );
+
+    let tool_results = history
+        .iter()
+        .filter_map(|message| match message {
+            Message::User { content } => match content.first_ref() {
+                UserContent::ToolResult(tool_result) => Some(tool_result),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        tool_results.len(),
+        1,
+        "one logical tool result must materialize as one transcript message"
+    );
+    assert_eq!(tool_results[0].id, model_result_id);
+    assert_eq!(tool_results[0].call_id.as_deref(), Some(model_result_id));
+    assert!(matches!(
+        tool_results[0].content.first_ref(),
+        ToolResultContent::Text(Text { text }) if text == tool_result_text
+    ));
+
+    let resp = node
+        .execute(&format!(
+            r#"{{
+                AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
+                    tool_call_key
+                    tool_call_id
+                }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !resp.has_errors(),
+        "query tool calls failed: {:?}",
+        resp.errors
+    );
+    let tool_call_rows = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|value| value.as_array())
+        .cloned()
+        .expect("tool call rows");
+    assert_eq!(tool_call_rows.len(), 1);
+    let tool_call_keys = tool_call_rows
+        .iter()
+        .filter_map(|row| row.get("tool_call_key").and_then(|value| value.as_str()))
+        .collect::<std::collections::HashSet<_>>();
+    let tool_call_ids = tool_call_rows
+        .iter()
+        .filter_map(|row| row.get("tool_call_id").and_then(|value| value.as_str()))
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(tool_call_keys.len(), 1);
+    assert_eq!(tool_call_ids.len(), 1);
+    assert_eq!(tool_call_ids.iter().next().copied(), Some(stored_call_id));
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
+    let data_path = std::env::temp_dir().join(format!(
+        "agent-hook-tool-result-distinct-message-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:general",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        PromptHook::<TestModel>::on_completion_call(
+            &hook,
+            &user_text_message("Run two tools"),
+            &[]
+        )
+        .await,
+        HookAction::Continue
+    ));
+
+    for result_id in ["result-1", "result-2"] {
+        hook.persist_message(&Message::User {
+            content: OneOrMany::one(UserContent::ToolResult(ToolResult {
+                id: result_id.to_string(),
+                call_id: Some(result_id.to_string()),
+                content: OneOrMany::one(ToolResultContent::Text(Text {
+                    text: "same payload".to_string(),
+                })),
+            })),
+        })
+        .await
+        .unwrap();
+    }
+
+    let session_id = hook.session_id().await.expect("session id");
+    let history = crate::session::load_history(&node, &session_id)
+        .await
+        .unwrap();
+    let tool_results = history
+        .iter()
+        .filter_map(|message| match message {
+            Message::User { content } => match content.first_ref() {
+                UserContent::ToolResult(tool_result) => Some(tool_result.id.as_str()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(tool_results, vec!["result-1", "result-2"]);
 
     let _ = std::fs::remove_dir_all(&data_path);
 }

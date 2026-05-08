@@ -9,27 +9,40 @@ use crate::session;
 use crate::tool_call_lifecycle::runtime::{classify_managed_tool_result, ManagedToolTerminal};
 use crate::truncation::{truncate_text, DefraSpillTruncator, TruncationMode, Truncator};
 
-use super::DefraSessionHook;
+use super::{non_empty, DefraSessionHook};
 
 impl DefraSessionHook {
     pub async fn persist_message(&self, message: &Message) -> anyhow::Result<u32> {
-        let (session_id, sequence, role) = {
+        let content = serde_json::to_string(message)?;
+        let (session_id, sequence, role, message_key) = {
             let mut state = self.state.lock().await;
             let session_id = state
                 .session_id
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("session hook missing session id"))?;
+            let message_key = tool_result_message_key(&session_id, message)?;
+            if let Some(existing_sequence) = message_key
+                .as_ref()
+                .and_then(|key| state.persisted_tool_result_message_sequences.get(key))
+            {
+                return Ok(*existing_sequence);
+            }
 
             match message {
                 Message::User { .. } => {
                     state.sequence += 1;
                     let sequence = state.sequence;
                     state.reset_after_user_message();
-                    (session_id, sequence, "user")
+                    if let Some(key) = message_key.as_ref() {
+                        state
+                            .persisted_tool_result_message_sequences
+                            .insert(key.clone(), sequence);
+                    }
+                    (session_id, sequence, "user", message_key)
                 }
                 Message::Assistant { .. } => {
                     let sequence = state.persist_assistant_turn()?;
-                    (session_id, sequence, "assistant")
+                    (session_id, sequence, "assistant", None)
                 }
                 Message::System { .. } => {
                     anyhow::bail!("system messages are not persisted in session history");
@@ -37,8 +50,22 @@ impl DefraSessionHook {
             }
         };
 
-        let content = serde_json::to_string(message)?;
-        session::save_message(&self.node, &session_id, sequence, role, &content).await?;
+        match message_key {
+            Some(message_key) => {
+                session::save_message_with_key(
+                    &self.node,
+                    &session_id,
+                    sequence,
+                    role,
+                    &content,
+                    &message_key,
+                )
+                .await?;
+            }
+            None => {
+                session::save_message(&self.node, &session_id, sequence, role, &content).await?;
+            }
+        }
         Ok(sequence)
     }
 
@@ -366,6 +393,39 @@ fn render_tool_result_text(tool_result: &ToolResult) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn tool_result_message_key(session_id: &str, message: &Message) -> anyhow::Result<Option<String>> {
+    let Message::User { content } = message else {
+        return Ok(None);
+    };
+    if content.len() != 1 {
+        return Ok(None);
+    }
+    let UserContent::ToolResult(tool_result) = content.first_ref() else {
+        return Ok(None);
+    };
+
+    let Some(logical_id) = non_empty(Some(tool_result.id.as_str()))
+        .or_else(|| non_empty(tool_result.call_id.as_deref()))
+    else {
+        return Ok(None);
+    };
+    let content_json = serde_json::to_string(&tool_result.content)?;
+    Ok(Some(format!(
+        "{session_id}:tool-result:{:016x}:{:016x}",
+        stable_hash(logical_id.as_bytes()),
+        stable_hash(content_json.as_bytes())
+    )))
+}
+
+fn stable_hash(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 /// Classify a runtime error string into a FailureClass. Defaults to

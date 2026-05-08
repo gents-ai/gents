@@ -53,18 +53,50 @@ pub(crate) async fn save_message(
     role: &str,
     content: &str,
 ) -> Result<()> {
+    let escaped_session_id = escape_graphql_string(session_id);
+    let message_key = format!("{escaped_session_id}:{sequence}");
+    save_message_inner(node, session_id, sequence, role, content, &message_key).await
+}
+
+pub(crate) async fn save_message_with_key(
+    node: &EmbeddedNode,
+    session_id: &str,
+    sequence: u32,
+    role: &str,
+    content: &str,
+    message_key: &str,
+) -> Result<()> {
+    let escaped_message_key = escape_graphql_string(message_key);
+    save_message_inner(
+        node,
+        session_id,
+        sequence,
+        role,
+        content,
+        &escaped_message_key,
+    )
+    .await
+}
+
+async fn save_message_inner(
+    node: &EmbeddedNode,
+    session_id: &str,
+    sequence: u32,
+    role: &str,
+    content: &str,
+    escaped_message_key: &str,
+) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let escaped = escape_graphql_string(content);
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_role = escape_graphql_string(role);
-    let message_key = format!("{escaped_session_id}:{sequence}");
 
     let mutation = format!(
         r#"mutation {{
             upsert_AgentMessage(
-                filter: {{ message_key: {{ _eq: "{message_key}" }} }},
+                filter: {{ message_key: {{ _eq: "{escaped_message_key}" }} }},
                 add: {{
-                    message_key: "{message_key}",
+                    message_key: "{escaped_message_key}",
                     session_id: "{escaped_session_id}",
                     sequence: {sequence},
                     role: "{escaped_role}",
