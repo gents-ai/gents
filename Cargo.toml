@@ -6,6 +6,7 @@ members = [
     "crates/defra-agent-cli",
     "crates/defra-agent-desktop",
     "crates/defra-agent-desktop-core",
+    "crates/defra-agent-lenses/agent_tool_call_lifecycle_v1_to_v2",
     "crates/defra-agent-protocol",
 ]
 

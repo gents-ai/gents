@@ -1,0 +1,12 @@
+[package]
+name = "agent-tool-call-lifecycle-v1-to-v2-lens"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+lens_sdk = "^0.8"
