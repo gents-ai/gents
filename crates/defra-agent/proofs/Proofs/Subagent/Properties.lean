@@ -197,5 +197,101 @@ theorem inv_link
   | refl => exact h_init
   | step h_step _ ih => exact ih (inv_link_step h_init h_step)
 
+/-! ### B1: child completion propagates to parent ToolCall completion -/
+
+/-- B1: A child Request reaching `.completed` propagates to the parent
+    ToolCall reaching `.completed` along a single `bridge_complete` step.
+
+    The bridge tool hypothesis bundles three facts about the running bridge
+    tool: it carries the bridge callId, it is currently `.running`, and its
+    `childRequestId` matches `pre.child.requestId`. The last conjunct is
+    morally part of `pre.linked`'s `parentLink`, but baking it directly into
+    the running-tool witness avoids a callId-uniqueness side condition: we
+    need to step the *same* tool for which we know the child link. -/
+theorem bridged_child_completion_propagates
+    (pre : BridgedState)
+    (h_running     : ∃ t ∈ pre.parent.tools,
+                       t.callId = pre.bridgeCallId ∧
+                       t.state = .running ∧
+                       t.childRequestId = some pre.child.requestId)
+    (h_persisted   : ∃ t ∈ pre.parent.tools,
+                       t.callId = pre.bridgeCallId ∧
+                       t.persistence = .committed)
+    (h_child_done  : pre.child.request.state = .completed) :
+    ∃ post, Trace pre post ∧
+            ∃ t ∈ post.parent.tools,
+              t.callId = pre.bridgeCallId ∧ t.state = .completed := by
+  -- Pull out the running bridge tool and its index in pre.parent.tools.
+  obtain ⟨tPre, h_in, h_id, h_run_state, h_child_id⟩ := h_running
+  obtain ⟨idx, h_idx⟩ := List.mem_iff_getElem?.mp h_in
+  -- The post-state advances the running bridge tool to `.completed`,
+  -- preserving every other field (including `childRequestId`).
+  let tPost : ToolExecution.ToolCallContext := { tPre with state := .completed }
+  let postParent : ComposedState :=
+    { pre.parent with tools := pre.parent.tools.set idx tPost }
+  let post : BridgedState := { pre with parent := postParent }
+  -- We need the index bound for `List.mem_set`.
+  have h_lt : idx < pre.parent.tools.length :=
+    (List.getElem?_eq_some_iff.mp h_idx).1
+  -- Recover `h_running` for the constructor (un-destructured form).
+  have h_running' : ∃ t ∈ pre.parent.tools,
+                       t.callId = pre.bridgeCallId ∧ t.state = .running :=
+    ⟨tPre, h_in, h_id, h_run_state⟩
+  -- The post bridge tool exists in post.parent.tools (it's the .set element).
+  have h_tPost_in : tPost ∈ postParent.tools :=
+    List.mem_set pre.parent.tools idx h_lt tPost
+  -- Provide the exhibit for the post existential.
+  refine ⟨post, ?_, tPost, ?_, ?_, rfl⟩
+  · -- One-step trace via bridge_complete.
+    refine Trace.step ?_ Trace.refl
+    refine Transition.bridge_complete
+      h_child_done
+      h_running'
+      h_persisted
+      ?_   -- h_post_tool
+      ?_   -- h_others_eq
+      rfl  -- h_request_eq      (post.parent.request = pre.parent.request)
+      rfl  -- h_child_eq        (post.child = pre.child)
+      rfl  -- h_bridgeId_eq     (post.bridgeCallId = pre.bridgeCallId)
+      rfl  -- h_parent_id_eq    (post.parent.requestId = pre.parent.requestId)
+    · -- h_post_tool: tPost ∈ post.parent.tools, callId, state = .completed,
+      --              childRequestId = some pre.child.requestId.
+      refine ⟨tPost, h_tPost_in, ?_, rfl, ?_⟩
+      · -- tPost.callId = pre.bridgeCallId  (tPost shares tPre's callId).
+        show tPre.callId = pre.bridgeCallId
+        exact h_id
+      · -- tPost.childRequestId = some pre.child.requestId.
+        show tPre.childRequestId = some pre.child.requestId
+        exact h_child_id
+    · -- h_others_eq: every non-bridge tool in pre is preserved in post.
+      intro t h_t_in h_t_ne
+      -- post.parent.tools = pre.parent.tools.set idx tPost. A non-bridge tool
+      -- t ≠ tPre (because tPre.callId = pre.bridgeCallId and t.callId ≠
+      -- pre.bridgeCallId). So t survives the .set unchanged.
+      show t ∈ postParent.tools
+      have h_set_subset :
+          ∀ x ∈ pre.parent.tools, x ≠ tPre →
+            x ∈ pre.parent.tools.set idx tPost := by
+        intro x hx hx_ne
+        -- x is in the original list; either its index = idx (then x = tPre,
+        -- contradicting hx_ne) or its index ≠ idx (then .set preserves it).
+        rcases List.mem_iff_getElem?.mp hx with ⟨j, hj⟩
+        by_cases h_eq : j = idx
+        · -- j = idx ⇒ x = tPre via h_idx, hj.
+          subst h_eq
+          have : some x = some tPre := by rw [← hj, h_idx]
+          exact absurd (Option.some.inj this) hx_ne
+        · -- j ≠ idx ⇒ x ∈ pre.parent.tools.set idx tPost.
+          apply List.mem_iff_getElem?.mpr
+          refine ⟨j, ?_⟩
+          rw [List.getElem?_set_ne (by exact fun h => h_eq h.symm)]
+          exact hj
+      apply h_set_subset t h_t_in
+      intro h_eq
+      apply h_t_ne
+      rw [h_eq]; exact h_id
+  · -- Bridge tool ∈ post.parent.tools.
+    exact h_tPost_in
+
 end BridgedState
 end Subagent
