@@ -118,6 +118,9 @@ impl ToolCallLifecycle {
         let escaped_result = escape_graphql_string(result);
         let escaped_doc_id = escape_graphql_string(doc_id);
         let now_str = now.to_rfc3339();
+        // DefraDB requires DateTime fields to be re-supplied on update to
+        // avoid a type-mismatch error when re-validating the document.
+        let started_at_str = started_at.to_rfc3339();
 
         let mutation = format!(
             r#"mutation {{
@@ -127,6 +130,7 @@ impl ToolCallLifecycle {
                         result: "{escaped_result}",
                         status: "completed",
                         lifecycle_state: "completed",
+                        started_at: "{started_at_str}",
                         completed_at: "{now_str}",
                         latency_ms: {latency_ms}
                     }}
@@ -160,6 +164,8 @@ impl ToolCallLifecycle {
         let escaped_doc_id = escape_graphql_string(doc_id);
         let now_str = now.to_rfc3339();
         let failure_class_str = failure.as_str();
+        // DefraDB requires DateTime fields to be re-supplied on update.
+        let started_at_str = started_at.to_rfc3339();
 
         let mutation = format!(
             r#"mutation {{
@@ -169,6 +175,7 @@ impl ToolCallLifecycle {
                         result: "{escaped_result}",
                         status: "completed",
                         lifecycle_state: "failed",
+                        started_at: "{started_at_str}",
                         completed_at: "{now_str}",
                         tool_failure_class: "{failure_class_str}",
                         latency_ms: {latency_ms}
@@ -257,6 +264,8 @@ impl ToolCallLifecycle {
 
         let escaped_doc_id = escape_graphql_string(doc_id);
         let now_str = now.to_rfc3339();
+        // DefraDB requires DateTime fields to be re-supplied on update.
+        let started_at_str = started_at.to_rfc3339();
 
         let mutation = format!(
             r#"mutation {{
@@ -265,6 +274,7 @@ impl ToolCallLifecycle {
                     input: {{
                         status: "completed",
                         lifecycle_state: "timedOut",
+                        started_at: "{started_at_str}",
                         completed_at: "{now_str}",
                         latency_ms: {latency_ms}
                     }}
@@ -338,6 +348,8 @@ impl ToolCallLifecycle {
 
         let escaped_doc_id = escape_graphql_string(doc_id);
         let now_str = now.to_rfc3339();
+        // DefraDB requires DateTime fields to be re-supplied on update.
+        let started_at_str = started_at.to_rfc3339();
 
         let mutation = format!(
             r#"mutation {{
@@ -346,6 +358,7 @@ impl ToolCallLifecycle {
                     input: {{
                         status: "completed",
                         lifecycle_state: "cancelled",
+                        started_at: "{started_at_str}",
                         completed_at: "{now_str}",
                         latency_ms: {latency_ms}
                     }}
@@ -365,25 +378,26 @@ impl ToolCallLifecycle {
 /// Helper to extract `_docID` from a `create_*` mutation response.
 /// Patterned off `crates/defra-agent/src/lifecycle/materialize.rs`.
 ///
-/// DefraDB returns either:
+/// DefraDB versions may return the key as either `"create_AgentToolCall"` or
+/// `"add_AgentToolCall"` (the latter is observed at runtime). Both the scalar
+/// and array forms are handled:
+///   `{ "add_AgentToolCall": [{ "_docID": "..." }] }`
 ///   `{ "create_AgentToolCall": { "_docID": "..." } }`
-/// or the array form:
-///   `{ "create_AgentToolCall": [{ "_docID": "..." }] }`
 fn extract_doc_id_from_create_response(resp: &QueryResponse) -> Option<String> {
-    resp.data
-        .as_ref()
-        .and_then(|d| d.get("create_AgentToolCall"))
-        .and_then(|value| {
+    let data = resp.data.as_ref()?;
+    // Try both "create_" and "add_" prefixes — DefraDB may return either.
+    let value = data
+        .get("create_AgentToolCall")
+        .or_else(|| data.get("add_AgentToolCall"))?;
+    value
+        .get("_docID")
+        .and_then(|doc_id| doc_id.as_str())
+        .or_else(|| {
             value
-                .get("_docID")
+                .as_array()
+                .and_then(|rows| rows.first())
+                .and_then(|row| row.get("_docID"))
                 .and_then(|doc_id| doc_id.as_str())
-                .or_else(|| {
-                    value
-                        .as_array()
-                        .and_then(|rows| rows.first())
-                        .and_then(|row| row.get("_docID"))
-                        .and_then(|doc_id| doc_id.as_str())
-                })
-                .map(|s| s.to_string())
         })
+        .map(|s| s.to_string())
 }
