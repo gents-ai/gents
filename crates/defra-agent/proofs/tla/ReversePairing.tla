@@ -69,7 +69,89 @@ Init ==
   /\ crashCount     = [n \in Node |-> 0]
   /\ rpcIdsUsed     = {}
 
-Next == UNCHANGED vars
+(***************************************************************************)
+(* Helpers                                                                 *)
+(***************************************************************************)
+
+Range(f) == { f[x] : x \in DOMAIN f }
+
+FreshIds(k) ==
+  \* True when there are at least k unused RPC ids available
+  Cardinality(RPCId \ rpcIdsUsed) >= k
+
+PendingInstallFor(n, p, c) ==
+  \E rpc \in inFlight[n] :
+    /\ rpc.kind = "Install"
+    /\ rpc.tgt = p
+    /\ rpc.collection = c
+
+PendingTeardownFor(n, p, c) ==
+  \E rpc \in inFlight[n] :
+    /\ rpc.kind = "Teardown"
+    /\ rpc.tgt = p
+    /\ rpc.collection = c
+
+(***************************************************************************)
+(* OperatorWrite(n, p, S): operator on node n sets desired[n][p] = S.      *)
+(* Atomic update of desired only — no RPCs emitted. Reconcile fires        *)
+(* separately to bridge any resulting gap.                                 *)
+(*                                                                         *)
+(* The S # desired[n][p] precondition prunes stutter steps where the       *)
+(* operator writes the same value already present.                         *)
+(***************************************************************************)
+
+OperatorWrite(n, p, S) ==
+  /\ p # n
+  /\ S # desired[n][p]
+  /\ desired' = [desired EXCEPT ![n] = [@ EXCEPT ![p] = S]]
+  /\ UNCHANGED <<replicator, inFlight, pendingInbound, messages, crashCount, rpcIdsUsed>>
+
+(***************************************************************************)
+(* Reconcile(n): emit ONE Install or Teardown RPC for some (p, c) pair    *)
+(* where desired[n][p] and replicator[p][n] disagree, provided no matching *)
+(* RPC is already in flight. Fires from any state (including post-Crash    *)
+(* recovery, when inFlight has been cleared but the persisted gap          *)
+(* survives).                                                              *)
+(*                                                                         *)
+(* Per-firing scope is one (p, c); multiple disagreements get reconciled   *)
+(* across multiple firings under fairness.                                 *)
+(***************************************************************************)
+
+ReconcileInstall(n, p, c) ==
+  /\ p # n
+  /\ c \in desired[n][p]
+  /\ c \notin replicator[p][n]
+  /\ ~PendingInstallFor(n, p, c)
+  /\ FreshIds(1)
+  /\ LET id == CHOOSE i \in RPCId \ rpcIdsUsed : TRUE
+         rpc == [id |-> id, kind |-> "Install", src |-> n, tgt |-> p,
+                 collection |-> c, of |-> NoOf]
+     IN /\ inFlight'    = [inFlight EXCEPT ![n] = @ \cup {rpc}]
+        /\ messages'    = messages \cup {rpc}
+        /\ rpcIdsUsed'  = rpcIdsUsed \cup {id}
+  /\ UNCHANGED <<desired, replicator, pendingInbound, crashCount>>
+
+ReconcileTeardown(n, p, c) ==
+  /\ p # n
+  /\ c \in replicator[p][n]
+  /\ c \notin desired[n][p]
+  /\ ~PendingTeardownFor(n, p, c)
+  /\ FreshIds(1)
+  /\ LET id == CHOOSE i \in RPCId \ rpcIdsUsed : TRUE
+         rpc == [id |-> id, kind |-> "Teardown", src |-> n, tgt |-> p,
+                 collection |-> c, of |-> NoOf]
+     IN /\ inFlight'    = [inFlight EXCEPT ![n] = @ \cup {rpc}]
+        /\ messages'    = messages \cup {rpc}
+        /\ rpcIdsUsed'  = rpcIdsUsed \cup {id}
+  /\ UNCHANGED <<desired, replicator, pendingInbound, crashCount>>
+
+Reconcile(n) ==
+  \/ \E p \in Node, c \in Collection : ReconcileInstall(n, p, c)
+  \/ \E p \in Node, c \in Collection : ReconcileTeardown(n, p, c)
+
+Next ==
+  \/ \E n \in Node, p \in Node, S \in SUBSET Collection : OperatorWrite(n, p, S)
+  \/ \E n \in Node : Reconcile(n)
 
 Spec == Init /\ [][Next]_vars
 
