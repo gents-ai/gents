@@ -58,5 +58,25 @@ theorem timedOut_requires_deadline_exceeded
   | timeAdvance _ _ h_post'         => simp_all
   | persistenceStep _ _ _ h_post'   => simp_all
 
+/-- T3: Persistence before completion. Mirror of Request S6.
+    The `h_pre` guard excludes `timeAdvance`/`persistenceStep`, which preserve
+    state — they cannot be the transition that *enters* `.completed`. -/
+theorem completed_implies_committed
+    {pre post : ToolCallContext}
+    (h_step : Transition pre post)
+    (h_pre  : pre.state ≠ .completed)
+    (h_post : post.state = .completed) :
+    post.persistence = .committed := by
+  cases h_step with
+  | dispatch _ h_post'              => simp_all
+  | spawnFailed _ _ h_post'         => simp_all
+  | complete _ h_persist h_post'    => simp_all
+  | fail _ _ h_post'                => simp_all
+  | timeout _ _ h_post'             => simp_all
+  | cancelBeforeDispatch _ h_post'  => simp_all
+  | cancelDuringRun _ h_post'       => simp_all
+  | timeAdvance _ _ h_post'         => simp_all
+  | persistenceStep _ _ _ h_post'   => simp_all
+
 end ToolCallContext
 end ToolExecution
