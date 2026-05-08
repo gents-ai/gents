@@ -605,6 +605,27 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
+    /// Lean parity: bridge_cancel_cascade. Pure — returns the action that should
+    /// be taken on the child AgentRequest. Caller (typically R3's daemon
+    /// interrupt dispatcher) performs the actual write to set
+    /// interrupt_requested_at on the child. Returns None for native tools,
+    /// detached subagents, or non-cancelled bridge tools.
+    pub async fn bridge_cancel_cascade(&self) -> Result<Option<super::CascadeIntent>> {
+        if self.state != ToolCallState::Cancelled {
+            return Err(IllegalToolCallTransition::CascadeRequiresCancelled.into());
+        }
+        if self.cancel_policy != CancelPolicy::Cascade {
+            return Ok(None); // detached: no cascade
+        }
+        let Some(child_request_id) = self.child_request_id.clone() else {
+            return Ok(None); // native: no bridge edge
+        };
+        Ok(Some(super::CascadeIntent {
+            child_request_id,
+            at: chrono::Utc::now(),
+        }))
+    }
+
     /// Running → Cancelled. R1 does not call from runtime code; R4 wires up.
     pub async fn cancel_during_run(&mut self) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "cancel_during_run")?;
@@ -1039,6 +1060,90 @@ mod tests {
                 Some(IllegalToolCallTransition::BadState { .. })
             ),
             "expected BadState, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_cancel_cascade_returns_intent_for_cascade_subagent() {
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new_subagent(
+            node,
+            "sess-cas-1".to_string(),
+            "tc-cas-1".to_string(),
+            0,
+            "spawn_agent".to_string(),
+            "{}".to_string(),
+            AwaitMode::Foreground,
+            CancelPolicy::Cascade,
+            "child-cas-1".to_string(),
+        );
+        lc.set_state(ToolCallState::Cancelled);
+
+        let intent = lc.bridge_cancel_cascade().await.unwrap();
+        let intent = intent.expect("should return Some(CascadeIntent)");
+        assert_eq!(intent.child_request_id, "child-cas-1");
+    }
+
+    #[tokio::test]
+    async fn bridge_cancel_cascade_returns_none_for_detached() {
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new_subagent(
+            node,
+            "sess-cas-2".to_string(),
+            "tc-cas-2".to_string(),
+            0,
+            "spawn_agent".to_string(),
+            "{}".to_string(),
+            AwaitMode::Foreground,
+            CancelPolicy::Detach,
+            "child-cas-2".to_string(),
+        );
+        lc.set_state(ToolCallState::Cancelled);
+
+        let intent = lc.bridge_cancel_cascade().await.unwrap();
+        assert!(intent.is_none(), "Detach policy returns None");
+    }
+
+    #[tokio::test]
+    async fn bridge_cancel_cascade_returns_none_for_native() {
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new(
+            node,
+            "sess-cas-3".to_string(),
+            "tc-cas-3".to_string(),
+            0,
+            "native_tool".to_string(),
+            "{}".to_string(),
+        );
+        lc.set_state(ToolCallState::Cancelled);
+
+        let intent = lc.bridge_cancel_cascade().await.unwrap();
+        assert!(intent.is_none(), "Native tool (no child_request_id) returns None");
+    }
+
+    #[tokio::test]
+    async fn bridge_cancel_cascade_rejects_non_cancelled_state() {
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new_subagent(
+            node,
+            "sess-cas-4".to_string(),
+            "tc-cas-4".to_string(),
+            0,
+            "spawn_agent".to_string(),
+            "{}".to_string(),
+            AwaitMode::Foreground,
+            CancelPolicy::Cascade,
+            "child-cas-4".to_string(),
+        );
+        lc.set_state(ToolCallState::Running);
+
+        let err = lc.bridge_cancel_cascade().await.unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::CascadeRequiresCancelled)
+            ),
+            "expected CascadeRequiresCancelled, got: {err:?}"
         );
     }
 }
