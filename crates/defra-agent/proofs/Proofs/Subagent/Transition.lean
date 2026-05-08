@@ -53,6 +53,10 @@ inductive Transition : BridgedState → BridgedState → Prop where
          post.child.request.subagentDepth = pre.parent.request.subagentDepth + 1)
       -- spawn doesn't progress the parent's narrative:
       (h_request_eq    : post.parent.request = pre.parent.request)
+      -- structural-identity guard: the parent's top-level requestId is
+      -- preserved across the spawn. Required for INV-LINK's parentLink ↔
+      -- childLink symmetry under any reachable trace.
+      (h_parent_id_eq  : post.parent.requestId = pre.parent.requestId)
       : Transition pre post
 
   | bridge_complete {pre post : BridgedState}
@@ -62,13 +66,20 @@ inductive Transition : BridgedState → BridgedState → Prop where
       (h_persisted     : ∃ t ∈ pre.parent.tools,
                            t.callId = pre.bridgeCallId ∧
                            t.persistence = .committed)
+      -- post bridge tool: state advances to .completed; childRequestId is
+      -- preserved (the bridge tool retains its link to the spawned child).
       (h_post_tool     : ∃ t ∈ post.parent.tools,
-                           t.callId = pre.bridgeCallId ∧ t.state = .completed)
+                           t.callId = pre.bridgeCallId ∧
+                           t.state = .completed ∧
+                           t.childRequestId = some pre.child.requestId)
       (h_others_eq     : ∀ t ∈ pre.parent.tools, t.callId ≠ pre.bridgeCallId →
                           t ∈ post.parent.tools)
       (h_request_eq    : post.parent.request = pre.parent.request)
       (h_child_eq      : post.child = pre.child)
       (h_bridgeId_eq   : post.bridgeCallId = pre.bridgeCallId)
+      -- structural-identity guard: the parent's top-level requestId is
+      -- preserved (only the bridge tool's state advances at the parent).
+      (h_parent_id_eq  : post.parent.requestId = pre.parent.requestId)
       : Transition pre post
 
   | bridge_failure {pre post : BridgedState}
@@ -78,14 +89,20 @@ inductive Transition : BridgedState → BridgedState → Prop where
                          pre.child.request.state = .superseded)
       (h_running       : ∃ t ∈ pre.parent.tools,
                            t.callId = pre.bridgeCallId ∧ t.state = .running)
+      -- post bridge tool: state moves to .failed/.cancelled; childRequestId
+      -- preserved (the bridge tool retains its link to the spawned child).
       (h_post_tool     : ∃ t ∈ post.parent.tools,
                            t.callId = pre.bridgeCallId ∧
-                           (t.state = .failed ∨ t.state = .cancelled))
+                           (t.state = .failed ∨ t.state = .cancelled) ∧
+                           t.childRequestId = some pre.child.requestId)
       (h_others_eq     : ∀ t ∈ pre.parent.tools, t.callId ≠ pre.bridgeCallId →
                           t ∈ post.parent.tools)
       (h_request_eq    : post.parent.request = pre.parent.request)
       (h_child_eq      : post.child = pre.child)
       (h_bridgeId_eq   : post.bridgeCallId = pre.bridgeCallId)
+      -- structural-identity guard: the parent's top-level requestId is
+      -- preserved (only the bridge tool's state advances at the parent).
+      (h_parent_id_eq  : post.parent.requestId = pre.parent.requestId)
       : Transition pre post
 
   | bridge_cancel_cascade {pre post : BridgedState}
@@ -99,6 +116,20 @@ inductive Transition : BridgedState → BridgedState → Prop where
       (h_interrupt_set : post.child.request.interruptRequestedAt.isSome)
       (h_parent_eq     : post.parent = pre.parent)
       (h_bridgeId_eq   : post.bridgeCallId = pre.bridgeCallId)
+      -- structural-identity guards on the child: only `interruptRequestedAt`
+      -- is allowed to change. Top-level child requestId, lineage fields, and
+      -- depth are preserved. (Subsequent inner transitions on the child use
+      -- `child_step` to drive .interrupted; bridge_cancel_cascade is
+      -- structurally inert except for setting the interrupt timestamp.)
+      (h_child_id_eq   : post.child.requestId = pre.child.requestId)
+      (h_child_caused_req_eq :
+         post.child.request.causedByParentRequestId =
+           pre.child.request.causedByParentRequestId)
+      (h_child_caused_tool_eq :
+         post.child.request.causedByParentToolCallId =
+           pre.child.request.causedByParentToolCallId)
+      (h_child_depth_eq :
+         post.child.request.subagentDepth = pre.child.request.subagentDepth)
       : Transition pre post
 
 /-- Reflexive-transitive closure for liveness statements. -/
