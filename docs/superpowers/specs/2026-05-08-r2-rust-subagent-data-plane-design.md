@@ -41,19 +41,24 @@ R2 deliberately stops at the data plane. SubagentSource (the `TriggerSource` imp
 
 ```
 crates/defra-agent/src/
-  tool_call_lifecycle.rs                # AMEND: + AwaitMode/CancelPolicy enums,
+  tool_call_lifecycle.rs                # AMEND: + AwaitMode/CancelPolicy/ChildTerminal enums,
+                                        #         + CascadeIntent struct,
                                         #         + struct fields,
                                         #         + new_subagent constructor,
                                         #         + IllegalToolCallTransition variants
   tool_call_lifecycle/
     transition.rs                       # AMEND: + background/foreground/detach,
-                                        #         + bridge_complete/failure/cancel_cascade
-    rows.rs                             # AMEND: + new GraphQL row fields
+                                        #         + bridge_complete/failure/cancel_cascade,
+                                        #         + symmetric h_native guards on complete/fail
+    query.rs                            # AMEND: load() reads new fields
     subagent_request.rs                 # NEW: create_subagent_request helper
   migration.rs                          # AMEND: + ensure_subagent_extensions_migrations
+  watcher.rs                            # AMEND: AgentRequest struct gains 3 new fields
+  watcher/query.rs                      # AMEND: AgentRequestRow gains 3 new fields
   document_config/
-    tool_selection.rs                   # AMEND: + subagent_targets / subagent_*_enabled fields,
-                                        #         + apply-time well-formedness validation
+    tool_selection.rs                   # AMEND: + subagent_targets / subagent_*_enabled fields
+  agent/document_view/apply.rs          # AMEND: + AgentRequest parent-linkage coherence checks,
+                                        #         + ToolSelection well-formedness checks
 
 crates/defra-agent-protocol/schemas/agent/
   agent_tool_call.graphql               # AMEND: +4 fields (v3)
@@ -65,10 +70,17 @@ crates/defra-agent-lenses/
     Cargo.toml
     src/lib.rs                          # forward + inverse transforms
 
+crates/defra-agent/proofs/Proofs/Conformance/Contracts/
+  Machines.lean                         # AMEND: emit AwaitMode, CancelPolicy, ChildTerminal,
+                                        #        + bridge transition pairs (prerequisite for
+                                        #        Buckets 1 + 2)
+
 crates/defra-agent/tests/
   tool_call_subagent_lifecycle_conformance.rs   # NEW: Bucket 3 runtime integration
   state_machine_conformance.rs                  # AMEND: Bucket 2 — new transitions
 ```
+
+There is no `rows.rs` file on R1's current `tool_call_lifecycle/` (the row-shape struct lives inline in `transition.rs`); R2 adds new persisted fields by amending the existing inline shape, not by creating a new file.
 
 ### Schema migrations (v2 → v3)
 
@@ -104,38 +116,51 @@ subagent_background_enabled  : Boolean    (default: false)
 
 #### Migration orchestrator
 
+The orchestrator is **per-collection idempotent**, not all-or-nothing. Each of the three patches has its own detection flag; re-running after a partial failure picks up where it left off.
+
 ```rust
 // crates/defra-agent/src/migration.rs
 pub async fn ensure_subagent_extensions_migrations(
     node: Arc<EmbeddedNode>,
 ) -> Result<()> {
-    // 1. Detect already-migrated state by checking AgentToolCall has await_mode field.
-    if has_await_mode_field(&node).await? { return Ok(()); }
+    // 1. AgentToolCall — patch only if v3 fields not already present.
+    if !has_await_mode_field(&node).await? {
+        let v3_atc = node.patch_collection("AgentToolCall", ADD_ATC_PATCH).await?;
+        node.set_active_collection_version(&v3_atc).await?;
+    }
 
-    // 2. Apply three JSON Patches in order.
-    let v3_atc = node.patch_collection("AgentToolCall", ADD_ATC_PATCH).await?;
-    let v3_ar  = node.patch_collection("AgentRequest", ADD_AR_PATCH).await?;
-    let v3_ts  = node.patch_collection("ToolSelection", ADD_TS_PATCH).await?;
+    // 2. AgentRequest — independent idempotency check.
+    if !has_caused_by_parent_request_id_field(&node).await? {
+        let v3_ar = node.patch_collection("AgentRequest", ADD_AR_PATCH).await?;
+        node.set_active_collection_version(&v3_ar).await?;
+    }
 
-    // 3. Register the unified lens.
+    // 3. ToolSelection — independent idempotency check.
+    if !has_subagent_targets_field(&node).await? {
+        let v3_ts = node.patch_collection("ToolSelection", ADD_TS_PATCH).await?;
+        node.set_active_collection_version(&v3_ts).await?;
+    }
+
+    // 4. Register the unified lens (idempotent — safe to call repeatedly).
     let forward = LensConfig::new(
-        v2_atc_id, v3_atc, LensModule::from_path(SUBAGENT_V2_V3_LENS_WASM)
+        v2_id_for_each_collection, v3_id_for_each_collection,
+        LensModule::from_path(SUBAGENT_V2_V3_LENS_WASM)
     );
     node.set_migration(forward).await?;
 
-    // 4. Activate v3 per collection.
-    node.set_active_collection_version(&v3_atc).await?;
-    node.set_active_collection_version(&v3_ar).await?;
-    node.set_active_collection_version(&v3_ts).await?;
     Ok(())
 }
 ```
 
-Invoked from `defra-agent-cli/src/commands/serve.rs` immediately after `ensure_tool_call_migrations()`. Idempotent.
+Invoked from `defra-agent-cli/src/commands/serve.rs` immediately after `ensure_tool_call_migrations()`. The per-collection detection means an operator who hits a partial failure mid-migration just restarts the daemon — the orchestrator finishes the unmigrated collections without needing manual intervention on the already-migrated ones.
 
-#### Backfill — none needed
+#### Backfill — selective
 
-All defaults represent today's behavior exactly. No silent behavior change. Subagent surfaces don't activate unless behavior config opts in (R3 work).
+Most defaults represent today's behavior exactly and need no backfill: `await_mode="foreground"`, `cancel_policy="cascade"`, `child_request_id=null`, `subagent_depth=0`, all `subagent_*` fields on ToolSelection. No silent behavior change.
+
+**One exception: `AgentToolCall.request_id`.** This field is a denormalization that gives "all tool calls for request R" a single-index query. Pre-R2 rows have no `request_id` populated; cross-collection lookup is hard inside a WASM lens, so the lens leaves it `null` on migrated rows. **Implication:** lineage queries that use `request_id` only see post-R2 tool calls. Historic-row lookups continue to work via the existing implicit `session_id → request_id` chain (sessions are owned by requests). New rows created by R2+ runtime always populate `request_id` directly.
+
+This is documented as a known limitation, not a bug. A separate runtime backfill task can fill historic rows if needed; out of scope for R2.
 
 ### Type additions in `tool_call_lifecycle.rs`
 
@@ -177,6 +202,11 @@ impl ChildTerminal {
         &["failed", "dead", "interrupted", "superseded"];
 }
 
+/// Returned by `bridge_cancel_cascade` (wrapped in `Option`). The caller —
+/// typically R3's daemon interrupt dispatcher — performs the actual write
+/// to the child's `interrupt_requested_at` field. Returning `None` from
+/// `bridge_cancel_cascade` means no cascade is required (native tool,
+/// detached subagent, or non-cancelled tool).
 pub struct CascadeIntent {
     pub child_request_id: String,
     pub at: chrono::DateTime<chrono::Utc>,
@@ -240,6 +270,8 @@ Each method:
 
 These don't touch `state` — orthogonal to the lifecycle state machine, exactly what the Lean spec promises.
 
+**Note on cascade policy irreversibility.** `detach()` is one-way: once `cancel_policy = Detach`, no transition flips it back. There is deliberately no `cascade()` method (mirror of Lean's structural irreversibility — the `detach` constructor is the only one that mutates `cancelPolicy`, and its precondition `pre.cancelPolicy = .cascade` makes the flip strictly directional).
+
 #### Bridge transitions
 
 ```rust
@@ -266,6 +298,35 @@ impl ToolCallLifecycle {
 
 `bridge_cancel_cascade` is pure — no DB writes; returns an intent the caller executes. Tests can stub the executor cleanly.
 
+### Symmetric guards on R1's native `complete`/`fail`
+
+The Lean inner `complete` constructor at `Proofs/ToolExecution/Transition.lean:28-33` requires `h_native : pre.childRequestId = none` — the native completion path is restricted to native tools. R2 must mirror this to prevent a subagent-typed `ToolCallLifecycle` from bypassing `bridge_complete` by calling the native `complete()`.
+
+R2 adds preconditions to R1's existing methods:
+
+```rust
+// AMENDED in R1:
+impl ToolCallLifecycle {
+    pub async fn complete(&mut self, result: ToolCallCompleteResult) -> Result<()> {
+        self.ensure_state(&[ToolCallState::Running])?;
+        if self.child_request_id.is_some() {
+            return Err(IllegalToolCallTransition::NativeCompleteOnSubagentTool);
+        }
+        // ...existing R1 body...
+    }
+
+    pub async fn fail(&mut self, result: ..., failure_class: FailureClass) -> Result<()> {
+        self.ensure_state(&[ToolCallState::Running])?;
+        if self.child_request_id.is_some() {
+            return Err(IllegalToolCallTransition::NativeFailOnSubagentTool);
+        }
+        // ...existing R1 body...
+    }
+}
+```
+
+This is structurally true today (every R1 caller of `complete()`/`fail()` is constructing via `new()` which sets `child_request_id = None`), but R2's `new_subagent` constructor introduces tools where `child_request_id = Some(_)` and the guard becomes load-bearing.
+
 ### `IllegalToolCallTransition` new variants
 
 ```rust
@@ -277,6 +338,8 @@ BridgeFailureRequiresChildLink
 CascadeRequiresCancelled
 SubagentDepthExceeded
 ParentLinkageIncoherent
+NativeCompleteOnSubagentTool      // R1's complete() called on subagent-typed tool
+NativeFailOnSubagentTool          // R1's fail() called on subagent-typed tool
 ```
 
 ### `create_subagent_request` helper (`tool_call_lifecycle/subagent_request.rs`)
@@ -300,6 +363,41 @@ pub async fn create_subagent_request(
 ```
 
 Internally builds a `CREATE AgentRequest` mutation with parent linkage fields populated and reuses the existing AgentRequest creation logic for the rest. Bucket 3 conformance can call this helper directly to set up real children for testing `bridge_complete` end-to-end without R3's SubagentSource.
+
+#### Example sequence (consumed by R3's SubagentSource)
+
+```rust
+// R3 will call this from its TriggerSource::next_fire path.
+// R2 only ships the API surface; the call site is R3.
+
+let child_request_id = create_subagent_request(
+    node.clone(),
+    parent_request_id.clone(),
+    parent_tool_call_id.clone(),
+    parent.subagent_depth,
+    behavior_id,
+    prompt,
+    deadline,
+).await?;
+
+let mut bridge_tool = ToolCallLifecycle::new_subagent(
+    node.clone(),
+    parent_session_id,
+    parent_tool_call_id,
+    parent_message_seq,
+    "spawn_subagent".to_string(),
+    args_json,
+    AwaitMode::Foreground,        // or Background, per spawn args
+    CancelPolicy::Cascade,        // default; spawn args can override
+    child_request_id,             // links the bridge edge
+);
+
+bridge_tool.start_running().await?;
+
+// ...time passes; R3's poller observes the child reaching .completed...
+
+bridge_tool.bridge_complete(child_final_assistant_message).await?;
+```
 
 ### `AgentRequest` Rust DAO extensions
 
@@ -337,6 +435,21 @@ pub struct ToolSelectionDocument {
 Apply-time validation: well-formedness only — each entry in `subagent_targets` is non-empty; the three booleans are independent. R3 adds cross-reference validation.
 
 ## Conformance
+
+### Prerequisite — extend the Lean conformance contract
+
+Before any of the buckets below can be implemented, the Lean conformance contract at `crates/defra-agent/proofs/Proofs/Conformance/Contracts/Machines.lean` must be extended to emit the new vocabularies and transitions. R1 had the same prerequisite (R1 spec §"Conformance" — "PR #152 added the toolCallMachine entry; that entry needs one extension before R1 lands its tests").
+
+R2's extensions to `Machines.lean`:
+- New machines / vocabularies emitted as JSON for Rust to consume:
+  - `awaitModeMachine` — `AwaitMode.all` enumeration
+  - `cancelPolicyMachine` — `CancelPolicy.all` enumeration
+  - `childTerminalMachine` — the four `ChildTerminal` variants plus their projection into `ToolCallState`
+- Bridge transition pairs added to the existing `toolCallMachine` (or a sibling `subagentBridgeMachine`):
+  - `(state, await_mode, child_link) → (state', await_mode')` for each of `background`, `foreground`, `detach`, `bridge_complete`, `bridge_failure`, `bridge_cancel_cascade`
+  - The native `complete`/`fail` rows gain a `requires child_request_id = none` precondition flag (matches the new symmetric guards above)
+
+This is **Task 0 of the R2 plan**. Buckets 1 and 2 below depend on it; Bucket 3 doesn't (it's pure runtime).
 
 ### Bucket 1 — vocabulary round-trip (in-module)
 
@@ -377,12 +490,14 @@ Today's `hook/persistence.rs:on_tool_call()` constructs `ToolCallLifecycle::new(
 
 ## Risks
 
-1. **Lens binary size.** Three collections in one WASM. Mitigation: monitor; split into per-collection lenses if past ~500KB.
+1. **Lens binary size.** Three collections in one WASM. Mitigation: measure size as a Bucket-1 step in the plan (e.g., `wc -c agent_subagent_v2_to_v3.wasm`); split into per-collection lenses if growth becomes a concern relative to R1's baseline.
 2. **Migration ordering.** `ensure_subagent_extensions_migrations` must run after `ensure_tool_call_migrations`. Mitigation: explicit serialization in `serve.rs`; assertion at the start of v2→v3 that v1→v2 has run (`AgentToolCall.lifecycle_state` field exists).
 3. **Coherence check too strict.** Reject hypothetical mixed-parent-linkage rows. Mitigation: not a real risk — fields are brand new; default-populated rows are coherent by construction.
 4. **Bucket 3 fixture complexity.** Constructing a "child request in `.completed`" via direct DB write bypasses normal flow. Mitigation: extract a `make_completed_request(node, ...)` test helper; reuse across all bridge_* tests.
 5. **Persisted vocabulary drift.** Lean's `toDefraDB` outputs vs Rust's `as_str()` could drift. Mitigation: Bucket 1's round-trip + Bucket 2's transition matrix consume Lean-emitted JSON as source of truth.
-6. **Partial-failure mode of multi-collection migration.** Three sequential `patch_collection` calls; if the second or third fails after the first succeeds, the database is left half-migrated and the daemon refuses to start. The DefraDB migration framework has no automatic rollback (per R1's experience). Mitigation: idempotent detection at the head of `ensure_subagent_extensions_migrations` (re-running the function after a partial failure either picks up where it left off if the existing patch is detectable, or fails again at the same step). Operators may need to manually patch the un-migrated collection in pathological cases. Acceptable for now because partial failure is improbable in practice (the patches are simple field additions, not data transforms).
+6. **Partial-failure mode of multi-collection migration.** Three sequential `patch_collection` calls; if the second or third fails after the first succeeds, the database is left half-migrated and the daemon refuses to start. The DefraDB migration framework has no automatic rollback (per R1's experience). Mitigation: per-collection idempotency detection at the head of `ensure_subagent_extensions_migrations` (re-running the function after a partial failure picks up at the unmigrated collection without manual intervention on the already-migrated ones). Acceptable risk because partial failure is improbable in practice (the patches are simple field additions, not data transforms).
+
+7. **`ToolSelection` baseline drift vs main / #151.** This branch is stacked on `bug/issue-149-native-glob-deadline`, which forked from main before commit `8b67dbc` (MCP service allowlists, PR #151) landed. R2's `tool_selection.graphql` patch adds 4 subagent fields; #151's already-merged main patch adds `allowed_mcp_service_ids` and related fields. When this branch eventually merges to main, the two field-set additions will need to be reconciled — likely a clean concatenation (no overlapping field names), but the lens version numbering (v2→v3 vs main's v?→v?+1) needs to be settled at merge time. Mitigation: rebase onto `bug/issue-149-native-glob-deadline` after that branch merges main; verify lens version chain at rebase time. R2's plan should treat the lens version numbers as placeholders (`v_pre` → `v_post`) until merge ordering is settled.
 
 ## References
 
