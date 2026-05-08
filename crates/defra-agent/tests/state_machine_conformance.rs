@@ -4201,3 +4201,21 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
         "lineage must be byte-identical before and after claim"
     );
 }
+
+#[test]
+fn tool_call_transitions_match_lean_contract() {
+    // Spec-relational legal transitions
+    assert_lean_transition_is_legal("ToolCall", "pending", "running");
+    assert_lean_transition_is_legal("ToolCall", "pending", "failed");
+    assert_lean_transition_is_legal("ToolCall", "pending", "cancelled");
+    assert_lean_transition_is_legal("ToolCall", "running", "completed");
+    assert_lean_transition_is_legal("ToolCall", "running", "failed");
+    assert_lean_transition_is_legal("ToolCall", "running", "timedOut");
+    assert_lean_transition_is_legal("ToolCall", "running", "cancelled");
+
+    // T1 — terminal irreversibility
+    assert_lean_transition_is_illegal("ToolCall", "completed", "running");
+    assert_lean_transition_is_illegal("ToolCall", "failed", "running");
+    assert_lean_transition_is_illegal("ToolCall", "timedOut", "running");
+    assert_lean_transition_is_illegal("ToolCall", "cancelled", "running");
+}
