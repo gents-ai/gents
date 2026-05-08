@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, it, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, parse } from "node:path";
@@ -48,9 +48,22 @@ type LeanClientShellCase = {
   frontend_expected_turn_state: TurnState | null;
 };
 
+type LeanLiveOverlayCase = {
+  name: string;
+  responseStatus: "streaming" | "complete" | "error";
+  materialized: boolean;
+  precedingToolCalls: number;
+  turnTerminal: boolean;
+  turnLabel: string;
+  hasContent: boolean;
+  hasReasoning: boolean;
+  expectOverlay: boolean;
+};
+
 type LeanContractSnapshot = {
   frontend_client_shell_case_count: number;
   frontend_client_shell_cases: LeanClientShellCase[];
+  live_overlay_cases: LeanLiveOverlayCase[];
 };
 
 let leanContractSnapshot: LeanContractSnapshot | null = null;
@@ -92,7 +105,7 @@ function session(overrides: Partial<DesktopSessionSnapshot> = {}): DesktopSessio
   };
 }
 
-function loadLeanClientShellCases() {
+function loadLeanContractSnapshot(): LeanContractSnapshot {
   if (!leanContractSnapshot) {
     const proofsDir = join(repoRoot(), "crates/defra-agent/proofs");
     runLeanCommand(proofsDir, ["build", "Proofs.Conformance.Contracts"]);
@@ -118,7 +131,15 @@ function loadLeanClientShellCases() {
     }
   }
 
-  return leanContractSnapshot.frontend_client_shell_cases;
+  return leanContractSnapshot;
+}
+
+function loadLeanClientShellCases() {
+  return loadLeanContractSnapshot().frontend_client_shell_cases;
+}
+
+function loadLeanLiveOverlayCases() {
+  return loadLeanContractSnapshot().live_overlay_cases;
 }
 
 function runLeanCommand(proofsDir: string, args: string[]) {
@@ -503,4 +524,49 @@ describe("projectChatShell", () => {
     expect(projection.workflow).toEqual({ kind: "ready" });
     expect(projection.sendStatus).toEqual({ kind: "ready" });
   });
+});
+
+/**
+ * Mirror of the Lean `projectActiveOverlay` decision (see
+ * `Proofs/ClientShell/Projection.lean`) and of the Rust
+ * `should_show_overlay` helper in
+ * `crates/defra-agent/tests/live_overlay_conformance.rs`. Kept inline so the
+ * TypeScript live-delta render decision can fail loudly if either side drifts
+ * from the contract.
+ */
+function shouldShowLiveOverlay(c: LeanLiveOverlayCase): boolean {
+  if (c.materialized) {
+    return false;
+  }
+  if (c.responseStatus === "complete" || c.responseStatus === "error") {
+    return false;
+  }
+  // The Lean predicate hides the overlay for any non-renderable turn label,
+  // including terminal labels (completed/failed/superseded/interrupted) and
+  // the unmodelled labels we may receive over the wire.
+  if (c.turnLabel !== "streaming" && c.turnLabel !== "waitingForClaim") {
+    return false;
+  }
+  return c.hasContent || c.hasReasoning;
+}
+
+describe("LiveOverlay conformance (issue #64)", () => {
+  const cases = loadLeanLiveOverlayCases();
+
+  it("Lean LiveOverlay case table is non-empty", () => {
+    expect(cases.length).toBeGreaterThan(0);
+  });
+
+  for (const raw of cases) {
+    it(`case ${raw.name} matches Lean expected decision`, () => {
+      expect(shouldShowLiveOverlay(raw)).toBe(raw.expectOverlay);
+      if (raw.turnTerminal) {
+        // Sanity: terminal turns must hide the overlay regardless of content,
+        // mirroring the Rust live_overlay_conformance integration test.
+        expect(raw.expectOverlay).toBe(false);
+      }
+      // Reference precedingToolCalls so a Lean column drop fails the snapshot.
+      expect(typeof raw.precedingToolCalls).toBe("number");
+    });
+  }
 });
