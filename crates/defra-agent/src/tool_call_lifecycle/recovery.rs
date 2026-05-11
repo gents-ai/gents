@@ -9,7 +9,10 @@ use crate::graphql::escape_graphql_string;
 use crate::interrupt::interrupt_request;
 use crate::session::execute_mutation_with_retry;
 
-use super::{CancelPolicy, FailureClass, ToolCallState};
+use super::{
+    subagent_request::create_subagent_request_with_request_id, CancelPolicy, FailureClass,
+    ToolCallState,
+};
 
 #[derive(Debug, Default)]
 pub struct ToolCallRecoveryReport {
@@ -25,6 +28,8 @@ struct RunningToolCallRow {
     session_id: String,
     tool_call_id: String,
     #[serde(default)]
+    args: String,
+    #[serde(default)]
     started_at: Option<String>,
     #[serde(default)]
     deadline_at: Option<String>,
@@ -36,9 +41,22 @@ struct RunningToolCallRow {
 
 #[derive(Debug, Deserialize)]
 struct ParentRequestRow {
+    agent_did: String,
     status: String,
     #[serde(default)]
     lifecycle_state: Option<String>,
+    #[serde(default)]
+    subagent_depth: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SpawnArgs {
+    #[serde(alias = "target", alias = "target_behavior_id")]
+    behavior_id: String,
+    #[serde(alias = "message", alias = "content")]
+    prompt: String,
+    #[serde(default)]
+    deadline: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,39 +71,126 @@ impl super::ToolCallLifecycle {
         node: &EmbeddedNode,
         agent_did: &str,
     ) -> Result<ToolCallRecoveryReport> {
+        let materialized_children = recover_orphan_subagent_children(node, agent_did).await?;
+        if materialized_children > 0 {
+            tracing::info!(
+                materialized_children,
+                "materialized orphan subagent child requests during tool-call recovery"
+            );
+        }
+
         Ok(ToolCallRecoveryReport {
             tool_calls_recovered: recover_stuck_running_tool_calls(node, agent_did).await?,
         })
     }
 }
 
-async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) -> Result<usize> {
-    let query = r#"{
-        AgentToolCall(
-            filter: { lifecycle_state: { _eq: "running" } }
-        ) {
-            _docID
-            request_id
-            session_id
-            tool_call_id
-            started_at
-            deadline_at
-            cancel_policy
-            child_request_id
-        }
-    }"#;
+async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) -> Result<usize> {
+    let rows = load_running_tool_call_rows(node).await?;
+    let mut materialized = 0;
 
-    let resp = node.execute(query).await;
-    if resp.has_errors() {
-        anyhow::bail!("querying stuck running tool calls: {:?}", resp.errors);
+    for row in rows {
+        let Some(child_request_id) = child_request_id(&row).map(str::to_string) else {
+            continue;
+        };
+        if child_request_exists(node, &child_request_id).await? {
+            continue;
+        }
+
+        let parent_request_id = match row
+            .request_id
+            .as_deref()
+            .filter(|request_id| !request_id.is_empty())
+        {
+            Some(request_id) => request_id.to_string(),
+            None => {
+                tracing::warn!(
+                    doc_id = %row.doc_id,
+                    session_id = %row.session_id,
+                    tool_call_id = %row.tool_call_id,
+                    child_request_id = %child_request_id,
+                    "cannot materialize orphan subagent child without parent request_id"
+                );
+                continue;
+            }
+        };
+
+        let Some(parent) = lookup_parent_request(node, agent_did, &parent_request_id).await? else {
+            tracing::warn!(
+                doc_id = %row.doc_id,
+                request_id = %parent_request_id,
+                session_id = %row.session_id,
+                tool_call_id = %row.tool_call_id,
+                child_request_id = %child_request_id,
+                "cannot materialize orphan subagent child because parent AgentRequest is missing"
+            );
+            continue;
+        };
+
+        let spawn_args = match serde_json::from_str::<SpawnArgs>(&row.args) {
+            Ok(spawn_args) => spawn_args,
+            Err(error) => {
+                tracing::warn!(
+                    doc_id = %row.doc_id,
+                    request_id = %parent_request_id,
+                    session_id = %row.session_id,
+                    tool_call_id = %row.tool_call_id,
+                    child_request_id = %child_request_id,
+                    error = %error,
+                    "cannot materialize orphan subagent child because tool args are invalid"
+                );
+                continue;
+            }
+        };
+
+        let parent_depth = parent
+            .subagent_depth
+            .and_then(|depth| u32::try_from(depth).ok())
+            .unwrap_or(0);
+        let deadline =
+            effective_deadline(row.deadline_at.as_deref(), spawn_args.deadline.as_deref());
+
+        if let Err(error) = create_subagent_request_with_request_id(
+            node,
+            child_request_id.clone(),
+            parent_request_id.clone(),
+            row.tool_call_id.clone(),
+            parent_depth,
+            parent.agent_did,
+            spawn_args.behavior_id,
+            spawn_args.prompt,
+            deadline,
+        )
+        .await
+        {
+            tracing::warn!(
+                doc_id = %row.doc_id,
+                request_id = %parent_request_id,
+                session_id = %row.session_id,
+                tool_call_id = %row.tool_call_id,
+                child_request_id = %child_request_id,
+                error = %error,
+                "failed to materialize orphan subagent child request during recovery"
+            );
+            continue;
+        }
+
+        materialized += 1;
+        tracing::info!(
+            doc_id = %row.doc_id,
+            request_id = %parent_request_id,
+            session_id = %row.session_id,
+            tool_call_id = %row.tool_call_id,
+            child_request_id = %child_request_id,
+            "materialized orphan subagent child request during recovery"
+        );
     }
 
-    let rows: Vec<RunningToolCallRow> = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
+    Ok(materialized)
+}
+
+async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) -> Result<usize> {
+    let rows = load_running_tool_call_rows(node).await?;
 
     let mut recovered = 0;
     for row in rows {
@@ -168,6 +273,37 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
     Ok(recovered)
 }
 
+async fn load_running_tool_call_rows(node: &EmbeddedNode) -> Result<Vec<RunningToolCallRow>> {
+    let query = r#"{
+        AgentToolCall(
+            filter: { lifecycle_state: { _eq: "running" } }
+        ) {
+            _docID
+            request_id
+            session_id
+            tool_call_id
+            args
+            started_at
+            deadline_at
+            cancel_policy
+            child_request_id
+        }
+    }"#;
+
+    let resp = node.execute(query).await;
+    if resp.has_errors() {
+        anyhow::bail!("querying stuck running tool calls: {:?}", resp.errors);
+    }
+
+    let rows: Vec<RunningToolCallRow> = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+    Ok(rows)
+}
+
 async fn lookup_parent_request(
     node: &EmbeddedNode,
     agent_did: &str,
@@ -184,8 +320,10 @@ async fn lookup_parent_request(
                 }},
                 limit: 1
             ) {{
+                agent_did
                 status
                 lifecycle_state
+                subagent_depth
             }}
         }}"#
     );
@@ -205,6 +343,31 @@ async fn lookup_parent_request(
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_default();
     Ok(rows.into_iter().next())
+}
+
+async fn child_request_exists(node: &EmbeddedNode, request_id: &str) -> Result<bool> {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                limit: 1
+            ) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        anyhow::bail!(
+            "querying child request for tool-call recovery: {:?}",
+            resp.errors
+        );
+    }
+    Ok(resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|rows| !rows.is_empty()))
 }
 
 async fn recover_tool_call_row(
@@ -256,6 +419,18 @@ fn parse_datetime(value: Option<&str>) -> Option<DateTime<Utc>> {
         .filter(|value| !value.is_empty())
         .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
         .map(|datetime| datetime.with_timezone(&Utc))
+}
+
+fn effective_deadline(
+    tool_deadline: Option<&str>,
+    args_deadline: Option<&str>,
+) -> Option<DateTime<Utc>> {
+    match (parse_datetime(tool_deadline), parse_datetime(args_deadline)) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(left), None) => Some(left),
+        (None, Some(right)) => Some(right),
+        (None, None) => None,
+    }
 }
 
 fn request_is_interrupted(parent: &ParentRequestRow) -> bool {

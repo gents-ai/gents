@@ -63,6 +63,7 @@ struct ChildRequestRow {
     request_id: String,
     behavior_id: String,
     content: String,
+    lifecycle_state: Option<String>,
     subagent_depth: Option<i64>,
     caused_by_parent_request_id: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
@@ -81,6 +82,7 @@ async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> 
                 request_id
                 behavior_id
                 content
+                lifecycle_state
                 subagent_depth
                 caused_by_parent_request_id
                 caused_by_parent_tool_call_id
@@ -379,6 +381,59 @@ async fn cascade_after_source_spawn_reaches_child_request() {
     running.booted.shutdown().await;
 }
 
+#[tokio::test]
+async fn recovery_materializes_orphan_child_request_for_running_subagent_tool() {
+    let db = test_db("r3-subagent-source-orphan-recovery").await;
+    let parent_request_id = "r3-parent-orphan";
+    let parent_session_id = "r3-session-orphan";
+    let parent_tool_call_id = "r3-tc-orphan";
+    let child_request_id = "child-orphan-1";
+    support::create_request(
+        db.node.as_ref(),
+        parent_request_id,
+        parent_session_id,
+        "processing",
+        &chrono::Utc::now().to_rfc3339(),
+    )
+    .await;
+    create_orphan_subagent_tool_call(
+        db.node.as_ref(),
+        parent_request_id,
+        parent_session_id,
+        parent_tool_call_id,
+        child_request_id,
+    )
+    .await;
+
+    let report = ToolCallLifecycle::recover_all(db.node.as_ref(), support::AGENT_DID)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.tool_calls_recovered, 0,
+        "orphan backfill should not terminalize a live non-expired tool call"
+    );
+
+    let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
+    assert_eq!(child.request_id, child_request_id);
+    assert_eq!(child.behavior_id, support::AGENT_NAME);
+    assert_eq!(child.content, "orphan child prompt");
+    assert_eq!(child.lifecycle_state.as_deref(), Some("pending"));
+    assert_eq!(child.subagent_depth, Some(1));
+    assert_eq!(
+        child.caused_by_parent_request_id.as_deref(),
+        Some(parent_request_id)
+    );
+    assert_eq!(
+        child.caused_by_parent_tool_call_id.as_deref(),
+        Some(parent_tool_call_id)
+    );
+    assert_eq!(
+        child.caused_by_trigger_id.as_deref(),
+        Some(parent_tool_call_id)
+    );
+    assert_eq!(child.caused_by_trigger_kind.as_deref(), Some("subagent"));
+}
+
 async fn mark_request_interrupted(node: &EmbeddedNode, request_id: &str) {
     let escaped_request_id = escape_graphql_string(request_id);
     let mutation = format!(
@@ -396,6 +451,59 @@ async fn mark_request_interrupted(node: &EmbeddedNode, request_id: &str) {
     assert!(
         !response.has_errors(),
         "mark_request_interrupted failed: {:?}",
+        response.errors
+    );
+}
+
+async fn create_orphan_subagent_tool_call(
+    node: &EmbeddedNode,
+    parent_request_id: &str,
+    parent_session_id: &str,
+    parent_tool_call_id: &str,
+    child_request_id: &str,
+) {
+    let escaped_parent_request_id = escape_graphql_string(parent_request_id);
+    let escaped_parent_session_id = escape_graphql_string(parent_session_id);
+    let escaped_parent_tool_call_id = escape_graphql_string(parent_tool_call_id);
+    let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let tool_call_key = format!("{escaped_parent_session_id}:{escaped_parent_tool_call_id}");
+    let args = serde_json::json!({
+        "behavior_id": support::AGENT_NAME,
+        "prompt": "orphan child prompt"
+    })
+    .to_string();
+    let escaped_args = escape_graphql_string(&args);
+    let started_at = chrono::Utc::now().to_rfc3339();
+    let deadline_at = (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentToolCall(input: {{
+                tool_call_key: "{tool_call_key}",
+                request_id: "{escaped_parent_request_id}",
+                session_id: "{escaped_parent_session_id}",
+                message_sequence: 1,
+                tool_name: "spawn_subagent",
+                tool_call_id: "{escaped_parent_tool_call_id}",
+                args: "{escaped_args}",
+                result: "",
+                status: "called",
+                lifecycle_state: "running",
+                started_at: "{started_at}",
+                deadline_at: "{deadline_at}",
+                child_request_id: "{escaped_child_request_id}",
+                await_mode: "Foreground",
+                cancel_policy: "Cascade",
+                selected_service_id: null,
+                selected_tool_name: null,
+                tool_failure_class: null,
+                latency_ms: null
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create orphan AgentToolCall failed: {:?}",
         response.errors
     );
 }
