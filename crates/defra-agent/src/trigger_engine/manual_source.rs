@@ -90,6 +90,7 @@ impl ManualTriggerHandle {
             }),
             doc_vars: None,
             args_vars: Some(args),
+            pre_materialized_request_id: None,
             on_result: Box::new(move |result| {
                 // Caller may have dropped the receiver — that's fine.
                 let _ = result_tx.send(result);

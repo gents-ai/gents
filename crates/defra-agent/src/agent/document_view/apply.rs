@@ -67,6 +67,7 @@ pub(crate) async fn apply_control_update(
             return Ok(ControlUpdateOutcome::Irrelevant);
         }
         selection.validate()?;
+        validate_subagent_targets_resolve(&selection, view)?;
         view.remove_tool_selection_by_doc_id(doc_id);
         view.tool_selections.insert(
             selection.selection_id.clone(),
@@ -188,4 +189,19 @@ pub(crate) async fn apply_control_update(
     }
 
     Ok(ControlUpdateOutcome::Irrelevant)
+}
+
+fn validate_subagent_targets_resolve(
+    selection: &crate::document_config::ToolSelectionDocument,
+    view: &DocumentRuntimeView,
+) -> Result<()> {
+    for target in selection.subagent_targets.iter().flatten() {
+        if !view.behaviors.contains_key(target) {
+            anyhow::bail!(
+                "ToolSelection {} subagent_targets entry {target:?} does not resolve to an AgentBehavior",
+                selection.selection_id,
+            );
+        }
+    }
+    Ok(())
 }

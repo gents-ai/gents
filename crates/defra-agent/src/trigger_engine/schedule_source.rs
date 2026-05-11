@@ -193,6 +193,7 @@ impl TriggerSource for ScheduleSource {
                         event_vars,
                         doc_vars: None,
                         args_vars: None,
+                        pre_materialized_request_id: None,
                         on_result: Box::new(move |result| {
                             let updates = match &result {
                                 FireResult::Fired { request_id } => {

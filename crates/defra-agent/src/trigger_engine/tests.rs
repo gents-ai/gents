@@ -464,6 +464,7 @@ async fn trigger_engine_dispatch_matches_lean_generated_contract_cases() {
             event_vars: serde_json::json!({}),
             doc_vars: None,
             args_vars: None,
+            pre_materialized_request_id: None,
             on_result: Box::new(|_| {}),
         };
 
@@ -627,6 +628,7 @@ async fn dispatch_skips_when_schedule_not_in_active_schedules() {
         event_vars: serde_json::json!({}),
         doc_vars: None,
         args_vars: None,
+        pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
 
@@ -639,6 +641,39 @@ async fn dispatch_skips_when_schedule_not_in_active_schedules() {
     assert!(
         materializer.calls().is_empty(),
         "materializer should not be called when the trigger is disabled"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_reports_pre_materialized_request_without_materializer_call() {
+    let snapshot = snapshot_with_schedules(HashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = SpyMaterializer::new();
+    let engine = TriggerEngine::new(rx, materializer.clone());
+
+    let intent = FireIntent {
+        trigger_id: None,
+        trigger_kind: TriggerKind::Manual,
+        task: resolved_task("ignored"),
+        concurrency: ConcurrencyMode::Parallel,
+        event_vars: serde_json::json!({"trigger_kind": "subagent"}),
+        doc_vars: None,
+        args_vars: None,
+        pre_materialized_request_id: Some("child-pre-materialized".to_string()),
+        on_result: Box::new(|_| {}),
+    };
+
+    let result = engine.dispatch(intent).await;
+
+    match result {
+        FireResult::Fired { request_id } => {
+            assert_eq!(request_id, "child-pre-materialized");
+        }
+        other => panic!("expected Fired for pre-materialized intent, got {other:?}"),
+    }
+    assert!(
+        materializer.calls().is_empty(),
+        "pre-materialized dispatch must not create a second AgentRequest"
     );
 }
 
@@ -659,6 +694,7 @@ async fn dispatch_renders_and_materializes_when_schedule_active() {
         event_vars: serde_json::json!({"fired_at": "2026-04-21T00:00:00Z"}),
         doc_vars: None,
         args_vars: None,
+        pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
 
@@ -695,6 +731,7 @@ async fn dispatch_parallel_materializes_every_intent() {
         event_vars: serde_json::json!({}),
         doc_vars: None,
         args_vars: None,
+        pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
     let intent2 = FireIntent {
@@ -705,6 +742,7 @@ async fn dispatch_parallel_materializes_every_intent() {
         event_vars: serde_json::json!({}),
         doc_vars: None,
         args_vars: None,
+        pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
 
@@ -744,6 +782,7 @@ async fn dispatch_serial_materializes_when_no_inflight() {
         event_vars: serde_json::json!({}),
         doc_vars: None,
         args_vars: None,
+        pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
 
@@ -780,6 +819,7 @@ async fn dispatch_serial_skips_when_inflight_exists() {
         event_vars: serde_json::json!({}),
         doc_vars: None,
         args_vars: None,
+        pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
 
@@ -820,6 +860,7 @@ async fn dispatch_latest_only_supersedes_prior_and_fires_new() {
         event_vars: serde_json::json!({}),
         doc_vars: None,
         args_vars: None,
+        pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
 
@@ -866,6 +907,7 @@ async fn dispatch_latest_only_lock_blocks_second_supersede_until_first_materiali
         event_vars: serde_json::json!({}),
         doc_vars: None,
         args_vars: None,
+        pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
 
@@ -965,6 +1007,7 @@ async fn dispatch_errors_and_skips_materialize_on_template_render_failure() {
         event_vars: serde_json::json!({}),
         doc_vars: None,
         args_vars: None,
+        pre_materialized_request_id: None,
         on_result: Box::new(move |r| {
             *capture.lock().unwrap() = Some(r);
         }),
@@ -1023,6 +1066,7 @@ async fn dispatch_latest_only_serializes_parallel_fires() {
         event_vars: serde_json::json!({}),
         doc_vars: None,
         args_vars: None,
+        pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
 
@@ -2765,6 +2809,7 @@ async fn dispatch_manual_intent_renders_with_args_and_materializes() {
         event_vars: serde_json::json!({}),
         doc_vars: None,
         args_vars: Some(serde_json::json!({"name": "Amy"})),
+        pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
 
@@ -2814,6 +2859,7 @@ async fn dispatch_rejects_manual_intent_with_trigger_id() {
         event_vars: serde_json::json!({}),
         doc_vars: None,
         args_vars: Some(serde_json::json!({})),
+        pre_materialized_request_id: None,
         on_result: Box::new(move |r| {
             *capture.lock().unwrap() = Some(r);
         }),

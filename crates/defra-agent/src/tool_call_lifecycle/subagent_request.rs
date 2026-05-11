@@ -9,6 +9,7 @@
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
+use serde::Deserialize;
 
 use crate::graphql::escape_graphql_string;
 use crate::lifecycle::DEFAULT_REQUEST_MAX_RETRIES;
@@ -23,9 +24,42 @@ use super::IllegalToolCallTransition;
 /// validation can reference the same value as the Lean spec.
 pub const MAX_SUBAGENT_DEPTH: u32 = 3;
 
-/// Create a new AgentRequest row with subagent parent linkage. Validates
-/// the two preconditions enforced by the Lean Subagent spec BEFORE any
-/// DB I/O:
+/// Create a new AgentRequest row with subagent parent linkage. Allocates a
+/// fresh request id before delegating to the request-id-aware implementation
+/// used by R3's `SubagentSource`.
+#[allow(clippy::too_many_arguments)]
+pub async fn create_subagent_request(
+    node: &EmbeddedNode,
+    parent_request_id: String,
+    parent_tool_call_id: String,
+    parent_subagent_depth: u32,
+    agent_did: String,
+    behavior_id: String,
+    prompt: String,
+    deadline: Option<DateTime<Utc>>,
+) -> Result<String> {
+    let new_request_id = uuid::Uuid::new_v4().to_string();
+    create_subagent_request_with_request_id(
+        node,
+        new_request_id,
+        parent_request_id,
+        parent_tool_call_id,
+        parent_subagent_depth,
+        agent_did,
+        behavior_id,
+        prompt,
+        deadline,
+    )
+    .await
+}
+
+/// Create a new AgentRequest row with subagent parent linkage and a caller-
+/// supplied request id. `SubagentSource` uses this path to preserve B5 link
+/// symmetry: the child `AgentRequest.request_id` must equal the parent
+/// `AgentToolCall.child_request_id` that caused the spawn.
+///
+/// Validates the preconditions enforced by the Lean Subagent spec before
+/// creation:
 ///
 ///   1. `parent_subagent_depth + 1 ≤ MAX_SUBAGENT_DEPTH`. Returns
 ///      `IllegalToolCallTransition::SubagentDepthExceeded` otherwise.
@@ -35,22 +69,25 @@ pub const MAX_SUBAGENT_DEPTH: u32 = 3;
 ///      well-formedness invariant in `watcher.rs::validate_subagent_fields`
 ///      requires that `subagent_depth > 0` documents have both fields
 ///      populated.)
+///   3. `parent_request_id` resolves to an existing `AgentRequest` owned by
+///      the same `agent_did` as the child request.
 ///
-/// On success returns the newly minted `request_id`.
+/// On success returns the child `request_id`.
 ///
 /// Field ownership notes (mirroring `materialize.rs`):
-///   - `request_id` and `session_id` are freshly generated UUIDs.
+///   - `request_id` is caller-supplied; `session_id` is a freshly generated
+///     UUID.
 ///   - `lifecycle_state` is initialized to `"pending"`.
 ///   - `subagent_depth = parent_subagent_depth + 1`.
 ///   - `caused_by_parent_request_id` / `caused_by_parent_tool_call_id`
 ///     carry the parent linkage.
-///   - Trigger lineage fields (`caused_by_trigger_id`,
-///     `caused_by_trigger_kind`) are intentionally left empty: a
-///     subagent spawn is not itself a trigger fire — the parent's
-///     trigger lineage already records the originating cause.
+///   - Trigger lineage fields identify the bridge edge:
+///     `caused_by_trigger_kind = "subagent"` and
+///     `caused_by_trigger_id = parent_tool_call_id`.
 #[allow(clippy::too_many_arguments)]
-pub async fn create_subagent_request(
+pub async fn create_subagent_request_with_request_id(
     node: &EmbeddedNode,
+    request_id: String,
     parent_request_id: String,
     parent_tool_call_id: String,
     parent_subagent_depth: u32,
@@ -65,17 +102,23 @@ pub async fn create_subagent_request(
     }
 
     // 2. Coherence check (pure precondition, fires before any DB I/O).
-    if parent_request_id.is_empty() || parent_tool_call_id.is_empty() {
+    if request_id.is_empty() || parent_request_id.is_empty() || parent_tool_call_id.is_empty() {
         return Err(anyhow!(IllegalToolCallTransition::ParentLinkageIncoherent));
     }
 
-    // 3. Generate fresh identifiers (mirror materialize.rs pattern).
-    let new_request_id = uuid::Uuid::new_v4().to_string();
+    // 3. Cross-reference check (R3): the parent link must point at a real
+    // AgentRequest before the child can be materialized.
+    let parent_agent_did = parent_request_agent_did(node, &parent_request_id).await?;
+    if parent_agent_did.as_deref() != Some(agent_did.as_str()) {
+        return Err(anyhow!(IllegalToolCallTransition::ParentLinkageIncoherent));
+    }
+
+    // 4. Generate fresh session identifier (mirror materialize.rs pattern).
     let new_session_id = uuid::Uuid::new_v4().to_string();
     let new_subagent_depth = parent_subagent_depth + 1;
     let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-    let escaped_request_id = escape_graphql_string(&new_request_id);
+    let escaped_request_id = escape_graphql_string(&request_id);
     let escaped_agent_did = escape_graphql_string(&agent_did);
     let escaped_behavior_id = escape_graphql_string(&behavior_id);
     let escaped_session_id = escape_graphql_string(&new_session_id);
@@ -118,7 +161,9 @@ pub async fn create_subagent_request(
                 max_retries: {max_retries},
                 subagent_depth: {new_subagent_depth},
                 caused_by_parent_request_id: "{escaped_parent_request_id}",
-                caused_by_parent_tool_call_id: "{escaped_parent_tool_call_id}"
+                caused_by_parent_tool_call_id: "{escaped_parent_tool_call_id}",
+                caused_by_trigger_id: "{escaped_parent_tool_call_id}",
+                caused_by_trigger_kind: "subagent"
             }}) {{ _docID }}
         }}"#,
         max_retries = DEFAULT_REQUEST_MAX_RETRIES,
@@ -126,7 +171,41 @@ pub async fn create_subagent_request(
 
     execute_mutation_with_retry(node, &mutation, "create_subagent_request").await?;
 
-    Ok(new_request_id)
+    Ok(request_id)
+}
+
+#[derive(Debug, Deserialize)]
+struct ParentRequestLookupRow {
+    agent_did: String,
+}
+
+async fn parent_request_agent_did(
+    node: &EmbeddedNode,
+    parent_request_id: &str,
+) -> Result<Option<String>> {
+    let escaped_parent_request_id = escape_graphql_string(parent_request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_parent_request_id}" }} }},
+                limit: 1
+            ) {{ agent_did }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query parent AgentRequest for create_subagent_request failed: {:?}",
+            response.errors
+        );
+    }
+    let rows: Vec<ParentRequestLookupRow> = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+    Ok(rows.into_iter().next().map(|row| row.agent_did))
 }
 
 #[cfg(test)]

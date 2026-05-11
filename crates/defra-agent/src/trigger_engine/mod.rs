@@ -17,6 +17,7 @@ pub(crate) mod event_source;
 pub(crate) mod manual_source;
 pub(crate) mod production_materializer;
 pub(crate) mod schedule_source;
+pub(crate) mod subagent_source;
 
 #[cfg(test)]
 mod tests;
@@ -65,6 +66,7 @@ pub(crate) struct FireIntent {
     pub(crate) event_vars: serde_json::Value,
     pub(crate) doc_vars: Option<serde_json::Value>,
     pub(crate) args_vars: Option<serde_json::Value>,
+    pub(crate) pre_materialized_request_id: Option<String>,
     pub(crate) on_result: Box<dyn FnOnce(FireResult) + Send>,
 }
 
@@ -236,6 +238,12 @@ impl TriggerEngine {
             let result = FireResult::Errored {
                 error: error.to_string(),
             };
+            (intent.on_result)(result.clone());
+            return result;
+        }
+
+        if let Some(request_id) = intent.pre_materialized_request_id.clone() {
+            let result = FireResult::Fired { request_id };
             (intent.on_result)(result.clone());
             return result;
         }

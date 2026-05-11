@@ -15,7 +15,8 @@
 //! - SubagentSource (R3) consumes `create_subagent_request` and the bridge methods.
 //! - Agent-facing tools (R4) are routed via hook integration that uses
 //!   `new_subagent` and recognizes spawn_subagent / wait_task / etc. tool names.
-//! - Cross-reference validation (target resolution, parent existence) lands in R3.
+//! - Cross-reference validation (target resolution, parent existence) is wired
+//!   by R3's `SubagentSource` work.
 //! - Cross-principal delegation (R6) lands with sourcenetwork/defra-agent#9.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,7 +217,9 @@ pub mod subagent_request;
 mod transition;
 
 pub use recovery::ToolCallRecoveryReport;
-pub use subagent_request::{create_subagent_request, MAX_SUBAGENT_DEPTH};
+pub use subagent_request::{
+    create_subagent_request, create_subagent_request_with_request_id, MAX_SUBAGENT_DEPTH,
+};
 pub use transition::IllegalToolCallTransition;
 
 /// State machine struct for an individual tool call. Mirrors `RequestLifecycle`
