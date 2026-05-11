@@ -25,6 +25,10 @@ use support::test_db;
 // Internal test helpers
 // ---------------------------------------------------------------------------
 
+fn test_deadline() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now() + chrono::Duration::minutes(5)
+}
+
 /// Test helper: directly constructs a child AgentRequest in `.completed`
 /// state via low-level DB writes, bypassing the normal request lifecycle.
 /// Used by bridge_complete tests to set up "the child has finished" state
@@ -186,11 +190,13 @@ async fn integration_load_round_trip_preserves_subagent_fields() {
     // Construct a subagent lifecycle with non-default values and persist it.
     let mut lc = ToolCallLifecycle::new_subagent(
         db.node.clone(),
+        "req-load-rt-1".to_string(),
         "sess-load-rt-1".to_string(),
         "tc-load-rt-1".to_string(),
         3,
         "spawn_subagent".to_string(),
         r#"{"target":"amy-code"}"#.to_string(),
+        test_deadline(),
         AwaitMode::Background,
         CancelPolicy::Detach,
         "child-req-load-rt-1".to_string(),
@@ -255,11 +261,13 @@ async fn integration_load_round_trip_foreground_cascade_also_preserved() {
 
     let mut lc = ToolCallLifecycle::new_subagent(
         db.node.clone(),
+        "req-load-rt-2".to_string(),
         "sess-load-rt-2".to_string(),
         "tc-load-rt-2".to_string(),
         1,
         "spawn_subagent".to_string(),
         "{}".to_string(),
+        test_deadline(),
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         "child-req-load-rt-2".to_string(),
@@ -303,11 +311,13 @@ async fn integration_load_round_trip_native_tool_has_no_child_request_id() {
 
     let mut lc = ToolCallLifecycle::new(
         db.node.clone(),
+        "req-load-rt-3".to_string(),
         "sess-load-rt-3".to_string(),
         "tc-load-rt-3".to_string(),
         0,
         "echo".to_string(),
         "{}".to_string(),
+        test_deadline(),
     );
     lc.start_running().await.unwrap();
 
@@ -351,11 +361,13 @@ async fn integration_background_then_foreground_persists_round_trip() {
 
     let mut lc = ToolCallLifecycle::new_subagent(
         db.node.clone(),
+        "req-int-1".to_string(),
         "sess-int-1".to_string(),
         "tc-int-1".to_string(),
         1,
         "spawn_subagent".to_string(),
         "{}".to_string(),
+        test_deadline(),
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         "child-req-int-1".to_string(),
@@ -419,11 +431,13 @@ async fn integration_detach_one_way_persists() {
 
     let mut lc = ToolCallLifecycle::new_subagent(
         db.node.clone(),
+        "req-det-1".to_string(),
         "sess-det-1".to_string(),
         "tc-det-1".to_string(),
         1,
         "spawn_subagent".to_string(),
         "{}".to_string(),
+        test_deadline(),
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         "child-req-det-1".to_string(),
@@ -581,11 +595,13 @@ async fn integration_bridge_complete_with_real_child() {
     // 2. Construct the parent bridge tool call and start_running.
     let mut bridge = ToolCallLifecycle::new_subagent(
         db.node.clone(),
+        "parent-req-bc1".to_string(),
         "sess-bc1".to_string(),
         "tc-bc1".to_string(),
         1,
         "spawn_subagent".to_string(),
         "{}".to_string(),
+        test_deadline(),
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         child_request_id.to_string(),
@@ -664,11 +680,13 @@ async fn run_bridge_failure_case(
 
     let mut bridge = ToolCallLifecycle::new_subagent(
         db.node.clone(),
+        parent_req.clone(),
         session.clone(),
         tc_id.clone(),
         1,
         "spawn_subagent".to_string(),
         "{}".to_string(),
+        test_deadline(),
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         child_id,
@@ -751,11 +769,13 @@ async fn integration_cascade_intent_for_cascade_subagent_returns_some() {
     let db = test_db("tc-sa-cas-1").await;
     let mut lc = ToolCallLifecycle::new_subagent(
         db.node.clone(),
+        "req-cas-1".to_string(),
         "sess-cas-1".to_string(),
         "tc-cas-1".to_string(),
         1,
         "spawn_subagent".to_string(),
         "{}".to_string(),
+        test_deadline(),
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         "child-req-cas-1".to_string(),
@@ -772,11 +792,13 @@ async fn integration_cascade_intent_for_detached_subagent_returns_none() {
     let db = test_db("tc-sa-cas-2").await;
     let mut lc = ToolCallLifecycle::new_subagent(
         db.node.clone(),
+        "req-cas-2".to_string(),
         "sess-cas-2".to_string(),
         "tc-cas-2".to_string(),
         1,
         "spawn_subagent".to_string(),
         "{}".to_string(),
+        test_deadline(),
         AwaitMode::Foreground,
         CancelPolicy::Detach,
         "child-req-cas-2".to_string(),
@@ -792,11 +814,13 @@ async fn integration_cascade_intent_for_native_returns_none() {
     let db = test_db("tc-sa-cas-3").await;
     let mut lc = ToolCallLifecycle::new(
         db.node.clone(),
+        "req-cas-3".to_string(),
         "sess-cas-3".to_string(),
         "tc-cas-3".to_string(),
         1,
         "echo".to_string(),
         "{}".to_string(),
+        test_deadline(),
     );
     lc.start_running().await.unwrap();
     lc.cancel_during_run().await.unwrap();

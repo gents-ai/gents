@@ -81,7 +81,11 @@ impl RuntimeContext {
         let api_key = behavior.completion_client_api_key()?;
         let prompt_builder = LayeredPromptBuilder::new(behavior.as_ref(), tool_surface.as_ref());
         let preamble = prompt_builder.preamble().to_string();
-        let tools = tool_surface.build_tools(&self.tool_runtime)?;
+        let tools = tool_surface
+            .build_tools(&self.tool_runtime)?
+            .into_iter()
+            .map(crate::tool_call_lifecycle::runtime::wrap_tool)
+            .collect();
         tracing::info!(
             behavior_id = %behavior.name,
             did = %behavior.did(),

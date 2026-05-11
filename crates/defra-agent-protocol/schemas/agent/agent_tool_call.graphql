@@ -1,5 +1,6 @@
 type AgentToolCall @branchable {
     tool_call_key: String @index(unique: true)
+    request_id: String @index
     session_id: String @index
     message_sequence: Int
     tool_name: String @index
@@ -9,6 +10,7 @@ type AgentToolCall @branchable {
     status: String
     lifecycle_state: String @index
     started_at: DateTime
+    deadline_at: DateTime
     completed_at: DateTime
     selected_service_id: String
     selected_tool_name: String
@@ -17,5 +19,4 @@ type AgentToolCall @branchable {
     await_mode: String
     cancel_policy: String
     child_request_id: String @index
-    request_id: String @index
 }

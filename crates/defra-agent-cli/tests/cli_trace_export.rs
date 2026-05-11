@@ -215,7 +215,7 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
         deadline
             .get("request_failure_class")
             .and_then(Value::as_str),
-        Some("deadline_or_inference_failure")
+        Some("external")
     );
     assert_eq!(
         deadline.get("request_status").and_then(Value::as_str),

@@ -4,7 +4,9 @@ use rig::completion::{CompletionModel, CompletionResponse};
 use rig::one_or_many::OneOrMany;
 use tracing::Instrument;
 
+use crate::config::DEFAULT_DEADLINE_DURATION_SECS;
 use crate::session;
+use crate::tool_call_lifecycle::runtime::{classify_managed_tool_result, ManagedToolTerminal};
 use crate::truncation::{truncate_text, DefraSpillTruncator, TruncationMode, Truncator};
 
 use super::DefraSessionHook;
@@ -95,16 +97,30 @@ impl DefraSessionHook {
         Ok(())
     }
 
-    async fn ensure_assistant_turn_sequence(&self) -> anyhow::Result<(String, u32)> {
+    async fn ensure_assistant_turn_sequence(
+        &self,
+    ) -> anyhow::Result<(String, String, chrono::DateTime<chrono::Utc>, u32)> {
         let mut state = self.state.lock().await;
         let session_id = state
             .session_id
             .clone()
             .ok_or_else(|| anyhow::anyhow!("session hook missing session id"))?;
+        let request_id = state.current_request_id.clone().unwrap_or_else(|| {
+            tracing::warn!(
+                "tool call has no active request id; persisting with empty request link"
+            );
+            String::new()
+        });
+        let deadline_at = state.request_deadline_at.unwrap_or_else(|| {
+            tracing::warn!(
+                "tool call has no active request deadline; using default lifecycle deadline"
+            );
+            chrono::Utc::now() + chrono::Duration::seconds(DEFAULT_DEADLINE_DURATION_SECS as i64)
+        });
 
         let sequence = state.begin_or_continue_assistant_turn();
 
-        Ok((session_id, sequence))
+        Ok((session_id, request_id, deadline_at, sequence))
     }
 }
 
@@ -169,7 +185,8 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
         args: &str,
     ) -> ToolCallHookAction {
         let result: anyhow::Result<()> = async {
-            let (session_id, seq) = self.ensure_assistant_turn_sequence().await?;
+            let (session_id, request_id, deadline_at, seq) =
+                self.ensure_assistant_turn_sequence().await?;
             self.state.lock().await.register_tool_result_identity(
                 internal_call_id,
                 None,
@@ -178,11 +195,13 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
 
             let mut lc = crate::tool_call_lifecycle::ToolCallLifecycle::new(
                 self.node.clone(),
+                request_id,
                 session_id,
                 internal_call_id.to_string(),
                 seq,
                 tool_name.to_string(),
                 args.to_string(),
+                deadline_at,
             );
             lc.start_running().await?;
 
@@ -217,7 +236,36 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
         args: &str,
         result: &str,
     ) -> HookAction {
-        let persist_result: anyhow::Result<()> = async {
+        let persist_result: anyhow::Result<HookAction> = async {
+            if let Some(terminal) = classify_managed_tool_result(result) {
+                let lifecycle = self
+                    .in_flight_lifecycles
+                    .lock()
+                    .await
+                    .remove(internal_call_id);
+
+                if let Some(mut lc) = lifecycle {
+                    match terminal {
+                        ManagedToolTerminal::TimedOut => lc.timeout().await?,
+                        ManagedToolTerminal::Cancelled => lc.cancel_during_run().await?,
+                    }
+                } else {
+                    tracing::debug!(
+                        tool_call_id = %internal_call_id,
+                        lifecycle_state = ?terminal,
+                        "managed terminal tool result arrived after lifecycle was already swept"
+                    );
+                }
+
+                let reason = match terminal {
+                    ManagedToolTerminal::TimedOut => "tool call deadline exceeded",
+                    ManagedToolTerminal::Cancelled => "tool call cancelled",
+                };
+                return Ok(HookAction::Terminate {
+                    reason: reason.to_string(),
+                });
+            }
+
             let (session_id, should_persist_message, persisted_result_id, persisted_call_id) = {
                 let mut state = self.state.lock().await;
                 let session_id = state
@@ -263,7 +311,11 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                     )
                 })?;
 
-            lc.complete(&truncated.text).await?;
+            if let Some(failure_class) = classify_runtime_failure(result) {
+                lc.fail(&truncated.text, failure_class).await?;
+            } else {
+                lc.complete(&truncated.text).await?;
+            }
 
             if should_persist_message {
                 let tool_result_message = Message::User {
@@ -278,7 +330,7 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                 self.persist_message(&tool_result_message).await?;
             }
 
-            Ok(())
+            Ok(HookAction::Continue)
         }
         .instrument(tracing::info_span!(
             "tool.result",
@@ -288,9 +340,9 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
         .await;
 
         match persist_result {
-            Ok(()) => {
+            Ok(action) => {
                 self.record_success();
-                HookAction::Continue
+                action
             }
             Err(e) => self.on_persistence_error("persist tool result", &e),
         }
@@ -317,8 +369,8 @@ fn render_tool_result_text(tool_result: &ToolResult) -> String {
 }
 
 /// Classify a runtime error string into a FailureClass. Defaults to
-/// ToolReturnedError for unknown shapes. Placeholder bridge until R3
-/// introduces structured error classification.
+/// ToolReturnedError for unknown shapes; managed timeout/cancel markers are
+/// handled before this helper so terminal outcomes stay distinct.
 #[allow(dead_code)]
 fn classify_runtime_error(err: &str) -> crate::tool_call_lifecycle::FailureClass {
     use crate::tool_call_lifecycle::FailureClass;
@@ -333,4 +385,14 @@ fn classify_runtime_error(err: &str) -> crate::tool_call_lifecycle::FailureClass
     } else {
         FailureClass::ToolReturnedError
     }
+}
+
+fn classify_runtime_failure(result: &str) -> Option<crate::tool_call_lifecycle::FailureClass> {
+    if result.starts_with("JsonError:") {
+        return Some(crate::tool_call_lifecycle::FailureClass::ArgumentInvalid);
+    }
+    if result.starts_with("ToolCallError:") {
+        return Some(classify_runtime_error(result));
+    }
+    None
 }

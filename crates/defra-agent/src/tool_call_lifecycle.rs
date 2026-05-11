@@ -210,9 +210,12 @@ use std::sync::Arc;
 use defra_node::EmbeddedNode;
 
 pub(crate) mod query;
+mod recovery;
+pub(crate) mod runtime;
 pub mod subagent_request;
 mod transition;
 
+pub use recovery::ToolCallRecoveryReport;
 pub use subagent_request::{create_subagent_request, MAX_SUBAGENT_DEPTH};
 pub use transition::IllegalToolCallTransition;
 
@@ -221,12 +224,14 @@ pub use transition::IllegalToolCallTransition;
 /// AgentToolCall row.
 pub struct ToolCallLifecycle {
     node: Arc<EmbeddedNode>,
+    request_id: String,
     session_id: String,
     tool_call_id: String,
     message_sequence: u32,
     tool_name: String,
     args: String,
     doc_id: Option<String>,
+    deadline_at: chrono::DateTime<chrono::Utc>,
     state: ToolCallState,
     started_at: Option<chrono::DateTime<chrono::Utc>>,
     failure_class: Option<FailureClass>,
@@ -240,20 +245,24 @@ impl ToolCallLifecycle {
     /// method (`start_running`) creates the DefraDB row.
     pub fn new(
         node: Arc<EmbeddedNode>,
+        request_id: String,
         session_id: String,
         tool_call_id: String,
         message_sequence: u32,
         tool_name: String,
         args: String,
+        deadline_at: chrono::DateTime<chrono::Utc>,
     ) -> Self {
         Self {
             node,
+            request_id,
             session_id,
             tool_call_id,
             message_sequence,
             tool_name,
             args,
             doc_id: None,
+            deadline_at,
             state: ToolCallState::Pending,
             started_at: None,
             failure_class: None,
@@ -269,23 +278,27 @@ impl ToolCallLifecycle {
     /// (typically start_running) creates the row.
     pub fn new_subagent(
         node: Arc<EmbeddedNode>,
+        request_id: String,
         session_id: String,
         tool_call_id: String,
         message_sequence: u32,
         tool_name: String,
         args: String,
+        deadline_at: chrono::DateTime<chrono::Utc>,
         await_mode: AwaitMode,
         cancel_policy: CancelPolicy,
         child_request_id: String,
     ) -> Self {
         Self {
             node,
+            request_id,
             session_id,
             tool_call_id,
             message_sequence,
             tool_name,
             args,
             doc_id: None,
+            deadline_at,
             state: ToolCallState::Pending,
             started_at: None,
             failure_class: None,
@@ -295,14 +308,12 @@ impl ToolCallLifecycle {
         }
     }
 
-    /// Test-only accessor for the current in-memory state.
-    #[cfg(test)]
-    pub(crate) fn state_for_test(&self) -> ToolCallState {
-        self.state
-    }
-
     pub(crate) fn set_doc_id(&mut self, doc_id: Option<String>) {
         self.doc_id = doc_id;
+    }
+
+    pub(crate) fn deadline_at(&self) -> chrono::DateTime<chrono::Utc> {
+        self.deadline_at
     }
 
     pub(crate) fn set_state(&mut self, state: ToolCallState) {
@@ -315,6 +326,10 @@ impl ToolCallLifecycle {
 
     pub(crate) fn set_failure_class(&mut self, fc: Option<FailureClass>) {
         self.failure_class = fc;
+    }
+
+    pub(crate) fn set_deadline_at(&mut self, deadline_at: chrono::DateTime<chrono::Utc>) {
+        self.deadline_at = deadline_at;
     }
 }
 
@@ -363,9 +378,11 @@ mod tests {
             std::sync::Arc<defra_node::EmbeddedNode>,
             String,
             String,
+            String,
             u32,
             String,
             String,
+            chrono::DateTime<chrono::Utc>,
         ) -> ToolCallLifecycle = ToolCallLifecycle::new;
     }
 

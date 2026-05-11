@@ -499,6 +499,8 @@ pub async fn fetch_message_snapshots_for_session(
 #[derive(Debug, PartialEq, Eq, Deserialize)]
 pub struct ToolCallSnapshot {
     pub tool_call_key: String,
+    #[serde(default)]
+    pub request_id: Option<String>,
     pub session_id: String,
     pub message_sequence: u32,
     pub tool_name: String,
@@ -510,6 +512,8 @@ pub struct ToolCallSnapshot {
     pub lifecycle_state: Option<String>,
     #[serde(default)]
     pub started_at: Option<String>,
+    #[serde(default)]
+    pub deadline_at: Option<String>,
     #[serde(default)]
     pub completed_at: Option<String>,
     #[serde(default)]
@@ -533,8 +537,8 @@ pub async fn fetch_tool_call_snapshots_for_session(
                 filter: {{ session_id: {{ _eq: "{session_id}" }} }},
                 order: {{ message_sequence: ASC }}
             ) {{
-                tool_call_key session_id message_sequence tool_name tool_call_id
-                args result status lifecycle_state started_at completed_at
+                tool_call_key request_id session_id message_sequence tool_name tool_call_id
+                args result status lifecycle_state started_at deadline_at completed_at
                 selected_service_id selected_tool_name tool_failure_class latency_ms
             }}
         }}"#

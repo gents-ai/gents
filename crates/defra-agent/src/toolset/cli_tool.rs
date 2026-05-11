@@ -93,7 +93,8 @@ async fn run_cli_command(config: &CliToolConfig, argv: &[String]) -> Result<Stri
         .env("GIT_PAGER", "cat")
         .env("NO_COLOR", "1")
         .env("CLICOLOR", "0")
-        .env("TERM", "dumb");
+        .env("TERM", "dumb")
+        .kill_on_drop(true);
 
     for (key, value) in &config.env_vars {
         command.env(key, value);

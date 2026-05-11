@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
@@ -68,11 +68,15 @@ pub async fn load_tool_call_result(
 struct ToolCallRow {
     #[serde(rename = "_docID")]
     doc_id: String,
+    #[serde(default)]
+    request_id: Option<String>,
     message_sequence: u32,
     tool_name: String,
     args: String,
     lifecycle_state: Option<String>,
     started_at: Option<String>,
+    #[serde(default)]
+    deadline_at: Option<String>,
     tool_failure_class: Option<String>,
     // v3 subagent fields — nullable for v2 rows that pre-date the schema migration.
     await_mode: Option<String>,
@@ -100,11 +104,13 @@ impl ToolCallLifecycle {
                     limit: 1
                 ) {{
                     _docID
+                    request_id
                     message_sequence
                     tool_name
                     args
                     lifecycle_state
                     started_at
+                    deadline_at
                     tool_failure_class
                     await_mode
                     cancel_policy
@@ -145,6 +151,13 @@ impl ToolCallLifecycle {
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&chrono::Utc));
 
+        let deadline_at = row
+            .deadline_at
+            .as_deref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(chrono::Utc::now);
+
         let failure_class = row
             .tool_failure_class
             .as_deref()
@@ -168,12 +181,14 @@ impl ToolCallLifecycle {
 
         Ok(Some(Self {
             node,
+            request_id: row.request_id.unwrap_or_default(),
             session_id: session_id.to_string(),
             tool_call_id: tool_call_id.to_string(),
             message_sequence: row.message_sequence,
             tool_name: row.tool_name,
             args: row.args,
             doc_id: Some(row.doc_id),
+            deadline_at,
             state,
             started_at,
             failure_class,
