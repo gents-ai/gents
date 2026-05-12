@@ -14,7 +14,7 @@ theorem terminal_implies_released_local
     (h_term : isTerminal r.state) :
     r.admission = .released := by
   cases r with
-  | mk state origin backend admission deadline claimTime currentTime retryCount maxRetries progressSeq messageSeq isLatest persistence interruptRequestedAt validUntil subagentDepth causedByParentRequestId causedByParentToolCallId =>
+  | mk state origin backend admission deadline requestDeadline claimTime currentTime retryCount maxRetries progressSeq messageSeq isLatest persistence interruptRequestedAt validUntil subagentDepth causedByParentRequestId causedByParentToolCallId =>
     cases h_term with
     | inl h =>
       cases h
@@ -122,7 +122,7 @@ theorem claimed_coherent_cases
     (h_coherent : r.coherent) :
     r.admission = .waiting ∨ r.admission = .acquired := by
   cases r with
-  | mk state origin backend admission deadline claimTime currentTime retryCount maxRetries progressSeq messageSeq isLatest persistence interruptRequestedAt validUntil subagentDepth causedByParentRequestId causedByParentToolCallId =>
+  | mk state origin backend admission deadline requestDeadline claimTime currentTime retryCount maxRetries progressSeq messageSeq isLatest persistence interruptRequestedAt validUntil subagentDepth causedByParentRequestId causedByParentToolCallId =>
     cases h_state
     cases admission <;> simp [coherent, coherentStateAdmission] at h_coherent ⊢
 
@@ -167,5 +167,68 @@ theorem claim_with_ttl_bounds_time
   have h_open := claim_requires_ttl_open h_trans h_claimed
   unfold ttlOpen at h_open
   simpa [h_ttl] using h_open
+
+/-- Claim uses an explicit submitter request deadline when one is present. -/
+theorem claim_deadline_explicit
+    {pre post : RequestContext}
+    {t : Time}
+    (h_trans : Transition pre post)
+    (h_claimed : post.state = .claimed)
+    (h_requestDeadline : pre.requestDeadline = some t) :
+    post.deadline = t := by
+  cases h_trans with
+  | claim _ _ _ h_post =>
+      simp [h_post, claimDeadline, h_requestDeadline]
+  | dedup_lose _ _ h_post =>
+      simp [h_post] at h_claimed
+  | begin_inference _ _ h_post =>
+      simp [h_post] at h_claimed
+  | advance h_state _ h_post =>
+      simp [h_post, h_state] at h_claimed
+  | finish _ _ h_post =>
+      simp [h_post] at h_claimed
+  | fail _ _ h_post =>
+      simp [h_post] at h_claimed
+  | fail_before_stream _ _ h_post =>
+      simp [h_post] at h_claimed
+  | expire _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_before_claim _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_claimed _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_processing _ _ _ h_post =>
+      simp [h_post] at h_claimed
+
+/-- Claim falls back to `currentTime + 1` when no submitter request deadline exists. -/
+theorem claim_deadline_default
+    {pre post : RequestContext}
+    (h_trans : Transition pre post)
+    (h_claimed : post.state = .claimed)
+    (h_requestDeadline : pre.requestDeadline = none) :
+    post.deadline = pre.currentTime + 1 := by
+  cases h_trans with
+  | claim _ _ _ h_post =>
+      simp [h_post, claimDeadline, h_requestDeadline]
+  | dedup_lose _ _ h_post =>
+      simp [h_post] at h_claimed
+  | begin_inference _ _ h_post =>
+      simp [h_post] at h_claimed
+  | advance h_state _ h_post =>
+      simp [h_post, h_state] at h_claimed
+  | finish _ _ h_post =>
+      simp [h_post] at h_claimed
+  | fail _ _ h_post =>
+      simp [h_post] at h_claimed
+  | fail_before_stream _ _ h_post =>
+      simp [h_post] at h_claimed
+  | expire _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_before_claim _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_claimed _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_processing _ _ _ h_post =>
+      simp [h_post] at h_claimed
 
 end RequestContext

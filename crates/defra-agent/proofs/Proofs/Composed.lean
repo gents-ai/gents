@@ -63,6 +63,23 @@ def Coherent (pre : ComposedState) (toolPre : ToolExecution.ToolCallContext) : P
   toolPre.deadline = pre.request.deadline ∧
   toolPre.currentTime = pre.request.currentTime
 
+/-- Coherence exposes the exact effective deadline shared by a tool and its
+    parent request. -/
+theorem coherent_tool_deadline_eq_request_deadline
+    {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
+    (h_coherent : Coherent pre toolPre) :
+    toolPre.deadline = pre.request.deadline :=
+  h_coherent.2.1
+
+/-- Deadline-exceeded checks are synchronized for coherent linked tools. -/
+theorem coherent_tool_deadlineExceeded_iff_request_deadlineExceeded
+    {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
+    (h_coherent : Coherent pre toolPre) :
+    toolPre.deadlineExceeded ↔ pre.request.deadlineExceeded := by
+  obtain ⟨_, h_deadline_eq, h_time_eq⟩ := h_coherent
+  simp [ToolExecution.ToolCallContext.deadlineExceeded,
+        RequestContext.deadlineExceeded, h_deadline_eq, h_time_eq]
+
 /-- A composed transition is valid only when cross-layer guards hold.
     Each constructor lifts a single-layer transition; the other layers must
     be unchanged across the composed step.
