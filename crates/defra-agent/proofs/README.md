@@ -72,6 +72,13 @@ The proof boundary matters:
 - External assumptions such as "DefraDB eventually makes an acked mutation
   visible" or "provider streamed bytes" are not proven here.
 
+## Cross-node TLA+ specs
+
+The `tla/` sibling directory contains TLA+ specifications for cross-node properties beyond per-node Lean coverage. See `tla/README.md`.
+
+Currently:
+- `ReversePairing` — control-plane convergence of reverse-pairing subscriptions; first concrete artifact under issue #155's cross-boundary verification strategy.
+
 ## Why This Matters
 
 The proof work is intended to prevent the class of bugs we have already hit in
