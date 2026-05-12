@@ -22,7 +22,7 @@ use super::*;
 use crate::ensure_schemas;
 use crate::lean_vocab_test::{
     lean_command_env_cases, lean_command_policy_case, lean_command_policy_cases,
-    lean_command_sandbox_cases, LeanCommandPolicyCase,
+    lean_command_sandbox_cases, lean_native_filesystem_boundary_cases, LeanCommandPolicyCase,
 };
 use crate::lifecycle::DEFAULT_REQUEST_MAX_RETRIES;
 
@@ -133,8 +133,7 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
     std::fs::write(root.join("second.txt"), "second request\n").unwrap();
     let context = ToolContext::new(root.clone(), false).unwrap();
 
-    let _blocker =
-        block_next_sorted_children_for_test(context.root(), Duration::from_millis(200));
+    let _blocker = block_next_sorted_children_for_test(context.root(), Duration::from_millis(200));
     let blocking_tool = crate::tool_call_lifecycle::runtime::wrap_tool(Box::new(GlobTool::new(
         context.clone(),
         DEFAULT_MAX_MATCHES,
@@ -181,6 +180,37 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
         "single-worker queue should advance before the blocking native work returns, elapsed={queue_elapsed:?}"
     );
     assert!(second_result.contains("second request"));
+}
+
+#[test]
+fn generated_native_filesystem_boundary_cases_match_preemptible_boundary_contract() {
+    let cases = lean_native_filesystem_boundary_cases();
+    let tool_names = cases
+        .iter()
+        .map(|case| case.tool_name.as_str())
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(tool_names, BTreeSet::from(["glob", "grep", "list_files"]));
+    for case in cases {
+        assert!(
+            case.name
+                .ends_with("_single_poll_blocker_times_out_and_queue_advances"),
+            "unexpected native filesystem boundary case name: {}",
+            case.name
+        );
+        assert_eq!(case.work_class, "filesystemTraversal");
+        assert_eq!(case.boundary, "spawnBlockingRuntimeBoundary");
+        assert!(case.inner_poll_blocks);
+        assert!(case.request_deadline_ms <= 20);
+        assert!(case.blocker_ms >= 200);
+        assert!(
+            case.request_deadline_ms < case.blocker_ms,
+            "deadline must be shorter than deterministic blocker"
+        );
+        assert_eq!(case.expected_terminal, "timedOut");
+        assert_eq!(case.expected_failure_class.as_deref(), Some("external"));
+        assert!(case.queue_advances_before_blocker_returns);
+    }
 }
 
 #[tokio::test]

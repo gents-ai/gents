@@ -19,6 +19,16 @@ use super::shared::{
 const DEFAULT_GREP_PREVIEW_CHARS: usize = 240;
 const OUTPUT_META_PREFIX: &str = "defra_fs: ";
 
+async fn run_filesystem_boundary<F, T>(operation: F) -> Result<T, ToolError>
+where
+    F: FnOnce() -> Result<T, ToolError> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|error| ToolError(anyhow!("filesystem tool boundary failed: {error}")))?
+}
+
 #[derive(Clone)]
 pub(super) struct ListFilesTool {
     context: ToolContext,
@@ -146,37 +156,43 @@ impl Tool for ListFilesTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let dir = self.context.resolve_existing_dir(args.path.as_deref())?;
-        let entries = collect_entries(
-            &self.context,
-            &dir,
-            args.recursive,
-            args.max_entries.max(1).min(self.default_max_entries.max(1)),
-        )?;
+        let context = self.context.clone();
+        let default_max_entries = self.default_max_entries;
 
-        let metadata = ListFilesMetadata {
-            ok: true,
-            status: "success",
-            tool: Self::NAME,
-            path: self.context.display_path(&dir),
-            recursive: args.recursive,
-            returned_count: entries.items.len(),
-            total_count: total_count(entries.items.len(), entries.truncated),
-            truncated: entries.truncated,
-            default_ignored: default_ignored_names(),
-            summary: summarize_entries(&entries.items),
-        };
-        let output = ListFilesOutput {
-            metadata,
-            entries: entries.items,
-        };
+        run_filesystem_boundary(move || {
+            let dir = context.resolve_existing_dir(args.path.as_deref())?;
+            let entries = collect_entries(
+                &context,
+                &dir,
+                args.recursive,
+                args.max_entries.max(1).min(default_max_entries.max(1)),
+            )?;
 
-        Ok(render_tool_output(
-            &output.metadata,
-            format_entries("entries", &output.entries),
-            &output,
-            args.raw_json,
-        )?)
+            let metadata = ListFilesMetadata {
+                ok: true,
+                status: "success",
+                tool: Self::NAME,
+                path: context.display_path(&dir),
+                recursive: args.recursive,
+                returned_count: entries.items.len(),
+                total_count: total_count(entries.items.len(), entries.truncated),
+                truncated: entries.truncated,
+                default_ignored: default_ignored_names(),
+                summary: summarize_entries(&entries.items),
+            };
+            let output = ListFilesOutput {
+                metadata,
+                entries: entries.items,
+            };
+
+            Ok(render_tool_output(
+                &output.metadata,
+                format_entries("entries", &output.entries),
+                &output,
+                args.raw_json,
+            )?)
+        })
+        .await
     }
 }
 
@@ -304,37 +320,43 @@ impl Tool for GlobTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let dir = self.context.resolve_existing_dir(args.path.as_deref())?;
-        let pattern = Pattern::new(&args.pattern)
-            .with_context(|| format!("invalid glob pattern {}", args.pattern))?;
-        let matches = collect_glob_matches(
-            &self.context,
-            &dir,
-            &pattern,
-            args.max_matches.min(self.default_max_matches).max(1),
-        )?;
+        let context = self.context.clone();
+        let default_max_matches = self.default_max_matches;
 
-        let output = GlobOutput {
-            metadata: GlobMetadata {
-                ok: true,
-                status: "success",
-                tool: Self::NAME,
-                pattern: args.pattern,
-                path: self.context.display_path(&dir),
-                returned_count: matches.items.len(),
-                total_count: total_count(matches.items.len(), matches.truncated),
-                truncated: matches.truncated,
-                default_ignored: default_ignored_names(),
-            },
-            matches: matches.items,
-        };
+        run_filesystem_boundary(move || {
+            let dir = context.resolve_existing_dir(args.path.as_deref())?;
+            let pattern = Pattern::new(&args.pattern)
+                .with_context(|| format!("invalid glob pattern {}", args.pattern))?;
+            let matches = collect_glob_matches(
+                &context,
+                &dir,
+                &pattern,
+                args.max_matches.min(default_max_matches).max(1),
+            )?;
 
-        Ok(render_tool_output(
-            &output.metadata,
-            format_entries("matches", &output.matches),
-            &output,
-            args.raw_json,
-        )?)
+            let output = GlobOutput {
+                metadata: GlobMetadata {
+                    ok: true,
+                    status: "success",
+                    tool: Self::NAME,
+                    pattern: args.pattern,
+                    path: context.display_path(&dir),
+                    returned_count: matches.items.len(),
+                    total_count: total_count(matches.items.len(), matches.truncated),
+                    truncated: matches.truncated,
+                    default_ignored: default_ignored_names(),
+                },
+                matches: matches.items,
+            };
+
+            Ok(render_tool_output(
+                &output.metadata,
+                format_entries("matches", &output.matches),
+                &output,
+                args.raw_json,
+            )?)
+        })
+        .await
     }
 }
 
@@ -385,53 +407,59 @@ impl Tool for GrepTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let dir = self.context.resolve_existing_dir(args.path.as_deref())?;
-        let max_matches = args.max_matches.min(self.default_max_matches).max(1);
-        let collected = collect_grep_matches(
-            &self.context,
-            &dir,
-            &args.pattern,
-            args.case_sensitive,
-            max_matches,
-        )?;
+        let context = self.context.clone();
+        let default_max_matches = self.default_max_matches;
 
-        let mut files_with_matches = BTreeSet::new();
-        let matches = collected
-            .items
-            .into_iter()
-            .map(|entry| {
-                files_with_matches.insert(entry.path.clone());
-                GrepOutputMatch {
-                    path: entry.path,
-                    line_number: entry.line_number,
-                    preview: truncate_inline(&entry.line, DEFAULT_GREP_PREVIEW_CHARS),
-                }
-            })
-            .collect::<Vec<_>>();
+        run_filesystem_boundary(move || {
+            let dir = context.resolve_existing_dir(args.path.as_deref())?;
+            let max_matches = args.max_matches.min(default_max_matches).max(1);
+            let collected = collect_grep_matches(
+                &context,
+                &dir,
+                &args.pattern,
+                args.case_sensitive,
+                max_matches,
+            )?;
 
-        let output = GrepOutput {
-            metadata: GrepMetadata {
-                ok: true,
-                status: "success",
-                tool: Self::NAME,
-                pattern: args.pattern,
-                path: self.context.display_path(&dir),
-                case_sensitive: args.case_sensitive,
-                returned_count: matches.len(),
-                total_count: total_count(matches.len(), collected.truncated),
-                files_with_matches: files_with_matches.len(),
-                truncated: collected.truncated,
-                default_ignored: default_ignored_names(),
-            },
-            matches,
-        };
+            let mut files_with_matches = BTreeSet::new();
+            let matches = collected
+                .items
+                .into_iter()
+                .map(|entry| {
+                    files_with_matches.insert(entry.path.clone());
+                    GrepOutputMatch {
+                        path: entry.path,
+                        line_number: entry.line_number,
+                        preview: truncate_inline(&entry.line, DEFAULT_GREP_PREVIEW_CHARS),
+                    }
+                })
+                .collect::<Vec<_>>();
 
-        Ok(render_tool_output(
-            &output.metadata,
-            format_grep_matches(&output.matches),
-            &output,
-            args.raw_json,
-        )?)
+            let output = GrepOutput {
+                metadata: GrepMetadata {
+                    ok: true,
+                    status: "success",
+                    tool: Self::NAME,
+                    pattern: args.pattern,
+                    path: context.display_path(&dir),
+                    case_sensitive: args.case_sensitive,
+                    returned_count: matches.len(),
+                    total_count: total_count(matches.len(), collected.truncated),
+                    files_with_matches: files_with_matches.len(),
+                    truncated: collected.truncated,
+                    default_ignored: default_ignored_names(),
+                },
+                matches,
+            };
+
+            Ok(render_tool_output(
+                &output.metadata,
+                format_grep_matches(&output.matches),
+                &output,
+                args.raw_json,
+            )?)
+        })
+        .await
     }
 }
 

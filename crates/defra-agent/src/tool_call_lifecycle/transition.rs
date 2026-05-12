@@ -17,7 +17,7 @@ use defra_node::QueryResponse;
 use crate::graphql::escape_graphql_string;
 use crate::session::execute_mutation_with_retry;
 
-use super::{AwaitMode, CancelPolicy, ToolCallLifecycle, ToolCallState};
+use super::{AwaitMode, CancelPolicy, FailureClass, ToolCallLifecycle, ToolCallState};
 
 /// Error returned when a transition method is called from an illegal
 /// pre-state, or when a subagent-specific guard is violated.
@@ -467,6 +467,7 @@ impl ToolCallLifecycle {
         // DefraDB requires DateTime fields to be re-supplied on update.
         let started_at_str = started_at.to_rfc3339();
         let deadline_at_str = self.deadline_at.to_rfc3339();
+        let failure_class = FailureClass::External.as_str();
 
         let mutation = format!(
             r#"mutation {{
@@ -476,6 +477,7 @@ impl ToolCallLifecycle {
                         result: "{escaped_result}",
                         status: "completed",
                         lifecycle_state: "timedOut",
+                        tool_failure_class: "{failure_class}",
                         started_at: "{started_at_str}",
                         deadline_at: "{deadline_at_str}",
                         completed_at: "{now_str}",
@@ -490,6 +492,7 @@ impl ToolCallLifecycle {
             .context("timeout mutation")?;
 
         self.state = ToolCallState::TimedOut;
+        self.failure_class = Some(FailureClass::External);
         Ok(())
     }
 

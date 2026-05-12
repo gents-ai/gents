@@ -44,6 +44,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) persistence_failure_policy_cases: Vec<LeanPersistenceFailurePolicyCase>,
     pub(crate) storage_observation_runtime_cases: Vec<LeanStorageObservationRuntimeCase>,
     pub(crate) backend_health_admission_cases: Vec<LeanBackendHealthAdmissionCase>,
+    pub(crate) native_filesystem_boundary_cases: Vec<LeanNativeFilesystemBoundaryCase>,
     pub(crate) tool_preflight_cases: Vec<LeanToolPreflightCase>,
     pub(crate) tool_retry_cases: Vec<LeanToolRetryCase>,
     pub(crate) boundaries: Vec<LeanBoundary>,
@@ -406,6 +407,20 @@ pub(crate) struct LeanBackendHealthAdmissionCase {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct LeanNativeFilesystemBoundaryCase {
+    pub(crate) name: String,
+    pub(crate) tool_name: String,
+    pub(crate) work_class: String,
+    pub(crate) boundary: String,
+    pub(crate) inner_poll_blocks: bool,
+    pub(crate) request_deadline_ms: usize,
+    pub(crate) blocker_ms: usize,
+    pub(crate) expected_terminal: String,
+    pub(crate) expected_failure_class: Option<String>,
+    pub(crate) queue_advances_before_blocker_returns: bool,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct LeanToolPreflightCase {
     pub(crate) name: String,
     pub(crate) health: String,
@@ -605,6 +620,11 @@ pub(crate) fn lean_storage_observation_runtime_cases(
 
 pub(crate) fn lean_backend_health_admission_cases() -> &'static [LeanBackendHealthAdmissionCase] {
     &lean_contract_snapshot().backend_health_admission_cases
+}
+
+pub(crate) fn lean_native_filesystem_boundary_cases() -> &'static [LeanNativeFilesystemBoundaryCase]
+{
+    &lean_contract_snapshot().native_filesystem_boundary_cases
 }
 
 pub(crate) fn lean_tool_preflight_cases() -> &'static [LeanToolPreflightCase] {

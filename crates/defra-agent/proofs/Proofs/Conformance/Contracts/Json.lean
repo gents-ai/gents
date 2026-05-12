@@ -198,6 +198,23 @@ def backendHealthAdmissionCaseJson
       ++ boolString witness.externalEndpointFreshnessClaimed
     ++ "}"
 
+def nativeFilesystemBoundaryCaseJson
+    (witness : NativeFilesystemBoundaryCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"tool_name\":" ++ jsonString witness.toolName ++ ","
+    ++ "\"work_class\":" ++ jsonString witness.workClass ++ ","
+    ++ "\"boundary\":" ++ jsonString witness.boundary ++ ","
+    ++ "\"inner_poll_blocks\":" ++ boolString witness.innerPollBlocks ++ ","
+    ++ "\"request_deadline_ms\":" ++ toString witness.requestDeadlineMs ++ ","
+    ++ "\"blocker_ms\":" ++ toString witness.blockerMs ++ ","
+    ++ "\"expected_terminal\":" ++ jsonString witness.expectedTerminal ++ ","
+    ++ "\"expected_failure_class\":"
+      ++ jsonOptionalString witness.expectedFailureClass ++ ","
+    ++ "\"queue_advances_before_blocker_returns\":"
+      ++ boolString witness.queueAdvancesBeforeBlockerReturns
+    ++ "}"
+
 def toolPreflightCaseJson (witness : ToolExecution.PreflightCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
@@ -339,6 +356,9 @@ def snapshotJson : String :=
     ++ "\"backend_health_admission_cases\":"
       ++ jsonArray
         (backendHealthAdmissionCases.map backendHealthAdmissionCaseJson) ++ ","
+    ++ "\"native_filesystem_boundary_cases\":"
+      ++ jsonArray
+        (nativeFilesystemBoundaryCases.map nativeFilesystemBoundaryCaseJson) ++ ","
     ++ "\"tool_preflight_cases\":"
       ++ jsonArray (ToolExecution.preflightCases.map toolPreflightCaseJson) ++ ","
     ++ "\"tool_retry_cases\":"
