@@ -327,21 +327,77 @@ IsPendingCompletionWakeup(row) ==
   /\ row.key = CompletionQueueKey
   /\ row.state = "pending"
 
+IsCompletionWakeup(row) ==
+  /\ row.session = ParentSession
+  /\ row.source = "subagent_completion"
+  /\ row.policy = "coalesce"
+  /\ row.key = CompletionQueueKey
+
 HasPendingCompletionWakeup ==
   \E row \in queueRows : IsPendingCompletionWakeup(row)
+
+HasCompletionWakeup ==
+  \E row \in queueRows : IsCompletionWakeup(row)
+
+IsUserRequest(row) ==
+  /\ row.session = ParentSession
+  /\ row.source = "user"
+  /\ row.policy = "append"
+  /\ row.key = UserQueueKey
+
+HasUserRequest ==
+  \E row \in queueRows : IsUserRequest(row)
 
 EnqueueWakeup(child) ==
   /\ child \in Child
   /\ notificationDurable[child]
   /\ ~HasPendingCompletionWakeup
+  /\ \/ /\ \E existing \in queueRows :
+           /\ IsCompletionWakeup(existing)
+           /\ queueRows' =
+                { IF row = existing
+                  THEN [row EXCEPT !.state = "pending"]
+                  ELSE row : row \in queueRows }
+           /\ queueIdsUsed' = queueIdsUsed
+        \/ /\ ~HasCompletionWakeup
+           /\ FreshQueueIds(1)
+           /\ LET id == CHOOSE queueId \in QueueId \ queueIdsUsed : TRUE
+                  row == [
+                    id      |-> id,
+                    session |-> ParentSession,
+                    source  |-> "subagent_completion",
+                    policy  |-> "coalesce",
+                    key     |-> CompletionQueueKey,
+                    state   |-> "pending"
+                  ]
+              IN /\ queueRows' = queueRows \cup {row}
+                 /\ queueIdsUsed' = queueIdsUsed \cup {id}
+  /\ UNCHANGED <<
+       childDurable,
+       childFinalResponseDurable,
+       messages,
+       pendingInboundA,
+       observedDurableA,
+       bridgeState,
+       terminalSource,
+       terminalWriteCount,
+       notificationDurable,
+       eventIdsUsed,
+       dropCount,
+       crashCount,
+       cancelRequested
+     >>
+
+EnqueueUserRequest ==
+  /\ ~HasUserRequest
   /\ FreshQueueIds(1)
   /\ LET id == CHOOSE queueId \in QueueId \ queueIdsUsed : TRUE
          row == [
            id      |-> id,
            session |-> ParentSession,
-           source  |-> "subagent_completion",
-           policy  |-> "coalesce",
-           key     |-> CompletionQueueKey,
+           source  |-> "user",
+           policy  |-> "append",
+           key     |-> UserQueueKey,
            state   |-> "pending"
          ]
      IN /\ queueRows' = queueRows \cup {row}
@@ -356,6 +412,29 @@ EnqueueWakeup(child) ==
        terminalSource,
        terminalWriteCount,
        notificationDurable,
+       eventIdsUsed,
+       dropCount,
+       crashCount,
+       cancelRequested
+     >>
+
+CancelDrain ==
+  /\ HasPendingCompletionWakeup
+  /\ queueRows' =
+       { IF IsPendingCompletionWakeup(row)
+         THEN [row EXCEPT !.state = "drained"]
+         ELSE row : row \in queueRows }
+  /\ UNCHANGED <<
+       childDurable,
+       childFinalResponseDurable,
+       messages,
+       pendingInboundA,
+       observedDurableA,
+       bridgeState,
+       terminalSource,
+       terminalWriteCount,
+       notificationDurable,
+       queueIdsUsed,
        eventIdsUsed,
        dropCount,
        crashCount,
@@ -421,10 +500,21 @@ WakeupCoalesced ==
     /\ IsPendingCompletionWakeup(r2)
     => FALSE
 
+CompletionWakeupUnique ==
+  \A r1, r2 \in queueRows :
+    /\ r1 # r2
+    /\ IsCompletionWakeup(r1)
+    /\ IsCompletionWakeup(r2)
+    => FALSE
+
 WakeupCausal ==
   \A row \in queueRows :
     IsPendingCompletionWakeup(row) =>
       \E child \in Child : notificationDurable[child]
+
+UserPendingPreserved ==
+  \A row \in queueRows :
+    row.source = "user" => row.state = "pending"
 
 StateBound == TRUE
 
@@ -438,6 +528,8 @@ Next ==
   \/ \E child \in Child : ProjectTerminal(child)
   \/ \E child \in Child : AppendNotification(child)
   \/ \E child \in Child : EnqueueWakeup(child)
+  \/ EnqueueUserRequest
+  \/ CancelDrain
 
 Spec == Init /\ [][Next]_vars
 
