@@ -4339,10 +4339,7 @@ fn lean_emits_bridge_transitions_in_tool_call_machine() {
         "bridge_cancel_cascade",
     ];
     for name in &bridge_names {
-        let found = machine
-            .named_transitions
-            .iter()
-            .any(|t| t.name == *name);
+        let found = machine.named_transitions.iter().any(|t| t.name == *name);
         assert!(
             found,
             "Lean contract must emit '{}' transition in ToolCall machine",

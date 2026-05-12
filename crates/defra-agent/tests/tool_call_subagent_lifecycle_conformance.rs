@@ -16,9 +16,8 @@ mod support;
 // remainder of Bucket 3 is filled in.
 #[allow(unused_imports)]
 use defra_agent::tool_call_lifecycle::{
-    AwaitMode, CancelPolicy, CascadeIntent, ChildTerminal, FailureClass,
-    IllegalToolCallTransition, ToolCallLifecycle,
-    create_subagent_request, MAX_SUBAGENT_DEPTH,
+    create_subagent_request, AwaitMode, CancelPolicy, CascadeIntent, ChildTerminal, FailureClass,
+    IllegalToolCallTransition, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
 use support::test_db;
 
@@ -56,8 +55,7 @@ async fn make_completed_request(
         .unwrap_or_default();
     let rid = defra_agent::graphql::escape_graphql_string(request_id);
     let content = defra_agent::graphql::escape_graphql_string(final_message);
-    let now = chrono::Utc::now()
-        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let now_escaped = defra_agent::graphql::escape_graphql_string(&now);
     let mutation = format!(
         r#"mutation {{
@@ -121,8 +119,7 @@ async fn make_terminal_request(
         .unwrap_or_default();
     let rid = defra_agent::graphql::escape_graphql_string(request_id);
     let state_escaped = defra_agent::graphql::escape_graphql_string(state);
-    let now = chrono::Utc::now()
-        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let now_escaped = defra_agent::graphql::escape_graphql_string(&now);
     // "dead"/"interrupted"/"superseded" are not valid `status` values in the
     // existing schema — the `status` field uses the legacy R1 vocabulary
@@ -205,14 +202,10 @@ async fn integration_load_round_trip_preserves_subagent_fields() {
     // Because await_mode/cancel_policy/child_request_id are pub(crate), we
     // verify the round-trip by querying the DB directly — the same pattern used
     // throughout this test file.
-    let loaded = ToolCallLifecycle::load(
-        db.node.clone(),
-        "sess-load-rt-1",
-        "tc-load-rt-1",
-    )
-    .await
-    .unwrap()
-    .expect("row must exist after start_running");
+    let loaded = ToolCallLifecycle::load(db.node.clone(), "sess-load-rt-1", "tc-load-rt-1")
+        .await
+        .unwrap()
+        .expect("row must exist after start_running");
 
     // Confirm the returned lifecycle is non-None (i.e. load() succeeded).
     // The live-state verification is below via a direct DB query.
@@ -221,13 +214,16 @@ async fn integration_load_round_trip_preserves_subagent_fields() {
     // Query the persisted row to confirm all three v3 fields were written by
     // start_running and are readable back. This validates the SELECT projection
     // added to load() picks up the correct values for a subagent row.
-    let resp = db.node.execute(
-        r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "tc-load-rt-1" } }) {
+    let resp = db
+        .node
+        .execute(
+            r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "tc-load-rt-1" } }) {
             await_mode
             cancel_policy
             child_request_id
         } }"#,
-    ).await;
+        )
+        .await;
     assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
     let data = resp.data.expect("data");
     let rows = data["AgentToolCall"].as_array().expect("array");
@@ -270,23 +266,22 @@ async fn integration_load_round_trip_foreground_cascade_also_preserved() {
     );
     lc.start_running().await.unwrap();
 
-    let loaded = ToolCallLifecycle::load(
-        db.node.clone(),
-        "sess-load-rt-2",
-        "tc-load-rt-2",
-    )
-    .await
-    .unwrap()
-    .expect("row must exist after start_running");
+    let loaded = ToolCallLifecycle::load(db.node.clone(), "sess-load-rt-2", "tc-load-rt-2")
+        .await
+        .unwrap()
+        .expect("row must exist after start_running");
     drop(loaded);
 
-    let resp = db.node.execute(
-        r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "tc-load-rt-2" } }) {
+    let resp = db
+        .node
+        .execute(
+            r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "tc-load-rt-2" } }) {
             await_mode
             cancel_policy
             child_request_id
         } }"#,
-    ).await;
+        )
+        .await;
     assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
     let data = resp.data.expect("data");
     let rows = data["AgentToolCall"].as_array().expect("array");
@@ -294,7 +289,10 @@ async fn integration_load_round_trip_foreground_cascade_also_preserved() {
     let row = &rows[0];
     assert_eq!(row["await_mode"].as_str(), Some("foreground"));
     assert_eq!(row["cancel_policy"].as_str(), Some("cascade"));
-    assert_eq!(row["child_request_id"].as_str(), Some("child-req-load-rt-2"));
+    assert_eq!(
+        row["child_request_id"].as_str(),
+        Some("child-req-load-rt-2")
+    );
 }
 
 #[tokio::test]
@@ -313,25 +311,24 @@ async fn integration_load_round_trip_native_tool_has_no_child_request_id() {
     );
     lc.start_running().await.unwrap();
 
-    let loaded = ToolCallLifecycle::load(
-        db.node.clone(),
-        "sess-load-rt-3",
-        "tc-load-rt-3",
-    )
-    .await
-    .unwrap()
-    .expect("row must exist after start_running");
+    let loaded = ToolCallLifecycle::load(db.node.clone(), "sess-load-rt-3", "tc-load-rt-3")
+        .await
+        .unwrap()
+        .expect("row must exist after start_running");
     drop(loaded);
 
     // Native tool: the three v3 fields are not written by start_running, so
     // they come back as null from the DB. The DB-level view:
-    let resp = db.node.execute(
-        r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "tc-load-rt-3" } }) {
+    let resp = db
+        .node
+        .execute(
+            r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "tc-load-rt-3" } }) {
             await_mode
             cancel_policy
             child_request_id
         } }"#,
-    ).await;
+        )
+        .await;
     assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
     let data = resp.data.expect("data");
     let rows = data["AgentToolCall"].as_array().expect("array");
@@ -367,9 +364,12 @@ async fn integration_background_then_foreground_persists_round_trip() {
 
     // Flip to background and verify persisted await_mode.
     lc.background().await.unwrap();
-    let resp = db.node.execute(
-        r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "tc-int-1" } }) { await_mode } }"#
-    ).await;
+    let resp = db
+        .node
+        .execute(
+            r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "tc-int-1" } }) { await_mode } }"#,
+        )
+        .await;
     assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
     let data = resp.data.expect("data");
     let rows = data["AgentToolCall"].as_array().expect("array");
@@ -382,9 +382,12 @@ async fn integration_background_then_foreground_persists_round_trip() {
 
     // Flip back to foreground and verify persisted await_mode.
     lc.foreground().await.unwrap();
-    let resp = db.node.execute(
-        r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "tc-int-1" } }) { await_mode } }"#
-    ).await;
+    let resp = db
+        .node
+        .execute(
+            r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "tc-int-1" } }) { await_mode } }"#,
+        )
+        .await;
     assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
     let data = resp.data.expect("data");
     let rows = data["AgentToolCall"].as_array().expect("array");
@@ -430,9 +433,12 @@ async fn integration_detach_one_way_persists() {
     lc.detach().await.unwrap();
 
     // Verify cancel_policy is persisted as "detach".
-    let resp = db.node.execute(
-        r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "tc-det-1" } }) { cancel_policy } }"#
-    ).await;
+    let resp = db
+        .node
+        .execute(
+            r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "tc-det-1" } }) { cancel_policy } }"#,
+        )
+        .await;
     assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
     let data = resp.data.expect("data");
     let rows = data["AgentToolCall"].as_array().expect("array");
@@ -462,15 +468,9 @@ async fn integration_detach_one_way_persists() {
 async fn test_make_completed_request_creates_row() {
     let db = test_db("tc-sa-sanity-1").await;
 
-    make_completed_request(
-        &db.node,
-        "req-sanity-1",
-        None,
-        None,
-        "all done",
-    )
-    .await
-    .unwrap();
+    make_completed_request(&db.node, "req-sanity-1", None, None, "all done")
+        .await
+        .unwrap();
 
     // Verify a row exists with lifecycle_state == "completed".
     let query = r#"{
@@ -484,9 +484,7 @@ async fn test_make_completed_request_creates_row() {
     assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
 
     let data = resp.data.expect("data");
-    let rows = data["AgentRequest"]
-        .as_array()
-        .expect("AgentRequest array");
+    let rows = data["AgentRequest"].as_array().expect("AgentRequest array");
     assert_eq!(rows.len(), 1, "expected exactly one AgentRequest row");
 
     let row = &rows[0];
@@ -534,9 +532,7 @@ async fn test_make_completed_request_child_sets_depth_and_parent_fields() {
     assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
 
     let data = resp.data.expect("data");
-    let rows = data["AgentRequest"]
-        .as_array()
-        .expect("AgentRequest array");
+    let rows = data["AgentRequest"].as_array().expect("AgentRequest array");
     assert_eq!(rows.len(), 1, "expected one row");
 
     let row = &rows[0];
@@ -598,17 +594,23 @@ async fn integration_bridge_complete_with_real_child() {
 
     // 3. Call bridge_complete with the projected child output.
     let projected_output = "child final assistant message".to_string();
-    bridge.bridge_complete(projected_output.clone()).await.unwrap();
+    bridge
+        .bridge_complete(projected_output.clone())
+        .await
+        .unwrap();
 
     // 4. Verify the bridge tool's persisted lifecycle_state, result, and
     //    child_request_id.
-    let resp = db.node.execute(
-        r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "tc-bc1" } }) {
+    let resp = db
+        .node
+        .execute(
+            r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "tc-bc1" } }) {
             lifecycle_state
             result
             child_request_id
         } }"#,
-    ).await;
+        )
+        .await;
     assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
 
     let data = resp.data.expect("data");
@@ -684,7 +686,11 @@ async fn run_bridge_failure_case(
 
     let data = resp.data.expect("data");
     let rows = data["AgentToolCall"].as_array().expect("array");
-    assert_eq!(rows.len(), 1, "expected one AgentToolCall row for {terminal_state}");
+    assert_eq!(
+        rows.len(),
+        1,
+        "expected one AgentToolCall row for {terminal_state}"
+    );
     assert_eq!(
         rows[0]["lifecycle_state"].as_str(),
         Some(expected_lifecycle_state),
@@ -727,7 +733,13 @@ async fn integration_bridge_failure_interrupted_projects_to_cancelled() {
 
 #[tokio::test]
 async fn integration_bridge_failure_superseded_projects_to_failed() {
-    run_bridge_failure_case("superseded", "superseded", ChildTerminal::Superseded, "failed").await;
+    run_bridge_failure_case(
+        "superseded",
+        "superseded",
+        ChildTerminal::Superseded,
+        "failed",
+    )
+    .await;
 }
 
 // ---------------------------------------------------------------------------
@@ -789,7 +801,10 @@ async fn integration_cascade_intent_for_native_returns_none() {
     lc.start_running().await.unwrap();
     lc.cancel_during_run().await.unwrap();
     let intent = lc.bridge_cancel_cascade().await.unwrap();
-    assert!(intent.is_none(), "Native tool (no child_request_id) returns None");
+    assert!(
+        intent.is_none(),
+        "Native tool (no child_request_id) returns None"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -802,9 +817,15 @@ async fn test_make_terminal_request_all_states() {
 
     for (idx, state) in ChildTerminal::ALL_KIND.iter().enumerate() {
         let rid = format!("req-terminal-{idx}");
-        make_terminal_request(&db.node, &rid, Some("req-parent-x"), Some("tc-parent-x"), state)
-            .await
-            .unwrap_or_else(|e| panic!("make_terminal_request({state}) failed: {e}"));
+        make_terminal_request(
+            &db.node,
+            &rid,
+            Some("req-parent-x"),
+            Some("tc-parent-x"),
+            state,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("make_terminal_request({state}) failed: {e}"));
 
         let rid_escaped = defra_agent::graphql::escape_graphql_string(&rid);
         let query = format!(
@@ -815,7 +836,11 @@ async fn test_make_terminal_request_all_states() {
             }}"#
         );
         let resp = db.node.execute(&query).await;
-        assert!(!resp.has_errors(), "query failed for state {state}: {:?}", resp.errors);
+        assert!(
+            !resp.has_errors(),
+            "query failed for state {state}: {:?}",
+            resp.errors
+        );
 
         let data = resp.data.expect("data");
         let rows = data["AgentRequest"].as_array().expect("array");

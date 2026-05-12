@@ -16,10 +16,7 @@ fn main() {
 
     // Re-run this build script if either lens crate's source changes.
     for (subdir, _pkg) in [
-        (
-            "agent_tool_call_lifecycle_v1_to_v2",
-            LENS_TOOL_CALL_PACKAGE,
-        ),
+        ("agent_tool_call_lifecycle_v1_to_v2", LENS_TOOL_CALL_PACKAGE),
         ("agent_subagent_v2_to_v3", LENS_SUBAGENT_PACKAGE),
     ] {
         let lens_dir = workspace_root

@@ -24,7 +24,9 @@ use super::{AwaitMode, CancelPolicy, ToolCallLifecycle, ToolCallState};
 /// Programmer error, not a user-visible failure.
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum IllegalToolCallTransition {
-    #[error("illegal tool call transition: cannot {method} from state {from:?} (allowed: {allowed:?})")]
+    #[error(
+        "illegal tool call transition: cannot {method} from state {from:?} (allowed: {allowed:?})"
+    )]
     BadState {
         method: &'static str,
         from: ToolCallState,
@@ -305,10 +307,9 @@ impl ToolCallLifecycle {
             return Err(IllegalToolCallTransition::BridgeCompleteRequiresChildLink.into());
         }
 
-        let doc_id = self
-            .doc_id
-            .as_ref()
-            .ok_or_else(|| anyhow!("bridge_complete called before start_running persisted a row"))?;
+        let doc_id = self.doc_id.as_ref().ok_or_else(|| {
+            anyhow!("bridge_complete called before start_running persisted a row")
+        })?;
         let now = Utc::now();
         let started_at = self
             .started_at
@@ -364,9 +365,10 @@ impl ToolCallLifecycle {
 
         let projected = child_terminal.projected_state();
         let (failure_class_for_persist, reason_for_persist) = match &child_terminal {
-            super::ChildTerminal::Failed { reason, failure_class } => {
-                (Some(*failure_class), Some(reason.clone()))
-            }
+            super::ChildTerminal::Failed {
+                reason,
+                failure_class,
+            } => (Some(*failure_class), Some(reason.clone())),
             _ => (None, None),
         };
 
@@ -1036,10 +1038,7 @@ mod tests {
             .projected_state(),
             ToolCallState::Failed
         );
-        assert_eq!(
-            ChildTerminal::Dead.projected_state(),
-            ToolCallState::Failed
-        );
+        assert_eq!(ChildTerminal::Dead.projected_state(), ToolCallState::Failed);
         assert_eq!(
             ChildTerminal::Superseded.projected_state(),
             ToolCallState::Failed
@@ -1155,7 +1154,10 @@ mod tests {
         lc.set_state(ToolCallState::Cancelled);
 
         let intent = lc.bridge_cancel_cascade().await.unwrap();
-        assert!(intent.is_none(), "Native tool (no child_request_id) returns None");
+        assert!(
+            intent.is_none(),
+            "Native tool (no child_request_id) returns None"
+        );
     }
 
     #[tokio::test]

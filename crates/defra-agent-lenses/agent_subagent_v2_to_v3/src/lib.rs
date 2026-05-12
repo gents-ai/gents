@@ -33,8 +33,7 @@ fn try_transform(
                 .or_insert(Value::String("cascade".to_string()));
             doc.entry("child_request_id".to_string())
                 .or_insert(Value::Null);
-            doc.entry("request_id".to_string())
-                .or_insert(Value::Null);
+            doc.entry("request_id".to_string()).or_insert(Value::Null);
         }
 
         // AgentRequest: has request_id AND agent_did (distinguishes from

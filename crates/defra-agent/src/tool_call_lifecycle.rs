@@ -172,7 +172,10 @@ impl CancelPolicy {
 /// onto a parent ToolCallState (.failed for most, .cancelled for .interrupted).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChildTerminal {
-    Failed { reason: String, failure_class: FailureClass },
+    Failed {
+        reason: String,
+        failure_class: FailureClass,
+    },
     Dead,
     Interrupted,
     Superseded,
@@ -188,8 +191,7 @@ impl ChildTerminal {
     }
 
     /// Persisted vocabulary names for conformance enumeration.
-    pub const ALL_KIND: &'static [&'static str] =
-        &["failed", "dead", "interrupted", "superseded"];
+    pub const ALL_KIND: &'static [&'static str] = &["failed", "dead", "interrupted", "superseded"];
 }
 
 /// Returned by `bridge_cancel_cascade` (wrapped in Option). The caller — typically
@@ -479,11 +481,18 @@ mod bucket_1_subagent_vocabulary {
             ChildTerminal::Failed {
                 reason: "x".to_string(),
                 failure_class: FailureClass::External
-            }.projected_state(),
+            }
+            .projected_state(),
             ToolCallState::Failed
         );
         assert_eq!(ChildTerminal::Dead.projected_state(), ToolCallState::Failed);
-        assert_eq!(ChildTerminal::Interrupted.projected_state(), ToolCallState::Cancelled);
-        assert_eq!(ChildTerminal::Superseded.projected_state(), ToolCallState::Failed);
+        assert_eq!(
+            ChildTerminal::Interrupted.projected_state(),
+            ToolCallState::Cancelled
+        );
+        assert_eq!(
+            ChildTerminal::Superseded.projected_state(),
+            ToolCallState::Failed
+        );
     }
 }
