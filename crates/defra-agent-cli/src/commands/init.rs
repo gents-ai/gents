@@ -542,6 +542,10 @@ fn standard_tool_selection(
         enable_meta_tools: Some(true),
         allowed_mcp_service_ids: Some(Vec::new()),
         delegate_to: Some(Vec::new()),
+        subagent_targets: Some(Vec::new()),
+        subagent_spawn_enabled: Some(false),
+        subagent_steering_enabled: Some(false),
+        subagent_background_enabled: Some(false),
     }
 }
 

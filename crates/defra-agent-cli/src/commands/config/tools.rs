@@ -33,6 +33,10 @@ pub(super) async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<
         enable_meta_tools: Some(args.enable_meta_tools),
         allowed_mcp_service_ids: Some(args.allowed_mcp_service_ids.clone()),
         delegate_to: Some(args.delegate_to.clone()),
+        subagent_targets: Some(Vec::new()),
+        subagent_spawn_enabled: Some(false),
+        subagent_steering_enabled: Some(false),
+        subagent_background_enabled: Some(false),
     };
     let doc_id = write_tool_selection_document(&access, &selection).await?;
     let output = json!({
