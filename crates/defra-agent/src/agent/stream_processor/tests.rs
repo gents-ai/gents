@@ -387,6 +387,9 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         metadata: None,
         execution_origin: None,
         created_at: chrono::Utc::now().to_rfc3339(),
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: None,
     };
 
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
@@ -549,6 +552,9 @@ async fn post_tool_resumed_resets_response_tail() {
         metadata: None,
         execution_origin: None,
         created_at: chrono::Utc::now().to_rfc3339(),
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: None,
     };
 
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(

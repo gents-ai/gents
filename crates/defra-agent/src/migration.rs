@@ -135,11 +135,26 @@ fn collection_has_lifecycle_state(cv: &defra_node::CollectionVersion) -> bool {
     cv.fields.iter().any(|f| f.name == "lifecycle_state")
 }
 
-/// Resolve the path to the bundled WASM lens artifact for the v2->v3 subagent
-/// extension migration.
-fn subagent_lens_wasm_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/wasm32-unknown-unknown/release/agent_subagent_v2_to_v3_lens.wasm")
+/// WASM lens bytes for the v2->v3 subagent extension. Embedded at compile time
+/// via build.rs.
+const SUBAGENT_LENS_WASM_BYTES: &[u8] =
+    include_bytes!(env!("AGENT_SUBAGENT_V2_TO_V3_LENS_WASM_PATH"));
+
+/// Process-wide temp file holding the unpacked subagent WASM bytes. Held alive
+/// (never dropped) so DefraDB's lazy lens loader can always reach the path.
+static SUBAGENT_LENS_TEMP_FILE: OnceLock<NamedTempFile> = OnceLock::new();
+
+/// Return the filesystem path to the embedded subagent WASM lens, unpacking it
+/// on first call. Subsequent calls return the same path.
+fn subagent_lens_wasm_path() -> Result<String> {
+    let temp = SUBAGENT_LENS_TEMP_FILE.get_or_init(|| {
+        let mut tf = NamedTempFile::new().expect("create subagent lens temp file");
+        std::io::Write::write_all(tf.as_file_mut(), SUBAGENT_LENS_WASM_BYTES)
+            .expect("write embedded subagent lens bytes to temp file");
+        tf
+    });
+    let path = temp.path().to_string_lossy().to_string();
+    Ok(path)
 }
 
 fn collection_has_field(cv: &defra_node::CollectionVersion, field_name: &str) -> bool {
@@ -257,10 +272,7 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
     // The WASM module (agent_subagent_v2_to_v3) retains transform logic for
     // all three collections in case future patches are non-additive, but only
     // the AgentToolCall transform is registered here via set_migration.
-    let lens_path = subagent_lens_wasm_path();
-    let lens_path_str = lens_path
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("non-utf8 subagent lens path"))?;
+    let lens_path = subagent_lens_wasm_path().context("unpack embedded subagent lens WASM")?;
 
     // The "from" version is the AgentToolCall version before the patch
     // (captured above) and "to" is the v3 version we just activated.
@@ -273,7 +285,7 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
     let forward_config = LensConfig::new(
         atc_pre_version_id.clone(),
         atc_v3_version_id.clone(),
-        LensModule::from_path(lens_path_str),
+        LensModule::from_path(lens_path),
     );
 
     node.set_migration(forward_config)
