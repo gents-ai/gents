@@ -54,6 +54,7 @@ struct SessionState {
     sequence: u32,
     transcript_turn: TranscriptTurnState,
     persisted_tool_result_keys: HashSet<String>,
+    persisted_tool_result_message_sequences: HashMap<String, u32>,
     tool_result_identities: HashMap<String, ToolResultIdentity>,
     initialized: bool,
 }
@@ -258,6 +259,7 @@ impl DefraSessionHook {
                 sequence: 0,
                 transcript_turn: TranscriptTurnState::Idle,
                 persisted_tool_result_keys: HashSet::new(),
+                persisted_tool_result_message_sequences: HashMap::new(),
                 tool_result_identities: HashMap::new(),
                 initialized: false,
             })),
@@ -292,6 +294,7 @@ impl DefraSessionHook {
                 sequence: max_seq,
                 transcript_turn: TranscriptTurnState::Idle,
                 persisted_tool_result_keys: HashSet::new(),
+                persisted_tool_result_message_sequences: HashMap::new(),
                 tool_result_identities: HashMap::new(),
                 initialized: true,
             })),
