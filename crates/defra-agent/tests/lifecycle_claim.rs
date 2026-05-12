@@ -17,12 +17,18 @@ struct BehaviorRow {
     behavior_id: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct DeadlineRow {
+    deadline: String,
+}
+
 #[tokio::test]
 async fn pending_request_hydrates_sampling_fields_and_metadata() {
     let db = test_db("request-sampling-metadata").await;
     let request_id = "req-sampling-metadata";
     let session_id = "session-sampling-metadata";
     let metadata = r#" { "run_id": "foo" } "#;
+    let deadline = "2026-03-23T00:05:00Z";
     let escaped_metadata = defra_agent::graphql::escape_graphql_string(metadata);
     let mutation = format!(
         r#"mutation {{
@@ -45,6 +51,7 @@ async fn pending_request_hydrates_sampling_fields_and_metadata() {
                 backend_id: "",
                 execution_origin: "interactive",
                 created_at: "2026-03-23T00:00:00Z",
+                deadline: "{deadline}",
                 retry_count: 0,
                 max_retries: 3
             }}) {{ _docID }}
@@ -83,6 +90,7 @@ async fn pending_request_hydrates_sampling_fields_and_metadata() {
     assert_eq!(request.top_k, Some(40));
     assert_eq!(request.max_tokens, Some(512));
     assert_eq!(request.metadata.as_deref(), Some(metadata));
+    assert_eq!(request.deadline.as_deref(), Some(deadline));
     assert_eq!(request.content, "visible prompt");
     assert!(!request.content.contains("run_id"));
 }
@@ -111,6 +119,7 @@ async fn claim_rejects_when_another_non_terminal_request_exists() {
         metadata: None,
         execution_origin: None,
         created_at: later,
+        deadline: None,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_tool_call_id: None,
@@ -172,6 +181,7 @@ async fn claim_suppresses_later_pending_duplicates() {
         metadata: None,
         execution_origin: None,
         created_at: "2026-03-23T00:00:00Z".into(),
+        deadline: None,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_tool_call_id: None,
@@ -260,6 +270,7 @@ async fn claim_preserves_explicit_behavior_id() {
         metadata: None,
         execution_origin: None,
         created_at: created_at.into(),
+        deadline: None,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_tool_call_id: None,
@@ -285,4 +296,173 @@ async fn claim_preserves_explicit_behavior_id() {
         first_row::<BehaviorRow>(&resp, "AgentRequest").behavior_id,
         "code"
     );
+}
+
+#[tokio::test]
+async fn claim_preserves_explicit_request_deadline() {
+    let db = test_db("lifecycle-explicit-deadline").await;
+    let request_id = "req-explicit-deadline";
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let explicit_deadline_at = chrono::Utc::now() + chrono::Duration::minutes(5);
+    let explicit_deadline = explicit_deadline_at.to_rfc3339();
+    let escaped_session_id = defra_agent::graphql::escape_graphql_string(&session_id);
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{request_id}",
+                agent_did: "{AGENT_DID}",
+                behavior_id: "{AGENT_NAME}",
+                session_id: "{escaped_session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{request_id}",
+                superseded_by_request: "",
+                content: "hello",
+                status: "pending",
+                lifecycle_state: "pending",
+                backend_id: "",
+                execution_origin: "interactive",
+                created_at: "{created_at}",
+                deadline: "{explicit_deadline}",
+                retry_count: 0,
+                max_retries: {max_retries}
+            }}) {{ _docID }}
+        }}"#,
+        max_retries = defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+    );
+    let resp = db.node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "create request failed: {:?}",
+        resp.errors
+    );
+
+    let doc_id = first_row::<support::DocIdRow>(
+        &db.node
+            .execute(
+                r#"{
+                    AgentRequest(
+                        filter: { request_id: { _eq: "req-explicit-deadline" } },
+                        limit: 1
+                    ) { _docID }
+                }"#,
+            )
+            .await,
+        "AgentRequest",
+    )
+    .doc_id;
+    let watcher = DefraWatcher::new(db.node.clone(), AGENT_DID);
+    let request = watcher
+        .try_fetch_request(&doc_id)
+        .await
+        .unwrap()
+        .expect("pending request");
+
+    let mut lifecycle =
+        RequestLifecycle::new_with_agent_did(db.node.clone(), AGENT_NAME, AGENT_DID, request, 3600);
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+
+    let resp = db
+        .node
+        .execute(
+            r#"{
+                AgentRequest(
+                    filter: { request_id: { _eq: "req-explicit-deadline" } },
+                    limit: 1
+                ) { deadline }
+            }"#,
+        )
+        .await;
+    let persisted = first_row::<DeadlineRow>(&resp, "AgentRequest").deadline;
+    assert_eq!(
+        chrono::DateTime::parse_from_rfc3339(&persisted).unwrap(),
+        chrono::DateTime::parse_from_rfc3339(&explicit_deadline).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn claim_synthesizes_deadline_when_request_deadline_is_invalid() {
+    let db = test_db("lifecycle-invalid-deadline").await;
+    let request_id = "req-invalid-deadline";
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let invalid_deadline = "not-a-deadline";
+    let escaped_session_id = defra_agent::graphql::escape_graphql_string(&session_id);
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{request_id}",
+                agent_did: "{AGENT_DID}",
+                behavior_id: "{AGENT_NAME}",
+                session_id: "{escaped_session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{request_id}",
+                superseded_by_request: "",
+                content: "hello",
+                status: "pending",
+                lifecycle_state: "pending",
+                backend_id: "",
+                execution_origin: "interactive",
+                created_at: "{created_at}",
+                deadline: "{invalid_deadline}",
+                retry_count: 0,
+                max_retries: {max_retries}
+            }}) {{ _docID }}
+        }}"#,
+        max_retries = defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+    );
+    let resp = db.node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "create request failed: {:?}",
+        resp.errors
+    );
+
+    let doc_id = first_row::<support::DocIdRow>(
+        &db.node
+            .execute(
+                r#"{
+                    AgentRequest(
+                        filter: { request_id: { _eq: "req-invalid-deadline" } },
+                        limit: 1
+                    ) { _docID }
+                }"#,
+            )
+            .await,
+        "AgentRequest",
+    )
+    .doc_id;
+    let watcher = DefraWatcher::new(db.node.clone(), AGENT_DID);
+    let request = watcher
+        .try_fetch_request(&doc_id)
+        .await
+        .unwrap()
+        .expect("pending request");
+    assert_eq!(request.deadline.as_deref(), Some(invalid_deadline));
+
+    let before_claim = chrono::Utc::now();
+    let mut lifecycle =
+        RequestLifecycle::new_with_agent_did(db.node.clone(), AGENT_NAME, AGENT_DID, request, 120);
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    let after_claim = chrono::Utc::now();
+
+    let resp = db
+        .node
+        .execute(
+            r#"{
+                AgentRequest(
+                    filter: { request_id: { _eq: "req-invalid-deadline" } },
+                    limit: 1
+                ) { deadline }
+            }"#,
+        )
+        .await;
+    let persisted = first_row::<DeadlineRow>(&resp, "AgentRequest").deadline;
+    assert_ne!(persisted, invalid_deadline);
+
+    let persisted_deadline = chrono::DateTime::parse_from_rfc3339(&persisted)
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    assert!(persisted_deadline >= before_claim + chrono::Duration::seconds(120));
+    assert!(persisted_deadline <= after_claim + chrono::Duration::seconds(121));
 }

@@ -1,5 +1,11 @@
 use super::*;
 
+fn parse_rfc3339_utc(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
 async fn fetch_interrupt_and_ttl(
     node: &EmbeddedNode,
     doc_id: &str,
@@ -211,7 +217,14 @@ impl RequestLifecycle {
 
         let now = chrono::Utc::now();
         let claimed_at = now.to_rfc3339();
-        let deadline_at = now + chrono::Duration::seconds(self.deadline_duration_secs as i64);
+        let synthesized_deadline_at =
+            now + chrono::Duration::seconds(self.deadline_duration_secs as i64);
+        let deadline_at = self
+            .request
+            .deadline
+            .as_deref()
+            .and_then(parse_rfc3339_utc)
+            .unwrap_or(synthesized_deadline_at);
         let deadline = deadline_at.to_rfc3339();
         let doc_id = &self.request.doc_id;
         let escaped_claimed_at = escape_graphql_string(&claimed_at);

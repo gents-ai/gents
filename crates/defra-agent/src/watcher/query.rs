@@ -18,6 +18,7 @@ const AGENT_REQUEST_FIELDS: &str = r#"
                     metadata
                     execution_origin
                     created_at
+                    deadline
                     subagent_depth
                     caused_by_parent_request_id
                     caused_by_parent_tool_call_id
@@ -111,6 +112,7 @@ struct AgentRequestRow {
     metadata: Option<String>,
     execution_origin: Option<String>,
     created_at: String,
+    deadline: Option<String>,
     subagent_depth: Option<u32>,
     caused_by_parent_request_id: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
@@ -132,6 +134,7 @@ impl AgentRequestRow {
             metadata: self.metadata,
             execution_origin: normalize_optional_string(self.execution_origin),
             created_at: self.created_at,
+            deadline: normalize_optional_string(self.deadline),
             subagent_depth: self.subagent_depth.unwrap_or(0),
             caused_by_parent_request_id: self.caused_by_parent_request_id,
             caused_by_parent_tool_call_id: self.caused_by_parent_tool_call_id,

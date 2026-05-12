@@ -33,6 +33,7 @@ pub struct AgentRequest {
     pub metadata: Option<String>,
     pub execution_origin: Option<String>,
     pub created_at: String,
+    pub deadline: Option<String>,
     pub subagent_depth: u32,
     pub caused_by_parent_request_id: Option<String>,
     pub caused_by_parent_tool_call_id: Option<String>,
