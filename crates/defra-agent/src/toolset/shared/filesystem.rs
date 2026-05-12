@@ -357,6 +357,9 @@ fn collect_grep_matches_inner(
 }
 
 fn sorted_children(dir: &Path) -> Result<Vec<std::fs::DirEntry>> {
+    #[cfg(test)]
+    maybe_block_sorted_children_for_test(dir);
+
     let read_dir = match std::fs::read_dir(dir) {
         Ok(read_dir) => read_dir,
         Err(error) if should_skip_io_error(&error) => return Ok(Vec::new()),
@@ -391,3 +394,63 @@ fn should_skip_io_error(error: &std::io::Error) -> bool {
         std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::NotFound
     )
 }
+
+#[cfg(test)]
+mod blocking_test_hook {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Duration;
+
+    static BLOCKED_DIRS: OnceLock<Mutex<Vec<(PathBuf, Duration)>>> = OnceLock::new();
+
+    fn blocked_dirs() -> &'static Mutex<Vec<(PathBuf, Duration)>> {
+        BLOCKED_DIRS.get_or_init(|| Mutex::new(Vec::new()))
+    }
+
+    pub(crate) struct SortedChildrenBlockGuard {
+        dir: PathBuf,
+    }
+
+    impl Drop for SortedChildrenBlockGuard {
+        fn drop(&mut self) {
+            let mut blocked = blocked_dirs()
+                .lock()
+                .expect("sorted-children test hook mutex poisoned");
+            blocked.retain(|(dir, _)| dir != &self.dir);
+        }
+    }
+
+    pub(crate) fn block_next_sorted_children_for_test(
+        dir: impl AsRef<Path>,
+        duration: Duration,
+    ) -> SortedChildrenBlockGuard {
+        let dir = dir.as_ref().to_path_buf();
+        blocked_dirs()
+            .lock()
+            .expect("sorted-children test hook mutex poisoned")
+            .push((dir.clone(), duration));
+        SortedChildrenBlockGuard { dir }
+    }
+
+    pub(super) fn maybe_block_sorted_children_for_test(dir: &Path) {
+        let duration = {
+            let mut blocked = blocked_dirs()
+                .lock()
+                .expect("sorted-children test hook mutex poisoned");
+            blocked
+                .iter()
+                .position(|(blocked_dir, _)| blocked_dir == dir)
+                .map(|index| blocked.remove(index).1)
+        };
+
+        if let Some(duration) = duration {
+            std::thread::sleep(duration);
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) use blocking_test_hook::block_next_sorted_children_for_test;
+
+#[cfg(test)]
+use blocking_test_hook::maybe_block_sorted_children_for_test;

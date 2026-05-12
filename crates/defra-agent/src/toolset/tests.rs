@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use defra_node::EmbeddedNode;
 
@@ -14,9 +14,9 @@ use super::file_tools::{
     EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool,
 };
 use super::shared::{
-    build_shell_env_from_vars, select_sandbox_for_policy, validate_command_policy,
-    validate_read_only_command, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,
-    ToolContext,
+    block_next_sorted_children_for_test, build_shell_env_from_vars, select_sandbox_for_policy,
+    validate_command_policy, validate_read_only_command, CommandExecutionMode,
+    CommandExecutionPolicy, CommandNetworkMode, ToolContext,
 };
 use super::*;
 use crate::ensure_schemas;
@@ -124,6 +124,63 @@ fn compact_exec_meta(output: &str) -> serde_json::Value {
         .strip_prefix("defra_exec: ")
         .unwrap_or_else(|| panic!("missing defra_exec metadata line in output:\n{output}"));
     serde_json::from_str(raw).expect("metadata json")
+}
+
+#[tokio::test]
+async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_queue() {
+    let root = temp_root("defra-agent-native-boundary");
+    std::fs::write(root.join("first.txt"), "first request\n").unwrap();
+    std::fs::write(root.join("second.txt"), "second request\n").unwrap();
+    let context = ToolContext::new(root.clone(), false).unwrap();
+
+    let _blocker =
+        block_next_sorted_children_for_test(context.root(), Duration::from_millis(200));
+    let blocking_tool = crate::tool_call_lifecycle::runtime::wrap_tool(Box::new(GlobTool::new(
+        context.clone(),
+        DEFAULT_MAX_MATCHES,
+    )));
+    let second_tool = crate::tool_call_lifecycle::runtime::wrap_tool(Box::new(ReadFileTool::new(
+        context,
+        DEFAULT_MAX_FILE_CHARS,
+    )));
+
+    let started = Instant::now();
+    let first_deadline = chrono::Utc::now() + chrono::Duration::milliseconds(15);
+    let first_result = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+        Some(first_deadline),
+        tokio_util::sync::CancellationToken::new(),
+        blocking_tool.call(r#"{"pattern":"*.txt"}"#.to_string()),
+    )
+    .await
+    .expect("managed timeout is returned as tool output");
+    let first_elapsed = started.elapsed();
+
+    let second_deadline = chrono::Utc::now() + chrono::Duration::seconds(1);
+    let second_result = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+        Some(second_deadline),
+        tokio_util::sync::CancellationToken::new(),
+        second_tool.call(r#"{"path":"second.txt"}"#.to_string()),
+    )
+    .await
+    .expect("second queued request should advance after first timeout");
+    let queue_elapsed = started.elapsed();
+
+    tokio::time::sleep(Duration::from_millis(225)).await;
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert_eq!(
+        crate::tool_call_lifecycle::runtime::classify_managed_tool_result(&first_result),
+        Some(crate::tool_call_lifecycle::runtime::ManagedToolTerminal::TimedOut)
+    );
+    assert!(
+        first_elapsed < Duration::from_millis(150),
+        "blocking native tool should terminalize at the request deadline, elapsed={first_elapsed:?}"
+    );
+    assert!(
+        queue_elapsed < Duration::from_millis(150),
+        "single-worker queue should advance before the blocking native work returns, elapsed={queue_elapsed:?}"
+    );
+    assert!(second_result.contains("second request"));
 }
 
 #[tokio::test]
