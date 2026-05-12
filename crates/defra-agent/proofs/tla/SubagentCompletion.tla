@@ -287,6 +287,33 @@ ProjectTerminal(child) ==
      >>
 
 (***************************************************************************)
+(* Durable transcript notification append on A.                            *)
+(***************************************************************************)
+
+AppendNotification(child) ==
+  /\ child \in Child
+  /\ terminalSource[child] = "ChildProjection"
+  /\ notificationDurable[child] = FALSE
+  /\ notificationDurable' =
+       [notificationDurable EXCEPT ![child] = TRUE]
+  /\ UNCHANGED <<
+       childDurable,
+       childFinalResponseDurable,
+       messages,
+       pendingInboundA,
+       observedDurableA,
+       bridgeState,
+       terminalSource,
+       terminalWriteCount,
+       queueRows,
+       queueIdsUsed,
+       eventIdsUsed,
+       dropCount,
+       crashCount,
+       cancelRequested
+     >>
+
+(***************************************************************************)
 (* Safety invariants.                                                      *)
 (***************************************************************************)
 
@@ -331,6 +358,10 @@ CancelledOnlyByParentCancel ==
   \A child \in Child :
     bridgeState[child] = "Cancelled" => terminalSource[child] = "ParentCancel"
 
+NotificationCausal ==
+  \A child \in Child :
+    notificationDurable[child] => terminalSource[child] = "ChildProjection"
+
 StateBound == TRUE
 
 Next ==
@@ -341,6 +372,7 @@ Next ==
   \/ \E obs \in messages : DropObservation(obs)
   \/ \E obs \in pendingInboundA : PersistObservationOnA(obs)
   \/ \E child \in Child : ProjectTerminal(child)
+  \/ \E child \in Child : AppendNotification(child)
 
 Spec == Init /\ [][Next]_vars
 
