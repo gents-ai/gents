@@ -17,16 +17,41 @@ use defra_node::QueryResponse;
 use crate::graphql::escape_graphql_string;
 use crate::session::execute_mutation_with_retry;
 
-use super::{ToolCallLifecycle, ToolCallState};
+use super::{AwaitMode, CancelPolicy, ToolCallLifecycle, ToolCallState};
 
 /// Error returned when a transition method is called from an illegal
-/// pre-state. Programmer error, not a user-visible failure.
-#[derive(Debug, thiserror::Error)]
-#[error("illegal tool call transition: cannot {method} from state {from:?} (allowed: {allowed:?})")]
-pub struct IllegalToolCallTransition {
-    pub method: &'static str,
-    pub from: ToolCallState,
-    pub allowed: Vec<ToolCallState>,
+/// pre-state, or when a subagent-specific guard is violated.
+/// Programmer error, not a user-visible failure.
+#[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
+pub enum IllegalToolCallTransition {
+    #[error(
+        "illegal tool call transition: cannot {method} from state {from:?} (allowed: {allowed:?})"
+    )]
+    BadState {
+        method: &'static str,
+        from: ToolCallState,
+        allowed: Vec<ToolCallState>,
+    },
+    #[error("await_mode flip rejected: tool already Background")]
+    ModeAlreadyBackground,
+    #[error("await_mode flip rejected: tool already Foreground")]
+    ModeAlreadyForeground,
+    #[error("cancel_policy flip rejected: tool already Detach")]
+    PolicyAlreadyDetach,
+    #[error("bridge_complete called on tool without child_request_id")]
+    BridgeCompleteRequiresChildLink,
+    #[error("bridge_failure called on tool without child_request_id")]
+    BridgeFailureRequiresChildLink,
+    #[error("bridge_cancel_cascade called on tool not in .cancelled state")]
+    CascadeRequiresCancelled,
+    #[error("create_subagent_request rejected: depth exceeds maxSubagentDepth")]
+    SubagentDepthExceeded,
+    #[error("AgentRequest parent linkage incoherent: must set both or neither parent fields")]
+    ParentLinkageIncoherent,
+    #[error("native complete() called on subagent-typed tool (child_request_id is set)")]
+    NativeCompleteOnSubagentTool,
+    #[error("native fail() called on subagent-typed tool (child_request_id is set)")]
+    NativeFailOnSubagentTool,
 }
 
 impl ToolCallLifecycle {
@@ -40,7 +65,7 @@ impl ToolCallLifecycle {
         if allowed.contains(&self.state) {
             Ok(())
         } else {
-            Err(anyhow!(IllegalToolCallTransition {
+            Err(anyhow!(IllegalToolCallTransition::BadState {
                 method,
                 from: self.state,
                 allowed: allowed.to_vec(),
@@ -66,6 +91,21 @@ impl ToolCallLifecycle {
         let tool_call_key = format!("{escaped_session_id}:{escaped_tool_call_id}");
         let message_sequence = self.message_sequence;
 
+        // Persist subagent-specific fields when this tool has a child link.
+        // These are optional schema fields so we emit them only when set.
+        let subagent_fields = if let Some(ref crid) = self.child_request_id {
+            let escaped_crid = escape_graphql_string(crid);
+            let await_mode_str = self.await_mode.as_str();
+            let cancel_policy_str = self.cancel_policy.as_str();
+            format!(
+                r#"child_request_id: "{escaped_crid}",
+                    await_mode: "{await_mode_str}",
+                    cancel_policy: "{cancel_policy_str}","#
+            )
+        } else {
+            String::new()
+        };
+
         let mutation = format!(
             r#"mutation {{
                 create_AgentToolCall(input: {{
@@ -79,6 +119,7 @@ impl ToolCallLifecycle {
                     status: "called",
                     lifecycle_state: "running",
                     started_at: "{started_at_str}",
+                    {subagent_fields}
                     selected_service_id: null,
                     selected_tool_name: null,
                     tool_failure_class: null,
@@ -104,6 +145,9 @@ impl ToolCallLifecycle {
     /// latency_ms.
     pub async fn complete(&mut self, result: &str) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "complete")?;
+        if self.child_request_id.is_some() {
+            return Err(IllegalToolCallTransition::NativeCompleteOnSubagentTool.into());
+        }
 
         let doc_id = self
             .doc_id
@@ -149,6 +193,9 @@ impl ToolCallLifecycle {
     /// Running → Failed. For tool errors during execution. Sets failure_class.
     pub async fn fail(&mut self, result: &str, failure: super::FailureClass) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "fail")?;
+        if self.child_request_id.is_some() {
+            return Err(IllegalToolCallTransition::NativeFailOnSubagentTool.into());
+        }
 
         let doc_id = self
             .doc_id
@@ -244,6 +291,142 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
+    /// Running → Completed for bridge (subagent) tools.
+    ///
+    /// Lean parity: bridge_complete. Parent tool .running → .completed when
+    /// the caller has verified the linked child request reached .completed.
+    /// Persists child_result as the row's `result` field; sets state,
+    /// completed_at, latency_ms following R1's complete() persistence pattern.
+    ///
+    /// Trust boundary: bridge_complete does NOT verify the child's terminal
+    /// state internally (Lean's precondition is on the caller). R3's
+    /// SubagentSource will be the natural place for that check.
+    pub async fn bridge_complete(&mut self, child_result: String) -> Result<()> {
+        self.ensure_state(&[ToolCallState::Running], "bridge_complete")?;
+        if self.child_request_id.is_none() {
+            return Err(IllegalToolCallTransition::BridgeCompleteRequiresChildLink.into());
+        }
+
+        let doc_id = self.doc_id.as_ref().ok_or_else(|| {
+            anyhow!("bridge_complete called before start_running persisted a row")
+        })?;
+        let now = Utc::now();
+        let started_at = self
+            .started_at
+            .ok_or_else(|| anyhow!("bridge_complete called without started_at set"))?;
+        let latency_ms = (now - started_at).num_milliseconds();
+
+        let escaped_result = escape_graphql_string(&child_result);
+        let escaped_doc_id = escape_graphql_string(doc_id);
+        let now_str = now.to_rfc3339();
+        // DefraDB requires DateTime fields to be re-supplied on update to
+        // avoid a type-mismatch error when re-validating the document.
+        let started_at_str = started_at.to_rfc3339();
+
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentToolCall(
+                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    input: {{
+                        result: "{escaped_result}",
+                        status: "completed",
+                        lifecycle_state: "completed",
+                        started_at: "{started_at_str}",
+                        completed_at: "{now_str}",
+                        latency_ms: {latency_ms}
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+
+        execute_mutation_with_retry(&self.node, &mutation, "bridge_complete")
+            .await
+            .context("bridge_complete mutation")?;
+
+        self.state = ToolCallState::Completed;
+        Ok(())
+    }
+
+    /// Running → Failed (or Cancelled for ChildTerminal::Interrupted).
+    ///
+    /// Lean parity: bridge_failure. Parent tool .running → .failed (or
+    /// .cancelled for ChildTerminal::Interrupted). Projection per
+    /// ChildTerminal::projected_state(). Persists lifecycle_state,
+    /// completed_at, latency_ms; conditionally persists tool_failure_class
+    /// and result when the child reached .failed.
+    ///
+    /// Returns BridgeFailureRequiresChildLink for native tools (no
+    /// child_request_id).
+    pub async fn bridge_failure(&mut self, child_terminal: super::ChildTerminal) -> Result<()> {
+        self.ensure_state(&[ToolCallState::Running], "bridge_failure")?;
+        if self.child_request_id.is_none() {
+            return Err(IllegalToolCallTransition::BridgeFailureRequiresChildLink.into());
+        }
+
+        let projected = child_terminal.projected_state();
+        let (failure_class_for_persist, reason_for_persist) = match &child_terminal {
+            super::ChildTerminal::Failed {
+                reason,
+                failure_class,
+            } => (Some(*failure_class), Some(reason.clone())),
+            _ => (None, None),
+        };
+
+        let doc_id = self
+            .doc_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("bridge_failure called before start_running persisted a row"))?;
+        let now = Utc::now();
+        let started_at = self
+            .started_at
+            .ok_or_else(|| anyhow!("bridge_failure called without started_at set"))?;
+        let latency_ms = (now - started_at).num_milliseconds();
+
+        let escaped_doc_id = escape_graphql_string(doc_id);
+        let now_str = now.to_rfc3339();
+        // DefraDB requires DateTime fields to be re-supplied on update.
+        let started_at_str = started_at.to_rfc3339();
+        let lifecycle_state_str = projected.as_str();
+
+        // Build conditional fields: tool_failure_class and result are only
+        // set when the child reached .failed (mirrors R1's fail() pattern).
+        let optional_fields = match (failure_class_for_persist, reason_for_persist.as_deref()) {
+            (Some(fc), Some(reason)) => {
+                let escaped_reason = escape_graphql_string(reason);
+                let fc_str = fc.as_str();
+                format!(
+                    r#"result: "{escaped_reason}",
+                        tool_failure_class: "{fc_str}","#
+                )
+            }
+            _ => String::new(),
+        };
+
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentToolCall(
+                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    input: {{
+                        {optional_fields}
+                        status: "completed",
+                        lifecycle_state: "{lifecycle_state_str}",
+                        started_at: "{started_at_str}",
+                        completed_at: "{now_str}",
+                        latency_ms: {latency_ms}
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+
+        execute_mutation_with_retry(&self.node, &mutation, "bridge_failure")
+            .await
+            .context("bridge_failure mutation")?;
+
+        self.state = projected;
+        self.failure_class = failure_class_for_persist;
+        Ok(())
+    }
+
     /// Running → TimedOut. R1 does not call this from runtime code; R3 wires
     /// it up to fire on deadline expiry. Defined here so the API surface
     /// matches the Lean spec.
@@ -332,6 +515,156 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
+    /// Running mode-flip: await_mode Foreground → Background.
+    ///
+    /// Lean parity: ToolCallContext.Transition.background.
+    /// Requires Running state. Returns `ModeAlreadyBackground` if already in
+    /// Background mode. Persists the new await_mode to the row, then updates
+    /// the in-memory field on success.
+    pub async fn background(&mut self) -> Result<()> {
+        self.ensure_state(&[ToolCallState::Running], "background")?;
+        if self.await_mode == AwaitMode::Background {
+            return Err(IllegalToolCallTransition::ModeAlreadyBackground.into());
+        }
+
+        let doc_id = self
+            .doc_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("background called before start_running persisted a row"))?;
+        // DefraDB requires DateTime fields to be re-supplied on update to
+        // avoid a type-mismatch error when re-validating the document.
+        let started_at = self
+            .started_at
+            .ok_or_else(|| anyhow!("background called without started_at set"))?;
+        let started_at_str = started_at.to_rfc3339();
+
+        let escaped_doc_id = escape_graphql_string(doc_id);
+
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentToolCall(
+                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    input: {{ await_mode: "background", started_at: "{started_at_str}" }}
+                ) {{ _docID }}
+            }}"#
+        );
+
+        execute_mutation_with_retry(&self.node, &mutation, "background")
+            .await
+            .context("background mutation")?;
+
+        self.await_mode = AwaitMode::Background;
+        Ok(())
+    }
+
+    /// Running mode-flip: await_mode Background → Foreground.
+    ///
+    /// Lean parity: ToolCallContext.Transition.foreground.
+    /// Requires Running state. Returns `ModeAlreadyForeground` if already in
+    /// Foreground mode. Persists the new await_mode to the row, then updates
+    /// the in-memory field on success.
+    pub async fn foreground(&mut self) -> Result<()> {
+        self.ensure_state(&[ToolCallState::Running], "foreground")?;
+        if self.await_mode == AwaitMode::Foreground {
+            return Err(IllegalToolCallTransition::ModeAlreadyForeground.into());
+        }
+
+        let doc_id = self
+            .doc_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("foreground called before start_running persisted a row"))?;
+        // DefraDB requires DateTime fields to be re-supplied on update to
+        // avoid a type-mismatch error when re-validating the document.
+        let started_at = self
+            .started_at
+            .ok_or_else(|| anyhow!("foreground called without started_at set"))?;
+        let started_at_str = started_at.to_rfc3339();
+
+        let escaped_doc_id = escape_graphql_string(doc_id);
+
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentToolCall(
+                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    input: {{ await_mode: "foreground", started_at: "{started_at_str}" }}
+                ) {{ _docID }}
+            }}"#
+        );
+
+        execute_mutation_with_retry(&self.node, &mutation, "foreground")
+            .await
+            .context("foreground mutation")?;
+
+        self.await_mode = AwaitMode::Foreground;
+        Ok(())
+    }
+
+    /// Pending|Running policy-flip: cancel_policy Cascade → Detach.
+    ///
+    /// Lean parity: ToolCallContext.Transition.detach. Allowed in both Pending
+    /// and Running states (h_live : pre.state = .pending ∨ pre.state = .running).
+    /// Returns `PolicyAlreadyDetach` if already in Detach policy. One-way — no
+    /// inverse method (matches Lean's structural irreversibility).
+    pub async fn detach(&mut self) -> Result<()> {
+        self.ensure_state(&[ToolCallState::Pending, ToolCallState::Running], "detach")?;
+        if self.cancel_policy == CancelPolicy::Detach {
+            return Err(IllegalToolCallTransition::PolicyAlreadyDetach.into());
+        }
+
+        let doc_id = self
+            .doc_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("doc_id must be set before policy-flip"))?;
+        // DefraDB requires DateTime fields to be re-supplied on update to
+        // avoid a type-mismatch error when re-validating the document.
+        // started_at is only set once the row is in Running state; for Pending
+        // state the row has not been created yet so this field will be absent.
+        let started_at_fragment = if let Some(started_at) = self.started_at {
+            format!(", started_at: \"{}\"", started_at.to_rfc3339())
+        } else {
+            String::new()
+        };
+
+        let escaped_doc_id = escape_graphql_string(doc_id);
+
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentToolCall(
+                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    input: {{ cancel_policy: "detach"{started_at_fragment} }}
+                ) {{ _docID }}
+            }}"#
+        );
+
+        execute_mutation_with_retry(&self.node, &mutation, "detach")
+            .await
+            .context("detach mutation")?;
+
+        self.cancel_policy = CancelPolicy::Detach;
+        Ok(())
+    }
+
+    /// Lean parity: bridge_cancel_cascade. Pure — returns the action that should
+    /// be taken on the child AgentRequest. Caller (typically R3's daemon
+    /// interrupt dispatcher) performs the actual write to set
+    /// interrupt_requested_at on the child. Returns None for native tools,
+    /// detached subagents, or non-cancelled bridge tools.
+    pub async fn bridge_cancel_cascade(&self) -> Result<Option<super::CascadeIntent>> {
+        if self.state != ToolCallState::Cancelled {
+            return Err(IllegalToolCallTransition::CascadeRequiresCancelled.into());
+        }
+        if self.cancel_policy != CancelPolicy::Cascade {
+            return Ok(None); // detached: no cascade
+        }
+        let Some(child_request_id) = self.child_request_id.clone() else {
+            return Ok(None); // native: no bridge edge
+        };
+        Ok(Some(super::CascadeIntent {
+            child_request_id,
+            at: chrono::Utc::now(),
+        }))
+    }
+
     /// Running → Cancelled. R1 does not call from runtime code; R4 wires up.
     pub async fn cancel_during_run(&mut self) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "cancel_during_run")?;
@@ -399,4 +732,457 @@ fn extract_doc_id_from_create_response(resp: &QueryResponse) -> Option<String> {
                 .and_then(|doc_id| doc_id.as_str())
         })
         .map(|s| s.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::super::{AwaitMode, CancelPolicy, ToolCallLifecycle, ToolCallState};
+    use super::IllegalToolCallTransition;
+
+    /// Build a minimal in-memory node. Schema setup is not required for these
+    /// tests because the h_native guards fire before any DB mutation.
+    async fn test_node() -> Arc<defra_node::EmbeddedNode> {
+        Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap())
+    }
+
+    /// Return a subagent-typed lifecycle already in Running state.
+    /// Uses the pub(crate) setters to skip `start_running` (which would
+    /// require schema setup). The guard under test fires before the DB call,
+    /// so no mutation ever reaches the node.
+    async fn subagent_lc_in_running() -> ToolCallLifecycle {
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new_subagent(
+            node,
+            "session-1".to_string(),
+            "tcid-1".to_string(),
+            0,
+            "spawn_agent".to_string(),
+            "{}".to_string(),
+            AwaitMode::Foreground,
+            CancelPolicy::Cascade,
+            "child-req-1".to_string(),
+        );
+        lc.set_state(ToolCallState::Running);
+        lc.set_doc_id(Some("fake-doc-id".to_string()));
+        lc.set_started_at(Some(chrono::Utc::now()));
+        lc
+    }
+
+    #[tokio::test]
+    async fn complete_rejects_subagent_typed_tool() {
+        let mut lc = subagent_lc_in_running().await;
+        let err = lc.complete("result").await.unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::NativeCompleteOnSubagentTool)
+            ),
+            "expected NativeCompleteOnSubagentTool, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn fail_rejects_subagent_typed_tool() {
+        use super::super::FailureClass;
+        let mut lc = subagent_lc_in_running().await;
+        let err = lc
+            .fail("error output", FailureClass::External)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::NativeFailOnSubagentTool)
+            ),
+            "expected NativeFailOnSubagentTool, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn background_rejects_already_background() {
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new_subagent(
+            node,
+            "sess-bg-2".to_string(),
+            "tc-bg-2".to_string(),
+            1,
+            "spawn_subagent".to_string(),
+            "{}".to_string(),
+            AwaitMode::Background, // start already in Background
+            CancelPolicy::Cascade,
+            "child-req-bg-2".to_string(),
+        );
+        lc.set_state(ToolCallState::Running);
+        lc.set_doc_id(Some("fake-doc-id-bg-2".to_string()));
+        lc.set_started_at(Some(chrono::Utc::now()));
+
+        let err = lc.background().await.unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::ModeAlreadyBackground)
+            ),
+            "expected ModeAlreadyBackground, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn background_rejects_pending_state() {
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new(
+            node,
+            "sess-bg-3".to_string(),
+            "tc-bg-3".to_string(),
+            1,
+            "spawn_subagent".to_string(),
+            "{}".to_string(),
+        );
+        // state is Pending (default); do not advance it
+
+        let err = lc.background().await.unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::BadState { .. })
+            ),
+            "expected BadState, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn foreground_rejects_already_foreground() {
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new_subagent(
+            node,
+            "sess-fg-1".to_string(),
+            "tc-fg-1".to_string(),
+            1,
+            "spawn_subagent".to_string(),
+            "{}".to_string(),
+            AwaitMode::Foreground, // start already in Foreground
+            CancelPolicy::Cascade,
+            "child-req-fg-1".to_string(),
+        );
+        lc.set_state(ToolCallState::Running);
+        lc.set_doc_id(Some("fake-doc-id-fg-1".to_string()));
+        lc.set_started_at(Some(chrono::Utc::now()));
+
+        let err = lc.foreground().await.unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::ModeAlreadyForeground)
+            ),
+            "expected ModeAlreadyForeground, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn foreground_rejects_pending_state() {
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new(
+            node,
+            "sess-fg-2".to_string(),
+            "tc-fg-2".to_string(),
+            1,
+            "spawn_subagent".to_string(),
+            "{}".to_string(),
+        );
+        // state is Pending (default); do not advance it
+
+        let err = lc.foreground().await.unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::BadState { .. })
+            ),
+            "expected BadState, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn detach_rejects_already_detach() {
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new_subagent(
+            node,
+            "sess-detach-1".to_string(),
+            "tc-detach-1".to_string(),
+            1,
+            "spawn_subagent".to_string(),
+            "{}".to_string(),
+            AwaitMode::Foreground,
+            CancelPolicy::Detach, // already in Detach policy
+            "child-req-detach-1".to_string(),
+        );
+        lc.set_state(ToolCallState::Running);
+        lc.set_doc_id(Some("fake-doc-id-detach-1".to_string()));
+        lc.set_started_at(Some(chrono::Utc::now()));
+
+        let err = lc.detach().await.unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::PolicyAlreadyDetach)
+            ),
+            "expected PolicyAlreadyDetach, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn detach_rejects_terminal_state() {
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new_subagent(
+            node,
+            "sess-detach-2".to_string(),
+            "tc-detach-2".to_string(),
+            1,
+            "spawn_subagent".to_string(),
+            "{}".to_string(),
+            AwaitMode::Foreground,
+            CancelPolicy::Cascade,
+            "child-req-detach-2".to_string(),
+        );
+        lc.set_state(ToolCallState::Cancelled); // terminal state
+        lc.set_doc_id(Some("fake-doc-id-detach-2".to_string()));
+        lc.set_started_at(Some(chrono::Utc::now()));
+
+        let err = lc.detach().await.unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::BadState { .. })
+            ),
+            "expected BadState, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_failure_rejects_native_tool() {
+        // Native tool: constructed with new() — no child_request_id.
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new(
+            node,
+            "sess-bf-1".to_string(),
+            "tc-bf-1".to_string(),
+            0,
+            "native_tool".to_string(),
+            "{}".to_string(),
+        );
+        lc.set_state(ToolCallState::Running);
+        lc.set_doc_id(Some("fake-doc-id-bf-1".to_string()));
+        lc.set_started_at(Some(chrono::Utc::now()));
+
+        let err = lc
+            .bridge_failure(super::super::ChildTerminal::Dead)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::BridgeFailureRequiresChildLink)
+            ),
+            "expected BridgeFailureRequiresChildLink, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_failure_rejects_pending_state() {
+        // Subagent tool, but never advanced to Running.
+        let node = test_node().await;
+        let lc_base = ToolCallLifecycle::new_subagent(
+            node,
+            "sess-bf-2".to_string(),
+            "tc-bf-2".to_string(),
+            0,
+            "spawn_agent".to_string(),
+            "{}".to_string(),
+            AwaitMode::Foreground,
+            CancelPolicy::Cascade,
+            "child-1".to_string(),
+        );
+        // Leave state as Pending (default); do not call start_running.
+        let mut lc = lc_base;
+
+        let err = lc
+            .bridge_failure(super::super::ChildTerminal::Dead)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::BadState { .. })
+            ),
+            "expected BadState, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_failure_projected_state_interrupted_is_cancelled() {
+        use super::super::ChildTerminal;
+        assert_eq!(
+            ChildTerminal::Interrupted.projected_state(),
+            ToolCallState::Cancelled
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_failure_projected_state_failed_is_failed() {
+        use super::super::{ChildTerminal, FailureClass};
+        assert_eq!(
+            ChildTerminal::Failed {
+                reason: "error".to_string(),
+                failure_class: FailureClass::External,
+            }
+            .projected_state(),
+            ToolCallState::Failed
+        );
+        assert_eq!(ChildTerminal::Dead.projected_state(), ToolCallState::Failed);
+        assert_eq!(
+            ChildTerminal::Superseded.projected_state(),
+            ToolCallState::Failed
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_complete_rejects_native_tool() {
+        // Native tool: constructed with new() — no child_request_id.
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new(
+            node,
+            "sess-bc-1".to_string(),
+            "tc-bc-1".to_string(),
+            0,
+            "native_tool".to_string(),
+            "{}".to_string(),
+        );
+        lc.set_state(ToolCallState::Running);
+        lc.set_doc_id(Some("fake-doc-id-bc-1".to_string()));
+        lc.set_started_at(Some(chrono::Utc::now()));
+
+        let err = lc.bridge_complete("x".to_string()).await.unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::BridgeCompleteRequiresChildLink)
+            ),
+            "expected BridgeCompleteRequiresChildLink, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_complete_rejects_pending_state() {
+        // Subagent tool, but never advanced to Running.
+        let node = test_node().await;
+        let lc_base = ToolCallLifecycle::new_subagent(
+            node,
+            "sess-bc-2".to_string(),
+            "tc-bc-2".to_string(),
+            0,
+            "spawn_agent".to_string(),
+            "{}".to_string(),
+            AwaitMode::Foreground,
+            CancelPolicy::Cascade,
+            "child-1".to_string(),
+        );
+        // Leave state as Pending (default); do not call start_running.
+        let mut lc = lc_base;
+
+        let err = lc.bridge_complete("x".to_string()).await.unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::BadState { .. })
+            ),
+            "expected BadState, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_cancel_cascade_returns_intent_for_cascade_subagent() {
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new_subagent(
+            node,
+            "sess-cas-1".to_string(),
+            "tc-cas-1".to_string(),
+            0,
+            "spawn_agent".to_string(),
+            "{}".to_string(),
+            AwaitMode::Foreground,
+            CancelPolicy::Cascade,
+            "child-cas-1".to_string(),
+        );
+        lc.set_state(ToolCallState::Cancelled);
+
+        let intent = lc.bridge_cancel_cascade().await.unwrap();
+        let intent = intent.expect("should return Some(CascadeIntent)");
+        assert_eq!(intent.child_request_id, "child-cas-1");
+    }
+
+    #[tokio::test]
+    async fn bridge_cancel_cascade_returns_none_for_detached() {
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new_subagent(
+            node,
+            "sess-cas-2".to_string(),
+            "tc-cas-2".to_string(),
+            0,
+            "spawn_agent".to_string(),
+            "{}".to_string(),
+            AwaitMode::Foreground,
+            CancelPolicy::Detach,
+            "child-cas-2".to_string(),
+        );
+        lc.set_state(ToolCallState::Cancelled);
+
+        let intent = lc.bridge_cancel_cascade().await.unwrap();
+        assert!(intent.is_none(), "Detach policy returns None");
+    }
+
+    #[tokio::test]
+    async fn bridge_cancel_cascade_returns_none_for_native() {
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new(
+            node,
+            "sess-cas-3".to_string(),
+            "tc-cas-3".to_string(),
+            0,
+            "native_tool".to_string(),
+            "{}".to_string(),
+        );
+        lc.set_state(ToolCallState::Cancelled);
+
+        let intent = lc.bridge_cancel_cascade().await.unwrap();
+        assert!(
+            intent.is_none(),
+            "Native tool (no child_request_id) returns None"
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_cancel_cascade_rejects_non_cancelled_state() {
+        let node = test_node().await;
+        let mut lc = ToolCallLifecycle::new_subagent(
+            node,
+            "sess-cas-4".to_string(),
+            "tc-cas-4".to_string(),
+            0,
+            "spawn_agent".to_string(),
+            "{}".to_string(),
+            AwaitMode::Foreground,
+            CancelPolicy::Cascade,
+            "child-cas-4".to_string(),
+        );
+        lc.set_state(ToolCallState::Running);
+
+        let err = lc.bridge_cancel_cascade().await.unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<IllegalToolCallTransition>(),
+                Some(IllegalToolCallTransition::CascadeRequiresCancelled)
+            ),
+            "expected CascadeRequiresCancelled, got: {err:?}"
+        );
+    }
 }

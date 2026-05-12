@@ -14,7 +14,7 @@ theorem terminal_implies_released_local
     (h_term : isTerminal r.state) :
     r.admission = .released := by
   cases r with
-  | mk state origin backend admission deadline claimTime currentTime retryCount maxRetries progressSeq messageSeq isLatest persistence interruptRequestedAt validUntil =>
+  | mk state origin backend admission deadline claimTime currentTime retryCount maxRetries progressSeq messageSeq isLatest persistence interruptRequestedAt validUntil subagentDepth causedByParentRequestId causedByParentToolCallId =>
     cases h_term with
     | inl h =>
       cases h
@@ -122,7 +122,7 @@ theorem claimed_coherent_cases
     (h_coherent : r.coherent) :
     r.admission = .waiting ∨ r.admission = .acquired := by
   cases r with
-  | mk state origin backend admission deadline claimTime currentTime retryCount maxRetries progressSeq messageSeq isLatest persistence interruptRequestedAt validUntil =>
+  | mk state origin backend admission deadline claimTime currentTime retryCount maxRetries progressSeq messageSeq isLatest persistence interruptRequestedAt validUntil subagentDepth causedByParentRequestId causedByParentToolCallId =>
     cases h_state
     cases admission <;> simp [coherent, coherentStateAdmission] at h_coherent ⊢
 

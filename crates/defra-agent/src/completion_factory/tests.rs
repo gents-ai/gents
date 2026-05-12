@@ -17,6 +17,9 @@ fn request() -> AgentRequest {
         metadata: None,
         execution_origin: None,
         created_at: String::new(),
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: None,
     }
 }
 
@@ -77,6 +80,9 @@ fn request_sampling_overrides_behavior_defaults() {
         metadata: Some(r#"{"run_id":"foo"}"#.to_string()),
         execution_origin: None,
         created_at: String::new(),
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: None,
     };
 
     let sampling = sampling_for_request(defaults, &request);

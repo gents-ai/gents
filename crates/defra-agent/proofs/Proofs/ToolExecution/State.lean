@@ -1,6 +1,7 @@
 import Proofs.Basic
 import Proofs.Persistence
 import Proofs.ToolExecution.Policy
+import Proofs.Subagent.State
 
 /-!
 # Tool Call State
@@ -80,15 +81,19 @@ abbrev ToolCallId := Nat
 
 /-- Mutable per-tool-call context that transitions carry along. -/
 structure ToolCallContext where
-  callId       : ToolCallId
-  requestId    : RequestId
-  state        : ToolCallState
-  operation    : ToolOperation
-  deadline     : Time
-  startedAt    : Option Time := none
-  currentTime  : Time
-  failureClass : Option FailureClass := none
-  persistence  : PersistenceState
+  callId         : ToolCallId
+  requestId      : RequestId
+  state          : ToolCallState
+  operation      : ToolOperation
+  deadline       : Time
+  startedAt      : Option Time := none
+  currentTime    : Time
+  failureClass   : Option FailureClass := none
+  persistence    : PersistenceState
+  -- Subagent extensions:
+  awaitMode      : Subagent.AwaitMode := .foreground
+  cancelPolicy   : Subagent.CancelPolicy := .cascade
+  childRequestId : Option RequestId := none
   deriving Repr
 
 namespace ToolCallContext

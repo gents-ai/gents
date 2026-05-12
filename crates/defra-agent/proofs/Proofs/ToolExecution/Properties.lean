@@ -20,11 +20,14 @@ theorem terminal_irreversible
   cases h_step with
   | dispatch h_state _              => simp_all [isTerminal]
   | spawnFailed _ h_state _         => simp_all [isTerminal]
-  | complete h_state _ _            => simp_all [isTerminal]
+  | complete h_state _ _ _          => simp_all [isTerminal]
   | fail _ h_state _                => simp_all [isTerminal]
   | timeout h_state _ _             => simp_all [isTerminal]
   | cancelBeforeDispatch h_state _  => simp_all [isTerminal]
   | cancelDuringRun h_state _       => simp_all [isTerminal]
+  | background h_state _ _          => simp_all [isTerminal]
+  | foreground h_state _ _          => simp_all [isTerminal]
+  | detach h_live _ _               => simp_all [isTerminal]
   | timeAdvance _ _ h_post          => simp_all
   | persistenceStep _ _ _ h_post    => simp_all
 
@@ -50,11 +53,14 @@ theorem timedOut_requires_deadline_exceeded
   cases h_step with
   | dispatch _ h_post'              => simp_all
   | spawnFailed _ _ h_post'         => simp_all
-  | complete _ _ h_post'            => simp_all
+  | complete _ _ _ h_post'          => simp_all
   | fail _ _ h_post'                => simp_all
   | timeout _ h_deadline _          => exact h_deadline
   | cancelBeforeDispatch _ h_post'  => simp_all
   | cancelDuringRun _ h_post'       => simp_all
+  | background _ _ h_post'          => simp_all
+  | foreground _ _ h_post'          => simp_all
+  | detach _ _ h_post'              => simp_all
   | timeAdvance _ _ h_post'         => simp_all
   | persistenceStep _ _ _ h_post'   => simp_all
 
@@ -70,11 +76,14 @@ theorem completed_implies_committed
   cases h_step with
   | dispatch _ h_post'              => simp_all
   | spawnFailed _ _ h_post'         => simp_all
-  | complete _ h_persist h_post'    => simp_all
+  | complete _ h_persist _ h_post'  => simp_all
   | fail _ _ h_post'                => simp_all
   | timeout _ _ h_post'             => simp_all
   | cancelBeforeDispatch _ h_post'  => simp_all
   | cancelDuringRun _ h_post'       => simp_all
+  | background _ _ h_post'          => simp_all
+  | foreground _ _ h_post'          => simp_all
+  | detach _ _ h_post'              => simp_all
   | timeAdvance _ _ h_post'         => simp_all
   | persistenceStep _ _ _ h_post'   => simp_all
 
@@ -138,11 +147,36 @@ theorem transition_preserves_requestId
   cases h_step with
   | dispatch _ h_post              => rw [h_post]
   | spawnFailed _ _ h_post         => rw [h_post]
-  | complete _ _ h_post            => rw [h_post]
+  | complete _ _ _ h_post          => rw [h_post]
   | fail _ _ h_post                => rw [h_post]
   | timeout _ _ h_post             => rw [h_post]
   | cancelBeforeDispatch _ h_post  => rw [h_post]
   | cancelDuringRun _ h_post       => rw [h_post]
+  | background _ _ h_post          => rw [h_post]
+  | foreground _ _ h_post          => rw [h_post]
+  | detach _ _ h_post              => rw [h_post]
+  | timeAdvance _ _ h_post         => rw [h_post]
+  | persistenceStep _ _ _ h_post   => rw [h_post]
+
+/-- Helper: every Transition preserves `callId`. The callId is set at
+    construction time and no inner transition mentions it in its
+    `post = { pre with ... }` rewrite. Used by
+    `ComposedState.uniqueCallIds_preserved`. -/
+theorem transition_preserves_callId
+    {pre post : ToolCallContext}
+    (h_step : Transition pre post) :
+    post.callId = pre.callId := by
+  cases h_step with
+  | dispatch _ h_post              => rw [h_post]
+  | spawnFailed _ _ h_post         => rw [h_post]
+  | complete _ _ _ h_post          => rw [h_post]
+  | fail _ _ h_post                => rw [h_post]
+  | timeout _ _ h_post             => rw [h_post]
+  | cancelBeforeDispatch _ h_post  => rw [h_post]
+  | cancelDuringRun _ h_post       => rw [h_post]
+  | background _ _ h_post          => rw [h_post]
+  | foreground _ _ h_post          => rw [h_post]
+  | detach _ _ h_post              => rw [h_post]
   | timeAdvance _ _ h_post         => rw [h_post]
   | persistenceStep _ _ _ h_post   => rw [h_post]
 
@@ -156,11 +190,14 @@ theorem dispatch_sets_startedAt
   cases h_step with
   | dispatch _ h_post'              => simp [h_post']
   | spawnFailed _ _ h_post'         => exfalso; rw [h_post'] at h_post; simp at h_post
-  | complete h_state _ h_post'      => exfalso; simp_all
+  | complete h_state _ _ h_post'    => exfalso; simp_all
   | fail _ h_state h_post'           => exfalso; simp_all
   | timeout h_state _ h_post'       => exfalso; simp_all
   | cancelBeforeDispatch _ h_post'  => exfalso; rw [h_post'] at h_post; simp at h_post
   | cancelDuringRun h_state h_post' => exfalso; simp_all
+  | background h_state _ h_post'    => exfalso; simp_all
+  | foreground h_state _ h_post'    => exfalso; simp_all
+  | detach h_live _ h_post'         => exfalso; rw [h_post'] at h_post; simp_all
   | timeAdvance _ _ h_post'         => exfalso; rw [h_post'] at h_post; simp_all
   | persistenceStep _ _ _ h_post'   => exfalso; rw [h_post'] at h_post; simp_all
 
@@ -177,11 +214,14 @@ theorem startedAt_preserved_outside_dispatch
       apply h_not
       exact ⟨h_state, by rw [h_post']⟩
   | spawnFailed _ _ h_post'         => rw [h_post']
-  | complete _ _ h_post'            => rw [h_post']
+  | complete _ _ _ h_post'          => rw [h_post']
   | fail _ _ h_post'                => rw [h_post']
   | timeout _ _ h_post'             => rw [h_post']
   | cancelBeforeDispatch _ h_post'  => rw [h_post']
   | cancelDuringRun _ h_post'       => rw [h_post']
+  | background _ _ h_post'          => rw [h_post']
+  | foreground _ _ h_post'          => rw [h_post']
+  | detach _ _ h_post'              => rw [h_post']
   | timeAdvance _ _ h_post'         => rw [h_post']
   | persistenceStep _ _ _ h_post'   => rw [h_post']
 

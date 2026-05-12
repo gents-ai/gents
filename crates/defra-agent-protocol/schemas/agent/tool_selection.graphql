@@ -15,4 +15,8 @@ type ToolSelection {
     enable_meta_tools: Boolean
     allowed_mcp_service_ids: [String]
     delegate_to: [String]
+    subagent_targets: [String]
+    subagent_spawn_enabled: Boolean
+    subagent_steering_enabled: Boolean
+    subagent_background_enabled: Boolean
 }

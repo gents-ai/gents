@@ -14,6 +14,25 @@ structure TransitionPair where
   target : String
   deriving DecidableEq, Repr
 
+/-- A transition row carrying a stable name plus precondition flags. Used
+    alongside `legalTransitions`/`illegalTransitions` for machines whose
+    consumers (e.g. R2 Bucket 2's matrix tests) need to discriminate beyond
+    the (source, target) pair — for example, native-only vs subagent-only
+    edges, or state-preserving mode flips that share `source = target`. -/
+structure NamedTransition where
+  name : String
+  source : String
+  target : String
+  /-- `true` ⇒ the inner-state edge is only legal when the tool is native
+      (i.e. has no `childRequestId`). Bucket 2 uses this to assert that the
+      Rust side rejects a native `complete`/`fail` on a subagent-typed tool. -/
+  requiresNative : Bool := false
+  /-- `true` ⇒ the edge requires a linked child (e.g. the bridge-completion
+      and bridge-failure edges that lift a child terminal into the parent
+      tool's state). Counterpart to `requiresNative`. -/
+  requiresChild : Bool := false
+  deriving Repr
+
 structure VocabularyContract where
   domain : String
   values : List String
@@ -28,6 +47,10 @@ structure StateMachineContract where
   actions : List String
   legalTransitions : List TransitionPair
   illegalTransitions : List TransitionPair
+  /-- Optional, per-machine richer transition rows. Defaults to `[]` so
+      existing call sites don't need to change. Emitted as the
+      `named_transitions` JSON field. -/
+  namedTransitions : List NamedTransition := []
   deriving Repr
 
 def jsonEscapeChar : Char → String
@@ -111,6 +134,18 @@ def TransitionPair.toJson (pair : TransitionPair) : String :=
     ++ "\"to\":" ++ jsonString pair.target
     ++ "}"
 
+private def boolJson (value : Bool) : String :=
+  if value then "true" else "false"
+
+def NamedTransition.toJson (t : NamedTransition) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString t.name ++ ","
+    ++ "\"from\":" ++ jsonString t.source ++ ","
+    ++ "\"to\":" ++ jsonString t.target ++ ","
+    ++ "\"requires_native\":" ++ boolJson t.requiresNative ++ ","
+    ++ "\"requires_child\":" ++ boolJson t.requiresChild
+    ++ "}"
+
 def VocabularyContract.toJson (contract : VocabularyContract) : String :=
   "{"
     ++ "\"domain\":" ++ jsonString contract.domain ++ ","
@@ -128,7 +163,9 @@ def StateMachineContract.toJson (contract : StateMachineContract) : String :=
     ++ "\"legal_transitions\":"
       ++ jsonArray (contract.legalTransitions.map TransitionPair.toJson) ++ ","
     ++ "\"illegal_transitions\":"
-      ++ jsonArray (contract.illegalTransitions.map TransitionPair.toJson)
+      ++ jsonArray (contract.illegalTransitions.map TransitionPair.toJson) ++ ","
+    ++ "\"named_transitions\":"
+      ++ jsonArray (contract.namedTransitions.map NamedTransition.toJson)
     ++ "}"
 
 end Conformance.Contracts

@@ -46,6 +46,9 @@ async fn complete_does_not_overwrite_conversation_for_newer_request() {
         metadata: None,
         execution_origin: None,
         created_at: "2026-03-23T00:00:00Z".into(),
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: None,
     };
     let mut lifecycle = RequestLifecycle::new_with_agent_did(
         db.node.clone(),
@@ -105,6 +108,9 @@ async fn advance_increments_progress_seq() {
         metadata: None,
         execution_origin: None,
         created_at: "2026-03-23T00:00:00Z".into(),
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_tool_call_id: None,
     };
 
     let mut lifecycle =

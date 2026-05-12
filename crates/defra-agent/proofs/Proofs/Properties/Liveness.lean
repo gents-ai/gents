@@ -84,10 +84,21 @@ theorem claimed_eventually_terminal
   have h_req : RequestContext.Transition pre.request postRequest := by
     exact RequestContext.Transition.fail_before_stream h_claimed h_admission rfl
   have h_step : ComposedState.Transition pre post := by
-    refine ComposedState.Transition.request_step h_req rfl rfl rfl rfl ?_
-    intro h_pending
-    rw [h_claimed] at h_pending
-    simp at h_pending
+    refine ComposedState.Transition.request_step h_req rfl rfl rfl rfl ?_ ?_
+    · intro h_pending
+      rw [h_claimed] at h_pending
+      simp at h_pending
+    · -- h_no_block: vacuously true — fail_before_stream doesn't bump
+      -- progressSeq, and post.request.state = .failed ≠ .processing.
+      intro h_anti
+      cases h_anti with
+      | inl h_progress =>
+          -- post.request.progressSeq = pre.request.progressSeq, contradiction
+          simp [post, postRequest] at h_progress
+      | inr h_begin =>
+          -- post.request.state = .failed, not .processing
+          obtain ⟨_, h_proc⟩ := h_begin
+          simp [post, postRequest] at h_proc
   refine ⟨post, ComposedState.Trace.step h_step ComposedState.Trace.refl, failed_is_terminal⟩
 
 theorem recovery_convergence

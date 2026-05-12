@@ -103,6 +103,7 @@ async fn load_document_runtime_view_includes_referenced_documents() {
             enable_meta_tools: Some(false),
             allowed_mcp_service_ids: Some(Vec::new()),
             delegate_to: Some(Vec::new()),
+            ..Default::default()
         },
     )
     .await
@@ -169,6 +170,7 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
             enable_meta_tools: Some(false),
             allowed_mcp_service_ids: Some(Vec::new()),
             delegate_to: Some(Vec::new()),
+            ..Default::default()
         },
     )
     .await
@@ -227,6 +229,92 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
     let tool_names = tool_surface.tool_names();
     assert!(tool_names.contains(&"read_file".to_string()));
     assert!(tool_names.contains(&"list_files".to_string()));
+}
+
+/// Insert a ToolSelection row with an empty string in `subagent_targets` and
+/// return its `_docID`.  DefraDB schema has no non-empty constraint on
+/// `[String]` fields, so the document writes successfully.  The validator
+/// must catch this on read.
+async fn insert_invalid_tool_selection(
+    node: &defra_node::EmbeddedNode,
+    selection_id: &str,
+    agent_did: &str,
+) -> String {
+    let escaped_selection_id = escape_graphql_string(selection_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
+
+    // subagent_targets contains an empty string — valid at the DB level but
+    // invalid per ToolSelectionDocument::validate().
+    let mutation = format!(
+        r#"mutation {{
+            create_ToolSelection(input: {{
+                selection_id: "{escaped_selection_id}",
+                agent_did: "{escaped_agent_did}",
+                subagent_targets: ["", "valid-behavior"],
+                subagent_spawn_enabled: true
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create_ToolSelection (invalid) failed: {:?}",
+        response.errors
+    );
+
+    let lookup = format!(
+        r#"{{
+            ToolSelection(filter: {{ selection_id: {{ _eq: "{escaped_selection_id}" }} }}, limit: 1) {{
+                _docID
+            }}
+        }}"#
+    );
+    let response = node.execute(&lookup).await;
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("ToolSelection"))
+        .and_then(|rows| rows.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned)
+        .expect("ToolSelection _docID")
+}
+
+#[tokio::test]
+async fn apply_control_update_rejects_tool_selection_with_empty_subagent_target() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-invalid-tool-selection"));
+    let agent_did = identity.did();
+
+    let selection_id = "invalid-targets-selection";
+    let doc_id = insert_invalid_tool_selection(node.as_ref(), selection_id, agent_did).await;
+
+    let mut view = load_document_runtime_view(node.as_ref(), agent_did)
+        .await
+        .expect("initial document view should load");
+
+    let result = apply_control_update(
+        node.as_ref(),
+        agent_did,
+        "opaque-tool-selection-collection",
+        &doc_id,
+        &mut view,
+    )
+    .await;
+
+    assert!(
+        result.is_err(),
+        "apply_control_update must reject ToolSelection with empty subagent_target, got: {:?}",
+        result
+    );
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(
+        err_msg.contains("subagent_targets"),
+        "error message must mention subagent_targets, got: {err_msg}"
+    );
 }
 
 async fn create_task(node: &defra_node::EmbeddedNode, task_id: &str, name: &str) {

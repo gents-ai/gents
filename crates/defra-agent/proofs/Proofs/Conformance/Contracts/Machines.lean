@@ -332,17 +332,164 @@ def toolCallWithState (state : ToolExecution.ToolCallState) : ToolExecution.Tool
   , persistence := .committed
   }
 
+/-- Named transition rows for the ToolCall machine.
+
+Bucket 2 of the R2 Rust subagent data plane consumes these to assert that
+the Rust runtime's transition matrix matches Lean. They cover three new
+classes of edge that the plain `(source, target)` pairs in
+`legalTransitions` cannot express on their own:
+
+* native-only edges: `complete` and `fail` on a tool whose
+  `childRequestId = none`. The relational `Transition.complete` constructor
+  carries `pre.childRequestId = none` as a precondition (and `step?` mirrors
+  it); `requires_native: true` lets the Rust matrix test reject calling
+  these on a subagent-typed tool.
+* mode-flip edges: `background`, `foreground`, `detach_running`,
+  `detach_pending` are state-preserving on `ToolCallState` and so don't
+  appear in the pair-based `legalTransitions` list. They live in
+  `ToolCallContext.Transition` (subagent extensions in `State.lean`) and
+  flip `awaitMode`/`cancelPolicy` while leaving `state` unchanged.
+  `detach` is split into two rows (`detach_running`, `detach_pending`)
+  mirroring the `bridge_failure` split pattern, because its
+  `h_live` precondition permits both `.pending` and `.running`.
+* bridge edges: `bridge_complete`, `bridge_failure`,
+  `bridge_cancel_cascade`. These are defined relationally on
+  `Subagent.BridgedState.Transition`, not on `ToolCallContext.Transition`,
+  but their effect on the bridge tool's inner state is what Bucket 2 needs
+  to enforce in Rust. `bridge_complete` advances the bridge tool from
+  `running → completed` (with `requires_child = true`); `bridge_failure`
+  drives `running → failed` or `running → cancelled` (per the disjunction in
+  `BridgedState.Transition.bridge_failure`); `bridge_cancel_cascade` is
+  state-preserving on the parent's bridge tool (it sets the child's
+  `interruptRequestedAt`) so its row uses `running → running`. -/
+def toolCallNamedTransitions : List NamedTransition :=
+  [ -- native-only inner transitions: subagent-typed tools (with a child) take
+    -- the bridge_* path instead.
+    { name := "complete_native"
+    , source := "running"
+    , target := "completed"
+    , requiresNative := true }
+  , { name := "fail_native"
+    , source := "running"
+    , target := "failed"
+    , requiresNative := true }
+    -- mode flips (state-preserving on ToolCallState):
+  , { name := "background"
+    , source := "running"
+    , target := "running" }
+  , { name := "foreground"
+    , source := "running"
+    , target := "running" }
+  , { name := "detach_running"
+    , source := "running"
+    , target := "running" }
+  , { name := "detach_pending"
+    , source := "pending"
+    , target := "pending" }
+    -- bridge edges (subagent-typed tools only):
+  , { name := "bridge_complete"
+    , source := "running"
+    , target := "completed"
+    , requiresChild := true }
+  , { name := "bridge_failure_failed"
+    , source := "running"
+    , target := "failed"
+    , requiresChild := true }
+  , { name := "bridge_failure_cancelled"
+    , source := "running"
+    , target := "cancelled"
+    , requiresChild := true }
+  , { name := "bridge_cancel_cascade"
+    , source := "running"
+    , target := "running"
+    , requiresChild := true }
+  ]
+
 def toolCallMachine : StateMachineContract :=
+  let base :=
+    machineContract
+      "ToolCall"
+      toolCallStateNames
+      (terminalNames toolCallStates ToolExecution.ToolCallState.toDefraDB)
+      (actionNames toolCallActions)
+      (transitionPairsFromSamples
+        (toolCallStates.map toolCallWithState)
+        toolCallActions
+        ToolExecution.ToolCallContext.step?
+        (fun call => call.state.toDefraDB))
+  { base with namedTransitions := toolCallNamedTransitions }
+
+/-- AwaitMode is a static enum on `ToolCallContext` (foreground/background).
+    It has no transitions in its own right — the mode-flip edges live on
+    `toolCallMachine`'s `namedTransitions` (`background`, `foreground`).
+    Emitted as a vocabulary-only state machine so Bucket 1 (vocabulary
+    round-trip) can target it the same way it targets `ToolCallState`. -/
+def awaitModeMachine : StateMachineContract :=
+  let names := Subagent.AwaitMode.all.map Subagent.AwaitMode.toDefraDB
   machineContract
-    "ToolCall"
-    toolCallStateNames
-    (terminalNames toolCallStates ToolExecution.ToolCallState.toDefraDB)
-    (actionNames toolCallActions)
-    (transitionPairsFromSamples
-      (toolCallStates.map toolCallWithState)
-      toolCallActions
-      ToolExecution.ToolCallContext.step?
-      (fun call => call.state.toDefraDB))
+    "AwaitMode"
+    names
+    []        -- no terminal states; modes are not lifecycle states
+    []        -- no actions
+    []        -- no transitions
+
+/-- CancelPolicy is a static enum on `ToolCallContext` (cascade/detach).
+    Only the cascade → detach edge is allowed at runtime, surfaced as
+    `toolCallMachine`'s `detach` named transition. Emitted vocabulary-only
+    here. -/
+def cancelPolicyMachine : StateMachineContract :=
+  let names := Subagent.CancelPolicy.all.map Subagent.CancelPolicy.toDefraDB
+  machineContract
+    "CancelPolicy"
+    names
+    []
+    []
+    []
+
+/-- Projection from a child's terminal `RequestState` to the parent
+    bridge tool's `ToolCallState` under `bridge_complete` / `bridge_failure`.
+
+The `namedTransitions` here encode the projection rule that R2 Bucket 2
+asserts against the Rust runtime: when a child request reaches a terminal
+state, the parent's bridge tool is driven to the projected tool state.
+
+  * `completed` is intentionally absent from the source vocabulary because
+    the `completed → completed` edge is handled by the dedicated
+    `bridge_complete` constructor, which has stricter preconditions
+    (`pre.persistence = .committed`). Including it here would conflate
+    success-path persistence with failure-path projection.
+  * `interrupted` projects to `cancelled` (operator-driven cancel); all
+    other terminals project to `failed`. Matches `BridgedState.Transition.
+    bridge_failure`'s `tPost.state = .failed ∨ tPost.state = .cancelled`.
+
+`legalTransitions` is left empty: source and target live in different
+vocabularies (child `RequestState` → parent `ToolCallState`), so the
+pair-based legal/illegal split would be misleading. The projection lives
+in `namedTransitions`, where `source` is documented as a child terminal
+and `target` as the projected tool state. -/
+def childTerminalMachine : StateMachineContract :=
+  let base :=
+    machineContract
+      "ChildTerminal"
+      ["failed", "dead", "interrupted", "superseded"]
+      ["failed", "dead", "interrupted", "superseded"]  -- every source row is a terminal child state
+      []  -- projection has no actions; rule is purely structural
+      []  -- pair-based legal transitions intentionally empty: cross-vocabulary edges are in namedTransitions
+  { base with
+      namedTransitions :=
+        [ { name := "project_failed"
+          , source := "failed"
+          , target := "failed" }
+        , { name := "project_dead"
+          , source := "dead"
+          , target := "failed" }
+        , { name := "project_interrupted"
+          , source := "interrupted"
+          , target := "cancelled" }
+        , { name := "project_superseded"
+          , source := "superseded"
+          , target := "failed" }
+        ] }
 
 def toolRetryDispositions : List ToolExecution.RetryDisposition :=
   ToolExecution.RetryDisposition.all
@@ -377,6 +524,15 @@ def vocabularies : List VocabularyContract :=
   , { domain := "ToolCallState", values := toolCallStateNames }
   , { domain := "ToolFailureClass", values := failureClassNames }
   , { domain := "ToolRetryDisposition", values := toolRetryDispositionNames }
+  , { domain := "AwaitMode"
+    , values := Subagent.AwaitMode.all.map Subagent.AwaitMode.toDefraDB
+    }
+  , { domain := "CancelPolicy"
+    , values := Subagent.CancelPolicy.all.map Subagent.CancelPolicy.toDefraDB
+    }
+  , { domain := "ChildTerminal"
+    , values := ["failed", "dead", "interrupted", "superseded"]
+    }
   ]
 
 def stateMachines : List StateMachineContract :=
@@ -390,6 +546,9 @@ def stateMachines : List StateMachineContract :=
   , sessionRecoveryMachine
   , inferenceCallMachine
   , toolCallMachine
+  , awaitModeMachine
+  , cancelPolicyMachine
+  , childTerminalMachine
   ]
 
 end Conformance.Contracts

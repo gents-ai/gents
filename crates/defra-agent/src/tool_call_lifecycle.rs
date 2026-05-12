@@ -6,6 +6,17 @@
 //!
 //! Lifecycle is daemon-visible only; subprocess kill mechanics, output
 //! streaming, and persistent processes are out of scope.
+//!
+//! ## R2 maintenance obligations
+//!
+//! This module implements R2 ("Rust subagent data plane"). Per the spec at
+//! `docs/superpowers/specs/2026-05-08-r2-rust-subagent-data-plane-design.md`:
+//!
+//! - SubagentSource (R3) consumes `create_subagent_request` and the bridge methods.
+//! - Agent-facing tools (R4) are routed via hook integration that uses
+//!   `new_subagent` and recognizes spawn_subagent / wait_task / etc. tool names.
+//! - Cross-reference validation (target resolution, parent existence) lands in R3.
+//! - Cross-principal delegation (R6) lands with sourcenetwork/defra-agent#9.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ToolCallState {
@@ -103,13 +114,106 @@ impl FailureClass {
     }
 }
 
+/// Whether the parent's narrative is blocked on this tool's terminal state.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum AwaitMode {
+    Foreground,
+    Background,
+}
+
+impl AwaitMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AwaitMode::Foreground => "foreground",
+            AwaitMode::Background => "background",
+        }
+    }
+
+    pub fn from_persisted(s: &str) -> Option<Self> {
+        match s {
+            "foreground" => Some(AwaitMode::Foreground),
+            "background" => Some(AwaitMode::Background),
+            _ => None,
+        }
+    }
+
+    pub const ALL: &'static [AwaitMode] = &[AwaitMode::Foreground, AwaitMode::Background];
+}
+
+/// Whether parent termination drives the linked child request to .interrupted
+/// (cascade) or detaches the child to its own deadline.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum CancelPolicy {
+    Cascade,
+    Detach,
+}
+
+impl CancelPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CancelPolicy::Cascade => "cascade",
+            CancelPolicy::Detach => "detach",
+        }
+    }
+
+    pub fn from_persisted(s: &str) -> Option<Self> {
+        match s {
+            "cascade" => Some(CancelPolicy::Cascade),
+            "detach" => Some(CancelPolicy::Detach),
+            _ => None,
+        }
+    }
+
+    pub const ALL: &'static [CancelPolicy] = &[CancelPolicy::Cascade, CancelPolicy::Detach];
+}
+
+/// The four non-.completed terminal states a child AgentRequest can reach.
+/// Used as the argument shape to bridge_failure to project the child terminal
+/// onto a parent ToolCallState (.failed for most, .cancelled for .interrupted).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChildTerminal {
+    Failed {
+        reason: String,
+        failure_class: FailureClass,
+    },
+    Dead,
+    Interrupted,
+    Superseded,
+}
+
+impl ChildTerminal {
+    /// Lean B2 projection: .interrupted → .cancelled, all others → .failed.
+    pub fn projected_state(&self) -> ToolCallState {
+        match self {
+            ChildTerminal::Interrupted => ToolCallState::Cancelled,
+            _ => ToolCallState::Failed,
+        }
+    }
+
+    /// Persisted vocabulary names for conformance enumeration.
+    pub const ALL_KIND: &'static [&'static str] = &["failed", "dead", "interrupted", "superseded"];
+}
+
+/// Returned by `bridge_cancel_cascade` (wrapped in Option). The caller — typically
+/// R3's daemon interrupt dispatcher — performs the actual write to the child
+/// AgentRequest's interrupt_requested_at field. Returning None from
+/// bridge_cancel_cascade means no cascade is required: the bridge tool is
+/// native (no child link), detached (no cascade), or not in .cancelled state.
+#[derive(Clone, Debug)]
+pub struct CascadeIntent {
+    pub child_request_id: String,
+    pub at: chrono::DateTime<chrono::Utc>,
+}
+
 use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
 
 pub(crate) mod query;
+pub mod subagent_request;
 mod transition;
 
+pub use subagent_request::{create_subagent_request, MAX_SUBAGENT_DEPTH};
 pub use transition::IllegalToolCallTransition;
 
 /// State machine struct for an individual tool call. Mirrors `RequestLifecycle`
@@ -126,6 +230,9 @@ pub struct ToolCallLifecycle {
     state: ToolCallState,
     started_at: Option<chrono::DateTime<chrono::Utc>>,
     failure_class: Option<FailureClass>,
+    pub(crate) await_mode: AwaitMode,
+    pub(crate) cancel_policy: CancelPolicy,
+    pub(crate) child_request_id: Option<String>,
 }
 
 impl ToolCallLifecycle {
@@ -150,6 +257,41 @@ impl ToolCallLifecycle {
             state: ToolCallState::Pending,
             started_at: None,
             failure_class: None,
+            await_mode: AwaitMode::Foreground,
+            cancel_policy: CancelPolicy::Cascade,
+            child_request_id: None,
+        }
+    }
+
+    /// Constructor for the subagent invocation path. Sets child_request_id (the
+    /// link to the spawned child AgentRequest) and lets the caller pick await_mode
+    /// and cancel_policy. Synchronous and does not persist — first transition
+    /// (typically start_running) creates the row.
+    pub fn new_subagent(
+        node: Arc<EmbeddedNode>,
+        session_id: String,
+        tool_call_id: String,
+        message_sequence: u32,
+        tool_name: String,
+        args: String,
+        await_mode: AwaitMode,
+        cancel_policy: CancelPolicy,
+        child_request_id: String,
+    ) -> Self {
+        Self {
+            node,
+            session_id,
+            tool_call_id,
+            message_sequence,
+            tool_name,
+            args,
+            doc_id: None,
+            state: ToolCallState::Pending,
+            started_at: None,
+            failure_class: None,
+            await_mode,
+            cancel_policy,
+            child_request_id: Some(child_request_id),
         }
     }
 
@@ -281,6 +423,76 @@ mod tests {
                 .iter()
                 .map(String::as_str)
                 .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[cfg(test)]
+mod bucket_1_subagent_vocabulary {
+    use super::*;
+
+    #[test]
+    fn await_mode_round_trip_via_persisted_vocab() {
+        for &mode in AwaitMode::ALL {
+            assert_eq!(AwaitMode::from_persisted(mode.as_str()), Some(mode));
+        }
+    }
+
+    #[test]
+    fn await_mode_all_has_two_variants() {
+        assert_eq!(AwaitMode::ALL.len(), 2);
+    }
+
+    #[test]
+    fn await_mode_from_persisted_unknown_returns_none() {
+        assert_eq!(AwaitMode::from_persisted("unknown"), None);
+    }
+
+    #[test]
+    fn cancel_policy_round_trip_via_persisted_vocab() {
+        for &policy in CancelPolicy::ALL {
+            assert_eq!(CancelPolicy::from_persisted(policy.as_str()), Some(policy));
+        }
+    }
+
+    #[test]
+    fn cancel_policy_all_has_two_variants() {
+        assert_eq!(CancelPolicy::ALL.len(), 2);
+    }
+
+    #[test]
+    fn cancel_policy_from_persisted_unknown_returns_none() {
+        assert_eq!(CancelPolicy::from_persisted("unknown"), None);
+    }
+
+    #[test]
+    fn child_terminal_all_kind_has_four_variants() {
+        assert_eq!(ChildTerminal::ALL_KIND.len(), 4);
+        assert_eq!(
+            ChildTerminal::ALL_KIND,
+            &["failed", "dead", "interrupted", "superseded"]
+        );
+    }
+
+    #[test]
+    fn child_terminal_projection_partition() {
+        // .interrupted → .cancelled; everything else → .failed
+        assert_eq!(
+            ChildTerminal::Failed {
+                reason: "x".to_string(),
+                failure_class: FailureClass::External
+            }
+            .projected_state(),
+            ToolCallState::Failed
+        );
+        assert_eq!(ChildTerminal::Dead.projected_state(), ToolCallState::Failed);
+        assert_eq!(
+            ChildTerminal::Interrupted.projected_state(),
+            ToolCallState::Cancelled
+        );
+        assert_eq!(
+            ChildTerminal::Superseded.projected_state(),
+            ToolCallState::Failed
         );
     }
 }

@@ -1,6 +1,7 @@
 import Proofs.Basic
 import Proofs.Persistence
 import Proofs.Scheduling
+import Proofs.ToolExecution.State
 
 /-!
 # Request State
@@ -123,6 +124,10 @@ structure RequestContext where
   interruptRequestedAt : Option Time := none
   /-- Submitter-set TTL deadline; runtime-read-only. `none` means no TTL set. -/
   validUntil           : Option Time := none
+  -- Subagent lineage / depth bound:
+  subagentDepth                : Nat := 0
+  causedByParentRequestId      : Option RequestId := none
+  causedByParentToolCallId     : Option ToolExecution.ToolCallId := none
   deriving Repr
 
 namespace RequestContext

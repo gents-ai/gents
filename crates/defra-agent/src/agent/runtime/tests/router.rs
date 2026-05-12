@@ -58,6 +58,9 @@ async fn router_dispatches_first_request_after_snapshot_change_to_latest_generat
             metadata: None,
             execution_origin: None,
             created_at: "2026-04-09T00:00:00Z".to_string(),
+            subagent_depth: 0,
+            caused_by_parent_request_id: None,
+            caused_by_parent_tool_call_id: None,
         }))
         .await
         .unwrap();
