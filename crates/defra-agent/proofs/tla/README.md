@@ -29,6 +29,11 @@ For ReversePairing (the real model):
 ./scripts/run-tlc.sh MCReversePairing
 ```
 
+For the multi-collection ReversePairing sanity bound:
+```bash
+./scripts/run-tlc.sh MCReversePairingMulti
+```
+
 The script runs TLC with parallel workers and writes state-graph artifacts to `states/` (gitignored).
 
 ## Bounded parameters
@@ -38,13 +43,23 @@ Current parameters in `MCReversePairing.cfg`:
 | Parameter | Value | Effect of increasing |
 |-----------|-------|---------------------|
 | `Node` | `{A, B}` | State space grows as |Node|^|Node|; 3-node run is feasible but much slower |
-| `Collection` | `{c1}` | Liveness checking with 2 collections balloons the state space (depth 12+, >2M distinct states still growing after 10 min). Single collection is sufficient because per-(p,c) leads-to properties are independent |
+| `Collection` | `{c1}` | The default full crash-recovery bound is single-collection. Use `MCReversePairingMulti.cfg` for a two-collection sanity run |
 | `RPCId` | `{r1, r2, r3, r4, r5, r6}` | More ids give more headroom above StateBound; raising without also raising StateBound has little effect; both together increase exploration depth |
 | `MaxCrashes` | `2` | Each additional crash budget step multiplies the reachable crash-sequence count; +1 roughly doubles runtime |
 | `NoOf` | `NoOf` (sentinel) | Not a tunable — must remain a value disjoint from RPCId |
 | `StateBound` | `Cardinality(rpcIdsUsed) <= 4` | Bounds total RPCs ever issued in any trace; raising risks pool exhaustion before liveness converges (a bounded-model artifact, not a real bug) |
 
 Larger parameters increase state space exponentially. State-space-exhaustion artifacts can mask real bugs; benchmark before raising.
+
+`MCReversePairingMulti.cfg` raises only the collection axis and backs off crash interleavings:
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| `Node` | `{A, B}` | Same peer-pair topology as the default model |
+| `Collection` | `{c1, c2}` | Exercises the collection-generic action and liveness quantification across two collections |
+| `RPCId` | `{r1, r2, r3, r4, r5, r6}` | Same bounded id pool/headroom as the default model |
+| `MaxCrashes` | `0` | Keeps the multi-collection liveness run tractable; crash recovery remains covered by the default single-collection bound |
+| `StateBound` | `Cardinality(rpcIdsUsed) <= 4` | Same total-issued-RPC bound as the default model |
 
 ## What TLC checks
 
@@ -105,9 +120,25 @@ The behavior up to this violation:
 
 Read the trace from top to bottom; identify the action between each state pair. Look for the divergence point — the state where progress stalled.
 
+## Recorded runs
+
+Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC v1.8.0, `-workers auto` using 18 workers.
+
+| Config | Bound | Result | State space | Depth | Runtime |
+|--------|-------|--------|-------------|-------|---------|
+| `MCReversePairing.cfg` | `Collection = {c1}`, `MaxCrashes = 2` | Passes `TypeOK`, `RPCIdsTracked`, `RPCWellFormed`, `Convergence` | 322,560 distinct states | 19 | 3min 21s |
+| `MCReversePairingMulti.cfg` | `Collection = {c1, c2}`, `MaxCrashes = 0` | Passes `TypeOK`, `RPCIdsTracked`, `RPCWellFormed`, `Convergence` | 2,164,720 distinct states; 28,085,121 generated | 18 | 36min 38s |
+
+The multi-collection run's final temporal-property pass dominated runtime: TLC completed BFS first, then checked 16 temporal branches over 34,635,520 total distinct states in 19min 27s.
+
+Crash-enabled two-collection attempts were stopped for tractability, not property failure:
+
+- `Collection = {c1, c2}`, `MaxCrashes = 1`: stopped after 30min 51s while checking a temporal-property phase over 81,451,952 total distinct states. Last BFS progress before that phase was 4,825,260 distinct states, 38,397,144 generated, 2,273,059 queued, depth 13.
+- `Collection = {c1, c2}`, `MaxCrashes = 2`: stopped after 30min 24s while checking a temporal-property phase over 143,512,080 total distinct states. Last BFS progress before that phase was 8,706,840 distinct states, 66,727,226 generated, 4,367,182 queued, depth 14.
+
 ## Known limitations and follow-ups
 
-- **Single-collection scope.** `Collection = {c1}` was needed to keep liveness verification tractable. The leads-to property is parametric in `(n, p, c)` and TLA+ symmetry means single-collection coverage carries the proof, but a multi-collection sanity run is worthwhile follow-up. **Follow-up:** add a CI run with `Collection = {c1, c2}` and a smaller `StateBound` to confirm cross-collection liveness empirically.
+- **Crash-enabled multi-collection scope.** `MCReversePairingMulti.cfg` verifies `Collection = {c1, c2}` with `MaxCrashes = 0`. Attempts with one or two crashes did not fail, but crossed the reference runtime cutoff during liveness checking. The leads-to property is parametric in `(n, p, c)`, so the multi-collection no-crash run is a sanity check for collection-generic structure rather than a replacement for the default crash-recovery bound.
 - **Per-action SF on Reconcile.** Current `\A n \in Node : SF_vars(Reconcile(n))` enforces fairness on each node's reconcile loop but treats the disjunction over `(p, c)` as one action. Multi-collection liveness may need per-(p, c) fairness: `\A n, p \in Node, c \in Collection : SF_vars(ReconcileInstall(n, p, c) \/ ReconcileTeardown(n, p, c))`. **Follow-up:** add when multi-collection runs are needed.
 - **StateBound constraint.** `Cardinality(rpcIdsUsed) <= 4` bounds total RPCs ever issued in any trace. This avoids the bounded-pool artifact but limits exploration depth in long-running traces. **Follow-up:** lift the bound or replace with a different bound (e.g., per-cycle limits) once the model is stable.
 - **InFlightJustified not TLC-checked.** The supporting invariant is defined as a documented model property but commented out in the .cfg because it fails in pool-exhausted states (a bounded-model artifact, not a real bug). **Follow-up:** TLAPS proof, or a parameter regime that avoids the artifact.
