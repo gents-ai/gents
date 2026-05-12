@@ -142,7 +142,8 @@ pub fn analyze_tool_call(
         }
         if let (Some(path), Some(message)) = (&error.path, &error.message) {
             analysis.validation_errors.push(TraceValidationError {
-                code: failure_class_code(error.failure_class).to_string(),
+                code: structured_tool_error_code_from_result(result)
+                    .unwrap_or_else(|| failure_class_code(error.failure_class).to_string()),
                 path: path.clone(),
                 message: message.clone(),
                 retryable: error.retryable.unwrap_or(false),
@@ -420,6 +421,19 @@ fn structured_tool_error_from_result(result: &str) -> Option<TraceToolError> {
         available_tools: string_array_field(object, "available_tools"),
         raw_error_text: trimmed.to_string(),
     })
+}
+
+fn structured_tool_error_code_from_result(result: &str) -> Option<String> {
+    let value = serde_json::from_str::<Value>(result.trim()).ok()?;
+    let object = value.as_object()?;
+    if object.get("ok").and_then(Value::as_bool) != Some(false) {
+        return None;
+    }
+
+    let raw = object.get("failure_class").and_then(Value::as_str)?;
+    // Preserve the policy-block reason for trace consumers while keeping
+    // discovery failures rebucketed to the canonical 5-variant vocabulary.
+    (raw == "tool_not_allowed").then(|| raw.to_string())
 }
 
 fn native_tool_output_from_result(tool_name: &str, result: &str) -> Option<NativeToolOutputTrace> {
@@ -1097,14 +1111,15 @@ mod tests {
         );
 
         assert!(!analysis.tool_result_ok);
-        // After R1's failure-class collapse, "tool_not_allowed" rebuckets to
-        // ServiceUnavailable, and `validation_errors[0].code` reports the
-        // bucketed class name (not the raw input string).
+        // The failure class still rebuckets to ServiceUnavailable per the
+        // 5-variant collapse, but trace consumers see the raw "tool_not_allowed"
+        // string preserved as the policy-block reason via
+        // structured_tool_error_code_from_result.
         assert_eq!(
             analysis.tool_failure_class,
             Some(ToolFailureClass::ServiceUnavailable)
         );
-        assert_eq!(analysis.validation_errors[0].code, "serviceUnavailable");
+        assert_eq!(analysis.validation_errors[0].code, "tool_not_allowed");
         assert_eq!(analysis.validation_errors[0].path, "/service_id");
         assert_eq!(analysis.validation_errors[0].retryable, false);
         let error = analysis.tool_error.as_ref().expect("tool error");

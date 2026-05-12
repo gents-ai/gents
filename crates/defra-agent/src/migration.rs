@@ -1,9 +1,10 @@
 //! Idempotent schema-patch + lens registration invoked at daemon startup.
 //!
-//! Migrates AgentToolCall v1 -> v2 by:
+//! Migrates AgentToolCall v1 -> current by:
 //!   1. Patching the collection to add `lifecycle_state` field.
 //!   2. Registering the v1->v2 forward and inverse Lens transforms.
 //!   3. Touching every existing row to force eager lens execution.
+//!   4. Patching later runtime fields that do not need row transforms.
 //!
 //! Idempotent: re-running on a v2 deployment is a no-op (collection already
 //! patched, migration already registered).
@@ -27,8 +28,7 @@ const ADD_LIFECYCLE_STATE_PATCH: &str = r#"[{"op":"add","path":"/AgentToolCall/F
 const ADD_AGENT_TOOL_CALL_SUBAGENT_PATCH: &str = r#"[
     {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"await_mode","Kind":11}},
     {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"cancel_policy","Kind":11}},
-    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"child_request_id","Kind":11}},
-    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"request_id","Kind":11}}
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"child_request_id","Kind":11}}
 ]"#;
 
 #[allow(dead_code)]
@@ -75,12 +75,12 @@ fn lens_wasm_path() -> Result<String> {
 /// Run all pending tool-call migrations against the embedded node.
 /// Called from the daemon startup path before any AgentToolCall reads.
 pub async fn ensure_tool_call_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
-    // 1. Check if AgentToolCall already has lifecycle_state.
-    let collection = node
+    // 1. Check which AgentToolCall runtime fields already exist.
+    let mut collection = node
         .get_collection("AgentToolCall")
         .context("get AgentToolCall collection")?;
 
-    let already_v2 = match collection {
+    let has_lifecycle_state = match collection {
         Some(ref cv) => collection_has_lifecycle_state(cv),
         None => {
             // Collection doesn't exist yet (fresh install). The schema add at
@@ -91,44 +91,79 @@ pub async fn ensure_tool_call_migrations(node: Arc<EmbeddedNode>) -> Result<()> 
         }
     };
 
-    if already_v2 {
-        tracing::debug!("AgentToolCall already at v2; migration no-op");
+    if !has_lifecycle_state {
+        // 2. Apply the v1 -> v2 schema patch.
+        let v1_version_id = collection
+            .as_ref()
+            .map(|cv| cv.version_id.clone())
+            .ok_or_else(|| anyhow::anyhow!("AgentToolCall collection has no version_id"))?;
+
+        let v2 = node
+            .patch_collection("AgentToolCall", ADD_LIFECYCLE_STATE_PATCH)
+            .await
+            .context("patch_collection v1 -> v2 (add lifecycle_state)")?;
+        let v2_version_id = v2.version_id.clone();
+
+        // 3. Activate v2 as the source-of-truth for new writes.
+        node.set_active_collection_version(&v2_version_id)
+            .await
+            .context("set_active_collection_version v2")?;
+
+        // 4. Register the forward Lens v1 -> v2.
+        let lens_path = lens_wasm_path().context("unpack embedded lens WASM")?;
+        let lens_config = LensConfig::new(
+            v1_version_id.clone(),
+            v2_version_id.clone(),
+            LensModule::from_path(lens_path),
+        );
+
+        node.set_migration(lens_config)
+            .await
+            .context("set_migration forward v1 -> v2")?;
+
+        tracing::info!(
+            v1 = %v1_version_id,
+            v2 = %v2_version_id,
+            "AgentToolCall migrated to v2 with lens"
+        );
+
+        collection = Some(v2);
+    }
+
+    let Some(collection) = collection.as_ref() else {
+        return Ok(());
+    };
+
+    let mut field_patches = Vec::new();
+    if !collection_has_field(collection, "request_id") {
+        field_patches.push(
+            r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"request_id","Kind":11}}"#,
+        );
+    }
+    if !collection_has_field(collection, "deadline_at") {
+        field_patches.push(
+            r#"{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"deadline_at","Kind":10}}"#,
+        );
+    }
+
+    if field_patches.is_empty() {
+        tracing::debug!("AgentToolCall already has all runtime lifecycle fields; migration no-op");
         return Ok(());
     }
 
-    // 2. Apply the v1 -> v2 schema patch.
-    let v1_version_id = collection
-        .as_ref()
-        .map(|cv| cv.version_id.clone())
-        .ok_or_else(|| anyhow::anyhow!("AgentToolCall collection has no version_id"))?;
-
-    let v2 = node
-        .patch_collection("AgentToolCall", ADD_LIFECYCLE_STATE_PATCH)
+    let patch = format!("[{}]", field_patches.join(","));
+    let next = node
+        .patch_collection("AgentToolCall", &patch)
         .await
-        .context("patch_collection v1 -> v2 (add lifecycle_state)")?;
-    let v2_version_id = v2.version_id;
-
-    // 3. Activate v2 as the source-of-truth for new writes.
-    node.set_active_collection_version(&v2_version_id)
+        .context("patch_collection add AgentToolCall runtime fields")?;
+    node.set_active_collection_version(&next.version_id)
         .await
-        .context("set_active_collection_version v2")?;
-
-    // 4. Register the forward Lens v1 -> v2.
-    let lens_path = lens_wasm_path().context("unpack embedded lens WASM")?;
-    let lens_config = LensConfig::new(
-        v1_version_id.clone(),
-        v2_version_id.clone(),
-        LensModule::from_path(lens_path),
-    );
-
-    node.set_migration(lens_config)
-        .await
-        .context("set_migration forward v1 -> v2")?;
+        .context("set_active_collection_version AgentToolCall runtime fields")?;
 
     tracing::info!(
-        v1 = %v1_version_id,
-        v2 = %v2_version_id,
-        "AgentToolCall migrated to v2 with lens"
+        version = %next.version_id,
+        fields = ?field_patches,
+        "AgentToolCall migrated with runtime lifecycle fields"
     );
 
     Ok(())
@@ -137,7 +172,11 @@ pub async fn ensure_tool_call_migrations(node: Arc<EmbeddedNode>) -> Result<()> 
 /// Decide whether a collection version already has the `lifecycle_state`
 /// field. Used to detect already-migrated databases.
 fn collection_has_lifecycle_state(cv: &defra_node::CollectionVersion) -> bool {
-    cv.fields.iter().any(|f| f.name == "lifecycle_state")
+    collection_has_field(cv, "lifecycle_state")
+}
+
+fn collection_has_field(cv: &defra_node::CollectionVersion, field_name: &str) -> bool {
+    cv.fields.iter().any(|f| f.name == field_name)
 }
 
 /// WASM lens bytes for the v2->v3 subagent extension. Embedded at compile time
@@ -167,10 +206,6 @@ fn subagent_lens_wasm_path() -> Result<String> {
     Ok(path)
 }
 
-fn collection_has_field(cv: &defra_node::CollectionVersion, field_name: &str) -> bool {
-    cv.fields.iter().any(|f| f.name == field_name)
-}
-
 /// Per-collection idempotent migration orchestrator for v2->v3.
 /// Applies the three subagent-extension patches and registers the unified
 /// lens. Re-running after a partial failure picks up at the un-migrated
@@ -181,6 +216,7 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
         .get_collection("AgentToolCall")
         .context("get AgentToolCall collection")?;
 
+    let mut atc_pre_version_id_for_lens = None;
     let atc_v3_version_id = if let Some(ref cv) = atc_collection {
         if collection_has_field(cv, "await_mode") {
             tracing::debug!("AgentToolCall already has await_mode; skipping patch");
@@ -200,6 +236,7 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
                 v3 = %v3_version_id,
                 "AgentToolCall patched to v3 (subagent fields)"
             );
+            atc_pre_version_id_for_lens = Some(pre_version_id);
             v3_version_id
         }
     } else {
@@ -282,15 +319,12 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
     // The WASM module (agent_subagent_v2_to_v3) retains transform logic for
     // all three collections in case future patches are non-additive, but only
     // the AgentToolCall transform is registered here via set_migration.
-    let lens_path = subagent_lens_wasm_path().context("unpack embedded subagent lens WASM")?;
+    let Some(atc_pre_version_id) = atc_pre_version_id_for_lens else {
+        tracing::debug!("AgentToolCall subagent fields already present; lens registration no-op");
+        return Ok(());
+    };
 
-    // The "from" version is the AgentToolCall version before the patch
-    // (captured above) and "to" is the v3 version we just activated.
-    // Re-read the pre-patch version from the collection we already fetched.
-    let atc_pre_version_id = atc_collection
-        .as_ref()
-        .map(|cv| cv.version_id.clone())
-        .ok_or_else(|| anyhow::anyhow!("AgentToolCall collection absent after earlier check"))?;
+    let lens_path = subagent_lens_wasm_path().context("unpack embedded subagent lens WASM")?;
 
     let forward_config = LensConfig::new(
         atc_pre_version_id.clone(),

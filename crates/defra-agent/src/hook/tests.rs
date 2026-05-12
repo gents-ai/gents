@@ -63,6 +63,7 @@ fn session_state_for_test() -> SessionState {
     SessionState {
         session_id: Some("session-1".to_string()),
         current_request_id: None,
+        request_deadline_at: None,
         agent_name: "agent".to_string(),
         sequence: 0,
         transcript_turn: TranscriptTurnState::Idle,
@@ -367,6 +368,450 @@ async fn create_streaming_response(
         "create response failed: {:?}",
         resp.errors
     );
+}
+
+async fn create_interruptible_request(
+    node: &defra_node::EmbeddedNode,
+    request_id: &str,
+    session_id: &str,
+) {
+    let request_id = crate::graphql::escape_graphql_string(request_id);
+    let session_id = crate::graphql::escape_graphql_string(session_id);
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{request_id}",
+                agent_did: "did:defra-agent:general",
+                behavior_id: "general",
+                session_id: "{session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{request_id}",
+                superseded_by_request: "",
+                content: "child request",
+                status: "processing",
+                lifecycle_state: "processing",
+                backend_id: "",
+                execution_origin: "subagent",
+                created_at: "{created_at}",
+                retry_count: 0,
+                max_retries: {max_retries}
+            }}) {{ _docID }}
+        }}"#,
+        max_retries = crate::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "create interruptible request failed: {:?}",
+        resp.errors
+    );
+}
+
+async fn fetch_tool_call_row(
+    node: &defra_node::EmbeddedNode,
+    session_id: &str,
+    tool_call_id: &str,
+) -> serde_json::Value {
+    let session_id = crate::graphql::escape_graphql_string(session_id);
+    let tool_call_id = crate::graphql::escape_graphql_string(tool_call_id);
+    let resp = node
+        .execute(&format!(
+            r#"{{
+                AgentToolCall(
+                    filter: {{
+                        session_id: {{ _eq: "{session_id}" }},
+                        tool_call_id: {{ _eq: "{tool_call_id}" }}
+                    }},
+                    limit: 1
+                ) {{
+                    request_id
+                    deadline_at
+                    lifecycle_state
+                    result
+                    status
+                }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !resp.has_errors(),
+        "query tool call failed: {:?}",
+        resp.errors
+    );
+    resp.data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|value| value.as_array())
+        .and_then(|rows| rows.first())
+        .cloned()
+        .expect("tool call row")
+}
+
+#[tokio::test]
+async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-hook-deadline-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:general",
+        FailurePolicy::default(),
+    );
+    let user_prompt = user_text_message("Run a tool");
+    assert!(matches!(
+        PromptHook::<TestModel>::on_completion_call(&hook, &user_prompt, &[]).await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+    let deadline = chrono::DateTime::parse_from_rfc3339("2026-05-08T12:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    hook.set_active_request_id(Some("req-deadline".to_string()))
+        .await;
+    hook.set_request_deadline_at(Some(deadline)).await;
+
+    assert!(matches!(
+        PromptHook::<TestModel>::on_tool_call(&hook, "read", None, "internal-deadline", "{}").await,
+        ToolCallHookAction::Continue
+    ));
+
+    let row = fetch_tool_call_row(&node, &session_id, "internal-deadline").await;
+    assert_eq!(
+        row.get("request_id").and_then(|value| value.as_str()),
+        Some("req-deadline")
+    );
+    let observed_deadline = chrono::DateTime::parse_from_rfc3339(
+        row.get("deadline_at")
+            .and_then(|value| value.as_str())
+            .expect("deadline_at"),
+    )
+    .unwrap()
+    .with_timezone(&chrono::Utc);
+    assert_eq!(observed_deadline, deadline);
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-hook-timeout-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:general",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        PromptHook::<TestModel>::on_completion_call(&hook, &user_text_message("Run"), &[]).await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+    let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
+    hook.set_active_request_id(Some("req-timeout".to_string()))
+        .await;
+    hook.set_request_deadline_at(Some(deadline)).await;
+
+    assert!(matches!(
+        PromptHook::<TestModel>::on_tool_call(&hook, "never", None, "internal-timeout", "{}").await,
+        ToolCallHookAction::Continue
+    ));
+    let action = PromptHook::<TestModel>::on_tool_result(
+        &hook,
+        "never",
+        None,
+        "internal-timeout",
+        "{}",
+        &crate::tool_call_lifecycle::runtime::timeout_result(Some(deadline)),
+    )
+    .await;
+    assert!(matches!(action, HookAction::Terminate { .. }));
+
+    let row = fetch_tool_call_row(&node, &session_id, "internal-timeout").await;
+    assert_eq!(
+        row.get("lifecycle_state").and_then(|value| value.as_str()),
+        Some("timedOut")
+    );
+    assert!(row
+        .get("result")
+        .and_then(|value| value.as_str())
+        .is_some_and(|result| result.contains("deadline exceeded")));
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn cancelling_one_hook_does_not_cancel_unrelated_live_tool_call() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-hook-cancel-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook_a = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:general",
+        FailurePolicy::default(),
+    );
+    let hook_b = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:general",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        PromptHook::<TestModel>::on_completion_call(&hook_a, &user_text_message("A"), &[]).await,
+        HookAction::Continue
+    ));
+    assert!(matches!(
+        PromptHook::<TestModel>::on_completion_call(&hook_b, &user_text_message("B"), &[]).await,
+        HookAction::Continue
+    ));
+    let session_a = hook_a.session_id().await.expect("session a");
+    let session_b = hook_b.session_id().await.expect("session b");
+    let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
+    hook_a
+        .set_active_request_id(Some("req-a".to_string()))
+        .await;
+    hook_a.set_request_deadline_at(Some(deadline)).await;
+    hook_b
+        .set_active_request_id(Some("req-b".to_string()))
+        .await;
+    hook_b.set_request_deadline_at(Some(deadline)).await;
+
+    assert!(matches!(
+        PromptHook::<TestModel>::on_tool_call(&hook_a, "slow", None, "internal-a", "{}").await,
+        ToolCallHookAction::Continue
+    ));
+    assert!(matches!(
+        PromptHook::<TestModel>::on_tool_call(&hook_b, "slow", None, "internal-b", "{}").await,
+        ToolCallHookAction::Continue
+    ));
+
+    assert_eq!(hook_a.cancel_in_flight_tool_calls().await.unwrap(), 1);
+
+    let row_a = fetch_tool_call_row(&node, &session_a, "internal-a").await;
+    assert_eq!(
+        row_a
+            .get("lifecycle_state")
+            .and_then(|value| value.as_str()),
+        Some("cancelled")
+    );
+    let row_b = fetch_tool_call_row(&node, &session_b, "internal-b").await;
+    assert_eq!(
+        row_b
+            .get("lifecycle_state")
+            .and_then(|value| value.as_str()),
+        Some("running")
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn cancelling_cascade_subagent_tool_latches_child_interrupt() {
+    let data_path = std::env::temp_dir().join(format!(
+        "agent-hook-cascade-cancel-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let session_id = "session-cascade";
+    let child_request_id = "child-cascade";
+    create_interruptible_request(&node, child_request_id, session_id).await;
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:general",
+        FailurePolicy::default(),
+    );
+    let mut lifecycle = crate::tool_call_lifecycle::ToolCallLifecycle::new_subagent(
+        node.clone(),
+        "parent-cascade".to_string(),
+        session_id.to_string(),
+        "tool-cascade".to_string(),
+        1,
+        "spawn_agent".to_string(),
+        "{}".to_string(),
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+        crate::tool_call_lifecycle::AwaitMode::Foreground,
+        crate::tool_call_lifecycle::CancelPolicy::Cascade,
+        child_request_id.to_string(),
+    );
+    lifecycle.start_running().await.unwrap();
+    hook.in_flight_lifecycles
+        .lock()
+        .await
+        .insert("tool-cascade".to_string(), lifecycle);
+
+    assert_eq!(hook.cancel_in_flight_tool_calls().await.unwrap(), 1);
+
+    let parent_row = fetch_tool_call_row(&node, session_id, "tool-cascade").await;
+    assert_eq!(
+        parent_row
+            .get("lifecycle_state")
+            .and_then(|value| value.as_str()),
+        Some("cancelled")
+    );
+    let child_interrupt = crate::interrupt::fetch_interrupt_requested_at(&node, child_request_id)
+        .await
+        .unwrap();
+    assert!(
+        child_interrupt.is_some(),
+        "cascade cancel should latch child interrupt_requested_at"
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn cancelling_detached_subagent_tool_does_not_interrupt_child() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-hook-detach-cancel-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let session_id = "session-detach";
+    let child_request_id = "child-detach";
+    create_interruptible_request(&node, child_request_id, session_id).await;
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:general",
+        FailurePolicy::default(),
+    );
+    let mut lifecycle = crate::tool_call_lifecycle::ToolCallLifecycle::new_subagent(
+        node.clone(),
+        "parent-detach".to_string(),
+        session_id.to_string(),
+        "tool-detach".to_string(),
+        1,
+        "spawn_agent".to_string(),
+        "{}".to_string(),
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+        crate::tool_call_lifecycle::AwaitMode::Foreground,
+        crate::tool_call_lifecycle::CancelPolicy::Detach,
+        child_request_id.to_string(),
+    );
+    lifecycle.start_running().await.unwrap();
+    hook.in_flight_lifecycles
+        .lock()
+        .await
+        .insert("tool-detach".to_string(), lifecycle);
+
+    assert_eq!(hook.cancel_in_flight_tool_calls().await.unwrap(), 1);
+
+    let parent_row = fetch_tool_call_row(&node, session_id, "tool-detach").await;
+    assert_eq!(
+        parent_row
+            .get("lifecycle_state")
+            .and_then(|value| value.as_str()),
+        Some("cancelled")
+    );
+    let child_interrupt = crate::interrupt::fetch_interrupt_requested_at(&node, child_request_id)
+        .await
+        .unwrap();
+    assert!(
+        child_interrupt.is_none(),
+        "detached cancel must leave child request interrupt unset"
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
+    let data_path = std::env::temp_dir().join(format!("agent-hook-fail-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:defra-agent:general",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        PromptHook::<TestModel>::on_completion_call(&hook, &user_text_message("fail"), &[]).await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+    hook.set_active_request_id(Some("req-fail".to_string()))
+        .await;
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
+        .await;
+
+    assert!(matches!(
+        PromptHook::<TestModel>::on_tool_call(&hook, "slow", None, "internal-fail", "{}").await,
+        ToolCallHookAction::Continue
+    ));
+    assert_eq!(
+        hook.fail_in_flight_tool_calls(
+            "stream liveness timeout while tool call was running",
+            crate::tool_call_lifecycle::FailureClass::External,
+        )
+        .await
+        .unwrap(),
+        1
+    );
+
+    let row = fetch_tool_call_row(&node, &session_id, "internal-fail").await;
+    assert_eq!(
+        row.get("lifecycle_state").and_then(|value| value.as_str()),
+        Some("failed")
+    );
+    assert_eq!(
+        row.get("status").and_then(|value| value.as_str()),
+        Some("completed")
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]

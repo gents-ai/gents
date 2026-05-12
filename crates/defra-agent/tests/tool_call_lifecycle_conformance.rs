@@ -12,6 +12,10 @@ use defra_agent::tool_call_lifecycle::{FailureClass, ToolCallLifecycle};
 use support::snapshots::fetch_tool_call_snapshots_for_session;
 use support::test_db;
 
+fn test_deadline() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now() + chrono::Duration::minutes(5)
+}
+
 // ---------------------------------------------------------------------------
 // Test 1: Pending → Running → Completed persists correctly
 // ---------------------------------------------------------------------------
@@ -22,11 +26,13 @@ async fn lifecycle_pending_to_running_to_completed_persists_correctly() {
 
     let mut lc = ToolCallLifecycle::new(
         db.node.clone(),
+        "request-1".into(),
         "test-session-1".into(),
         "tool-call-1".into(),
         0,
         "test_tool".into(),
         r#"{"x":1}"#.into(),
+        test_deadline(),
     );
 
     lc.start_running().await.unwrap();
@@ -37,6 +43,14 @@ async fn lifecycle_pending_to_running_to_completed_persists_correctly() {
         snapshots[0].lifecycle_state.as_deref(),
         Some("running"),
         "lifecycle_state should be running after start_running"
+    );
+    assert_eq!(snapshots[0].request_id.as_deref(), Some("request-1"));
+    assert!(
+        snapshots[0]
+            .deadline_at
+            .as_deref()
+            .is_some_and(|value| !value.is_empty()),
+        "deadline_at should persist on running tool calls"
     );
 
     lc.complete("ok").await.unwrap();
@@ -60,11 +74,13 @@ async fn lifecycle_running_to_failed_persists_failure_class() {
 
     let mut lc = ToolCallLifecycle::new(
         db.node.clone(),
+        "request-2".into(),
         "test-session-2".into(),
         "tool-call-2".into(),
         0,
         "test_tool".into(),
         r#"{"x":1}"#.into(),
+        test_deadline(),
     );
 
     lc.start_running().await.unwrap();
@@ -96,11 +112,13 @@ async fn lifecycle_terminal_irreversibility() {
 
     let mut lc = ToolCallLifecycle::new(
         db.node.clone(),
+        "request-3".into(),
         "test-session-3".into(),
         "tool-call-3".into(),
         0,
         "test_tool".into(),
         r#"{}"#.into(),
+        test_deadline(),
     );
 
     lc.start_running().await.unwrap();
@@ -128,11 +146,13 @@ async fn lifecycle_idempotent_start_running() {
 
     let mut lc = ToolCallLifecycle::new(
         db.node.clone(),
+        "request-4".into(),
         "test-session-4".into(),
         "tool-call-4".into(),
         0,
         "test_tool".into(),
         r#"{}"#.into(),
+        test_deadline(),
     );
 
     lc.start_running().await.unwrap();
@@ -163,11 +183,13 @@ async fn lifecycle_load_returns_persisted_state() {
     {
         let mut lc = ToolCallLifecycle::new(
             db.node.clone(),
+            "request-5".into(),
             "test-session-5".into(),
             "tool-call-5".into(),
             0,
             "test_tool".into(),
             r#"{}"#.into(),
+            test_deadline(),
         );
         lc.start_running().await.unwrap();
         lc.fail("oops", FailureClass::Transport).await.unwrap();
@@ -194,5 +216,48 @@ async fn lifecycle_load_returns_persisted_state() {
         snapshots[0].tool_failure_class.as_deref(),
         Some("transport"),
         "persisted tool_failure_class should be transport"
+    );
+}
+
+#[tokio::test]
+async fn lifecycle_load_preserves_deadline_for_terminal_update() {
+    let db = test_db("tc-lc-6").await;
+    let deadline = chrono::DateTime::parse_from_rfc3339("2026-05-08T12:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+
+    {
+        let mut lc = ToolCallLifecycle::new(
+            db.node.clone(),
+            "request-6".into(),
+            "test-session-6".into(),
+            "tool-call-6".into(),
+            0,
+            "test_tool".into(),
+            r#"{}"#.into(),
+            deadline,
+        );
+        lc.start_running().await.unwrap();
+    }
+
+    let mut loaded = ToolCallLifecycle::load(db.node.clone(), "test-session-6", "tool-call-6")
+        .await
+        .unwrap()
+        .expect("row should exist after start_running");
+    loaded.timeout().await.unwrap();
+
+    let snapshots = fetch_tool_call_snapshots_for_session(&db.node, "test-session-6").await;
+    assert_eq!(
+        snapshots[0].lifecycle_state.as_deref(),
+        Some("timedOut"),
+        "loaded lifecycle should be able to terminalize as timedOut"
+    );
+    let observed_deadline =
+        chrono::DateTime::parse_from_rfc3339(snapshots[0].deadline_at.as_deref().unwrap())
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+    assert_eq!(
+        observed_deadline, deadline,
+        "deadline_at should survive load and terminal update"
     );
 }

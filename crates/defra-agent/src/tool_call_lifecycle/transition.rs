@@ -84,6 +84,8 @@ impl ToolCallLifecycle {
 
         let now = Utc::now();
         let started_at_str = now.to_rfc3339();
+        let deadline_at_str = self.deadline_at.to_rfc3339();
+        let escaped_request_id = escape_graphql_string(&self.request_id);
         let escaped_session_id = escape_graphql_string(&self.session_id);
         let escaped_tool_call_id = escape_graphql_string(&self.tool_call_id);
         let escaped_tool_name = escape_graphql_string(&self.tool_name);
@@ -110,6 +112,7 @@ impl ToolCallLifecycle {
             r#"mutation {{
                 create_AgentToolCall(input: {{
                     tool_call_key: "{tool_call_key}",
+                    request_id: "{escaped_request_id}",
                     session_id: "{escaped_session_id}",
                     message_sequence: {message_sequence},
                     tool_name: "{escaped_tool_name}",
@@ -119,6 +122,7 @@ impl ToolCallLifecycle {
                     status: "called",
                     lifecycle_state: "running",
                     started_at: "{started_at_str}",
+                    deadline_at: "{deadline_at_str}",
                     {subagent_fields}
                     selected_service_id: null,
                     selected_tool_name: null,
@@ -165,6 +169,7 @@ impl ToolCallLifecycle {
         // DefraDB requires DateTime fields to be re-supplied on update to
         // avoid a type-mismatch error when re-validating the document.
         let started_at_str = started_at.to_rfc3339();
+        let deadline_at_str = self.deadline_at.to_rfc3339();
 
         let mutation = format!(
             r#"mutation {{
@@ -175,6 +180,7 @@ impl ToolCallLifecycle {
                         status: "completed",
                         lifecycle_state: "completed",
                         started_at: "{started_at_str}",
+                        deadline_at: "{deadline_at_str}",
                         completed_at: "{now_str}",
                         latency_ms: {latency_ms}
                     }}
@@ -213,6 +219,7 @@ impl ToolCallLifecycle {
         let failure_class_str = failure.as_str();
         // DefraDB requires DateTime fields to be re-supplied on update.
         let started_at_str = started_at.to_rfc3339();
+        let deadline_at_str = self.deadline_at.to_rfc3339();
 
         let mutation = format!(
             r#"mutation {{
@@ -223,6 +230,7 @@ impl ToolCallLifecycle {
                         status: "completed",
                         lifecycle_state: "failed",
                         started_at: "{started_at_str}",
+                        deadline_at: "{deadline_at_str}",
                         completed_at: "{now_str}",
                         tool_failure_class: "{failure_class_str}",
                         latency_ms: {latency_ms}
@@ -249,6 +257,8 @@ impl ToolCallLifecycle {
         // directly in Failed state.
         let now = Utc::now();
         let started_at_str = now.to_rfc3339();
+        let deadline_at_str = self.deadline_at.to_rfc3339();
+        let escaped_request_id = escape_graphql_string(&self.request_id);
         let escaped_session_id = escape_graphql_string(&self.session_id);
         let escaped_tool_call_id = escape_graphql_string(&self.tool_call_id);
         let escaped_tool_name = escape_graphql_string(&self.tool_name);
@@ -262,6 +272,7 @@ impl ToolCallLifecycle {
             r#"mutation {{
                 create_AgentToolCall(input: {{
                     tool_call_key: "{tool_call_key}",
+                    request_id: "{escaped_request_id}",
                     session_id: "{escaped_session_id}",
                     message_sequence: {message_sequence},
                     tool_name: "{escaped_tool_name}",
@@ -271,6 +282,7 @@ impl ToolCallLifecycle {
                     status: "completed",
                     lifecycle_state: "failed",
                     started_at: null,
+                    deadline_at: "{deadline_at_str}",
                     completed_at: "{started_at_str}",
                     tool_failure_class: "{failure_class_str}",
                     latency_ms: 0
@@ -322,6 +334,7 @@ impl ToolCallLifecycle {
         // DefraDB requires DateTime fields to be re-supplied on update to
         // avoid a type-mismatch error when re-validating the document.
         let started_at_str = started_at.to_rfc3339();
+        let deadline_at_str = self.deadline_at.to_rfc3339();
 
         let mutation = format!(
             r#"mutation {{
@@ -332,6 +345,7 @@ impl ToolCallLifecycle {
                         status: "completed",
                         lifecycle_state: "completed",
                         started_at: "{started_at_str}",
+                        deadline_at: "{deadline_at_str}",
                         completed_at: "{now_str}",
                         latency_ms: {latency_ms}
                     }}
@@ -386,6 +400,7 @@ impl ToolCallLifecycle {
         let now_str = now.to_rfc3339();
         // DefraDB requires DateTime fields to be re-supplied on update.
         let started_at_str = started_at.to_rfc3339();
+        let deadline_at_str = self.deadline_at.to_rfc3339();
         let lifecycle_state_str = projected.as_str();
 
         // Build conditional fields: tool_failure_class and result are only
@@ -411,6 +426,7 @@ impl ToolCallLifecycle {
                         status: "completed",
                         lifecycle_state: "{lifecycle_state_str}",
                         started_at: "{started_at_str}",
+                        deadline_at: "{deadline_at_str}",
                         completed_at: "{now_str}",
                         latency_ms: {latency_ms}
                     }}
@@ -427,9 +443,8 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
-    /// Running → TimedOut. R1 does not call this from runtime code; R3 wires
-    /// it up to fire on deadline expiry. Defined here so the API surface
-    /// matches the Lean spec.
+    /// Running → TimedOut. Called by the runtime deadline wrapper and startup
+    /// recovery when a running tool call exceeds its effective deadline.
     pub async fn timeout(&mut self) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "timeout")?;
 
@@ -444,18 +459,25 @@ impl ToolCallLifecycle {
         let latency_ms = (now - started_at).num_milliseconds();
 
         let escaped_doc_id = escape_graphql_string(doc_id);
+        let escaped_result = escape_graphql_string(&format!(
+            "tool call deadline exceeded at {}",
+            self.deadline_at.to_rfc3339()
+        ));
         let now_str = now.to_rfc3339();
         // DefraDB requires DateTime fields to be re-supplied on update.
         let started_at_str = started_at.to_rfc3339();
+        let deadline_at_str = self.deadline_at.to_rfc3339();
 
         let mutation = format!(
             r#"mutation {{
                 update_AgentToolCall(
                     filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
                     input: {{
+                        result: "{escaped_result}",
                         status: "completed",
                         lifecycle_state: "timedOut",
                         started_at: "{started_at_str}",
+                        deadline_at: "{deadline_at_str}",
                         completed_at: "{now_str}",
                         latency_ms: {latency_ms}
                     }}
@@ -471,13 +493,16 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
-    /// Pending → Cancelled. R1 does not call from runtime code; R4 wires up.
+    /// Pending → Cancelled. Used when a tool call is cancelled before
+    /// dispatch creates a running row.
     pub async fn cancel_before_dispatch(&mut self) -> Result<()> {
         self.ensure_state(&[ToolCallState::Pending], "cancel_before_dispatch")?;
 
         // Pending: row may not exist yet. Create directly in Cancelled.
         let now = Utc::now();
         let started_at_str = now.to_rfc3339();
+        let deadline_at_str = self.deadline_at.to_rfc3339();
+        let escaped_request_id = escape_graphql_string(&self.request_id);
         let escaped_session_id = escape_graphql_string(&self.session_id);
         let escaped_tool_call_id = escape_graphql_string(&self.tool_call_id);
         let escaped_tool_name = escape_graphql_string(&self.tool_name);
@@ -485,19 +510,23 @@ impl ToolCallLifecycle {
         let tool_call_key = format!("{escaped_session_id}:{escaped_tool_call_id}");
         let message_sequence = self.message_sequence;
 
+        let escaped_result = escape_graphql_string("tool call cancelled before dispatch");
+
         let mutation = format!(
             r#"mutation {{
                 create_AgentToolCall(input: {{
                     tool_call_key: "{tool_call_key}",
+                    request_id: "{escaped_request_id}",
                     session_id: "{escaped_session_id}",
                     message_sequence: {message_sequence},
                     tool_name: "{escaped_tool_name}",
                     tool_call_id: "{escaped_tool_call_id}",
                     args: "{escaped_args}",
-                    result: "",
+                    result: "{escaped_result}",
                     status: "completed",
                     lifecycle_state: "cancelled",
                     started_at: null,
+                    deadline_at: "{deadline_at_str}",
                     completed_at: "{started_at_str}",
                     latency_ms: 0
                 }}) {{ _docID }}
@@ -537,6 +566,7 @@ impl ToolCallLifecycle {
             .started_at
             .ok_or_else(|| anyhow!("background called without started_at set"))?;
         let started_at_str = started_at.to_rfc3339();
+        let deadline_at_str = self.deadline_at.to_rfc3339();
 
         let escaped_doc_id = escape_graphql_string(doc_id);
 
@@ -544,7 +574,7 @@ impl ToolCallLifecycle {
             r#"mutation {{
                 update_AgentToolCall(
                     filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
-                    input: {{ await_mode: "background", started_at: "{started_at_str}" }}
+                    input: {{ await_mode: "background", started_at: "{started_at_str}", deadline_at: "{deadline_at_str}" }}
                 ) {{ _docID }}
             }}"#
         );
@@ -579,6 +609,7 @@ impl ToolCallLifecycle {
             .started_at
             .ok_or_else(|| anyhow!("foreground called without started_at set"))?;
         let started_at_str = started_at.to_rfc3339();
+        let deadline_at_str = self.deadline_at.to_rfc3339();
 
         let escaped_doc_id = escape_graphql_string(doc_id);
 
@@ -586,7 +617,7 @@ impl ToolCallLifecycle {
             r#"mutation {{
                 update_AgentToolCall(
                     filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
-                    input: {{ await_mode: "foreground", started_at: "{started_at_str}" }}
+                    input: {{ await_mode: "foreground", started_at: "{started_at_str}", deadline_at: "{deadline_at_str}" }}
                 ) {{ _docID }}
             }}"#
         );
@@ -624,6 +655,7 @@ impl ToolCallLifecycle {
         } else {
             String::new()
         };
+        let deadline_at_str = self.deadline_at.to_rfc3339();
 
         let escaped_doc_id = escape_graphql_string(doc_id);
 
@@ -631,7 +663,7 @@ impl ToolCallLifecycle {
             r#"mutation {{
                 update_AgentToolCall(
                     filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
-                    input: {{ cancel_policy: "detach"{started_at_fragment} }}
+                    input: {{ cancel_policy: "detach", deadline_at: "{deadline_at_str}"{started_at_fragment} }}
                 ) {{ _docID }}
             }}"#
         );
@@ -665,7 +697,8 @@ impl ToolCallLifecycle {
         }))
     }
 
-    /// Running → Cancelled. R1 does not call from runtime code; R4 wires up.
+    /// Running → Cancelled. Called by request interruption handling and
+    /// startup recovery for interrupted parent requests.
     pub async fn cancel_during_run(&mut self) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "cancel_during_run")?;
 
@@ -679,18 +712,22 @@ impl ToolCallLifecycle {
         let latency_ms = (now - started_at).num_milliseconds();
 
         let escaped_doc_id = escape_graphql_string(doc_id);
+        let escaped_result = escape_graphql_string("tool call cancelled");
         let now_str = now.to_rfc3339();
         // DefraDB requires DateTime fields to be re-supplied on update.
         let started_at_str = started_at.to_rfc3339();
+        let deadline_at_str = self.deadline_at.to_rfc3339();
 
         let mutation = format!(
             r#"mutation {{
                 update_AgentToolCall(
                     filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
                     input: {{
+                        result: "{escaped_result}",
                         status: "completed",
                         lifecycle_state: "cancelled",
                         started_at: "{started_at_str}",
+                        deadline_at: "{deadline_at_str}",
                         completed_at: "{now_str}",
                         latency_ms: {latency_ms}
                     }}
@@ -747,6 +784,10 @@ mod tests {
         Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap())
     }
 
+    fn test_deadline() -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc::now() + chrono::Duration::minutes(5)
+    }
+
     /// Return a subagent-typed lifecycle already in Running state.
     /// Uses the pub(crate) setters to skip `start_running` (which would
     /// require schema setup). The guard under test fires before the DB call,
@@ -755,11 +796,13 @@ mod tests {
         let node = test_node().await;
         let mut lc = ToolCallLifecycle::new_subagent(
             node,
+            "request-1".to_string(),
             "session-1".to_string(),
             "tcid-1".to_string(),
             0,
             "spawn_agent".to_string(),
             "{}".to_string(),
+            test_deadline(),
             AwaitMode::Foreground,
             CancelPolicy::Cascade,
             "child-req-1".to_string(),
@@ -805,11 +848,13 @@ mod tests {
         let node = test_node().await;
         let mut lc = ToolCallLifecycle::new_subagent(
             node,
+            "req-bg-2".to_string(),
             "sess-bg-2".to_string(),
             "tc-bg-2".to_string(),
             1,
             "spawn_subagent".to_string(),
             "{}".to_string(),
+            test_deadline(),
             AwaitMode::Background, // start already in Background
             CancelPolicy::Cascade,
             "child-req-bg-2".to_string(),
@@ -833,11 +878,13 @@ mod tests {
         let node = test_node().await;
         let mut lc = ToolCallLifecycle::new(
             node,
+            "req-bg-3".to_string(),
             "sess-bg-3".to_string(),
             "tc-bg-3".to_string(),
             1,
             "spawn_subagent".to_string(),
             "{}".to_string(),
+            test_deadline(),
         );
         // state is Pending (default); do not advance it
 
@@ -856,11 +903,13 @@ mod tests {
         let node = test_node().await;
         let mut lc = ToolCallLifecycle::new_subagent(
             node,
+            "req-fg-1".to_string(),
             "sess-fg-1".to_string(),
             "tc-fg-1".to_string(),
             1,
             "spawn_subagent".to_string(),
             "{}".to_string(),
+            test_deadline(),
             AwaitMode::Foreground, // start already in Foreground
             CancelPolicy::Cascade,
             "child-req-fg-1".to_string(),
@@ -884,11 +933,13 @@ mod tests {
         let node = test_node().await;
         let mut lc = ToolCallLifecycle::new(
             node,
+            "req-fg-2".to_string(),
             "sess-fg-2".to_string(),
             "tc-fg-2".to_string(),
             1,
             "spawn_subagent".to_string(),
             "{}".to_string(),
+            test_deadline(),
         );
         // state is Pending (default); do not advance it
 
@@ -907,11 +958,13 @@ mod tests {
         let node = test_node().await;
         let mut lc = ToolCallLifecycle::new_subagent(
             node,
+            "req-detach-1".to_string(),
             "sess-detach-1".to_string(),
             "tc-detach-1".to_string(),
             1,
             "spawn_subagent".to_string(),
             "{}".to_string(),
+            test_deadline(),
             AwaitMode::Foreground,
             CancelPolicy::Detach, // already in Detach policy
             "child-req-detach-1".to_string(),
@@ -935,11 +988,13 @@ mod tests {
         let node = test_node().await;
         let mut lc = ToolCallLifecycle::new_subagent(
             node,
+            "req-detach-2".to_string(),
             "sess-detach-2".to_string(),
             "tc-detach-2".to_string(),
             1,
             "spawn_subagent".to_string(),
             "{}".to_string(),
+            test_deadline(),
             AwaitMode::Foreground,
             CancelPolicy::Cascade,
             "child-req-detach-2".to_string(),
@@ -964,11 +1019,13 @@ mod tests {
         let node = test_node().await;
         let mut lc = ToolCallLifecycle::new(
             node,
+            "req-bf-1".to_string(),
             "sess-bf-1".to_string(),
             "tc-bf-1".to_string(),
             0,
             "native_tool".to_string(),
             "{}".to_string(),
+            test_deadline(),
         );
         lc.set_state(ToolCallState::Running);
         lc.set_doc_id(Some("fake-doc-id-bf-1".to_string()));
@@ -993,11 +1050,13 @@ mod tests {
         let node = test_node().await;
         let lc_base = ToolCallLifecycle::new_subagent(
             node,
+            "req-bf-2".to_string(),
             "sess-bf-2".to_string(),
             "tc-bf-2".to_string(),
             0,
             "spawn_agent".to_string(),
             "{}".to_string(),
+            test_deadline(),
             AwaitMode::Foreground,
             CancelPolicy::Cascade,
             "child-1".to_string(),
@@ -1051,11 +1110,13 @@ mod tests {
         let node = test_node().await;
         let mut lc = ToolCallLifecycle::new(
             node,
+            "req-bc-1".to_string(),
             "sess-bc-1".to_string(),
             "tc-bc-1".to_string(),
             0,
             "native_tool".to_string(),
             "{}".to_string(),
+            test_deadline(),
         );
         lc.set_state(ToolCallState::Running);
         lc.set_doc_id(Some("fake-doc-id-bc-1".to_string()));
@@ -1077,11 +1138,13 @@ mod tests {
         let node = test_node().await;
         let lc_base = ToolCallLifecycle::new_subagent(
             node,
+            "req-bc-2".to_string(),
             "sess-bc-2".to_string(),
             "tc-bc-2".to_string(),
             0,
             "spawn_agent".to_string(),
             "{}".to_string(),
+            test_deadline(),
             AwaitMode::Foreground,
             CancelPolicy::Cascade,
             "child-1".to_string(),
@@ -1104,11 +1167,13 @@ mod tests {
         let node = test_node().await;
         let mut lc = ToolCallLifecycle::new_subagent(
             node,
+            "req-cas-1".to_string(),
             "sess-cas-1".to_string(),
             "tc-cas-1".to_string(),
             0,
             "spawn_agent".to_string(),
             "{}".to_string(),
+            test_deadline(),
             AwaitMode::Foreground,
             CancelPolicy::Cascade,
             "child-cas-1".to_string(),
@@ -1125,11 +1190,13 @@ mod tests {
         let node = test_node().await;
         let mut lc = ToolCallLifecycle::new_subagent(
             node,
+            "req-cas-2".to_string(),
             "sess-cas-2".to_string(),
             "tc-cas-2".to_string(),
             0,
             "spawn_agent".to_string(),
             "{}".to_string(),
+            test_deadline(),
             AwaitMode::Foreground,
             CancelPolicy::Detach,
             "child-cas-2".to_string(),
@@ -1145,11 +1212,13 @@ mod tests {
         let node = test_node().await;
         let mut lc = ToolCallLifecycle::new(
             node,
+            "req-cas-3".to_string(),
             "sess-cas-3".to_string(),
             "tc-cas-3".to_string(),
             0,
             "native_tool".to_string(),
             "{}".to_string(),
+            test_deadline(),
         );
         lc.set_state(ToolCallState::Cancelled);
 
@@ -1165,11 +1234,13 @@ mod tests {
         let node = test_node().await;
         let mut lc = ToolCallLifecycle::new_subagent(
             node,
+            "req-cas-4".to_string(),
             "sess-cas-4".to_string(),
             "tc-cas-4".to_string(),
             0,
             "spawn_agent".to_string(),
             "{}".to_string(),
+            test_deadline(),
             AwaitMode::Foreground,
             CancelPolicy::Cascade,
             "child-cas-4".to_string(),

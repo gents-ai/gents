@@ -144,6 +144,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 .await?;
                 hook.set_active_request_id(Some(request.request_id.clone()))
                     .await;
+                hook.set_request_deadline_at(request_deadline).await;
                 let persistence_hook = hook.clone();
 
                 let agent = agent_with_request_sampling(&self.agent, &self.behavior, request);
@@ -153,6 +154,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 // InferenceCall as cancelled rather than a generic stream drop.
                 let inference_token = request_token.child_token();
                 let inference_token_for_start = inference_token.clone();
+                let hook_for_start_interrupt = persistence_hook.clone();
                 let mut stream = admission::scope_call_with_token(
                     CallKind::Inference,
                     attempt_index as i64,
@@ -166,6 +168,14 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             _ = interrupt_rx.changed() => {
                                 request_token.cancel();
                                 inference_token_for_start.cancel();
+                                if let Err(error) = hook_for_start_interrupt.cancel_in_flight_tool_calls().await {
+                                    tracing::warn!(
+                                        request_id = %request_id,
+                                        session_id = %session_id,
+                                        error = %error,
+                                        "failed to cancel in-flight tool calls before inference stream started"
+                                    );
+                                }
                                 Err(anyhow!("request interrupted during inference"))
                             }
                             stream = await_with_request_deadline(
@@ -206,6 +216,16 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 _ = interrupt_rx.changed() => {
                                     request_token.cancel();
                                     inference_token.cancel();
+                                    if let Err(error) =
+                                        persistence_hook.cancel_in_flight_tool_calls().await
+                                    {
+                                        tracing::warn!(
+                                            request_id = %request_id,
+                                            session_id = %session_id,
+                                            error = %error,
+                                            "failed to cancel in-flight tool calls during request interrupt"
+                                        );
+                                    }
                                     if let Err(error) = processor
                                         .persist_partial_turn("persist interrupted assistant turn")
                                         .await
@@ -221,13 +241,48 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 }
                                 result = await_with_request_deadline(
                                     request_deadline,
-                                    tokio::time::timeout(liveness_timeout, stream.next()),
+                                    crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+                                        request_deadline,
+                                        request_token.clone(),
+                                        tokio::time::timeout(liveness_timeout, stream.next()),
+                                    ),
                                     "waiting for inference stream item",
-                                ) => result?
+                                ) => {
+                                    match result {
+                                        Ok(item) => item,
+                                        Err(error) => {
+                                            if let Err(sweep_error) =
+                                                persistence_hook.timeout_expired_tool_calls().await
+                                            {
+                                                tracing::warn!(
+                                                    request_id = %request_id,
+                                                    session_id = %session_id,
+                                                    error = %sweep_error,
+                                                    "failed to sweep expired in-flight tool calls after request deadline"
+                                                );
+                                            }
+                                            return Err(error);
+                                        }
+                                    }
+                                }
                             } {
                                 Ok(Some(item)) => item,
                                 Ok(None) => break,
                                 Err(_) => {
+                                    if let Err(error) = persistence_hook
+                                        .fail_in_flight_tool_calls(
+                                            "stream liveness timeout while tool call was running",
+                                            crate::tool_call_lifecycle::FailureClass::External,
+                                        )
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            request_id = %request_id,
+                                            session_id = %session_id,
+                                            error = %error,
+                                            "failed to mark in-flight tool calls failed after stream liveness timeout"
+                                        );
+                                    }
                                     stream_error = Some(rig::agent::StreamingError::Completion(
                                         rig::completion::CompletionError::ProviderError(format!(
                                             "stream liveness timeout: no data received for {}s",

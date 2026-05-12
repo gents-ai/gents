@@ -19,6 +19,7 @@ use crate::health_checker::{spawn_health_checker, ServiceHealthMap};
 use crate::lifecycle::RequestLifecycle;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::runtime_status::{ReconcilePhase, RuntimeStatusHandle};
+use crate::tool_call_lifecycle::ToolCallLifecycle;
 use crate::tool_surface::{ToolRuntimeContext, ToolSurface};
 
 enum BackgroundTaskResult {
@@ -320,9 +321,11 @@ pub(in crate::agent) async fn run_agent(
 }
 
 async fn log_recovery(node: &defra_node::EmbeddedNode, agent_did: &str, default_behavior_id: &str) {
+    let mut recovered_any = false;
     match RequestLifecycle::recover_all(node, agent_did).await {
         Ok(report) => {
             if report.requests_recovered > 0 {
+                recovered_any = true;
                 tracing::info!(
                     agent_did = %agent_did,
                     count = report.requests_recovered,
@@ -330,6 +333,7 @@ async fn log_recovery(node: &defra_node::EmbeddedNode, agent_did: &str, default_
                 );
             }
             if report.responses_recovered > 0 {
+                recovered_any = true;
                 tracing::info!(
                     agent_did = %agent_did,
                     count = report.responses_recovered,
@@ -337,26 +341,45 @@ async fn log_recovery(node: &defra_node::EmbeddedNode, agent_did: &str, default_
                 );
             }
             if report.conversations_recovered > 0 {
+                recovered_any = true;
                 tracing::info!(
                     agent_did = %agent_did,
                     count = report.conversations_recovered,
                     "recovered stuck conversations"
                 );
             }
-            if report.requests_recovered == 0
-                && report.responses_recovered == 0
-                && report.conversations_recovered == 0
-            {
-                tracing::debug!(
-                    agent_did = %agent_did,
-                    default_behavior_id = %default_behavior_id,
-                    "startup recovery found no stuck documents"
-                );
-            }
         }
         Err(error) => {
             tracing::warn!(agent_did = %agent_did, error = %error, "startup recovery failed");
         }
+    }
+
+    match ToolCallLifecycle::recover_all(node, agent_did).await {
+        Ok(report) => {
+            if report.tool_calls_recovered > 0 {
+                recovered_any = true;
+                tracing::info!(
+                    agent_did = %agent_did,
+                    count = report.tool_calls_recovered,
+                    "recovered stuck tool calls"
+                );
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                agent_did = %agent_did,
+                error = %error,
+                "startup tool-call recovery failed"
+            );
+        }
+    }
+
+    if !recovered_any {
+        tracing::debug!(
+            agent_did = %agent_did,
+            default_behavior_id = %default_behavior_id,
+            "startup recovery found no stuck documents"
+        );
     }
 }
 

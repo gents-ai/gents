@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use rig::agent::{HookAction, ToolCallHookAction};
 use tokio::sync::Mutex;
@@ -48,6 +49,7 @@ struct ToolResultIdentity {
 struct SessionState {
     session_id: Option<String>,
     current_request_id: Option<String>,
+    request_deadline_at: Option<DateTime<Utc>>,
     agent_name: String,
     sequence: u32,
     transcript_turn: TranscriptTurnState,
@@ -251,6 +253,7 @@ impl DefraSessionHook {
             state: Arc::new(Mutex::new(SessionState {
                 session_id: None,
                 current_request_id: None,
+                request_deadline_at: None,
                 agent_name: agent_name.to_string(),
                 sequence: 0,
                 transcript_turn: TranscriptTurnState::Idle,
@@ -284,6 +287,7 @@ impl DefraSessionHook {
             state: Arc::new(Mutex::new(SessionState {
                 session_id: Some(session_id.to_string()),
                 current_request_id: None,
+                request_deadline_at: None,
                 agent_name: agent_name.to_string(),
                 sequence: max_seq,
                 transcript_turn: TranscriptTurnState::Idle,
@@ -360,6 +364,77 @@ impl DefraSessionHook {
         );
     }
 
+    pub async fn set_request_deadline_at(&self, deadline_at: Option<DateTime<Utc>>) {
+        self.state.lock().await.request_deadline_at = deadline_at;
+    }
+
+    pub(crate) async fn timeout_expired_tool_calls(&self) -> anyhow::Result<usize> {
+        let lifecycles = {
+            let now = Utc::now();
+            let mut map = self.in_flight_lifecycles.lock().await;
+            let expired_ids = map
+                .iter()
+                .filter_map(|(id, lifecycle)| (lifecycle.deadline_at() <= now).then(|| id.clone()))
+                .collect::<Vec<_>>();
+
+            expired_ids
+                .into_iter()
+                .filter_map(|id| map.remove(&id))
+                .collect::<Vec<_>>()
+        };
+
+        let count = lifecycles.len();
+        for mut lifecycle in lifecycles {
+            lifecycle.timeout().await?;
+        }
+        Ok(count)
+    }
+
+    pub(crate) async fn cancel_in_flight_tool_calls(&self) -> anyhow::Result<usize> {
+        let lifecycles = {
+            let mut map = self.in_flight_lifecycles.lock().await;
+            map.drain()
+                .map(|(_, lifecycle)| lifecycle)
+                .collect::<Vec<_>>()
+        };
+
+        let count = lifecycles.len();
+        for mut lifecycle in lifecycles {
+            lifecycle.cancel_during_run().await?;
+            if let Some(intent) = lifecycle.bridge_cancel_cascade().await? {
+                if let Err(error) =
+                    crate::interrupt::interrupt_request(&self.node, &intent.child_request_id).await
+                {
+                    tracing::warn!(
+                        child_request_id = %intent.child_request_id,
+                        error = %error,
+                        "failed to cascade live tool-call cancellation to child request"
+                    );
+                }
+            }
+        }
+        Ok(count)
+    }
+
+    pub(crate) async fn fail_in_flight_tool_calls(
+        &self,
+        result: &str,
+        failure_class: crate::tool_call_lifecycle::FailureClass,
+    ) -> anyhow::Result<usize> {
+        let lifecycles = {
+            let mut map = self.in_flight_lifecycles.lock().await;
+            map.drain()
+                .map(|(_, lifecycle)| lifecycle)
+                .collect::<Vec<_>>()
+        };
+
+        let count = lifecycles.len();
+        for mut lifecycle in lifecycles {
+            lifecycle.fail(result, failure_class).await?;
+        }
+        Ok(count)
+    }
+
     pub async fn mark_current_response_materialized(&self, sequence: u32) -> anyhow::Result<()> {
         let request_id = self.state.lock().await.current_request_id.clone();
         let Some(request_id) = request_id.as_deref() else {
@@ -398,7 +473,7 @@ impl Drop for DefraSessionHook {
     fn drop(&mut self) {
         // Drain the in-flight map. Lifecycles dropped without completing a
         // transition leave their AgentToolCall row in state Running on disk —
-        // startup recovery (future R) will sweep these.
+        // startup recovery sweeps these on daemon restart.
         if let Ok(mut map) = self.in_flight_lifecycles.try_lock() {
             map.clear();
         }
