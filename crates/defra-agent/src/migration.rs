@@ -19,7 +19,7 @@ use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 use defra_node::{EmbeddedNode, LensConfig, LensModule};
-use tempfile::NamedTempFile;
+use tempfile::{Builder, NamedTempFile};
 
 const ADD_LIFECYCLE_STATE_PATCH: &str = r#"[{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"lifecycle_state","Kind":11}}]"#;
 
@@ -57,8 +57,13 @@ static LENS_TEMP_FILE: OnceLock<NamedTempFile> = OnceLock::new();
 /// Return the filesystem path to the embedded WASM lens, unpacking it on first
 /// call. Subsequent calls return the same path.
 fn lens_wasm_path() -> Result<String> {
+    // DefraDB's lens loader validates that the module path ends with `.wasm`,
+    // so the temp file must be created with that suffix.
     let temp = LENS_TEMP_FILE.get_or_init(|| {
-        let mut tf = NamedTempFile::new().expect("create lens temp file");
+        let mut tf = Builder::new()
+            .suffix(".wasm")
+            .tempfile()
+            .expect("create lens temp file");
         std::io::Write::write_all(tf.as_file_mut(), LENS_WASM_BYTES)
             .expect("write embedded lens bytes to temp file");
         tf
@@ -147,8 +152,13 @@ static SUBAGENT_LENS_TEMP_FILE: OnceLock<NamedTempFile> = OnceLock::new();
 /// Return the filesystem path to the embedded subagent WASM lens, unpacking it
 /// on first call. Subsequent calls return the same path.
 fn subagent_lens_wasm_path() -> Result<String> {
+    // DefraDB's lens loader validates that the module path ends with `.wasm`,
+    // so the temp file must be created with that suffix.
     let temp = SUBAGENT_LENS_TEMP_FILE.get_or_init(|| {
-        let mut tf = NamedTempFile::new().expect("create subagent lens temp file");
+        let mut tf = Builder::new()
+            .suffix(".wasm")
+            .tempfile()
+            .expect("create subagent lens temp file");
         std::io::Write::write_all(tf.as_file_mut(), SUBAGENT_LENS_WASM_BYTES)
             .expect("write embedded subagent lens bytes to temp file");
         tf
