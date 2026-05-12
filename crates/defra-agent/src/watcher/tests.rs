@@ -227,6 +227,213 @@ async fn insert_incoherent_agent_request(
         .expect("AgentRequest _docID")
 }
 
+async fn insert_agent_request_row(
+    node: &defra_node::EmbeddedNode,
+    agent_did: &str,
+    request_id: &str,
+    session_id: &str,
+    status: &str,
+    lifecycle_state: &str,
+    created_at: &str,
+) -> String {
+    let request_id = crate::graphql::escape_graphql_string(request_id);
+    let agent_did = crate::graphql::escape_graphql_string(agent_did);
+    let session_id = crate::graphql::escape_graphql_string(session_id);
+    let status = crate::graphql::escape_graphql_string(status);
+    let lifecycle_state = crate::graphql::escape_graphql_string(lifecycle_state);
+    let created_at = crate::graphql::escape_graphql_string(created_at);
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{request_id}",
+                agent_did: "{agent_did}",
+                session_id: "{session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{request_id}",
+                superseded_by_request: "",
+                content: "test",
+                status: "{status}",
+                lifecycle_state: "{lifecycle_state}",
+                backend_id: "",
+                created_at: "{created_at}",
+                retry_count: 0,
+                max_retries: 0
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create_AgentRequest failed: {:?}",
+        response.errors
+    );
+
+    let lookup = format!(
+        r#"{{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
+                _docID
+            }}
+        }}"#
+    );
+    let response = node.execute(&lookup).await;
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|rows| rows.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned)
+        .expect("AgentRequest _docID")
+}
+
+async fn set_request_terminal_completed(node: &defra_node::EmbeddedNode, doc_id: &str) {
+    let doc_id = crate::graphql::escape_graphql_string(doc_id);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                input: {{
+                    status: "completed",
+                    lifecycle_state: "completed"
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "update_AgentRequest terminal failed: {:?}",
+        response.errors
+    );
+}
+
+async fn set_request_interrupt_requested_at(
+    node: &defra_node::EmbeddedNode,
+    doc_id: &str,
+    at: &str,
+) {
+    let doc_id = crate::graphql::escape_graphql_string(doc_id);
+    let at = crate::graphql::escape_graphql_string(at);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                input: {{ interrupt_requested_at: "{at}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "update_AgentRequest interrupt failed: {:?}",
+        response.errors
+    );
+}
+
+#[tokio::test]
+async fn pending_requests_skip_queued_same_session_rows_until_claimable() {
+    let node = test_node().await;
+    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let agent_did = "did:key:z-watcher-queue";
+    let active_doc_id = insert_agent_request_row(
+        node.as_ref(),
+        agent_did,
+        "req-active",
+        "sess-queue",
+        "processing",
+        "processing",
+        "2026-03-12T00:00:00Z",
+    )
+    .await;
+    insert_agent_request_row(
+        node.as_ref(),
+        agent_did,
+        "req-queued",
+        "sess-queue",
+        "pending",
+        "pending",
+        "2026-03-12T00:00:01Z",
+    )
+    .await;
+    insert_agent_request_row(
+        node.as_ref(),
+        agent_did,
+        "req-other",
+        "sess-other",
+        "pending",
+        "pending",
+        "2026-03-12T00:00:02Z",
+    )
+    .await;
+
+    let watcher = DefraWatcher::new(node.clone(), agent_did);
+    let pending = watcher.pending_requests().await.unwrap();
+    assert_eq!(
+        pending
+            .iter()
+            .map(|request| request.request_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["req-other"]
+    );
+
+    set_request_terminal_completed(node.as_ref(), &active_doc_id).await;
+    let pending = watcher.pending_requests().await.unwrap();
+    assert_eq!(
+        pending
+            .iter()
+            .map(|request| request.request_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["req-queued", "req-other"]
+    );
+}
+
+#[tokio::test]
+async fn pending_requests_include_interrupted_queued_rows_for_terminalization() {
+    let node = test_node().await;
+    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let agent_did = "did:key:z-watcher-queued-interrupt";
+    insert_agent_request_row(
+        node.as_ref(),
+        agent_did,
+        "req-active",
+        "sess-queue",
+        "processing",
+        "processing",
+        "2026-03-12T00:00:00Z",
+    )
+    .await;
+    let queued_doc_id = insert_agent_request_row(
+        node.as_ref(),
+        agent_did,
+        "req-queued-interrupt",
+        "sess-queue",
+        "pending",
+        "pending",
+        "2026-03-12T00:00:01Z",
+    )
+    .await;
+    set_request_interrupt_requested_at(
+        node.as_ref(),
+        &queued_doc_id,
+        &chrono::Utc::now().to_rfc3339(),
+    )
+    .await;
+
+    let watcher = DefraWatcher::new(node, agent_did);
+    let pending = watcher.pending_requests().await.unwrap();
+    assert_eq!(
+        pending
+            .iter()
+            .map(|request| request.request_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["req-queued-interrupt"]
+    );
+}
+
 #[tokio::test]
 async fn pending_requests_rejects_incoherent_subagent_linkage() {
     let node = test_node().await;

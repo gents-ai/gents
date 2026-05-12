@@ -1872,16 +1872,31 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
         }
         "dedupLose" => {
-            let earlier = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
-            create_request(
-                &db.node,
-                &format!("earlier-{request_id}"),
-                &session_id,
-                "processing",
-                &earlier,
-            )
-            .await;
-            assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Superseded);
+            let escaped_doc_id = escape_graphql_string(&doc_id);
+            let resp = db
+                .node
+                .execute(&format!(
+                    r#"mutation {{
+                        update_AgentRequest(
+                            filter: {{
+                                _docID: {{ _eq: "{escaped_doc_id}" }},
+                                status: {{ _eq: "pending" }},
+                                lifecycle_state: {{ _eq: "pending" }}
+                            }},
+                            input: {{
+                                status: "superseded",
+                                lifecycle_state: "superseded",
+                                superseded_by_request: "explicit-replacement-{request_id}"
+                            }}
+                        ) {{ _docID }}
+                    }}"#
+                ))
+                .await;
+            assert!(
+                !resp.has_errors(),
+                "explicit supersede writer failed: {:?}",
+                resp.errors
+            );
         }
         "beginInference" => {
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);

@@ -233,9 +233,16 @@ async fn fail_routed_request(
 
     match lifecycle.claim_with_identity().await {
         Ok(ClaimOutcome::Claimed) => {}
-        Ok(ClaimOutcome::Superseded)
-        | Ok(ClaimOutcome::Interrupted)
-        | Ok(ClaimOutcome::Expired) => return Ok(()),
+        Ok(ClaimOutcome::Queued) => {
+            tracing::info!(
+                request_id = %request.request_id,
+                session_id = %request.session_id,
+                behavior_id = %behavior_id,
+                "rejected request queued behind an earlier same-session request"
+            );
+            return Ok(());
+        }
+        Ok(ClaimOutcome::Interrupted) | Ok(ClaimOutcome::Expired) => return Ok(()),
         Err(error) => {
             tracing::warn!(
                 request_id = %request.request_id,

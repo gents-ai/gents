@@ -166,12 +166,12 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
 
         match lifecycle.claim_with_identity().await {
             Ok(ClaimOutcome::Claimed) => {}
-            Ok(ClaimOutcome::Superseded) => {
+            Ok(ClaimOutcome::Queued) => {
                 tracing::info!(
                     behavior_id = %self.behavior.name,
                     request_id = %request.request_id,
                     session_id = %request.session_id,
-                    "request superseded by an earlier non-terminal request"
+                    "request queued behind an earlier same-session request"
                 );
                 return;
             }

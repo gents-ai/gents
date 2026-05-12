@@ -4,7 +4,6 @@ use serde::Deserialize;
 pub(super) struct DedupPlan {
     pub(super) is_earliest: bool,
     pub(super) blocking_request_id: Option<String>,
-    pub(super) duplicates_to_suppress: Vec<DedupRow>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,8 +19,19 @@ pub(super) struct DedupRow {
     pub(super) doc_id: String,
     pub(super) request_id: String,
     pub(super) status: String,
+    pub(super) lifecycle_state: Option<String>,
     #[allow(dead_code)]
     pub(super) created_at: String,
+}
+
+impl DedupRow {
+    pub(super) fn is_pending(&self) -> bool {
+        self.status == "pending" && self.lifecycle_state.as_deref() == Some("pending")
+    }
+
+    pub(super) fn is_active_non_pending(&self) -> bool {
+        !self.is_pending()
+    }
 }
 
 #[derive(Deserialize)]

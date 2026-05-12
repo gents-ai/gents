@@ -35,7 +35,6 @@ enum LocalLifecycleState {
     Streaming,
     Completed,
     Failed,
-    Superseded,
     Interrupted,
     Dead,
 }
@@ -43,7 +42,7 @@ enum LocalLifecycleState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClaimOutcome {
     Claimed,
-    Superseded,
+    Queued,
     Interrupted,
     Expired,
 }
