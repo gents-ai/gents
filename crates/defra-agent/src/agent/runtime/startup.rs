@@ -131,6 +131,7 @@ pub(in crate::agent) async fn run_agent(
     let trigger_engine_node = agent.node.clone();
     let trigger_engine_schedule_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_event_snapshot_rx = active_snapshot_rx.clone();
+    let trigger_engine_subagent_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_engine_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_materializer_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_cancel = cancel.child_token();
@@ -167,13 +168,23 @@ pub(in crate::agent) async fn run_agent(
         let event_source: Box<dyn crate::trigger_engine::TriggerSource> =
             Box::new(crate::trigger_engine::event_source::EventSource::new(
                 trigger_engine_event_snapshot_rx,
+                trigger_engine_node.clone(),
+                trigger_engine_cancel.clone(),
+            ));
+        let subagent_source: Box<dyn crate::trigger_engine::TriggerSource> =
+            Box::new(crate::trigger_engine::subagent_source::SubagentSource::new(
+                trigger_engine_subagent_snapshot_rx,
                 trigger_engine_node,
                 trigger_engine_cancel.clone(),
             ));
         let manual_source_box: Box<dyn crate::trigger_engine::TriggerSource> =
             Box::new(manual_source);
-        let sources: Vec<Box<dyn crate::trigger_engine::TriggerSource>> =
-            vec![schedule_source, event_source, manual_source_box];
+        let sources: Vec<Box<dyn crate::trigger_engine::TriggerSource>> = vec![
+            schedule_source,
+            event_source,
+            subagent_source,
+            manual_source_box,
+        ];
         let engine = crate::trigger_engine::TriggerEngine::new(
             trigger_engine_engine_snapshot_rx,
             materializer,

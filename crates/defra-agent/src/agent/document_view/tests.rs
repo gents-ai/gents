@@ -317,6 +317,60 @@ async fn apply_control_update_rejects_tool_selection_with_empty_subagent_target(
     );
 }
 
+#[tokio::test]
+async fn apply_control_update_rejects_tool_selection_with_missing_subagent_target() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-missing-subagent-target"));
+    let agent_did = identity.did();
+    let selection_id = "missing-targets-selection";
+    let escaped_selection_id = escape_graphql_string(selection_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let mutation = format!(
+        r#"mutation {{
+            create_ToolSelection(input: {{
+                selection_id: "{escaped_selection_id}",
+                agent_did: "{escaped_agent_did}",
+                subagent_targets: ["missing-behavior"],
+                subagent_spawn_enabled: true
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create_ToolSelection failed: {:?}",
+        response.errors
+    );
+    let record = crate::document_config::load_tool_selection_record(node.as_ref(), selection_id)
+        .await
+        .unwrap()
+        .expect("tool selection record");
+    let mut view = load_document_runtime_view(node.as_ref(), agent_did)
+        .await
+        .expect("initial document view should load");
+
+    let result = apply_control_update(
+        node.as_ref(),
+        agent_did,
+        "opaque-tool-selection-collection",
+        &record.0,
+        &mut view,
+    )
+    .await;
+
+    assert!(
+        result.is_err(),
+        "apply_control_update must reject missing subagent target, got: {:?}",
+        result
+    );
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(
+        err_msg.contains("missing-behavior") && err_msg.contains("AgentBehavior"),
+        "error message must mention the missing target and AgentBehavior, got: {err_msg}"
+    );
+}
+
 async fn create_task(node: &defra_node::EmbeddedNode, task_id: &str, name: &str) {
     let escaped_task_id = escape_graphql_string(task_id);
     let escaped_name = escape_graphql_string(name);

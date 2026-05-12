@@ -735,6 +735,7 @@ impl EventSource {
                 event_vars,
                 doc_vars,
                 args_vars: None,
+                pre_materialized_request_id: None,
                 on_result: Box::new(move |result| {
                     EventSource::spawn_runtime_field_write(
                         node_for_callback,

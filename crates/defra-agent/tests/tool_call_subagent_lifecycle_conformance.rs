@@ -990,6 +990,15 @@ async fn integration_v3_schema_defaults_populate_correctly() {
 #[tokio::test]
 async fn integration_create_subagent_request_at_max_depth_succeeds() {
     let db = test_db("tc-sa-csr-1").await;
+    support::create_request(
+        &db.node,
+        "parent-req-csr-1",
+        "parent-sess-csr-1",
+        "processing",
+        &chrono::Utc::now().to_rfc3339(),
+    )
+    .await;
+
     let new_id = create_subagent_request(
         &db.node,
         "parent-req-csr-1".to_string(),
@@ -1015,6 +1024,8 @@ async fn integration_create_subagent_request_at_max_depth_succeeds() {
                 subagent_depth
                 caused_by_parent_request_id
                 caused_by_parent_tool_call_id
+                caused_by_trigger_id
+                caused_by_trigger_kind
             }}
         }}"#
     );
@@ -1038,6 +1049,11 @@ async fn integration_create_subagent_request_at_max_depth_succeeds() {
         row["caused_by_parent_tool_call_id"].as_str(),
         Some("parent-tc-csr-1")
     );
+    assert_eq!(
+        row["caused_by_trigger_id"].as_str(),
+        Some("parent-tc-csr-1")
+    );
+    assert_eq!(row["caused_by_trigger_kind"].as_str(), Some("subagent"));
 }
 
 #[tokio::test]
