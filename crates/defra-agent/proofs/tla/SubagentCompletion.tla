@@ -314,6 +314,55 @@ AppendNotification(child) ==
      >>
 
 (***************************************************************************)
+(* Coalesced same-session wake-up enqueue on A.                            *)
+(***************************************************************************)
+
+FreshQueueIds(k) ==
+  Cardinality(QueueId \ queueIdsUsed) >= k
+
+IsPendingCompletionWakeup(row) ==
+  /\ row.session = ParentSession
+  /\ row.source = "subagent_completion"
+  /\ row.policy = "coalesce"
+  /\ row.key = CompletionQueueKey
+  /\ row.state = "pending"
+
+HasPendingCompletionWakeup ==
+  \E row \in queueRows : IsPendingCompletionWakeup(row)
+
+EnqueueWakeup(child) ==
+  /\ child \in Child
+  /\ notificationDurable[child]
+  /\ ~HasPendingCompletionWakeup
+  /\ FreshQueueIds(1)
+  /\ LET id == CHOOSE queueId \in QueueId \ queueIdsUsed : TRUE
+         row == [
+           id      |-> id,
+           session |-> ParentSession,
+           source  |-> "subagent_completion",
+           policy  |-> "coalesce",
+           key     |-> CompletionQueueKey,
+           state   |-> "pending"
+         ]
+     IN /\ queueRows' = queueRows \cup {row}
+        /\ queueIdsUsed' = queueIdsUsed \cup {id}
+  /\ UNCHANGED <<
+       childDurable,
+       childFinalResponseDurable,
+       messages,
+       pendingInboundA,
+       observedDurableA,
+       bridgeState,
+       terminalSource,
+       terminalWriteCount,
+       notificationDurable,
+       eventIdsUsed,
+       dropCount,
+       crashCount,
+       cancelRequested
+     >>
+
+(***************************************************************************)
 (* Safety invariants.                                                      *)
 (***************************************************************************)
 
@@ -362,6 +411,21 @@ NotificationCausal ==
   \A child \in Child :
     notificationDurable[child] => terminalSource[child] = "ChildProjection"
 
+QueueIdsTracked ==
+  \A row \in queueRows : row.id \in queueIdsUsed
+
+WakeupCoalesced ==
+  \A r1, r2 \in queueRows :
+    /\ r1 # r2
+    /\ IsPendingCompletionWakeup(r1)
+    /\ IsPendingCompletionWakeup(r2)
+    => FALSE
+
+WakeupCausal ==
+  \A row \in queueRows :
+    IsPendingCompletionWakeup(row) =>
+      \E child \in Child : notificationDurable[child]
+
 StateBound == TRUE
 
 Next ==
@@ -373,6 +437,7 @@ Next ==
   \/ \E obs \in pendingInboundA : PersistObservationOnA(obs)
   \/ \E child \in Child : ProjectTerminal(child)
   \/ \E child \in Child : AppendNotification(child)
+  \/ \E child \in Child : EnqueueWakeup(child)
 
 Spec == Init /\ [][Next]_vars
 
