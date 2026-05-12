@@ -1098,13 +1098,13 @@ mod tests {
 
         assert!(!analysis.tool_result_ok);
         // After R1's failure-class collapse, "tool_not_allowed" rebuckets to
-        // ServiceUnavailable. The raw `validation_errors[0].code` field still
-        // carries the original "tool_not_allowed" string from the JSON.
+        // ServiceUnavailable, and `validation_errors[0].code` reports the
+        // bucketed class name (not the raw input string).
         assert_eq!(
             analysis.tool_failure_class,
             Some(ToolFailureClass::ServiceUnavailable)
         );
-        assert_eq!(analysis.validation_errors[0].code, "tool_not_allowed");
+        assert_eq!(analysis.validation_errors[0].code, "serviceUnavailable");
         assert_eq!(analysis.validation_errors[0].path, "/service_id");
         assert_eq!(analysis.validation_errors[0].retryable, false);
         let error = analysis.tool_error.as_ref().expect("tool error");
