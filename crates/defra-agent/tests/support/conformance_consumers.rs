@@ -224,6 +224,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_request_transition_cases_cover_lifecycle_policy",
         },
         ConformanceConsumer::RustTest {
+            id: "state_machine_conformance::generated_queue_deadline_cases_pin_r4a_contract_rows",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/state_machine_conformance.rs",
+            module_path: "state_machine_conformance",
+            function: "generated_queue_deadline_cases_pin_r4a_contract_rows",
+        },
+        ConformanceConsumer::RustTest {
             id: "state_machine_conformance::generated_tool_execution_cases_cover_preflight_and_retry_contracts",
             package: "defra-agent",
             source_path: "crates/defra-agent/tests/state_machine_conformance.rs",

@@ -4,6 +4,7 @@ import Proofs.Conformance.ContractCases.SessionRecovery
 import Proofs.Conformance.ContractCases.BoundaryRuntime
 import Proofs.Conformance.ContractCases.LifecycleTransitions
 import Proofs.Conformance.ContractCases.LiveOverlay
+import Proofs.Conformance.ContractCases.QueueDeadline
 
 /-!
 # Finite Conformance Witness Cases

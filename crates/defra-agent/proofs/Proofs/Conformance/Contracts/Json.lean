@@ -314,6 +314,49 @@ def liveOverlayCaseJson (witness : LiveOverlayCase) : String :=
     ++ "\"expectOverlay\":" ++ boolString witness.expectOverlay
     ++ "}"
 
+def jsonOptionalNat : Option Nat → String
+  | none => "null"
+  | some value => toString value
+
+def queueDeadlineConformanceCaseJson
+    (witness : QueueDeadlineConformanceCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"group\":" ++ jsonString witness.group ++ ","
+    ++ "\"action\":" ++ jsonString witness.action ++ ","
+    ++ "\"session_id\":" ++ toString witness.sessionId ++ ","
+    ++ "\"legal\":" ++ boolString witness.legal ++ ","
+    ++ "\"pre_active_request_id\":"
+      ++ jsonOptionalNat witness.preActiveRequestId ++ ","
+    ++ "\"post_active_request_id\":"
+      ++ jsonOptionalNat witness.postActiveRequestId ++ ","
+    ++ "\"pre_pending_request_ids\":"
+      ++ jsonArray (witness.prePendingRequestIds.map toString) ++ ","
+    ++ "\"post_pending_request_ids\":"
+      ++ jsonArray (witness.postPendingRequestIds.map toString) ++ ","
+    ++ "\"claimed_request_id\":"
+      ++ jsonOptionalNat witness.claimedRequestId ++ ","
+    ++ "\"blocked_by_active\":" ++ boolString witness.blockedByActive ++ ","
+    ++ "\"superseded_request_ids\":"
+      ++ jsonArray (witness.supersededRequestIds.map toString) ++ ","
+    ++ "\"queue_key\":" ++ jsonOptionalString witness.queueKey ++ ","
+    ++ "\"post_coalesced_pending_count\":"
+      ++ toString witness.postCoalescedPendingCount ++ ","
+    ++ "\"automated_drained_request_ids\":"
+      ++ jsonArray (witness.automatedDrainedRequestIds.map toString) ++ ","
+    ++ "\"preserved_user_pending_request_ids\":"
+      ++ jsonArray (witness.preservedUserPendingRequestIds.map toString) ++ ","
+    ++ "\"post_terminal_request_ids\":"
+      ++ jsonArray (witness.postTerminalRequestIds.map toString) ++ ","
+    ++ "\"pre_request_deadline\":"
+      ++ jsonOptionalNat witness.preRequestDeadline ++ ","
+    ++ "\"synthesized_claim_deadline\":"
+      ++ jsonOptionalNat witness.synthesizedClaimDeadline ++ ","
+    ++ "\"post_deadline\":" ++ jsonOptionalNat witness.postDeadline ++ ","
+    ++ "\"explicit_deadline_preserved\":"
+      ++ boolString witness.explicitDeadlinePreserved
+    ++ "}"
+
 def snapshotJson : String :=
   "{"
     ++ "\"generated_by\":\"lake env lean --run Proofs/Conformance/Contracts.lean\","
@@ -375,6 +418,9 @@ def snapshotJson : String :=
       ++ jsonArray (CommandPolicy.commandEnvCases.map commandEnvCaseJson) ++ ","
     ++ "\"live_overlay_cases\":"
       ++ jsonArray (liveOverlayCases.map liveOverlayCaseJson) ++ ","
+    ++ "\"queue_deadline_conformance_cases\":"
+      ++ jsonArray
+        (queueDeadlineConformanceCases.map queueDeadlineConformanceCaseJson) ++ ","
     ++ "\"follow_up_hooks\":[],"
     ++ "\"coverage_ledger\":"
       ++ coverageLedgerJson

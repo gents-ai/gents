@@ -53,6 +53,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) command_sandbox_cases: Vec<LeanCommandSandboxCase>,
     pub(crate) command_env_cases: Vec<LeanCommandEnvCase>,
     pub(crate) live_overlay_cases: Vec<LeanLiveOverlayCase>,
+    pub(crate) queue_deadline_conformance_cases: Vec<LeanQueueDeadlineConformanceCase>,
     pub(crate) follow_up_hooks: Vec<String>,
     pub(crate) coverage_ledger: Vec<LeanCoverageEntry>,
 }
@@ -502,6 +503,31 @@ pub(crate) struct LeanLiveOverlayCase {
     pub(crate) expect_overlay: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanQueueDeadlineConformanceCase {
+    pub(crate) name: String,
+    pub(crate) group: String,
+    pub(crate) action: String,
+    pub(crate) session_id: usize,
+    pub(crate) legal: bool,
+    pub(crate) pre_active_request_id: Option<usize>,
+    pub(crate) post_active_request_id: Option<usize>,
+    pub(crate) pre_pending_request_ids: Vec<usize>,
+    pub(crate) post_pending_request_ids: Vec<usize>,
+    pub(crate) claimed_request_id: Option<usize>,
+    pub(crate) blocked_by_active: bool,
+    pub(crate) superseded_request_ids: Vec<usize>,
+    pub(crate) queue_key: Option<String>,
+    pub(crate) post_coalesced_pending_count: usize,
+    pub(crate) automated_drained_request_ids: Vec<usize>,
+    pub(crate) preserved_user_pending_request_ids: Vec<usize>,
+    pub(crate) post_terminal_request_ids: Vec<usize>,
+    pub(crate) pre_request_deadline: Option<usize>,
+    pub(crate) synthesized_claim_deadline: Option<usize>,
+    pub(crate) post_deadline: Option<usize>,
+    pub(crate) explicit_deadline_preserved: bool,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum LeanVocabularyParseError<'a> {
     MissingNamespace,
@@ -641,6 +667,18 @@ pub(crate) fn lean_tool_preflight_case(name: &str) -> &'static LeanToolPreflight
 
 pub(crate) fn lean_tool_retry_cases() -> &'static [LeanToolRetryCase] {
     &lean_contract_snapshot().tool_retry_cases
+}
+
+pub(crate) fn lean_queue_deadline_cases() -> &'static [LeanQueueDeadlineConformanceCase] {
+    &lean_contract_snapshot().queue_deadline_conformance_cases
+}
+
+pub(crate) fn lean_queue_deadline_case(name: &str) -> &'static LeanQueueDeadlineConformanceCase {
+    lean_contract_snapshot()
+        .queue_deadline_conformance_cases
+        .iter()
+        .find(|case| case.name == name)
+        .unwrap_or_else(|| panic!("Lean queue/deadline case {name:?} was not emitted"))
 }
 
 pub(crate) fn lean_tool_retry_case(name: &str) -> &'static LeanToolRetryCase {
