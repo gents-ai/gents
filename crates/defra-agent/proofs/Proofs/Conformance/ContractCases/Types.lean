@@ -154,6 +154,19 @@ structure BackendHealthAdmissionCase where
   externalEndpointFreshnessClaimed : Bool
   deriving Repr
 
+structure NativeFilesystemBoundaryCase where
+  name : String
+  toolName : String
+  workClass : String
+  boundary : String
+  innerPollBlocks : Bool
+  requestDeadlineMs : Nat
+  blockerMs : Nat
+  expectedTerminal : String
+  expectedFailureClass : Option String
+  queueAdvancesBeforeBlockerReturns : Bool
+  deriving Repr
+
 structure LifecycleTransitionCase where
   name : String
   domain : String

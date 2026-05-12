@@ -431,6 +431,7 @@ async fn fetch_tool_call_row(
                     lifecycle_state
                     result
                     status
+                    tool_failure_class
                 }}
             }}"#
         ))
@@ -551,6 +552,11 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
     assert_eq!(
         row.get("lifecycle_state").and_then(|value| value.as_str()),
         Some("timedOut")
+    );
+    assert_eq!(
+        row.get("tool_failure_class")
+            .and_then(|value| value.as_str()),
+        Some("external")
     );
     assert!(row
         .get("result")

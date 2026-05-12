@@ -425,6 +425,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "BackendHealthAdmissionCases".to_string(),
         ));
     }
+    if !snapshot.native_filesystem_boundary_cases.is_empty() {
+        emitted.insert((
+            "native_filesystem_boundary_cases".to_string(),
+            "NativeFilesystemBoundaryCases".to_string(),
+        ));
+    }
     assert_eq!(
         snapshot.frontend_client_shell_case_count,
         snapshot.frontend_client_shell_cases.len(),
@@ -498,6 +504,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "persistence_policy_cases",
         "storage_observation_cases",
         "backend_health_cases",
+        "native_filesystem_boundary_cases",
         "frontend_client_shell_cases",
         "desktop_client_shell_cases",
         "tool_cases",

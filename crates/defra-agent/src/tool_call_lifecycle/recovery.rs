@@ -85,6 +85,20 @@ impl super::ToolCallLifecycle {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timeout_recovery_persists_external_failure_class() {
+        assert_eq!(
+            RecoveryOutcome::TimedOut.failure_class(),
+            Some(FailureClass::External)
+        );
+        assert_eq!(RecoveryOutcome::Cancelled.failure_class(), None);
+    }
+}
+
 async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) -> Result<usize> {
     let rows = load_running_tool_call_rows(node).await?;
     let mut materialized = 0;
@@ -478,8 +492,8 @@ impl RecoveryOutcome {
 
     fn failure_class(self) -> Option<FailureClass> {
         match self {
-            Self::Failed => Some(FailureClass::External),
-            Self::TimedOut | Self::Cancelled => None,
+            Self::TimedOut | Self::Failed => Some(FailureClass::External),
+            Self::Cancelled => None,
         }
     }
 

@@ -234,4 +234,23 @@ def backendHealthAdmissionCases : List BackendHealthAdmissionCase :=
       .stale
   ]
 
+def nativeFilesystemBoundaryCase (toolName : String) : NativeFilesystemBoundaryCase :=
+  { name := toolName ++ "_single_poll_blocker_times_out_and_queue_advances"
+  , toolName := toolName
+  , workClass := "filesystemTraversal"
+  , boundary := "spawnBlockingRuntimeBoundary"
+  , innerPollBlocks := true
+  , requestDeadlineMs := 15
+  , blockerMs := 200
+  , expectedTerminal := "timedOut"
+  , expectedFailureClass := some "external"
+  , queueAdvancesBeforeBlockerReturns := true
+  }
+
+def nativeFilesystemBoundaryCases : List NativeFilesystemBoundaryCase :=
+  [ nativeFilesystemBoundaryCase "list_files"
+  , nativeFilesystemBoundaryCase "glob"
+  , nativeFilesystemBoundaryCase "grep"
+  ]
+
 end Conformance.ContractCases

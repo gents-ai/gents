@@ -226,6 +226,10 @@ def caseCoverage : List CoverageEntry :=
       boundaryBackendHealthAdmissionFreshnessId
       "backend_registry::tests::generated_backend_health_admission_cases_match_registry_and_admission_policy"
   , consumerCoverage
+      "native_filesystem_boundary_cases"
+      "NativeFilesystemBoundaryCases"
+      "toolset::tests::generated_native_filesystem_boundary_cases_match_preemptible_boundary_contract"
+  , consumerCoverage
       "frontend_client_shell_cases"
       "FrontendClientShellCases"
       "apps/desktop-tauri/src/lib/chat-shell.test.ts::projectChatShell matches generated Lean ClientShell projection contracts"

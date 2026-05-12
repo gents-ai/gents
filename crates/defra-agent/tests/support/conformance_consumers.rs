@@ -259,6 +259,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_command_sandbox_cases_match_rust_selection",
         },
         ConformanceConsumer::RustTest {
+            id: "toolset::tests::generated_native_filesystem_boundary_cases_match_preemptible_boundary_contract",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/src/toolset/tests.rs",
+            module_path: "toolset::tests",
+            function: "generated_native_filesystem_boundary_cases_match_preemptible_boundary_contract",
+        },
+        ConformanceConsumer::RustTest {
             id: "trigger_engine::tests::trigger_engine_dispatch_matches_lean_generated_contract_cases",
             package: "defra-agent",
             source_path: "crates/defra-agent/src/trigger_engine/tests.rs",
