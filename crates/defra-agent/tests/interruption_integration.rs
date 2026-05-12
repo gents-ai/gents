@@ -207,6 +207,27 @@ async fn resend_from_stale_populates_retry_chain() {
     );
 }
 
+#[tokio::test]
+async fn inference_call_wait_observes_latest_attempt() {
+    let db = test_db("inference-call-wait-latest").await;
+    let request_id = "req-inference-call-wait-latest";
+
+    insert_inference_call(
+        db.node.as_ref(),
+        request_id,
+        1,
+        "failed",
+        Some("ProviderError: transient connect failure"),
+    )
+    .await;
+    // Regression guard: a failed historical attempt must not hide the current retry.
+    insert_inference_call(db.node.as_ref(), request_id, 2, "running", None).await;
+
+    let call = wait_for_inference_call_state(db.node.as_ref(), request_id, "running").await;
+    assert_eq!(call.call_seq, 2);
+    assert_eq!(call.call_state, "running");
+}
+
 // --- Full BehaviorDaemon streaming interruption tests ---
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -464,6 +485,62 @@ async fn upsert_streaming_backend(
     assert!(
         !response.has_errors(),
         "upsert streaming backend failed: {:?}",
+        response.errors
+    );
+}
+
+async fn insert_inference_call(
+    node: &defra_agent::defra_node::EmbeddedNode,
+    request_id: &str,
+    call_seq: i64,
+    call_state: &str,
+    failure_reason: Option<&str>,
+) {
+    let call_id = format!("call-{request_id}-{call_seq}");
+    let now = chrono::Utc::now().to_rfc3339();
+    let escaped_call_id = escape_graphql_string(&call_id);
+    let escaped_request_id = escape_graphql_string(request_id);
+    let escaped_call_state = escape_graphql_string(call_state);
+    let escaped_now = escape_graphql_string(&now);
+    let failure_reason_field = failure_reason
+        .map(|reason| format!(r#"failure_reason: "{}","#, escape_graphql_string(reason)))
+        .unwrap_or_default();
+    let ended_at_field = if matches!(call_state, "failed" | "completed" | "cancelled") {
+        format!(r#"ended_at: "{escaped_now}","#)
+    } else {
+        String::new()
+    };
+
+    // These links are plain string fields in the test schema; the helper does
+    // not need to create matching backend or behavior rows.
+    let mutation = format!(
+        r#"mutation {{
+            add_InferenceCall(input: {{
+                call_id: "{escaped_call_id}",
+                runtime_instance_id: "runtime-test",
+                request_id: "{escaped_request_id}",
+                call_seq: {call_seq},
+                backend_id: "{STREAM_BACKEND_ID}",
+                behavior_id: "{PRIMARY_BEHAVIOR}",
+                agent_did: "{AGENT_DID}",
+                call_kind: "inference",
+                attempt: {call_seq},
+                call_state: "{escaped_call_state}",
+                {failure_reason_field}
+                queued_at: "{escaped_now}",
+                started_at: "{escaped_now}",
+                {ended_at_field}
+                priority: 0,
+                queue_depth_at_enqueue: 0,
+                controller_generation: 0,
+                backend_config_fingerprint: "test"
+            }}) {{ _docID }}
+        }}"#,
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "insert inference call failed: {:?}",
         response.errors
     );
 }

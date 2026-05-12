@@ -266,10 +266,15 @@ pub async fn wait_for_request_lifecycle_state(
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct InferenceCallSnapshot {
+    pub call_seq: i64,
     pub call_state: String,
     pub failure_reason: Option<String>,
 }
 
+/// Wait for the latest inference attempt for `request_id` to reach `expected`.
+///
+/// The daemon retries transient provider failures, so a historical failed
+/// attempt must not hide the current attempt's running or terminal state.
 pub async fn wait_for_inference_call_state(
     node: &EmbeddedNode,
     request_id: &str,
@@ -277,7 +282,7 @@ pub async fn wait_for_inference_call_state(
 ) -> InferenceCallSnapshot {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
-        let row = fetch_inference_call(node, request_id).await;
+        let row = fetch_latest_inference_call(node, request_id).await;
         if row
             .as_ref()
             .is_some_and(|row| row.call_state.as_str() == expected)
@@ -286,13 +291,13 @@ pub async fn wait_for_inference_call_state(
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for inference call request_id={request_id} call_state={expected}; last={row:?}"
+            "timed out waiting for latest inference call request_id={request_id} call_state={expected}; last={row:?}"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
-async fn fetch_inference_call(
+async fn fetch_latest_inference_call(
     node: &EmbeddedNode,
     request_id: &str,
 ) -> Option<InferenceCallSnapshot> {
@@ -304,9 +309,10 @@ async fn fetch_inference_call(
                     request_id: {{ _eq: "{escaped_request_id}" }},
                     call_kind: {{ _eq: "inference" }}
                 }},
-                order: {{ call_seq: ASC }},
+                order: {{ call_seq: DESC }},
                 limit: 1
             ) {{
+                call_seq
                 call_state
                 failure_reason
             }}
