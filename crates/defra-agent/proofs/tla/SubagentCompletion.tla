@@ -14,6 +14,8 @@ EXTENDS Naturals, FiniteSets, TLC
 
 CONSTANTS
   Deployment,
+  ParentDeployment,
+  ChildDeployment,
   Child,
   EventId,
   QueueId,
@@ -33,6 +35,9 @@ QueueState == {"pending", "drained"}
 QueueKey == {CompletionQueueKey, UserQueueKey}
 
 ASSUME DeploymentIsFiniteSet == IsFiniteSet(Deployment)
+ASSUME ParentDeploymentInDeployment == ParentDeployment \in Deployment
+ASSUME ChildDeploymentInDeployment == ChildDeployment \in Deployment
+ASSUME ParentChildDeploymentDistinct == ParentDeployment # ChildDeployment
 ASSUME ChildIsFiniteSet == IsFiniteSet(Child)
 ASSUME EventIdIsFiniteSet == IsFiniteSet(EventId)
 ASSUME QueueIdIsFiniteSet == IsFiniteSet(QueueId)
@@ -468,6 +473,52 @@ CancelParent(child) ==
      >>
 
 (***************************************************************************)
+(* Crash/recovery abstraction.                                             *)
+(***************************************************************************)
+
+CrashA ==
+  /\ crashCount[ParentDeployment] < MaxCrashes
+  /\ pendingInboundA' = {}
+  /\ crashCount' =
+       [crashCount EXCEPT ![ParentDeployment] = @ + 1]
+  /\ UNCHANGED <<
+       childDurable,
+       childFinalResponseDurable,
+       messages,
+       observedDurableA,
+       bridgeState,
+       terminalSource,
+       terminalWriteCount,
+       notificationDurable,
+       queueRows,
+       queueIdsUsed,
+       eventIdsUsed,
+       dropCount,
+       cancelRequested
+     >>
+
+CrashB ==
+  /\ crashCount[ChildDeployment] < MaxCrashes
+  /\ crashCount' =
+       [crashCount EXCEPT ![ChildDeployment] = @ + 1]
+  /\ UNCHANGED <<
+       childDurable,
+       childFinalResponseDurable,
+       messages,
+       pendingInboundA,
+       observedDurableA,
+       bridgeState,
+       terminalSource,
+       terminalWriteCount,
+       notificationDurable,
+       queueRows,
+       queueIdsUsed,
+       eventIdsUsed,
+       dropCount,
+       cancelRequested
+     >>
+
+(***************************************************************************)
 (* Safety invariants.                                                      *)
 (***************************************************************************)
 
@@ -553,7 +604,9 @@ CancelRequestedCausal ==
   \A child \in Child :
     cancelRequested[child] => terminalSource[child] = "ParentCancel"
 
-StateBound == TRUE
+StateBound ==
+  /\ Cardinality(eventIdsUsed) <= 3
+  /\ Cardinality(queueIdsUsed) <= 2
 
 Next ==
   \/ \E child \in Child, terminal \in TerminalKind :
@@ -568,6 +621,8 @@ Next ==
   \/ EnqueueUserRequest
   \/ CancelDrain
   \/ \E child \in Child : CancelParent(child)
+  \/ CrashA
+  \/ CrashB
 
 Spec == Init /\ [][Next]_vars
 
