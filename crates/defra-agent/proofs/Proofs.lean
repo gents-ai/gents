@@ -8,6 +8,7 @@ import Proofs.InferenceCall
 import Proofs.Composed
 import Proofs.Fleet
 import Proofs.SessionRecovery
+import Proofs.Session.Properties
 import Proofs.RuntimeReconcile
 import Proofs.Triggers
 import Proofs.Client
