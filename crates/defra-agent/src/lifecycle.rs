@@ -12,6 +12,7 @@ mod lookup;
 pub mod manual;
 mod materialize;
 mod query;
+pub(crate) mod queue;
 mod recovery;
 mod rows;
 mod task_title;

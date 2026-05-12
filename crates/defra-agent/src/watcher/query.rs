@@ -2,6 +2,8 @@ use serde::Deserialize;
 
 use super::{validate_agent_request_subagent_coherence, AgentRequest, DefraWatcher};
 
+// Keep this projection aligned with `AgentRequest`; downstream intake needs
+// metadata so it can inspect lifecycle queue hints.
 const AGENT_REQUEST_FIELDS: &str = r#"
                     _docID
                     request_id

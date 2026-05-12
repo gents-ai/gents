@@ -29,6 +29,7 @@ pub struct AgentRequest {
     pub top_p: Option<f64>,
     pub top_k: Option<i64>,
     pub max_tokens: Option<i64>,
+    /// Raw AgentRequest.metadata JSON payload, including lifecycle queue hints.
     pub metadata: Option<String>,
     pub execution_origin: Option<String>,
     pub created_at: String,
