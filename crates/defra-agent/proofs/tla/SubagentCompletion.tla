@@ -254,6 +254,39 @@ PersistObservationOnA(obs) ==
      >>
 
 (***************************************************************************)
+(* A-side parent bridge projection.                                        *)
+(***************************************************************************)
+
+ProjectedBridgeState(terminal) ==
+  IF terminal = "Completed" THEN "Completed" ELSE "Failed"
+
+ProjectTerminal(child) ==
+  /\ child \in Child
+  /\ bridgeState[child] = "Running"
+  /\ terminalSource[child] = "None"
+  /\ observedDurableA[child] # NoTerminal
+  /\ bridgeState' =
+       [bridgeState EXCEPT ![child] = ProjectedBridgeState(observedDurableA[child])]
+  /\ terminalSource' =
+       [terminalSource EXCEPT ![child] = "ChildProjection"]
+  /\ terminalWriteCount' =
+       [terminalWriteCount EXCEPT ![child] = @ + 1]
+  /\ UNCHANGED <<
+       childDurable,
+       childFinalResponseDurable,
+       messages,
+       pendingInboundA,
+       observedDurableA,
+       notificationDurable,
+       queueRows,
+       queueIdsUsed,
+       eventIdsUsed,
+       dropCount,
+       crashCount,
+       cancelRequested
+     >>
+
+(***************************************************************************)
 (* Safety invariants.                                                      *)
 (***************************************************************************)
 
@@ -275,6 +308,29 @@ ADurableObservationBackedByB ==
       /\ childDurable[child] = observedDurableA[child]
       /\ childFinalResponseDurable[child]
 
+BridgeTerminalUnique ==
+  \A child \in Child : terminalWriteCount[child] <= 1
+
+ProjectionRequiresBDurableTerminal ==
+  \A child \in Child :
+    terminalSource[child] = "ChildProjection" =>
+      /\ childDurable[child] = observedDurableA[child]
+      /\ childFinalResponseDurable[child]
+
+ProjectionRequiresADurableObservation ==
+  \A child \in Child :
+    terminalSource[child] = "ChildProjection" =>
+      observedDurableA[child] # NoTerminal
+
+ProjectionMatchesLeanBridgeMapping ==
+  \A child \in Child :
+    terminalSource[child] = "ChildProjection" =>
+      bridgeState[child] = ProjectedBridgeState(observedDurableA[child])
+
+CancelledOnlyByParentCancel ==
+  \A child \in Child :
+    bridgeState[child] = "Cancelled" => terminalSource[child] = "ParentCancel"
+
 StateBound == TRUE
 
 Next ==
@@ -284,6 +340,7 @@ Next ==
   \/ \E obs \in messages : DeliverObservation(obs)
   \/ \E obs \in messages : DropObservation(obs)
   \/ \E obs \in pendingInboundA : PersistObservationOnA(obs)
+  \/ \E child \in Child : ProjectTerminal(child)
 
 Spec == Init /\ [][Next]_vars
 
