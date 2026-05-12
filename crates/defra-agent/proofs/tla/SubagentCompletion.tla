@@ -125,9 +125,47 @@ Init ==
   /\ crashCount                = [deployment \in Deployment |-> 0]
   /\ cancelRequested           = [child \in Child |-> FALSE]
 
+(***************************************************************************)
+(* B-side durable child terminal writes.                                   *)
+(***************************************************************************)
+
+PersistChildTerminal(child, terminal) ==
+  /\ child \in Child
+  /\ terminal \in TerminalKind
+  /\ childDurable[child] = NoTerminal
+  /\ childDurable' =
+       [childDurable EXCEPT ![child] = terminal]
+  /\ childFinalResponseDurable' =
+       [childFinalResponseDurable EXCEPT ![child] = TRUE]
+  /\ UNCHANGED <<
+       messages,
+       pendingInboundA,
+       observedDurableA,
+       bridgeState,
+       terminalSource,
+       terminalWriteCount,
+       notificationDurable,
+       queueRows,
+       queueIdsUsed,
+       eventIdsUsed,
+       dropCount,
+       crashCount,
+       cancelRequested
+     >>
+
+(***************************************************************************)
+(* Safety invariants.                                                      *)
+(***************************************************************************)
+
+DurableChildTerminalOK ==
+  \A child \in Child :
+    childDurable[child] # NoTerminal => childFinalResponseDurable[child]
+
 StateBound == TRUE
 
-Next == FALSE
+Next ==
+  \E child \in Child, terminal \in TerminalKind :
+    PersistChildTerminal(child, terminal)
 
 Spec == Init /\ [][Next]_vars
 
