@@ -624,6 +624,48 @@ Next ==
   \/ CrashA
   \/ CrashB
 
-Spec == Init /\ [][Next]_vars
+(***************************************************************************)
+(* Fairness and liveness.                                                  *)
+(***************************************************************************)
+
+Fairness ==
+  /\ \A child \in Child : WF_vars(EmitTerminalObservation(child))
+  /\ WF_vars(\E obs \in messages : DeliverObservation(obs))
+  /\ WF_vars(\E obs \in pendingInboundA : PersistObservationOnA(obs))
+  /\ \A child \in Child : WF_vars(ProjectTerminal(child))
+  /\ \A child \in Child : WF_vars(AppendNotification(child))
+  /\ \A child \in Child : WF_vars(EnqueueWakeup(child))
+
+Spec == Init /\ [][Next]_vars /\ Fairness
+
+DurableTerminalSettles ==
+  \A child \in Child :
+    /\ childDurable[child] # NoTerminal
+    /\ terminalSource[child] = "None"
+    ~> \/ terminalSource[child] = "ChildProjection"
+       \/ terminalSource[child] = "ParentCancel"
+
+LiveBridgeTerminalProjects ==
+  \A child \in Child :
+    /\ childDurable[child] # NoTerminal
+    /\ bridgeState[child] = "Running"
+    /\ terminalSource[child] = "None"
+    ~> \/ terminalSource[child] = "ChildProjection"
+       \/ terminalSource[child] = "ParentCancel"
+
+ProjectionNotifies ==
+  \A child \in Child :
+    terminalSource[child] = "ChildProjection"
+      ~> notificationDurable[child]
+
+ProjectionWakeupRepresented ==
+  \A child \in Child :
+    notificationDurable[child] ~> HasPendingCompletionWakeup
+
+CompletionProgress ==
+  /\ DurableTerminalSettles
+  /\ LiveBridgeTerminalProjects
+  /\ ProjectionNotifies
+  /\ ProjectionWakeupRepresented
 
 ====
