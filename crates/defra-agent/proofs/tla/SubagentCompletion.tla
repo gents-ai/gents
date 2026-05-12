@@ -154,6 +154,106 @@ PersistChildTerminal(child, terminal) ==
      >>
 
 (***************************************************************************)
+(* Document-gossip delivery from B to A.                                   *)
+(***************************************************************************)
+
+FreshEventIds(k) ==
+  Cardinality(EventId \ eventIdsUsed) >= k
+
+AllObservations == messages \cup pendingInboundA
+
+EmitTerminalObservation(child) ==
+  /\ child \in Child
+  /\ childDurable[child] # NoTerminal
+  /\ FreshEventIds(1)
+  /\ LET id == CHOOSE eventId \in EventId \ eventIdsUsed : TRUE
+         obs == [
+           id       |-> id,
+           child    |-> child,
+           terminal |-> childDurable[child]
+         ]
+     IN /\ messages' = messages \cup {obs}
+        /\ eventIdsUsed' = eventIdsUsed \cup {id}
+  /\ UNCHANGED <<
+       childDurable,
+       childFinalResponseDurable,
+       pendingInboundA,
+       observedDurableA,
+       bridgeState,
+       terminalSource,
+       terminalWriteCount,
+       notificationDurable,
+       queueRows,
+       queueIdsUsed,
+       dropCount,
+       crashCount,
+       cancelRequested
+     >>
+
+DeliverObservation(obs) ==
+  /\ obs \in messages
+  /\ messages' = messages \ {obs}
+  /\ pendingInboundA' = pendingInboundA \cup {obs}
+  /\ UNCHANGED <<
+       childDurable,
+       childFinalResponseDurable,
+       observedDurableA,
+       bridgeState,
+       terminalSource,
+       terminalWriteCount,
+       notificationDurable,
+       queueRows,
+       queueIdsUsed,
+       eventIdsUsed,
+       dropCount,
+       crashCount,
+       cancelRequested
+     >>
+
+DropObservation(obs) ==
+  /\ obs \in messages
+  /\ dropCount < MaxDrops
+  /\ messages' = messages \ {obs}
+  /\ dropCount' = dropCount + 1
+  /\ UNCHANGED <<
+       childDurable,
+       childFinalResponseDurable,
+       pendingInboundA,
+       observedDurableA,
+       bridgeState,
+       terminalSource,
+       terminalWriteCount,
+       notificationDurable,
+       queueRows,
+       queueIdsUsed,
+       eventIdsUsed,
+       crashCount,
+       cancelRequested
+     >>
+
+PersistObservationOnA(obs) ==
+  /\ obs \in pendingInboundA
+  /\ observedDurableA[obs.child] \in {NoTerminal, obs.terminal}
+  /\ pendingInboundA' = pendingInboundA \ {obs}
+  /\ observedDurableA' =
+       [observedDurableA EXCEPT ![obs.child] = obs.terminal]
+  /\ UNCHANGED <<
+       childDurable,
+       childFinalResponseDurable,
+       messages,
+       bridgeState,
+       terminalSource,
+       terminalWriteCount,
+       notificationDurable,
+       queueRows,
+       queueIdsUsed,
+       eventIdsUsed,
+       dropCount,
+       crashCount,
+       cancelRequested
+     >>
+
+(***************************************************************************)
 (* Safety invariants.                                                      *)
 (***************************************************************************)
 
@@ -161,11 +261,29 @@ DurableChildTerminalOK ==
   \A child \in Child :
     childDurable[child] # NoTerminal => childFinalResponseDurable[child]
 
+EventIdsTracked ==
+  \A obs \in AllObservations : obs.id \in eventIdsUsed
+
+ObservationBackedByBDurable ==
+  \A obs \in AllObservations :
+    /\ childDurable[obs.child] = obs.terminal
+    /\ childFinalResponseDurable[obs.child]
+
+ADurableObservationBackedByB ==
+  \A child \in Child :
+    observedDurableA[child] # NoTerminal =>
+      /\ childDurable[child] = observedDurableA[child]
+      /\ childFinalResponseDurable[child]
+
 StateBound == TRUE
 
 Next ==
-  \E child \in Child, terminal \in TerminalKind :
-    PersistChildTerminal(child, terminal)
+  \/ \E child \in Child, terminal \in TerminalKind :
+       PersistChildTerminal(child, terminal)
+  \/ \E child \in Child : EmitTerminalObservation(child)
+  \/ \E obs \in messages : DeliverObservation(obs)
+  \/ \E obs \in messages : DropObservation(obs)
+  \/ \E obs \in pendingInboundA : PersistObservationOnA(obs)
 
 Spec == Init /\ [][Next]_vars
 
