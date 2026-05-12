@@ -442,6 +442,32 @@ CancelDrain ==
      >>
 
 (***************************************************************************)
+(* Parent cancellation winning a completion race.                          *)
+(***************************************************************************)
+
+CancelParent(child) ==
+  /\ child \in Child
+  /\ bridgeState[child] = "Running"
+  /\ terminalSource[child] = "None"
+  /\ bridgeState' = [bridgeState EXCEPT ![child] = "Cancelled"]
+  /\ terminalSource' = [terminalSource EXCEPT ![child] = "ParentCancel"]
+  /\ terminalWriteCount' = [terminalWriteCount EXCEPT ![child] = @ + 1]
+  /\ cancelRequested' = [cancelRequested EXCEPT ![child] = TRUE]
+  /\ UNCHANGED <<
+       childDurable,
+       childFinalResponseDurable,
+       messages,
+       pendingInboundA,
+       observedDurableA,
+       notificationDurable,
+       queueRows,
+       queueIdsUsed,
+       eventIdsUsed,
+       dropCount,
+       crashCount
+     >>
+
+(***************************************************************************)
 (* Safety invariants.                                                      *)
 (***************************************************************************)
 
@@ -516,6 +542,17 @@ UserPendingPreserved ==
   \A row \in queueRows :
     row.source = "user" => row.state = "pending"
 
+ParentCancelAbsorbsLateTerminal ==
+  \A child \in Child :
+    terminalSource[child] = "ParentCancel" =>
+      /\ bridgeState[child] = "Cancelled"
+      /\ terminalWriteCount[child] = 1
+      /\ notificationDurable[child] = FALSE
+
+CancelRequestedCausal ==
+  \A child \in Child :
+    cancelRequested[child] => terminalSource[child] = "ParentCancel"
+
 StateBound == TRUE
 
 Next ==
@@ -530,6 +567,7 @@ Next ==
   \/ \E child \in Child : EnqueueWakeup(child)
   \/ EnqueueUserRequest
   \/ CancelDrain
+  \/ \E child \in Child : CancelParent(child)
 
 Spec == Init /\ [][Next]_vars
 
