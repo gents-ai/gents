@@ -279,6 +279,11 @@ def caseCoverage : List CoverageEntry :=
       "QueueDeadlineConformanceCases"
       "state_machine_conformance::generated_queue_deadline_cases_pin_r4a_contract_rows"
       "Runtime-backed queue/deadline consumers land in R4a Task 5 and Task 7 after the Rust claim and scheduler implementations exist."
+  , consumerWithFollowUpCoverage
+      "recovery_sweep_cases"
+      "RecoverySweepCases"
+      "state_machine_conformance::generated_recovery_sweep_cases_pin_startup_recovery_contract"
+      "Deadline audit PR E must implement InferenceCall::recover_all; the bridge terminal wiring follow-up must implement detached bridge row recovery."
   ]
 
 def followUpHookCoverage : List CoverageEntry :=

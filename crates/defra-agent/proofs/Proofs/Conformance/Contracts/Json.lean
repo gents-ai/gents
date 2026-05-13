@@ -6,6 +6,7 @@ import Proofs.ToolExecution
 import Proofs.Conformance.Deviations
 import Proofs.CommandPolicy.Cases
 import Proofs.Conformance.CoverageLedger
+import Proofs.Recovery.ContractCases
 
 /-!
 # Conformance Snapshot JSON
@@ -357,6 +358,23 @@ def queueDeadlineConformanceCaseJson
       ++ boolString witness.explicitDeadlinePreserved
     ++ "}"
 
+def recoverySweepCaseJson (witness : RecoverySweepCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"sweep_id\":" ++ jsonString witness.sweepId ++ ","
+    ++ "\"collection\":" ++ jsonString witness.collection ++ ","
+    ++ "\"rust_function\":" ++ jsonString witness.rustFunction ++ ","
+    ++ "\"cadence\":" ++ jsonString witness.cadence ++ ","
+    ++ "\"implementation_status\":"
+      ++ jsonString witness.implementationStatus ++ ","
+    ++ "\"pre_state\":" ++ jsonString witness.preState ++ ","
+    ++ "\"terminal_state\":" ++ jsonString witness.terminalState ++ ","
+    ++ "\"measure_before\":" ++ toString witness.measureBefore ++ ","
+    ++ "\"measure_after\":" ++ toString witness.measureAfter ++ ","
+    ++ "\"deadline_audit_ref\":"
+      ++ jsonString witness.deadlineAuditRef
+    ++ "}"
+
 def snapshotJson : String :=
   "{"
     ++ "\"generated_by\":\"lake env lean --run Proofs/Conformance/Contracts.lean\","
@@ -421,6 +439,9 @@ def snapshotJson : String :=
     ++ "\"queue_deadline_conformance_cases\":"
       ++ jsonArray
         (queueDeadlineConformanceCases.map queueDeadlineConformanceCaseJson) ++ ","
+    ++ "\"recovery_sweep_cases\":"
+      ++ jsonArray
+        (Recovery.recoverySweepCases.map recoverySweepCaseJson) ++ ","
     ++ "\"follow_up_hooks\":[],"
     ++ "\"coverage_ledger\":"
       ++ coverageLedgerJson

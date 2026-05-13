@@ -201,6 +201,20 @@ structure QueueDeadlineConformanceCase where
   explicitDeadlinePreserved : Bool
   deriving Repr
 
+structure RecoverySweepCase where
+  name : String
+  sweepId : String
+  collection : String
+  rustFunction : String
+  cadence : String
+  implementationStatus : String
+  preState : String
+  terminalState : String
+  measureBefore : Nat
+  measureAfter : Nat
+  deadlineAuditRef : String
+  deriving DecidableEq, Repr
+
 def boolString (value : Bool) : String :=
   if value then "true" else "false"
 
