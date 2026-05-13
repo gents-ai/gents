@@ -108,4 +108,55 @@ theorem D1_delivery_convergence
     show d ∈ d :: w₁.handled
     exact List.mem_cons_self _ _
 
+/-- **D2 — Fair-delivery latency witness.** When `d` is persistent and not
+    yet processed, there exists a two-action subscription-path trace
+    `[enqueue d, handle d]` that lands `d` in `handled` without using
+    `rescanTick`. Documentation property; not load-bearing.
+
+    The interpretation: under fair subscription delivery (no permanent
+    drops), the subscription path closes convergence in two actions
+    instead of paying the full rescan-cadence latency. -/
+theorem D2_fair_delivery_latency
+    (w₀ : World) (d : DocId)
+    (h_persisted : d ∈ w₀.persistentSet)
+    (h_unprocessed : d ∉ w₀.processedSet) :
+    ∃ (actions : List Action) (w' : World),
+      TraceOf w₀ actions w' ∧
+      d ∈ w'.handled ∧
+      Action.rescanTick ∉ actions := by
+  let w₁ : World :=
+    { w₀ with subscriptionQueue := d :: w₀.subscriptionQueue }
+  let w₂ : World :=
+    { w₁ with handled := d :: w₁.handled
+            , processedSet := d :: w₁.processedSet
+            , subscriptionQueue := w₁.subscriptionQueue.erase d }
+  refine ⟨[.enqueue d, .handle d], w₂, ?_, ?_, ?_⟩
+  · -- TraceOf w₀ [.enqueue d, .handle d] w₂
+    have h_enq : Transition w₀ (.enqueue d) w₁ := Transition.enqueue w₀ d h_persisted
+    have h_mem_q : d ∈ w₁.subscriptionQueue := List.mem_cons_self _ _
+    have h_handle : Transition w₁ (.handle d) w₂ :=
+      Transition.handle w₁ d h_mem_q h_unprocessed
+    exact TraceOf.cons h_enq (TraceOf.cons h_handle TraceOf.nil)
+  · -- d ∈ w₂.handled
+    show d ∈ d :: w₁.handled
+    exact List.mem_cons_self _ _
+  · -- .rescanTick ∉ [.enqueue d, .handle d]
+    intro h
+    simp at h
+
+/-- **C1 — Processed-set excludes re-handle.** For any source instance,
+    while `d ∈ processedSet`, no `handle d` action is admissible. Watcher-
+    relevant: the 30s `processed_request_ids` cooldown enforces this
+    operationally; the contract makes it a structural invariant. -/
+theorem C1_processed_set_excludes_handle
+    (w : World) (d : DocId) (a : Action) (w' : World)
+    (h_processed : d ∈ w.processedSet)
+    (h : Transition w a w') :
+    a ≠ .handle d := by
+  intro h_eq
+  rw [h_eq] at h
+  cases h with
+  | handle _ _ h_unprocessed =>
+    exact h_unprocessed h_processed
+
 end EventDelivery
