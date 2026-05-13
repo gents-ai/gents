@@ -20,4 +20,15 @@ theorem sharing
     decide b₁ p = decide b₂ p :=
   h b₁ b₂ p heq
 
+/-- **I2 Isolation** (contrapositive of I1). If two behaviors get
+    different permission outcomes, they have different principals. -/
+theorem isolation
+    {Permission : Type} (decide : Decide Permission)
+    (h : RespectsPrincipal decide)
+    (b₁ b₂ : Behavior) (p : Permission)
+    (hneq : decide b₁ p ≠ decide b₂ p) :
+    b₁.principal ≠ b₂.principal := by
+  intro heq
+  exact hneq (h b₁ b₂ p heq)
+
 end Identity
