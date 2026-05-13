@@ -12,7 +12,11 @@ use defra_agent::tool_call_lifecycle::{
     create_subagent_request_with_request_id, AwaitMode, CancelPolicy, IllegalToolCallTransition,
     ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
-use defra_agent::{AgentIdentity, DefraAgent, DocumentRuntimeOptions, ToolCeiling};
+use defra_agent::{
+    default_behavior_id_for_agent, load_agent_behavior, upsert_agent_behavior,
+    upsert_tool_selection, AgentBehavior, AgentIdentity, DefraAgent, DocumentRuntimeOptions,
+    ToolCeiling, ToolSelectionDocument,
+};
 use serde::Deserialize;
 
 use support::fixtures::{bind_default_behavior_backend, test_identity};
@@ -27,13 +31,42 @@ struct RunningAgent {
 }
 
 async fn boot_agent(db: &support::TestDb, test_name: &str) -> RunningAgent {
+    boot_agent_with_policy(db, test_name, None, true, true).await
+}
+
+async fn boot_agent_with_targets(
+    db: &support::TestDb,
+    test_name: &str,
+    subagent_targets: Vec<String>,
+) -> RunningAgent {
+    boot_agent_with_policy(db, test_name, Some(subagent_targets), true, true).await
+}
+
+async fn boot_agent_with_policy(
+    db: &support::TestDb,
+    test_name: &str,
+    subagent_targets: Option<Vec<String>>,
+    spawn_enabled: bool,
+    background_enabled: bool,
+) -> RunningAgent {
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(test_name));
+    let agent_did = identity.did().to_string();
+    let behavior_id = default_behavior_id_for_agent(&agent_did);
     let endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_behavior_backend(
         db.node.as_ref(),
-        identity.did(),
+        &agent_did,
         "backend-subagent-source",
         endpoint.endpoint(),
+    )
+    .await;
+    ensure_parent_subagent_authorization(
+        db.node.as_ref(),
+        &agent_did,
+        &behavior_id,
+        subagent_targets.unwrap_or_else(|| vec![behavior_id.clone()]),
+        spawn_enabled,
+        background_enabled,
     )
     .await;
     let agent = DefraAgent::from_default_behavior_documents(
@@ -58,6 +91,50 @@ async fn boot_agent(db: &support::TestDb, test_name: &str) -> RunningAgent {
     }
 }
 
+async fn ensure_parent_subagent_authorization(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    behavior_id: &str,
+    subagent_targets: Vec<String>,
+    spawn_enabled: bool,
+    background_enabled: bool,
+) {
+    let selection_id = format!("{behavior_id}-r3-subagent-tools");
+    upsert_tool_selection(
+        node,
+        &ToolSelectionDocument {
+            selection_id: selection_id.clone(),
+            agent_did: agent_did.to_string(),
+            subagent_targets: Some(subagent_targets),
+            subagent_spawn_enabled: Some(spawn_enabled),
+            subagent_background_enabled: Some(background_enabled),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let mut behavior = match load_agent_behavior(node, behavior_id).await.unwrap() {
+        Some(behavior) => behavior,
+        None => AgentBehavior {
+            behavior_id: behavior_id.to_string(),
+            agent_did: agent_did.to_string(),
+            display_name: Some(behavior_id.to_string()),
+            system_prompt: None,
+            backend_id: None,
+            model_name: None,
+            tool_selection_id: None,
+            inference_profile_id: None,
+            compaction_strategy: None,
+            compaction_threshold: None,
+            enabled: true,
+            created_at: Some("2026-05-12T00:00:00Z".to_string()),
+        },
+    };
+    behavior.tool_selection_id = Some(selection_id);
+    upsert_agent_behavior(node, &behavior).await.unwrap();
+}
+
 #[derive(Debug, Deserialize)]
 struct ChildRequestRow {
     request_id: String,
@@ -69,6 +146,13 @@ struct ChildRequestRow {
     caused_by_parent_tool_call_id: Option<String>,
     caused_by_trigger_id: Option<String>,
     caused_by_trigger_kind: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolCallRow {
+    lifecycle_state: Option<String>,
+    result: Option<String>,
+    tool_failure_class: Option<String>,
 }
 
 async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> ChildRequestRow {
@@ -140,6 +224,41 @@ async fn assert_no_child_request_for_tool(
     );
 }
 
+async fn fetch_tool_call(node: &EmbeddedNode, session_id: &str, tool_call_id: &str) -> ToolCallRow {
+    let escaped_session_id = escape_graphql_string(session_id);
+    let escaped_tool_call_id = escape_graphql_string(tool_call_id);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    session_id: {{ _eq: "{escaped_session_id}" }},
+                    tool_call_id: {{ _eq: "{escaped_tool_call_id}" }}
+                }},
+                limit: 1
+            ) {{
+                lifecycle_state
+                result
+                tool_failure_class
+            }}
+        }}"#
+    );
+    first_row(&node.execute(&query).await, "AgentToolCall")
+}
+
+fn assert_tool_call_not_allowed(tool: &ToolCallRow, expected_path: &str, expected_requested: &str) {
+    assert_eq!(tool.lifecycle_state.as_deref(), Some("failed"));
+    assert_eq!(
+        tool.tool_failure_class.as_deref(),
+        Some("serviceUnavailable")
+    );
+    let result: serde_json::Value =
+        serde_json::from_str(tool.result.as_deref().expect("tool result JSON")).unwrap();
+    assert_eq!(result["failure_class"], "tool_not_allowed");
+    assert_eq!(result["service_id"], "subagent");
+    assert_eq!(result["path"], expected_path);
+    assert_eq!(result["requested_tool_name"], expected_requested);
+}
+
 #[tokio::test]
 async fn subagent_source_materializes_child_request_from_tool_call() {
     let db = test_db("r3-subagent-source-spawn").await;
@@ -195,6 +314,227 @@ async fn subagent_source_materializes_child_request_from_tool_call() {
         Some(parent_tool_call_id)
     );
     assert_eq!(child.caused_by_trigger_kind.as_deref(), Some("subagent"));
+
+    running.booted.shutdown().await;
+}
+
+#[tokio::test]
+async fn subagent_source_rejects_unauthorized_target_without_child_request() {
+    let db = test_db("r3-subagent-source-unauthorized").await;
+    let running = boot_agent_with_targets(&db, "r3-subagent-source-unauthorized", Vec::new()).await;
+    let parent_request_id = "r3-parent-unauthorized";
+    let parent_tool_call_id = "r3-tc-unauthorized";
+    let child_request_id = "r3-child-unauthorized";
+    let parent_session_id = "r3-session-unauthorized";
+    create_runtime_request(
+        db.node.as_ref(),
+        &running.booted.agent_did,
+        &running.behavior_id,
+        parent_request_id,
+        parent_session_id,
+        "parent prompt",
+    )
+    .await;
+
+    let args = serde_json::json!({
+        "behavior_id": running.behavior_id.clone(),
+        "prompt": "unauthorized child prompt from source"
+    })
+    .to_string();
+    let mut lifecycle = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        parent_request_id.to_string(),
+        parent_session_id.to_string(),
+        parent_tool_call_id.to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        args,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+        AwaitMode::Foreground,
+        CancelPolicy::Cascade,
+        child_request_id.to_string(),
+    );
+    lifecycle.start_running().await.unwrap();
+
+    assert_no_child_request_for_tool(
+        db.node.as_ref(),
+        parent_tool_call_id,
+        Duration::from_millis(750),
+    )
+    .await;
+    let tool = fetch_tool_call(db.node.as_ref(), parent_session_id, parent_tool_call_id).await;
+    assert_tool_call_not_allowed(&tool, "/behavior_id", &running.behavior_id);
+
+    running.booted.shutdown().await;
+}
+
+#[tokio::test]
+async fn subagent_source_fails_unauthorized_target_even_when_target_is_not_active() {
+    let db = test_db("r3-subagent-source-unauthorized-inactive").await;
+    let running =
+        boot_agent_with_targets(&db, "r3-subagent-source-unauthorized-inactive", Vec::new()).await;
+    let parent_request_id = "r3-parent-unauthorized-inactive";
+    let parent_tool_call_id = "r3-tc-unauthorized-inactive";
+    let child_request_id = "r3-child-unauthorized-inactive";
+    let parent_session_id = "r3-session-unauthorized-inactive";
+    let target_behavior_id = "not-active-or-authorized";
+    create_runtime_request(
+        db.node.as_ref(),
+        &running.booted.agent_did,
+        &running.behavior_id,
+        parent_request_id,
+        parent_session_id,
+        "parent prompt",
+    )
+    .await;
+
+    let args = serde_json::json!({
+        "behavior_id": target_behavior_id,
+        "prompt": "unauthorized inactive child prompt from source"
+    })
+    .to_string();
+    let mut lifecycle = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        parent_request_id.to_string(),
+        parent_session_id.to_string(),
+        parent_tool_call_id.to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        args,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+        AwaitMode::Foreground,
+        CancelPolicy::Cascade,
+        child_request_id.to_string(),
+    );
+    lifecycle.start_running().await.unwrap();
+
+    assert_no_child_request_for_tool(
+        db.node.as_ref(),
+        parent_tool_call_id,
+        Duration::from_millis(750),
+    )
+    .await;
+    let tool = fetch_tool_call(db.node.as_ref(), parent_session_id, parent_tool_call_id).await;
+    assert_tool_call_not_allowed(&tool, "/behavior_id", target_behavior_id);
+
+    running.booted.shutdown().await;
+}
+
+#[tokio::test]
+async fn subagent_source_rejects_when_spawn_disabled_even_with_authorized_target() {
+    let db = test_db("r3-subagent-source-spawn-disabled").await;
+    let running = boot_agent(&db, "r3-subagent-source-spawn-disabled").await;
+    ensure_parent_subagent_authorization(
+        db.node.as_ref(),
+        &running.booted.agent_did,
+        &running.behavior_id,
+        vec![running.behavior_id.clone()],
+        false,
+        true,
+    )
+    .await;
+    let parent_request_id = "r3-parent-spawn-disabled";
+    let parent_tool_call_id = "r3-tc-spawn-disabled";
+    let child_request_id = "r3-child-spawn-disabled";
+    let parent_session_id = "r3-session-spawn-disabled";
+    create_runtime_request(
+        db.node.as_ref(),
+        &running.booted.agent_did,
+        &running.behavior_id,
+        parent_request_id,
+        parent_session_id,
+        "parent prompt",
+    )
+    .await;
+
+    let args = serde_json::json!({
+        "behavior_id": running.behavior_id.clone(),
+        "prompt": "spawn disabled child prompt from source"
+    })
+    .to_string();
+    let mut lifecycle = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        parent_request_id.to_string(),
+        parent_session_id.to_string(),
+        parent_tool_call_id.to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        args,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+        AwaitMode::Foreground,
+        CancelPolicy::Cascade,
+        child_request_id.to_string(),
+    );
+    lifecycle.start_running().await.unwrap();
+
+    assert_no_child_request_for_tool(
+        db.node.as_ref(),
+        parent_tool_call_id,
+        Duration::from_millis(750),
+    )
+    .await;
+    let tool = fetch_tool_call(db.node.as_ref(), parent_session_id, parent_tool_call_id).await;
+    assert_tool_call_not_allowed(&tool, "/", "spawn_subagent");
+
+    running.booted.shutdown().await;
+}
+
+#[tokio::test]
+async fn subagent_source_rejects_background_when_background_disabled() {
+    let db = test_db("r3-subagent-source-background-disabled").await;
+    let running = boot_agent(&db, "r3-subagent-source-background-disabled").await;
+    ensure_parent_subagent_authorization(
+        db.node.as_ref(),
+        &running.booted.agent_did,
+        &running.behavior_id,
+        vec![running.behavior_id.clone()],
+        true,
+        false,
+    )
+    .await;
+    let parent_request_id = "r3-parent-background-disabled";
+    let parent_tool_call_id = "r3-tc-background-disabled";
+    let child_request_id = "r3-child-background-disabled";
+    let parent_session_id = "r3-session-background-disabled";
+    create_runtime_request(
+        db.node.as_ref(),
+        &running.booted.agent_did,
+        &running.behavior_id,
+        parent_request_id,
+        parent_session_id,
+        "parent prompt",
+    )
+    .await;
+
+    let args = serde_json::json!({
+        "behavior_id": running.behavior_id.clone(),
+        "prompt": "background disabled child prompt from source",
+        "await_mode": "background"
+    })
+    .to_string();
+    let mut lifecycle = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        parent_request_id.to_string(),
+        parent_session_id.to_string(),
+        parent_tool_call_id.to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        args,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+        AwaitMode::Background,
+        CancelPolicy::Cascade,
+        child_request_id.to_string(),
+    );
+    lifecycle.start_running().await.unwrap();
+
+    assert_no_child_request_for_tool(
+        db.node.as_ref(),
+        parent_tool_call_id,
+        Duration::from_millis(750),
+    )
+    .await;
+    let tool = fetch_tool_call(db.node.as_ref(), parent_session_id, parent_tool_call_id).await;
+    assert_tool_call_not_allowed(&tool, "/await_mode", "background");
 
     running.booted.shutdown().await;
 }
@@ -388,6 +728,15 @@ async fn recovery_materializes_orphan_child_request_for_running_subagent_tool() 
     let parent_session_id = "r3-session-orphan";
     let parent_tool_call_id = "r3-tc-orphan";
     let child_request_id = "child-orphan-1";
+    ensure_parent_subagent_authorization(
+        db.node.as_ref(),
+        support::AGENT_DID,
+        support::AGENT_NAME,
+        vec![support::AGENT_NAME.to_string()],
+        true,
+        true,
+    )
+    .await;
     support::create_request(
         db.node.as_ref(),
         parent_request_id,
@@ -434,6 +783,149 @@ async fn recovery_materializes_orphan_child_request_for_running_subagent_tool() 
     assert_eq!(child.caused_by_trigger_kind.as_deref(), Some("subagent"));
 }
 
+#[tokio::test]
+async fn recovery_rejects_unauthorized_orphan_child_request() {
+    let db = test_db("r3-subagent-source-orphan-unauthorized").await;
+    let parent_request_id = "r3-parent-orphan-denied";
+    let parent_session_id = "r3-session-orphan-denied";
+    let parent_tool_call_id = "r3-tc-orphan-denied";
+    let child_request_id = "child-orphan-denied";
+    ensure_parent_subagent_authorization(
+        db.node.as_ref(),
+        support::AGENT_DID,
+        support::AGENT_NAME,
+        Vec::new(),
+        true,
+        true,
+    )
+    .await;
+    support::create_request(
+        db.node.as_ref(),
+        parent_request_id,
+        parent_session_id,
+        "processing",
+        &chrono::Utc::now().to_rfc3339(),
+    )
+    .await;
+    create_orphan_subagent_tool_call(
+        db.node.as_ref(),
+        parent_request_id,
+        parent_session_id,
+        parent_tool_call_id,
+        child_request_id,
+    )
+    .await;
+
+    let report = ToolCallLifecycle::recover_all(db.node.as_ref(), support::AGENT_DID)
+        .await
+        .unwrap();
+    assert_eq!(report.tool_calls_recovered, 0);
+    assert_no_child_request_for_tool(
+        db.node.as_ref(),
+        parent_tool_call_id,
+        Duration::from_millis(0),
+    )
+    .await;
+
+    let tool = fetch_tool_call(db.node.as_ref(), parent_session_id, parent_tool_call_id).await;
+    assert_tool_call_not_allowed(&tool, "/behavior_id", support::AGENT_NAME);
+}
+
+#[tokio::test]
+async fn recovery_rejects_orphan_when_spawn_disabled_even_with_authorized_target() {
+    let db = test_db("r3-subagent-source-orphan-spawn-disabled").await;
+    let parent_request_id = "r3-parent-orphan-spawn-disabled";
+    let parent_session_id = "r3-session-orphan-spawn-disabled";
+    let parent_tool_call_id = "r3-tc-orphan-spawn-disabled";
+    let child_request_id = "child-orphan-spawn-disabled";
+    ensure_parent_subagent_authorization(
+        db.node.as_ref(),
+        support::AGENT_DID,
+        support::AGENT_NAME,
+        vec![support::AGENT_NAME.to_string()],
+        false,
+        true,
+    )
+    .await;
+    support::create_request(
+        db.node.as_ref(),
+        parent_request_id,
+        parent_session_id,
+        "processing",
+        &chrono::Utc::now().to_rfc3339(),
+    )
+    .await;
+    create_orphan_subagent_tool_call(
+        db.node.as_ref(),
+        parent_request_id,
+        parent_session_id,
+        parent_tool_call_id,
+        child_request_id,
+    )
+    .await;
+
+    let report = ToolCallLifecycle::recover_all(db.node.as_ref(), support::AGENT_DID)
+        .await
+        .unwrap();
+    assert_eq!(report.tool_calls_recovered, 0);
+    assert_no_child_request_for_tool(
+        db.node.as_ref(),
+        parent_tool_call_id,
+        Duration::from_millis(0),
+    )
+    .await;
+    let tool = fetch_tool_call(db.node.as_ref(), parent_session_id, parent_tool_call_id).await;
+    assert_tool_call_not_allowed(&tool, "/", "spawn_subagent");
+}
+
+#[tokio::test]
+async fn recovery_rejects_background_orphan_when_background_disabled() {
+    let db = test_db("r3-subagent-source-orphan-background-disabled").await;
+    let parent_request_id = "r3-parent-orphan-background-disabled";
+    let parent_session_id = "r3-session-orphan-background-disabled";
+    let parent_tool_call_id = "r3-tc-orphan-background-disabled";
+    let child_request_id = "child-orphan-background-disabled";
+    ensure_parent_subagent_authorization(
+        db.node.as_ref(),
+        support::AGENT_DID,
+        support::AGENT_NAME,
+        vec![support::AGENT_NAME.to_string()],
+        true,
+        false,
+    )
+    .await;
+    support::create_request(
+        db.node.as_ref(),
+        parent_request_id,
+        parent_session_id,
+        "processing",
+        &chrono::Utc::now().to_rfc3339(),
+    )
+    .await;
+    create_orphan_subagent_tool_call_with_await_mode(
+        db.node.as_ref(),
+        parent_request_id,
+        parent_session_id,
+        parent_tool_call_id,
+        child_request_id,
+        AwaitMode::Background,
+    )
+    .await;
+
+    let report = ToolCallLifecycle::recover_all(db.node.as_ref(), support::AGENT_DID)
+        .await
+        .unwrap();
+    assert_eq!(report.tool_calls_recovered, 0);
+    assert_no_child_request_for_tool(
+        db.node.as_ref(),
+        parent_tool_call_id,
+        Duration::from_millis(0),
+    )
+    .await;
+    let tool = fetch_tool_call(db.node.as_ref(), parent_session_id, parent_tool_call_id).await;
+    assert_tool_call_not_allowed(&tool, "/await_mode", "background");
+}
+
 async fn mark_request_interrupted(node: &EmbeddedNode, request_id: &str) {
     let escaped_request_id = escape_graphql_string(request_id);
     let mutation = format!(
@@ -462,6 +954,25 @@ async fn create_orphan_subagent_tool_call(
     parent_tool_call_id: &str,
     child_request_id: &str,
 ) {
+    create_orphan_subagent_tool_call_with_await_mode(
+        node,
+        parent_request_id,
+        parent_session_id,
+        parent_tool_call_id,
+        child_request_id,
+        AwaitMode::Foreground,
+    )
+    .await;
+}
+
+async fn create_orphan_subagent_tool_call_with_await_mode(
+    node: &EmbeddedNode,
+    parent_request_id: &str,
+    parent_session_id: &str,
+    parent_tool_call_id: &str,
+    child_request_id: &str,
+    await_mode: AwaitMode,
+) {
     let escaped_parent_request_id = escape_graphql_string(parent_request_id);
     let escaped_parent_session_id = escape_graphql_string(parent_session_id);
     let escaped_parent_tool_call_id = escape_graphql_string(parent_tool_call_id);
@@ -475,6 +986,7 @@ async fn create_orphan_subagent_tool_call(
     let escaped_args = escape_graphql_string(&args);
     let started_at = chrono::Utc::now().to_rfc3339();
     let deadline_at = (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
+    let await_mode = await_mode.as_str();
     let mutation = format!(
         r#"mutation {{
             create_AgentToolCall(input: {{
@@ -491,8 +1003,8 @@ async fn create_orphan_subagent_tool_call(
                 started_at: "{started_at}",
                 deadline_at: "{deadline_at}",
                 child_request_id: "{escaped_child_request_id}",
-                await_mode: "Foreground",
-                cancel_policy: "Cascade",
+                await_mode: "{await_mode}",
+                cancel_policy: "cascade",
                 selected_service_id: null,
                 selected_tool_name: null,
                 tool_failure_class: null,

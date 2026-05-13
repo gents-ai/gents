@@ -6,8 +6,10 @@ use defra_agent_protocol::transcript::decode_persisted_message;
 use defra_node::EmbeddedNode;
 use rig::completion::message::{AssistantContent, Message, Text};
 use serde::Deserialize;
+use serde_json::json;
 
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, response_has_documents};
+use crate::session::execute_mutation_with_retry;
 use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -77,6 +79,64 @@ pub(crate) struct ParentSubagentContext {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParentSubagentAuthorization {
+    pub behavior_id: String,
+    pub allowed_targets: Vec<String>,
+    pub spawn_enabled: bool,
+    pub background_enabled: bool,
+}
+
+impl ParentSubagentAuthorization {
+    pub(crate) fn authorizes_target(&self, target_behavior_id: &str) -> bool {
+        self.allowed_targets
+            .iter()
+            .any(|target| target == target_behavior_id)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SubagentAuthorizationDenial {
+    pub path: &'static str,
+    pub requested: String,
+    pub message: String,
+}
+
+pub(crate) fn subagent_spawn_denial(
+    authorization: &ParentSubagentAuthorization,
+    target_behavior_id: &str,
+    await_mode: AwaitMode,
+    tool_name: &str,
+) -> Option<SubagentAuthorizationDenial> {
+    if !authorization.spawn_enabled {
+        return Some(SubagentAuthorizationDenial {
+            path: "/",
+            requested: tool_name.to_string(),
+            message: "subagent spawning is not enabled for this behavior".to_string(),
+        });
+    }
+
+    if await_mode == AwaitMode::Background && !authorization.background_enabled {
+        return Some(SubagentAuthorizationDenial {
+            path: "/await_mode",
+            requested: "background".to_string(),
+            message: "background subagent spawning is not enabled for this behavior".to_string(),
+        });
+    }
+
+    if !authorization.authorizes_target(target_behavior_id) {
+        return Some(SubagentAuthorizationDenial {
+            path: "/behavior_id",
+            requested: target_behavior_id.to_string(),
+            message: format!(
+                "behavior '{target_behavior_id}' is not allowed as a subagent target for this behavior"
+            ),
+        });
+    }
+
+    None
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ChildEdge {
     pub parent_tool_call_id: String,
     pub child_request_id: String,
@@ -93,6 +153,11 @@ struct ParentRequestRow {
     behavior_id: Option<String>,
     subagent_depth: Option<u32>,
     deadline: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ParentAuthorizationRequestRow {
+    behavior_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -165,11 +230,48 @@ pub(crate) async fn parent_authorizes_subagent_target(
     parent_request_id: &str,
     target_behavior_id: &str,
 ) -> Result<bool> {
-    let context = load_parent_subagent_context(node, parent_request_id).await?;
-    Ok(context
-        .allowed_targets
-        .iter()
-        .any(|target| target == target_behavior_id))
+    Ok(load_parent_subagent_authorization(node, parent_request_id)
+        .await?
+        .authorizes_target(target_behavior_id))
+}
+
+pub(crate) async fn load_parent_subagent_authorization(
+    node: &EmbeddedNode,
+    parent_request_id: &str,
+) -> Result<ParentSubagentAuthorization> {
+    let escaped_request_id = escape_graphql_string(parent_request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                limit: 1
+            ) {{
+                behavior_id
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query parent AgentRequest {parent_request_id} authorization failed: {:?}",
+            response.errors
+        );
+    }
+
+    let row: ParentAuthorizationRequestRow = first_row(response.data.as_ref(), "AgentRequest")
+        .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} not found"))?;
+    let behavior_id = row
+        .behavior_id
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} has no behavior_id"))?;
+    let selection = load_subagent_tool_selection(node, &behavior_id).await?;
+
+    Ok(ParentSubagentAuthorization {
+        behavior_id,
+        allowed_targets: selection.allowed_targets,
+        spawn_enabled: selection.spawn_enabled,
+        background_enabled: selection.background_enabled,
+    })
 }
 
 pub(crate) fn target_is_allowed(context: &ParentSubagentContext, target_behavior_id: &str) -> bool {
@@ -583,6 +685,85 @@ pub(crate) fn child_request_completed(row: &ChildRequestTerminalRow) -> bool {
         row.lifecycle_state.as_deref(),
         Some("completed" | "complete")
     ) || matches!(row.status.as_deref(), Some("completed" | "complete"))
+}
+
+pub(crate) fn subagent_tool_not_allowed_payload(
+    tool_name: &str,
+    path: &str,
+    requested: &str,
+    message: impl Into<String>,
+    allowed_targets: &[String],
+) -> String {
+    serde_json::to_string(&json!({
+        "ok": false,
+        "failure_class": "tool_not_allowed",
+        "path": path,
+        "message": message.into(),
+        "retryable": false,
+        "service_id": "subagent",
+        "tool_name": tool_name,
+        "requested_tool_name": requested,
+        "allowed_subagent_targets": allowed_targets
+    }))
+    .unwrap_or_else(|_| {
+        r#"{"ok":false,"failure_class":"tool_not_allowed","service_id":"subagent"}"#.to_string()
+    })
+}
+
+pub(crate) async fn fail_running_subagent_tool_call(
+    node: &EmbeddedNode,
+    doc_id: &str,
+    started_at: Option<&str>,
+    deadline_at: Option<&str>,
+    result: &str,
+    failure: FailureClass,
+) -> Result<bool> {
+    let now = Utc::now();
+    let started_at = parse_rfc3339(started_at).unwrap_or(now);
+    let latency_ms = (now - started_at).num_milliseconds().max(0);
+    let escaped_doc_id = escape_graphql_string(doc_id);
+    let escaped_result = escape_graphql_string(result);
+    let started_at_str = started_at.to_rfc3339();
+    let completed_at_str = now.to_rfc3339();
+    let failure_class = failure.as_str();
+    let deadline_field = parse_rfc3339(deadline_at)
+        .map(|deadline| format!(r#", deadline_at: "{}""#, deadline.to_rfc3339()))
+        .unwrap_or_default();
+
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentToolCall(
+                filter: {{
+                    _docID: {{ _eq: "{escaped_doc_id}" }},
+                    lifecycle_state: {{ _eq: "running" }}
+                }},
+                input: {{
+                    result: "{escaped_result}",
+                    status: "completed",
+                    lifecycle_state: "failed",
+                    started_at: "{started_at_str}"{deadline_field},
+                    completed_at: "{completed_at_str}",
+                    tool_failure_class: "{failure_class}",
+                    latency_ms: {latency_ms}
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+
+    let response =
+        execute_mutation_with_retry(node, &mutation, "fail_running_subagent_tool_call").await?;
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("update_AgentToolCall"))
+        .is_some_and(response_has_documents))
+}
+
+fn parse_rfc3339(value: Option<&str>) -> Option<DateTime<Utc>> {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc))
 }
 
 fn first_row<T>(data: Option<&serde_json::Value>, collection: &str) -> Option<T>
