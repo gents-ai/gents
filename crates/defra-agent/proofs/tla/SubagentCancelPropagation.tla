@@ -188,6 +188,91 @@ EmitCancel(child) ==
      >>
 
 (***************************************************************************)
+(* Cross-deployment channel interleavings.                                 *)
+(***************************************************************************)
+
+Deliver(rpc) ==
+  /\ rpc \in messages
+  /\ messages' = messages \ {rpc}
+  /\ pendingInbound' =
+       [pendingInbound EXCEPT ![rpc.tgt] = @ \cup {rpc}]
+  /\ UNCHANGED <<
+       cancelIntentA,
+       cancelAckedA,
+       cancelAttemptCountA,
+       childStateB,
+       terminalSourceB,
+       terminalWriteCountB,
+       cancelHandledB,
+       cancelHandleCountB,
+       inFlight,
+       rpcIdsUsed,
+       dropCount,
+       crashCount
+     >>
+
+Drop(rpc) ==
+  /\ rpc \in messages
+  /\ dropCount < MaxDrops
+  /\ messages' = messages \ {rpc}
+  /\ dropCount' = dropCount + 1
+  /\ UNCHANGED <<
+       cancelIntentA,
+       cancelAckedA,
+       cancelAttemptCountA,
+       childStateB,
+       terminalSourceB,
+       terminalWriteCountB,
+       cancelHandledB,
+       cancelHandleCountB,
+       inFlight,
+       pendingInbound,
+       rpcIdsUsed,
+       crashCount
+     >>
+
+Timeout(rpc) ==
+  /\ rpc \in inFlight[ParentDeployment]
+  /\ rpc.kind = "Cancel"
+  /\ inFlight' =
+       [inFlight EXCEPT ![ParentDeployment] = @ \ {rpc}]
+  /\ UNCHANGED <<
+       cancelIntentA,
+       cancelAckedA,
+       cancelAttemptCountA,
+       childStateB,
+       terminalSourceB,
+       terminalWriteCountB,
+       cancelHandledB,
+       cancelHandleCountB,
+       messages,
+       pendingInbound,
+       rpcIdsUsed,
+       dropCount,
+       crashCount
+     >>
+
+Crash(deployment) ==
+  /\ deployment \in Deployment
+  /\ crashCount[deployment] < MaxCrashes
+  /\ inFlight' = [inFlight EXCEPT ![deployment] = {}]
+  /\ pendingInbound' = [pendingInbound EXCEPT ![deployment] = {}]
+  /\ crashCount' = [crashCount EXCEPT ![deployment] = @ + 1]
+  /\ UNCHANGED <<
+       cancelIntentA,
+       cancelAckedA,
+       cancelAttemptCountA,
+       childStateB,
+       terminalSourceB,
+       terminalWriteCountB,
+       cancelHandledB,
+       cancelHandleCountB,
+       messages,
+       rpcIdsUsed,
+       dropCount
+     >>
+
+(***************************************************************************)
 (* Safety invariants.                                                      *)
 (***************************************************************************)
 
@@ -217,6 +302,10 @@ CancelIntentCausal ==
 Next ==
   \/ \E child \in Child : InvokeBridgeCancelCascade(child)
   \/ \E child \in Child : EmitCancel(child)
+  \/ \E rpc \in messages : Deliver(rpc)
+  \/ \E rpc \in messages : Drop(rpc)
+  \/ \E rpc \in inFlight[ParentDeployment] : Timeout(rpc)
+  \/ \E deployment \in Deployment : Crash(deployment)
 
 Spec == Init /\ [][Next]_vars
 
