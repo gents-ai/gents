@@ -846,7 +846,8 @@ pub(crate) fn lean_event_delivery_source_instances() -> &'static [LeanEventDeliv
     &lean_contract_snapshot().event_delivery_source_instances
 }
 
-pub(crate) fn lean_event_delivery_convergence_traces() -> &'static [LeanEventDeliveryConvergenceTrace] {
+pub(crate) fn lean_event_delivery_convergence_traces(
+) -> &'static [LeanEventDeliveryConvergenceTrace] {
     &lean_contract_snapshot().event_delivery_convergence_traces
 }
 

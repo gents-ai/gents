@@ -4808,11 +4808,13 @@ fn event_delivery_transition_cases_match_contract() {
 
 #[test]
 fn event_delivery_source_instances_match_runtime() {
-    let by_name: std::collections::HashMap<&str, &lean_vocab_test::LeanEventDeliverySourceInstance> =
-        lean_event_delivery_source_instances()
-            .iter()
-            .map(|i| (i.name.as_str(), i))
-            .collect();
+    let by_name: std::collections::HashMap<
+        &str,
+        &lean_vocab_test::LeanEventDeliverySourceInstance,
+    > = lean_event_delivery_source_instances()
+        .iter()
+        .map(|i| (i.name.as_str(), i))
+        .collect();
 
     let watcher = by_name
         .get("Watcher")
