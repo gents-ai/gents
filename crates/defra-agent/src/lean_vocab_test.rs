@@ -55,6 +55,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) live_overlay_cases: Vec<LeanLiveOverlayCase>,
     pub(crate) queue_deadline_conformance_cases: Vec<LeanQueueDeadlineConformanceCase>,
     pub(crate) recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
+    pub(crate) transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub(crate) follow_up_hooks: Vec<String>,
     pub(crate) coverage_ledger: Vec<LeanCoverageEntry>,
 }
@@ -544,6 +545,28 @@ pub(crate) struct LeanRecoverySweepCase {
     pub(crate) deadline_audit_ref: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanTranscriptCase {
+    pub(crate) name: String,
+    pub(crate) group: String,
+    pub(crate) action: String,
+    pub(crate) legal: bool,
+    pub(crate) pre_message_count: usize,
+    pub(crate) post_message_count: usize,
+    pub(crate) pre_tool_call_count: usize,
+    pub(crate) post_tool_call_count: usize,
+    pub(crate) pre_in_flight_count: usize,
+    pub(crate) post_in_flight_count: usize,
+    pub(crate) assistant_sequence: usize,
+    pub(crate) result_sequence: usize,
+    pub(crate) logical_result_id: usize,
+    pub(crate) payload_hash: usize,
+    pub(crate) expected_pair_closed: bool,
+    pub(crate) expected_ordered: bool,
+    pub(crate) expected_duplicate_reused_sequence: bool,
+    pub(crate) expected_strong_drain: bool,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum LeanVocabularyParseError<'a> {
     MissingNamespace,
@@ -707,6 +730,18 @@ pub(crate) fn lean_recovery_sweep_case(name: &str) -> &'static LeanRecoverySweep
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean recovery sweep case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_transcript_cases() -> &'static [LeanTranscriptCase] {
+    &lean_contract_snapshot().transcript_conformance_cases
+}
+
+pub(crate) fn lean_transcript_case(name: &str) -> &'static LeanTranscriptCase {
+    lean_contract_snapshot()
+        .transcript_conformance_cases
+        .iter()
+        .find(|case| case.name == name)
+        .unwrap_or_else(|| panic!("Lean transcript case {name:?} was not emitted"))
 }
 
 pub(crate) fn lean_tool_retry_case(name: &str) -> &'static LeanToolRetryCase {

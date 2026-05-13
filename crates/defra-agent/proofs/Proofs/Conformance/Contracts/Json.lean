@@ -375,6 +375,29 @@ def recoverySweepCaseJson (witness : RecoverySweepCase) : String :=
       ++ jsonString witness.deadlineAuditRef
     ++ "}"
 
+def transcriptCaseJson (witness : TranscriptCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"group\":" ++ jsonString witness.group ++ ","
+    ++ "\"action\":" ++ jsonString witness.action ++ ","
+    ++ "\"legal\":" ++ boolString witness.legal ++ ","
+    ++ "\"pre_message_count\":" ++ toString witness.preMessageCount ++ ","
+    ++ "\"post_message_count\":" ++ toString witness.postMessageCount ++ ","
+    ++ "\"pre_tool_call_count\":" ++ toString witness.preToolCallCount ++ ","
+    ++ "\"post_tool_call_count\":" ++ toString witness.postToolCallCount ++ ","
+    ++ "\"pre_in_flight_count\":" ++ toString witness.preInFlightCount ++ ","
+    ++ "\"post_in_flight_count\":" ++ toString witness.postInFlightCount ++ ","
+    ++ "\"assistant_sequence\":" ++ toString witness.assistantSequence ++ ","
+    ++ "\"result_sequence\":" ++ toString witness.resultSequence ++ ","
+    ++ "\"logical_result_id\":" ++ toString witness.logicalResultId ++ ","
+    ++ "\"payload_hash\":" ++ toString witness.payloadHash ++ ","
+    ++ "\"expected_pair_closed\":" ++ boolString witness.expectedPairClosed ++ ","
+    ++ "\"expected_ordered\":" ++ boolString witness.expectedOrdered ++ ","
+    ++ "\"expected_duplicate_reused_sequence\":"
+      ++ boolString witness.expectedDuplicateReusedSequence ++ ","
+    ++ "\"expected_strong_drain\":" ++ boolString witness.expectedStrongDrain
+    ++ "}"
+
 def snapshotJson : String :=
   "{"
     ++ "\"generated_by\":\"lake env lean --run Proofs/Conformance/Contracts.lean\","
@@ -442,6 +465,9 @@ def snapshotJson : String :=
     ++ "\"recovery_sweep_cases\":"
       ++ jsonArray
         (Recovery.recoverySweepCases.map recoverySweepCaseJson) ++ ","
+    ++ "\"transcript_conformance_cases\":"
+      ++ jsonArray
+        (transcriptConformanceCases.map transcriptCaseJson) ++ ","
     ++ "\"follow_up_hooks\":[],"
     ++ "\"coverage_ledger\":"
       ++ coverageLedgerJson
