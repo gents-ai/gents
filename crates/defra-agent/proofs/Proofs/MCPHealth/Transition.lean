@@ -40,12 +40,13 @@ def step? (sm : ServiceModel) (e : Event) (K : Threshold) : Option ServiceModel 
   | .backoffExpiry  =>
       some { sm with state := if sm.state = .evicted then .reconnecting else sm.state }
   | .probeSuccess stale =>
-      some { state := if stale then .degraded else .healthy
-           , failureCount := 0 }
+      some { sm with
+                state := if stale then .degraded else .healthy
+              , failureCount := 0 }
   | .probeFail =>
       let n := sm.failureCount + 1
-      if n ≥ K.val then some { state := .evicted,  failureCount := n }
-                   else some { state := .degraded, failureCount := n }
+      if n ≥ K.val then some { sm with state := .evicted,  failureCount := n }
+                   else some { sm with state := .degraded, failureCount := n }
 
 /-- Sequential application of events. Short-circuits on `registryAbsent`. -/
 def run? (sm : ServiceModel) (events : List Event) (K : Threshold)
