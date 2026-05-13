@@ -1,5 +1,6 @@
 import Proofs.MCPHealth.State
 import Proofs.MCPHealth.Transition
+import Proofs.MCPHealth.Properties
 
 /-!
 # MCP Health / Eviction
@@ -12,6 +13,5 @@ K ≥ 2 admits the bounded-flap regime. See
 -/
 
 -- Subsequent imports added as tasks land:
--- import Proofs.MCPHealth.Properties
 -- import Proofs.MCPHealth.Coupling
 -- import Proofs.MCPHealth.Executable
