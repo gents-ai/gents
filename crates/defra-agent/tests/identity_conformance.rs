@@ -16,20 +16,17 @@ use lean_vocab_test::{
 ///   - every behavior.principal references an existing principal
 ///   - every deployment.principal references an existing principal
 fn rust_well_formed(case: &LeanIdentityStructuralCase) -> bool {
-    let principal_dids: HashSet<&str> =
-        case.principals.iter().map(|p| p.did.as_str()).collect();
+    let principal_dids: HashSet<&str> = case.principals.iter().map(|p| p.did.as_str()).collect();
     if principal_dids.len() != case.principals.len() {
         return false;
     }
 
-    let behavior_ids: HashSet<&str> =
-        case.behaviors.iter().map(|b| b.id.as_str()).collect();
+    let behavior_ids: HashSet<&str> = case.behaviors.iter().map(|b| b.id.as_str()).collect();
     if behavior_ids.len() != case.behaviors.len() {
         return false;
     }
 
-    let deployment_ids: HashSet<&str> =
-        case.deployments.iter().map(|d| d.id.as_str()).collect();
+    let deployment_ids: HashSet<&str> = case.deployments.iter().map(|d| d.id.as_str()).collect();
     if deployment_ids.len() != case.deployments.len() {
         return false;
     }
