@@ -21,9 +21,28 @@ The Lean model **leads** the Rust refactor:
 
 ## Approach: decision-factor framing
 
-The model is **engine-agnostic over the permission representation**. `Permission` is opaque (no constructors). A `Decide` function answers "does this behavior have this permission?" The load-bearing predicate is `RespectsPrincipal (decide)` — the decision factors through the behavior's principal. The sharing/isolation theorems are proved for *any* decide function that respects principal-factoring, so they survive a Cedar/Zanzibar swap.
+The model is **engine-agnostic over the permission representation**. `Permission` is a free type parameter (no constructors fixed by the model). A `Decide` function answers "does this behavior have this permission?" The load-bearing predicate is `RespectsPrincipal (decide)` — the decision factors through the behavior's principal. The sharing/isolation theorems are proved for *any* decide function that respects principal-factoring, so they survive a Cedar/Zanzibar swap.
 
 A canonical witness (`canonicalDecide g b p := g.granted b.principal p`) proves the predicate is inhabited.
+
+### `RespectsPrincipal` is strict
+
+The predicate quantifies over **behaviors**, not over the principal field. Concretely:
+
+> `∀ b₁ b₂ p, b₁.principal = b₂.principal → decide b₁ p = decide b₂ p`
+
+This says the decision must depend on the behavior **only through `b.principal`**. A decide function that reads `b.enabled`, `b.id`, `b.displayName`, or any other Behavior field violates the predicate — because two behaviors with the same principal but different values in that field would force a permission-outcome difference, contradicting the hypothesis.
+
+This strictness is intentional. The audit's leverage is that a permission outcome cannot change without a principal change. Letting decide depend on `b.enabled` would mean "a behavior was disabled" silently becomes a permission boundary — and the same security guarantee no longer holds, because two behaviors of one principal could now have different effective permissions purely from operator state.
+
+The slim Behavior struct **enforces this by construction over modeled fields**. By not modeling `systemPrompt`, `backendId`, `toolSelectionId`, etc., the model prevents future readers from drifting toward "decide depends on the behavior's prompt or tool selection." The only behavior-level fields the predicate *can* depend on are `principal` (allowed by construction — that's the whole point) and `enabled` (modeled but not allowed by the predicate).
+
+**Consequence for future extensions.** An enabled-aware permission policy ("a disabled principal grants nothing"; "a disabled behavior is unreachable") is *not* free against this contract. It either:
+
+1. Lifts to the principal layer (`¬principal.enabled → ∀ p, granted = false`) — preserves `RespectsPrincipal` because the predicate is preserved when decide factors through `principal.enabled` via the `GrantStore`.
+2. Adds a separate enforcement gate orthogonal to `decide` (e.g., the runtime refuses to route to a disabled behavior before the permission check ever runs) — preserves `RespectsPrincipal` because the check never reaches `decide`.
+
+Either is fine; both are out of scope for this PR. What the contract forbids is *silently widening* decide to read `b.enabled`. That is the kind of drift the proof exists to prevent.
 
 ## Module shape
 
@@ -205,7 +224,7 @@ Mapping back to #185:
 - [x] Behaviors cannot escalate beyond principal grant (I3 under canonicalDecide; I5 at deployment level).
 - [x] `(did, behavior_id)` uniqueness (I4).
 - [x] Conformance vectors emitted (structural witnesses + RespectsPrincipal contract declaration).
-- [x] Wire conformance to the runtime split #9 described — declared contract becomes load-bearing when the runtime adds a permission engine; structural witnesses test today. (Issue #9 itself is closed; the `DefaultAgent` runtime split it described is still pending.)
+- [x] Wire conformance to the runtime split #9 described — declared contract becomes load-bearing when the runtime adds a permission engine; structural witnesses test today. (Issue #9 itself is closed; the `DefaultAgent` runtime split it described is tracked in **#193**, which lands against this Lean contract.)
 
 ## Risks
 
