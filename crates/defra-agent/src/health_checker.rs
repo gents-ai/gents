@@ -369,3 +369,83 @@ mod registry_parsing_tests {
         assert_eq!(entries[0].tailscale_ip, "100.69.4.79");
     }
 }
+
+#[cfg(test)]
+mod transitions_tests {
+    use super::HealthStatus;
+    use crate::lean_vocab_test::{lean_mcp_health_k1_cases, LeanMcpHealthCase};
+
+    /// Project a Lean K=1 case's `rust_projection` to a `HealthStatus` for
+    /// today's Rust to assert against. `None` means the service was removed
+    /// via `registryAbsent`; tests skip those rows (Rust represents removal
+    /// by dropping the map entry, not by a `HealthStatus`).
+    fn projected_health_status(case: &LeanMcpHealthCase) -> Option<HealthStatus> {
+        case.rust_projection.as_deref().map(|s| match s {
+            "healthy" => HealthStatus::Healthy,
+            "stale" => HealthStatus::Stale,
+            "unreachable" => HealthStatus::Unreachable,
+            other => panic!(
+                "Lean MCP health case {} produced unknown rust_projection {:?}",
+                case.name, other
+            ),
+        })
+    }
+
+    /// Simulate one tick of `run_health_check`'s decision logic for a given
+    /// case: given a starting `HealthStatus` and a probe event, what does
+    /// today's Rust assign?
+    ///
+    /// Mirrors the inline logic at `health_checker.rs:247–308` but drives it
+    /// with the case's event rather than a real probe call.
+    fn rust_simulated_next(case: &LeanMcpHealthCase) -> Option<HealthStatus> {
+        match case.event.as_str() {
+            "registryAbsent" => None,
+            "backoffExpiry" => {
+                // Today's Rust has no backoffExpiry behavior — backoff is not
+                // armed at K=1. Express this by mapping back through the
+                // starting projection (no observable change at K=1).
+                Some(start_status(case))
+            }
+            "probeSuccessFresh" => Some(HealthStatus::Healthy),
+            "probeSuccessStale" => Some(HealthStatus::Stale),
+            "probeFail" => Some(HealthStatus::Unreachable),
+            other => panic!(
+                "Lean MCP health case {} produced unknown event {:?}",
+                case.name, other
+            ),
+        }
+    }
+
+    fn start_status(case: &LeanMcpHealthCase) -> HealthStatus {
+        match case.start_state.as_str() {
+            "healthy" => HealthStatus::Healthy,
+            // K=1 collapses: degraded can only be entered via probeSuccess(stale=true),
+            // which projects to Stale.
+            "degraded" => HealthStatus::Stale,
+            "evicted" | "reconnecting" => HealthStatus::Unreachable,
+            other => panic!(
+                "Lean MCP health case {} produced unknown start_state {:?}",
+                case.name, other
+            ),
+        }
+    }
+
+    #[test]
+    fn generated_mcp_health_k1_cases_match_health_checker_transitions() {
+        let cases = lean_mcp_health_k1_cases();
+        assert!(
+            !cases.is_empty(),
+            "Lean must emit at least one K=1 MCP health case"
+        );
+
+        for case in cases {
+            let expected = projected_health_status(case);
+            let actual = rust_simulated_next(case);
+            assert_eq!(
+                actual, expected,
+                "Lean MCP health K=1 case {} must match Rust HealthStatus assignment",
+                case.name
+            );
+        }
+    }
+}

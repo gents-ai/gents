@@ -17,6 +17,7 @@ import Proofs.Client
 import Proofs.ClientShell
 import Proofs.CommandPolicy
 import Proofs.ToolExecution
+import Proofs.MCPHealth
 import Proofs.Subagent
 import Proofs.Properties.Safety
 import Proofs.Properties.Decidable

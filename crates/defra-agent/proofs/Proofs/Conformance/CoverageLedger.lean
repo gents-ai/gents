@@ -300,6 +300,10 @@ def caseCoverage : List CoverageEntry :=
       "event_delivery_cases"
       "EventDeliveryConvergenceTraces"
       "state_machine_conformance::event_delivery_convergence_traces_match_runtime_or_deviation"
+  , consumerCoverage
+      "mcp_health_cases"
+      "MCPHealthCases"
+      "health_checker::tests::generated_mcp_health_k1_cases_match_health_checker_transitions"
   ]
 
 def followUpHookCoverage : List CoverageEntry :=

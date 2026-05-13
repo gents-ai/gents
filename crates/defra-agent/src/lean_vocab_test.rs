@@ -47,6 +47,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) native_filesystem_boundary_cases: Vec<LeanNativeFilesystemBoundaryCase>,
     pub(crate) tool_preflight_cases: Vec<LeanToolPreflightCase>,
     pub(crate) tool_retry_cases: Vec<LeanToolRetryCase>,
+    pub(crate) mcp_health_cases: Vec<LeanMcpHealthCase>,
     pub(crate) boundaries: Vec<LeanBoundary>,
     pub(crate) deviations: Vec<LeanDeviation>,
     pub(crate) command_policy_cases: Vec<LeanCommandPolicyCase>,
@@ -498,6 +499,18 @@ pub(crate) struct LeanToolRetryCase {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct LeanMcpHealthCase {
+    pub(crate) name: String,
+    pub(crate) start_state: String,
+    pub(crate) start_count: usize,
+    pub(crate) event: String,
+    pub(crate) threshold_k: usize,
+    pub(crate) next_state: Option<String>,
+    pub(crate) next_count: Option<usize>,
+    pub(crate) rust_projection: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct LeanCommandPolicyCase {
     pub(crate) name: String,
     pub(crate) category: String,
@@ -857,6 +870,18 @@ pub(crate) fn lean_tool_retry_case(name: &str) -> &'static LeanToolRetryCase {
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean tool retry case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_mcp_health_cases() -> &'static [LeanMcpHealthCase] {
+    &lean_contract_snapshot().mcp_health_cases
+}
+
+pub(crate) fn lean_mcp_health_k1_cases() -> Vec<&'static LeanMcpHealthCase> {
+    lean_contract_snapshot()
+        .mcp_health_cases
+        .iter()
+        .filter(|case| case.threshold_k == 1)
+        .collect()
 }
 
 pub(crate) fn lean_command_policy_cases() -> &'static [LeanCommandPolicyCase] {

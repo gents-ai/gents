@@ -3,6 +3,7 @@ import Proofs.Conformance.Triggers.Contracts
 import Proofs.Conformance.ClientShell.Contracts
 import Proofs.ApplyReconcile.ContractCases
 import Proofs.ToolExecution
+import Proofs.MCPHealth.Executable
 import Proofs.Conformance.Deviations
 import Proofs.CommandPolicy.Cases
 import Proofs.Conformance.CoverageLedger
@@ -235,6 +236,24 @@ def toolRetryCaseJson (witness : ToolExecution.RetryCase) : String :=
     ++ "\"idempotency\":" ++ jsonString witness.idempotency.toDefraDB ++ ","
     ++ "\"failure_class\":" ++ jsonString witness.failure.toDefraDB ++ ","
     ++ "\"disposition\":" ++ jsonString witness.disposition.toDefraDB
+    ++ "}"
+
+def mcpHealthCaseJson (witness : Proofs.MCPHealth.TransitionCase) : String :=
+  let nextCountStr : String :=
+    match witness.nextCount with
+    | none => "null"
+    | some n => toString n
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"start_state\":" ++ jsonString witness.startState.toDefraDB ++ ","
+    ++ "\"start_count\":" ++ toString witness.startCount ++ ","
+    ++ "\"event\":" ++ jsonString witness.event.toDefraDB ++ ","
+    ++ "\"threshold_k\":" ++ toString witness.thresholdK ++ ","
+    ++ "\"next_state\":"
+      ++ jsonOptionalString
+          (witness.nextState.map Proofs.MCPHealth.HealthState.toDefraDB) ++ ","
+    ++ "\"next_count\":" ++ nextCountStr ++ ","
+    ++ "\"rust_projection\":" ++ jsonOptionalString witness.rustProjection
     ++ "}"
 
 def jsonStringMatrix (values : List (List String)) : String :=
@@ -470,6 +489,9 @@ def snapshotJson : String :=
     ++ "\"transcript_conformance_cases\":"
       ++ jsonArray
         (transcriptConformanceCases.map transcriptCaseJson) ++ ","
+    ++ "\"mcp_health_cases\":"
+      ++ jsonArray
+        (Proofs.MCPHealth.transitionCases.map mcpHealthCaseJson) ++ ","
     ++ "\"follow_up_hooks\":[],"
     ++ "\"event_delivery_transition_case_count\":"
       ++ toString Conformance.EventDelivery.transitionCaseCount ++ ","
