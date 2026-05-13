@@ -32,4 +32,11 @@ def canonicalDecide {Permission : Type} (g : GrantStore Permission) :
     Decide Permission :=
   fun b p => g.granted b.principal p
 
+theorem canonicalDecide_respectsPrincipal
+    {Permission : Type} (g : GrantStore Permission) :
+    RespectsPrincipal (canonicalDecide g) := by
+  intro b₁ b₂ p heq
+  unfold canonicalDecide
+  rw [heq]
+
 end Identity
