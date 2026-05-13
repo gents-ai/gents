@@ -60,6 +60,14 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) coverage_ledger: Vec<LeanCoverageEntry>,
     pub(crate) identity_structural_cases: Vec<LeanIdentityStructuralCase>,
     pub(crate) identity_contracts: Vec<LeanIdentityContract>,
+    #[serde(default)]
+    pub(crate) event_delivery_transition_case_count: usize,
+    #[serde(default)]
+    pub(crate) event_delivery_transition_cases: Vec<LeanEventDeliveryTransitionCase>,
+    #[serde(default)]
+    pub(crate) event_delivery_source_instances: Vec<LeanEventDeliverySourceInstance>,
+    #[serde(default)]
+    pub(crate) event_delivery_convergence_traces: Vec<LeanEventDeliveryConvergenceTrace>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -140,6 +148,52 @@ pub(crate) struct LeanLifecycleTransitionCase {
     pub(crate) classification: String,
     pub(crate) action: Option<String>,
     pub(crate) boundary: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+pub(crate) struct LeanEventDeliveryWorld {
+    pub(crate) persistent_set: Vec<String>,
+    pub(crate) subscription_queue: Vec<String>,
+    pub(crate) processed_set: Vec<String>,
+    pub(crate) handled: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum LeanEventDeliveryAction {
+    Persist { doc: String },
+    Depersist { doc: String },
+    Enqueue { doc: String },
+    Drop { doc: String },
+    DeliverFromQueue { doc: String },
+    RescanTick,
+    Handle { doc: String },
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct LeanEventDeliveryTransitionCase {
+    pub(crate) name: String,
+    pub(crate) pre: LeanEventDeliveryWorld,
+    pub(crate) action: LeanEventDeliveryAction,
+    pub(crate) post: LeanEventDeliveryWorld,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct LeanEventDeliverySourceInstance {
+    pub(crate) name: String,
+    pub(crate) dedupe_policy: String,
+    pub(crate) rescan_bounded_by: u64,
+    pub(crate) deviation: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct LeanEventDeliveryConvergenceTrace {
+    pub(crate) name: String,
+    pub(crate) instance_name: String,
+    pub(crate) initial_world: LeanEventDeliveryWorld,
+    pub(crate) actions: Vec<LeanEventDeliveryAction>,
+    pub(crate) final_world: LeanEventDeliveryWorld,
+    pub(crate) status: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -782,6 +836,18 @@ pub(crate) fn lean_transcript_case(name: &str) -> &'static LeanTranscriptCase {
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean transcript case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_event_delivery_transition_cases() -> &'static [LeanEventDeliveryTransitionCase] {
+    &lean_contract_snapshot().event_delivery_transition_cases
+}
+
+pub(crate) fn lean_event_delivery_source_instances() -> &'static [LeanEventDeliverySourceInstance] {
+    &lean_contract_snapshot().event_delivery_source_instances
+}
+
+pub(crate) fn lean_event_delivery_convergence_traces() -> &'static [LeanEventDeliveryConvergenceTrace] {
+    &lean_contract_snapshot().event_delivery_convergence_traces
 }
 
 pub(crate) fn lean_tool_retry_case(name: &str) -> &'static LeanToolRetryCase {

@@ -20,12 +20,14 @@ use lean_vocab_test::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
     assert_lifecycle_transition_cases_partition, assert_state_machine_contract_is_complete,
     lean_client_shell_case, lean_command_env_case, lean_command_policy_case,
-    lean_command_sandbox_case, lean_contract_snapshot, lean_fleet_slot_accounting_case,
-    lean_inference_slot_accounting_case, lean_queue_deadline_case, lean_queue_deadline_cases,
-    lean_recovery_sweep_case, lean_recovery_sweep_cases, lean_request_transition_cases,
-    lean_runtime_reconcile_case, lean_session_recovery_case, lean_state_machine_contract,
-    lean_tool_preflight_case, lean_tool_retry_case, lean_transcript_case, lean_transcript_cases,
-    lean_vocabulary_values, LeanLifecycleTransitionCase,
+    lean_command_sandbox_case, lean_contract_snapshot, lean_event_delivery_convergence_traces,
+    lean_event_delivery_source_instances, lean_event_delivery_transition_cases,
+    lean_fleet_slot_accounting_case, lean_inference_slot_accounting_case, lean_queue_deadline_case,
+    lean_queue_deadline_cases, lean_recovery_sweep_case, lean_recovery_sweep_cases,
+    lean_request_transition_cases, lean_runtime_reconcile_case, lean_session_recovery_case,
+    lean_state_machine_contract, lean_tool_preflight_case, lean_tool_retry_case,
+    lean_transcript_case, lean_transcript_cases, lean_vocabulary_values, LeanEventDeliveryAction,
+    LeanLifecycleTransitionCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
@@ -4736,4 +4738,165 @@ fn lean_marks_native_complete_fail_as_requires_native() {
         fail.requires_native,
         "fail_native must be flagged with requires_native: true"
     );
+}
+
+#[test]
+fn event_delivery_transition_cases_match_contract() {
+    let cases = lean_event_delivery_transition_cases();
+    assert!(
+        cases.len() >= 12,
+        "Expected at least 12 transition-case rows; got {}",
+        cases.len()
+    );
+    for case in cases {
+        match &case.action {
+            LeanEventDeliveryAction::Persist { doc } => {
+                assert!(
+                    case.post.persistent_set.contains(doc),
+                    "case `{}`: persist did not add doc to persistent_set",
+                    case.name
+                );
+            }
+            LeanEventDeliveryAction::Handle { doc } => {
+                assert!(
+                    case.post.handled.contains(doc),
+                    "case `{}`: handle did not add doc to handled",
+                    case.name
+                );
+                assert!(
+                    case.post.processed_set.contains(doc),
+                    "case `{}`: handle did not add doc to processed_set",
+                    case.name
+                );
+            }
+            LeanEventDeliveryAction::RescanTick => {
+                assert_eq!(
+                    case.pre.persistent_set, case.post.persistent_set,
+                    "case `{}`: rescanTick changed persistent_set",
+                    case.name
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn event_delivery_source_instances_match_runtime() {
+    let by_name: std::collections::HashMap<&str, &lean_vocab_test::LeanEventDeliverySourceInstance> =
+        lean_event_delivery_source_instances()
+            .iter()
+            .map(|i| (i.name.as_str(), i))
+            .collect();
+
+    let watcher = by_name
+        .get("Watcher")
+        .expect("Watcher instance must be present");
+    assert_eq!(watcher.dedupe_policy, "ttl_cooldown");
+    assert!(
+        watcher.rescan_bounded_by > 0,
+        "Watcher rescanBoundedBy must be positive"
+    );
+    assert!(
+        watcher.deviation.is_none(),
+        "Watcher must have no deviation entry; got {:?}",
+        watcher.deviation
+    );
+
+    let event_source = by_name
+        .get("EventSource")
+        .expect("EventSource instance must be present");
+    assert_eq!(event_source.dedupe_policy, "monotone_once");
+    assert_eq!(
+        event_source.rescan_bounded_by, 0,
+        "EventSource must currently use unboundedRescan sentinel"
+    );
+    assert_eq!(
+        event_source.deviation.as_deref(),
+        Some("event_source_lacks_periodic_rescan"),
+        "EventSource deviation tag drifted"
+    );
+
+    let subagent_source = by_name
+        .get("SubagentSource")
+        .expect("SubagentSource instance must be present");
+    assert_eq!(subagent_source.dedupe_policy, "monotone_once");
+    assert_eq!(subagent_source.rescan_bounded_by, 0);
+    assert_eq!(
+        subagent_source.deviation.as_deref(),
+        Some("subagent_source_lacks_live_rescan")
+    );
+}
+
+#[test]
+fn event_delivery_convergence_traces_match_runtime_or_deviation() {
+    let traces = lean_event_delivery_convergence_traces();
+    assert!(
+        traces.len() >= 3,
+        "Expected at least one convergence trace per source"
+    );
+
+    for trace in traces {
+        match trace.status.as_str() {
+            "substantive" => {
+                let final_handled: std::collections::HashSet<&String> =
+                    trace.final_world.handled.iter().collect();
+                let final_persistent: std::collections::HashSet<&String> =
+                    trace.final_world.persistent_set.iter().collect();
+                for doc in &trace.initial_world.persistent_set {
+                    let was_handled = final_handled.contains(doc);
+                    let was_depersisted = !final_persistent.contains(doc);
+                    assert!(
+                        was_handled || was_depersisted,
+                        "substantive trace `{}` did not converge for doc `{}` \
+                         (handled? {}, depersisted? {})",
+                        trace.name,
+                        doc,
+                        was_handled,
+                        was_depersisted,
+                    );
+                }
+            }
+            "deviation" => {
+                let final_handled: std::collections::HashSet<&String> =
+                    trace.final_world.handled.iter().collect();
+                let final_persistent: std::collections::HashSet<&String> =
+                    trace.final_world.persistent_set.iter().collect();
+                // Collect all docs that were ever persisted: either present in
+                // the initial world or added via a Persist action during the trace.
+                let mut all_persisted: std::collections::HashSet<&String> =
+                    trace.initial_world.persistent_set.iter().collect();
+                for action in &trace.actions {
+                    if let LeanEventDeliveryAction::Persist { doc } = action {
+                        all_persisted.insert(doc);
+                    }
+                }
+                // Deviation is witnessed when at least one persisted doc ends
+                // up still in the persistent_set but was never handled.
+                let observed_deviation = all_persisted
+                    .iter()
+                    .any(|doc| final_persistent.contains(*doc) && !final_handled.contains(*doc));
+                assert!(
+                    observed_deviation,
+                    "deviation trace `{}` did not witness the documented \
+                     deviation state (no orphan persistent doc remaining)",
+                    trace.name,
+                );
+            }
+            other => panic!(
+                "trace `{}` has unknown status `{}` (expected 'substantive' or 'deviation')",
+                trace.name, other,
+            ),
+        }
+    }
+
+    let trace_instances: std::collections::HashSet<&str> =
+        traces.iter().map(|t| t.instance_name.as_str()).collect();
+    for name in &["Watcher", "EventSource", "SubagentSource"] {
+        assert!(
+            trace_instances.contains(name),
+            "Expected a convergence trace for instance `{}`",
+            name
+        );
+    }
 }
