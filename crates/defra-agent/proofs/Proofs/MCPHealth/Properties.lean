@@ -107,12 +107,6 @@ theorem h6'_evicted_recovers_via_probe_directly
     (sm : ServiceModel) (K : Threshold) (_h : sm.state = .evicted) :
     (step? sm (.probeSuccess false) K).map (·.state) = some .healthy := rfl
 
-/-- Helper: `run?` unfolds across `cons` via `step?` and a recursive `run?`. -/
-theorem run?_cons (sm : ServiceModel) (e : Event) (rest : List Event) (K : Threshold) :
-    run? sm (e :: rest) K = (step? sm e K).bind (fun sm'' => run? sm'' rest K) := by
-  have := run?_append sm [e] rest K
-  simpa using this
-
 /-- Helper 1: across any successful `run?`, the gain in `failureCount` is
     bounded above by the number of `probeFail` events. Each `probeFail`
     increments `failureCount` by 1; `probeSuccess` resets to 0; `backoffExpiry`
@@ -312,12 +306,10 @@ theorem take_split_at {α : Type} (l : List α) (p1 p2 : Nat) (h12 : p1 ≤ p2) 
     contains ≥ K `probeFail` events. -/
 theorem h5_anti_flapping_inter_eviction_gap
     (events : List Event) (K : Threshold)
-    (p1 p2 : Nat) (h12 : p1 < p2) (h2le : p2 ≤ events.length)
+    (p1 p2 : Nat) (h12 : p1 < p2) (_h2le : p2 ≤ events.length)
     (h1 : (run? ServiceModel.initial (events.take p1) K).map (·.state) = some .healthy)
     (h2 : (run? ServiceModel.initial (events.take p2) K).map (·.state) = some .evicted) :
     K.val ≤ ((events.drop p1).take (p2 - p1)).countP (· = Event.probeFail) := by
-  -- Bound check: p2 ≤ events.length keeps the slice within events.
-  have _hlen_p2 : p2 ≤ events.length := h2le
   -- Extract sm1 from h1.
   rcases hsm1 : run? ServiceModel.initial (events.take p1) K with _ | sm1
   · rw [hsm1] at h1; simp at h1

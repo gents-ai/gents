@@ -89,4 +89,10 @@ theorem run?_append (sm : ServiceModel) (a b : List Event) (K : Threshold) :
   simp only [run?]
   exact foldl_bind_append (some sm) a b K
 
+/-- Helper: `run?` unfolds across `cons` via `step?` and a recursive `run?`. -/
+theorem run?_cons (sm : ServiceModel) (e : Event) (rest : List Event) (K : Threshold) :
+    run? sm (e :: rest) K = (step? sm e K).bind (fun sm'' => run? sm'' rest K) := by
+  have := run?_append sm [e] rest K
+  simpa using this
+
 end Proofs.MCPHealth
