@@ -39,4 +39,18 @@ theorem no_escalation
     (b : Behavior) (p : Permission) :
     canonicalDecide g b p = g.granted b.principal p := rfl
 
+/-- **I4 Behavior-id functionally determines principal.** In any
+    well-formed world, `Behavior.id` is unique and therefore
+    `behavior_id → principal` is a function. Closes the
+    "`(did, behavior_id)` uniqueness" criterion. -/
+theorem behavior_id_determines_principal
+    (w : World) (hw : w.WellFormed)
+    (b₁ b₂ : Behavior)
+    (h₁ : b₁ ∈ w.behaviors) (h₂ : b₂ ∈ w.behaviors)
+    (hid : b₁.id = b₂.id) :
+    b₁.principal = b₂.principal := by
+  have hbeh := hw.2.1
+  have heq : b₁ = b₂ := hbeh b₁ b₂ h₁ h₂ hid
+  rw [heq]
+
 end Identity
