@@ -4,8 +4,8 @@ use std::collections::HashSet;
 mod lean_vocab_test;
 
 use lean_vocab_test::{
-    lean_identity_structural_cases, LeanIdentityBehavior, LeanIdentityDeployment,
-    LeanIdentityStructuralCase,
+    lean_identity_contracts, lean_identity_structural_cases, LeanIdentityBehavior,
+    LeanIdentityContract, LeanIdentityDeployment, LeanIdentityStructuralCase,
 };
 
 /// Rust mirror of `Identity.World.WellFormed` from
@@ -89,4 +89,39 @@ fn identity_structural_cases_cover_named_scenarios() {
             "missing expected identity conformance case: {expected}"
         );
     }
+}
+
+#[test]
+fn identity_respects_principal_contract_is_declared() {
+    let contracts = lean_identity_contracts();
+    let target = contracts
+        .iter()
+        .find(|c: &&LeanIdentityContract| c.name == "identity.respects_principal_boundary")
+        .expect(
+            "Lean must emit the identity.respects_principal_boundary contract \
+             — this is the spec the future runtime permission engine (#193) lands against",
+        );
+
+    // The contract is declared today and not yet enforced by a runtime
+    // permission decision module. When that module lands (#193), flip
+    // `enforced` to `true` in Proofs/Identity/Conformance.lean AND
+    // replace the assertion below with a property-based test driving
+    // the runtime decide function on the structural cases.
+    assert!(
+        !target.enforced,
+        "identity.respects_principal_boundary is marked enforced=true in Lean, \
+         but the Rust runtime permission decision module is not yet wired up. \
+         Either revert the Lean flag or extend this test to drive the runtime."
+    );
+    assert_eq!(
+        target.tracked_by, "#193",
+        "tracked_by must point at the runtime-refactor tracker so the deferred \
+         enforcement has a discoverable owner"
+    );
+    assert!(
+        target.statement.contains("agent_did"),
+        "contract statement must mention agent_did so a reader unfamiliar with the \
+         Lean model can grasp the boundary; statement was: {}",
+        target.statement
+    );
 }
