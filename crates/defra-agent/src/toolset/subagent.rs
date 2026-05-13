@@ -3,6 +3,8 @@ use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::Deserialize;
 
+use crate::subagent_tools::SpawnSubagentArgs;
+use crate::tool_call_lifecycle::AwaitMode;
 use crate::tool_surface::SubagentToolConfig;
 
 use super::shared::ToolError;
@@ -53,11 +55,10 @@ impl SpawnSubagentTool {
             ));
         }
 
-        let await_mode = args.await_mode.as_deref().unwrap_or("foreground").trim();
-        match await_mode {
-            "foreground" => {}
-            "background" if self.config.background_enabled => {}
-            "background" => {
+        match args.await_mode.as_await_mode() {
+            AwaitMode::Foreground => {}
+            AwaitMode::Background if self.config.background_enabled => {}
+            AwaitMode::Background => {
                 return Err(tool_not_allowed_error(
                     SPAWN_SUBAGENT_TOOL_NAME,
                     "/await_mode",
@@ -66,25 +67,6 @@ impl SpawnSubagentTool {
                     self.config.targets.clone(),
                 ));
             }
-            other => {
-                return Err(invalid_arguments_error(
-                    SPAWN_SUBAGENT_TOOL_NAME,
-                    "/await_mode",
-                    format!("unsupported await_mode '{other}'"),
-                ));
-            }
-        }
-
-        if args
-            .deadline
-            .as_deref()
-            .is_some_and(|deadline| deadline.trim().is_empty())
-        {
-            return Err(invalid_arguments_error(
-                SPAWN_SUBAGENT_TOOL_NAME,
-                "/deadline",
-                "deadline must be omitted or a non-empty RFC3339 timestamp",
-            ));
         }
 
         Ok(())
@@ -96,16 +78,6 @@ pub(super) struct WaitSubagentTool;
 
 #[derive(Clone, Copy)]
 pub(super) struct CancelSubagentTool;
-
-#[derive(Debug, Deserialize)]
-pub(super) struct SpawnSubagentArgs {
-    behavior_id: String,
-    prompt: String,
-    #[serde(default)]
-    await_mode: Option<String>,
-    #[serde(default)]
-    deadline: Option<String>,
-}
 
 #[derive(Debug, Deserialize)]
 pub(super) struct WaitSubagentArgs {

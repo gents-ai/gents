@@ -8,7 +8,7 @@ use rig::agent::{HookAction, ToolCallHookAction};
 use tokio::sync::Mutex;
 
 use crate::session;
-use crate::tool_call_lifecycle::ToolCallLifecycle;
+use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, ToolCallLifecycle};
 use crate::truncation::TruncationLimits;
 
 mod persistence;
@@ -388,7 +388,17 @@ impl DefraSessionHook {
 
         let count = lifecycles.len();
         for mut lifecycle in lifecycles {
-            lifecycle.timeout().await?;
+            if lifecycle.is_subagent_bridge() {
+                if lifecycle.await_mode() == AwaitMode::Foreground {
+                    lifecycle.bridge_failure(ChildTerminal::Dead).await?;
+                } else {
+                    tracing::debug!(
+                        "leaving background subagent bridge running after parent deadline sweep"
+                    );
+                }
+            } else {
+                lifecycle.timeout().await?;
+            }
         }
         Ok(count)
     }
@@ -433,7 +443,16 @@ impl DefraSessionHook {
 
         let count = lifecycles.len();
         for mut lifecycle in lifecycles {
-            lifecycle.fail(result, failure_class).await?;
+            if lifecycle.is_subagent_bridge() {
+                lifecycle
+                    .bridge_failure(ChildTerminal::Failed {
+                        reason: result.to_string(),
+                        failure_class,
+                    })
+                    .await?;
+            } else {
+                lifecycle.fail(result, failure_class).await?;
+            }
         }
         Ok(count)
     }

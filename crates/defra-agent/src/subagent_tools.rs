@@ -10,6 +10,48 @@ use serde::Deserialize;
 use crate::graphql::escape_graphql_string;
 use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass};
 
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct SpawnSubagentArgs {
+    pub behavior_id: String,
+    pub prompt: String,
+    #[serde(default)]
+    pub await_mode: AwaitModeArg,
+    #[serde(default)]
+    pub deadline: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum AwaitModeArg {
+    #[default]
+    Foreground,
+    Background,
+}
+
+impl AwaitModeArg {
+    pub(crate) fn as_await_mode(self) -> AwaitMode {
+        match self {
+            Self::Foreground => AwaitMode::Foreground,
+            Self::Background => AwaitMode::Background,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AwaitModeArg {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match value.trim() {
+            "foreground" => Ok(Self::Foreground),
+            "background" => Ok(Self::Background),
+            other => Err(serde::de::Error::custom(format!(
+                "unsupported await_mode '{other}'"
+            ))),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ParentSubagentContext {
     pub session_id: String,
@@ -18,6 +60,8 @@ pub(crate) struct ParentSubagentContext {
     pub subagent_depth: u32,
     pub request_deadline_at: DateTime<Utc>,
     pub allowed_targets: Vec<String>,
+    pub subagent_spawn_enabled: bool,
+    pub subagent_background_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +91,8 @@ struct AgentBehaviorToolSelectionRow {
 #[derive(Debug, Deserialize)]
 struct ToolSelectionTargetsRow {
     subagent_targets: Option<Vec<String>>,
+    subagent_spawn_enabled: Option<bool>,
+    subagent_background_enabled: Option<bool>,
 }
 
 pub(crate) async fn load_parent_subagent_context(
@@ -88,7 +134,7 @@ pub(crate) async fn load_parent_subagent_context(
         .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
         .map(|value| value.with_timezone(&Utc))
         .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} has no valid deadline"))?;
-    let allowed_targets = load_allowed_subagent_targets(node, &behavior_id).await?;
+    let selection = load_subagent_tool_selection(node, &behavior_id).await?;
 
     Ok(ParentSubagentContext {
         session_id: row.session_id,
@@ -96,7 +142,9 @@ pub(crate) async fn load_parent_subagent_context(
         behavior_id,
         subagent_depth: row.subagent_depth.unwrap_or_default(),
         request_deadline_at: deadline,
-        allowed_targets,
+        allowed_targets: selection.allowed_targets,
+        subagent_spawn_enabled: selection.spawn_enabled,
+        subagent_background_enabled: selection.background_enabled,
     })
 }
 
@@ -119,10 +167,16 @@ pub(crate) fn target_is_allowed(context: &ParentSubagentContext, target_behavior
         .any(|target| target == target_behavior_id)
 }
 
-async fn load_allowed_subagent_targets(
+struct SubagentToolSelection {
+    allowed_targets: Vec<String>,
+    spawn_enabled: bool,
+    background_enabled: bool,
+}
+
+async fn load_subagent_tool_selection(
     node: &EmbeddedNode,
     behavior_id: &str,
-) -> Result<Vec<String>> {
+) -> Result<SubagentToolSelection> {
     let escaped_behavior_id = escape_graphql_string(behavior_id);
     let behavior_query = format!(
         r#"{{
@@ -151,7 +205,13 @@ async fn load_allowed_subagent_targets(
         .filter(|value| !value.is_empty())
     {
         Some(selection_id) => selection_id,
-        None => return Ok(Vec::new()),
+        None => {
+            return Ok(SubagentToolSelection {
+                allowed_targets: Vec::new(),
+                spawn_enabled: false,
+                background_enabled: false,
+            });
+        }
     };
 
     let escaped_selection_id = escape_graphql_string(selection_id);
@@ -162,6 +222,8 @@ async fn load_allowed_subagent_targets(
                 limit: 1
             ) {{
                 subagent_targets
+                subagent_spawn_enabled
+                subagent_background_enabled
             }}
         }}"#
     );
@@ -175,12 +237,18 @@ async fn load_allowed_subagent_targets(
     let Some(selection) =
         first_row::<ToolSelectionTargetsRow>(selection_response.data.as_ref(), "ToolSelection")
     else {
-        return Ok(Vec::new());
+        return Ok(SubagentToolSelection {
+            allowed_targets: Vec::new(),
+            spawn_enabled: false,
+            background_enabled: false,
+        });
     };
 
-    Ok(dedupe_non_empty(
-        selection.subagent_targets.unwrap_or_default(),
-    ))
+    Ok(SubagentToolSelection {
+        allowed_targets: dedupe_non_empty(selection.subagent_targets.unwrap_or_default()),
+        spawn_enabled: selection.subagent_spawn_enabled.unwrap_or(false),
+        background_enabled: selection.subagent_background_enabled.unwrap_or(false),
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -390,6 +458,65 @@ pub(crate) async fn load_child_final_response(
     Ok(Some(render_assistant_message_text(&message_row.content)?))
 }
 
+pub(crate) async fn load_child_session_id(
+    node: &EmbeddedNode,
+    child_request_id: &str,
+) -> Result<Option<String>> {
+    let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
+                limit: 1
+            ) {{
+                session_id
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query child AgentRequest {child_request_id} session failed: {:?}",
+            response.errors
+        );
+    }
+    #[derive(Deserialize)]
+    struct SessionRow {
+        session_id: String,
+    }
+    Ok(first_row::<SessionRow>(response.data.as_ref(), "AgentRequest").map(|row| row.session_id))
+}
+
+pub(crate) async fn load_child_terminal_row(
+    node: &EmbeddedNode,
+    child_request_id: &str,
+) -> Result<Option<ChildRequestTerminalRow>> {
+    let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
+                limit: 1
+            ) {{
+                status
+                lifecycle_state
+                failure_reason
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query child AgentRequest {child_request_id} terminal state failed: {:?}",
+            response.errors
+        );
+    }
+    Ok(first_row::<ChildRequestTerminalRow>(
+        response.data.as_ref(),
+        "AgentRequest",
+    ))
+}
+
 fn render_assistant_message_text(content: &str) -> Result<String> {
     let message = decode_persisted_message("assistant", content);
     let Message::Assistant { content, .. } = message else {
@@ -437,6 +564,13 @@ pub(crate) fn project_child_terminal(row: &ChildRequestTerminalRow) -> Option<Ch
             _ => None,
         },
     }
+}
+
+pub(crate) fn child_request_completed(row: &ChildRequestTerminalRow) -> bool {
+    matches!(
+        row.lifecycle_state.as_deref(),
+        Some("completed" | "complete")
+    ) || matches!(row.status.as_deref(), Some("completed" | "complete"))
 }
 
 fn first_row<T>(data: Option<&serde_json::Value>, collection: &str) -> Option<T>
