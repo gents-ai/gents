@@ -66,13 +66,19 @@ The contract is parametric in two pieces:
 2. **`DedupePolicy`** — `ttlCooldown` (watcher) or `monotoneOnce` (EventSource, SubagentSource).
    The handler precondition `d ∉ processedSet` is shared; eviction policy is per-instance.
 
-`rescanBoundedBy : Nat` is an instance-supplied bound. Positive values feed D1 directly.
-We additionally provide `SourceInstance.unboundedRescan : Nat` (concretely `0`) as a
-**recording sentinel** for instances whose Rust impl does not satisfy the contract today.
-D1 still holds vacuously for these instances (the `Fair` predicate is unsatisfiable when
-`rescanBoundedBy = 0`), and the corresponding `Conformance/Deviations.lean` entry names
-the gap. When Rust adds a periodic rescan, the instance value flips to a positive `Nat`
-and the deviation flips to a positive conformance row.
+`rescanBoundedBy : Nat` is an instance-supplied bound on **the number of
+non-`rescanTick` actions that may occur between two consecutive `rescanTick`s**
+in a `Fair` action sequence. (Not a wall-clock time, not a generic step count —
+specifically: in any window of length `rescanBoundedBy + 1` consecutive
+actions, at least one must be `rescanTick`.) Positive values feed D1 directly.
+
+We additionally provide `SourceInstance.unboundedRescan : Nat` (concretely `0`)
+as a **recording sentinel** for instances whose Rust impl does not satisfy the
+contract today. With `rescanBoundedBy = 0`, the `Fair` predicate is
+unsatisfiable, so D1 holds vacuously for that instance; the corresponding
+`Conformance/Deviations.lean` entry names the gap. When Rust adds a periodic
+rescan, the instance value flips to a positive `Nat`, the simulation proof
+fires, and the deviation flips to a positive conformance row.
 
 ## Properties to prove
 
@@ -164,10 +170,13 @@ def instance : SourceInstance :=
   }
 ```
 
-Why `rescanBoundedBy = 1`: `next_request` (watcher.rs:88) calls `pending_requests()`
-on *every* iteration. The 30 s `GOSSIP_FALLBACK_POLL` is the upper bound on
-subscription-quiet idle, not the rescan cadence itself. The model captures
-worst-case cadence; for the watcher, that's one rescan per outer loop pass.
+Why `rescanBoundedBy = 1`: under the contract definition (at most this many
+non-`rescanTick` actions between consecutive `rescanTick`s), `1` says "at most
+one non-rescan action — for example, a `handle` of the previous iteration's
+pickup — can occur before the next rescan." That matches `next_request`
+(watcher.rs:88), which calls `pending_requests()` on *every* outer loop
+iteration. The 30 s `GOSSIP_FALLBACK_POLL` is the upper bound on
+subscription-quiet idle, not the rescan-action gap.
 
 **Status: closes D1 today.** Watcher is a positive conformance entry.
 
@@ -182,11 +191,12 @@ def instance : SourceInstance :=
   }
 ```
 
-`rescanBoundedBy` is an abstract `Nat` in the contract; the Lean model proves
-D1 for any finite value. The operational value is recorded in conformance
-metadata. EventSource currently has no periodic rescan, so its instance carries
-the `unboundedRescan` sentinel — D1 is still stated, but the simulation
-proof for this instance is conditional on the operational rescan existing.
+**States D1 unconditionally.** The EventSource binding uses the rescan
+sentinel today, so D1 holds vacuously for this instance (the `Fair` predicate
+is unsatisfiable when `rescanBoundedBy = 0`). Adding a periodic introspection
+query against the desired collections flips `rescanBoundedBy` to a positive
+`Nat` and makes D1 substantive — the same theorem statement, now witnessing
+real convergence rather than a vacuous truth.
 
 Binding: `persistentSet` = `(collection, doc_id)` pairs in `desired_collections`
 not yet in `seen_docs`. Rescan = the periodic introspection query that this PR
@@ -197,10 +207,10 @@ do not fire as 'created'") falsifiable: if a doc was in `seen_docs` at
 `handle` precondition `d ∉ processedSet` rejects it without needing to look at
 delivery history.
 
-**Status: violates D1 today.** Lands as a `Conformance/Deviations.lean` entry:
+**Status: deviation entry today.** `Conformance/Deviations.lean`:
 `event_source_lacks_periodic_rescan`. The deviation cites the follow-up issue
 that adds the periodic rescan; when Rust grows that, the deviation flips to a
-positive conformance row.
+positive conformance row and D1 for this instance becomes substantive.
 
 ### SubagentSource (`SubagentSource.lean`)
 
@@ -213,17 +223,23 @@ def instance : SourceInstance :=
   }
 ```
 
-Binding: `persistentSet` = running `AgentToolCall` rows with `child_request_id` set
-whose child `AgentRequest` row doesn't yet exist (the orphan condition). Rescan =
-`recover_orphan_subagent_children`, which exists today as a startup-only sweep.
-The instance carries `unboundedRescan` for the **live process**; the existence of
-the startup sweep guarantees convergence at process boundaries but not within
-a single live process. The deviation entry names the gap as "live rescan
-missing"; lifting the existing recovery primitive to a periodic loop closes it.
+**States O1 unconditionally.** The SubagentSource binding uses the rescan
+sentinel today, so O1 holds vacuously for this instance. Adding a periodic
+live rescan flips `rescanBoundedBy` to a positive `Nat` and makes O1
+substantive — the existing `recover_orphan_subagent_children` primitive
+already has the right shape; lifting it from a startup-only sweep to a
+periodic loop is the Rust gap-fill.
 
-**Status: violates D1 in the live process today; satisfies it at startup.**
-Lands as a `Conformance/Deviations.lean` entry: `subagent_source_lacks_live_rescan`.
-Closes O1 conditionally on the rescan being lifted to periodic.
+Binding: `persistentSet` = running `AgentToolCall` rows with `child_request_id`
+set whose child `AgentRequest` row doesn't yet exist (the orphan condition).
+Rescan = `recover_orphan_subagent_children`, today running only at startup.
+Startup-only convergence is real but lives outside the contract's "live
+trace" frame — the deviation entry records this distinction.
+
+**Status: deviation entry today.** `Conformance/Deviations.lean`:
+`subagent_source_lacks_live_rescan`. When Rust adds the periodic loop, the
+deviation flips to a positive conformance row and O1 for this instance
+becomes substantive.
 
 ## Conformance vectors
 
@@ -260,11 +276,31 @@ fails to satisfy today.
 ### Family 3 — `event_delivery_convergence_traces`
 
 A small set of constructed convergent traces — finite witnesses to D1 — one per
-source. Each row is `(initial_world, action_sequence, final_world)`. Rust runs
-the trace as a sequence assertion.
+source. Each row is `(initial_world, action_sequence, final_world, instance_status)`.
 
-This is the verifiable analogue of the watcher's existing integration test
-"drop simulated, fallback poll fires, request picked up."
+**Per-instance Rust consumer behavior:**
+
+- **Watcher** (positive instance): Rust replays the trace step-by-step against
+  the watcher's helpers (`take_next_eligible_pending_request`, `mark_processed`,
+  `prune_processed_requests`) and asserts the post-state vocabulary matches.
+  This is the verifiable analogue of the watcher's existing integration test
+  "drop simulated, fallback poll fires, request picked up."
+
+- **EventSource and SubagentSource** (deviation instances): Rust runs the
+  trace and asserts the runtime is **in the documented deviation state** —
+  i.e., the periodic rescan is absent from the live runtime. The test
+  *passes* when the runtime is in the documented deviation state. This is a
+  positive assertion, not a skipped test — `#[ignore]` is explicitly out.
+  When Rust adds the periodic rescan, the same test starts asserting actual
+  convergence and the deviation tag is removed from the source-instance
+  metadata in Family 2.
+
+The "deviation state" assertion takes the shape: "no method on
+`EventSource` / `SubagentSource` named `periodic_rescan` (or analogous
+identifier specified in the deviation entry) exists, AND no spawned periodic
+task is registered with the trigger engine for this source." Concrete probe
+lives in the Rust consumer; the Lean side only emits the deviation tag and
+the trace.
 
 ### Registry entries
 
@@ -312,13 +348,22 @@ other agents see it before they rebase.
 
 ## Property closure summary (for PR body)
 
-When this PR lands:
+When this PR lands, every theorem is closed unconditionally. Per-instance
+substantive vs. vacuous status depends on the binding's `rescanBoundedBy`:
 
-- **D1** (delivery convergence) — closed, with rescan-cadence as the named assumption.
+- **D1** (delivery convergence) — closed unconditionally. Substantive for
+  Watcher; vacuous for EventSource and SubagentSource pending the Rust
+  rescan gap-fill.
 - **D2** (fair-delivery latency) — closed, optional witness trace.
-- **O1** (orphan-child materialization for SubagentSource) — closed as a specialization of D1.
-- **C1** (watcher processed-id cooldown invariant) — closed.
-- **Deadline audit followups #5 and #8** — closed at the model level. Implementation closure deferred to follow-up issues named in the PR body.
+- **O1** (orphan-child materialization for SubagentSource) — closed
+  unconditionally as a specialization of D1; substantive when SubagentSource
+  grows a periodic rescan.
+- **C1** (watcher processed-id cooldown invariant) — closed and substantive
+  for the watcher today.
+- **Deadline audit followups #5 and #8** — closed at the model level.
+  Implementation closure deferred to follow-up issues named in the PR body
+  (those flip the EventSource and SubagentSource bindings from vacuous to
+  substantive).
 
 ## Conformance vectors registered
 
