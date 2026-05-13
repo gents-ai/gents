@@ -53,4 +53,24 @@ theorem behavior_id_determines_principal
   have heq : b₁ = b₂ := hbeh b₁ b₂ h₁ h₂ hid
   rw [heq]
 
+/-- A deployment can host a behavior iff their principals match. -/
+def Deployment.canHostBehavior (d : Deployment) (b : Behavior) : Bool :=
+  d.principal == b.principal
+
+/-- **I5 Deployment-hosting respects principal boundary.** Two
+    behaviors hostable on the same deployment must share a principal.
+    Discharges the "amy-general and amy-rumination cannot accidentally
+    co-locate" constraint at the structural level. -/
+theorem co_hostable_share_principal
+    (d : Deployment) (b₁ b₂ : Behavior)
+    (h₁ : d.canHostBehavior b₁ = true)
+    (h₂ : d.canHostBehavior b₂ = true) :
+    b₁.principal = b₂.principal := by
+  unfold Deployment.canHostBehavior at h₁ h₂
+  have e₁ : d.principal = b₁.principal := by
+    simpa [beq_iff_eq] using h₁
+  have e₂ : d.principal = b₂.principal := by
+    simpa [beq_iff_eq] using h₂
+  exact e₁.symm.trans e₂
+
 end Identity
