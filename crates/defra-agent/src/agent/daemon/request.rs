@@ -192,6 +192,20 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     }
                     // 5. Write terminal lifecycle_state = interrupted.
                     lifecycle.transition_to_interrupted().await?;
+                    if let Err(error) = crate::lifecycle::queue::drain_automated_wakeups(
+                        &self.node,
+                        &request.session_id,
+                        "automated wake-up drained because active request was interrupted",
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            request_id = %request.request_id,
+                            session_id = %request.session_id,
+                            error = %error,
+                            "failed to drain automated wake-ups after request interrupt"
+                        );
+                    }
                     Ok::<_, anyhow::Error>(())
                 }
                 .instrument(flow_span)

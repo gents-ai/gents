@@ -9,6 +9,7 @@ use defra_node::EmbeddedNode;
 use tokio::sync::watch;
 
 use crate::graphql::escape_graphql_string;
+use crate::lifecycle::queue::drain_automated_wakeups;
 
 /// Request a soft interrupt by latching `interrupt_requested_at` on the
 /// AgentRequest document. Idempotent: if the field is already set, the
@@ -50,6 +51,7 @@ pub async fn interrupt_request(node: &EmbeddedNode, request_id: &str) -> Result<
                 limit: 1
             ) {{
                 request_id
+                session_id
                 interrupt_requested_at
             }}
         }}"#
@@ -80,6 +82,7 @@ pub async fn interrupt_request(node: &EmbeddedNode, request_id: &str) -> Result<
         .and_then(|v| v.as_str())
         .is_some_and(|s| !s.is_empty());
     if already_latched {
+        drain_request_queue_after_interrupt(node, request_id, row).await;
         return Ok(());
     }
 
@@ -120,7 +123,53 @@ pub async fn interrupt_request(node: &EmbeddedNode, request_id: &str) -> Result<
             "interrupt_request mutation updated 0 rows; treating as idempotent (racy delete or concurrent latch)"
         );
     }
+    drain_request_queue_after_interrupt(node, request_id, row).await;
     Ok(())
+}
+
+async fn drain_request_queue_after_interrupt(
+    node: &EmbeddedNode,
+    request_id: &str,
+    row: &serde_json::Value,
+) {
+    let Some(session_id) = row
+        .get("session_id")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+    else {
+        tracing::warn!(
+            request_id = %request_id,
+            "interrupted request has no session_id; cannot drain automated wake-ups"
+        );
+        return;
+    };
+
+    let drained = match drain_automated_wakeups(
+        node,
+        session_id,
+        "automated wake-up drained because active request was interrupted",
+    )
+    .await
+    {
+        Ok(drained) => drained,
+        Err(error) => {
+            tracing::warn!(
+                request_id = %request_id,
+                session_id = %session_id,
+                error = %error,
+                "failed to drain queued automated wake-ups after request interrupt"
+            );
+            return;
+        }
+    };
+    if drained > 0 {
+        tracing::info!(
+            request_id = %request_id,
+            session_id = %session_id,
+            drained,
+            "drained queued automated wake-ups after request interrupt"
+        );
+    }
 }
 
 /// Read `interrupt_requested_at` for the given request. Returns `None` if the
