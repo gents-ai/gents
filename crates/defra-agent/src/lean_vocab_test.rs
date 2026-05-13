@@ -58,6 +58,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub(crate) follow_up_hooks: Vec<String>,
     pub(crate) coverage_ledger: Vec<LeanCoverageEntry>,
+    pub(crate) identity_structural_cases: Vec<LeanIdentityStructuralCase>,
+    pub(crate) identity_contracts: Vec<LeanIdentityContract>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -506,6 +508,44 @@ pub(crate) struct LeanLiveOverlayCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanIdentityPrincipal {
+    pub(crate) did: String,
+    pub(crate) enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanIdentityBehavior {
+    pub(crate) id: String,
+    pub(crate) principal: String,
+    pub(crate) enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanIdentityDeployment {
+    pub(crate) id: String,
+    pub(crate) principal: String,
+    pub(crate) host_id: String,
+    pub(crate) enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanIdentityStructuralCase {
+    pub(crate) name: String,
+    pub(crate) principals: Vec<LeanIdentityPrincipal>,
+    pub(crate) behaviors: Vec<LeanIdentityBehavior>,
+    pub(crate) deployments: Vec<LeanIdentityDeployment>,
+    pub(crate) well_formed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanIdentityContract {
+    pub(crate) name: String,
+    pub(crate) statement: String,
+    pub(crate) enforced: bool,
+    pub(crate) tracked_by: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanQueueDeadlineConformanceCase {
     pub(crate) name: String,
     pub(crate) group: String,
@@ -786,6 +826,14 @@ pub(crate) fn lean_command_env_case(name: &str) -> &'static LeanCommandEnvCase {
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean command env case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_identity_structural_cases() -> &'static [LeanIdentityStructuralCase] {
+    &lean_contract_snapshot().identity_structural_cases
+}
+
+pub(crate) fn lean_identity_contracts() -> &'static [LeanIdentityContract] {
+    &lean_contract_snapshot().identity_contracts
 }
 
 pub(crate) fn lean_live_overlay_cases() -> &'static [LeanLiveOverlayCase] {

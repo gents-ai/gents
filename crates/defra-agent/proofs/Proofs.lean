@@ -32,3 +32,4 @@ import Proofs.Conformance.CoverageLedger
 import Proofs.Conformance.Contracts
 import Proofs.ApplyReconcile
 import Proofs.ReversePairingHandlers
+import Proofs.Identity

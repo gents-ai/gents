@@ -7,6 +7,7 @@ import Proofs.Conformance.Deviations
 import Proofs.CommandPolicy.Cases
 import Proofs.Conformance.CoverageLedger
 import Proofs.Recovery.ContractCases
+import Proofs.Identity.Conformance
 
 /-!
 # Conformance Snapshot JSON
@@ -471,6 +472,10 @@ def snapshotJson : String :=
     ++ "\"follow_up_hooks\":[],"
     ++ "\"coverage_ledger\":"
       ++ coverageLedgerJson
+    ++ ",\"identity_structural_cases\":"
+      ++ Identity.Conformance.structuralCasesJson
+    ++ ",\"identity_contracts\":"
+      ++ Identity.Conformance.identityContractsJson
     ++ "}"
 
 end Conformance.Contracts
