@@ -20,6 +20,7 @@ import Proofs.Subagent
 import Proofs.Properties.Safety
 import Proofs.Properties.Decidable
 import Proofs.Properties.Liveness
+import Proofs.Recovery
 import Proofs.Properties.SchedulingSafety
 import Proofs.Properties.SchedulingLiveness
 import Proofs.Conformance.DefraAgent

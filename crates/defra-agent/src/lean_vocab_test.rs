@@ -54,6 +54,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) command_env_cases: Vec<LeanCommandEnvCase>,
     pub(crate) live_overlay_cases: Vec<LeanLiveOverlayCase>,
     pub(crate) queue_deadline_conformance_cases: Vec<LeanQueueDeadlineConformanceCase>,
+    pub(crate) recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
     pub(crate) follow_up_hooks: Vec<String>,
     pub(crate) coverage_ledger: Vec<LeanCoverageEntry>,
 }
@@ -528,6 +529,21 @@ pub(crate) struct LeanQueueDeadlineConformanceCase {
     pub(crate) explicit_deadline_preserved: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanRecoverySweepCase {
+    pub(crate) name: String,
+    pub(crate) sweep_id: String,
+    pub(crate) collection: String,
+    pub(crate) rust_function: String,
+    pub(crate) cadence: String,
+    pub(crate) implementation_status: String,
+    pub(crate) pre_state: String,
+    pub(crate) terminal_state: String,
+    pub(crate) measure_before: usize,
+    pub(crate) measure_after: usize,
+    pub(crate) deadline_audit_ref: String,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum LeanVocabularyParseError<'a> {
     MissingNamespace,
@@ -679,6 +695,18 @@ pub(crate) fn lean_queue_deadline_case(name: &str) -> &'static LeanQueueDeadline
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean queue/deadline case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_recovery_sweep_cases() -> &'static [LeanRecoverySweepCase] {
+    &lean_contract_snapshot().recovery_sweep_cases
+}
+
+pub(crate) fn lean_recovery_sweep_case(name: &str) -> &'static LeanRecoverySweepCase {
+    lean_contract_snapshot()
+        .recovery_sweep_cases
+        .iter()
+        .find(|case| case.name == name)
+        .unwrap_or_else(|| panic!("Lean recovery sweep case {name:?} was not emitted"))
 }
 
 pub(crate) fn lean_tool_retry_case(name: &str) -> &'static LeanToolRetryCase {
