@@ -13,6 +13,7 @@ pub mod fixtures;
 pub mod http_mock;
 pub mod interrupt;
 pub mod mock_endpoint;
+pub mod pairing_conformance;
 pub mod snapshots;
 pub mod streaming_backend;
 pub mod waits;

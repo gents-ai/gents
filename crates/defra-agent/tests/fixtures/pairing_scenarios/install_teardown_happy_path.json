@@ -1,0 +1,16 @@
+{
+  "name": "install_teardown_happy_path",
+  "actions": [
+    {
+      "op": "OperatorWrite",
+      "node": "A",
+      "peer": "B",
+      "collections": ["AgentRequest", "AgentResponse"]
+    },
+    { "op": "Reconcile", "node": "A" },
+    { "op": "WaitForConvergence", "timeout_secs": 15 },
+    { "op": "OperatorWrite", "node": "A", "peer": "B", "collections": [] },
+    { "op": "Reconcile", "node": "A" },
+    { "op": "WaitForConvergence", "timeout_secs": 15 }
+  ]
+}

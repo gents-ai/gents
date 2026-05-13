@@ -32,6 +32,7 @@ use crate::local_runtime;
 
 pub(super) const BRANCHABLE_PAIR_SYNC_ENV: &str = "DEFRA_AGENT_DESKTOP_SYNC_BRANCHABLE_ON_PAIR";
 pub(super) const REMOTE_P2P_PAIRING_ENV: &str = "DEFRA_AGENT_DESKTOP_PAIR_REMOTE_P2P";
+pub(super) const PAIRING_RECONCILE_ENV: &str = "DEFRA_AGENT_PAIRING_RECONCILE";
 
 impl ClientCore {
     pub async fn start() -> Result<Self> {
@@ -122,6 +123,7 @@ impl ClientCore {
         p2p_health.send_replace(initial_health);
         let (p2p_control, p2p_control_rx) = mpsc::channel(8);
         let p2p_supervisor = spawn_p2p_supervisor_task(
+            Arc::clone(&node),
             Arc::clone(&p2p),
             Arc::clone(&peer_directory),
             Arc::clone(&peer_statuses),
@@ -176,6 +178,7 @@ pub(super) async fn bootstrap_saved_peers(
             addr: record.addr.clone(),
             dial_succeeded: false,
             last_error: None,
+            pairing: Vec::new(),
         };
 
         match connect_peer_with_retry(p2p, &record.addr, &record.label).await {
@@ -218,7 +221,7 @@ pub(super) async fn bootstrap_saved_peers(
 
                 if let Some(graphql) = record.graphql.as_deref() {
                     if p2p_pairing_enabled {
-                        match configure_local_runtime_pairing(p2p, graphql).await {
+                        match configure_local_runtime_pairing(node, p2p, record).await {
                             Ok(()) => {
                                 if branchable_pair_sync_enabled() {
                                     match sync_branchable_collections_with_retry(
@@ -289,6 +292,23 @@ pub(super) async fn bootstrap_saved_peers(
 }
 
 pub(super) async fn configure_local_runtime_pairing(
+    node: &EmbeddedNode,
+    p2p: &Arc<dyn P2POps>,
+    record: &PeerRecord,
+) -> Result<()> {
+    if pairing_reconcile_enabled() {
+        write_peer_pairing_desired(node, record).await?;
+        return Ok(());
+    }
+
+    let graphql = record
+        .graphql
+        .as_deref()
+        .context("local runtime pairing requires a GraphQL endpoint")?;
+    configure_local_runtime_pairing_legacy(p2p, graphql).await
+}
+
+pub(super) async fn configure_local_runtime_pairing_legacy(
     p2p: &Arc<dyn P2POps>,
     graphql: &str,
 ) -> Result<()> {
@@ -302,6 +322,89 @@ pub(super) async fn configure_local_runtime_pairing(
             .collect(),
     )
     .await
+}
+
+pub(super) async fn write_peer_pairing_desired(
+    node: &EmbeddedNode,
+    record: &PeerRecord,
+) -> Result<()> {
+    use defra_agent_protocol::graphql::escape_graphql_string;
+
+    let peer_id = escape_graphql_string(&record.peer_id);
+    let collections = subscribed_collection_names()
+        .iter()
+        .map(|s| format!(r#""{}""#, escape_graphql_string(s)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let replicator_addr = escape_graphql_string(&record.addr);
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let now = escape_graphql_string(&now);
+
+    let query = format!(
+        r#"query {{ PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{ _docID created_at }} }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query PeerPairingDesired failed: {}",
+            response
+                .errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+    let existing_row = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("PeerPairingDesired"))
+        .and_then(|rows| rows.as_array())
+        .and_then(|rows| rows.first())
+        .cloned();
+
+    let mutation = if let Some(existing_row) = existing_row {
+        let created_at = existing_row
+            .get("created_at")
+            .and_then(|value| value.as_str())
+            .map(escape_graphql_string)
+            .unwrap_or_else(|| now.clone());
+        format!(
+            r#"mutation {{ update_PeerPairingDesired(
+                filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
+                input: {{
+                    collections: [{collections}],
+                    replicator_addresses: ["{replicator_addr}"],
+                    created_at: "{created_at}",
+                    updated_at: "{now}"
+                }}
+            ) {{ _docID }} }}"#
+        )
+    } else {
+        format!(
+            r#"mutation {{ create_PeerPairingDesired(input: {{
+                peer_id: "{peer_id}",
+                collections: [{collections}],
+                replicator_addresses: ["{replicator_addr}"],
+                created_at: "{now}",
+                updated_at: "{now}"
+            }}) {{ _docID }} }}"#
+        )
+    };
+
+    let response = node.execute(&mutation).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "write PeerPairingDesired failed: {}",
+            response
+                .errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+    Ok(())
 }
 
 pub(super) async fn connect_peer_with_retry(
@@ -472,6 +575,10 @@ pub(super) fn branchable_pair_sync_enabled() -> bool {
 
 pub(super) fn p2p_pairing_enabled_for_graphql(graphql: &str) -> bool {
     graphql_endpoint_is_loopback_or_unspecified(graphql) || env_flag_enabled(REMOTE_P2P_PAIRING_ENV)
+}
+
+pub(super) fn pairing_reconcile_enabled() -> bool {
+    env_flag_enabled(PAIRING_RECONCILE_ENV)
 }
 
 fn env_flag_enabled(name: &str) -> bool {

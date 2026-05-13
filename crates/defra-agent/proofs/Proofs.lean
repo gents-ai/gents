@@ -10,6 +10,7 @@ import Proofs.Fleet
 import Proofs.SessionRecovery
 import Proofs.Session.Properties
 import Proofs.RuntimeReconcile
+import Proofs.PairingReconcile
 import Proofs.Triggers
 import Proofs.Client
 import Proofs.ClientShell

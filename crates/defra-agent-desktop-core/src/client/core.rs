@@ -27,6 +27,7 @@ use super::principal_identity::PrincipalIdentity;
 use super::query::{
     load_agent_scoped_snapshot, load_full_snapshot, load_full_snapshot_from_graphql,
 };
+use crate::remote_admin::PairingErrorClass;
 
 const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -90,6 +91,130 @@ pub struct ClientPeerStatus {
     pub addr: String,
     pub dial_succeeded: bool,
     pub last_error: Option<String>,
+    pub pairing: Vec<PairingCollectionStatus>,
+}
+
+/// Per-peer-per-collection reconcile retry state, in-memory in v1.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairingCollectionStatus {
+    pub collection_id: String,
+    pub pairing_retry_count: u32,
+    pub last_retry_at: Option<SystemTime>,
+    pub last_retry_error_class: Option<PairingErrorClass>,
+    pub stuck_since: Option<SystemTime>,
+    first_failure_at: Option<SystemTime>,
+}
+
+pub const RPC_TIMEOUT: Duration = Duration::from_secs(10);
+pub const STUCK_THRESHOLD_ATTEMPTS: u32 = 6;
+pub const STUCK_THRESHOLD_DURATION: Duration = Duration::from_secs(5 * 60);
+
+impl PairingCollectionStatus {
+    pub fn new(collection_id: impl Into<String>) -> Self {
+        Self {
+            collection_id: collection_id.into(),
+            pairing_retry_count: 0,
+            last_retry_at: None,
+            last_retry_error_class: None,
+            stuck_since: None,
+            first_failure_at: None,
+        }
+    }
+
+    pub fn record_retry(&mut self, class: PairingErrorClass) {
+        let now = SystemTime::now();
+        self.pairing_retry_count = self.pairing_retry_count.saturating_add(1);
+        self.last_retry_at = Some(now);
+        self.last_retry_error_class = Some(class);
+        if self.first_failure_at.is_none() {
+            self.first_failure_at = Some(now);
+        }
+    }
+
+    pub fn record_success(&mut self) {
+        self.pairing_retry_count = 0;
+        self.last_retry_at = None;
+        self.last_retry_error_class = None;
+        self.stuck_since = None;
+        self.first_failure_at = None;
+    }
+
+    pub fn update_stuck_indicator(&mut self, now: SystemTime) {
+        if self.stuck_since.is_some() {
+            return;
+        }
+        let attempts_trigger = self.pairing_retry_count >= STUCK_THRESHOLD_ATTEMPTS;
+        let duration_trigger = self
+            .first_failure_at
+            .and_then(|first| now.duration_since(first).ok())
+            .map(|elapsed| elapsed >= STUCK_THRESHOLD_DURATION)
+            .unwrap_or(false);
+        if attempts_trigger || duration_trigger {
+            self.stuck_since = Some(now);
+        }
+    }
+}
+
+#[cfg(test)]
+mod pairing_status_tests {
+    use super::*;
+
+    #[test]
+    fn pairing_collection_status_default_is_clean() {
+        let s = PairingCollectionStatus::new("c1");
+        assert_eq!(s.collection_id, "c1");
+        assert_eq!(s.pairing_retry_count, 0);
+        assert!(s.last_retry_at.is_none());
+        assert!(s.last_retry_error_class.is_none());
+        assert!(s.stuck_since.is_none());
+    }
+
+    #[test]
+    fn client_peer_status_carries_pairing_vec() {
+        let peer_status = ClientPeerStatus {
+            peer_id: "p1".into(),
+            label: "l".into(),
+            agent_did: "did:defra:p1".into(),
+            addr: "/ip4/1/p2p/p1".into(),
+            dial_succeeded: true,
+            last_error: None,
+            pairing: vec![PairingCollectionStatus::new("c1")],
+        };
+        assert_eq!(peer_status.pairing.len(), 1);
+    }
+
+    #[test]
+    fn record_retry_increments_and_classifies() {
+        let mut s = PairingCollectionStatus::new("c1");
+        let before = SystemTime::now();
+        s.record_retry(PairingErrorClass::RpcTimeout);
+        assert_eq!(s.pairing_retry_count, 1);
+        assert!(s.last_retry_at.unwrap() >= before);
+        assert_eq!(
+            s.last_retry_error_class,
+            Some(PairingErrorClass::RpcTimeout)
+        );
+    }
+
+    #[test]
+    fn mark_stuck_after_threshold() {
+        let mut s = PairingCollectionStatus::new("c1");
+        for _ in 0..STUCK_THRESHOLD_ATTEMPTS {
+            s.record_retry(PairingErrorClass::RpcTimeout);
+        }
+        s.update_stuck_indicator(SystemTime::now());
+        assert!(s.stuck_since.is_some());
+    }
+
+    #[test]
+    fn record_success_clears_state() {
+        let mut s = PairingCollectionStatus::new("c1");
+        s.record_retry(PairingErrorClass::RpcError);
+        s.record_success();
+        assert_eq!(s.pairing_retry_count, 0);
+        assert!(s.last_retry_error_class.is_none());
+        assert!(s.stuck_since.is_none());
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

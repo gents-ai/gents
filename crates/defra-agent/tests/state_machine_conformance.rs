@@ -51,6 +51,7 @@ fn lean_executable_contracts_cover_initial_domains() {
         "StorageObservation.failClosed",
         "StorageObservation.failOpen",
         "RuntimeReconcile",
+        "PairingReconcile",
         "SessionRecovery",
         "InferenceCall",
     ] {
@@ -59,6 +60,10 @@ fn lean_executable_contracts_cover_initial_domains() {
 
     assert_lean_transition_is_legal("RuntimeReconcile", "applying", "idle");
     assert_lean_transition_is_legal("RuntimeReconcile", "idle", "debouncing");
+    assert_lean_transition_is_legal("PairingReconcile", "idle", "diverged");
+    assert_lean_transition_is_legal("PairingReconcile", "diverged", "converged");
+    assert_lean_transition_is_legal("PairingReconcile", "converged", "crashed");
+    assert_lean_transition_is_illegal("PairingReconcile", "idle", "converged");
     assert_lean_transition_is_legal("Persistence.failClosed", "committing", "uncommitted");
     assert_lean_transition_is_legal("Persistence.failOpen", "committing", "lost");
     assert_lean_transition_is_legal("StorageObservation.failClosed", "noMutation", "inFlight");
