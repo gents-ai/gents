@@ -24,8 +24,8 @@ use lean_vocab_test::{
     lean_inference_slot_accounting_case, lean_queue_deadline_case, lean_queue_deadline_cases,
     lean_recovery_sweep_case, lean_recovery_sweep_cases, lean_request_transition_cases,
     lean_runtime_reconcile_case, lean_session_recovery_case, lean_state_machine_contract,
-    lean_tool_preflight_case, lean_tool_retry_case, lean_vocabulary_values,
-    LeanLifecycleTransitionCase,
+    lean_tool_preflight_case, lean_tool_retry_case, lean_transcript_case, lean_transcript_cases,
+    lean_vocabulary_values, LeanLifecycleTransitionCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
@@ -215,6 +215,7 @@ fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
     assert_eq!(lean_queue_deadline_cases().len(), 5);
     assert_eq!(lean_recovery_sweep_cases().len(), 17);
+    assert_eq!(lean_transcript_cases().len(), 6);
 }
 
 #[test]
@@ -506,6 +507,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "RecoverySweepCases".to_string(),
         ));
     }
+    if !lean_transcript_cases().is_empty() {
+        emitted.insert((
+            "transcript_cases".to_string(),
+            "TranscriptConformanceCases".to_string(),
+        ));
+    }
     for hook in &snapshot.follow_up_hooks {
         emitted.insert(("follow_up_hook".to_string(), hook.clone()));
     }
@@ -532,6 +539,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "live_overlay_cases",
         "queue_deadline_cases",
         "recovery_sweep_cases",
+        "transcript_cases",
         "follow_up_hook",
     ];
     let registered_consumers = assert_registered_conformance_consumers_resolve();
@@ -742,6 +750,87 @@ fn generated_recovery_sweep_cases_pin_startup_recovery_contract() {
             reconstructed_running_slot_count([terminal_row], "contract-backend"),
             0,
             "terminal InferenceCall recovery case {} must reconstruct zero running slots",
+            case.name
+        );
+    }
+}
+
+#[test]
+fn generated_transcript_cases_pin_agent_message_ordering_contract() {
+    let cases = lean_transcript_cases();
+    assert_eq!(cases.len(), 6);
+
+    let names = cases
+        .iter()
+        .map(|case| case.name.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        names,
+        [
+            "ordering_user_assistant_tool_result",
+            "dedupe_duplicate_reuses_sequence",
+            "distinct_result_ids_append_distinct_rows",
+            "completed_tool_pair_closed",
+            "explicit_drain_terminalizes_ownership",
+            "drop_abandon_not_strong_drain",
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+    );
+
+    let ordering = lean_transcript_case("ordering_user_assistant_tool_result");
+    assert!(ordering.legal);
+    assert_eq!(ordering.group.as_str(), "ordering");
+    assert_eq!(ordering.pre_message_count, 0);
+    assert_eq!(ordering.post_message_count, 3);
+    assert_eq!(ordering.pre_tool_call_count, 0);
+    assert_eq!(ordering.post_tool_call_count, 1);
+    assert_eq!(ordering.assistant_sequence, 2);
+    assert_eq!(ordering.result_sequence, 3);
+    assert!(ordering.expected_ordered);
+    assert!(ordering.expected_pair_closed);
+
+    let dedupe = lean_transcript_case("dedupe_duplicate_reuses_sequence");
+    assert_eq!(dedupe.group.as_str(), "dedupe");
+    assert_eq!(dedupe.action.as_str(), "observe_duplicate_tool_result");
+    assert_eq!(dedupe.pre_message_count, dedupe.post_message_count);
+    assert_eq!(dedupe.pre_tool_call_count, dedupe.post_tool_call_count);
+    assert_eq!(dedupe.logical_result_id, ordering.logical_result_id);
+    assert_eq!(dedupe.payload_hash, ordering.payload_hash);
+    assert!(dedupe.expected_duplicate_reused_sequence);
+    assert_eq!(dedupe.result_sequence, ordering.result_sequence);
+
+    let distinct = lean_transcript_case("distinct_result_ids_append_distinct_rows");
+    assert_eq!(distinct.group.as_str(), "dedupe");
+    assert_eq!(distinct.payload_hash, ordering.payload_hash);
+    assert_ne!(distinct.logical_result_id, ordering.logical_result_id);
+    assert_eq!(distinct.pre_message_count + 1, distinct.post_message_count);
+    assert!(!distinct.expected_duplicate_reused_sequence);
+
+    let pair = lean_transcript_case("completed_tool_pair_closed");
+    assert_eq!(pair.group.as_str(), "pairing");
+    assert!(pair.expected_pair_closed);
+    assert!(pair.expected_ordered);
+
+    let drain = lean_transcript_case("explicit_drain_terminalizes_ownership");
+    assert_eq!(drain.group.as_str(), "hook_boundary");
+    assert_eq!(drain.pre_in_flight_count, 1);
+    assert_eq!(drain.post_in_flight_count, 0);
+    assert!(drain.expected_strong_drain);
+
+    let abandon = lean_transcript_case("drop_abandon_not_strong_drain");
+    assert_eq!(abandon.group.as_str(), "hook_boundary");
+    assert_eq!(abandon.action.as_str(), "abandon_hook_ownership");
+    assert_eq!(abandon.pre_in_flight_count, 1);
+    assert_eq!(abandon.post_in_flight_count, 0);
+    assert!(!abandon.expected_strong_drain);
+    assert!(!abandon.expected_pair_closed);
+
+    for case in cases {
+        assert!(case.legal, "transcript case {} should be legal", case.name);
+        assert!(
+            case.expected_ordered,
+            "transcript case {} should preserve ordering",
             case.name
         );
     }
