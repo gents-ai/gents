@@ -104,7 +104,7 @@ theorem h6_evicted_recovers_via_backoff_then_probe
     `Reconnecting` state, so a successful probe after eviction must assign
     `Healthy` directly. See spec §7.1 for the design rationale. -/
 theorem h6'_evicted_recovers_via_probe_directly
-    (sm : ServiceModel) (K : Threshold) (h : sm.state = .evicted) :
+    (sm : ServiceModel) (K : Threshold) (_h : sm.state = .evicted) :
     (step? sm (.probeSuccess false) K).map (·.state) = some .healthy := rfl
 
 end Proofs.MCPHealth
