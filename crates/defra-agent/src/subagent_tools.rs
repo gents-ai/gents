@@ -25,6 +25,13 @@ pub(crate) struct WaitSubagentArgs {
     pub child_request_id: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct CancelSubagentArgs {
+    pub child_request_id: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum AwaitModeArg {
     #[default]

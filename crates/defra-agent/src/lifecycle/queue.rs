@@ -68,6 +68,18 @@ pub(crate) fn is_automated_wakeup(metadata: Option<&str>) -> bool {
     })
 }
 
+pub(crate) fn is_subagent_owned_queue(metadata: Option<&str>) -> bool {
+    parse_queue_hints(metadata).is_some_and(|hints| {
+        matches!(hints.source, QueueSource::Steering)
+            || (matches!(hints.source, QueueSource::SubagentCompletion)
+                && hints.policy == QueuePolicy::Coalesce
+                && hints
+                    .key
+                    .as_deref()
+                    .is_some_and(|key| !key.trim().is_empty()))
+    })
+}
+
 #[derive(Debug, Deserialize)]
 struct PendingQueueRow {
     #[serde(rename = "_docID")]
@@ -418,6 +430,30 @@ pub(crate) async fn drain_automated_wakeups(
     session_id: &str,
     reason: &str,
 ) -> Result<usize> {
+    drain_pending_session_requests_where(node, session_id, reason, |row| {
+        row.execution_origin.as_deref() == Some("scheduled")
+            && is_automated_wakeup(row.metadata.as_deref())
+    })
+    .await
+}
+
+pub(crate) async fn drain_subagent_owned_queue(
+    node: &EmbeddedNode,
+    session_id: &str,
+    reason: &str,
+) -> Result<usize> {
+    drain_pending_session_requests_where(node, session_id, reason, |row| {
+        is_subagent_owned_queue(row.metadata.as_deref())
+    })
+    .await
+}
+
+async fn drain_pending_session_requests_where(
+    node: &EmbeddedNode,
+    session_id: &str,
+    reason: &str,
+    should_drain: impl Fn(&PendingQueueRow) -> bool,
+) -> Result<usize> {
     let escaped_session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
@@ -452,10 +488,7 @@ pub(crate) async fn drain_automated_wakeups(
 
     let escaped_reason = escape_graphql_string(reason);
     let mut drained = 0;
-    for row in rows.into_iter().filter(|row| {
-        row.execution_origin.as_deref() == Some("scheduled")
-            && is_automated_wakeup(row.metadata.as_deref())
-    }) {
+    for row in rows.into_iter().filter(should_drain) {
         let escaped_doc_id = escape_graphql_string(&row.doc_id);
         let mutation = format!(
             r#"mutation {{

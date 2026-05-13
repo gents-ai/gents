@@ -6,7 +6,10 @@ use std::time::Duration;
 
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
-use defra_agent::tool_call_lifecycle::{ToolCallLifecycle, MAX_SUBAGENT_DEPTH};
+use defra_agent::tool_call_lifecycle::{
+    create_subagent_request_with_request_id, AwaitMode, CancelPolicy, ToolCallLifecycle,
+    MAX_SUBAGENT_DEPTH,
+};
 use defra_agent::{
     fetch_interrupt_requested_at, interrupt_request, load_history, upsert_agent_behavior,
     upsert_tool_selection, AgentBehavior, DefraSessionHook, FailurePolicy, ToolSelectionDocument,
@@ -79,7 +82,9 @@ struct ChildRequestRow {
     session_id: String,
     behavior_id: String,
     content: String,
+    status: Option<String>,
     lifecycle_state: Option<String>,
+    failure_reason: Option<String>,
     subagent_depth: Option<i64>,
     deadline: Option<String>,
     caused_by_parent_request_id: Option<String>,
@@ -339,7 +344,9 @@ async fn fetch_child_request(node: &EmbeddedNode, child_request_id: &str) -> Chi
                 session_id
                 behavior_id
                 content
+                status
                 lifecycle_state
+                failure_reason
                 subagent_depth
                 deadline
                 caused_by_parent_request_id
@@ -369,7 +376,9 @@ async fn child_request_for_tool(
                 session_id
                 behavior_id
                 content
+                status
                 lifecycle_state
+                failure_reason
                 subagent_depth
                 deadline
                 caused_by_parent_request_id
@@ -518,6 +527,101 @@ async fn persist_child_terminal(
         "update child AgentRequest {lifecycle_state} failed: {:?}",
         response.errors
     );
+}
+
+async fn update_request_state(
+    node: &EmbeddedNode,
+    request_id: &str,
+    status: &str,
+    lifecycle_state: &str,
+) {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let escaped_status = escape_graphql_string(status);
+    let escaped_lifecycle_state = escape_graphql_string(lifecycle_state);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                input: {{
+                    status: "{escaped_status}",
+                    lifecycle_state: "{escaped_lifecycle_state}"
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "update AgentRequest state failed: {:?}",
+        response.errors
+    );
+}
+
+async fn create_child_session_queued_request(
+    node: &EmbeddedNode,
+    request_id: &str,
+    session_id: &str,
+    execution_origin: &str,
+    metadata: &str,
+) {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let escaped_agent_did = escape_graphql_string(AGENT_DID);
+    let escaped_behavior_id = escape_graphql_string(CHILD_BEHAVIOR_ID);
+    let escaped_session_id = escape_graphql_string(session_id);
+    let escaped_execution_origin = escape_graphql_string(execution_origin);
+    let escaped_metadata = escape_graphql_string(metadata);
+    let now = chrono::Utc::now();
+    let escaped_created_at = escape_graphql_string(&now.to_rfc3339());
+    let escaped_deadline =
+        escape_graphql_string(&(now + chrono::Duration::minutes(5)).to_rfc3339());
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{escaped_request_id}",
+                agent_did: "{escaped_agent_did}",
+                behavior_id: "{escaped_behavior_id}",
+                session_id: "{escaped_session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{escaped_request_id}",
+                superseded_by_request: "",
+                content: "queued child session request",
+                status: "pending",
+                lifecycle_state: "pending",
+                backend_id: "",
+                execution_origin: "{escaped_execution_origin}",
+                metadata: "{escaped_metadata}",
+                failure_reason: "",
+                created_at: "{escaped_created_at}",
+                deadline: "{escaped_deadline}",
+                retry_count: 0,
+                max_retries: 3,
+                subagent_depth: 1
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create queued child AgentRequest failed: {:?}",
+        response.errors
+    );
+}
+
+fn queue_metadata(
+    source: &str,
+    policy: &str,
+    key: Option<&str>,
+    queued_after_request_id: Option<&str>,
+) -> String {
+    json!({
+        "queue": {
+            "source": source,
+            "policy": policy,
+            "key": key,
+            "queued_after_request_id": queued_after_request_id
+        }
+    })
+    .to_string()
 }
 
 fn skip_reason_json(action: ToolCallHookAction) -> Value {
@@ -1450,6 +1554,216 @@ async fn wait_subagent_returns_background_receipt_when_bridge_is_backgrounded() 
     assert_eq!(result["backgrounded"], true);
     assert_eq!(
         count_tool_calls_by_name(db.node.as_ref(), &session_id, "wait_subagent").await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
+    let (db, hook, session_id, _request_id, parent_deadline) =
+        setup_spawn_fixture("cancel_subagent_active", vec![CHILD_BEHAVIOR_ID], 0, true).await;
+    let spawn_args = json!({
+        "behavior_id": CHILD_BEHAVIOR_ID,
+        "prompt": "background child for cancel_subagent",
+        "await_mode": "background"
+    })
+    .to_string();
+
+    let spawn_action = PromptHook::<TestModel>::on_tool_call(
+        &hook,
+        "spawn_subagent",
+        Some("model-call-cancel-spawn".to_string()),
+        "internal-cancel-spawn",
+        &spawn_args,
+    )
+    .await;
+    let spawn_receipt = skip_reason_json(spawn_action);
+    let child_request_id = spawn_receipt["child_request_id"]
+        .as_str()
+        .expect("child_request_id")
+        .to_string();
+    let child_session_id = spawn_receipt["child_session_id"]
+        .as_str()
+        .expect("child_session_id")
+        .to_string();
+    update_request_state(
+        db.node.as_ref(),
+        &child_request_id,
+        "processing",
+        "processing",
+    )
+    .await;
+
+    let automated_request_id = "cancel-subagent-active-auto-queue";
+    create_child_session_queued_request(
+        db.node.as_ref(),
+        automated_request_id,
+        &child_session_id,
+        "scheduled",
+        &queue_metadata(
+            "subagent_completion",
+            "coalesce",
+            Some("subagent_completion:cancel-subagent-active"),
+            Some(&child_request_id),
+        ),
+    )
+    .await;
+    let steering_request_id = "cancel-subagent-active-steering-queue";
+    create_child_session_queued_request(
+        db.node.as_ref(),
+        steering_request_id,
+        &child_session_id,
+        "interactive",
+        &queue_metadata("steering", "append", None, Some(&child_request_id)),
+    )
+    .await;
+    let user_request_id = "cancel-subagent-active-user-queue";
+    create_child_session_queued_request(
+        db.node.as_ref(),
+        user_request_id,
+        &child_session_id,
+        "interactive",
+        &queue_metadata("user", "append", None, Some(&child_request_id)),
+    )
+    .await;
+
+    let grandchild_request_id = "cancel-subagent-active-grandchild";
+    let mut descendant_bridge = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        child_request_id.clone(),
+        child_session_id.clone(),
+        "internal-cancel-descendant".to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        "{}".to_string(),
+        parent_deadline,
+        AwaitMode::Background,
+        CancelPolicy::Cascade,
+        grandchild_request_id.to_string(),
+    );
+    descendant_bridge.start_running().await.unwrap();
+    let _grandchild_session_id = create_subagent_request_with_request_id(
+        db.node.as_ref(),
+        grandchild_request_id.to_string(),
+        child_request_id.clone(),
+        "internal-cancel-descendant".to_string(),
+        1,
+        AGENT_DID.to_string(),
+        CHILD_BEHAVIOR_ID.to_string(),
+        "grandchild prompt".to_string(),
+        Some(parent_deadline - chrono::Duration::minutes(1)),
+    )
+    .await
+    .unwrap();
+
+    let collision_action = PromptHook::<TestModel>::on_tool_call(
+        &hook,
+        "bash",
+        None,
+        "internal-cancel-descendant",
+        "{\"cmd\":\"still running\"}",
+    )
+    .await;
+    assert!(matches!(collision_action, ToolCallHookAction::Continue));
+
+    let cancel_args = json!({
+        "child_request_id": child_request_id.clone(),
+        "reason": "parent no longer needs this work"
+    })
+    .to_string();
+    let action = PromptHook::<TestModel>::on_tool_call(
+        &hook,
+        "cancel_subagent",
+        Some("model-call-cancel".to_string()),
+        "internal-cancel-tool",
+        &cancel_args,
+    )
+    .await;
+    let result = skip_reason_json(action);
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["status"], "cancelled");
+    assert_eq!(result["child_request_id"], child_request_id);
+    assert_eq!(result["child_session_id"], child_session_id);
+    assert_eq!(result["active_interrupted"], true);
+    assert_eq!(result["descendants_cancelled"], 1);
+    assert_eq!(result["queued_drained"], 2);
+
+    let root_bridge = fetch_tool_call(db.node.as_ref(), &session_id, "internal-cancel-spawn").await;
+    assert_eq!(root_bridge.lifecycle_state.as_deref(), Some("cancelled"));
+    let descendant = fetch_tool_call(
+        db.node.as_ref(),
+        &child_session_id,
+        "internal-cancel-descendant",
+    )
+    .await;
+    assert_eq!(descendant.lifecycle_state.as_deref(), Some("cancelled"));
+    let parent_collision =
+        fetch_tool_call(db.node.as_ref(), &session_id, "internal-cancel-descendant").await;
+    assert_eq!(
+        parent_collision.lifecycle_state.as_deref(),
+        Some("running"),
+        "descendant cancellation must not consume same-id parent-session lifecycle state"
+    );
+    assert!(
+        fetch_interrupt_requested_at(db.node.as_ref(), &child_request_id)
+            .await
+            .unwrap()
+            .is_some(),
+        "cancel_subagent should interrupt the child request"
+    );
+    assert!(
+        fetch_interrupt_requested_at(db.node.as_ref(), grandchild_request_id)
+            .await
+            .unwrap()
+            .is_some(),
+        "cancel_subagent should cascade to live descendant subagents"
+    );
+
+    let automated = fetch_child_request(db.node.as_ref(), automated_request_id).await;
+    assert_eq!(automated.status.as_deref(), Some("interrupted"));
+    assert_eq!(automated.lifecycle_state.as_deref(), Some("interrupted"));
+    assert!(automated
+        .failure_reason
+        .as_deref()
+        .is_some_and(|reason| reason.contains("parent no longer needs this work")));
+    let steering = fetch_child_request(db.node.as_ref(), steering_request_id).await;
+    assert_eq!(steering.status.as_deref(), Some("interrupted"));
+    assert_eq!(steering.lifecycle_state.as_deref(), Some("interrupted"));
+    let user = fetch_child_request(db.node.as_ref(), user_request_id).await;
+    assert_eq!(user.status.as_deref(), Some("pending"));
+    assert_eq!(user.lifecycle_state.as_deref(), Some("pending"));
+    assert_eq!(
+        count_tool_calls_by_name(db.node.as_ref(), &session_id, "cancel_subagent").await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn cancel_subagent_rejects_unlinked_child_without_lifecycle_row() {
+    let (db, hook, session_id, _request_id, _parent_deadline) = setup_spawn_fixture(
+        "cancel_subagent_unlinked_child",
+        vec![CHILD_BEHAVIOR_ID],
+        0,
+        true,
+    )
+    .await;
+    let cancel_args = json!({ "child_request_id": "not-this-parents-child" }).to_string();
+
+    let action = PromptHook::<TestModel>::on_tool_call(
+        &hook,
+        "cancel_subagent",
+        Some("model-call-cancel-denied".to_string()),
+        "internal-cancel-denied",
+        &cancel_args,
+    )
+    .await;
+    let error = skip_reason_json(action);
+    assert_eq!(error["ok"], false);
+    assert_eq!(error["failure_class"], "service_unavailable");
+    assert_eq!(error["tool_name"], "cancel_subagent");
+    assert_eq!(error["path"], "/child_request_id");
+    assert_eq!(
+        count_tool_calls_by_name(db.node.as_ref(), &session_id, "cancel_subagent").await,
         0
     );
 }

@@ -1,9 +1,8 @@
 use anyhow::anyhow;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
-use serde::Deserialize;
 
-use crate::subagent_tools::{SpawnSubagentArgs, WaitSubagentArgs};
+use crate::subagent_tools::{CancelSubagentArgs, SpawnSubagentArgs, WaitSubagentArgs};
 use crate::tool_call_lifecycle::AwaitMode;
 use crate::tool_surface::SubagentToolConfig;
 
@@ -78,13 +77,6 @@ pub(super) struct WaitSubagentTool;
 
 #[derive(Clone, Copy)]
 pub(super) struct CancelSubagentTool;
-
-#[derive(Debug, Deserialize)]
-pub(super) struct CancelSubagentArgs {
-    child_request_id: String,
-    #[serde(default)]
-    reason: Option<String>,
-}
 
 impl Tool for SpawnSubagentTool {
     const NAME: &'static str = SPAWN_SUBAGENT_TOOL_NAME;

@@ -4,6 +4,7 @@ use rig::agent::{HookAction, PromptHook, ToolCallHookAction};
 use rig::completion::message::{Message, Text, ToolResult, ToolResultContent, UserContent};
 use rig::completion::{CompletionModel, CompletionResponse};
 use rig::one_or_many::OneOrMany;
+use serde::Deserialize;
 use serde_json::json;
 use tracing::Instrument;
 
@@ -12,8 +13,8 @@ use crate::session;
 use crate::subagent_tools::{
     child_request_completed, load_authorized_child_edge, load_child_final_response,
     load_child_session_id, load_child_terminal_row, load_parent_subagent_context,
-    project_child_terminal, target_is_allowed, ParentSubagentContext, SpawnSubagentArgs,
-    WaitSubagentArgs,
+    project_child_terminal, target_is_allowed, CancelSubagentArgs, ParentSubagentContext,
+    SpawnSubagentArgs, WaitSubagentArgs,
 };
 use crate::tool_call_lifecycle::query::load_tool_call_result;
 use crate::tool_call_lifecycle::runtime::{classify_managed_tool_result, ManagedToolTerminal};
@@ -21,7 +22,9 @@ use crate::tool_call_lifecycle::{
     create_subagent_request_with_request_id, AwaitMode, CancelPolicy, ChildTerminal, FailureClass,
     ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
-use crate::toolset::{SPAWN_SUBAGENT_TOOL_NAME, WAIT_SUBAGENT_TOOL_NAME};
+use crate::toolset::{
+    CANCEL_SUBAGENT_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME, WAIT_SUBAGENT_TOOL_NAME,
+};
 use crate::truncation::{truncate_text, DefraSpillTruncator, TruncationMode, Truncator};
 
 use super::{non_empty, DefraSessionHook, TranscriptTurnState};
@@ -598,6 +601,200 @@ impl DefraSessionHook {
             .await?;
 
         Ok(ToolCallHookAction::skip(result))
+    }
+
+    async fn persist_cancel_subagent_tool_call(
+        &self,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+    ) -> anyhow::Result<ToolCallHookAction> {
+        let (_session_id, request_id, _deadline_at, _seq) =
+            self.ensure_assistant_turn_sequence().await?;
+        self.state.lock().await.register_tool_result_identity(
+            internal_call_id,
+            None,
+            tool_call_id.as_deref(),
+        );
+
+        let parsed = match serde_json::from_str::<CancelSubagentArgs>(args) {
+            Ok(args) => args,
+            Err(error) => {
+                return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+                    CANCEL_SUBAGENT_TOOL_NAME,
+                    "/",
+                    format!("invalid cancel_subagent arguments: {error}"),
+                )));
+            }
+        };
+        let child_request_id = parsed.child_request_id.trim();
+        if child_request_id.is_empty() {
+            return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+                CANCEL_SUBAGENT_TOOL_NAME,
+                "/child_request_id",
+                "child_request_id is required",
+            )));
+        }
+        if parsed
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.trim().is_empty())
+        {
+            return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+                CANCEL_SUBAGENT_TOOL_NAME,
+                "/reason",
+                "reason must be omitted or non-empty",
+            )));
+        }
+
+        let parent_context = load_parent_subagent_context(&self.node, &request_id).await?;
+        let edge =
+            match load_authorized_child_edge(&self.node, &parent_context, child_request_id).await {
+                Ok(edge) => edge,
+                Err(error) => {
+                    return Ok(ToolCallHookAction::skip(service_unavailable_payload(
+                        CANCEL_SUBAGENT_TOOL_NAME,
+                        "/child_request_id",
+                        format!(
+                        "child subagent request is not available to this parent request: {error}"
+                    ),
+                        false,
+                    )));
+                }
+            };
+
+        let reason = parsed
+            .reason
+            .as_deref()
+            .map(str::trim)
+            .filter(|reason| !reason.is_empty())
+            .unwrap_or("subagent cancelled by parent request");
+
+        let mut queued_drained = crate::interrupt::cancel_subagent_session_queue(
+            &self.node,
+            &edge.child_session_id,
+            reason,
+        )
+        .await?;
+        self.cancel_running_subagent_bridge(
+            &parent_context.session_id,
+            &edge.parent_tool_call_id,
+            "root",
+        )
+        .await?;
+        let active_interrupted =
+            crate::interrupt::interrupt_active_session_request(&self.node, &edge.child_session_id)
+                .await?;
+        let descendants_cancelled = self
+            .cancel_live_subagent_descendants(&edge.child_session_id)
+            .await?;
+        queued_drained += crate::interrupt::cancel_subagent_session_queue(
+            &self.node,
+            &edge.child_session_id,
+            reason,
+        )
+        .await?;
+
+        Ok(ToolCallHookAction::skip(json_string(json!({
+            "ok": true,
+            "child_request_id": edge.child_request_id,
+            "child_session_id": edge.child_session_id,
+            "behavior_id": edge.behavior_id,
+            "status": "cancelled",
+            "active_interrupted": active_interrupted,
+            "descendants_cancelled": descendants_cancelled,
+            "queued_drained": queued_drained
+        }))))
+    }
+
+    async fn cancel_live_subagent_descendants(
+        &self,
+        child_session_id: &str,
+    ) -> anyhow::Result<usize> {
+        let tool_call_ids = running_subagent_bridge_ids(&self.node, child_session_id).await?;
+        let mut cancelled = 0;
+        for tool_call_id in tool_call_ids {
+            if self
+                .cancel_stored_running_subagent_bridge(
+                    child_session_id,
+                    &tool_call_id,
+                    "descendant",
+                )
+                .await?
+            {
+                cancelled += 1;
+            }
+        }
+        Ok(cancelled)
+    }
+
+    async fn cancel_running_subagent_bridge(
+        &self,
+        session_id: &str,
+        tool_call_id: &str,
+        bridge_kind: &str,
+    ) -> anyhow::Result<bool> {
+        let Some(mut lifecycle) = self
+            .take_or_load_in_flight_lifecycle(session_id, tool_call_id)
+            .await?
+        else {
+            return Ok(false);
+        };
+        if !lifecycle.is_running() {
+            return Ok(false);
+        }
+
+        lifecycle.cancel_during_run().await?;
+        if !lifecycle.is_cancelled() {
+            return Ok(false);
+        }
+
+        let Some(intent) = lifecycle.bridge_cancel_cascade().await? else {
+            return Ok(false);
+        };
+        crate::interrupt::interrupt_request(&self.node, &intent.child_request_id)
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to cascade cancel_subagent {bridge_kind} bridge {tool_call_id} cancellation to child request {}: {error}",
+                    intent.child_request_id
+                )
+            })?;
+        Ok(true)
+    }
+
+    async fn cancel_stored_running_subagent_bridge(
+        &self,
+        session_id: &str,
+        tool_call_id: &str,
+        bridge_kind: &str,
+    ) -> anyhow::Result<bool> {
+        let Some(mut lifecycle) =
+            ToolCallLifecycle::load(self.node.clone(), session_id, tool_call_id).await?
+        else {
+            return Ok(false);
+        };
+        if !lifecycle.is_running() {
+            return Ok(false);
+        }
+
+        lifecycle.cancel_during_run().await?;
+        if !lifecycle.is_cancelled() {
+            return Ok(false);
+        }
+
+        let Some(intent) = lifecycle.bridge_cancel_cascade().await? else {
+            return Ok(false);
+        };
+        crate::interrupt::interrupt_request(&self.node, &intent.child_request_id)
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to cascade cancel_subagent {bridge_kind} bridge {tool_call_id} cancellation to child request {}: {error}",
+                    intent.child_request_id
+                )
+            })?;
+        Ok(true)
     }
 
     async fn await_foreground_subagent(
@@ -1367,6 +1564,59 @@ async fn wait_for_external_lifecycle_owner(
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+struct RunningSubagentBridgeRow {
+    tool_call_id: String,
+    child_request_id: Option<String>,
+}
+
+async fn running_subagent_bridge_ids(
+    node: &defra_node::EmbeddedNode,
+    session_id: &str,
+) -> anyhow::Result<Vec<String>> {
+    let escaped_session_id = crate::graphql::escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    session_id: {{ _eq: "{escaped_session_id}" }},
+                    lifecycle_state: {{ _eq: "running" }},
+                    cancel_policy: {{ _eq: "cascade" }}
+                }},
+                order: [{{ started_at: ASC }}, {{ tool_call_id: ASC }}]
+            ) {{
+                tool_call_id
+                child_request_id
+            }}
+        }}"#
+    );
+
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query running subagent bridges for session {session_id} failed: {:?}",
+            response.errors
+        );
+    }
+
+    let rows: Vec<RunningSubagentBridgeRow> = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+
+    Ok(rows
+        .into_iter()
+        .filter(|row| {
+            row.child_request_id
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+        })
+        .map(|row| row.tool_call_id)
+        .collect())
+}
+
 impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
     async fn on_completion_call(&self, prompt: &Message, _history: &[Message]) -> HookAction {
         let result: anyhow::Result<()> = async {
@@ -1461,6 +1711,24 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                     action
                 }
                 Err(e) => self.on_tool_persistence_error("persist wait_subagent tool call", &e),
+            };
+        }
+        if tool_name == CANCEL_SUBAGENT_TOOL_NAME {
+            let result = self
+                .persist_cancel_subagent_tool_call(tool_call_id, internal_call_id, args)
+                .instrument(tracing::info_span!(
+                    "tool.call",
+                    tool_name = %tool_name,
+                    tool_call_id = %internal_call_id,
+                ))
+                .await;
+
+            return match result {
+                Ok(action) => {
+                    self.record_success();
+                    action
+                }
+                Err(e) => self.on_tool_persistence_error("persist cancel_subagent tool call", &e),
             };
         }
 
