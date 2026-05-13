@@ -105,7 +105,7 @@ impl DefraSessionHook {
                     if let Some(key) = message_key.as_ref() {
                         state
                             .persisted_tool_result_message_sequences
-                        .insert(key.clone(), sequence);
+                            .insert(key.clone(), sequence);
                     }
                     (session_id, sequence, "user", message_key)
                 }
