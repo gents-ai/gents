@@ -22,12 +22,12 @@ use lean_vocab_test::{
     lean_client_shell_case, lean_command_env_case, lean_command_policy_case,
     lean_command_sandbox_case, lean_contract_snapshot, lean_event_delivery_convergence_traces,
     lean_event_delivery_source_instances, lean_event_delivery_transition_cases,
-    lean_fleet_slot_accounting_case, lean_inference_slot_accounting_case, lean_queue_deadline_case,
-    lean_queue_deadline_cases, lean_recovery_sweep_case, lean_recovery_sweep_cases,
-    lean_request_transition_cases, lean_runtime_reconcile_case, lean_session_recovery_case,
-    lean_state_machine_contract, lean_tool_preflight_case, lean_tool_retry_case,
-    lean_transcript_case, lean_transcript_cases, lean_vocabulary_values, LeanEventDeliveryAction,
-    LeanLifecycleTransitionCase,
+    lean_fleet_slot_accounting_case, lean_inference_slot_accounting_case, lean_mcp_health_cases,
+    lean_queue_deadline_case, lean_queue_deadline_cases, lean_recovery_sweep_case,
+    lean_recovery_sweep_cases, lean_request_transition_cases, lean_runtime_reconcile_case,
+    lean_session_recovery_case, lean_state_machine_contract, lean_tool_preflight_case,
+    lean_tool_retry_case, lean_transcript_case, lean_transcript_cases, lean_vocabulary_values,
+    LeanEventDeliveryAction, LeanLifecycleTransitionCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
@@ -539,6 +539,9 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "EventDeliveryConvergenceTraces".to_string(),
         ));
     }
+    if !lean_mcp_health_cases().is_empty() {
+        emitted.insert(("mcp_health_cases".to_string(), "MCPHealthCases".to_string()));
+    }
     for hook in &snapshot.follow_up_hooks {
         emitted.insert(("follow_up_hook".to_string(), hook.clone()));
     }
@@ -567,6 +570,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "recovery_sweep_cases",
         "transcript_cases",
         "event_delivery_cases",
+        "mcp_health_cases",
         "follow_up_hook",
     ];
     let registered_consumers = assert_registered_conformance_consumers_resolve();

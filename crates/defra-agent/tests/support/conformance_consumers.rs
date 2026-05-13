@@ -335,6 +335,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             module_path: "tool_call_lifecycle::tests",
             function: "tool_call_state_machine_contract_is_complete",
         },
+        ConformanceConsumer::RustTest {
+            id: "health_checker::tests::generated_mcp_health_k1_cases_match_health_checker_transitions",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/src/health_checker.rs",
+            module_path: "health_checker::tests",
+            function: "generated_mcp_health_k1_cases_match_health_checker_transitions",
+        },
     ]
 }
 
