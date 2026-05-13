@@ -9,7 +9,9 @@ use crate::document_config::{
 };
 
 use super::snapshot::behavior_references_ready;
-use super::{ControlUpdateOutcome, DocumentRecord, DocumentRuntimeView};
+use super::{
+    validate_subagent_targets_resolve, ControlUpdateOutcome, DocumentRecord, DocumentRuntimeView,
+};
 
 pub(crate) async fn apply_control_update(
     node: &EmbeddedNode,
@@ -189,19 +191,4 @@ pub(crate) async fn apply_control_update(
     }
 
     Ok(ControlUpdateOutcome::Irrelevant)
-}
-
-fn validate_subagent_targets_resolve(
-    selection: &crate::document_config::ToolSelectionDocument,
-    view: &DocumentRuntimeView,
-) -> Result<()> {
-    for target in selection.subagent_targets.iter().flatten() {
-        if !view.behaviors.contains_key(target) {
-            anyhow::bail!(
-                "ToolSelection {} subagent_targets entry {target:?} does not resolve to an AgentBehavior",
-                selection.selection_id,
-            );
-        }
-    }
-    Ok(())
 }
