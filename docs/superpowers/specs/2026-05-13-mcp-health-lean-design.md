@@ -135,7 +135,16 @@ structure ServiceModel where
   deriving DecidableEq, Repr
 ```
 
-`failureCount` is the count of consecutive `probeFail` events since the last `probeSuccess`. Carrying it on the structure (rather than inside `.degraded`) lets `Reconnecting → probeFail → Evicted` increment without re-deriving the count from `.degraded`'s payload. `Degraded` is entered with `failureCount ∈ [0, K)`: `0` means "degraded because the last probe reported `staleness=true`"; `n ≥ 1` means "degraded because of `n` consecutive probe failures."
+`failureCount` is the count of consecutive `probeFail` events since the last `probeSuccess`. Carrying it on the structure (rather than inside `.degraded`) lets `Reconnecting → probeFail → Evicted` increment without re-deriving the count from `.degraded`'s payload.
+
+**`Degraded` is a single constructor with two semantic flavors, distinguished by `failureCount`:**
+
+| `failureCount` | Flavor | Entered by |
+|---|---|---|
+| `0` | **Staleness-degraded.** The last probe succeeded but the heartbeat is older than the staleness window. Operationally equivalent to today's `Stale`. | `probeSuccess(staleness = true)` from any state. |
+| `≥ 1` | **Failure-count-degraded.** Saw `failureCount` consecutive probe failures, but `failureCount < K` so the service is not yet evicted. Only reachable under `K ≥ 2`. | `probeFail` from `Healthy`/`Degraded`/`Reconnecting` when `failureCount + 1 < K`. |
+
+The two flavors share `Degraded` (and therefore share `healthProjection .degraded = .stale`) because the operational dispatch decision is identical: both flavors admit `call_tool` with a longer timeout (matching today's "stale services allowed through with a longer timeout" behavior). The doc comment on `ServiceModel.failureCount` will state this distinction explicitly.
 
 ### 6.3 `Event`
 
@@ -173,6 +182,16 @@ def step? (sm : ServiceModel) (e : Event) (K : Threshold) : Option ServiceModel 
                    else some { state := .degraded, failureCount := n }
 ```
 
+**Design choice: `Reconnecting` is an *optional* pass-through state, not mandatory.**
+
+`probeSuccess(false)` from `Evicted` returns directly to `Healthy` (skipping `Reconnecting`) rather than `none`. We deliberately choose the **permissive** version on these grounds:
+
+- **K=1 (today) has no `Reconnecting` state in Rust.** When a service is evicted, the next health-check tick simply calls `mcp_pool.list_tools(...)`, which lazily reconnects via `get_or_connect`. A successful probe assigns `HealthStatus::Healthy` directly. There is no intermediate observable state. Forcing the path through `Reconnecting` would make every K=1 conformance row for `Evicted + probeSuccess` fail against today's Rust.
+- **`Reconnecting` is meaningful only under K≥2 with an armed backoff.** In that regime, `Evicted → backoffExpiry → Reconnecting → probeSuccess → Healthy` is the natural sequence; the backoff is what introduces the intermediate state. Without an armed backoff, there's nothing between "I was evicted" and "the next probe succeeded."
+- **Restrictive alternative considered and rejected.** Returning `none` (or holding state in `Evicted`) on `Evicted + probeSuccess` would force the path through `Reconnecting`, but at the cost of either making the K=1 path unreachable (the service can never recover without a backoff event) or requiring Rust to emit a `backoffExpiry` event before every successful reconnect (gratuitous mechanism). Neither matches today's Rust.
+
+This is documented in property **H6'** (§8) and in the doc comment on `step?`.
+
 ### 7.2 `run?`
 
 ```lean
@@ -199,8 +218,8 @@ For K=1, the matrix evaluates to:
 | Degraded | probeFail | **Evicted** | n+1 |
 | Degraded | backoffExpiry | Degraded | unchanged |
 | Degraded | registryAbsent | (removed) | — |
-| Evicted | probeSuccess false | Healthy | 0 |
-| Evicted | probeSuccess true | Degraded | 0 |
+| Evicted | probeSuccess false | Healthy [†] | 0 |
+| Evicted | probeSuccess true | Degraded [†] | 0 |
 | Evicted | probeFail | Evicted | n+1 |
 | Evicted | backoffExpiry | **Reconnecting** | unchanged |
 | Evicted | registryAbsent | (removed) | — |
@@ -212,6 +231,8 @@ For K=1, the matrix evaluates to:
 
 At K=1, every `probeFail` from a non-removed state goes to `Evicted` in one step — matching today's Rust single-failure eviction. The `Degraded`-as-stale-only path matches the `Stale` HealthStatus today.
 
+[†] The `Evicted → Healthy` and `Evicted → Degraded` rows on `probeSuccess` reflect the **permissive recovery** choice (§7.1): `Reconnecting` is an optional pass-through, not mandatory. Under K=1, Rust has no `Reconnecting` state, so a successful probe after eviction assigns `Healthy` directly. Property **H6'** formalizes this.
+
 ## 8. Properties
 
 | Tag | Statement | Kind | Discharged in |
@@ -222,6 +243,7 @@ At K=1, every `probeFail` from a non-removed state goes to `Evicted` in one step
 | H4 | `backoffExpiry` is a no-op outside `.evicted`. | Safety | `Properties.lean` |
 | **H5** | **Anti-flapping inter-eviction gap:** if `run?` reaches `.healthy` at prefix p1 and `.evicted` at later prefix p2, then the event slice `events[p1..p2]` contains ≥ K probeFail events. | **Safety (load-bearing)** | `Properties.lean` |
 | H6 | From `.evicted`, the two-event sequence `[backoffExpiry, probeSuccess false]` reaches `.healthy`. | Liveness (constructive) | `Properties.lean` |
+| H6' | From `.evicted`, a single `probeSuccess false` reaches `.healthy` directly (permissive transition; the `Reconnecting` pass-through is optional). Witnesses the K=1 collapse where Rust has no `Reconnecting` state. | Liveness (constructive) | `Properties.lean` |
 | H7 | At K=1, a `probeFail` from any non-degraded state with `failureCount = 0` goes directly to `.evicted` (witnesses the K=1 collapse to today's Rust). | Safety | `Properties.lean` |
 | H8 | `registryAbsent` ends the per-service state machine (`step? sm .registryAbsent K = none`). | Safety | `Properties.lean` |
 | C1 | `preflight (healthProjection .evicted) schema = .block .serviceUnavailable`. | Coupling | `Coupling.lean` |
@@ -325,6 +347,7 @@ The `simulate_health_checker_one_event` helper drives a single probe outcome thr
 
 - **K is a free parameter in the model but pinned at 1 in Rust today.** A future K≥2 refactor must (a) add a per-service failure counter to `ServiceHealth`, (b) introduce a `Degraded` variant to `HealthStatus`, (c) gate `mcp_pool.remove` on `failureCount ≥ K`, (d) consume the K≥2 conformance rows in a new test. This spec defines that contract; it does not deliver the refactor.
 - **`backoffExpiry` semantics are minimal.** The model only requires "evicted + backoffExpiry → reconnecting." It does not model arming, cancellation, jitter, or schedule choice. Future Rust may add backoff timers; the model accommodates that by leaving the event's timing unspecified.
+- **Permissive `Evicted → Healthy` recovery (see §7.1, H6').** The state machine admits a direct `probeSuccess` from `Evicted` to `Healthy`, skipping `Reconnecting`. This is the right model of today's Rust, but it also means the state machine does **not** enforce "every recovery must pass through `Reconnecting`." If a future Rust refactor wants `Reconnecting` to be observable (e.g., for runtime status counters), it must also change `step?` to return `none` on `Evicted + probeSuccess`, drop H6', and route every recovery through `backoffExpiry`. That refactor is out of scope here.
 - **`registryAbsent` is modeled as terminal.** In Rust, a service can disappear from the online set and reappear later with the same `service_id`. The model treats reappearance as a fresh `ServiceModel` (i.e., `step?` returns `none`, and the pool layer would seed a new model). If we want to formalize same-id resurrection, that would need a separate Pool.lean wrapper — explicitly out of scope here.
 - **Staleness is observational, not driven by an async tick.** Today's Rust computes staleness inline from the heartbeat age at probe time, which means the model never needs an async time event. If Rust ever moves to an asynchronous staleness flagger (independent of probes), the event vocabulary would need a fifth event — this spec accepts that small future delta.
 - **H5's induction depth.** The flapping-bound theorem is a quantifier over arbitrary event lists. The proof is by induction on the suffix `events[p1..p2]`; cases are `nil` (vacuous), `probeSuccess _ :: …` (impossible to reach `.evicted` since it resets `failureCount`), `probeFail :: …` (decrement K by 1 and recurse), `backoffExpiry :: …` and `registryAbsent :: …` (vacuous transit). Lemma `failureCount_le_K_along_degraded` discharges the bookkeeping.
