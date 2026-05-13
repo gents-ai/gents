@@ -273,6 +273,32 @@ Crash(deployment) ==
      >>
 
 (***************************************************************************)
+(* B-side natural child terminal race.                                     *)
+(***************************************************************************)
+
+NaturalTerminalize(child, terminal) ==
+  /\ child \in Child
+  /\ terminal \in NaturalTerminal
+  /\ childStateB[child] = "Running"
+  /\ childStateB' = [childStateB EXCEPT ![child] = terminal]
+  /\ terminalSourceB' = [terminalSourceB EXCEPT ![child] = "Natural"]
+  /\ terminalWriteCountB' =
+       [terminalWriteCountB EXCEPT ![child] = @ + 1]
+  /\ UNCHANGED <<
+       cancelIntentA,
+       cancelAckedA,
+       cancelAttemptCountA,
+       cancelHandledB,
+       cancelHandleCountB,
+       inFlight,
+       messages,
+       pendingInbound,
+       rpcIdsUsed,
+       dropCount,
+       crashCount
+     >>
+
+(***************************************************************************)
 (* B-side cancel handling and A-side ack receipt.                          *)
 (***************************************************************************)
 
@@ -404,6 +430,23 @@ InterruptedOnlyByCascade ==
     childStateB[child] = "Interrupted" =>
       terminalSourceB[child] = "CascadeCancel"
 
+InterruptExactlyOnce ==
+  \A child \in Child : terminalWriteCountB[child] <= 1
+
+NaturalTerminalStableAfterCancel ==
+  \A child \in Child :
+    terminalSourceB[child] = "Natural" =>
+      /\ childStateB[child] \in NaturalTerminal
+      /\ terminalWriteCountB[child] = 1
+
+HandledCancelStable ==
+  \A child \in Child :
+    cancelHandledB[child] =>
+      \/ /\ terminalSourceB[child] = "CascadeCancel"
+         /\ childStateB[child] = "Interrupted"
+      \/ /\ terminalSourceB[child] = "Natural"
+         /\ childStateB[child] \in NaturalTerminal
+
 Next ==
   \/ \E child \in Child : InvokeBridgeCancelCascade(child)
   \/ \E child \in Child : EmitCancel(child)
@@ -411,6 +454,8 @@ Next ==
   \/ \E rpc \in messages : Drop(rpc)
   \/ \E rpc \in pendingInbound[ChildDeployment] : ProcessCancel(rpc)
   \/ \E ack \in pendingInbound[ParentDeployment] : ReceiveAck(ack)
+  \/ \E child \in Child, terminal \in NaturalTerminal :
+       NaturalTerminalize(child, terminal)
   \/ \E rpc \in inFlight[ParentDeployment] : Timeout(rpc)
   \/ \E deployment \in Deployment : Crash(deployment)
 
