@@ -31,4 +31,12 @@ theorem isolation
   intro heq
   exact hneq (h b₁ b₂ p heq)
 
+/-- **I3 No-escalation** (under the canonical construction).
+    A behavior's effective decision is entirely determined by its
+    principal's grants; no field of `Behavior` can widen access. -/
+theorem no_escalation
+    {Permission : Type} (g : GrantStore Permission)
+    (b : Behavior) (p : Permission) :
+    canonicalDecide g b p = g.granted b.principal p := rfl
+
 end Identity
