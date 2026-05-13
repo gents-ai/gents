@@ -47,7 +47,7 @@ structure World where
   subscriptionQueue : List DocId
   processedSet      : List DocId
   handled           : List DocId
-  deriving Repr
+  deriving DecidableEq, Repr
 
 /-- Empty initial world. -/
 def World.empty : World :=
@@ -66,7 +66,7 @@ inductive Action where
   | deliverFromQueue (d : DocId)
   | rescanTick
   | handle (d : DocId)
-  deriving Repr
+  deriving DecidableEq, Repr
 
 /-- Is this action a rescanTick? (Used by the `Fair` predicate.) -/
 def Action.isRescan : Action → Bool
@@ -129,10 +129,7 @@ structure SourceInstance where
   rescanBoundedBy : Nat
   deriving Repr
 
-/-- Sentinel value for instances whose Rust impl does not yet satisfy the
-    rescan obligation. Concretely `0`; makes the `Fair` predicate
-    unsatisfiable, so D1 holds vacuously and the corresponding
-    `Conformance/Deviations.lean` entry names the gap. -/
+/-- Concretely `0`; see `SourceInstance.rescanBoundedBy` for semantics. -/
 def SourceInstance.unboundedRescan : Nat := 0
 
 end EventDelivery
