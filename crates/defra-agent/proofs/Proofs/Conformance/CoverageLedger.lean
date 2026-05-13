@@ -175,6 +175,10 @@ def stateMachineCoverage : List CoverageEntry :=
       "state_machine"
       "ToolCall"
       "tool_call_lifecycle::tests::tool_call_state_machine_contract_is_complete"
+  , consumerCoverage
+      "state_machine"
+      "MCPHealth"
+      "health_checker::tests::generated_mcp_health_k1_cases_match_health_checker_transitions"
   , followUpCoverage
       "state_machine"
       "AwaitMode"
