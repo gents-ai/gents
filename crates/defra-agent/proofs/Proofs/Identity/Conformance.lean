@@ -1,6 +1,7 @@
 import Proofs.Identity.State
 import Proofs.Identity.Permission
 import Proofs.Identity.Properties
+import Proofs.Conformance.ContractCases
 
 /-!
 # Identity — Conformance
@@ -115,5 +116,72 @@ def structuralCases : List IdentityStructuralCase :=
     , wellFormed  := true
     }
   ]
+
+open Conformance.Contracts
+open Conformance.ContractCases (boolString)
+
+def principalCaseJson (c : PrincipalCase) : String :=
+  "{"
+    ++ "\"did\":" ++ jsonString c.did ++ ","
+    ++ "\"enabled\":" ++ boolString c.enabled
+    ++ "}"
+
+def behaviorCaseJson (c : BehaviorCase) : String :=
+  "{"
+    ++ "\"id\":" ++ jsonString c.id ++ ","
+    ++ "\"principal\":" ++ jsonString c.principal ++ ","
+    ++ "\"enabled\":" ++ boolString c.enabled
+    ++ "}"
+
+def deploymentCaseJson (c : DeploymentCase) : String :=
+  "{"
+    ++ "\"id\":" ++ jsonString c.id ++ ","
+    ++ "\"principal\":" ++ jsonString c.principal ++ ","
+    ++ "\"host_id\":" ++ jsonString c.hostId ++ ","
+    ++ "\"enabled\":" ++ boolString c.enabled
+    ++ "}"
+
+def identityStructuralCaseJson (c : IdentityStructuralCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString c.name ++ ","
+    ++ "\"principals\":" ++ jsonArray (c.principals.map principalCaseJson) ++ ","
+    ++ "\"behaviors\":" ++ jsonArray (c.behaviors.map behaviorCaseJson) ++ ","
+    ++ "\"deployments\":" ++ jsonArray (c.deployments.map deploymentCaseJson) ++ ","
+    ++ "\"well_formed\":" ++ boolString c.wellFormed
+    ++ "}"
+
+def structuralCasesJson : String :=
+  jsonArray (structuralCases.map identityStructuralCaseJson)
+
+/-- A named property the runtime permission engine must satisfy. -/
+structure IdentityContract where
+  name      : String
+  statement : String
+  enforced  : Bool
+  trackedBy : String
+  deriving Repr
+
+def identityContracts : List IdentityContract :=
+  [ { name      := "identity.respects_principal_boundary"
+    , statement :=
+        "For any two AgentBehavior rows b₁, b₂ with " ++
+        "b₁.agent_did == b₂.agent_did, the runtime's permission " ++
+        "decision function MUST return identical results for any " ++
+        "permission."
+    , enforced  := false
+    , trackedBy := "#193"
+    }
+  ]
+
+def identityContractJson (c : IdentityContract) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString c.name ++ ","
+    ++ "\"statement\":" ++ jsonString c.statement ++ ","
+    ++ "\"enforced\":" ++ boolString c.enforced ++ ","
+    ++ "\"tracked_by\":" ++ jsonString c.trackedBy
+    ++ "}"
+
+def identityContractsJson : String :=
+  jsonArray (identityContracts.map identityContractJson)
 
 end Identity.Conformance
