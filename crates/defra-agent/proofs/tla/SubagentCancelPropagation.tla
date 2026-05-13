@@ -112,7 +112,111 @@ Init ==
   /\ dropCount           = 0
   /\ crashCount          = [deployment \in Deployment |-> 0]
 
-Next == FALSE
+(***************************************************************************)
+(* Helpers.                                                                *)
+(***************************************************************************)
+
+AllRPCs ==
+  messages
+    \cup UNION { inFlight[deployment] : deployment \in Deployment }
+    \cup UNION { pendingInbound[deployment] : deployment \in Deployment }
+
+FreshIds(k) ==
+  Cardinality(RPCId \ rpcIdsUsed) >= k
+
+PendingCancelFor(child) ==
+  \E rpc \in inFlight[ParentDeployment] :
+    /\ rpc.kind = "Cancel"
+    /\ rpc.child = child
+
+(***************************************************************************)
+(* A-side durable cascade intent and retry emission.                       *)
+(***************************************************************************)
+
+InvokeBridgeCancelCascade(child) ==
+  /\ child \in Child
+  /\ childStateB[child] = "Running"
+  /\ cancelIntentA[child] = FALSE
+  /\ cancelIntentA' = [cancelIntentA EXCEPT ![child] = TRUE]
+  /\ UNCHANGED <<
+       cancelAckedA,
+       cancelAttemptCountA,
+       childStateB,
+       terminalSourceB,
+       terminalWriteCountB,
+       cancelHandledB,
+       cancelHandleCountB,
+       inFlight,
+       messages,
+       pendingInbound,
+       rpcIdsUsed,
+       dropCount,
+       crashCount
+     >>
+
+EmitCancel(child) ==
+  /\ child \in Child
+  /\ cancelIntentA[child]
+  /\ ~PendingCancelFor(child)
+  /\ FreshIds(1)
+  /\ LET id == CHOOSE rpcId \in RPCId \ rpcIdsUsed : TRUE
+         rpc == [
+           id    |-> id,
+           kind  |-> "Cancel",
+           src   |-> ParentDeployment,
+           tgt   |-> ChildDeployment,
+           child |-> child,
+           of    |-> NoOf
+         ]
+     IN /\ inFlight' =
+             [inFlight EXCEPT ![ParentDeployment] = @ \cup {rpc}]
+        /\ messages' = messages \cup {rpc}
+        /\ rpcIdsUsed' = rpcIdsUsed \cup {id}
+  /\ cancelAttemptCountA' =
+       [cancelAttemptCountA EXCEPT ![child] = @ + 1]
+  /\ UNCHANGED <<
+       cancelIntentA,
+       cancelAckedA,
+       childStateB,
+       terminalSourceB,
+       terminalWriteCountB,
+       cancelHandledB,
+       cancelHandleCountB,
+       pendingInbound,
+       dropCount,
+       crashCount
+     >>
+
+(***************************************************************************)
+(* Safety invariants.                                                      *)
+(***************************************************************************)
+
+RPCIdsTracked ==
+  \A rpc \in AllRPCs : rpc.id \in rpcIdsUsed
+
+RPCWellFormed ==
+  \A rpc \in AllRPCs :
+    /\ rpc.kind \in RPCKind
+    /\ \/ /\ rpc.kind = "Cancel"
+          /\ rpc.src = ParentDeployment
+          /\ rpc.tgt = ChildDeployment
+          /\ rpc.of = NoOf
+       \/ /\ rpc.kind = "Ack"
+          /\ rpc.src = ChildDeployment
+          /\ rpc.tgt = ParentDeployment
+          /\ rpc.of \in rpcIdsUsed
+
+CancelIntentCausal ==
+  \A child \in Child :
+    (cancelAttemptCountA[child] > 0
+      \/ \E rpc \in AllRPCs :
+           /\ rpc.child = child
+           /\ rpc.kind \in {"Cancel", "Ack"})
+      => cancelIntentA[child]
+
+Next ==
+  \/ \E child \in Child : InvokeBridgeCancelCascade(child)
+  \/ \E child \in Child : EmitCancel(child)
 
 Spec == Init /\ [][Next]_vars
 
