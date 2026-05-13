@@ -10,8 +10,8 @@ use crate::interrupt::interrupt_request;
 use crate::session::execute_mutation_with_retry;
 
 use super::{
-    subagent_request::create_subagent_request_with_request_id, CancelPolicy, FailureClass,
-    ToolCallState,
+    subagent_request::create_subagent_request_with_request_id, AwaitMode, CancelPolicy,
+    FailureClass, ToolCallState,
 };
 
 #[derive(Debug, Default)]
@@ -33,6 +33,8 @@ struct RunningToolCallRow {
     started_at: Option<String>,
     #[serde(default)]
     deadline_at: Option<String>,
+    #[serde(default)]
+    await_mode: Option<String>,
     #[serde(default)]
     cancel_policy: Option<String>,
     #[serde(default)]
@@ -218,6 +220,22 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
             None => None,
         };
 
+        if is_background_subagent_tool(&row)
+            && !parent
+                .as_ref()
+                .is_some_and(|parent| request_is_interrupted(parent))
+        {
+            tracing::info!(
+                doc_id = %row.doc_id,
+                request_id = row.request_id.as_deref().unwrap_or(""),
+                session_id = %row.session_id,
+                tool_call_id = %row.tool_call_id,
+                child_request_id = row.child_request_id.as_deref().unwrap_or(""),
+                "leaving background subagent tool call running during recovery"
+            );
+            continue;
+        }
+
         let outcome = if deadline_at.is_some_and(|deadline| Utc::now() >= deadline) {
             Some(RecoveryOutcome::TimedOut)
         } else if parent
@@ -299,6 +317,7 @@ async fn load_running_tool_call_rows(node: &EmbeddedNode) -> Result<Vec<RunningT
             args
             started_at
             deadline_at
+            await_mode
             cancel_policy
             child_request_id
         }
@@ -470,6 +489,17 @@ fn cancel_policy(row: &RunningToolCallRow) -> CancelPolicy {
         .as_deref()
         .and_then(CancelPolicy::from_persisted)
         .unwrap_or(CancelPolicy::Cascade)
+}
+
+fn await_mode(row: &RunningToolCallRow) -> AwaitMode {
+    row.await_mode
+        .as_deref()
+        .and_then(AwaitMode::from_persisted)
+        .unwrap_or(AwaitMode::Foreground)
+}
+
+fn is_background_subagent_tool(row: &RunningToolCallRow) -> bool {
+    child_request_id(row).is_some() && await_mode(row) == AwaitMode::Background
 }
 
 fn is_detached_subagent_tool(row: &RunningToolCallRow) -> bool {

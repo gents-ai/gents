@@ -23,18 +23,69 @@ use crate::tool_call_lifecycle::{
 use crate::toolset::SPAWN_SUBAGENT_TOOL_NAME;
 use crate::truncation::{truncate_text, DefraSpillTruncator, TruncationMode, Truncator};
 
-use super::{non_empty, DefraSessionHook};
+use super::{non_empty, DefraSessionHook, TranscriptTurnState};
 
 impl DefraSessionHook {
     pub async fn persist_message(&self, message: &Message) -> anyhow::Result<u32> {
         let content = serde_json::to_string(message)?;
+        let (session_id, turn_state, message_key, existing_sequence) = {
+            let state = self.state.lock().await;
+            let session_id = state
+                .session_id
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("session hook missing session id"))?;
+            let message_key = tool_result_message_key(&session_id, message)?;
+            let existing_sequence = message_key
+                .as_ref()
+                .and_then(|key| state.persisted_tool_result_message_sequences.get(key))
+                .copied();
+            (
+                session_id,
+                state.transcript_turn,
+                message_key,
+                existing_sequence,
+            )
+        };
+
+        if let Some(sequence) = existing_sequence {
+            return Ok(sequence);
+        }
+
+        if matches!(turn_state, TranscriptTurnState::Idle) {
+            let role = match message {
+                Message::User { .. } => "user",
+                Message::Assistant { .. } => "assistant",
+                Message::System { .. } => {
+                    anyhow::bail!("system messages are not persisted in session history");
+                }
+            };
+            let sequence = session::append_message(&self.node, &session_id, role, &content).await?;
+            let mut state = self.state.lock().await;
+            if state.session_id.as_deref() == Some(session_id.as_str()) {
+                state.sequence = state.sequence.max(sequence);
+                if let Some(key) = message_key {
+                    state
+                        .persisted_tool_result_message_sequences
+                        .insert(key, sequence);
+                }
+                match message {
+                    Message::User { .. } => state.reset_after_user_message(),
+                    Message::Assistant { .. } => {
+                        state.transcript_turn =
+                            TranscriptTurnState::AssistantPersisted { sequence };
+                    }
+                    Message::System { .. } => {}
+                }
+            }
+            return Ok(sequence);
+        }
+
         let (session_id, sequence, role, message_key) = {
             let mut state = self.state.lock().await;
             let session_id = state
                 .session_id
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("session hook missing session id"))?;
-            let message_key = tool_result_message_key(&session_id, message)?;
             if let Some(existing_sequence) = message_key
                 .as_ref()
                 .and_then(|key| state.persisted_tool_result_message_sequences.get(key))
@@ -50,7 +101,7 @@ impl DefraSessionHook {
                     if let Some(key) = message_key.as_ref() {
                         state
                             .persisted_tool_result_message_sequences
-                            .insert(key.clone(), sequence);
+                        .insert(key.clone(), sequence);
                     }
                     (session_id, sequence, "user", message_key)
                 }

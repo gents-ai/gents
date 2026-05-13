@@ -115,6 +115,112 @@ async fn save_message_inner(
     Ok(())
 }
 
+pub(crate) async fn append_message(
+    node: &EmbeddedNode,
+    session_id: &str,
+    role: &str,
+    content: &str,
+) -> Result<u32> {
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        let sequence = next_append_sequence(node, session_id).await?;
+        match create_message(node, session_id, sequence, role, content).await {
+            Ok(()) => return Ok(sequence),
+            Err(error) if attempts < 5 => {
+                tracing::debug!(
+                    session_id = %session_id,
+                    sequence,
+                    error = %error,
+                    "append_message create failed; retrying with refreshed sequence"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+async fn next_append_sequence(node: &EmbeddedNode, session_id: &str) -> Result<u32> {
+    let message_max = super::sessions::max_sequence(node, session_id).await?;
+    let tool_call_reserved_max = max_tool_call_reserved_sequence(node, session_id).await?;
+    Ok(message_max.max(tool_call_reserved_max) + 1)
+}
+
+#[derive(Deserialize)]
+struct ToolCallSequenceRow {
+    message_sequence: u32,
+}
+
+async fn max_tool_call_reserved_sequence(node: &EmbeddedNode, session_id: &str) -> Result<u32> {
+    let escaped_session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}
+            ) {{ message_sequence }}
+        }}"#
+    );
+
+    let resp = execute_query_timed(node, &query, "max_tool_call_reserved_sequence").await;
+    if resp.has_errors() {
+        anyhow::bail!(
+            "loading tool-call message sequences for session_id={}: {:?}",
+            session_id,
+            resp.errors
+        );
+    }
+
+    let rows: Vec<ToolCallSequenceRow> = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+    let mut counts = std::collections::BTreeMap::<u32, u32>::new();
+    for row in rows {
+        *counts.entry(row.message_sequence).or_default() += 1;
+    }
+    Ok(counts
+        .into_iter()
+        .map(|(sequence, count)| sequence + count)
+        .max()
+        .unwrap_or(0))
+}
+
+async fn create_message(
+    node: &EmbeddedNode,
+    session_id: &str,
+    sequence: u32,
+    role: &str,
+    content: &str,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let escaped = escape_graphql_string(content);
+    let escaped_session_id = escape_graphql_string(session_id);
+    let escaped_role = escape_graphql_string(role);
+    let message_key = format!("{escaped_session_id}:{sequence}");
+
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentMessage(input: {{
+                message_key: "{message_key}",
+                session_id: "{escaped_session_id}",
+                sequence: {sequence},
+                role: "{escaped_role}",
+                content: "{escaped}",
+                timestamp: "{now}"
+            }}) {{ _docID }}
+        }}"#
+    );
+
+    let resp = node.execute(&mutation).await;
+    if resp.has_errors() {
+        anyhow::bail!("append AgentMessage failed: {:?}", resp.errors);
+    }
+    Ok(())
+}
+
 pub(crate) async fn mark_response_materialized(
     node: &EmbeddedNode,
     request_id: &str,

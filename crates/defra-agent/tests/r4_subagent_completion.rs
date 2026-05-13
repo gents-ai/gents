@@ -1,0 +1,953 @@
+//! R4 background subagent completion projection tests.
+
+mod support;
+
+use std::time::Duration;
+
+use defra_agent::defra_node::EmbeddedNode;
+use defra_agent::graphql::escape_graphql_string;
+use defra_agent::subagent_completion::{
+    project_background_subagent_completion, BackgroundCompletionOutcome,
+};
+use defra_agent::tool_call_lifecycle::{
+    create_subagent_request_with_request_id, AwaitMode, CancelPolicy, ToolCallLifecycle,
+};
+use defra_agent::{
+    fetch_interrupt_requested_at, upsert_agent_behavior, upsert_tool_selection, AgentBehavior,
+    DefraSessionHook, DefraWatcher, FailurePolicy, ToolSelectionDocument, Watcher,
+};
+use rig::agent::{PromptHook, ToolCallHookAction};
+use rig::completion::message::{
+    AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
+    UserContent,
+};
+use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
+use rig::one_or_many::OneOrMany;
+use rig::streaming::StreamingCompletionResponse;
+use serde::Deserialize;
+use serde_json::json;
+
+use support::{first_row, test_db};
+
+const AGENT_DID: &str = "did:defra-agent:r4-subagent-completion";
+const PARENT_BEHAVIOR_ID: &str = "r4-completion-parent";
+const CHILD_BEHAVIOR_ID: &str = "r4-completion-child";
+const WAKE_PROMPT: &str =
+    "Review pending subagent completion notifications in this session and continue the task if needed.";
+
+#[derive(Clone, Default)]
+struct TestModel;
+
+#[allow(refining_impl_trait)]
+impl CompletionModel for TestModel {
+    type Response = ();
+    type StreamingResponse = ();
+    type Client = ();
+
+    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+        Self
+    }
+
+    async fn completion(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+        Err(CompletionError::ProviderError(
+            "completion is unused in R4 subagent completion tests".to_string(),
+        ))
+    }
+
+    async fn stream(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        Err(CompletionError::ProviderError(
+            "streaming is unused in R4 subagent completion tests".to_string(),
+        ))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RequestSessionRow {
+    session_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolCallRow {
+    result: Option<String>,
+    lifecycle_state: Option<String>,
+    await_mode: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MessageRow {
+    sequence: u32,
+    role: String,
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WakeRequestRow {
+    request_id: String,
+    content: String,
+    status: String,
+    lifecycle_state: Option<String>,
+    execution_origin: Option<String>,
+    metadata: Option<String>,
+}
+
+async fn setup_fixture(test_name: &str) -> (support::TestDb, String, String) {
+    let db = test_db(test_name).await;
+    upsert_tool_selection(
+        db.node.as_ref(),
+        &ToolSelectionDocument {
+            selection_id: format!("{test_name}-tools"),
+            agent_did: AGENT_DID.to_string(),
+            subagent_targets: Some(vec![CHILD_BEHAVIOR_ID.to_string()]),
+            subagent_spawn_enabled: Some(true),
+            subagent_background_enabled: Some(true),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    upsert_agent_behavior(
+        db.node.as_ref(),
+        &AgentBehavior {
+            behavior_id: PARENT_BEHAVIOR_ID.to_string(),
+            agent_did: AGENT_DID.to_string(),
+            display_name: Some("R4 completion parent".to_string()),
+            system_prompt: None,
+            backend_id: None,
+            model_name: None,
+            tool_selection_id: Some(format!("{test_name}-tools")),
+            inference_profile_id: None,
+            compaction_strategy: None,
+            compaction_threshold: None,
+            enabled: true,
+            created_at: Some("2026-05-12T00:00:00Z".to_string()),
+        },
+    )
+    .await
+    .unwrap();
+    upsert_agent_behavior(
+        db.node.as_ref(),
+        &AgentBehavior {
+            behavior_id: CHILD_BEHAVIOR_ID.to_string(),
+            agent_did: AGENT_DID.to_string(),
+            display_name: Some("R4 completion child".to_string()),
+            system_prompt: None,
+            backend_id: None,
+            model_name: None,
+            tool_selection_id: None,
+            inference_profile_id: None,
+            compaction_strategy: None,
+            compaction_threshold: None,
+            enabled: true,
+            created_at: Some("2026-05-12T00:00:01Z".to_string()),
+        },
+    )
+    .await
+    .unwrap();
+
+    let session_id = format!("{test_name}-parent-session");
+    let request_id = format!("{test_name}-parent-request");
+    create_parent_request(db.node.as_ref(), &request_id, &session_id).await;
+    (db, session_id, request_id)
+}
+
+async fn create_parent_request(node: &EmbeddedNode, request_id: &str, session_id: &str) {
+    let request_id = escape_graphql_string(request_id);
+    let session_id = escape_graphql_string(session_id);
+    let behavior_id = escape_graphql_string(PARENT_BEHAVIOR_ID);
+    let agent_did = escape_graphql_string(AGENT_DID);
+    let now = chrono::Utc::now().to_rfc3339();
+    let deadline = (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{request_id}",
+                agent_did: "{agent_did}",
+                behavior_id: "{behavior_id}",
+                session_id: "{session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{request_id}",
+                superseded_by_request: "",
+                content: "parent prompt",
+                status: "processing",
+                lifecycle_state: "processing",
+                backend_id: "",
+                execution_origin: "interactive",
+                metadata: "",
+                failure_reason: "",
+                created_at: "{now}",
+                deadline: "{deadline}",
+                retry_count: 0,
+                max_retries: 3,
+                subagent_depth: 0
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create parent AgentRequest failed: {:?}",
+        response.errors
+    );
+}
+
+async fn create_child_and_bridge(
+    node: &std::sync::Arc<EmbeddedNode>,
+    parent_request_id: &str,
+    parent_session_id: &str,
+    tool_call_id: &str,
+    await_mode: AwaitMode,
+    message_sequence: u32,
+) -> (String, String) {
+    let child_request_id = format!("{parent_request_id}-{tool_call_id}-child");
+    create_subagent_request_with_request_id(
+        node.as_ref(),
+        child_request_id.clone(),
+        parent_request_id.to_string(),
+        tool_call_id.to_string(),
+        0,
+        AGENT_DID.to_string(),
+        CHILD_BEHAVIOR_ID.to_string(),
+        format!("prompt for {tool_call_id}"),
+        Some(chrono::Utc::now() + chrono::Duration::minutes(4)),
+    )
+    .await
+    .unwrap();
+    let child_session_id = child_session_id(node.as_ref(), &child_request_id).await;
+
+    let mut lifecycle = ToolCallLifecycle::new_subagent(
+        node.clone(),
+        parent_request_id.to_string(),
+        parent_session_id.to_string(),
+        tool_call_id.to_string(),
+        message_sequence,
+        "spawn_subagent".to_string(),
+        serde_json::json!({
+            "behavior_id": CHILD_BEHAVIOR_ID,
+            "prompt": format!("prompt for {tool_call_id}"),
+            "await_mode": await_mode.as_str()
+        })
+        .to_string(),
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+        await_mode,
+        CancelPolicy::Cascade,
+        child_request_id.clone(),
+    );
+    lifecycle.start_running().await.unwrap();
+
+    (child_request_id, child_session_id)
+}
+
+async fn child_session_id(node: &EmbeddedNode, child_request_id: &str) -> String {
+    let child_request_id = escape_graphql_string(child_request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{child_request_id}" }} }},
+                limit: 1
+            ) {{ session_id }}
+        }}"#
+    );
+    first_row::<RequestSessionRow>(&node.execute(&query).await, "AgentRequest").session_id
+}
+
+async fn child_for_tool(node: &EmbeddedNode, tool_call_id: &str) -> (String, String) {
+    let tool_call_id = escape_graphql_string(tool_call_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{
+                    caused_by_parent_tool_call_id: {{ _eq: "{tool_call_id}" }}
+                }},
+                limit: 1
+            ) {{ request_id session_id }}
+        }}"#
+    );
+    let row: ChildForToolRow = first_row(&node.execute(&query).await, "AgentRequest");
+    (row.request_id, row.session_id)
+}
+
+#[derive(Debug, Deserialize)]
+struct ChildForToolRow {
+    request_id: String,
+    session_id: String,
+}
+
+fn skip_reason(action: ToolCallHookAction) -> String {
+    let ToolCallHookAction::Skip { reason } = action else {
+        panic!("expected Skip action, got {action:?}");
+    };
+    reason
+}
+
+async fn persist_child_completion(
+    node: &EmbeddedNode,
+    child_request_id: &str,
+    child_session_id: &str,
+    final_response: &str,
+) {
+    let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let update_request = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
+                input: {{ status: "completed", lifecycle_state: "completed" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&update_request).await;
+    assert!(
+        !response.has_errors(),
+        "update child AgentRequest completed failed: {:?}",
+        response.errors
+    );
+
+    let assistant = Message::Assistant {
+        id: None,
+        content: OneOrMany::one(AssistantContent::Text(Text {
+            text: final_response.to_string(),
+        })),
+    };
+    let escaped_message = escape_graphql_string(&serde_json::to_string(&assistant).unwrap());
+    let escaped_child_session_id = escape_graphql_string(child_session_id);
+    let now = chrono::Utc::now().to_rfc3339();
+    let create_message = format!(
+        r#"mutation {{
+            create_AgentMessage(input: {{
+                message_key: "{escaped_child_session_id}:1",
+                session_id: "{escaped_child_session_id}",
+                sequence: 1,
+                role: "assistant",
+                content: "{escaped_message}",
+                timestamp: "{now}"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&create_message).await;
+    assert!(
+        !response.has_errors(),
+        "create child AgentMessage failed: {:?}",
+        response.errors
+    );
+
+    let escaped_agent_did = escape_graphql_string(AGENT_DID);
+    let escaped_behavior_id = escape_graphql_string(CHILD_BEHAVIOR_ID);
+    let create_response = format!(
+        r#"mutation {{
+            create_AgentResponse(input: {{
+                response_key: "{escaped_child_request_id}",
+                request_id: "{escaped_child_request_id}",
+                agent_did: "{escaped_agent_did}",
+                behavior_id: "{escaped_behavior_id}",
+                session_id: "{escaped_child_session_id}",
+                content: "",
+                reasoning: "",
+                status: "completed",
+                error_message: "",
+                token_count: 0,
+                progress_seq: 0,
+                materialized_message_sequence: 1,
+                materialized_at: "{now}",
+                created_at: "{now}",
+                completed_at: "{now}"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&create_response).await;
+    assert!(
+        !response.has_errors(),
+        "create child AgentResponse failed: {:?}",
+        response.errors
+    );
+}
+
+async fn set_request_lifecycle(node: &EmbeddedNode, request_id: &str, state: &str) {
+    let request_id = escape_graphql_string(request_id);
+    let status = match state {
+        "completed" => "completed",
+        "processing" => "processing",
+        "superseded" => "superseded",
+        _ => "error",
+    };
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                input: {{ status: "{status}", lifecycle_state: "{state}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "set request lifecycle failed: {:?}",
+        response.errors
+    );
+}
+
+async fn fetch_tool_call(node: &EmbeddedNode, session_id: &str, tool_call_id: &str) -> ToolCallRow {
+    let session_id = escape_graphql_string(session_id);
+    let tool_call_id = escape_graphql_string(tool_call_id);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    session_id: {{ _eq: "{session_id}" }},
+                    tool_call_id: {{ _eq: "{tool_call_id}" }}
+                }},
+                limit: 1
+            ) {{ result lifecycle_state await_mode }}
+        }}"#
+    );
+    first_row(&node.execute(&query).await, "AgentToolCall")
+}
+
+async fn fetch_parent_messages(node: &EmbeddedNode, session_id: &str) -> Vec<MessageRow> {
+    let session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentMessage(
+                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                order: {{ sequence: ASC }}
+            ) {{ sequence role content }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "message query failed: {:?}",
+        response.errors
+    );
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentMessage"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default()
+}
+
+async fn fetch_scheduled_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<WakeRequestRow> {
+    let session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{
+                    session_id: {{ _eq: "{session_id}" }},
+                    execution_origin: {{ _eq: "scheduled" }}
+                }},
+                order: {{ created_at: ASC }}
+            ) {{
+                request_id
+                content
+                status
+                lifecycle_state
+                execution_origin
+                metadata
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "wake query failed: {:?}",
+        response.errors
+    );
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn background_completion_projects_bridge_appends_notification_and_enqueues_wakeup() {
+    let (db, session_id, parent_request_id) = setup_fixture("background_completion_project").await;
+    let (child_request_id, child_session_id) = create_child_and_bridge(
+        &db.node,
+        &parent_request_id,
+        &session_id,
+        "spawn-bg-1",
+        AwaitMode::Background,
+        1,
+    )
+    .await;
+    persist_child_completion(
+        db.node.as_ref(),
+        &child_request_id,
+        &child_session_id,
+        "child final answer <ok>",
+    )
+    .await;
+
+    let outcome = project_background_subagent_completion(db.node.clone(), &child_request_id)
+        .await
+        .unwrap();
+    let BackgroundCompletionOutcome::Projected {
+        wake_request_id, ..
+    } = outcome
+    else {
+        panic!("expected projection, got {outcome:?}");
+    };
+
+    let tool = fetch_tool_call(db.node.as_ref(), &session_id, "spawn-bg-1").await;
+    assert_eq!(tool.lifecycle_state.as_deref(), Some("completed"));
+    assert_eq!(tool.await_mode.as_deref(), Some("background"));
+    assert_eq!(tool.result.as_deref(), Some("child final answer <ok>"));
+
+    let messages = fetch_parent_messages(db.node.as_ref(), &session_id).await;
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].sequence, 3);
+    assert_eq!(messages[0].role, "user");
+    assert!(messages[0].content.contains(r#"<subagent-notification"#));
+    assert!(messages[0].content.contains(r#"status="completed""#));
+    assert!(messages[0]
+        .content
+        .contains("child final answer &lt;ok&gt;"));
+
+    let wakes = fetch_scheduled_wakes(db.node.as_ref(), &session_id).await;
+    assert_eq!(wakes.len(), 1);
+    assert_eq!(wakes[0].request_id, wake_request_id);
+    assert_eq!(wakes[0].content, WAKE_PROMPT);
+    assert_eq!(wakes[0].status, "pending");
+    assert_eq!(wakes[0].lifecycle_state.as_deref(), Some("pending"));
+    assert_eq!(wakes[0].execution_origin.as_deref(), Some("scheduled"));
+    let metadata: serde_json::Value =
+        serde_json::from_str(wakes[0].metadata.as_deref().unwrap()).unwrap();
+    assert_eq!(metadata["queue"]["source"], "subagent_completion");
+    assert_eq!(metadata["queue"]["policy"], "coalesce");
+    assert_eq!(
+        metadata["queue"]["key"],
+        format!("subagent_completion:{session_id}")
+    );
+    assert_eq!(
+        metadata["queue"]["queued_after_request_id"],
+        parent_request_id
+    );
+
+    let again = project_background_subagent_completion(db.node.clone(), &child_request_id)
+        .await
+        .unwrap();
+    assert_eq!(again, BackgroundCompletionOutcome::AlreadyProjected);
+    assert_eq!(
+        fetch_parent_messages(db.node.as_ref(), &session_id)
+            .await
+            .len(),
+        1
+    );
+    assert_eq!(
+        fetch_scheduled_wakes(db.node.as_ref(), &session_id)
+            .await
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn background_completion_recovers_side_effects_after_bridge_already_projected() {
+    let (db, session_id, parent_request_id) = setup_fixture("background_completion_recovery").await;
+    let (child_request_id, child_session_id) = create_child_and_bridge(
+        &db.node,
+        &parent_request_id,
+        &session_id,
+        "spawn-bg-recover",
+        AwaitMode::Background,
+        1,
+    )
+    .await;
+    persist_child_completion(
+        db.node.as_ref(),
+        &child_request_id,
+        &child_session_id,
+        "child completed before observer side effects",
+    )
+    .await;
+
+    let mut lifecycle = ToolCallLifecycle::load(db.node.clone(), &session_id, "spawn-bg-recover")
+        .await
+        .unwrap()
+        .expect("bridge should exist");
+    assert!(lifecycle
+        .bridge_complete("child completed before observer side effects".to_string())
+        .await
+        .unwrap());
+    assert!(fetch_parent_messages(db.node.as_ref(), &session_id)
+        .await
+        .is_empty());
+    assert!(fetch_scheduled_wakes(db.node.as_ref(), &session_id)
+        .await
+        .is_empty());
+
+    let outcome = project_background_subagent_completion(db.node.clone(), &child_request_id)
+        .await
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        BackgroundCompletionOutcome::Projected { .. }
+    ));
+    let messages = fetch_parent_messages(db.node.as_ref(), &session_id).await;
+    assert_eq!(messages.len(), 1);
+    assert!(messages[0]
+        .content
+        .contains("child completed before observer side effects"));
+    assert_eq!(
+        fetch_scheduled_wakes(db.node.as_ref(), &session_id)
+            .await
+            .len(),
+        1
+    );
+
+    let again = project_background_subagent_completion(db.node.clone(), &child_request_id)
+        .await
+        .unwrap();
+    assert_eq!(again, BackgroundCompletionOutcome::AlreadyProjected);
+    assert_eq!(
+        fetch_parent_messages(db.node.as_ref(), &session_id)
+            .await
+            .len(),
+        1
+    );
+    assert_eq!(
+        fetch_scheduled_wakes(db.node.as_ref(), &session_id)
+            .await
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn background_notification_sorts_after_reserved_spawn_tool_result() {
+    let (db, session_id, parent_request_id) = setup_fixture("background_completion_order").await;
+    let hook = DefraSessionHook::resume_or_create_with_identity_policy(
+        db.node.clone(),
+        &session_id,
+        PARENT_BEHAVIOR_ID,
+        AGENT_DID,
+        FailurePolicy::default(),
+    )
+    .await
+    .unwrap();
+    hook.set_active_request_id(Some(parent_request_id.clone()))
+        .await;
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
+        .await;
+
+    let args = json!({
+        "behavior_id": CHILD_BEHAVIOR_ID,
+        "prompt": "background child can complete quickly",
+        "await_mode": "background"
+    })
+    .to_string();
+    let action = PromptHook::<TestModel>::on_tool_call(
+        &hook,
+        "spawn_subagent",
+        Some("model-call-order".to_string()),
+        "spawn-bg-order",
+        &args,
+    )
+    .await;
+    let receipt = skip_reason(action);
+    let (child_request_id, child_session_id) =
+        child_for_tool(db.node.as_ref(), "spawn-bg-order").await;
+    persist_child_completion(
+        db.node.as_ref(),
+        &child_request_id,
+        &child_session_id,
+        "fast background child done",
+    )
+    .await;
+    project_background_subagent_completion(db.node.clone(), &child_request_id)
+        .await
+        .unwrap();
+
+    let messages_before_parent_persists =
+        fetch_parent_messages(db.node.as_ref(), &session_id).await;
+    assert_eq!(messages_before_parent_persists.len(), 1);
+    assert_eq!(messages_before_parent_persists[0].sequence, 3);
+
+    hook.persist_message(&Message::Assistant {
+        id: None,
+        content: OneOrMany::one(AssistantContent::ToolCall(ToolCall {
+            id: "spawn-bg-order".to_string(),
+            call_id: Some("model-call-order".to_string()),
+            function: ToolFunction {
+                name: "spawn_subagent".to_string(),
+                arguments: serde_json::from_str(&args).unwrap(),
+            },
+            signature: None,
+            additional_params: None,
+        })),
+    })
+    .await
+    .unwrap();
+    hook.persist_stream_tool_result_message(
+        &ToolResult {
+            id: "spawn-bg-order".to_string(),
+            call_id: Some("model-call-order".to_string()),
+            content: OneOrMany::one(ToolResultContent::Text(Text { text: receipt })),
+        },
+        "spawn-bg-order",
+    )
+    .await
+    .unwrap();
+
+    let messages = fetch_parent_messages(db.node.as_ref(), &session_id).await;
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[0].sequence, 1);
+    assert_eq!(messages[0].role, "assistant");
+    assert!(messages[0].content.contains("spawn_subagent"));
+    assert_eq!(messages[1].sequence, 2);
+    assert_eq!(messages[1].role, "user");
+    assert!(messages[1].content.contains("child_request_id"));
+    assert_eq!(messages[2].sequence, 3);
+    assert!(messages[2].content.contains("<subagent-notification"));
+}
+
+#[tokio::test]
+async fn background_completion_compacts_multibyte_summary_without_panicking() {
+    let (db, session_id, parent_request_id) = setup_fixture("background_completion_unicode").await;
+    let (child_request_id, child_session_id) = create_child_and_bridge(
+        &db.node,
+        &parent_request_id,
+        &session_id,
+        "spawn-bg-unicode",
+        AwaitMode::Background,
+        1,
+    )
+    .await;
+    let final_response = "é".repeat(3000);
+    persist_child_completion(
+        db.node.as_ref(),
+        &child_request_id,
+        &child_session_id,
+        &final_response,
+    )
+    .await;
+
+    let outcome = project_background_subagent_completion(db.node.clone(), &child_request_id)
+        .await
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        BackgroundCompletionOutcome::Projected { .. }
+    ));
+    let messages = fetch_parent_messages(db.node.as_ref(), &session_id).await;
+    assert_eq!(messages.len(), 1);
+    assert!(messages[0].content.contains("<subagent-notification"));
+    assert!(messages[0].content.contains("..."));
+}
+
+#[tokio::test]
+async fn multiple_background_completions_append_notifications_but_coalesce_wakeup() {
+    let (db, session_id, parent_request_id) = setup_fixture("background_completion_coalesce").await;
+    let (child_a, session_a) = create_child_and_bridge(
+        &db.node,
+        &parent_request_id,
+        &session_id,
+        "spawn-bg-a",
+        AwaitMode::Background,
+        1,
+    )
+    .await;
+    let (child_b, session_b) = create_child_and_bridge(
+        &db.node,
+        &parent_request_id,
+        &session_id,
+        "spawn-bg-b",
+        AwaitMode::Background,
+        1,
+    )
+    .await;
+    persist_child_completion(db.node.as_ref(), &child_a, &session_a, "child A done").await;
+    persist_child_completion(db.node.as_ref(), &child_b, &session_b, "child B done").await;
+
+    let first = project_background_subagent_completion(db.node.clone(), &child_a)
+        .await
+        .unwrap();
+    let second = project_background_subagent_completion(db.node.clone(), &child_b)
+        .await
+        .unwrap();
+    let (
+        BackgroundCompletionOutcome::Projected {
+            wake_request_id: wake_a,
+            ..
+        },
+        BackgroundCompletionOutcome::Projected {
+            wake_request_id: wake_b,
+            ..
+        },
+    ) = (first, second)
+    else {
+        panic!("both completions should project");
+    };
+
+    assert_eq!(wake_a, wake_b);
+    let messages = fetch_parent_messages(db.node.as_ref(), &session_id).await;
+    assert_eq!(messages.len(), 2);
+    assert!(messages[0].content.contains("child A done"));
+    assert!(messages[1].content.contains("child B done"));
+    assert_eq!(
+        fetch_scheduled_wakes(db.node.as_ref(), &session_id)
+            .await
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn background_completion_wakeup_waits_behind_active_foreground_parent_then_claims() {
+    let (db, session_id, parent_request_id) =
+        setup_fixture("background_completion_interleave").await;
+    let (foreground_child, _) = create_child_and_bridge(
+        &db.node,
+        &parent_request_id,
+        &session_id,
+        "spawn-fg-a",
+        AwaitMode::Foreground,
+        1,
+    )
+    .await;
+    set_request_lifecycle(db.node.as_ref(), &foreground_child, "processing").await;
+
+    let (background_child, background_session) = create_child_and_bridge(
+        &db.node,
+        &parent_request_id,
+        &session_id,
+        "spawn-bg-b",
+        AwaitMode::Background,
+        2,
+    )
+    .await;
+    persist_child_completion(
+        db.node.as_ref(),
+        &background_child,
+        &background_session,
+        "background child B done",
+    )
+    .await;
+
+    let outcome = project_background_subagent_completion(db.node.clone(), &background_child)
+        .await
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        BackgroundCompletionOutcome::Projected { .. }
+    ));
+    assert_eq!(
+        fetch_parent_messages(db.node.as_ref(), &session_id)
+            .await
+            .len(),
+        1
+    );
+
+    let wakes = fetch_scheduled_wakes(db.node.as_ref(), &session_id).await;
+    assert_eq!(wakes.len(), 1);
+    assert_eq!(wakes[0].status, "pending");
+    assert_eq!(wakes[0].lifecycle_state.as_deref(), Some("pending"));
+
+    let mut blocked_watcher = DefraWatcher::new(db.node.clone(), AGENT_DID);
+    let blocked =
+        tokio::time::timeout(Duration::from_millis(200), blocked_watcher.next_request()).await;
+    assert!(
+        blocked.is_err(),
+        "wake-up should not be claimable while the parent request is active"
+    );
+
+    set_request_lifecycle(db.node.as_ref(), &parent_request_id, "completed").await;
+    let mut watcher = DefraWatcher::new(db.node.clone(), AGENT_DID);
+    let claimed = tokio::time::timeout(Duration::from_secs(2), watcher.next_request())
+        .await
+        .expect("watcher should return queued wake-up")
+        .expect("watcher should still be open")
+        .expect("wake-up should load");
+    assert_eq!(claimed.request_id, wakes[0].request_id);
+    assert_eq!(claimed.session_id, session_id);
+}
+
+#[tokio::test]
+async fn recovery_leaves_running_background_bridge_alive_after_parent_completes() {
+    let (db, session_id, parent_request_id) =
+        setup_fixture("background_completion_recovery_skip").await;
+    let (child_request_id, _) = create_child_and_bridge(
+        &db.node,
+        &parent_request_id,
+        &session_id,
+        "spawn-bg-recovery-skip",
+        AwaitMode::Background,
+        1,
+    )
+    .await;
+    set_request_lifecycle(db.node.as_ref(), &child_request_id, "processing").await;
+    set_request_lifecycle(db.node.as_ref(), &parent_request_id, "completed").await;
+
+    let report = ToolCallLifecycle::recover_all(db.node.as_ref(), AGENT_DID)
+        .await
+        .unwrap();
+    assert_eq!(report.tool_calls_recovered, 0);
+
+    let tool = fetch_tool_call(db.node.as_ref(), &session_id, "spawn-bg-recovery-skip").await;
+    assert_eq!(tool.lifecycle_state.as_deref(), Some("running"));
+    assert_eq!(tool.await_mode.as_deref(), Some("background"));
+    let interrupt = fetch_interrupt_requested_at(db.node.as_ref(), &child_request_id)
+        .await
+        .unwrap();
+    assert!(
+        interrupt.is_none(),
+        "background child should not be interrupted merely because the parent completed"
+    );
+}
+
+#[tokio::test]
+async fn stale_hook_sequence_does_not_overwrite_background_notification() {
+    let (db, session_id, parent_request_id) =
+        setup_fixture("background_completion_hook_sequence").await;
+    let hook = DefraSessionHook::resume_or_create_with_identity_policy(
+        db.node.clone(),
+        &session_id,
+        PARENT_BEHAVIOR_ID,
+        AGENT_DID,
+        FailurePolicy::default(),
+    )
+    .await
+    .unwrap();
+
+    let (child_request_id, child_session_id) = create_child_and_bridge(
+        &db.node,
+        &parent_request_id,
+        &session_id,
+        "spawn-bg-stale-hook",
+        AwaitMode::Background,
+        1,
+    )
+    .await;
+    persist_child_completion(
+        db.node.as_ref(),
+        &child_request_id,
+        &child_session_id,
+        "notification must survive",
+    )
+    .await;
+    project_background_subagent_completion(db.node.clone(), &child_request_id)
+        .await
+        .unwrap();
+
+    hook.persist_message(&Message::User {
+        content: OneOrMany::one(UserContent::Text(Text {
+            text: "parent hook resumes".to_string(),
+        })),
+    })
+    .await
+    .unwrap();
+
+    let messages = fetch_parent_messages(db.node.as_ref(), &session_id).await;
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].sequence, 3);
+    assert!(messages[0].content.contains("notification must survive"));
+    assert_eq!(messages[1].sequence, 4);
+    assert!(messages[1].content.contains("parent hook resumes"));
+}

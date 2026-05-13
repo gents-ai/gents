@@ -35,6 +35,7 @@ pub(crate) mod runtime_status;
 pub mod schema;
 pub mod session;
 pub mod streaming;
+pub mod subagent_completion;
 pub(crate) mod subagent_tools;
 pub mod template;
 pub mod tool_call_lifecycle;
