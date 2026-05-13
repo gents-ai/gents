@@ -102,6 +102,7 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
                 "runtime": runtime,
                 "runtimes": data.agent_runtimes,
                 "backends": data.inference_backends,
+                "liveness": data.liveness,
                 "p2p": p2p.clone(),
             })
         }

@@ -1,4 +1,5 @@
 pub(crate) mod healthz;
+pub(crate) mod liveness;
 pub(crate) mod prometheus;
 pub(crate) mod router;
 pub(crate) mod version;

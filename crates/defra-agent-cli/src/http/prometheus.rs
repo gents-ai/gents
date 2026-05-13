@@ -1,18 +1,33 @@
 use anyhow::{Context, Result};
+use chrono::Utc;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
+use crate::http::liveness::{
+    compute_liveness_summary, LivenessRequestRow, LivenessToolCallRow, RuntimeLivenessSnapshot,
+};
 use crate::post_graphql;
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Serialize)]
 pub(crate) struct MetricsQueryData {
-    #[serde(rename = "AgentRuntime", default)]
     pub(crate) agent_runtimes: Vec<MetricsRuntimeRow>,
-    #[serde(rename = "InferenceBackend", default)]
     pub(crate) inference_backends: Vec<MetricsBackendRow>,
+    pub(crate) liveness: RuntimeLivenessSnapshot,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
+struct MetricsQueryEnvelope {
+    #[serde(rename = "AgentRuntime", default)]
+    agent_runtimes: Vec<MetricsRuntimeRow>,
+    #[serde(rename = "InferenceBackend", default)]
+    inference_backends: Vec<MetricsBackendRow>,
+    #[serde(rename = "AgentRequest", default)]
+    requests: Vec<LivenessRequestRow>,
+    #[serde(rename = "AgentToolCall", default)]
+    tool_calls: Vec<LivenessToolCallRow>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct MetricsRuntimeRow {
     pub(crate) agent_did: String,
     #[serde(default)]
@@ -33,7 +48,7 @@ pub(crate) struct MetricsRuntimeRow {
     pub(crate) last_reconcile_completed_at: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct MetricsBackendRow {
     pub(crate) backend_id: String,
     #[serde(default)]
@@ -249,6 +264,40 @@ pub(crate) async fn render_prometheus_metrics(graphql: &str) -> Result<String> {
         }
     }
 
+    push_metric_prelude(
+        &mut lines,
+        "defra_agent_active_requests",
+        "Number of AgentRequest rows currently in processing.",
+    );
+    push_metric_sample(
+        &mut lines,
+        "defra_agent_active_requests",
+        &[],
+        data.liveness.active_request_ids.len() as i64,
+    );
+    push_metric_prelude(
+        &mut lines,
+        "defra_agent_active_tool_calls",
+        "Number of AgentToolCall rows currently running.",
+    );
+    push_metric_sample(
+        &mut lines,
+        "defra_agent_active_tool_calls",
+        &[],
+        data.liveness.active_tool_calls.len() as i64,
+    );
+    push_metric_prelude(
+        &mut lines,
+        "defra_agent_expired_processing_count",
+        "Number of processing AgentRequest rows whose deadline has already passed. Zero is healthy.",
+    );
+    push_metric_sample(
+        &mut lines,
+        "defra_agent_expired_processing_count",
+        &[],
+        data.liveness.expired_processing_count,
+    );
+
     lines.push(String::new());
     Ok(lines.join("\n"))
 }
@@ -276,6 +325,27 @@ pub(crate) async fn load_metrics_query_data(graphql: &str) -> Result<MetricsQuer
                 probe_status
                 last_probe
             }
+            AgentRequest(filter: {
+                status: { _eq: "processing" },
+                lifecycle_state: { _eq: "processing" }
+            }) {
+                request_id
+                claimed_at
+                deadline
+                subagent_depth
+                caused_by_parent_request_id
+                caused_by_trigger_kind
+            }
+            AgentToolCall(filter: {
+                lifecycle_state: { _eq: "running" }
+            }) {
+                request_id
+                tool_call_id
+                tool_name
+                started_at
+                deadline_at
+                await_mode
+            }
         }"#,
     )
     .await?;
@@ -283,7 +353,14 @@ pub(crate) async fn load_metrics_query_data(graphql: &str) -> Result<MetricsQuer
         .get("data")
         .cloned()
         .unwrap_or_else(|| Value::Object(Default::default()));
-    serde_json::from_value(data).context("decoding runtime HTTP query response")
+    let envelope: MetricsQueryEnvelope =
+        serde_json::from_value(data).context("decoding runtime HTTP query response")?;
+    let liveness = compute_liveness_summary(Utc::now(), envelope.requests, envelope.tool_calls);
+    Ok(MetricsQueryData {
+        agent_runtimes: envelope.agent_runtimes,
+        inference_backends: envelope.inference_backends,
+        liveness,
+    })
 }
 
 fn push_metric_prelude(lines: &mut Vec<String>, name: &str, help: &str) {
@@ -334,8 +411,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn metrics_query_data_treats_null_probe_status_as_unknown() {
-        let data: MetricsQueryData = serde_json::from_value(serde_json::json!({
+    fn metrics_query_envelope_treats_null_probe_status_as_unknown() {
+        let envelope: MetricsQueryEnvelope = serde_json::from_value(serde_json::json!({
             "AgentRuntime": [],
             "InferenceBackend": [{
                 "backend_id": "workstation-1",
@@ -344,10 +421,12 @@ mod tests {
                 "max_queue_depth": 8,
                 "probe_status": null,
                 "last_probe": null
-            }]
+            }],
+            "AgentRequest": [],
+            "AgentToolCall": []
         }))
-        .expect("metrics query data should decode null probe_status");
+        .expect("metrics query envelope should decode null probe_status");
 
-        assert_eq!(data.inference_backends[0].probe_status, "unknown");
+        assert_eq!(envelope.inference_backends[0].probe_status, "unknown");
     }
 }
