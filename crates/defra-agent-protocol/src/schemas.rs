@@ -37,6 +37,9 @@ pub const SCHEDULE_NAME: &str = "Schedule";
 pub const SCHEDULE: &str = include_str!("../schemas/agent/schedule.graphql");
 pub const EVENT_TRIGGER_NAME: &str = "EventTrigger";
 pub const EVENT_TRIGGER: &str = include_str!("../schemas/agent/event_trigger.graphql");
+pub const PEER_PAIRING_DESIRED_NAME: &str = "PeerPairingDesired";
+pub const PEER_PAIRING_DESIRED: &str =
+    include_str!("../schemas/agent/peer_pairing_desired.graphql");
 
 // inference domain
 pub const INFERENCE_BACKEND_NAME: &str = "InferenceBackend";
@@ -77,6 +80,7 @@ pub const ALL: &[&str] = &[
     SCHEDULE,
     EVENT_TRIGGER,
     TOOL_SERVICE_REGISTRY,
+    PEER_PAIRING_DESIRED,
 ];
 pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_PRINCIPAL_NAME,
@@ -97,6 +101,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     SCHEDULE_NAME,
     EVENT_TRIGGER_NAME,
     TOOL_SERVICE_REGISTRY_NAME,
+    PEER_PAIRING_DESIRED_NAME,
 ];
 
 pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
@@ -124,7 +129,7 @@ mod tests {
     fn all_contains_every_schema() {
         assert_eq!(
             ALL.len(),
-            18,
+            19,
             "ALL should enumerate every non-runtime schema"
         );
     }

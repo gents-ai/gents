@@ -479,7 +479,13 @@ impl ClientCore {
 
         if let Some(graphql) = record.graphql.as_deref() {
             if p2p_pairing_enabled {
-                match super::bootstrap::configure_local_runtime_pairing(&self.p2p, graphql).await {
+                match super::bootstrap::configure_local_runtime_pairing(
+                    self.node.as_ref(),
+                    &self.p2p,
+                    &record,
+                )
+                .await
+                {
                     Ok(()) => {
                         if branchable_pair_sync_enabled() {
                             match sync_branchable_collections_with_retry(
@@ -564,6 +570,7 @@ impl ClientCore {
             addr: record.addr.clone(),
             dial_succeeded: connected,
             last_error: warning.clone(),
+            pairing: Vec::new(),
         });
         self.clear_mutation_error();
         if let Some(warning) = warning.as_deref() {

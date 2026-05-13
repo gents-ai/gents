@@ -161,6 +161,10 @@ def stateMachineCoverage : List CoverageEntry :=
       "runtime_status::tests::rust_reconcile_phase_vocabulary_matches_lean_model"
   , consumerCoverage
       "state_machine"
+      "PairingReconcile"
+      "state_machine_conformance::lean_executable_contracts_cover_initial_domains"
+  , consumerCoverage
+      "state_machine"
       "SessionRecovery"
       "state_machine_conformance::generated_session_recovery_cases_drive_db_backed_reissue_contract"
   , consumerCoverage

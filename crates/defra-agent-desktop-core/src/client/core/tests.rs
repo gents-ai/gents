@@ -300,6 +300,7 @@ async fn repair_saved_peer_refreshes_network_before_redial() {
             addr: record.addr.clone(),
             dial_succeeded: false,
             last_error: Some("peer Workshop Bay dial failed".to_string()),
+            pairing: Vec::new(),
         }),
         false,
         false,
@@ -333,6 +334,7 @@ async fn repair_saved_peer_forces_reconfiguration_while_peer_is_connected() {
             addr: record.addr.clone(),
             dial_succeeded: true,
             last_error: None,
+            pairing: Vec::new(),
         }),
         true,
         true,
@@ -366,6 +368,7 @@ async fn saved_peer_needs_repair_when_live_connection_has_dropped() {
             addr: record.addr.clone(),
             dial_succeeded: true,
             last_error: None,
+            pairing: Vec::new(),
         }),
     )
     .await;
@@ -394,6 +397,7 @@ async fn saved_peer_does_not_need_repair_while_live_connection_is_healthy() {
             addr: record.addr.clone(),
             dial_succeeded: true,
             last_error: None,
+            pairing: Vec::new(),
         }),
     )
     .await;
