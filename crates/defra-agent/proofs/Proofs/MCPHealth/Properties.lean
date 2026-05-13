@@ -58,4 +58,33 @@ theorem h8_registry_absent_terminates
     (sm : ServiceModel) (K : Threshold) :
     step? sm .registryAbsent K = none := rfl
 
+/-- H7: at K=1, `probeFail` from any non-removed state with `failureCount = 0`
+    goes directly to `.evicted`. Witnesses the K=1 collapse to today's Rust
+    single-failure eviction. -/
+theorem h7_k1_collapse_probefail_skips_degraded
+    (sm : ServiceModel) (h0 : sm.failureCount = 0)
+    (K : Threshold) (hk : K.val = 1) :
+    (step? sm .probeFail K).map (·.state) = some .evicted := by
+  simp [step?, h0, hk]
+
+/-- Helper: when `step?` lands in `.degraded` via `probeFail`, the new
+    `failureCount` is strictly less than K. This is the bookkeeping invariant
+    that supports H5's induction in Task 7. -/
+theorem degraded_count_lt_K
+    (sm sm' : ServiceModel) (K : Threshold)
+    (h : step? sm .probeFail K = some sm')
+    (hd : sm'.state = .degraded) :
+    sm'.failureCount < K.val := by
+  simp only [step?] at h
+  split at h
+  · -- ≥ K branch — state becomes .evicted, contradicts hd = .degraded
+    rename_i hge
+    cases h
+    exact absurd hd (by simp)
+  · -- < K branch — state becomes .degraded, failureCount = sm.failureCount + 1 < K
+    rename_i hlt
+    cases h
+    simp only [ServiceModel.mk.injEq] at *
+    omega
+
 end Proofs.MCPHealth
