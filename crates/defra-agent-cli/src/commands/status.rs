@@ -56,6 +56,7 @@ pub(crate) async fn load_runtime_status_output(
         .and_then(|rows| rows.first())
         .cloned()
         .unwrap_or(Value::Null);
+    let liveness_value = crate::commands::status::load_liveness_value(graphql).await;
     let home_dir = resolve_home_dir(home);
     let runtime_state = read_runtime_state(&home_dir)?;
     let p2p_status = crate::commands::p2p::load_live_http_p2p_status(home, graphql).await;
@@ -65,6 +66,7 @@ pub(crate) async fn load_runtime_status_output(
         "agent_did": agent_did,
         "runtime_state": runtime_state,
         "runtime": runtime_row,
+        "liveness": liveness_value,
         "p2p": p2p_status,
         "behavior_readiness": if unavailable_behaviors.is_empty() { "ready" } else { "degraded" },
         "unavailable_behaviors": unavailable_behaviors,
@@ -91,6 +93,13 @@ pub(crate) async fn load_runtime_status_output(
         crate::commands::p2p::flatten_p2p_fields(map, &p2p_value);
     }
     Ok(output)
+}
+
+pub(crate) async fn load_liveness_value(graphql: &str) -> Value {
+    match crate::http::prometheus::load_metrics_query_data(graphql).await {
+        Ok(data) => serde_json::to_value(&data.liveness).unwrap_or(Value::Null),
+        Err(_) => Value::Null,
+    }
 }
 
 async fn load_live_unavailable_behaviors(
