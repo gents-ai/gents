@@ -19,7 +19,7 @@ inductive Transition : RequestContext → RequestContext → Prop where
       pre.state = .pending →
       pre.admission = .released →
       pre.ttlOpen →
-      post = { pre with state := .claimed, admission := .waiting, claimTime := pre.currentTime, deadline := pre.currentTime + 1 } →
+      post = { pre with state := .claimed, admission := .waiting, claimTime := pre.currentTime, deadline := pre.claimDeadline } →
       Transition pre post
   | dedup_lose {pre post : RequestContext} :
       pre.state = .pending →

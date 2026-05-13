@@ -235,6 +235,37 @@ theorem deadline_structural_bound
     ¬post.deadlineExceeded ∨ post.persistence = .committed := by
   exact Or.inr (persistence_before_completion h_trans h_completed)
 
+/-- Request claim assigns the runtime deadline from `claimDeadline`, preserving
+    explicit submitter deadlines and using the runtime fallback otherwise. -/
+theorem claim_deadline_structural_bound
+    {pre post : RequestContext}
+    (h_trans : RequestContext.Transition pre post)
+    (h_claimed : post.state = .claimed) :
+    post.deadline = pre.claimDeadline := by
+  cases h_trans with
+  | claim _ _ _ h_post =>
+      simp [h_post]
+  | dedup_lose _ _ h_post =>
+      simp [h_post] at h_claimed
+  | begin_inference _ _ h_post =>
+      simp [h_post] at h_claimed
+  | advance h_state _ h_post =>
+      simp [h_post, h_state] at h_claimed
+  | finish _ _ h_post =>
+      simp [h_post] at h_claimed
+  | fail _ _ h_post =>
+      simp [h_post] at h_claimed
+  | fail_before_stream _ _ h_post =>
+      simp [h_post] at h_claimed
+  | expire _ _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_before_claim _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_claimed _ _ _ h_post =>
+      simp [h_post] at h_claimed
+  | interrupt_processing _ _ _ h_post =>
+      simp [h_post] at h_claimed
+
 /-- R-Int: request-local interrupt field monotonicity — once `interruptRequestedAt` is set on
     a request, no subsequent transition may clear or change it. The runtime
     treats this field as read-only; it is submitter-owned.
@@ -256,3 +287,11 @@ theorem valid_until_monotonicity
     (h_trans : RequestContext.Transition pre post) :
     post.validUntil = pre.validUntil := by
   cases h_trans <;> simp_all
+
+/-- R-ReqDeadline: the submitter-owned request deadline is never rewritten by
+    runtime transitions; claim only copies it into the effective deadline. -/
+theorem request_deadline_monotonicity
+    {pre post : RequestContext}
+    (h_trans : RequestContext.Transition pre post) :
+    post.requestDeadline = pre.requestDeadline := by
+  cases h_trans <;> simp_all [RequestContext.claimDeadline]

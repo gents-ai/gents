@@ -9,6 +9,19 @@ use std::path::PathBuf;
 
 use crate::toolset::CommandExecutionPolicy;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SubagentToolConfig {
+    pub targets: Vec<String>,
+    pub spawn_enabled: bool,
+    pub background_enabled: bool,
+}
+
+impl SubagentToolConfig {
+    pub(crate) fn tools_enabled(&self) -> bool {
+        self.spawn_enabled && !self.targets.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolSelection {
     pub file_tools: FileToolMode,

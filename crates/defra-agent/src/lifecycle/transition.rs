@@ -5,7 +5,7 @@
 // submodules with no readability gain.
 use anyhow::Context;
 
-use super::rows::{DedupRow, RequestStatusTransition, RequestViewRow};
+use super::rows::{RequestStatusTransition, RequestViewRow};
 use super::*;
 
 fn request_status_is_terminal(status: &str) -> bool {
@@ -111,13 +111,6 @@ impl RequestLifecycle {
             tracing::info!(
                 request_id = %self.request.request_id,
                 "skipping complete() because request lifecycle already failed"
-            );
-            return Ok(());
-        }
-        if self.state == LocalLifecycleState::Superseded {
-            tracing::info!(
-                request_id = %self.request.request_id,
-                "skipping complete() because request lifecycle was superseded"
             );
             return Ok(());
         }
@@ -261,13 +254,6 @@ impl RequestLifecycle {
             tracing::info!(
                 request_id = %self.request.request_id,
                 "skipping fail() because request lifecycle already completed"
-            );
-            return Ok(());
-        }
-        if self.state == LocalLifecycleState::Superseded {
-            tracing::info!(
-                request_id = %self.request.request_id,
-                "skipping fail() because request lifecycle was superseded"
             );
             return Ok(());
         }
@@ -527,134 +513,5 @@ impl RequestLifecycle {
             self.request.request_id,
             self.state
         )
-    }
-
-    pub(super) async fn suppress_later_pending_duplicates(
-        &self,
-        duplicates: &[DedupRow],
-    ) -> Result<()> {
-        let superseded_by_request = escape_graphql_string(&self.request.request_id);
-        for duplicate in duplicates {
-            let mutation = format!(
-                r#"mutation {{
-                    update_AgentRequest(
-                        filter: {{
-                            _docID: {{ _eq: "{doc_id}" }},
-                            status: {{ _eq: "pending" }},
-                            lifecycle_state: {{ _eq: "pending" }}
-                        }},
-                        input: {{
-                            status: "superseded",
-                            lifecycle_state: "{lifecycle_state}",
-                            superseded_by_request: "{superseded_by_request}",
-                            behavior_id: "{behavior_id}",
-                            backend_id: "{backend_id}",
-                            execution_origin: "{execution_origin}"
-                        }}
-                    ) {{ _docID }}
-                }}"#,
-                doc_id = duplicate.doc_id,
-                lifecycle_state = PersistedLifecycleState::Superseded.as_str(),
-                superseded_by_request = superseded_by_request,
-                behavior_id = escape_graphql_string(&self.behavior_id),
-                backend_id = escape_graphql_string(&self.backend_id),
-                execution_origin = self.execution_origin.as_str(),
-            );
-
-            let resp = self.node.execute(&mutation).await;
-            if resp.has_errors() {
-                anyhow::bail!(
-                    "failed to suppress duplicate request_id={} doc_id={}: {:?}",
-                    duplicate.request_id,
-                    duplicate.doc_id,
-                    resp.errors
-                );
-            }
-
-            if resp
-                .data
-                .as_ref()
-                .and_then(|data| data.get("update_AgentRequest"))
-                .is_some_and(response_has_documents)
-            {
-                tracing::info!(
-                    session_id = %self.request.session_id,
-                    claimed_request_id = %self.request.request_id,
-                    duplicate_request_id = %duplicate.request_id,
-                    "marked later duplicate pending request superseded"
-                );
-            }
-        }
-
-        Ok(())
-    }
-
-    pub(super) async fn mark_superseded_pending_request(
-        &self,
-        superseded_by_request: Option<&str>,
-    ) -> Result<()> {
-        let superseded_by_request = escape_graphql_string(superseded_by_request.unwrap_or(""));
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentRequest(
-                    filter: {{
-                        _docID: {{ _eq: "{doc_id}" }},
-                        status: {{ _eq: "pending" }},
-                        lifecycle_state: {{ _eq: "pending" }}
-                    }},
-                    input: {{
-                        status: "superseded",
-                        lifecycle_state: "{lifecycle_state}",
-                        superseded_by_request: "{superseded_by_request}",
-                        behavior_id: "{behavior_id}",
-                        backend_id: "{backend_id}",
-                        execution_origin: "{execution_origin}"
-                    }}
-                ) {{ _docID }}
-            }}"#,
-            doc_id = self.request.doc_id,
-            lifecycle_state = PersistedLifecycleState::Superseded.as_str(),
-            superseded_by_request = superseded_by_request,
-            behavior_id = escape_graphql_string(&self.behavior_id),
-            backend_id = escape_graphql_string(&self.backend_id),
-            execution_origin = self.execution_origin.as_str(),
-        );
-
-        let resp = self.node.execute(&mutation).await;
-        if resp.has_errors() {
-            anyhow::bail!(
-                "failed to mark duplicate request_id={} superseded: {:?}",
-                self.request.request_id,
-                resp.errors
-            );
-        }
-
-        if !resp
-            .data
-            .as_ref()
-            .and_then(|data| data.get("update_AgentRequest"))
-            .is_some_and(response_has_documents)
-        {
-            let request_view = self.request_view().await?;
-            if request_view.as_ref().is_some_and(|row| {
-                row.status == "superseded" && row.lifecycle_state.as_deref() == Some("superseded")
-            }) {
-                return Ok(());
-            }
-            anyhow::bail!(
-                "request {} could not transition pending -> superseded; current status={} lifecycle_state={}",
-                self.request.request_id,
-                request_view
-                    .as_ref()
-                    .map(|row| row.status.as_str())
-                    .unwrap_or("missing"),
-                request_view
-                    .as_ref()
-                    .and_then(|row| row.lifecycle_state.as_deref())
-                    .unwrap_or("missing")
-            );
-        }
-
-        Ok(())
     }
 }

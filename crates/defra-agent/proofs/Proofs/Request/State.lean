@@ -111,7 +111,10 @@ structure RequestContext where
   origin       : ExecutionOrigin
   backend      : BackendId
   admission    : AdmissionState
+  /-- Effective runtime deadline used after claim. -/
   deadline     : Time
+  /-- Submitter-provided claim deadline. `none` falls back to the runtime default. -/
+  requestDeadline : Option Time := none
   claimTime    : Time
   currentTime  : Time
   retryCount   : Nat
@@ -161,6 +164,11 @@ def deadlineExceeded (r : RequestContext) : Prop :=
 
 instance (r : RequestContext) : Decidable r.deadlineExceeded :=
   Nat.decLt r.deadline r.currentTime
+
+/-- Deadline assigned at claim time: explicit submitter deadline if present,
+    otherwise the runtime default one tick after the current time. -/
+def claimDeadline (r : RequestContext) : Time :=
+  r.requestDeadline.getD (r.currentTime + 1)
 
 /-- Submitter TTL is open exactly when no TTL exists or current time is at/before it. -/
 def ttlOpen (r : RequestContext) : Prop :=

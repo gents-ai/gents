@@ -1,7 +1,11 @@
+use std::collections::HashSet;
+
 use serde::Deserialize;
 
 use super::{validate_agent_request_subagent_coherence, AgentRequest, DefraWatcher};
 
+// Keep this projection aligned with `AgentRequest`; downstream intake needs
+// metadata so it can inspect lifecycle queue hints.
 const AGENT_REQUEST_FIELDS: &str = r#"
                     _docID
                     request_id
@@ -16,6 +20,7 @@ const AGENT_REQUEST_FIELDS: &str = r#"
                     metadata
                     execution_origin
                     created_at
+                    deadline
                     subagent_depth
                     caused_by_parent_request_id
                     caused_by_parent_tool_call_id
@@ -30,8 +35,13 @@ impl DefraWatcher {
                         _docID: {{ _eq: "{doc_id}" }},
                         agent_did: {{ _eq: "{agent_did}" }},
                         status: {{ _eq: "pending" }}
-                    }}
+                    }},
+                    limit: 1
                 ) {{{fields}
+                    status
+                    lifecycle_state
+                    interrupt_requested_at
+                    valid_until
                 }}
             }}"#,
             doc_id = doc_id,
@@ -44,26 +54,35 @@ impl DefraWatcher {
             anyhow::bail!("watcher query failed: {:?}", resp.errors);
         }
 
-        agent_request_rows(resp.data.as_ref())?
-            .into_iter()
-            .next()
-            .map(AgentRequestRow::into_agent_request)
-            .transpose()
+        let Some(row) = active_runtime_rows(resp.data.as_ref())?.into_iter().next() else {
+            return Ok(None);
+        };
+        if !self.row_is_claimable(&row).await? {
+            return Ok(None);
+        }
+        row.into_agent_request().map(Some)
     }
 
     pub(super) async fn pending_requests(&self) -> anyhow::Result<Vec<AgentRequest>> {
+        let active_runtime_states = crate::lifecycle::active_runtime_lifecycle_state_graphql_list();
         let query = format!(
             r#"{{
                 AgentRequest(
                     filter: {{
                         agent_did: {{ _eq: "{agent_did}" }},
-                        status: {{ _eq: "pending" }}
+                        status: {{ _in: ["pending", "processing"] }},
+                        lifecycle_state: {{ _in: {active_runtime_states} }}
                     }},
-                    order: {{ created_at: ASC }}
+                    order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
                 ) {{{fields}
+                    status
+                    lifecycle_state
+                    interrupt_requested_at
+                    valid_until
                 }}
             }}"#,
             agent_did = self.agent_did,
+            active_runtime_states = active_runtime_states,
             fields = AGENT_REQUEST_FIELDS,
         );
 
@@ -72,18 +91,103 @@ impl DefraWatcher {
             anyhow::bail!("watcher pending-request query failed: {:?}", resp.errors);
         }
 
-        agent_request_rows(resp.data.as_ref())?
+        claimable_pending_rows(resp.data.as_ref())?
             .into_iter()
             .map(AgentRequestRow::into_agent_request)
             .collect()
     }
+
+    async fn row_is_claimable(&self, row: &AgentRequestRow) -> anyhow::Result<bool> {
+        if !row.is_pending() {
+            return Ok(false);
+        }
+        if row.has_preclaim_terminal_signal() {
+            return Ok(true);
+        }
+
+        let session_id = crate::graphql::escape_graphql_string(&row.session_id);
+        let active_runtime_states = crate::lifecycle::active_runtime_lifecycle_state_graphql_list();
+        let query = format!(
+            r#"{{
+                AgentRequest(
+                    filter: {{
+                        session_id: {{ _eq: "{session_id}" }},
+                        status: {{ _in: ["pending", "processing"] }},
+                        lifecycle_state: {{ _in: {active_runtime_states} }}
+                    }},
+                    order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
+                ) {{
+                    _docID
+                    request_id
+                    status
+                    lifecycle_state
+                    created_at
+                }}
+            }}"#,
+            session_id = session_id,
+            active_runtime_states = active_runtime_states,
+        );
+        let resp = self.node.execute(&query).await;
+        if resp.has_errors() {
+            anyhow::bail!("watcher session queue query failed: {:?}", resp.errors);
+        }
+
+        let rows: Vec<SessionQueueRow> = resp
+            .data
+            .as_ref()
+            .and_then(|d| d.get("AgentRequest"))
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+
+        let active_blocker = rows
+            .iter()
+            .any(|candidate| candidate.doc_id != row.doc_id && candidate.is_active_non_pending());
+        if active_blocker {
+            return Ok(false);
+        }
+
+        Ok(rows
+            .iter()
+            .find(|candidate| candidate.is_pending())
+            .is_some_and(|candidate| candidate.doc_id == row.doc_id))
+    }
 }
 
-fn agent_request_rows(data: Option<&serde_json::Value>) -> anyhow::Result<Vec<AgentRequestRow>> {
+fn active_runtime_rows(data: Option<&serde_json::Value>) -> anyhow::Result<Vec<AgentRequestRow>> {
     match data.and_then(|d| d.get("AgentRequest")) {
         Some(value) => Ok(serde_json::from_value(value.clone())?),
         None => Ok(Vec::new()),
     }
+}
+
+fn claimable_pending_rows(
+    data: Option<&serde_json::Value>,
+) -> anyhow::Result<Vec<AgentRequestRow>> {
+    let rows = active_runtime_rows(data)?;
+    let blocked_sessions = rows
+        .iter()
+        .filter(|row| row.is_active_non_pending())
+        .map(|row| row.session_id.clone())
+        .collect::<HashSet<_>>();
+    let mut seen_pending_sessions = HashSet::new();
+    let mut claimable = Vec::new();
+
+    for row in rows {
+        let is_pending = row.is_pending();
+        let is_preclaim_terminal = row.has_preclaim_terminal_signal();
+        let pending_session_seen = seen_pending_sessions.contains(&row.session_id);
+        let session_blocked = blocked_sessions.contains(&row.session_id);
+
+        if is_pending && (is_preclaim_terminal || (!session_blocked && !pending_session_seen)) {
+            claimable.push(row.clone());
+        }
+
+        if is_pending {
+            seen_pending_sessions.insert(row.session_id.clone());
+        }
+    }
+
+    Ok(claimable)
 }
 
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
@@ -93,7 +197,7 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
     })
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct AgentRequestRow {
     #[serde(rename = "_docID")]
     doc_id: String,
@@ -109,12 +213,54 @@ struct AgentRequestRow {
     metadata: Option<String>,
     execution_origin: Option<String>,
     created_at: String,
+    deadline: Option<String>,
     subagent_depth: Option<u32>,
     caused_by_parent_request_id: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
+    status: String,
+    lifecycle_state: Option<String>,
+    interrupt_requested_at: Option<String>,
+    valid_until: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SessionQueueRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    status: String,
+    lifecycle_state: Option<String>,
+}
+
+impl SessionQueueRow {
+    fn is_pending(&self) -> bool {
+        self.status == "pending" && self.lifecycle_state.as_deref() == Some("pending")
+    }
+
+    fn is_active_non_pending(&self) -> bool {
+        !self.is_pending()
+    }
 }
 
 impl AgentRequestRow {
+    fn is_pending(&self) -> bool {
+        self.status == "pending" && self.lifecycle_state.as_deref() == Some("pending")
+    }
+
+    fn is_active_non_pending(&self) -> bool {
+        !self.is_pending()
+    }
+
+    fn has_preclaim_terminal_signal(&self) -> bool {
+        if normalize_optional_string(self.interrupt_requested_at.clone()).is_some() {
+            return true;
+        }
+        normalize_optional_string(self.valid_until.clone()).is_some_and(|value| {
+            chrono::DateTime::parse_from_rfc3339(&value)
+                .map(|dt| chrono::Utc::now() > dt.with_timezone(&chrono::Utc))
+                .unwrap_or(false)
+        })
+    }
+
     fn into_agent_request(self) -> anyhow::Result<AgentRequest> {
         let req = AgentRequest {
             doc_id: self.doc_id,
@@ -130,6 +276,7 @@ impl AgentRequestRow {
             metadata: self.metadata,
             execution_origin: normalize_optional_string(self.execution_origin),
             created_at: self.created_at,
+            deadline: normalize_optional_string(self.deadline),
             subagent_depth: self.subagent_depth.unwrap_or(0),
             caused_by_parent_request_id: self.caused_by_parent_request_id,
             caused_by_parent_tool_call_id: self.caused_by_parent_tool_call_id,

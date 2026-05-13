@@ -27,7 +27,7 @@ inductive Action where
 def step? (pre : RequestContext) : Action → Option RequestContext
   | .claim =>
       if pre.state = .pending ∧ pre.admission = .released ∧ pre.ttlOpen then
-        some { pre with state := .claimed, admission := .waiting, claimTime := pre.currentTime, deadline := pre.currentTime + 1 }
+        some { pre with state := .claimed, admission := .waiting, claimTime := pre.currentTime, deadline := pre.claimDeadline }
       else
         none
   | .dedupLose =>
@@ -197,6 +197,29 @@ theorem transition_complete
       exact ⟨.interruptClaimed, by simp [step?, h_state, h_admission, h_int, h_post]⟩
   | interrupt_processing h_state h_admission h_int h_post =>
       exact ⟨.interruptProcessing, by simp [step?, h_state, h_admission, h_int, h_post]⟩
+
+/-- Executable claim uses an explicit submitter request deadline when one is present. -/
+theorem action_claim_deadline_explicit
+    {pre post : RequestContext}
+    {t : Time}
+    (h_step : step? pre .claim = some post)
+    (h_requestDeadline : pre.requestDeadline = some t) :
+    post.deadline = t := by
+  simp [step?] at h_step
+  rcases h_step with ⟨_, h_post⟩
+  rw [← h_post]
+  simp [claimDeadline, h_requestDeadline]
+
+/-- Executable claim falls back to `currentTime + 1` without a submitter request deadline. -/
+theorem action_claim_deadline_default
+    {pre post : RequestContext}
+    (h_step : step? pre .claim = some post)
+    (h_requestDeadline : pre.requestDeadline = none) :
+    post.deadline = pre.currentTime + 1 := by
+  simp [step?] at h_step
+  rcases h_step with ⟨_, h_post⟩
+  rw [← h_post]
+  simp [claimDeadline, h_requestDeadline]
 
 theorem replay_sound
     {pre post : RequestContext}

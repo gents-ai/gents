@@ -319,6 +319,22 @@ impl ToolCallLifecycle {
         self.deadline_at
     }
 
+    pub(crate) fn is_subagent_bridge(&self) -> bool {
+        self.child_request_id.is_some()
+    }
+
+    pub(crate) fn await_mode(&self) -> AwaitMode {
+        self.await_mode
+    }
+
+    pub(crate) fn is_running(&self) -> bool {
+        self.state == ToolCallState::Running
+    }
+
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.state == ToolCallState::Cancelled
+    }
+
     pub(crate) fn set_state(&mut self, state: ToolCallState) {
         self.state = state;
     }

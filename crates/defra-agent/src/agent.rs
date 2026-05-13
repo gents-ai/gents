@@ -16,7 +16,9 @@ use crate::identity::AgentIdentity;
 use crate::mcp_pool::McpPool;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
-use crate::tool_surface::{BashMode, BehaviorToolConfig, FileToolMode, ToolCeiling, ToolSelection};
+use crate::tool_surface::{
+    BashMode, BehaviorToolConfig, FileToolMode, SubagentToolConfig, ToolCeiling, ToolSelection,
+};
 use crate::toolset::{
     default_read_only_command_policy, parse_argv_prefixes, CommandExecutionMode,
     CommandExecutionPolicy, CommandNetworkMode,
@@ -202,6 +204,7 @@ pub(crate) fn behavior_config_from_documents(
     backend: &crate::backend_registry::InferenceBackend,
     inference_profile: &crate::document_config::InferenceProfile,
     tool_selection: ToolSelection,
+    subagent_tools: SubagentToolConfig,
     tool_ceiling: &ToolCeiling,
 ) -> anyhow::Result<BehaviorConfig> {
     let compaction_strategy = parse_compaction_strategy(behavior.compaction_strategy.as_deref())?;
@@ -241,10 +244,11 @@ pub(crate) fn behavior_config_from_documents(
             .and_then(|value| usize::try_from(value).ok())
             .unwrap_or(DEFAULT_MAX_TURNS),
         system_prompt: behavior.system_prompt.clone().unwrap_or_default(),
-        tools: BehaviorToolConfig::from_selection(
+        tools: BehaviorToolConfig::from_selection_with_subagent_tools(
             &behavior.behavior_id,
             tool_selection,
             tool_ceiling,
+            subagent_tools,
             Vec::new(),
         )?,
         compaction_threshold: behavior
@@ -305,6 +309,16 @@ pub(crate) fn tool_selection_from_document(
             .unwrap_or_default(),
         delegate_to: selection.delegate_to.clone().unwrap_or_default(),
     })
+}
+
+pub(crate) fn subagent_tool_config_from_document(
+    selection: &crate::document_config::ToolSelectionDocument,
+) -> SubagentToolConfig {
+    SubagentToolConfig {
+        targets: selection.subagent_targets.clone().unwrap_or_default(),
+        spawn_enabled: selection.subagent_spawn_enabled.unwrap_or(false),
+        background_enabled: selection.subagent_background_enabled.unwrap_or(false),
+    }
 }
 
 fn command_policy_from_document(

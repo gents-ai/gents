@@ -185,5 +185,20 @@ impl DocumentRuntimeView {
     }
 }
 
+fn validate_subagent_targets_resolve(
+    selection: &ToolSelectionDocument,
+    view: &DocumentRuntimeView,
+) -> anyhow::Result<()> {
+    for target in selection.subagent_targets.iter().flatten() {
+        if !view.behaviors.contains_key(target) {
+            anyhow::bail!(
+                "ToolSelection {} subagent_targets entry {target:?} does not resolve to an AgentBehavior",
+                selection.selection_id,
+            );
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests;

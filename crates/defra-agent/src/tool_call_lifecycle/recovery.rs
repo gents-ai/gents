@@ -8,10 +8,14 @@ use serde::Deserialize;
 use crate::graphql::escape_graphql_string;
 use crate::interrupt::interrupt_request;
 use crate::session::execute_mutation_with_retry;
+use crate::subagent_tools::{
+    fail_running_subagent_tool_call, load_parent_subagent_authorization, subagent_spawn_denial,
+    subagent_tool_not_allowed_payload,
+};
 
 use super::{
-    subagent_request::create_subagent_request_with_request_id, CancelPolicy, FailureClass,
-    ToolCallState,
+    subagent_request::create_subagent_request_with_request_id, AwaitMode, CancelPolicy,
+    FailureClass, ToolCallState,
 };
 
 #[derive(Debug, Default)]
@@ -28,11 +32,15 @@ struct RunningToolCallRow {
     session_id: String,
     tool_call_id: String,
     #[serde(default)]
+    tool_name: String,
+    #[serde(default)]
     args: String,
     #[serde(default)]
     started_at: Option<String>,
     #[serde(default)]
     deadline_at: Option<String>,
+    #[serde(default)]
+    await_mode: Option<String>,
     #[serde(default)]
     cancel_policy: Option<String>,
     #[serde(default)]
@@ -164,6 +172,65 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
         let deadline =
             effective_deadline(row.deadline_at.as_deref(), spawn_args.deadline.as_deref());
 
+        let authorization = match load_parent_subagent_authorization(node, &parent_request_id).await
+        {
+            Ok(authorization) => authorization,
+            Err(error) => {
+                let failed = fail_unauthorized_orphan_subagent_tool_call(
+                    node,
+                    &row,
+                    "/behavior_id",
+                    &spawn_args.behavior_id,
+                    "subagent authorization could not be verified for this behavior",
+                    &[],
+                )
+                .await?;
+                tracing::warn!(
+                    doc_id = %row.doc_id,
+                    request_id = %parent_request_id,
+                    session_id = %row.session_id,
+                    tool_call_id = %row.tool_call_id,
+                    child_request_id = %child_request_id,
+                    target_behavior_id = %spawn_args.behavior_id,
+                    failed_tool_call = failed,
+                    error = %error,
+                    "cannot materialize orphan subagent child because parent authorization could not be verified"
+                );
+                continue;
+            }
+        };
+        let row_await_mode = await_mode(&row);
+        let tool_name = subagent_tool_name(&row);
+        if let Some(denial) = subagent_spawn_denial(
+            &authorization,
+            &spawn_args.behavior_id,
+            row_await_mode,
+            tool_name,
+        ) {
+            let failed = fail_unauthorized_orphan_subagent_tool_call(
+                node,
+                &row,
+                denial.path,
+                &denial.requested,
+                denial.message,
+                &authorization.allowed_targets,
+            )
+            .await?;
+            tracing::warn!(
+                doc_id = %row.doc_id,
+                request_id = %parent_request_id,
+                session_id = %row.session_id,
+                tool_call_id = %row.tool_call_id,
+                child_request_id = %child_request_id,
+                parent_behavior_id = %authorization.behavior_id,
+                target_behavior_id = %spawn_args.behavior_id,
+                await_mode = %row_await_mode.as_str(),
+                failed_tool_call = failed,
+                "cannot materialize orphan subagent child because spawn is not authorized"
+            );
+            continue;
+        }
+
         if let Err(error) = create_subagent_request_with_request_id(
             node,
             child_request_id.clone(),
@@ -203,6 +270,28 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
     Ok(materialized)
 }
 
+async fn fail_unauthorized_orphan_subagent_tool_call(
+    node: &EmbeddedNode,
+    row: &RunningToolCallRow,
+    path: &str,
+    requested: &str,
+    message: impl Into<String>,
+    allowed_targets: &[String],
+) -> Result<bool> {
+    let tool_name = subagent_tool_name(row);
+    let payload =
+        subagent_tool_not_allowed_payload(tool_name, path, requested, message, allowed_targets);
+    fail_running_subagent_tool_call(
+        node,
+        &row.doc_id,
+        row.started_at.as_deref(),
+        row.deadline_at.as_deref(),
+        &payload,
+        FailureClass::ServiceUnavailable,
+    )
+    .await
+}
+
 async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) -> Result<usize> {
     let rows = load_running_tool_call_rows(node).await?;
 
@@ -217,6 +306,22 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
             Some(request_id) => lookup_parent_request(node, agent_did, request_id).await?,
             None => None,
         };
+
+        if is_background_subagent_tool(&row)
+            && !parent
+                .as_ref()
+                .is_some_and(|parent| request_is_interrupted(parent))
+        {
+            tracing::info!(
+                doc_id = %row.doc_id,
+                request_id = row.request_id.as_deref().unwrap_or(""),
+                session_id = %row.session_id,
+                tool_call_id = %row.tool_call_id,
+                child_request_id = row.child_request_id.as_deref().unwrap_or(""),
+                "leaving background subagent tool call running during recovery"
+            );
+            continue;
+        }
 
         let outcome = if deadline_at.is_some_and(|deadline| Utc::now() >= deadline) {
             Some(RecoveryOutcome::TimedOut)
@@ -296,9 +401,11 @@ async fn load_running_tool_call_rows(node: &EmbeddedNode) -> Result<Vec<RunningT
             request_id
             session_id
             tool_call_id
+            tool_name
             args
             started_at
             deadline_at
+            await_mode
             cancel_policy
             child_request_id
         }
@@ -470,6 +577,26 @@ fn cancel_policy(row: &RunningToolCallRow) -> CancelPolicy {
         .as_deref()
         .and_then(CancelPolicy::from_persisted)
         .unwrap_or(CancelPolicy::Cascade)
+}
+
+fn await_mode(row: &RunningToolCallRow) -> AwaitMode {
+    row.await_mode
+        .as_deref()
+        .and_then(AwaitMode::from_persisted)
+        .unwrap_or(AwaitMode::Foreground)
+}
+
+fn subagent_tool_name(row: &RunningToolCallRow) -> &str {
+    row.tool_name
+        .as_str()
+        .trim()
+        .is_empty()
+        .then_some("spawn_subagent")
+        .unwrap_or(row.tool_name.as_str())
+}
+
+fn is_background_subagent_tool(row: &RunningToolCallRow) -> bool {
+    child_request_id(row).is_some() && await_mode(row) == AwaitMode::Background
 }
 
 fn is_detached_subagent_tool(row: &RunningToolCallRow) -> bool {

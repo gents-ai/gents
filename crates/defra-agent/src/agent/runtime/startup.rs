@@ -27,6 +27,7 @@ enum BackgroundTaskResult {
     RouterObserver(Result<()>),
     Reconcile(Result<()>),
     Control(Result<()>),
+    SubagentCompletion(Result<()>),
 }
 
 pub(in crate::agent) async fn run_agent(
@@ -218,6 +219,18 @@ pub(in crate::agent) async fn run_agent(
 
     let mut background_tasks = JoinSet::new();
 
+    let completion_node = agent.node.clone();
+    let completion_cancel = cancel.child_token();
+    background_tasks.spawn(async move {
+        BackgroundTaskResult::SubagentCompletion(
+            crate::subagent_completion::run_background_completion_observer(
+                completion_node,
+                completion_cancel,
+            )
+            .await,
+        )
+    });
+
     let router_node = agent.node.clone();
     let router_agent_did = agent.agent_did.clone();
     let router_active_snapshot_rx = active_snapshot_rx.clone();
@@ -294,6 +307,7 @@ pub(in crate::agent) async fn run_agent(
             Ok(BackgroundTaskResult::RouterObserver(result)) => (result, false),
             Ok(BackgroundTaskResult::Reconcile(result)) => (result, false),
             Ok(BackgroundTaskResult::Control(result)) => (result, false),
+            Ok(BackgroundTaskResult::SubagentCompletion(result)) => (result, false),
             Err(error) => (Err(anyhow!("background task join failed: {error}")), false),
         },
         else => (Ok(()), false),

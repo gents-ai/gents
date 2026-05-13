@@ -132,6 +132,9 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
             enable_meta_tools: Some(false),
             allowed_mcp_service_ids: Some(Vec::new()),
             delegate_to: Some(vec!["did:defra-agent:amy-code".to_string()]),
+            subagent_targets: Some(vec!["researcher".to_string(), "researcher".to_string()]),
+            subagent_spawn_enabled: Some(true),
+            subagent_background_enabled: Some(true),
             ..Default::default()
         },
     )
@@ -146,12 +149,31 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
             system_prompt: Some("Use tools carefully.".to_string()),
             backend_id: Some("backend-tools".to_string()),
             model_name: None,
-            tool_selection_id: Some(selection_id),
-            inference_profile_id: bootstrap.default_behavior.inference_profile_id,
+            tool_selection_id: Some(selection_id.clone()),
+            inference_profile_id: bootstrap.default_behavior.inference_profile_id.clone(),
             compaction_strategy: Some("StripThenSummarize".to_string()),
             compaction_threshold: Some(0.75),
             enabled: true,
-            created_at: bootstrap.default_behavior.created_at,
+            created_at: bootstrap.default_behavior.created_at.clone(),
+        },
+    )
+    .await
+    .unwrap();
+    crate::upsert_agent_behavior(
+        node.as_ref(),
+        &AgentBehavior {
+            behavior_id: "researcher".to_string(),
+            agent_did: did.clone(),
+            display_name: Some("Researcher".to_string()),
+            system_prompt: Some("Research carefully.".to_string()),
+            backend_id: Some("backend-tools".to_string()),
+            model_name: None,
+            tool_selection_id: None,
+            inference_profile_id: bootstrap.default_behavior.inference_profile_id,
+            compaction_strategy: None,
+            compaction_threshold: None,
+            enabled: true,
+            created_at: Some(chrono::Utc::now().to_rfc3339()),
         },
     )
     .await
@@ -176,6 +198,190 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
         behavior.tools.delegate_to(),
         ["did:defra-agent:amy-code".to_string()]
     );
+    assert_eq!(
+        behavior.tools.subagent_tools().targets,
+        ["researcher".to_string()]
+    );
+    assert!(behavior.tools.subagent_tools().spawn_enabled);
+    assert!(behavior.tools.subagent_tools().background_enabled);
+    let snapshot = resolve_document_runtime_snapshot(
+        agent.node.as_ref(),
+        agent.document_runtime_context().unwrap(),
+    )
+    .await
+    .unwrap();
+    let tool_surface = snapshot
+        .tool_surfaces
+        .get(&default_behavior_id)
+        .expect("tool surface for default behavior");
+    let tool_names = tool_surface.tool_names();
+    assert!(tool_names.contains(&"spawn_subagent".to_string()));
+    assert!(tool_names.contains(&"wait_subagent".to_string()));
+    assert!(tool_names.contains(&"cancel_subagent".to_string()));
+    assert!(!tool_names.contains(&"list_subagents".to_string()));
+    assert!(!tool_names.contains(&"read_subagent_transcript".to_string()));
+    assert!(!tool_names.contains(&"steer_subagent".to_string()));
+}
+
+#[tokio::test]
+async fn from_default_behavior_documents_filters_inactive_subagent_targets_from_surface() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("subagent-target-disabled"));
+    let did = identity.did().to_string();
+    let default_behavior_id = default_behavior_id_for_agent(&did);
+    let selection_id = crate::default_tool_selection_id_for_behavior(&default_behavior_id);
+
+    let bootstrap = crate::ensure_agent_principal(node.as_ref(), &did)
+        .await
+        .unwrap();
+    insert_backend(
+        node.as_ref(),
+        "backend-disabled-target",
+        "http://127.0.0.1:8234/v1",
+    )
+    .await;
+    crate::upsert_tool_selection(
+        node.as_ref(),
+        &ToolSelectionDocument {
+            selection_id: selection_id.clone(),
+            agent_did: did.clone(),
+            enable_meta_tools: Some(false),
+            subagent_targets: Some(vec!["disabled-researcher".to_string()]),
+            subagent_spawn_enabled: Some(true),
+            subagent_background_enabled: Some(true),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    crate::upsert_agent_behavior(
+        node.as_ref(),
+        &AgentBehavior {
+            behavior_id: bootstrap.default_behavior.behavior_id,
+            agent_did: did.clone(),
+            display_name: Some("Default".to_string()),
+            system_prompt: Some("Use tools carefully.".to_string()),
+            backend_id: Some("backend-disabled-target".to_string()),
+            model_name: None,
+            tool_selection_id: Some(selection_id),
+            inference_profile_id: bootstrap.default_behavior.inference_profile_id,
+            compaction_strategy: Some("StripThenSummarize".to_string()),
+            compaction_threshold: Some(0.75),
+            enabled: true,
+            created_at: bootstrap.default_behavior.created_at,
+        },
+    )
+    .await
+    .unwrap();
+    crate::upsert_agent_behavior(
+        node.as_ref(),
+        &AgentBehavior {
+            behavior_id: "disabled-researcher".to_string(),
+            agent_did: did.clone(),
+            display_name: Some("Disabled Researcher".to_string()),
+            system_prompt: Some("Research carefully.".to_string()),
+            backend_id: Some("backend-disabled-target".to_string()),
+            model_name: None,
+            tool_selection_id: None,
+            inference_profile_id: None,
+            compaction_strategy: None,
+            compaction_threshold: None,
+            enabled: false,
+            created_at: Some(chrono::Utc::now().to_rfc3339()),
+        },
+    )
+    .await
+    .unwrap();
+
+    let snapshot = resolve_document_runtime_snapshot(
+        node.as_ref(),
+        &DocumentResolveContext {
+            identity,
+            tool_ceiling: ToolCeiling::readonly(),
+        },
+    )
+    .await
+    .unwrap();
+    let tool_names = snapshot
+        .tool_surfaces
+        .get(&default_behavior_id)
+        .expect("tool surface for default behavior")
+        .tool_names();
+
+    assert!(!tool_names.contains(&"spawn_subagent".to_string()));
+    assert!(!tool_names.contains(&"wait_subagent".to_string()));
+    assert!(!tool_names.contains(&"cancel_subagent".to_string()));
+}
+
+#[tokio::test]
+async fn from_default_behavior_documents_rejects_unresolved_subagent_target() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("subagent-target-missing"));
+    let did = identity.did().to_string();
+    let default_behavior_id = default_behavior_id_for_agent(&did);
+    let selection_id = crate::default_tool_selection_id_for_behavior(&default_behavior_id);
+
+    let bootstrap = crate::ensure_agent_principal(node.as_ref(), &did)
+        .await
+        .unwrap();
+    insert_backend(
+        node.as_ref(),
+        "backend-missing-target",
+        "http://127.0.0.1:8233/v1",
+    )
+    .await;
+    crate::upsert_tool_selection(
+        node.as_ref(),
+        &ToolSelectionDocument {
+            selection_id: selection_id.clone(),
+            agent_did: did.clone(),
+            enable_meta_tools: Some(false),
+            subagent_targets: Some(vec!["missing-behavior".to_string()]),
+            subagent_spawn_enabled: Some(true),
+            subagent_background_enabled: Some(true),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    crate::upsert_agent_behavior(
+        node.as_ref(),
+        &AgentBehavior {
+            behavior_id: bootstrap.default_behavior.behavior_id,
+            agent_did: did.clone(),
+            display_name: Some("Default".to_string()),
+            system_prompt: Some("Use tools carefully.".to_string()),
+            backend_id: Some("backend-missing-target".to_string()),
+            model_name: None,
+            tool_selection_id: Some(selection_id),
+            inference_profile_id: bootstrap.default_behavior.inference_profile_id,
+            compaction_strategy: Some("StripThenSummarize".to_string()),
+            compaction_threshold: Some(0.75),
+            enabled: true,
+            created_at: bootstrap.default_behavior.created_at,
+        },
+    )
+    .await
+    .unwrap();
+
+    let agent = DefraAgent::from_default_behavior_documents(
+        node,
+        identity,
+        DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::readonly(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(agent.behaviors().is_empty());
+    assert!(agent
+        .unavailable_behaviors()
+        .get(default_behavior_id.as_str())
+        .is_some_and(|message| message.contains("subagent_targets entry")));
 }
 
 #[tokio::test]

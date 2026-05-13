@@ -7,16 +7,20 @@ mod selection;
 pub use behavior_config::BehaviorToolConfig;
 pub use modes::{BashMode, FileToolMode, ToolCeiling};
 pub use runtime_context::ToolRuntimeContext;
+pub(crate) use selection::SubagentToolConfig;
 pub use selection::{CustomToolFactory, ToolSelection};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use anyhow::Result;
 use rig::tool::ToolDyn;
 
 use crate::meta_tools::{build_meta_tools, META_TOOL_NAMES};
-use crate::toolset::{build_delegate_tool, CliToolConfig, ToolSet, DELEGATE_TOOL_NAME};
+use crate::toolset::{
+    build_delegate_tool, build_subagent_tools, subagent_tool_names, CliToolConfig, ToolSet,
+    DELEGATE_TOOL_NAME,
+};
 
 const DEFAULT_CLI_TIMEOUT_SECS: u64 = 10;
 
@@ -26,6 +30,7 @@ pub struct ToolSurface {
     include_meta_tools: bool,
     allowed_mcp_service_ids: Vec<String>,
     delegate_to: Vec<String>,
+    subagent_tools: SubagentToolConfig,
     custom_tools: Vec<CustomToolFactory>,
 }
 
@@ -46,6 +51,17 @@ impl ToolSurface {
         &self.delegate_to
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn subagent_tools(&self) -> &SubagentToolConfig {
+        &self.subagent_tools
+    }
+
+    pub(crate) fn retain_subagent_targets(&mut self, active_behavior_ids: &HashSet<String>) {
+        self.subagent_tools
+            .targets
+            .retain(|target| active_behavior_ids.contains(target));
+    }
+
     pub fn tool_names(&self) -> Vec<String> {
         let mut names = self.host_tools.tool_names();
         if self.include_meta_tools {
@@ -54,6 +70,7 @@ impl ToolSurface {
         if !self.delegate_to.is_empty() {
             names.push(DELEGATE_TOOL_NAME.to_string());
         }
+        names.extend(subagent_tool_names(&self.subagent_tools));
         names.extend(self.custom_tools.iter().map(|tool| tool.name().to_string()));
         build::dedupe_strings(names)
     }
@@ -76,6 +93,7 @@ impl ToolSurface {
                 self.allowed_mcp_service_ids.clone(),
             ));
         }
+        tools.extend(build_subagent_tools(self.subagent_tools.clone()));
         for tool in &self.custom_tools {
             tools.push(tool.build()?);
         }
@@ -90,6 +108,7 @@ impl std::fmt::Debug for ToolSurface {
             .field("include_meta_tools", &self.include_meta_tools)
             .field("allowed_mcp_service_ids", &self.allowed_mcp_service_ids)
             .field("delegate_to", &self.delegate_to)
+            .field("subagent_tools", &self.subagent_tools)
             .field(
                 "custom_tools",
                 &self

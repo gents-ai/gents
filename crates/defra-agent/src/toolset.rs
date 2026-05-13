@@ -14,6 +14,7 @@ mod cli_tool;
 mod delegate;
 mod file_tools;
 mod shared;
+mod subagent;
 #[cfg(test)]
 mod tests;
 
@@ -22,6 +23,9 @@ use cli_tool::CliTool;
 use delegate::DelegateToAgentTool;
 use file_tools::{EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool};
 use shared::ToolContext;
+use subagent::{CancelSubagentTool, SpawnSubagentTool, WaitSubagentTool};
+
+use crate::tool_surface::SubagentToolConfig;
 
 pub(crate) use shared::parse_argv_prefixes;
 pub use shared::{CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode};
@@ -38,6 +42,9 @@ const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 10;
 const DELEGATE_POLL_INTERVAL_MS: u64 = 200;
 const DELEGATE_WAIT_TIMEOUT_SECS: u64 = 30;
 pub const DELEGATE_TOOL_NAME: &str = "delegate_to_agent";
+pub(crate) const SPAWN_SUBAGENT_TOOL_NAME: &str = "spawn_subagent";
+pub(crate) const WAIT_SUBAGENT_TOOL_NAME: &str = "wait_subagent";
+pub(crate) const CANCEL_SUBAGENT_TOOL_NAME: &str = "cancel_subagent";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliToolConfig {
@@ -363,6 +370,33 @@ pub fn build_delegate_tool(
     allowed_target_dids: Vec<String>,
 ) -> Box<dyn ToolDyn> {
     Box::new(DelegateToAgentTool::new(node, allowed_target_dids))
+}
+
+pub(crate) fn subagent_tool_names(config: &SubagentToolConfig) -> Vec<String> {
+    if !config.tools_enabled() {
+        return Vec::new();
+    }
+
+    [
+        SPAWN_SUBAGENT_TOOL_NAME,
+        WAIT_SUBAGENT_TOOL_NAME,
+        CANCEL_SUBAGENT_TOOL_NAME,
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+pub(crate) fn build_subagent_tools(config: SubagentToolConfig) -> Vec<Box<dyn ToolDyn>> {
+    if !config.tools_enabled() {
+        return Vec::new();
+    }
+
+    vec![
+        Box::new(SpawnSubagentTool::new(config.clone())),
+        Box::new(WaitSubagentTool),
+        Box::new(CancelSubagentTool),
+    ]
 }
 
 fn default_read_only_commands() -> Vec<String> {

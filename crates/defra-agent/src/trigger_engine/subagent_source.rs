@@ -17,8 +17,12 @@ use tokio_util::sync::CancellationToken;
 
 use crate::graphql::escape_graphql_string;
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedTask};
+use crate::subagent_tools::{
+    fail_running_subagent_tool_call, load_parent_subagent_authorization, subagent_spawn_denial,
+    subagent_tool_not_allowed_payload,
+};
 use crate::tool_call_lifecycle::subagent_request::create_subagent_request_with_request_id;
-use crate::tool_call_lifecycle::IllegalToolCallTransition;
+use crate::tool_call_lifecycle::{AwaitMode, FailureClass, IllegalToolCallTransition};
 
 use super::{FireIntent, FireResult, TriggerKind, TriggerSource};
 
@@ -43,11 +47,17 @@ struct ToolCallRow {
     request_id: Option<String>,
     tool_call_id: String,
     #[serde(default)]
+    tool_name: String,
+    #[serde(default)]
     args: String,
     #[serde(default)]
     lifecycle_state: Option<String>,
     #[serde(default)]
+    started_at: Option<String>,
+    #[serde(default)]
     deadline_at: Option<String>,
+    #[serde(default)]
+    await_mode: Option<String>,
     #[serde(default)]
     child_request_id: Option<String>,
 }
@@ -141,9 +151,12 @@ impl SubagentSource {
                     tool_call_key
                     request_id
                     tool_call_id
+                    tool_name
                     args
                     lifecycle_state
+                    started_at
                     deadline_at
+                    await_mode
                     child_request_id
                 }}
             }}"#
@@ -221,6 +234,28 @@ impl SubagentSource {
             .is_some_and(|rows| !rows.is_empty()))
     }
 
+    async fn fail_unauthorized_tool_call(
+        &self,
+        row: &ToolCallRow,
+        path: &str,
+        requested: &str,
+        message: impl Into<String>,
+        allowed_targets: &[String],
+    ) -> anyhow::Result<bool> {
+        let tool_name = non_empty(Some(&row.tool_name)).unwrap_or("spawn_subagent");
+        let payload =
+            subagent_tool_not_allowed_payload(tool_name, path, requested, message, allowed_targets);
+        fail_running_subagent_tool_call(
+            &self.node,
+            &row.doc_id,
+            row.started_at.as_deref(),
+            row.deadline_at.as_deref(),
+            &payload,
+            FailureClass::ServiceUnavailable,
+        )
+        .await
+    }
+
     async fn build_intent_for_tool_call_doc(
         &mut self,
         doc_id: &str,
@@ -254,6 +289,70 @@ impl SubagentSource {
             None => return Ok(None),
         };
         let spawn_args: SpawnArgs = serde_json::from_str(&row.args)?;
+        let await_mode = row
+            .await_mode
+            .as_deref()
+            .and_then(AwaitMode::from_persisted)
+            .unwrap_or(AwaitMode::Foreground);
+
+        let Some(parent) = self.load_parent_request(&parent_request_id).await? else {
+            anyhow::bail!(IllegalToolCallTransition::ParentLinkageIncoherent);
+        };
+
+        let authorization = match load_parent_subagent_authorization(&self.node, &parent_request_id)
+            .await
+        {
+            Ok(authorization) => authorization,
+            Err(error) => {
+                let failed = self
+                    .fail_unauthorized_tool_call(
+                        &row,
+                        "/behavior_id",
+                        &spawn_args.behavior_id,
+                        "subagent authorization could not be verified for this behavior",
+                        &[],
+                    )
+                    .await?;
+                self.processed_tool_calls.insert(processed_key);
+                tracing::warn!(
+                    parent_request_id = %parent_request_id,
+                    parent_tool_call_id = %parent_tool_call_id,
+                    target_behavior_id = %spawn_args.behavior_id,
+                    failed_tool_call = failed,
+                    %error,
+                    "subagent source could not verify parent subagent authorization; rejecting spawn",
+                );
+                return Ok(None);
+            }
+        };
+        let tool_name = non_empty(Some(&row.tool_name)).unwrap_or("spawn_subagent");
+        if let Some(denial) = subagent_spawn_denial(
+            &authorization,
+            &spawn_args.behavior_id,
+            await_mode,
+            tool_name,
+        ) {
+            let failed = self
+                .fail_unauthorized_tool_call(
+                    &row,
+                    denial.path,
+                    &denial.requested,
+                    denial.message,
+                    &authorization.allowed_targets,
+                )
+                .await?;
+            self.processed_tool_calls.insert(processed_key);
+            tracing::warn!(
+                parent_request_id = %parent_request_id,
+                parent_behavior_id = %authorization.behavior_id,
+                parent_tool_call_id = %parent_tool_call_id,
+                target_behavior_id = %spawn_args.behavior_id,
+                await_mode = %await_mode.as_str(),
+                failed_tool_call = failed,
+                "subagent source rejected unauthorized subagent spawn",
+            );
+            return Ok(None);
+        }
 
         let snapshot = self.snapshot_rx.borrow().clone();
         if snapshot.behavior(&spawn_args.behavior_id).is_none() {
@@ -265,10 +364,6 @@ impl SubagentSource {
             );
             return Ok(None);
         }
-
-        let Some(parent) = self.load_parent_request(&parent_request_id).await? else {
-            anyhow::bail!(IllegalToolCallTransition::ParentLinkageIncoherent);
-        };
 
         if self.child_request_exists(&child_request_id).await? {
             self.processed_tool_calls.insert(processed_key);

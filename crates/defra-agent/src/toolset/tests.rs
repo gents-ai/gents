@@ -104,6 +104,86 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
     );
 }
 
+#[test]
+fn subagent_tool_names_are_gated_by_spawn_and_targets() {
+    let disabled = SubagentToolConfig {
+        targets: vec!["worker".to_string()],
+        spawn_enabled: false,
+        background_enabled: true,
+    };
+    assert!(subagent_tool_names(&disabled).is_empty());
+
+    let no_targets = SubagentToolConfig {
+        targets: Vec::new(),
+        spawn_enabled: true,
+        background_enabled: true,
+    };
+    assert!(subagent_tool_names(&no_targets).is_empty());
+
+    let enabled = SubagentToolConfig {
+        targets: vec!["worker".to_string()],
+        spawn_enabled: true,
+        background_enabled: false,
+    };
+    let names = subagent_tool_names(&enabled);
+    assert_eq!(
+        names,
+        vec![
+            SPAWN_SUBAGENT_TOOL_NAME.to_string(),
+            WAIT_SUBAGENT_TOOL_NAME.to_string(),
+            CANCEL_SUBAGENT_TOOL_NAME.to_string()
+        ]
+    );
+    assert!(!names.contains(&"list_subagents".to_string()));
+    assert!(!names.contains(&"read_subagent_transcript".to_string()));
+    assert!(!names.contains(&"steer_subagent".to_string()));
+}
+
+#[tokio::test]
+async fn subagent_tool_definitions_register_only_r4b_surface() {
+    let config = SubagentToolConfig {
+        targets: vec!["research".to_string()],
+        spawn_enabled: true,
+        background_enabled: false,
+    };
+    let tools = build_subagent_tools(config);
+    let names = tools.iter().map(|tool| tool.name()).collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        vec![
+            SPAWN_SUBAGENT_TOOL_NAME.to_string(),
+            WAIT_SUBAGENT_TOOL_NAME.to_string(),
+            CANCEL_SUBAGENT_TOOL_NAME.to_string()
+        ]
+    );
+
+    let spawn_def = tools[0].definition(String::new()).await;
+    assert_eq!(
+        spawn_def.parameters["properties"]["behavior_id"]["enum"],
+        serde_json::json!(["research"])
+    );
+    assert_eq!(
+        spawn_def.parameters["properties"]["await_mode"]["enum"],
+        serde_json::json!(["foreground"])
+    );
+}
+
+#[tokio::test]
+async fn spawn_subagent_definition_exposes_background_mode_when_enabled() {
+    let config = SubagentToolConfig {
+        targets: vec!["research".to_string()],
+        spawn_enabled: true,
+        background_enabled: true,
+    };
+    let tools = build_subagent_tools(config);
+    let spawn_def = tools[0].definition(String::new()).await;
+
+    assert_eq!(
+        spawn_def.parameters["properties"]["await_mode"]["enum"],
+        serde_json::json!(["foreground", "background"])
+    );
+}
+
 fn temp_root(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("{name}-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&path).unwrap();

@@ -174,6 +174,46 @@ async fn make_terminal_request(
     Ok(())
 }
 
+async fn fetch_tool_call_state_and_result(
+    node: &defra_agent::defra_node::EmbeddedNode,
+    tool_call_id: &str,
+) -> (String, String) {
+    let tool_call_id = defra_agent::graphql::escape_graphql_string(tool_call_id);
+    let query = format!(
+        r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tool_call_id}" }} }}) {{
+            lifecycle_state
+            result
+        }} }}"#
+    );
+    let resp = node.execute(&query).await;
+    assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
+    let data = resp.data.expect("data");
+    let rows = data["AgentToolCall"].as_array().expect("array");
+    assert_eq!(rows.len(), 1, "expected one AgentToolCall row");
+    (
+        rows[0]["lifecycle_state"].as_str().unwrap().to_string(),
+        rows[0]["result"].as_str().unwrap().to_string(),
+    )
+}
+
+async fn fetch_tool_call_await_mode(
+    node: &defra_agent::defra_node::EmbeddedNode,
+    tool_call_id: &str,
+) -> String {
+    let tool_call_id = defra_agent::graphql::escape_graphql_string(tool_call_id);
+    let query = format!(
+        r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tool_call_id}" }} }}) {{
+            await_mode
+        }} }}"#
+    );
+    let resp = node.execute(&query).await;
+    assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
+    let data = resp.data.expect("data");
+    let rows = data["AgentToolCall"].as_array().expect("array");
+    assert_eq!(rows.len(), 1, "expected one AgentToolCall row");
+    rows[0]["await_mode"].as_str().unwrap().to_string()
+}
+
 // ---------------------------------------------------------------------------
 // Bucket 3 / R2 fix — load() round-trip: subagent fields survive restart
 // ---------------------------------------------------------------------------
@@ -421,6 +461,50 @@ async fn integration_background_then_foreground_persists_round_trip() {
     );
 }
 
+#[tokio::test]
+async fn integration_mode_flips_tolerate_stale_same_target_owner() {
+    let db = test_db("tc-sa-mode-cas-1").await;
+
+    let mut lc = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        "req-mode-cas-1".to_string(),
+        "sess-mode-cas-1".to_string(),
+        "tc-mode-cas-1".to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        "{}".to_string(),
+        test_deadline(),
+        AwaitMode::Foreground,
+        CancelPolicy::Cascade,
+        "child-req-mode-cas-1".to_string(),
+    );
+    lc.start_running().await.unwrap();
+
+    let mut stale_foreground =
+        ToolCallLifecycle::load(db.node.clone(), "sess-mode-cas-1", "tc-mode-cas-1")
+            .await
+            .unwrap()
+            .expect("stale foreground owner should load");
+    lc.background().await.unwrap();
+    stale_foreground.background().await.unwrap();
+    assert_eq!(
+        fetch_tool_call_await_mode(&db.node, "tc-mode-cas-1").await,
+        "background"
+    );
+
+    let mut stale_background =
+        ToolCallLifecycle::load(db.node.clone(), "sess-mode-cas-1", "tc-mode-cas-1")
+            .await
+            .unwrap()
+            .expect("stale background owner should load");
+    lc.foreground().await.unwrap();
+    stale_background.foreground().await.unwrap();
+    assert_eq!(
+        fetch_tool_call_await_mode(&db.node, "tc-mode-cas-1").await,
+        "foreground"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Integration: detach one-way persists cancel_policy
 // ---------------------------------------------------------------------------
@@ -610,10 +694,14 @@ async fn integration_bridge_complete_with_real_child() {
 
     // 3. Call bridge_complete with the projected child output.
     let projected_output = "child final assistant message".to_string();
-    bridge
+    let transitioned = bridge
         .bridge_complete(projected_output.clone())
         .await
         .unwrap();
+    assert!(
+        transitioned,
+        "bridge_complete should win the running compare"
+    );
 
     // 4. Verify the bridge tool's persisted lifecycle_state, result, and
     //    child_request_id.
@@ -649,6 +737,53 @@ async fn integration_bridge_complete_with_real_child() {
         Some(child_request_id),
         "child_request_id should be persisted from start_running"
     );
+}
+
+#[tokio::test]
+async fn integration_bridge_complete_does_not_overwrite_externally_terminal_bridge() {
+    let db = test_db("tc-sa-bc-cas-1").await;
+    let child_request_id = "child-bc-cas-1";
+    make_completed_request(
+        &db.node,
+        child_request_id,
+        Some("parent-req-bc-cas1"),
+        Some("parent-tc-bc-cas1"),
+        "child final assistant message",
+    )
+    .await
+    .unwrap();
+
+    let mut bridge = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        "parent-req-bc-cas1".to_string(),
+        "sess-bc-cas1".to_string(),
+        "tc-bc-cas1".to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        "{}".to_string(),
+        test_deadline(),
+        AwaitMode::Foreground,
+        CancelPolicy::Cascade,
+        child_request_id.to_string(),
+    );
+    bridge.start_running().await.unwrap();
+    let mut external = ToolCallLifecycle::load(db.node.clone(), "sess-bc-cas1", "tc-bc-cas1")
+        .await
+        .unwrap()
+        .expect("external owner should reload running bridge");
+    external.cancel_during_run().await.unwrap();
+
+    let transitioned = bridge
+        .bridge_complete("late child answer".to_string())
+        .await
+        .unwrap();
+    assert!(
+        !transitioned,
+        "bridge_complete should lose the persisted running compare"
+    );
+    let (state, result) = fetch_tool_call_state_and_result(&db.node, "tc-bc-cas1").await;
+    assert_eq!(state, "cancelled");
+    assert_eq!(result, "tool call cancelled");
 }
 
 // ---------------------------------------------------------------------------
@@ -692,7 +827,11 @@ async fn run_bridge_failure_case(
         child_id,
     );
     bridge.start_running().await.unwrap();
-    bridge.bridge_failure(child_terminal).await.unwrap();
+    let transitioned = bridge.bridge_failure(child_terminal).await.unwrap();
+    assert!(
+        transitioned,
+        "bridge_failure should win the running compare for {terminal_state}"
+    );
 
     // Verify persistence — read the bridge tool back from DB.
     let tc_id_escaped = defra_agent::graphql::escape_graphql_string(&tc_id);
@@ -717,6 +856,56 @@ async fn run_bridge_failure_case(
         terminal_state,
         rows[0]["lifecycle_state"]
     );
+}
+
+#[tokio::test]
+async fn integration_bridge_failure_does_not_overwrite_externally_terminal_bridge() {
+    let db = test_db("tc-sa-bf-cas-1").await;
+    let child_id = "child-req-bf-cas-1";
+    make_terminal_request(
+        &db.node,
+        child_id,
+        Some("parent-req-bf-cas1"),
+        Some("parent-tc-bf-cas1"),
+        "dead",
+    )
+    .await
+    .unwrap();
+
+    let mut bridge = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        "parent-req-bf-cas1".to_string(),
+        "sess-bf-cas1".to_string(),
+        "tc-bf-cas1".to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        "{}".to_string(),
+        test_deadline(),
+        AwaitMode::Foreground,
+        CancelPolicy::Cascade,
+        child_id.to_string(),
+    );
+    bridge.start_running().await.unwrap();
+    let mut external = ToolCallLifecycle::load(db.node.clone(), "sess-bf-cas1", "tc-bf-cas1")
+        .await
+        .unwrap()
+        .expect("external owner should reload running bridge");
+    assert!(
+        external
+            .bridge_complete("already completed".to_string())
+            .await
+            .unwrap(),
+        "external owner should terminalize the bridge"
+    );
+
+    let transitioned = bridge.bridge_failure(ChildTerminal::Dead).await.unwrap();
+    assert!(
+        !transitioned,
+        "bridge_failure should lose the persisted running compare"
+    );
+    let (state, result) = fetch_tool_call_state_and_result(&db.node, "tc-bf-cas1").await;
+    assert_eq!(state, "completed");
+    assert_eq!(result, "already completed");
 }
 
 #[tokio::test]

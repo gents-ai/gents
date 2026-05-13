@@ -30,7 +30,9 @@ pub(crate) use conversation::{
 };
 pub use fork::{fork, ForkError, ForkOutcome, ForkParams};
 pub use history::load_history;
-pub(crate) use history::{mark_response_materialized, save_message, save_message_with_key};
+pub(crate) use history::{
+    append_message, mark_response_materialized, save_message, save_message_with_key,
+};
 pub(crate) use query::load_session_behavior_id;
 pub use retry::count_active_sessions;
 pub(crate) use retry::execute_mutation_with_retry;

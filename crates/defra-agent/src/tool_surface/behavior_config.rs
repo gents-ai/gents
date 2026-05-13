@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 
@@ -8,7 +10,7 @@ use super::build::{
     has_registered_mcp_services,
 };
 use super::modes::ToolCeiling;
-use super::selection::{CustomToolFactory, ToolSelection};
+use super::selection::{CustomToolFactory, SubagentToolConfig, ToolSelection};
 use super::ToolSurface;
 
 #[derive(Clone)]
@@ -17,6 +19,7 @@ pub struct BehaviorToolConfig {
     enable_meta_tools: bool,
     allowed_mcp_service_ids: Vec<String>,
     delegate_to: Vec<String>,
+    subagent_tools: SubagentToolConfig,
     custom_tools: Vec<CustomToolFactory>,
 }
 
@@ -27,6 +30,7 @@ impl BehaviorToolConfig {
             enable_meta_tools: true,
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
+            subagent_tools: SubagentToolConfig::default(),
             custom_tools: Vec::new(),
         }
     }
@@ -35,6 +39,22 @@ impl BehaviorToolConfig {
         behavior_name: &str,
         selection: ToolSelection,
         ceiling: &ToolCeiling,
+        custom_tools: Vec<CustomToolFactory>,
+    ) -> Result<Self> {
+        Self::from_selection_with_subagent_tools(
+            behavior_name,
+            selection,
+            ceiling,
+            SubagentToolConfig::default(),
+            custom_tools,
+        )
+    }
+
+    pub(crate) fn from_selection_with_subagent_tools(
+        behavior_name: &str,
+        selection: ToolSelection,
+        ceiling: &ToolCeiling,
+        subagent_tools: SubagentToolConfig,
         custom_tools: Vec<CustomToolFactory>,
     ) -> Result<Self> {
         let ToolSelection {
@@ -65,6 +85,11 @@ impl BehaviorToolConfig {
             enable_meta_tools,
             allowed_mcp_service_ids: dedupe_strings(allowed_mcp_service_ids),
             delegate_to: dedupe_strings(delegate_to),
+            subagent_tools: SubagentToolConfig {
+                targets: dedupe_strings(subagent_tools.targets),
+                spawn_enabled: subagent_tools.spawn_enabled,
+                background_enabled: subagent_tools.background_enabled,
+            },
             custom_tools,
         })
     }
@@ -85,6 +110,11 @@ impl BehaviorToolConfig {
         &self.delegate_to
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn subagent_tools(&self) -> &SubagentToolConfig {
+        &self.subagent_tools
+    }
+
     pub fn custom_tool_names(&self) -> Vec<String> {
         self.custom_tools
             .iter()
@@ -93,6 +123,15 @@ impl BehaviorToolConfig {
     }
 
     pub async fn resolve(&self, node: &EmbeddedNode) -> Result<ToolSurface> {
+        self.resolve_with_subagent_tools(node, SubagentToolConfig::default())
+            .await
+    }
+
+    async fn resolve_with_subagent_tools(
+        &self,
+        node: &EmbeddedNode,
+        subagent_tools: SubagentToolConfig,
+    ) -> Result<ToolSurface> {
         let include_meta_tools = if self.enable_meta_tools {
             has_registered_mcp_services(node).await?
         } else {
@@ -104,8 +143,21 @@ impl BehaviorToolConfig {
             include_meta_tools,
             allowed_mcp_service_ids: self.allowed_mcp_service_ids.clone(),
             delegate_to: self.delegate_to.clone(),
+            subagent_tools,
             custom_tools: self.custom_tools.clone(),
         })
+    }
+
+    pub(crate) async fn resolve_with_available_subagent_targets(
+        &self,
+        node: &EmbeddedNode,
+        active_behavior_ids: &HashSet<String>,
+    ) -> Result<ToolSurface> {
+        let mut subagent_tools = self.subagent_tools.clone();
+        subagent_tools
+            .targets
+            .retain(|target| active_behavior_ids.contains(target));
+        self.resolve_with_subagent_tools(node, subagent_tools).await
     }
 }
 
@@ -122,6 +174,7 @@ impl std::fmt::Debug for BehaviorToolConfig {
             .field("enable_meta_tools", &self.enable_meta_tools)
             .field("allowed_mcp_service_ids", &self.allowed_mcp_service_ids)
             .field("delegate_to", &self.delegate_to)
+            .field("subagent_tools", &self.subagent_tools)
             .field(
                 "custom_tools",
                 &self

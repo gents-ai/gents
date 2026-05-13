@@ -1,5 +1,11 @@
 use super::*;
 
+fn parse_rfc3339_utc(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
 async fn fetch_interrupt_and_ttl(
     node: &EmbeddedNode,
     doc_id: &str,
@@ -170,14 +176,6 @@ impl RequestLifecycle {
 
     async fn claim_inner(&mut self, _explicit_did: bool) -> Result<ClaimOutcome> {
         self.ensure_state(&[LocalLifecycleState::Pending], "claim")?;
-        let dedup = self.check_deduplication().await?;
-        if !dedup.is_earliest {
-            self.mark_superseded_pending_request(dedup.blocking_request_id.as_deref())
-                .await?;
-            self.state = LocalLifecycleState::Superseded;
-            return Ok(ClaimOutcome::Superseded);
-        }
-
         let (interrupt_requested_at, valid_until) =
             fetch_interrupt_and_ttl(&self.node, &self.request.doc_id).await?;
 
@@ -209,9 +207,27 @@ impl RequestLifecycle {
             None => None,
         };
 
+        let dedup = self.check_deduplication().await?;
+        if !dedup.is_earliest {
+            tracing::info!(
+                request_id = %self.request.request_id,
+                session_id = %self.request.session_id,
+                blocking_request_id = dedup.blocking_request_id.as_deref().unwrap_or(""),
+                "request remains queued behind earlier same-session request"
+            );
+            return Ok(ClaimOutcome::Queued);
+        }
+
         let now = chrono::Utc::now();
         let claimed_at = now.to_rfc3339();
-        let deadline_at = now + chrono::Duration::seconds(self.deadline_duration_secs as i64);
+        let synthesized_deadline_at =
+            now + chrono::Duration::seconds(self.deadline_duration_secs as i64);
+        let deadline_at = self
+            .request
+            .deadline
+            .as_deref()
+            .and_then(parse_rfc3339_utc)
+            .unwrap_or(synthesized_deadline_at);
         let deadline = deadline_at.to_rfc3339();
         let doc_id = &self.request.doc_id;
         let escaped_claimed_at = escape_graphql_string(&claimed_at);
@@ -270,8 +286,6 @@ impl RequestLifecycle {
             );
         }
 
-        self.suppress_later_pending_duplicates(&dedup.duplicates_to_suppress)
-            .await?;
         self.state = LocalLifecycleState::Claimed;
         self.claimed_deadline_at = Some(deadline_at);
         self.valid_until_at_claim = valid_until_at_claim;

@@ -177,6 +177,30 @@ structure LifecycleTransitionCase where
   boundary : Option String
   deriving Repr
 
+structure QueueDeadlineConformanceCase where
+  name : String
+  group : String
+  action : String
+  sessionId : SessionId
+  legal : Bool
+  preActiveRequestId : Option RequestId
+  postActiveRequestId : Option RequestId
+  prePendingRequestIds : List RequestId
+  postPendingRequestIds : List RequestId
+  claimedRequestId : Option RequestId
+  blockedByActive : Bool
+  supersededRequestIds : List RequestId
+  queueKey : Option String
+  postCoalescedPendingCount : Nat
+  automatedDrainedRequestIds : List RequestId
+  preservedUserPendingRequestIds : List RequestId
+  postTerminalRequestIds : List RequestId
+  preRequestDeadline : Option Time
+  synthesizedClaimDeadline : Option Time
+  postDeadline : Option Time
+  explicitDeadlinePreserved : Bool
+  deriving Repr
+
 def boolString (value : Bool) : String :=
   if value then "true" else "false"
 

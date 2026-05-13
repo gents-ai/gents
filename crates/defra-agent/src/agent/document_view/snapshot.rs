@@ -12,11 +12,13 @@ use crate::runtime_snapshot::{
 };
 use crate::tool_surface::ToolSelection;
 
-use super::DocumentRuntimeView;
+use super::{validate_subagent_targets_resolve, DocumentRuntimeView};
 
 use crate::agent::{
-    behavior_config_from_documents, tool_selection_from_document, DocumentResolveContext,
+    behavior_config_from_documents, subagent_tool_config_from_document,
+    tool_selection_from_document, DocumentResolveContext,
 };
+use crate::tool_surface::SubagentToolConfig;
 
 pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     node: &EmbeddedNode,
@@ -40,7 +42,6 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         .unwrap_or_else(|| default_behavior_id_for_agent(context.identity.did()));
 
     let mut behaviors = Vec::<Arc<BehaviorConfig>>::new();
-    let mut tool_surfaces = HashMap::new();
     let mut unavailable_behaviors = HashMap::new();
 
     for behavior_record in view.behaviors.values() {
@@ -107,20 +108,27 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                         profile_id
                     )
                 })?;
-            let tool_selection = match behavior
+            let (tool_selection, subagent_tools) = match behavior
                 .tool_selection_id
                 .as_deref()
                 .filter(|value| !value.trim().is_empty())
             {
                 Some(selection_id) => match view.tool_selections.get(selection_id) {
-                    Some(record) => tool_selection_from_document(&record.value)?,
+                    Some(record) => {
+                        record.value.validate()?;
+                        validate_subagent_targets_resolve(&record.value, view)?;
+                        (
+                            tool_selection_from_document(&record.value)?,
+                            subagent_tool_config_from_document(&record.value),
+                        )
+                    }
                     None => anyhow::bail!(
                         "behavior {} references missing tool selection {}",
                         behavior.behavior_id,
                         selection_id
                     ),
                 },
-                None => ToolSelection::default(),
+                None => (ToolSelection::default(), SubagentToolConfig::default()),
             };
 
             let behavior_config = behavior_config_from_documents(
@@ -129,23 +137,51 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                 backend,
                 inference_profile,
                 tool_selection,
+                subagent_tools,
                 &context.tool_ceiling,
             )?;
-            let behavior = Arc::new(behavior_config);
-            let tool_surface = Arc::new(behavior.tools.resolve(node).await?);
-            Ok::<_, anyhow::Error>((behavior, tool_surface))
+            Ok::<_, anyhow::Error>(Arc::new(behavior_config))
         }
         .await;
 
         match resolved {
-            Ok((behavior_config, tool_surface)) => {
-                tool_surfaces.insert(behavior_config.name.clone(), tool_surface);
+            Ok(behavior_config) => {
                 behaviors.push(behavior_config);
             }
             Err(error) => {
                 unavailable_behaviors.insert(behavior.behavior_id.clone(), error.to_string());
             }
         }
+    }
+
+    let candidate_behavior_ids = behaviors
+        .iter()
+        .map(|behavior| behavior.name.clone())
+        .collect::<HashSet<_>>();
+    let mut behavior_surfaces = Vec::with_capacity(behaviors.len());
+    for behavior in behaviors {
+        match behavior
+            .tools
+            .resolve_with_available_subagent_targets(node, &candidate_behavior_ids)
+            .await
+        {
+            Ok(tool_surface) => behavior_surfaces.push((behavior, tool_surface)),
+            Err(error) => {
+                unavailable_behaviors.insert(behavior.name.clone(), error.to_string());
+            }
+        }
+    }
+
+    let active_behavior_ids = behavior_surfaces
+        .iter()
+        .map(|(behavior, _)| behavior.name.clone())
+        .collect::<HashSet<_>>();
+    let mut behaviors = Vec::with_capacity(behavior_surfaces.len());
+    let mut tool_surfaces = HashMap::with_capacity(behavior_surfaces.len());
+    for (behavior, mut tool_surface) in behavior_surfaces {
+        tool_surface.retain_subagent_targets(&active_behavior_ids);
+        tool_surfaces.insert(behavior.name.clone(), Arc::new(tool_surface));
+        behaviors.push(behavior);
     }
 
     let backend_admission_configs = backend_admission_configs_from_backends(

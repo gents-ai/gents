@@ -7,6 +7,9 @@ use serde_json::Value;
 
 use super::snapshots::{fetch_request_snapshot, fetch_response_content, fetch_runtime_snapshot};
 
+const TEST_MUTATION_MAX_RETRIES: u32 = 3;
+const TEST_MUTATION_INITIAL_BACKOFF_MS: u64 = 100;
+
 pub struct BootedAgent {
     shutdown_tx: tokio::sync::watch::Sender<bool>,
     handle: Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
@@ -105,7 +108,8 @@ pub async fn create_runtime_request(
         }}"#,
         max_retries = defra_agent::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
-    let response = node.execute(&mutation).await;
+    let response =
+        execute_mutation_with_transaction_retry(node, &mutation, "create_runtime_request").await;
     assert!(
         !response.has_errors(),
         "create runtime AgentRequest failed: {:?}",
@@ -154,7 +158,9 @@ async fn upsert_generated_conversation(
             ) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
+    let response =
+        execute_mutation_with_transaction_retry(node, &mutation, "upsert_generated_conversation")
+            .await;
     assert!(
         !response.has_errors(),
         "upsert generated conversation failed: {:?}",
@@ -332,6 +338,40 @@ async fn fetch_latest_inference_call(
         .and_then(|rows| rows.first())
         .cloned()
         .map(|value| serde_json::from_value(value).expect("decode InferenceCallSnapshot"))
+}
+
+async fn execute_mutation_with_transaction_retry(
+    node: &EmbeddedNode,
+    mutation: &str,
+    operation: &str,
+) -> QueryResponse {
+    let mut last_response = None;
+    for attempt in 0..=TEST_MUTATION_MAX_RETRIES {
+        if attempt > 0 {
+            let backoff =
+                Duration::from_millis(TEST_MUTATION_INITIAL_BACKOFF_MS * (1u64 << (attempt - 1)));
+            tracing::warn!(
+                operation = %operation,
+                attempt = attempt,
+                backoff_ms = backoff.as_millis() as u64,
+                "retrying test setup mutation after transaction conflict"
+            );
+            tokio::time::sleep(backoff).await;
+        }
+
+        let response = node.execute(mutation).await;
+        if !response.has_errors() || !response_has_transaction_conflict(&response) {
+            return response;
+        }
+        last_response = Some(response);
+    }
+
+    last_response.expect("retry loop always stores the failed response")
+}
+
+fn response_has_transaction_conflict(response: &QueryResponse) -> bool {
+    let error_text = format!("{:?}", response.errors);
+    error_text.contains("transaction conflict") || error_text.contains("Please retry")
 }
 
 fn first_doc_id(response: &QueryResponse, key: &str) -> String {

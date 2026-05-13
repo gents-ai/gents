@@ -14,11 +14,12 @@ impl RequestLifecycle {
                         status: {{ _in: ["pending", "processing"] }},
                         lifecycle_state: {{ _in: {active_runtime_states} }}
                     }},
-                    order: {{ created_at: ASC }}
+                    order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
                 ) {{
                     _docID
                     request_id
                     status
+                    lifecycle_state
                     created_at
                 }}
             }}"#
@@ -36,33 +37,32 @@ impl RequestLifecycle {
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
 
-        let duplicates_to_suppress = rows
+        let active_blocker = rows
             .iter()
-            .filter(|row| row.doc_id != self.request.doc_id && row.status == "pending")
-            .cloned()
-            .collect::<Vec<_>>();
-        let is_earliest = rows
-            .first()
-            .is_some_and(|earliest| earliest.doc_id == self.request.doc_id);
-        let blocking_request_id = rows.first().and_then(|earliest| {
-            (earliest.doc_id != self.request.doc_id).then(|| earliest.request_id.clone())
-        });
+            .find(|row| row.doc_id != self.request.doc_id && row.is_active_non_pending());
+        let first_pending = rows.iter().find(|row| row.is_pending());
+        let is_earliest = active_blocker.is_none()
+            && first_pending.is_some_and(|row| row.doc_id == self.request.doc_id);
+        let blocking_request_id = active_blocker
+            .or_else(|| {
+                first_pending.and_then(|row| (row.doc_id != self.request.doc_id).then_some(row))
+            })
+            .map(|row| row.request_id.clone());
 
         if rows.len() > 1 {
             tracing::info!(
                 request_id = %self.request.request_id,
                 session_id = %self.request.session_id,
                 is_earliest,
-                active_runtime_count = rows.len(),
-                duplicate_pending_count = duplicates_to_suppress.len(),
-                "deduplication check found multiple active runtime requests"
+                same_session_runtime_count = rows.len(),
+                blocking_request_id = blocking_request_id.as_deref().unwrap_or(""),
+                "same-session request queue check found pending or active requests"
             );
         }
 
         Ok(DedupPlan {
             is_earliest,
             blocking_request_id,
-            duplicates_to_suppress,
         })
     }
 

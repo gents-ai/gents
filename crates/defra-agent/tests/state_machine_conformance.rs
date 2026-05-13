@@ -21,10 +21,10 @@ use lean_vocab_test::{
     assert_lifecycle_transition_cases_partition, assert_state_machine_contract_is_complete,
     lean_client_shell_case, lean_command_env_case, lean_command_policy_case,
     lean_command_sandbox_case, lean_contract_snapshot, lean_fleet_slot_accounting_case,
-    lean_inference_slot_accounting_case, lean_request_transition_cases,
-    lean_runtime_reconcile_case, lean_session_recovery_case, lean_state_machine_contract,
-    lean_tool_preflight_case, lean_tool_retry_case, lean_vocabulary_values,
-    LeanLifecycleTransitionCase,
+    lean_inference_slot_accounting_case, lean_queue_deadline_case, lean_queue_deadline_cases,
+    lean_request_transition_cases, lean_runtime_reconcile_case, lean_session_recovery_case,
+    lean_state_machine_contract, lean_tool_preflight_case, lean_tool_retry_case,
+    lean_vocabulary_values, LeanLifecycleTransitionCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
@@ -207,6 +207,7 @@ fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().command_policy_cases.len(), 45);
     assert_eq!(lean_contract_snapshot().command_sandbox_cases.len(), 4);
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
+    assert_eq!(lean_queue_deadline_cases().len(), 5);
 }
 
 #[test]
@@ -486,6 +487,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "LiveOverlayCases".to_string(),
         ));
     }
+    if !lean_queue_deadline_cases().is_empty() {
+        emitted.insert((
+            "queue_deadline_cases".to_string(),
+            "QueueDeadlineConformanceCases".to_string(),
+        ));
+    }
     for hook in &snapshot.follow_up_hooks {
         emitted.insert(("follow_up_hook".to_string(), hook.clone()));
     }
@@ -510,6 +517,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "tool_cases",
         "command_policy_cases",
         "live_overlay_cases",
+        "queue_deadline_cases",
         "follow_up_hook",
     ];
     let registered_consumers = assert_registered_conformance_consumers_resolve();
@@ -1644,6 +1652,103 @@ fn generated_slot_accounting_cases_pin_inference_and_fleet_contracts() {
 }
 
 #[test]
+fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
+    let cases = lean_queue_deadline_cases();
+    assert_eq!(cases.len(), 5);
+
+    let emitted_names = cases
+        .iter()
+        .map(|case| case.name.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        emitted_names,
+        [
+            "active_request_blocks_later_same_session_claim",
+            "terminal_active_allows_next_pending_same_session_claim",
+            "subagent_completion_session_coalesces_one_pending_wakeup",
+            "cancel_drains_automated_wakeups_preserves_user_pending",
+            "claim_preserves_explicit_deadline",
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+    );
+
+    for case in cases {
+        assert_eq!(case.session_id, 900, "{}", case.name);
+        assert!(
+            case.superseded_request_ids.is_empty(),
+            "{} must be a queue/deadline contract, not a supersession contract",
+            case.name
+        );
+    }
+
+    let blocked = lean_queue_deadline_case("active_request_blocks_later_same_session_claim");
+    assert_eq!(blocked.group, "queue_admission");
+    assert_eq!(blocked.action, "claimNext");
+    assert!(!blocked.legal);
+    assert!(blocked.blocked_by_active);
+    assert_eq!(blocked.pre_active_request_id, Some(100));
+    assert_eq!(blocked.post_active_request_id, Some(100));
+    assert_eq!(blocked.pre_pending_request_ids, vec![101]);
+    assert_eq!(blocked.post_pending_request_ids, vec![101]);
+    assert_eq!(blocked.claimed_request_id, None);
+    assert!(blocked.post_terminal_request_ids.is_empty());
+
+    let terminal =
+        lean_queue_deadline_case("terminal_active_allows_next_pending_same_session_claim");
+    assert_eq!(terminal.group, "queue_admission");
+    assert_eq!(terminal.action, "finishActive_then_claimNext");
+    assert!(terminal.legal);
+    assert!(!terminal.blocked_by_active);
+    assert_eq!(terminal.pre_active_request_id, Some(100));
+    assert_eq!(terminal.pre_pending_request_ids, vec![101]);
+    assert_eq!(terminal.post_active_request_id, Some(101));
+    assert_eq!(terminal.claimed_request_id, Some(101));
+    assert!(terminal.post_pending_request_ids.is_empty());
+    assert_eq!(terminal.post_terminal_request_ids, vec![100]);
+
+    let coalesced =
+        lean_queue_deadline_case("subagent_completion_session_coalesces_one_pending_wakeup");
+    assert_eq!(coalesced.group, "queue_coalesce");
+    assert_eq!(coalesced.action, "coalescePending_twice");
+    assert!(coalesced.legal);
+    assert_eq!(
+        coalesced.queue_key.as_deref(),
+        Some("subagent_completion:900")
+    );
+    assert!(coalesced.pre_pending_request_ids.is_empty());
+    assert_eq!(coalesced.post_pending_request_ids, vec![201]);
+    assert_eq!(coalesced.post_coalesced_pending_count, 1);
+    assert!(coalesced.post_terminal_request_ids.is_empty());
+
+    let cancel = lean_queue_deadline_case("cancel_drains_automated_wakeups_preserves_user_pending");
+    assert_eq!(cancel.group, "queue_cancel");
+    assert_eq!(cancel.action, "drainAutomated");
+    assert!(cancel.legal);
+    assert_eq!(cancel.queue_key.as_deref(), Some("subagent_completion:900"));
+    assert_eq!(cancel.pre_pending_request_ids, vec![301, 302]);
+    assert_eq!(cancel.post_pending_request_ids, vec![302]);
+    assert_eq!(cancel.automated_drained_request_ids, vec![301]);
+    assert_eq!(cancel.preserved_user_pending_request_ids, vec![302]);
+    assert_eq!(cancel.post_terminal_request_ids, vec![301]);
+    assert_eq!(cancel.post_coalesced_pending_count, 0);
+
+    let deadline = lean_queue_deadline_case("claim_preserves_explicit_deadline");
+    assert_eq!(deadline.group, "claim_deadline");
+    assert_eq!(deadline.action, "claim");
+    assert!(deadline.legal);
+    assert_eq!(deadline.claimed_request_id, Some(401));
+    assert_eq!(deadline.pre_request_deadline, Some(50));
+    assert_eq!(deadline.synthesized_claim_deadline, Some(51));
+    assert_eq!(deadline.post_deadline, Some(50));
+    assert!(
+        deadline.post_deadline < deadline.synthesized_claim_deadline,
+        "explicit request deadline should remain tighter than the synthesized claim deadline"
+    );
+    assert!(deadline.explicit_deadline_preserved);
+}
+
+#[test]
 fn generated_command_policy_cases_cover_policy_sandbox_and_env_contracts() {
     let forbidden = lean_command_policy_case("forbidden_prefix_wins_over_allowed_prefix_order");
     assert_eq!(forbidden.category, "forbidden_prefix");
@@ -1767,16 +1872,31 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
         }
         "dedupLose" => {
-            let earlier = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
-            create_request(
-                &db.node,
-                &format!("earlier-{request_id}"),
-                &session_id,
-                "processing",
-                &earlier,
-            )
-            .await;
-            assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Superseded);
+            let escaped_doc_id = escape_graphql_string(&doc_id);
+            let resp = db
+                .node
+                .execute(&format!(
+                    r#"mutation {{
+                        update_AgentRequest(
+                            filter: {{
+                                _docID: {{ _eq: "{escaped_doc_id}" }},
+                                status: {{ _eq: "pending" }},
+                                lifecycle_state: {{ _eq: "pending" }}
+                            }},
+                            input: {{
+                                status: "superseded",
+                                lifecycle_state: "superseded",
+                                superseded_by_request: "explicit-replacement-{request_id}"
+                            }}
+                        ) {{ _docID }}
+                    }}"#
+                ))
+                .await;
+            assert!(
+                !resp.has_errors(),
+                "explicit supersede writer failed: {:?}",
+                resp.errors
+            );
         }
         "beginInference" => {
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
