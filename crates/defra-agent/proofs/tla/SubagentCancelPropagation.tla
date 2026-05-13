@@ -273,6 +273,89 @@ Crash(deployment) ==
      >>
 
 (***************************************************************************)
+(* B-side cancel handling and A-side ack receipt.                          *)
+(***************************************************************************)
+
+ProcessCancel(rpc) ==
+  /\ rpc \in pendingInbound[ChildDeployment]
+  /\ rpc.kind = "Cancel"
+  /\ rpc.tgt = ChildDeployment
+  /\ FreshIds(1)
+  /\ LET child == rpc.child
+         firstHandle == ~cancelHandledB[child]
+         liveChild == childStateB[child] = "Running"
+         ackId == CHOOSE rpcId \in RPCId \ rpcIdsUsed : TRUE
+         ack == [
+           id    |-> ackId,
+           kind  |-> "Ack",
+           src   |-> ChildDeployment,
+           tgt   |-> ParentDeployment,
+           child |-> child,
+           of    |-> rpc.id
+         ]
+     IN /\ pendingInbound' =
+             [pendingInbound EXCEPT ![ChildDeployment] = @ \ {rpc}]
+        /\ cancelHandledB' =
+             IF firstHandle
+             THEN [cancelHandledB EXCEPT ![child] = TRUE]
+             ELSE cancelHandledB
+        /\ cancelHandleCountB' =
+             IF firstHandle
+             THEN [cancelHandleCountB EXCEPT ![child] = @ + 1]
+             ELSE cancelHandleCountB
+        /\ childStateB' =
+             IF firstHandle /\ liveChild
+             THEN [childStateB EXCEPT ![child] = "Interrupted"]
+             ELSE childStateB
+        /\ terminalSourceB' =
+             IF firstHandle /\ liveChild
+             THEN [terminalSourceB EXCEPT ![child] = "CascadeCancel"]
+             ELSE terminalSourceB
+        /\ terminalWriteCountB' =
+             IF firstHandle /\ liveChild
+             THEN [terminalWriteCountB EXCEPT ![child] = @ + 1]
+             ELSE terminalWriteCountB
+        /\ messages' = messages \cup {ack}
+        /\ rpcIdsUsed' = rpcIdsUsed \cup {ackId}
+  /\ UNCHANGED <<
+       cancelIntentA,
+       cancelAckedA,
+       cancelAttemptCountA,
+       inFlight,
+       dropCount,
+       crashCount
+     >>
+
+ReceiveAck(ack) ==
+  /\ ack \in pendingInbound[ParentDeployment]
+  /\ ack.kind = "Ack"
+  /\ ack.tgt = ParentDeployment
+  /\ \E rpc \in inFlight[ParentDeployment] :
+       /\ rpc.kind = "Cancel"
+       /\ rpc.id = ack.of
+       /\ rpc.child = ack.child
+  /\ pendingInbound' =
+       [pendingInbound EXCEPT ![ParentDeployment] = @ \ {ack}]
+  /\ inFlight' =
+       [inFlight EXCEPT ![ParentDeployment] =
+         { rpc \in @ : rpc.id # ack.of }]
+  /\ cancelAckedA' =
+       [cancelAckedA EXCEPT ![ack.child] = TRUE]
+  /\ UNCHANGED <<
+       cancelIntentA,
+       cancelAttemptCountA,
+       childStateB,
+       terminalSourceB,
+       terminalWriteCountB,
+       cancelHandledB,
+       cancelHandleCountB,
+       messages,
+       rpcIdsUsed,
+       dropCount,
+       crashCount
+     >>
+
+(***************************************************************************)
 (* Safety invariants.                                                      *)
 (***************************************************************************)
 
@@ -293,17 +376,41 @@ RPCWellFormed ==
 
 CancelIntentCausal ==
   \A child \in Child :
-    (cancelAttemptCountA[child] > 0
+    (cancelHandledB[child]
+      \/ cancelAckedA[child]
+      \/ cancelAttemptCountA[child] > 0
       \/ \E rpc \in AllRPCs :
            /\ rpc.child = child
            /\ rpc.kind \in {"Cancel", "Ack"})
       => cancelIntentA[child]
+
+AckRequiresHandled ==
+  /\ \A child \in Child :
+       cancelAckedA[child] => cancelHandledB[child]
+  /\ \A rpc \in AllRPCs :
+       rpc.kind = "Ack" => cancelHandledB[rpc.child]
+
+CancelHandledIdempotent ==
+  \A child \in Child : cancelHandleCountB[child] <= 1
+
+CascadeInterruptsOnlyRunning ==
+  \A child \in Child :
+    terminalSourceB[child] = "CascadeCancel" =>
+      /\ childStateB[child] = "Interrupted"
+      /\ cancelHandledB[child]
+
+InterruptedOnlyByCascade ==
+  \A child \in Child :
+    childStateB[child] = "Interrupted" =>
+      terminalSourceB[child] = "CascadeCancel"
 
 Next ==
   \/ \E child \in Child : InvokeBridgeCancelCascade(child)
   \/ \E child \in Child : EmitCancel(child)
   \/ \E rpc \in messages : Deliver(rpc)
   \/ \E rpc \in messages : Drop(rpc)
+  \/ \E rpc \in pendingInbound[ChildDeployment] : ProcessCancel(rpc)
+  \/ \E ack \in pendingInbound[ParentDeployment] : ReceiveAck(ack)
   \/ \E rpc \in inFlight[ParentDeployment] : Timeout(rpc)
   \/ \E deployment \in Deployment : Crash(deployment)
 
