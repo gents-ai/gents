@@ -327,6 +327,14 @@ impl ToolCallLifecycle {
         self.await_mode
     }
 
+    pub(crate) fn is_running(&self) -> bool {
+        self.state == ToolCallState::Running
+    }
+
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.state == ToolCallState::Cancelled
+    }
+
     pub(crate) fn set_state(&mut self, state: ToolCallState) {
         self.state = state;
     }

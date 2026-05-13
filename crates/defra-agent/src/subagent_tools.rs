@@ -20,6 +20,11 @@ pub(crate) struct SpawnSubagentArgs {
     pub deadline: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct WaitSubagentArgs {
+    pub child_request_id: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum AwaitModeArg {
     #[default]

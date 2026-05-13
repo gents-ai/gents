@@ -300,6 +300,33 @@ async fn fetch_tool_call(node: &EmbeddedNode, session_id: &str, tool_call_id: &s
     first_row(&node.execute(&query).await, "AgentToolCall")
 }
 
+async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_name: &str) -> usize {
+    let escaped_session_id = escape_graphql_string(session_id);
+    let escaped_tool_name = escape_graphql_string(tool_name);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    session_id: {{ _eq: "{escaped_session_id}" }},
+                    tool_name: {{ _eq: "{escaped_tool_name}" }}
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "count AgentToolCall by name failed: {:?}",
+        response.errors
+    );
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|rows| rows.as_array())
+        .map_or(0, Vec::len)
+}
+
 async fn fetch_child_request(node: &EmbeddedNode, child_request_id: &str) -> ChildRequestRow {
     let escaped_child_request_id = escape_graphql_string(child_request_id);
     let query = format!(
@@ -1134,5 +1161,295 @@ async fn spawn_subagent_rejects_depth_ceiling_without_child_request() {
         child_request_for_tool(db.node.as_ref(), "internal-spawn-depth")
             .await
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn wait_subagent_waits_on_existing_bridge_without_lifecycle_row() {
+    let (db, hook, session_id, _request_id, _parent_deadline) = setup_spawn_fixture(
+        "wait_subagent_existing_bridge",
+        vec![CHILD_BEHAVIOR_ID],
+        0,
+        true,
+    )
+    .await;
+    let spawn_args = json!({
+        "behavior_id": CHILD_BEHAVIOR_ID,
+        "prompt": "background child for wait_subagent",
+        "await_mode": "background"
+    })
+    .to_string();
+
+    let spawn_action = PromptHook::<TestModel>::on_tool_call(
+        &hook,
+        "spawn_subagent",
+        Some("model-call-wait-spawn".to_string()),
+        "internal-wait-spawn",
+        &spawn_args,
+    )
+    .await;
+    let spawn_receipt = skip_reason_json(spawn_action);
+    assert_eq!(spawn_receipt["ok"], true);
+    assert_eq!(spawn_receipt["await_mode"], "background");
+    let child_request_id = spawn_receipt["child_request_id"]
+        .as_str()
+        .expect("child_request_id")
+        .to_string();
+    let child_session_id = spawn_receipt["child_session_id"]
+        .as_str()
+        .expect("child_session_id")
+        .to_string();
+
+    let hook_for_wait = hook.clone();
+    let wait_args = json!({ "child_request_id": child_request_id }).to_string();
+    let wait_handle = tokio::spawn(async move {
+        PromptHook::<TestModel>::on_tool_call(
+            &hook_for_wait,
+            "wait_subagent",
+            Some("model-call-wait".to_string()),
+            "internal-wait-tool",
+            &wait_args,
+        )
+        .await
+    });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let foregrounded_bridge =
+        fetch_tool_call(db.node.as_ref(), &session_id, "internal-wait-spawn").await;
+    assert_eq!(
+        foregrounded_bridge.await_mode.as_deref(),
+        Some("foreground")
+    );
+    assert_eq!(
+        count_tool_calls_by_name(db.node.as_ref(), &session_id, "wait_subagent").await,
+        0
+    );
+
+    persist_child_completion(
+        db.node.as_ref(),
+        &child_request_id,
+        &child_session_id,
+        "wait_subagent final answer",
+    )
+    .await;
+
+    let action = tokio::time::timeout(Duration::from_secs(5), wait_handle)
+        .await
+        .expect("wait_subagent should complete after child completion")
+        .expect("wait_subagent task should not panic");
+    let result = skip_reason_json(action);
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["await_mode"], "foreground");
+    assert_eq!(result["status"], "completed");
+    assert_eq!(result["final_response"], "wait_subagent final answer");
+
+    let completed_bridge =
+        fetch_tool_call(db.node.as_ref(), &session_id, "internal-wait-spawn").await;
+    assert_eq!(
+        completed_bridge.lifecycle_state.as_deref(),
+        Some("completed")
+    );
+    assert_eq!(
+        completed_bridge.result.as_deref(),
+        Some("wait_subagent final answer")
+    );
+    assert_eq!(
+        count_tool_calls_by_name(db.node.as_ref(), &session_id, "wait_subagent").await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn wait_subagent_rejects_unlinked_child_without_lifecycle_row() {
+    let (db, hook, session_id, _request_id, _parent_deadline) = setup_spawn_fixture(
+        "wait_subagent_unlinked_child",
+        vec![CHILD_BEHAVIOR_ID],
+        0,
+        true,
+    )
+    .await;
+    let wait_args = json!({ "child_request_id": "not-this-parents-child" }).to_string();
+
+    let action = PromptHook::<TestModel>::on_tool_call(
+        &hook,
+        "wait_subagent",
+        Some("model-call-wait-denied".to_string()),
+        "internal-wait-denied",
+        &wait_args,
+    )
+    .await;
+    let error = skip_reason_json(action);
+    assert_eq!(error["ok"], false);
+    assert_eq!(error["failure_class"], "service_unavailable");
+    assert_eq!(error["tool_name"], "wait_subagent");
+    assert_eq!(error["path"], "/child_request_id");
+    assert_eq!(
+        count_tool_calls_by_name(db.node.as_ref(), &session_id, "wait_subagent").await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn wait_subagent_from_resumed_hook_cascades_parent_interrupt() {
+    let (db, hook, session_id, request_id, parent_deadline) = setup_spawn_fixture(
+        "wait_subagent_resumed_interrupt",
+        vec![CHILD_BEHAVIOR_ID],
+        0,
+        true,
+    )
+    .await;
+    let spawn_args = json!({
+        "behavior_id": CHILD_BEHAVIOR_ID,
+        "prompt": "background child for resumed wait cancellation",
+        "await_mode": "background"
+    })
+    .to_string();
+
+    let spawn_action = PromptHook::<TestModel>::on_tool_call(
+        &hook,
+        "spawn_subagent",
+        Some("model-call-wait-resume-spawn".to_string()),
+        "internal-wait-resume-spawn",
+        &spawn_args,
+    )
+    .await;
+    let spawn_receipt = skip_reason_json(spawn_action);
+    let child_request_id = spawn_receipt["child_request_id"]
+        .as_str()
+        .expect("child_request_id")
+        .to_string();
+
+    let resumed_hook = DefraSessionHook::resume_or_create_with_identity_policy(
+        db.node.clone(),
+        &session_id,
+        PARENT_BEHAVIOR_ID,
+        AGENT_DID,
+        FailurePolicy::default(),
+    )
+    .await
+    .unwrap();
+    resumed_hook
+        .set_active_request_id(Some(request_id.clone()))
+        .await;
+    resumed_hook
+        .set_request_deadline_at(Some(parent_deadline))
+        .await;
+
+    let hook_for_wait = resumed_hook.clone();
+    let wait_args = json!({ "child_request_id": child_request_id }).to_string();
+    let wait_handle = tokio::spawn(async move {
+        PromptHook::<TestModel>::on_tool_call(
+            &hook_for_wait,
+            "wait_subagent",
+            Some("model-call-wait-resume".to_string()),
+            "internal-wait-resume",
+            &wait_args,
+        )
+        .await
+    });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let foregrounded_bridge =
+        fetch_tool_call(db.node.as_ref(), &session_id, "internal-wait-resume-spawn").await;
+    assert_eq!(
+        foregrounded_bridge.await_mode.as_deref(),
+        Some("foreground")
+    );
+
+    interrupt_request(db.node.as_ref(), &request_id)
+        .await
+        .unwrap();
+
+    let action = tokio::time::timeout(Duration::from_secs(5), wait_handle)
+        .await
+        .expect("resumed wait_subagent should unblock after parent interrupt")
+        .expect("resumed wait_subagent task should not panic");
+    let result = skip_reason_json(action);
+    assert_eq!(result["ok"], false);
+    assert_eq!(result["await_mode"], "foreground");
+    assert_eq!(result["status"], "interrupted");
+
+    let cancelled_bridge =
+        fetch_tool_call(db.node.as_ref(), &session_id, "internal-wait-resume-spawn").await;
+    assert_eq!(
+        cancelled_bridge.lifecycle_state.as_deref(),
+        Some("cancelled")
+    );
+    let child_interrupt = fetch_interrupt_requested_at(db.node.as_ref(), &child_request_id)
+        .await
+        .unwrap();
+    assert!(
+        child_interrupt.is_some(),
+        "wait_subagent cancellation should cascade to the child request"
+    );
+    assert_eq!(
+        count_tool_calls_by_name(db.node.as_ref(), &session_id, "wait_subagent").await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn wait_subagent_returns_background_receipt_when_bridge_is_backgrounded() {
+    let (db, hook, session_id, _request_id, _parent_deadline) = setup_spawn_fixture(
+        "wait_subagent_backgrounded",
+        vec![CHILD_BEHAVIOR_ID],
+        0,
+        true,
+    )
+    .await;
+    let spawn_args = json!({
+        "behavior_id": CHILD_BEHAVIOR_ID,
+        "prompt": "background child for wait backgrounding",
+        "await_mode": "background"
+    })
+    .to_string();
+
+    let spawn_action = PromptHook::<TestModel>::on_tool_call(
+        &hook,
+        "spawn_subagent",
+        Some("model-call-wait-bg-spawn".to_string()),
+        "internal-wait-bg-spawn",
+        &spawn_args,
+    )
+    .await;
+    let spawn_receipt = skip_reason_json(spawn_action);
+    let child_request_id = spawn_receipt["child_request_id"]
+        .as_str()
+        .expect("child_request_id")
+        .to_string();
+
+    let hook_for_wait = hook.clone();
+    let wait_args = json!({ "child_request_id": child_request_id }).to_string();
+    let wait_handle = tokio::spawn(async move {
+        PromptHook::<TestModel>::on_tool_call(
+            &hook_for_wait,
+            "wait_subagent",
+            Some("model-call-wait-bg".to_string()),
+            "internal-wait-bg",
+            &wait_args,
+        )
+        .await
+    });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let mut lifecycle =
+        ToolCallLifecycle::load(db.node.clone(), &session_id, "internal-wait-bg-spawn")
+            .await
+            .unwrap()
+            .expect("wait_subagent should foreground the original bridge");
+    lifecycle.background().await.unwrap();
+
+    let action = tokio::time::timeout(Duration::from_secs(5), wait_handle)
+        .await
+        .expect("wait_subagent should unblock after bridge backgrounding")
+        .expect("wait_subagent task should not panic");
+    let result = skip_reason_json(action);
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["await_mode"], "background");
+    assert_eq!(result["status"], "running");
+    assert_eq!(result["backgrounded"], true);
+    assert_eq!(
+        count_tool_calls_by_name(db.node.as_ref(), &session_id, "wait_subagent").await,
+        0
     );
 }

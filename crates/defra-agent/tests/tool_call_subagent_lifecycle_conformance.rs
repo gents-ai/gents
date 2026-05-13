@@ -196,6 +196,24 @@ async fn fetch_tool_call_state_and_result(
     )
 }
 
+async fn fetch_tool_call_await_mode(
+    node: &defra_agent::defra_node::EmbeddedNode,
+    tool_call_id: &str,
+) -> String {
+    let tool_call_id = defra_agent::graphql::escape_graphql_string(tool_call_id);
+    let query = format!(
+        r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tool_call_id}" }} }}) {{
+            await_mode
+        }} }}"#
+    );
+    let resp = node.execute(&query).await;
+    assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
+    let data = resp.data.expect("data");
+    let rows = data["AgentToolCall"].as_array().expect("array");
+    assert_eq!(rows.len(), 1, "expected one AgentToolCall row");
+    rows[0]["await_mode"].as_str().unwrap().to_string()
+}
+
 // ---------------------------------------------------------------------------
 // Bucket 3 / R2 fix — load() round-trip: subagent fields survive restart
 // ---------------------------------------------------------------------------
@@ -440,6 +458,50 @@ async fn integration_background_then_foreground_persists_round_trip() {
             Some(IllegalToolCallTransition::ModeAlreadyForeground)
         ),
         "expected ModeAlreadyForeground on second foreground() call, got: {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn integration_mode_flips_tolerate_stale_same_target_owner() {
+    let db = test_db("tc-sa-mode-cas-1").await;
+
+    let mut lc = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        "req-mode-cas-1".to_string(),
+        "sess-mode-cas-1".to_string(),
+        "tc-mode-cas-1".to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        "{}".to_string(),
+        test_deadline(),
+        AwaitMode::Foreground,
+        CancelPolicy::Cascade,
+        "child-req-mode-cas-1".to_string(),
+    );
+    lc.start_running().await.unwrap();
+
+    let mut stale_foreground =
+        ToolCallLifecycle::load(db.node.clone(), "sess-mode-cas-1", "tc-mode-cas-1")
+            .await
+            .unwrap()
+            .expect("stale foreground owner should load");
+    lc.background().await.unwrap();
+    stale_foreground.background().await.unwrap();
+    assert_eq!(
+        fetch_tool_call_await_mode(&db.node, "tc-mode-cas-1").await,
+        "background"
+    );
+
+    let mut stale_background =
+        ToolCallLifecycle::load(db.node.clone(), "sess-mode-cas-1", "tc-mode-cas-1")
+            .await
+            .unwrap()
+            .expect("stale background owner should load");
+    lc.foreground().await.unwrap();
+    stale_background.foreground().await.unwrap();
+    assert_eq!(
+        fetch_tool_call_await_mode(&db.node, "tc-mode-cas-1").await,
+        "foreground"
     );
 }
 

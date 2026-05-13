@@ -13,6 +13,7 @@ use crate::subagent_tools::{
     child_request_completed, load_authorized_child_edge, load_child_final_response,
     load_child_session_id, load_child_terminal_row, load_parent_subagent_context,
     project_child_terminal, target_is_allowed, ParentSubagentContext, SpawnSubagentArgs,
+    WaitSubagentArgs,
 };
 use crate::tool_call_lifecycle::query::load_tool_call_result;
 use crate::tool_call_lifecycle::runtime::{classify_managed_tool_result, ManagedToolTerminal};
@@ -20,7 +21,7 @@ use crate::tool_call_lifecycle::{
     create_subagent_request_with_request_id, AwaitMode, CancelPolicy, ChildTerminal, FailureClass,
     ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
-use crate::toolset::SPAWN_SUBAGENT_TOOL_NAME;
+use crate::toolset::{SPAWN_SUBAGENT_TOOL_NAME, WAIT_SUBAGENT_TOOL_NAME};
 use crate::truncation::{truncate_text, DefraSpillTruncator, TruncationMode, Truncator};
 
 use super::{non_empty, DefraSessionHook, TranscriptTurnState};
@@ -519,6 +520,86 @@ impl DefraSessionHook {
         Ok(ToolCallHookAction::skip(result))
     }
 
+    async fn persist_wait_subagent_tool_call(
+        &self,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+    ) -> anyhow::Result<ToolCallHookAction> {
+        let (_session_id, request_id, parent_deadline_at, _seq) =
+            self.ensure_assistant_turn_sequence().await?;
+        self.state.lock().await.register_tool_result_identity(
+            internal_call_id,
+            None,
+            tool_call_id.as_deref(),
+        );
+
+        let parsed = match serde_json::from_str::<WaitSubagentArgs>(args) {
+            Ok(args) => args,
+            Err(error) => {
+                return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+                    WAIT_SUBAGENT_TOOL_NAME,
+                    "/",
+                    format!("invalid wait_subagent arguments: {error}"),
+                )));
+            }
+        };
+        let child_request_id = parsed.child_request_id.trim();
+        if child_request_id.is_empty() {
+            return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+                WAIT_SUBAGENT_TOOL_NAME,
+                "/child_request_id",
+                "child_request_id is required",
+            )));
+        }
+
+        let parent_context = load_parent_subagent_context(&self.node, &request_id).await?;
+        let edge =
+            match load_authorized_child_edge(&self.node, &parent_context, child_request_id).await {
+                Ok(edge) => edge,
+                Err(error) => {
+                    return Ok(ToolCallHookAction::skip(service_unavailable_payload(
+                        WAIT_SUBAGENT_TOOL_NAME,
+                        "/child_request_id",
+                        format!(
+                        "child subagent request is not available to this parent request: {error}"
+                    ),
+                        false,
+                    )));
+                }
+            };
+
+        if edge.lifecycle_state == "running" {
+            if edge.await_mode == AwaitMode::Background {
+                self.foreground_and_track_existing_subagent_bridge(
+                    &parent_context,
+                    child_request_id,
+                    &edge.parent_tool_call_id,
+                )
+                .await?;
+            } else {
+                self.track_in_flight_lifecycle_from_storage(
+                    &parent_context.session_id,
+                    &edge.parent_tool_call_id,
+                )
+                .await?;
+            }
+        }
+
+        let result = self
+            .await_existing_subagent_bridge(
+                &parent_context,
+                &edge.parent_tool_call_id,
+                &edge.child_request_id,
+                &edge.child_session_id,
+                &edge.behavior_id,
+                parent_deadline_at.min(parent_context.request_deadline_at),
+            )
+            .await?;
+
+        Ok(ToolCallHookAction::skip(result))
+    }
+
     async fn await_foreground_subagent(
         &self,
         internal_call_id: &str,
@@ -712,6 +793,296 @@ impl DefraSessionHook {
         }
     }
 
+    async fn await_existing_subagent_bridge(
+        &self,
+        parent_context: &ParentSubagentContext,
+        parent_tool_call_id: &str,
+        child_request_id: &str,
+        child_session_id: &str,
+        behavior_id: &str,
+        parent_deadline_at: chrono::DateTime<chrono::Utc>,
+    ) -> anyhow::Result<String> {
+        loop {
+            let now = chrono::Utc::now();
+            let edge =
+                load_authorized_child_edge(&self.node, parent_context, child_request_id).await?;
+
+            if edge.lifecycle_state == "cancelled" {
+                self.discard_in_flight_lifecycle(parent_tool_call_id).await;
+                return Ok(foreground_terminal_failure_payload(
+                    child_request_id,
+                    child_session_id,
+                    "interrupted",
+                    "parent request was cancelled while waiting for child subagent",
+                    FailureClass::External,
+                ));
+            }
+
+            if edge.lifecycle_state == "failed" || edge.lifecycle_state == "timedOut" {
+                self.discard_in_flight_lifecycle(parent_tool_call_id).await;
+                return Ok(foreground_terminal_failure_payload(
+                    child_request_id,
+                    child_session_id,
+                    if edge.lifecycle_state == "timedOut" {
+                        "dead"
+                    } else {
+                        "failed"
+                    },
+                    "parent subagent bridge reached a terminal failure while waiting for child subagent",
+                    FailureClass::External,
+                ));
+            }
+
+            if edge.lifecycle_state == "completed" {
+                self.discard_in_flight_lifecycle(parent_tool_call_id).await;
+                return self
+                    .foreground_completed_bridge_payload(
+                        &parent_context.session_id,
+                        parent_tool_call_id,
+                        child_request_id,
+                        child_session_id,
+                        behavior_id,
+                    )
+                    .await;
+            }
+
+            if edge.lifecycle_state == "running"
+                && crate::interrupt::fetch_interrupt_requested_at(
+                    &self.node,
+                    &parent_context.request_id,
+                )
+                .await?
+                .is_some()
+            {
+                if let Some(mut lifecycle) = self
+                    .take_or_load_in_flight_lifecycle(
+                        &parent_context.session_id,
+                        parent_tool_call_id,
+                    )
+                    .await?
+                {
+                    if let Err(error) = lifecycle.cancel_during_run().await {
+                        return self
+                            .foreground_external_bridge_terminal_or_error(
+                                parent_context,
+                                parent_tool_call_id,
+                                child_request_id,
+                                child_session_id,
+                                behavior_id,
+                                error,
+                            )
+                            .await;
+                    }
+                    if !lifecycle.is_cancelled() {
+                        return self
+                            .foreground_external_bridge_terminal_payload(
+                                parent_context,
+                                parent_tool_call_id,
+                                child_request_id,
+                                child_session_id,
+                                behavior_id,
+                            )
+                            .await;
+                    }
+                    if let Some(intent) = lifecycle.bridge_cancel_cascade().await? {
+                        if let Err(error) = crate::interrupt::interrupt_request(
+                            &self.node,
+                            &intent.child_request_id,
+                        )
+                        .await
+                        {
+                            tracing::warn!(
+                                child_request_id = %intent.child_request_id,
+                                error = %error,
+                                "failed to cascade wait_subagent cancellation to child request"
+                            );
+                        }
+                    }
+                }
+                self.discard_in_flight_lifecycle(parent_tool_call_id).await;
+                return Ok(foreground_terminal_failure_payload(
+                    child_request_id,
+                    child_session_id,
+                    "interrupted",
+                    "parent request was cancelled while waiting for child subagent",
+                    FailureClass::External,
+                ));
+            }
+
+            if edge.await_mode == AwaitMode::Background && edge.lifecycle_state == "running" {
+                self.refresh_owned_in_flight_lifecycle_from_storage(
+                    &parent_context.session_id,
+                    parent_tool_call_id,
+                )
+                .await?;
+                return Ok(backgrounded_receipt_payload(
+                    child_request_id,
+                    child_session_id,
+                    behavior_id,
+                ));
+            }
+
+            if now >= parent_deadline_at {
+                if edge.lifecycle_state == "running" {
+                    if let Some(mut lifecycle) = self
+                        .take_or_load_in_flight_lifecycle(
+                            &parent_context.session_id,
+                            parent_tool_call_id,
+                        )
+                        .await?
+                    {
+                        let projected = match lifecycle.bridge_failure(ChildTerminal::Dead).await {
+                            Ok(projected) => projected,
+                            Err(error) => {
+                                return self
+                                    .foreground_external_bridge_terminal_or_error(
+                                        parent_context,
+                                        parent_tool_call_id,
+                                        child_request_id,
+                                        child_session_id,
+                                        behavior_id,
+                                        error,
+                                    )
+                                    .await;
+                            }
+                        };
+                        if !projected {
+                            return self
+                                .foreground_external_bridge_terminal_payload(
+                                    parent_context,
+                                    parent_tool_call_id,
+                                    child_request_id,
+                                    child_session_id,
+                                    behavior_id,
+                                )
+                                .await;
+                        }
+                    }
+                }
+                self.discard_in_flight_lifecycle(parent_tool_call_id).await;
+                return Ok(foreground_terminal_failure_payload(
+                    child_request_id,
+                    child_session_id,
+                    "dead",
+                    "parent request deadline exceeded while waiting for child subagent",
+                    FailureClass::External,
+                ));
+            }
+
+            if let Some(row) = load_child_terminal_row(&self.node, child_request_id).await? {
+                if child_request_completed(&row) {
+                    let Some(final_response) = load_child_final_response(&self.node, &edge).await?
+                    else {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
+                    };
+                    if edge.lifecycle_state == "running" {
+                        if let Some(mut lifecycle) = self
+                            .take_or_load_in_flight_lifecycle(
+                                &parent_context.session_id,
+                                parent_tool_call_id,
+                            )
+                            .await?
+                        {
+                            let projected =
+                                match lifecycle.bridge_complete(final_response.clone()).await {
+                                    Ok(projected) => projected,
+                                    Err(error) => {
+                                        return self
+                                            .foreground_external_bridge_terminal_or_error(
+                                                parent_context,
+                                                parent_tool_call_id,
+                                                child_request_id,
+                                                child_session_id,
+                                                behavior_id,
+                                                error,
+                                            )
+                                            .await;
+                                    }
+                                };
+                            if !projected {
+                                return self
+                                    .foreground_external_bridge_terminal_payload(
+                                        parent_context,
+                                        parent_tool_call_id,
+                                        child_request_id,
+                                        child_session_id,
+                                        behavior_id,
+                                    )
+                                    .await;
+                            }
+                        }
+                    }
+                    self.discard_in_flight_lifecycle(parent_tool_call_id).await;
+                    return Ok(json_string(json!({
+                        "ok": true,
+                        "child_request_id": child_request_id,
+                        "child_session_id": child_session_id,
+                        "behavior_id": behavior_id,
+                        "await_mode": "foreground",
+                        "status": "completed",
+                        "final_response": final_response,
+                        "error": null
+                    })));
+                }
+
+                if let Some(terminal) = project_child_terminal(&row) {
+                    let status = child_terminal_status(&terminal);
+                    let (reason, failure_class) = child_terminal_error(&terminal);
+                    if edge.lifecycle_state == "running" {
+                        if let Some(mut lifecycle) = self
+                            .take_or_load_in_flight_lifecycle(
+                                &parent_context.session_id,
+                                parent_tool_call_id,
+                            )
+                            .await?
+                        {
+                            let projected = match lifecycle.bridge_failure(terminal).await {
+                                Ok(projected) => projected,
+                                Err(error) => {
+                                    return self
+                                        .foreground_external_bridge_terminal_or_error(
+                                            parent_context,
+                                            parent_tool_call_id,
+                                            child_request_id,
+                                            child_session_id,
+                                            behavior_id,
+                                            error,
+                                        )
+                                        .await;
+                                }
+                            };
+                            if !projected {
+                                return self
+                                    .foreground_external_bridge_terminal_payload(
+                                        parent_context,
+                                        parent_tool_call_id,
+                                        child_request_id,
+                                        child_session_id,
+                                        behavior_id,
+                                    )
+                                    .await;
+                            }
+                        }
+                    }
+                    self.discard_in_flight_lifecycle(parent_tool_call_id).await;
+                    return Ok(foreground_terminal_failure_payload(
+                        child_request_id,
+                        child_session_id,
+                        status,
+                        reason,
+                        failure_class,
+                    ));
+                }
+            }
+
+            let remaining = (parent_deadline_at - now)
+                .to_std()
+                .unwrap_or(Duration::from_millis(0));
+            tokio::time::sleep(remaining.min(Duration::from_millis(250))).await;
+        }
+    }
+
     async fn foreground_external_bridge_terminal_payload(
         &self,
         parent_context: &ParentSubagentContext,
@@ -793,11 +1164,104 @@ impl DefraSessionHook {
             .remove(internal_call_id)
     }
 
+    async fn take_or_load_in_flight_lifecycle(
+        &self,
+        session_id: &str,
+        internal_call_id: &str,
+    ) -> anyhow::Result<Option<ToolCallLifecycle>> {
+        if let Some(lifecycle) = self.take_owned_in_flight_lifecycle(internal_call_id).await {
+            return Ok(Some(lifecycle));
+        }
+
+        ToolCallLifecycle::load(self.node.clone(), session_id, internal_call_id).await
+    }
+
     async fn discard_in_flight_lifecycle(&self, internal_call_id: &str) {
         self.in_flight_lifecycles
             .lock()
             .await
             .remove(internal_call_id);
+    }
+
+    async fn foreground_external_bridge_terminal_or_error(
+        &self,
+        parent_context: &ParentSubagentContext,
+        parent_tool_call_id: &str,
+        child_request_id: &str,
+        child_session_id: &str,
+        behavior_id: &str,
+        error: anyhow::Error,
+    ) -> anyhow::Result<String> {
+        let edge = load_authorized_child_edge(&self.node, parent_context, child_request_id).await?;
+        if edge.lifecycle_state == "running" {
+            return Err(error);
+        }
+
+        self.foreground_external_bridge_terminal_payload(
+            parent_context,
+            parent_tool_call_id,
+            child_request_id,
+            child_session_id,
+            behavior_id,
+        )
+        .await
+    }
+
+    async fn foreground_and_track_existing_subagent_bridge(
+        &self,
+        parent_context: &ParentSubagentContext,
+        child_request_id: &str,
+        parent_tool_call_id: &str,
+    ) -> anyhow::Result<()> {
+        let Some(mut lifecycle) = ToolCallLifecycle::load(
+            self.node.clone(),
+            &parent_context.session_id,
+            parent_tool_call_id,
+        )
+        .await?
+        else {
+            return Ok(());
+        };
+
+        if let Err(error) = lifecycle.foreground().await {
+            let refreshed =
+                load_authorized_child_edge(&self.node, parent_context, child_request_id).await?;
+            if refreshed.lifecycle_state == "running"
+                && refreshed.await_mode == AwaitMode::Background
+            {
+                return Err(error);
+            }
+
+            tracing::debug!(
+                tool_call_id = %parent_tool_call_id,
+                child_request_id = %child_request_id,
+                error = %error,
+                lifecycle_state = %refreshed.lifecycle_state,
+                await_mode = ?refreshed.await_mode,
+                "wait_subagent foreground race resolved by refreshed bridge state"
+            );
+        }
+
+        self.track_in_flight_lifecycle_from_storage(&parent_context.session_id, parent_tool_call_id)
+            .await
+    }
+
+    async fn track_in_flight_lifecycle_from_storage(
+        &self,
+        session_id: &str,
+        internal_call_id: &str,
+    ) -> anyhow::Result<()> {
+        if let Some(lifecycle) =
+            ToolCallLifecycle::load(self.node.clone(), session_id, internal_call_id).await?
+        {
+            if lifecycle.is_running() {
+                self.in_flight_lifecycles
+                    .lock()
+                    .await
+                    .insert(internal_call_id.to_string(), lifecycle);
+            }
+        }
+        Ok(())
     }
 
     async fn refresh_owned_in_flight_lifecycle_from_storage(
@@ -819,7 +1283,11 @@ impl DefraSessionHook {
         {
             let mut map = self.in_flight_lifecycles.lock().await;
             if map.contains_key(internal_call_id) {
-                map.insert(internal_call_id.to_string(), lifecycle);
+                if lifecycle.is_running() {
+                    map.insert(internal_call_id.to_string(), lifecycle);
+                } else {
+                    map.remove(internal_call_id);
+                }
             }
         }
         Ok(())
@@ -975,6 +1443,24 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                     action
                 }
                 Err(e) => self.on_tool_persistence_error("persist spawn_subagent tool call", &e),
+            };
+        }
+        if tool_name == WAIT_SUBAGENT_TOOL_NAME {
+            let result = self
+                .persist_wait_subagent_tool_call(tool_call_id, internal_call_id, args)
+                .instrument(tracing::info_span!(
+                    "tool.call",
+                    tool_name = %tool_name,
+                    tool_call_id = %internal_call_id,
+                ))
+                .await;
+
+            return match result {
+                Ok(action) => {
+                    self.record_success();
+                    action
+                }
+                Err(e) => self.on_tool_persistence_error("persist wait_subagent tool call", &e),
             };
         }
 

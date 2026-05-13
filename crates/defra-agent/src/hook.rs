@@ -414,15 +414,18 @@ impl DefraSessionHook {
         let count = lifecycles.len();
         for mut lifecycle in lifecycles {
             lifecycle.cancel_during_run().await?;
-            if let Some(intent) = lifecycle.bridge_cancel_cascade().await? {
-                if let Err(error) =
-                    crate::interrupt::interrupt_request(&self.node, &intent.child_request_id).await
-                {
-                    tracing::warn!(
-                        child_request_id = %intent.child_request_id,
-                        error = %error,
-                        "failed to cascade live tool-call cancellation to child request"
-                    );
+            if lifecycle.is_cancelled() {
+                if let Some(intent) = lifecycle.bridge_cancel_cascade().await? {
+                    if let Err(error) =
+                        crate::interrupt::interrupt_request(&self.node, &intent.child_request_id)
+                            .await
+                    {
+                        tracing::warn!(
+                            child_request_id = %intent.child_request_id,
+                            error = %error,
+                            "failed to cascade live tool-call cancellation to child request"
+                        );
+                    }
                 }
             }
         }
