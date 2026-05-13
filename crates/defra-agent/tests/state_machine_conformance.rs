@@ -239,6 +239,7 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
         "boundary.backend-health.admission-freshness",
         "boundary.session-recovery.client-retry-surface",
         "boundary.coverage-ledger.review-discipline",
+        "boundary.event-delivery.fair-substrate",
     ]
     .into_iter()
     .map(str::to_string)
@@ -515,6 +516,29 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "TranscriptConformanceCases".to_string(),
         ));
     }
+    assert_eq!(
+        snapshot.event_delivery_transition_case_count,
+        snapshot.event_delivery_transition_cases.len(),
+        "Lean event-delivery transition case count drifted from emitted cases"
+    );
+    if !snapshot.event_delivery_transition_cases.is_empty() {
+        emitted.insert((
+            "event_delivery_cases".to_string(),
+            "EventDeliveryTransitionCases".to_string(),
+        ));
+    }
+    if !snapshot.event_delivery_source_instances.is_empty() {
+        emitted.insert((
+            "event_delivery_cases".to_string(),
+            "EventDeliverySourceInstances".to_string(),
+        ));
+    }
+    if !snapshot.event_delivery_convergence_traces.is_empty() {
+        emitted.insert((
+            "event_delivery_cases".to_string(),
+            "EventDeliveryConvergenceTraces".to_string(),
+        ));
+    }
     for hook in &snapshot.follow_up_hooks {
         emitted.insert(("follow_up_hook".to_string(), hook.clone()));
     }
@@ -542,6 +566,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "queue_deadline_cases",
         "recovery_sweep_cases",
         "transcript_cases",
+        "event_delivery_cases",
         "follow_up_hook",
     ];
     let registered_consumers = assert_registered_conformance_consumers_resolve();
