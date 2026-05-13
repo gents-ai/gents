@@ -246,6 +246,9 @@ def boundarySessionRecoveryClientRetrySurfaceId : String :=
 def boundaryCoverageLedgerReviewDisciplineId : String :=
   "boundary.coverage-ledger.review-discipline"
 
+def boundaryEventDeliveryFairSubstrateId : String :=
+  "boundary.event-delivery.fair-substrate"
+
 def boundaries : List Boundary :=
   [ { id := boundaryRequestInputRequiredReservedId
     , domain := "RequestLifecycle"
@@ -348,6 +351,16 @@ def boundaries : List Boundary :=
     , subject := "advisory contract guard"
     , statement :=
         "CoverageLedger is a checked index requiring every emitted domain to name a Rust or TypeScript consumer, accepted boundary, or follow-up; this boundary documents the ledger discipline as a whole."
+    }
+  , { id := boundaryEventDeliveryFairSubstrateId
+    , domain := "event_delivery"
+    , subject := "Fair substrate delivery"
+    , statement :=
+        "EventDelivery's Fair predicate assumes rescanTick actions occur with " ++
+        "bounded gap. Substrate-level fairness (DefraDB gossip + libp2p delivery) " ++
+        "is taken as an axiom; the substrate model lives in tla/ReversePairing.tla."
+    , acceptedFollowUp :=
+        some "Substrate fairness is proved separately in tla/ReversePairing.tla; see also #162."
     }
   ]
 

@@ -25,7 +25,30 @@ structure Deviation where
   deriving Repr
 
 def deviations : List Deviation :=
-  []
+  [ { id := "event_source_lacks_periodic_rescan"
+    , domain := "event_delivery"
+    , subject := "EventSource"
+    , statement :=
+        "EventSource has no periodic introspection rescan in the live process. " ++
+        "EventDelivery.D1 closes vacuously for this instance (rescanBoundedBy = 0). " ++
+        "Adding a periodic rescan flips the binding to substantive D1."
+    , acceptedFailureMode := some "missed_event_observation"
+    , acceptedFollowUp :=
+        some "Track at #187 PR description; deadline-audit followup #8."
+    }
+  , { id := "subagent_source_lacks_live_rescan"
+    , domain := "event_delivery"
+    , subject := "SubagentSource"
+    , statement :=
+        "SubagentSource has recover_orphan_subagent_children only at startup, " ++
+        "not as a periodic loop in the live process. EventDelivery.D1 closes " ++
+        "vacuously for this instance (rescanBoundedBy = 0). Lifting the existing " ++
+        "recovery primitive to a periodic timer makes D1 substantive."
+    , acceptedFailureMode := some "missed_subagent_spawn_observation_in_live_process"
+    , acceptedFollowUp :=
+        some "Track at #187 PR description; deadline-audit followup #5."
+    }
+  ]
 
 def Deviation.toJson (deviation : Deviation) : String :=
   "{"

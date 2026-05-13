@@ -288,6 +288,18 @@ def caseCoverage : List CoverageEntry :=
       "transcript_cases"
       "TranscriptConformanceCases"
       "state_machine_conformance::generated_transcript_cases_pin_agent_message_ordering_contract"
+  , consumerCoverage
+      "event_delivery_cases"
+      "EventDeliveryTransitionCases"
+      "state_machine_conformance::event_delivery_transition_cases_match_contract"
+  , consumerCoverage
+      "event_delivery_cases"
+      "EventDeliverySourceInstances"
+      "state_machine_conformance::event_delivery_source_instances_match_runtime"
+  , consumerCoverage
+      "event_delivery_cases"
+      "EventDeliveryConvergenceTraces"
+      "state_machine_conformance::event_delivery_convergence_traces_match_runtime_or_deviation"
   ]
 
 def followUpHookCoverage : List CoverageEntry :=
