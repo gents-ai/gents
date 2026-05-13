@@ -87,4 +87,24 @@ theorem degraded_count_lt_K
     simp only [ServiceModel.mk.injEq] at *
     omega
 
+/-- H6: from `.evicted`, the two-event sequence
+    `[backoffExpiry, probeSuccess false]` reaches `.healthy`.
+    Constructive liveness witness for the backoff-then-probe recovery path
+    (relevant under K ≥ 2 with an armed backoff). -/
+theorem h6_evicted_recovers_via_backoff_then_probe
+    (sm : ServiceModel) (K : Threshold) (h : sm.state = .evicted) :
+    (run? sm [.backoffExpiry, .probeSuccess false] K).map (·.state) = some .healthy := by
+  simp [run?, List.foldl, Option.bind, step?, h]
+
+/-- H6': from `.evicted`, a single `probeSuccess false` reaches `.healthy`
+    directly (skipping `.reconnecting`). This is the **permissive** recovery
+    path — `Reconnecting` is an optional pass-through state, not mandatory.
+
+    Required by the K=1 conformance: today's Rust has no observable
+    `Reconnecting` state, so a successful probe after eviction must assign
+    `Healthy` directly. See spec §7.1 for the design rationale. -/
+theorem h6'_evicted_recovers_via_probe_directly
+    (sm : ServiceModel) (K : Threshold) (h : sm.state = .evicted) :
+    (step? sm (.probeSuccess false) K).map (·.state) = some .healthy := rfl
+
 end Proofs.MCPHealth
