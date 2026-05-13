@@ -20,7 +20,7 @@ def pendingWork (w : World) : Nat :=
 def Fair (inst : SourceInstance) (actions : List Action) : Prop :=
   ∀ i : Nat, i + inst.rescanBoundedBy < actions.length →
     ∃ j : Nat, i ≤ j ∧ j ≤ i + inst.rescanBoundedBy ∧
-      (actions.get? j).map Action.isRescan = some true
+      (actions[j]?).map Action.isRescan = some true
 
 /-- The empty action list is trivially fair. -/
 theorem Fair.nil (inst : SourceInstance) : Fair inst [] := by
@@ -35,6 +35,6 @@ theorem Fair.singleton_rescanTick
   simp only [List.length_singleton] at h_lt
   have h_i : i = 0 := by omega
   have h_b : inst.rescanBoundedBy = 0 := by omega
-  exact absurd h_b (Nat.not_eq_zero_of_lt h_pos)
+  exact absurd h_b (Nat.ne_zero_of_lt h_pos)
 
 end EventDelivery
