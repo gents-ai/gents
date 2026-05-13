@@ -8,6 +8,7 @@ import Proofs.CommandPolicy.Cases
 import Proofs.Conformance.CoverageLedger
 import Proofs.Recovery.ContractCases
 import Proofs.Identity.Conformance
+import Proofs.Conformance.EventDelivery
 
 /-!
 # Conformance Snapshot JSON
@@ -470,6 +471,14 @@ def snapshotJson : String :=
       ++ jsonArray
         (transcriptConformanceCases.map transcriptCaseJson) ++ ","
     ++ "\"follow_up_hooks\":[],"
+    ++ "\"event_delivery_transition_case_count\":"
+      ++ toString Conformance.EventDelivery.transitionCaseCount ++ ","
+    ++ "\"event_delivery_transition_cases\":"
+      ++ Conformance.EventDelivery.transitionCasesJson ++ ","
+    ++ "\"event_delivery_source_instances\":"
+      ++ Conformance.EventDelivery.sourceInstancesJson ++ ","
+    ++ "\"event_delivery_convergence_traces\":"
+      ++ Conformance.EventDelivery.convergenceTracesJson ++ ","
     ++ "\"coverage_ledger\":"
       ++ coverageLedgerJson
     ++ ",\"identity_structural_cases\":"
