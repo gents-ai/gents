@@ -6,10 +6,10 @@ use std::time::Duration;
 
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
-use defra_agent::tool_call_lifecycle::MAX_SUBAGENT_DEPTH;
+use defra_agent::tool_call_lifecycle::{ToolCallLifecycle, MAX_SUBAGENT_DEPTH};
 use defra_agent::{
-    load_history, upsert_agent_behavior, upsert_tool_selection, AgentBehavior, DefraSessionHook,
-    FailurePolicy, ToolSelectionDocument,
+    fetch_interrupt_requested_at, interrupt_request, load_history, upsert_agent_behavior,
+    upsert_tool_selection, AgentBehavior, DefraSessionHook, FailurePolicy, ToolSelectionDocument,
 };
 use rig::agent::{PromptHook, ToolCallHookAction};
 use rig::completion::message::{
@@ -123,6 +123,31 @@ async fn setup_spawn_fixture_with_flags(
     String,
     chrono::DateTime<chrono::Utc>,
 ) {
+    setup_spawn_fixture_with_flags_and_deadline(
+        test_name,
+        targets,
+        parent_subagent_depth,
+        spawn_enabled,
+        background_enabled,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await
+}
+
+async fn setup_spawn_fixture_with_flags_and_deadline(
+    test_name: &str,
+    targets: Vec<&str>,
+    parent_subagent_depth: u32,
+    spawn_enabled: bool,
+    background_enabled: bool,
+    parent_deadline: chrono::DateTime<chrono::Utc>,
+) -> (
+    support::TestDb,
+    DefraSessionHook,
+    String,
+    String,
+    chrono::DateTime<chrono::Utc>,
+) {
     let db = test_db(test_name).await;
     upsert_tool_selection(
         db.node.as_ref(),
@@ -178,7 +203,6 @@ async fn setup_spawn_fixture_with_flags(
 
     let session_id = format!("{test_name}-session");
     let request_id = format!("{test_name}-parent");
-    let parent_deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
     create_parent_request(
         db.node.as_ref(),
         &request_id,
@@ -429,6 +453,46 @@ async fn persist_child_completion(
     );
 }
 
+async fn persist_child_terminal(
+    node: &EmbeddedNode,
+    child_request_id: &str,
+    lifecycle_state: &str,
+    failure_reason: Option<&str>,
+) {
+    let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let escaped_lifecycle_state = escape_graphql_string(lifecycle_state);
+    let status = match lifecycle_state {
+        "completed" => "completed",
+        "superseded" => "superseded",
+        "failed" | "dead" | "interrupted" => "error",
+        other => other,
+    };
+    let failure_reason_field = failure_reason
+        .map(|reason| {
+            let escaped = escape_graphql_string(reason);
+            format!(r#", failure_reason: "{escaped}""#)
+        })
+        .unwrap_or_default();
+    let update_request = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
+                input: {{
+                    status: "{status}",
+                    lifecycle_state: "{escaped_lifecycle_state}"
+                    {failure_reason_field}
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&update_request).await;
+    assert!(
+        !response.has_errors(),
+        "update child AgentRequest {lifecycle_state} failed: {:?}",
+        response.errors
+    );
+}
+
 fn skip_reason_json(action: ToolCallHookAction) -> Value {
     let ToolCallHookAction::Skip { reason } = action else {
         panic!("expected Skip action, got {action:?}");
@@ -515,7 +579,7 @@ async fn spawn_subagent_background_materializes_child_and_bridge() {
 }
 
 #[tokio::test]
-async fn spawn_subagent_foreground_waits_for_child_completion() {
+async fn foreground_spawn_subagent_waits_for_child_completion() {
     let (db, hook, session_id, _request_id, parent_deadline) = setup_spawn_fixture(
         "spawn_subagent_foreground",
         vec![CHILD_BEHAVIOR_ID],
@@ -565,6 +629,235 @@ async fn spawn_subagent_foreground_waits_for_child_completion() {
     let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-spawn-fg").await;
     assert_eq!(tool.lifecycle_state.as_deref(), Some("completed"));
     assert_eq!(tool.result.as_deref(), Some("foreground final answer"));
+}
+
+#[tokio::test]
+async fn foreground_spawn_subagent_parent_deadline_marks_bridge_dead() {
+    let parent_deadline = chrono::Utc::now() + chrono::Duration::milliseconds(250);
+    let (db, hook, session_id, _request_id, _parent_deadline) =
+        setup_spawn_fixture_with_flags_and_deadline(
+            "foreground_spawn_deadline",
+            vec![CHILD_BEHAVIOR_ID],
+            0,
+            true,
+            true,
+            parent_deadline,
+        )
+        .await;
+    let args = json!({
+        "behavior_id": CHILD_BEHAVIOR_ID,
+        "prompt": "foreground child that will exceed parent deadline"
+    })
+    .to_string();
+
+    let action = PromptHook::<TestModel>::on_tool_call(
+        &hook,
+        "spawn_subagent",
+        Some("model-call-fg-deadline".to_string()),
+        "internal-spawn-fg-deadline",
+        &args,
+    )
+    .await;
+    let result = skip_reason_json(action);
+    assert_eq!(result["ok"], false);
+    assert_eq!(result["await_mode"], "foreground");
+    assert_eq!(result["status"], "dead");
+    assert!(result["error"]["reason"]
+        .as_str()
+        .is_some_and(|reason| reason.contains("parent request deadline exceeded")));
+
+    let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-spawn-fg-deadline").await;
+    assert_eq!(tool.lifecycle_state.as_deref(), Some("failed"));
+}
+
+#[tokio::test]
+async fn foreground_spawn_subagent_cancellation_cascades_to_child_and_unblocks_wait() {
+    let (db, hook, session_id, _request_id, _parent_deadline) =
+        setup_spawn_fixture("foreground_spawn_cancel", vec![CHILD_BEHAVIOR_ID], 0, true).await;
+    let args = json!({
+        "behavior_id": CHILD_BEHAVIOR_ID,
+        "prompt": "foreground child that will be cancelled"
+    })
+    .to_string();
+
+    let hook_for_wait = hook.clone();
+    let args_for_wait = args.clone();
+    let wait_handle = tokio::spawn(async move {
+        PromptHook::<TestModel>::on_tool_call(
+            &hook_for_wait,
+            "spawn_subagent",
+            Some("model-call-fg-cancel".to_string()),
+            "internal-spawn-fg-cancel",
+            &args_for_wait,
+        )
+        .await
+    });
+
+    let child = wait_for_child_request_for_tool(db.node.as_ref(), "internal-spawn-fg-cancel").await;
+    let mut lifecycle =
+        ToolCallLifecycle::load(db.node.clone(), &session_id, "internal-spawn-fg-cancel")
+            .await
+            .unwrap()
+            .expect("foreground bridge should be persisted");
+    lifecycle.cancel_during_run().await.unwrap();
+    let intent = lifecycle
+        .bridge_cancel_cascade()
+        .await
+        .unwrap()
+        .expect("foreground bridge should return cascade intent");
+    assert_eq!(intent.child_request_id, child.request_id);
+    interrupt_request(db.node.as_ref(), &intent.child_request_id)
+        .await
+        .unwrap();
+
+    let action = tokio::time::timeout(Duration::from_secs(5), wait_handle)
+        .await
+        .expect("foreground wait should unblock after cancellation")
+        .expect("foreground task should not panic");
+    let result = skip_reason_json(action);
+    assert_eq!(result["ok"], false);
+    assert_eq!(result["await_mode"], "foreground");
+    assert_eq!(result["status"], "interrupted");
+
+    let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-spawn-fg-cancel").await;
+    assert_eq!(tool.lifecycle_state.as_deref(), Some("cancelled"));
+    let child_interrupt = fetch_interrupt_requested_at(db.node.as_ref(), &child.request_id)
+        .await
+        .unwrap();
+    assert!(
+        child_interrupt.is_some(),
+        "cascade cancellation should latch interrupt_requested_at on the child"
+    );
+}
+
+#[tokio::test]
+async fn foreground_spawn_subagent_user_backgrounding_returns_background_receipt() {
+    let (db, hook, session_id, _request_id, _parent_deadline) = setup_spawn_fixture(
+        "foreground_spawn_backgrounded",
+        vec![CHILD_BEHAVIOR_ID],
+        0,
+        true,
+    )
+    .await;
+    let args = json!({
+        "behavior_id": CHILD_BEHAVIOR_ID,
+        "prompt": "foreground child that will be backgrounded"
+    })
+    .to_string();
+
+    let hook_for_wait = hook.clone();
+    let args_for_wait = args.clone();
+    let wait_handle = tokio::spawn(async move {
+        PromptHook::<TestModel>::on_tool_call(
+            &hook_for_wait,
+            "spawn_subagent",
+            Some("model-call-fg-backgrounded".to_string()),
+            "internal-spawn-fg-backgrounded",
+            &args_for_wait,
+        )
+        .await
+    });
+
+    let child =
+        wait_for_child_request_for_tool(db.node.as_ref(), "internal-spawn-fg-backgrounded").await;
+    let mut lifecycle = ToolCallLifecycle::load(
+        db.node.clone(),
+        &session_id,
+        "internal-spawn-fg-backgrounded",
+    )
+    .await
+    .unwrap()
+    .expect("foreground bridge should be persisted");
+    lifecycle.background().await.unwrap();
+
+    let action = tokio::time::timeout(Duration::from_secs(5), wait_handle)
+        .await
+        .expect("foreground wait should unblock after backgrounding")
+        .expect("foreground task should not panic");
+    let result = skip_reason_json(action);
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["await_mode"], "background");
+    assert_eq!(result["status"], "running");
+    assert_eq!(result["backgrounded"], true);
+    assert_eq!(result["child_request_id"], child.request_id);
+
+    let tool = fetch_tool_call(
+        db.node.as_ref(),
+        &session_id,
+        "internal-spawn-fg-backgrounded",
+    )
+    .await;
+    assert_eq!(tool.lifecycle_state.as_deref(), Some("running"));
+    assert_eq!(tool.await_mode.as_deref(), Some("background"));
+}
+
+#[tokio::test]
+async fn foreground_spawn_subagent_maps_child_terminal_failures() {
+    let cases = [
+        ("failed", "failed", "failed", Some("child failed reason")),
+        ("dead", "dead", "failed", None),
+        ("interrupted", "interrupted", "cancelled", None),
+        ("superseded", "superseded", "failed", None),
+    ];
+
+    for (child_state, expected_status, expected_tool_state, failure_reason) in cases {
+        let test_name = format!("foreground_spawn_terminal_{child_state}");
+        let internal_call_id = format!("internal-spawn-terminal-{child_state}");
+        let (db, hook, session_id, _request_id, _parent_deadline) =
+            setup_spawn_fixture(&test_name, vec![CHILD_BEHAVIOR_ID], 0, true).await;
+        let args = json!({
+            "behavior_id": CHILD_BEHAVIOR_ID,
+            "prompt": format!("foreground child terminal {child_state}")
+        })
+        .to_string();
+
+        let hook_for_wait = hook.clone();
+        let args_for_wait = args.clone();
+        let internal_call_id_for_wait = internal_call_id.clone();
+        let wait_handle = tokio::spawn(async move {
+            PromptHook::<TestModel>::on_tool_call(
+                &hook_for_wait,
+                "spawn_subagent",
+                Some(format!("model-call-{child_state}")),
+                &internal_call_id_for_wait,
+                &args_for_wait,
+            )
+            .await
+        });
+
+        let child = wait_for_child_request_for_tool(db.node.as_ref(), &internal_call_id).await;
+        persist_child_terminal(
+            db.node.as_ref(),
+            &child.request_id,
+            child_state,
+            failure_reason,
+        )
+        .await;
+
+        let action = tokio::time::timeout(Duration::from_secs(5), wait_handle)
+            .await
+            .expect("foreground wait should complete after child terminal")
+            .expect("foreground task should not panic");
+        let result = skip_reason_json(action);
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["await_mode"], "foreground");
+        assert_eq!(result["status"], expected_status);
+        if let Some(reason) = failure_reason {
+            assert_eq!(result["error"]["reason"], reason);
+            assert_eq!(result["error"]["failure_class"], "external");
+        }
+
+        let tool = fetch_tool_call(db.node.as_ref(), &session_id, &internal_call_id).await;
+        assert_eq!(
+            tool.lifecycle_state.as_deref(),
+            Some(expected_tool_state),
+            "unexpected tool state for child terminal {child_state}"
+        );
+        if let Some(reason) = failure_reason {
+            assert_eq!(tool.result.as_deref(), Some(reason));
+            assert_eq!(tool.tool_failure_class.as_deref(), Some("external"));
+        }
+    }
 }
 
 #[tokio::test]

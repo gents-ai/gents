@@ -14,7 +14,7 @@ use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use defra_node::QueryResponse;
 
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::session::execute_mutation_with_retry;
 
 use super::{AwaitMode, CancelPolicy, FailureClass, ToolCallLifecycle, ToolCallState};
@@ -55,6 +55,37 @@ pub enum IllegalToolCallTransition {
 }
 
 impl ToolCallLifecycle {
+    async fn sync_after_lost_running_compare(&mut self, method: &'static str) -> Result<()> {
+        let current =
+            ToolCallLifecycle::load(self.node.clone(), &self.session_id, &self.tool_call_id)
+                .await?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "{method} compare failed and AgentToolCall row disappeared for session_id={} tool_call_id={}",
+                        self.session_id,
+                        self.tool_call_id
+                    )
+                })?;
+
+        if current.state == ToolCallState::Running {
+            anyhow::bail!(
+                "{method} compare failed but AgentToolCall row is still running for session_id={} tool_call_id={}",
+                self.session_id,
+                self.tool_call_id
+            );
+        }
+
+        self.doc_id = current.doc_id;
+        self.deadline_at = current.deadline_at;
+        self.state = current.state;
+        self.started_at = current.started_at;
+        self.failure_class = current.failure_class;
+        self.await_mode = current.await_mode;
+        self.cancel_policy = current.cancel_policy;
+        self.child_request_id = current.child_request_id;
+        Ok(())
+    }
+
     /// Assert that the current state is in `allowed`. Returns
     /// `IllegalToolCallTransition` otherwise.
     pub(crate) fn ensure_state(
@@ -313,7 +344,7 @@ impl ToolCallLifecycle {
     /// Trust boundary: bridge_complete does NOT verify the child's terminal
     /// state internally (Lean's precondition is on the caller). R3's
     /// SubagentSource will be the natural place for that check.
-    pub async fn bridge_complete(&mut self, child_result: String) -> Result<()> {
+    pub async fn bridge_complete(&mut self, child_result: String) -> Result<bool> {
         self.ensure_state(&[ToolCallState::Running], "bridge_complete")?;
         if self.child_request_id.is_none() {
             return Err(IllegalToolCallTransition::BridgeCompleteRequiresChildLink.into());
@@ -339,7 +370,10 @@ impl ToolCallLifecycle {
         let mutation = format!(
             r#"mutation {{
                 update_AgentToolCall(
-                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    filter: {{
+                        _docID: {{ _eq: "{escaped_doc_id}" }},
+                        lifecycle_state: {{ _eq: "running" }}
+                    }},
                     input: {{
                         result: "{escaped_result}",
                         status: "completed",
@@ -353,12 +387,22 @@ impl ToolCallLifecycle {
             }}"#
         );
 
-        execute_mutation_with_retry(&self.node, &mutation, "bridge_complete")
+        let response = execute_mutation_with_retry(&self.node, &mutation, "bridge_complete")
             .await
             .context("bridge_complete mutation")?;
+        if !response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("update_AgentToolCall"))
+            .is_some_and(response_has_documents)
+        {
+            self.sync_after_lost_running_compare("bridge_complete")
+                .await?;
+            return Ok(false);
+        }
 
         self.state = ToolCallState::Completed;
-        Ok(())
+        Ok(true)
     }
 
     /// Running → Failed (or Cancelled for ChildTerminal::Interrupted).
@@ -371,7 +415,7 @@ impl ToolCallLifecycle {
     ///
     /// Returns BridgeFailureRequiresChildLink for native tools (no
     /// child_request_id).
-    pub async fn bridge_failure(&mut self, child_terminal: super::ChildTerminal) -> Result<()> {
+    pub async fn bridge_failure(&mut self, child_terminal: super::ChildTerminal) -> Result<bool> {
         self.ensure_state(&[ToolCallState::Running], "bridge_failure")?;
         if self.child_request_id.is_none() {
             return Err(IllegalToolCallTransition::BridgeFailureRequiresChildLink.into());
@@ -420,7 +464,10 @@ impl ToolCallLifecycle {
         let mutation = format!(
             r#"mutation {{
                 update_AgentToolCall(
-                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    filter: {{
+                        _docID: {{ _eq: "{escaped_doc_id}" }},
+                        lifecycle_state: {{ _eq: "running" }}
+                    }},
                     input: {{
                         {optional_fields}
                         status: "completed",
@@ -434,13 +481,23 @@ impl ToolCallLifecycle {
             }}"#
         );
 
-        execute_mutation_with_retry(&self.node, &mutation, "bridge_failure")
+        let response = execute_mutation_with_retry(&self.node, &mutation, "bridge_failure")
             .await
             .context("bridge_failure mutation")?;
+        if !response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("update_AgentToolCall"))
+            .is_some_and(response_has_documents)
+        {
+            self.sync_after_lost_running_compare("bridge_failure")
+                .await?;
+            return Ok(false);
+        }
 
         self.state = projected;
         self.failure_class = failure_class_for_persist;
-        Ok(())
+        Ok(true)
     }
 
     /// Running → TimedOut. Called by the runtime deadline wrapper and startup

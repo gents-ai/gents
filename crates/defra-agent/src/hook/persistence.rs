@@ -12,8 +12,9 @@ use crate::session;
 use crate::subagent_tools::{
     child_request_completed, load_authorized_child_edge, load_child_final_response,
     load_child_session_id, load_child_terminal_row, load_parent_subagent_context,
-    project_child_terminal, target_is_allowed, ChildEdge, SpawnSubagentArgs,
+    project_child_terminal, target_is_allowed, ParentSubagentContext, SpawnSubagentArgs,
 };
+use crate::tool_call_lifecycle::query::load_tool_call_result;
 use crate::tool_call_lifecycle::runtime::{classify_managed_tool_result, ManagedToolTerminal};
 use crate::tool_call_lifecycle::{
     create_subagent_request_with_request_id, AwaitMode, CancelPolicy, ChildTerminal, FailureClass,
@@ -456,6 +457,7 @@ impl DefraSessionHook {
         let result = self
             .await_foreground_subagent(
                 internal_call_id,
+                &parent_context,
                 &child_request_id,
                 &child_session_id,
                 behavior_id,
@@ -469,16 +471,96 @@ impl DefraSessionHook {
     async fn await_foreground_subagent(
         &self,
         internal_call_id: &str,
+        parent_context: &ParentSubagentContext,
         child_request_id: &str,
         child_session_id: &str,
         behavior_id: &str,
         parent_deadline_at: chrono::DateTime<chrono::Utc>,
     ) -> anyhow::Result<String> {
+        let mut missing_owner_since = None;
+
         loop {
             let now = chrono::Utc::now();
+            let edge =
+                load_authorized_child_edge(&self.node, parent_context, child_request_id).await?;
+
+            if edge.lifecycle_state == "cancelled" {
+                self.discard_in_flight_lifecycle(internal_call_id).await;
+                return Ok(foreground_terminal_failure_payload(
+                    child_request_id,
+                    child_session_id,
+                    "interrupted",
+                    "parent request was cancelled while waiting for child subagent",
+                    FailureClass::External,
+                ));
+            }
+
+            if edge.lifecycle_state == "failed" || edge.lifecycle_state == "timedOut" {
+                self.discard_in_flight_lifecycle(internal_call_id).await;
+                return Ok(foreground_terminal_failure_payload(
+                    child_request_id,
+                    child_session_id,
+                    if edge.lifecycle_state == "timedOut" {
+                        "dead"
+                    } else {
+                        "failed"
+                    },
+                    "parent subagent bridge reached a terminal failure while waiting for child subagent",
+                    FailureClass::External,
+                ));
+            }
+
+            if edge.lifecycle_state == "completed" {
+                self.discard_in_flight_lifecycle(internal_call_id).await;
+                return self
+                    .foreground_completed_bridge_payload(
+                        &parent_context.session_id,
+                        internal_call_id,
+                        child_request_id,
+                        child_session_id,
+                        behavior_id,
+                    )
+                    .await;
+            }
+
+            if edge.await_mode == AwaitMode::Background && edge.lifecycle_state == "running" {
+                self.refresh_owned_in_flight_lifecycle_from_storage(
+                    &parent_context.session_id,
+                    internal_call_id,
+                )
+                .await?;
+                return Ok(backgrounded_receipt_payload(
+                    child_request_id,
+                    child_session_id,
+                    behavior_id,
+                ));
+            }
+
             if now >= parent_deadline_at {
-                let mut lifecycle = self.remove_in_flight_lifecycle(internal_call_id).await?;
-                lifecycle.bridge_failure(ChildTerminal::Dead).await?;
+                if edge.lifecycle_state == "running" {
+                    let Some(mut lifecycle) =
+                        self.take_owned_in_flight_lifecycle(internal_call_id).await
+                    else {
+                        wait_for_external_lifecycle_owner(
+                            &mut missing_owner_since,
+                            now,
+                            internal_call_id,
+                        )
+                        .await?;
+                        continue;
+                    };
+                    if !lifecycle.bridge_failure(ChildTerminal::Dead).await? {
+                        return self
+                            .foreground_external_bridge_terminal_payload(
+                                parent_context,
+                                internal_call_id,
+                                child_request_id,
+                                child_session_id,
+                                behavior_id,
+                            )
+                            .await;
+                    }
+                }
                 return Ok(foreground_terminal_failure_payload(
                     child_request_id,
                     child_session_id,
@@ -490,19 +572,37 @@ impl DefraSessionHook {
 
             if let Some(row) = load_child_terminal_row(&self.node, child_request_id).await? {
                 if child_request_completed(&row) {
-                    let child_edge = ChildEdge {
-                        parent_tool_call_id: internal_call_id.to_string(),
-                        child_request_id: child_request_id.to_string(),
-                        child_session_id: child_session_id.to_string(),
-                        behavior_id: behavior_id.to_string(),
-                        await_mode: AwaitMode::Foreground,
-                        lifecycle_state: "running".to_string(),
+                    let Some(final_response) = load_child_final_response(&self.node, &edge).await?
+                    else {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
                     };
-                    let final_response = load_child_final_response(&self.node, &child_edge)
-                        .await?
-                        .unwrap_or_default();
-                    let mut lifecycle = self.remove_in_flight_lifecycle(internal_call_id).await?;
-                    lifecycle.bridge_complete(final_response.clone()).await?;
+                    if edge.lifecycle_state == "running" {
+                        let Some(mut lifecycle) =
+                            self.take_owned_in_flight_lifecycle(internal_call_id).await
+                        else {
+                            wait_for_external_lifecycle_owner(
+                                &mut missing_owner_since,
+                                now,
+                                internal_call_id,
+                            )
+                            .await?;
+                            continue;
+                        };
+                        if !lifecycle.bridge_complete(final_response.clone()).await? {
+                            return self
+                                .foreground_external_bridge_terminal_payload(
+                                    parent_context,
+                                    internal_call_id,
+                                    child_request_id,
+                                    child_session_id,
+                                    behavior_id,
+                                )
+                                .await;
+                        }
+                    } else {
+                        self.discard_in_flight_lifecycle(internal_call_id).await;
+                    }
                     return Ok(json_string(json!({
                         "ok": true,
                         "child_request_id": child_request_id,
@@ -518,8 +618,32 @@ impl DefraSessionHook {
                 if let Some(terminal) = project_child_terminal(&row) {
                     let status = child_terminal_status(&terminal);
                     let (reason, failure_class) = child_terminal_error(&terminal);
-                    let mut lifecycle = self.remove_in_flight_lifecycle(internal_call_id).await?;
-                    lifecycle.bridge_failure(terminal).await?;
+                    if edge.lifecycle_state == "running" {
+                        let Some(mut lifecycle) =
+                            self.take_owned_in_flight_lifecycle(internal_call_id).await
+                        else {
+                            wait_for_external_lifecycle_owner(
+                                &mut missing_owner_since,
+                                now,
+                                internal_call_id,
+                            )
+                            .await?;
+                            continue;
+                        };
+                        if !lifecycle.bridge_failure(terminal).await? {
+                            return self
+                                .foreground_external_bridge_terminal_payload(
+                                    parent_context,
+                                    internal_call_id,
+                                    child_request_id,
+                                    child_session_id,
+                                    behavior_id,
+                                )
+                                .await;
+                        }
+                    } else {
+                        self.discard_in_flight_lifecycle(internal_call_id).await;
+                    }
                     return Ok(foreground_terminal_failure_payload(
                         child_request_id,
                         child_session_id,
@@ -537,19 +661,117 @@ impl DefraSessionHook {
         }
     }
 
-    async fn remove_in_flight_lifecycle(
+    async fn foreground_external_bridge_terminal_payload(
+        &self,
+        parent_context: &ParentSubagentContext,
+        internal_call_id: &str,
+        child_request_id: &str,
+        child_session_id: &str,
+        behavior_id: &str,
+    ) -> anyhow::Result<String> {
+        self.discard_in_flight_lifecycle(internal_call_id).await;
+        let edge = load_authorized_child_edge(&self.node, parent_context, child_request_id).await?;
+
+        match edge.lifecycle_state.as_str() {
+            "completed" => {
+                self.foreground_completed_bridge_payload(
+                    &parent_context.session_id,
+                    internal_call_id,
+                    child_request_id,
+                    child_session_id,
+                    behavior_id,
+                )
+                .await
+            }
+            "cancelled" => Ok(foreground_terminal_failure_payload(
+                child_request_id,
+                child_session_id,
+                "interrupted",
+                "parent request was cancelled while waiting for child subagent",
+                FailureClass::External,
+            )),
+            "timedOut" => Ok(foreground_terminal_failure_payload(
+                child_request_id,
+                child_session_id,
+                "dead",
+                "parent subagent bridge timed out while waiting for child subagent",
+                FailureClass::External,
+            )),
+            "failed" => Ok(foreground_terminal_failure_payload(
+                child_request_id,
+                child_session_id,
+                "failed",
+                "parent subagent bridge reached a terminal failure while waiting for child subagent",
+                FailureClass::External,
+            )),
+            other => anyhow::bail!(
+                "spawn_subagent foreground bridge lost running compare but persisted lifecycle_state is {other}"
+            ),
+        }
+    }
+
+    async fn foreground_completed_bridge_payload(
+        &self,
+        session_id: &str,
+        internal_call_id: &str,
+        child_request_id: &str,
+        child_session_id: &str,
+        behavior_id: &str,
+    ) -> anyhow::Result<String> {
+        let final_response =
+            load_tool_call_result(&self.node, session_id, internal_call_id).await?;
+        Ok(json_string(json!({
+            "ok": true,
+            "child_request_id": child_request_id,
+            "child_session_id": child_session_id,
+            "behavior_id": behavior_id,
+            "await_mode": "foreground",
+            "status": "completed",
+            "final_response": final_response,
+            "error": null
+        })))
+    }
+
+    async fn take_owned_in_flight_lifecycle(
         &self,
         internal_call_id: &str,
-    ) -> anyhow::Result<ToolCallLifecycle> {
+    ) -> Option<ToolCallLifecycle> {
         self.in_flight_lifecycles
             .lock()
             .await
             .remove(internal_call_id)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "spawn_subagent foreground wait lost in-flight lifecycle for tool_call_id={internal_call_id}"
-                )
-            })
+    }
+
+    async fn discard_in_flight_lifecycle(&self, internal_call_id: &str) {
+        self.in_flight_lifecycles
+            .lock()
+            .await
+            .remove(internal_call_id);
+    }
+
+    async fn refresh_owned_in_flight_lifecycle_from_storage(
+        &self,
+        session_id: &str,
+        internal_call_id: &str,
+    ) -> anyhow::Result<()> {
+        if !self
+            .in_flight_lifecycles
+            .lock()
+            .await
+            .contains_key(internal_call_id)
+        {
+            return Ok(());
+        }
+
+        if let Some(lifecycle) =
+            ToolCallLifecycle::load(self.node.clone(), session_id, internal_call_id).await?
+        {
+            let mut map = self.in_flight_lifecycles.lock().await;
+            if map.contains_key(internal_call_id) {
+                map.insert(internal_call_id.to_string(), lifecycle);
+            }
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -592,6 +814,38 @@ fn background_receipt_payload(
         "await_mode": "background",
         "status": "running"
     }))
+}
+
+fn backgrounded_receipt_payload(
+    child_request_id: &str,
+    child_session_id: &str,
+    behavior_id: &str,
+) -> String {
+    json_string(json!({
+        "ok": true,
+        "child_request_id": child_request_id,
+        "child_session_id": child_session_id,
+        "behavior_id": behavior_id,
+        "await_mode": "background",
+        "status": "running",
+        "backgrounded": true
+    }))
+}
+
+async fn wait_for_external_lifecycle_owner(
+    missing_owner_since: &mut Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+    internal_call_id: &str,
+) -> anyhow::Result<()> {
+    let first_missing_at = *missing_owner_since.get_or_insert(now);
+    if now - first_missing_at >= chrono::Duration::seconds(5) {
+        anyhow::bail!(
+            "spawn_subagent foreground wait lost lifecycle ownership for tool_call_id={internal_call_id}"
+        );
+    }
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    Ok(())
 }
 
 impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
