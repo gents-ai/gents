@@ -270,7 +270,7 @@ Read: once A has durable cascade intent, fair retry/delivery eventually gets the
   cancelHandledB[child] ~> cancelAckedA[child]
 ```
 
-Read: durable B-side handling eventually becomes visible to A through an ack, assuming the ack lane is fair and finite drops/crashes do not continue forever.
+Read: durable B-side handling eventually becomes visible to A through an ack, assuming the ack lane is fair, finite drops/crashes do not continue forever, and the bounded TLC id pool has enough headroom after delivery. This is a useful implementation goal but not the #188 delivery safety boundary.
 
 `LiveCancelInterruptsOrNaturalWins`
 
@@ -285,18 +285,21 @@ Read: after A invokes cascade while the child is live, the child cannot remain r
 
 `CancelPropagationProgress`
 
-The default TLC property combines the three leads-to claims:
+The default TLC property combines the two #188 delivery claims:
 
 ```tla
 CancelPropagationProgress ==
   /\ CancelDeliveryProgress
-  /\ CancelAckProgress
   /\ LiveCancelInterruptsOrNaturalWins
 ```
+
+`CancelAckProgress` is defined in the model but excluded from the default TLC config. It can fail only in bounded-pool-exhausted states after B has already durably handled the cancel and A has lost the matching in-flight attempt through crash or timeout. The enforced safety property is `AckRequiresHandled`: every ack that exists is backed by durable B-side handling.
 
 ## Bounded-model caveats
 
 The model uses a bounded `RPCId` pool. If TLC reaches a state where all ids are consumed before delivery converges, a strict "every intent has an in-flight or enabled retry" invariant can fail only because the finite pool is exhausted. As in #162's `InFlightJustified`, any such support property should be documented in `.tla` comments and excluded from the default TLC enforcement unless the default bound leaves enough headroom.
+
+The default config uses `StateBound` to exclude states where the finite id pool has no fresh id left while an unhandled child still needs B-side cancel processing. That leaves the real delivery obligation intact while avoiding the artificial "no id available for the handling ack" state. After `cancelHandledB[child]` is true, #188's delivery property is already satisfied; later ack retirement is documented but not enforced by default.
 
 The default run should enforce the main safety invariants and `CancelPropagationProgress`. A larger sanity config may raise `Child` to `{c1, c2}` or `MaxCrashes`, but the default target remains under five minutes on reference hardware.
 
