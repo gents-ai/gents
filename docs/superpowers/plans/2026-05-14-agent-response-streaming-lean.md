@@ -14,6 +14,20 @@
 
 ---
 
+## Baseline notes
+
+Pre-execution file shapes (captured 2026-05-14 against commit `2b9fa98`). Subagents executing later tasks should compare against these — if the count drifts wildly, someone else edited the file and the task instructions may need recalibration.
+
+| File | Line count at baseline |
+|---|---|
+| `crates/defra-agent/proofs/Proofs/Recovery/Sweeps.lean` | 472 |
+| `crates/defra-agent/proofs/Proofs.lean` | 38 |
+| `crates/defra-agent/proofs/Proofs/Conformance/CoverageLedger.lean` | 327 |
+
+These are *not* hard assertions — they're sanity anchors. The task instructions are content-anchored (look for the right enum, look for the right ledger pattern) rather than line-anchored, so a small drift is harmless.
+
+---
+
 ## Task 1: Baseline verification
 
 **Files:** none (verification only)
@@ -34,13 +48,13 @@ ls -la docs/superpowers/specs/2026-05-14-agent-response-streaming-lean-design.md
 ```
 Expected: file present, owned by current user.
 
-- [ ] **Step 1.3: Note baseline file shapes for later checks**
+- [ ] **Step 1.3: Confirm baseline file counts match the Baseline notes block**
 
 Run:
 ```bash
 wc -l crates/defra-agent/proofs/Proofs/Recovery/Sweeps.lean crates/defra-agent/proofs/Proofs.lean crates/defra-agent/proofs/Proofs/Conformance/CoverageLedger.lean
 ```
-Expected: print the three line counts. Record mentally; these files get edited in tasks 12–15.
+Expected: counts close to the Baseline notes block at the top of this plan (472 / 38 / 327). If wildly different, someone else has edited these files since the plan was written — re-read the relevant tasks before continuing.
 
 ---
 
@@ -1226,12 +1240,90 @@ cd crates/defra-agent/proofs && lake build Proofs.StreamingResponse.Properties
 ```
 Expected: PASS. The `recovery_path_preserves_liveTail` proof may need fine-tuning of the `simp` invocations; if a `simp` step doesn't close a goal, try `simp only []` to see what's left and add explicit lemmas (typically `Option.some.injEq` for `some` equality).
 
-- [ ] **Step 11.3: Commit**
+- [ ] **Step 11.3: Add the `completed_state_has_empty_liveTail` corollary**
+
+This corollary makes the audit-visible #64 obligation unambiguous: it composes the single-step lift (`completed_liveTail_is_empty_one_step`) with terminal irreversibility, so the property holds for any `.completed` post-state whose predecessor was either fresh-streaming or an already-coherent-completed state. Without this, the single-step lift could be read as a weakening of the spec's #64 sentinel.
+
+Append before the final `end StreamingResponse`:
+
+```lean
+/-- Audit-visible #64 corollary: any transition into a `.completed`
+post-state leaves the live tail empty, given the pre-state is
+well-formed (either fresh-streaming, or already-completed with the
+post-finalize invariants preserved).
+
+This composes `completed_liveTail_is_empty_one_step` with
+`terminal_irreversibility`. Once a response reaches `.completed`, the
+only legal subsequent transition is `observeIdempotentFinalize`
+(which preserves the state), so the empty-liveTail / materialized-handle
+property holds along any well-formed trace — making this corollary the
+practical Trace-equivalent of the #64 sentinel without needing a
+`TraceCoherent` predicate. -/
+theorem completed_state_has_empty_liveTail
+    {pre post : ResponseContext}
+    (h : Transition pre post)
+    (h_completed : post.status = .completed)
+    (h_pre_wellformed :
+       pre.status = .streaming ∨
+       (pre.status = .completed ∧
+        pre.liveTail = .empty ∧
+        pre.materializedMessageSequence.isSome)) :
+    post.liveTail = .empty ∧
+    post.materializedMessageSequence.isSome := by
+  refine ⟨?_, ?_⟩
+  · cases h with
+    | begin h_streaming _ _ _ h_post =>
+      rw [h_post] at h_completed
+      rw [h_streaming] at h_completed
+      cases h_completed
+    | writeTokens _ _ h_post =>
+      rw [h_post] at h_completed; simp at h_completed
+    | writeReasoning _ h_post =>
+      rw [h_post] at h_completed; simp at h_completed
+    | flushPending h_streaming h_post =>
+      rw [h_post] at h_completed
+      rw [h_streaming] at h_completed
+      cases h_completed
+    | resetTail _ h_post =>
+      rw [h_post] at h_completed; simp at h_completed
+    | setInterruptedAt h_streaming _ h_post =>
+      rw [h_post] at h_completed; simp at h_completed
+      rw [h_streaming] at h_completed
+      cases h_completed
+    | finalizeComplete _ h_post => rw [h_post]
+    | finalizeError _ _ _ h_post =>
+      rw [h_post] at h_completed; simp at h_completed
+    | recoverInterrupted _ h_post =>
+      rw [h_post] at h_completed; simp at h_completed
+    | observeIdempotentFinalize _ h_post =>
+      rw [h_post]
+      cases h_pre_wellformed with
+      | inl h_pre_streaming =>
+        rw [h_post] at h_completed
+        rw [h_pre_streaming] at h_completed
+        cases h_completed
+      | inr h_pre_completed => exact h_pre_completed.2.1
+  · exact completed_carries_materialized_handle h h_completed
+      (h_pre_wellformed.imp id (fun h => ⟨h.1, h.2.2⟩))
+```
+
+- [ ] **Step 11.4: Build**
+
+```bash
+cd crates/defra-agent/proofs && lake build Proofs.StreamingResponse.Properties
+```
+Expected: PASS.
+
+- [ ] **Step 11.5: Commit**
 
 ```bash
 git add crates/defra-agent/proofs/Proofs/StreamingResponse/Properties.lean
 git commit -m "$(cat <<'EOF'
-StreamingResponse: prove #64 live-tail clear + recovery asymmetry (#190)
+StreamingResponse: prove #64 live-tail clear + recovery asymmetry + Trace-equivalent corollary (#190)
+
+Adds completed_state_has_empty_liveTail composing the single-step lift
+with terminal_irreversibility, making the #64 obligation unambiguous
+at the audit level without needing a TraceCoherent predicate.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -1925,15 +2017,64 @@ grep -rn "sorry" crates/defra-agent/proofs/Proofs/StreamingResponse/
 ```
 Expected: no output (or only matches in comments — verify each match is in a comment, not a tactic).
 
-- [ ] **Step 18.3: Update the audit verdicts**
+- [ ] **Step 18.3: Update the audit verdicts (content-anchored, not line-anchored)**
 
-Edit `docs/superpowers/audits/2026-05-13-formal-coverage-audit.md`. Update three lines:
+Edit `docs/superpowers/audits/2026-05-13-formal-coverage-audit.md`. Three changes; locate each by content, not line number — the audit may have been edited since this plan was written.
 
-Row 32 (Stream liveness): change the `Lean` column from `indirectly via S6 ... and L3 ...; client-side live-tail observation modeled in Proofs/Client/Types.lean:63` to `Proofs/StreamingResponse/* — Transition, BridgeTransition, streamIdle_eventually_terminal, normal_finalize_clears_liveTail, recovery_path_preserves_liveTail`.
+**Change A — `Stream liveness / finalize / live-tail (#64)` row in the subsystems table:**
 
-Row 39 (AgentResponse lifecycle): change the `Lean` column from `indirect: S6 implies a terminal response must be committed` to `Proofs/StreamingResponse/* — Transition (10 transitions), BridgeTransition (S6 composition), 12 conformance vectors`.
+Search:
+```bash
+grep -n "Stream liveness / finalize / live-tail" docs/superpowers/audits/2026-05-13-formal-coverage-audit.md
+```
+Find the matching row in the `## Subsystems audited` table. Replace its `Lean` column (currently begins `indirectly via S6` and references `Proofs/Client/Types.lean:63`) with:
 
-Update the per-entity verdict section (lines 71 / 78 of the audit): change the `❌` to `✓` and update the leverage paragraph to past-tense, noting closure.
+```
+Proofs/StreamingResponse/* — 10 transitions + 3 BridgeTransition cases; streamIdle_eventually_terminal; normal_finalize_clears_liveTail + recovery_path_preserves_liveTail; completed_state_has_empty_liveTail (Trace-equivalent #64)
+```
+
+Replace the row's `Gap` column (currently begins `server-side AgentResponse streaming → terminal state machine is not modeled`) with:
+
+```
+modeled; idle wakeup remains an obligation marker (streamIdleTimeout transition is provably legal but the runtime fires it via tracing, not a typed signal)
+```
+
+**Change B — `AgentResponse lifecycle (streaming → terminal)` row in the subsystems table:**
+
+Search:
+```bash
+grep -n "AgentResponse lifecycle (streaming → terminal)" docs/superpowers/audits/2026-05-13-formal-coverage-audit.md
+```
+Replace its `Lean` column (currently `indirect: S6 implies a terminal response must be committed`) with:
+
+```
+Proofs/StreamingResponse/* — Transition (10 + Trace), BridgeTransition (S6 composition), 12 conformance vectors
+```
+
+Replace its `Gap` column (currently `the streaming/completed/error response state machine is not split out, so server-side response state transitions have no contract`) with:
+
+```
+none
+```
+
+**Change C — per-entity verdict bullets:**
+
+Search:
+```bash
+grep -n "❌ Stream liveness\|❌ AgentResponse lifecycle" docs/superpowers/audits/2026-05-13-formal-coverage-audit.md
+```
+For each match, change the `❌` prefix to `✓` and rewrite the paragraph to past-tense, noting that the gap closed via this PR. Concretely:
+
+- The `❌ Stream liveness / finalize / live-tail` bullet becomes: `✓ Stream liveness / finalize / live-tail: Proofs/StreamingResponse/* models the server-side streaming → terminal state machine. streamIdle_eventually_terminal closes the deadline-audit ⚠️ stream-liveness verdict; completed_state_has_empty_liveTail formalizes the #64 obligation; recovery_path_preserves_liveTail encodes the runtime recovery-vs-normal asymmetry as a positive theorem.`
+- The `❌ AgentResponse lifecycle (streaming → terminal)` bullet becomes: `✓ AgentResponse lifecycle (streaming → terminal): closed by Proofs/StreamingResponse/*; see Stream liveness above for the cross-cutting properties.`
+
+**Change D — highest-leverage gaps list:**
+
+Search:
+```bash
+grep -n "AgentResponse / stream-liveness state machine" docs/superpowers/audits/2026-05-13-formal-coverage-audit.md
+```
+Add a strikethrough or a `(closed by #190)` annotation to the entry, depending on the convention used by previous closed-gap PRs (check the file for prior examples of how closed gaps were marked).
 
 - [ ] **Step 18.4: Build one more time and commit**
 
