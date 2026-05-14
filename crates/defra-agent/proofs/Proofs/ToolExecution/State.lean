@@ -1,7 +1,7 @@
 import Proofs.Basic
 import Proofs.Persistence
 import Proofs.ToolExecution.Policy
-import Proofs.Subagent.State
+import Proofs.Background.State
 
 /-!
 # Tool Call State

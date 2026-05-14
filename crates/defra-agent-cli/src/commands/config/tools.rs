@@ -33,6 +33,7 @@ pub(super) async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<
         enable_meta_tools: Some(args.enable_meta_tools),
         allowed_mcp_service_ids: Some(args.allowed_mcp_service_ids.clone()),
         delegate_to: Some(args.delegate_to.clone()),
+        backgroundable_tool_names: Some(Vec::new()),
         subagent_targets: Some(Vec::new()),
         subagent_spawn_enabled: Some(false),
         subagent_steering_enabled: Some(false),

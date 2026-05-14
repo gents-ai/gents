@@ -5,13 +5,13 @@ use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
-use crate::graphql::escape_graphql_string;
-use crate::interrupt::interrupt_request;
-use crate::session::execute_mutation_with_retry;
-use crate::subagent_tools::{
+use crate::background_tools::{
     fail_running_subagent_tool_call, load_parent_subagent_authorization, subagent_spawn_denial,
     subagent_tool_not_allowed_payload,
 };
+use crate::graphql::escape_graphql_string;
+use crate::interrupt::interrupt_request;
+use crate::session::execute_mutation_with_retry;
 
 use super::{
     subagent_request::create_subagent_request_with_request_id, AwaitMode, CancelPolicy,
@@ -72,6 +72,7 @@ enum RecoveryOutcome {
     TimedOut,
     Cancelled,
     Failed,
+    BackgroundInterrupted,
 }
 
 impl super::ToolCallLifecycle {
@@ -323,7 +324,13 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
             continue;
         }
 
-        let outcome = if deadline_at.is_some_and(|deadline| Utc::now() >= deadline) {
+        let outcome = if is_background_tool_row(&row)
+            && parent
+                .as_ref()
+                .is_some_and(|parent| !request_is_terminal(parent))
+        {
+            Some(RecoveryOutcome::BackgroundInterrupted)
+        } else if deadline_at.is_some_and(|deadline| Utc::now() >= deadline) {
             Some(RecoveryOutcome::TimedOut)
         } else if parent
             .as_ref()
@@ -376,6 +383,32 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
                 "failed to recover running tool call"
             );
             continue;
+        }
+
+        if outcome == RecoveryOutcome::BackgroundInterrupted {
+            if let Some(parent_request_id) = row.request_id.as_deref().filter(|id| !id.is_empty()) {
+                if let Err(error) = crate::background_completion::append_background_tool_completion(
+                    node,
+                    &row.session_id,
+                    parent_request_id,
+                    &row.tool_call_id,
+                    &row.tool_name,
+                    "cancelled",
+                    "",
+                    Some("interrupted_on_restart"),
+                )
+                .await
+                {
+                    tracing::warn!(
+                        doc_id = %row.doc_id,
+                        request_id = parent_request_id,
+                        session_id = %row.session_id,
+                        tool_call_id = %row.tool_call_id,
+                        error = %error,
+                        "failed to append recovered background tool notification"
+                    );
+                }
+            }
         }
 
         recovered += 1;
@@ -599,6 +632,10 @@ fn is_background_subagent_tool(row: &RunningToolCallRow) -> bool {
     child_request_id(row).is_some() && await_mode(row) == AwaitMode::Background
 }
 
+fn is_background_tool_row(row: &RunningToolCallRow) -> bool {
+    child_request_id(row).is_none() && await_mode(row) == AwaitMode::Background
+}
+
 fn is_detached_subagent_tool(row: &RunningToolCallRow) -> bool {
     child_request_id(row).is_some() && cancel_policy(row) == CancelPolicy::Detach
 }
@@ -612,7 +649,7 @@ impl RecoveryOutcome {
     fn lifecycle_state(self) -> ToolCallState {
         match self {
             Self::TimedOut => ToolCallState::TimedOut,
-            Self::Cancelled => ToolCallState::Cancelled,
+            Self::Cancelled | Self::BackgroundInterrupted => ToolCallState::Cancelled,
             Self::Failed => ToolCallState::Failed,
         }
     }
@@ -620,7 +657,7 @@ impl RecoveryOutcome {
     fn failure_class(self) -> Option<FailureClass> {
         match self {
             Self::TimedOut | Self::Failed => Some(FailureClass::External),
-            Self::Cancelled => None,
+            Self::Cancelled | Self::BackgroundInterrupted => None,
         }
     }
 
@@ -637,6 +674,9 @@ impl RecoveryOutcome {
             },
             Self::Cancelled => {
                 "tool call cancelled because parent request was interrupted".to_string()
+            }
+            Self::BackgroundInterrupted => {
+                "backgrounded tool call interrupted on restart".to_string()
             }
             Self::Failed => {
                 "tool call failed because parent request was already terminal".to_string()

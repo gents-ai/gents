@@ -1,5 +1,5 @@
 import Proofs.Composed
-import Proofs.Subagent.State
+import Proofs.Background.State
 
 /-!
 # BridgedState
@@ -15,16 +15,72 @@ Lives in a separate file from `Subagent.State` to avoid the import cycle:
 
 namespace Subagent
 
+/-- The bridge's second leg: either a child request (R4) or an in-process
+    tool execution (R6). -/
+inductive SecondLeg where
+  | subagent (child : ComposedState)
+  | tool (ctx : ToolExecution.ToolCallContext)
+  deriving Repr
+
+namespace SecondLeg
+
+def kind : SecondLeg → BackgroundedKind
+  | .subagent _ => .Subagent
+  | .tool _ => .Tool
+
+/-- Project the observed second-leg terminal into the bridge vocabulary. -/
+def terminalOf : SecondLeg → ChildTerminal
+  | .subagent child =>
+      match child.request.state with
+      | .completed => .completed
+      | .failed => .failed
+      | .dead => .dead
+      | .interrupted => .interrupted
+      | .superseded => .superseded
+      | _ => .running
+  | .tool ctx =>
+      match ctx.state with
+      | .completed => .completed
+      | .failed => .failed
+      | .timedOut => .dead
+      | .cancelled => .interrupted
+      | _ => .running
+
+end SecondLeg
+
+namespace ChildTerminal
+
+/-- Rust projection used by `bridge_failure`: interrupted maps to cancelled;
+    all other non-completed terminals map to failed. -/
+def projectedToolState : ChildTerminal → ToolExecution.ToolCallState
+  | .interrupted => .cancelled
+  | _ => .failed
+
+theorem projected_failure_state
+    (t : ChildTerminal)
+    (h : t.isFailure) :
+    t.projectedToolState = .failed ∨ t.projectedToolState = .cancelled := by
+  cases t <;> simp [ChildTerminal.isFailure, projectedToolState] at h ⊢
+
+end ChildTerminal
+
 /-- A paired parent/child composed state representing one subagent invocation
     edge. Structural guards are stated as predicates rather than baked into
     the constructor; they hold for any state reachable from `bridge_spawn`. -/
 structure BridgedState where
   parent       : ComposedState
   child        : ComposedState
+  secondLeg    : SecondLeg := .subagent child
   bridgeCallId : ToolExecution.ToolCallId
   deriving Repr
 
 namespace BridgedState
+
+def kind (s : BridgedState) : BackgroundedKind :=
+  s.secondLeg.kind
+
+def terminalOf (s : BridgedState) : ChildTerminal :=
+  s.secondLeg.terminalOf
 
 /-- The bridge tool exists on the parent and points to the child. -/
 def parentLink (s : BridgedState) : Prop :=
@@ -43,14 +99,11 @@ def linked (s : BridgedState) : Prop :=
 
 /-- The child has been observed reaching .completed. -/
 def bridgeObservedCompleted (s : BridgedState) : Prop :=
-  s.child.request.state = .completed
+  s.terminalOf = .completed
 
 /-- The child terminated in any non-completed terminal state. -/
 def bridgeChildFailed (s : BridgedState) : Prop :=
-  s.child.request.state = .failed ∨
-  s.child.request.state = .dead ∨
-  s.child.request.state = .interrupted ∨
-  s.child.request.state = .superseded
+  s.terminalOf.isFailure
 
 end BridgedState
 

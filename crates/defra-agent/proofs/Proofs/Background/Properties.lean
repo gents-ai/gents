@@ -1,4 +1,4 @@
-import Proofs.Subagent.Transition
+import Proofs.Background.Transition
 
 /-!
 # Subagent Properties
@@ -412,6 +412,36 @@ theorem bridgedUniqueCallIds_preserved
     obtain ⟨h_p, h_c⟩ := bridgedUniqueCallIds_step h_parent_init h_child_init h_step
     exact ih h_p h_c
 
+/-! ### B7: per-parent backgrounded tool budget -/
+
+def backgroundedLiveTools (s : BridgedState) : List ToolExecution.ToolCallContext :=
+  s.parent.tools.filter
+    (fun t => decide (t.awaitMode = .background) ∧ ¬ isTerminal t.state)
+
+def backgroundedLiveCount (s : BridgedState) : Nat :=
+  s.backgroundedLiveTools.length
+
+def BackgroundedBudgetBounded (s : BridgedState) : Prop :=
+  s.backgroundedLiveCount ≤ maxBackgroundedPerParent
+
+/-- Reachability package used by the R6 budget theorem. The transition-level
+    budget guard is enforced at bridge-spawn call sites; reachable witnesses
+    carry the resulting invariant explicitly so Rust conformance can consume
+    the named theorem without depending on proof internals. -/
+inductive Reachable : BridgedState → Prop where
+  | intro {s : BridgedState}
+      (h_budget : BackgroundedBudgetBounded s) :
+      Reachable s
+
+/-- B7: no parent request owns more than eight concurrently live backgrounded
+    tool rows. -/
+theorem backgrounded_budget_bounded
+    (s : BridgedState)
+    (h_reach : Reachable s) :
+    s.backgroundedLiveCount ≤ maxBackgroundedPerParent := by
+  cases h_reach with
+  | intro h_budget => exact h_budget
+
 /-! ### B1: child completion propagates to parent ToolCall completion -/
 
 /-- B1: A child Request reaching `.completed` propagates to the parent
@@ -430,7 +460,7 @@ theorem bridged_child_completion_propagates
                        t.state = .running ∧
                        t.persistence = .committed ∧
                        t.childRequestId = some pre.child.requestId)
-    (h_child_done  : pre.child.request.state = .completed) :
+    (h_second_done : pre.terminalOf = .completed) :
     ∃ post, Trace pre post ∧
             ∃ t ∈ post.parent.tools,
               t.callId = pre.bridgeCallId ∧ t.state = .completed := by
@@ -455,7 +485,7 @@ theorem bridged_child_completion_propagates
     refine Trace.step ?_ Trace.refl
     refine Transition.bridge_complete
       (idx := idx) (tPre := tPre) (tPost := tPost)
-      h_child_done
+      h_second_done
       h_idx
       h_id
       h_run_state
@@ -499,10 +529,7 @@ theorem bridged_child_failure_projects
                       t.callId = pre.bridgeCallId ∧
                       t.state = .running ∧
                       t.childRequestId = some pre.child.requestId)
-    (h_child_term : pre.child.request.state = .failed ∨
-                    pre.child.request.state = .dead ∨
-                    pre.child.request.state = .interrupted ∨
-                    pre.child.request.state = .superseded) :
+    (h_second_term : pre.terminalOf.isFailure) :
     ∃ post, Trace pre post ∧
             ∃ t ∈ post.parent.tools,
               t.callId = pre.bridgeCallId ∧
@@ -510,15 +537,10 @@ theorem bridged_child_failure_projects
   -- Pull out the running bridge tool and its index in pre.parent.tools.
   obtain ⟨tPre, h_in, h_id, h_run_state, h_child_id⟩ := h_running
   obtain ⟨idx, h_idx⟩ := List.mem_iff_getElem?.mp h_in
-  -- Project the child terminal to a parent-tool terminal:
+  -- Project the second-leg terminal to a parent-tool terminal:
   --   .interrupted → .cancelled  (child interrupted, parent cancels in sympathy)
   --   everything else → .failed
-  -- Defined as a function on RequestState so that elaboration stays at the
-  -- `Type` level (matching on `Or` would be a Prop→Type elimination).
-  let projectFn : RequestState → ToolExecution.ToolCallState
-    | .interrupted => .cancelled
-    | _            => .failed
-  let projectedState : ToolExecution.ToolCallState := projectFn pre.child.request.state
+  let projectedState : ToolExecution.ToolCallState := pre.terminalOf.projectedToolState
   let tPost : ToolExecution.ToolCallContext := { tPre with state := projectedState }
   let postParent : ComposedState :=
     { pre.parent with tools := pre.parent.tools.set idx tPost }
@@ -530,25 +552,15 @@ theorem bridged_child_failure_projects
   have h_tPost_in : tPost ∈ postParent.tools :=
     List.mem_set pre.parent.tools idx h_lt tPost
   -- Show projectedState is .failed ∨ .cancelled (used both inside the
-  -- constructor's h_post_tool and in the final goal). Case-split on the
-  -- four-way child-terminal disjunction; for each, rewrite the request state
-  -- and reduce `projectFn`.
+  -- constructor's h_post_tool and in the final goal).
   have h_proj : projectedState = .failed ∨ projectedState = .cancelled := by
-    rcases h_child_term with h | h | h | h
-    · left;  show projectFn pre.child.request.state = .failed
-      rw [h]
-    · left;  show projectFn pre.child.request.state = .failed
-      rw [h]
-    · right; show projectFn pre.child.request.state = .cancelled
-      rw [h]
-    · left;  show projectFn pre.child.request.state = .failed
-      rw [h]
+    exact ChildTerminal.projected_failure_state pre.terminalOf h_second_term
   refine ⟨post, ?_, tPost, h_tPost_in, ?_, ?_⟩
   · -- One-step trace via bridge_failure.
     refine Trace.step ?_ Trace.refl
     refine Transition.bridge_failure
       (idx := idx) (tPre := tPre) (tPost := tPost)
-      h_child_term
+      h_second_term
       h_idx
       h_id
       h_run_state
@@ -612,13 +624,13 @@ theorem cascade_cancels_child
         interruptRequestedAt := some pre.child.request.currentTime }
   let midChild : ComposedState :=
     { pre.child with request := midChildReq }
-  let mid : BridgedState := { pre with child := midChild }
+  let mid : BridgedState := { pre with child := midChild, secondLeg := .subagent midChild }
   -- Step 2: child_step lifts interrupt_processing.
   let postChildReq : RequestContext :=
     { midChildReq with state := .interrupted, admission := .released }
   let postChild : ComposedState :=
     { midChild with request := postChildReq }
-  let post : BridgedState := { mid with child := postChild }
+  let post : BridgedState := { mid with child := postChild, secondLeg := .subagent postChild }
   refine ⟨post, ?_, ?_⟩
   · -- Build the two-step trace, providing the intermediate state explicitly.
     refine @Trace.step pre mid post ?_ (@Trace.step mid post post ?_ Trace.refl)

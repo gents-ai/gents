@@ -4,11 +4,11 @@ mod support;
 
 use std::time::Duration;
 
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::subagent_completion::{
+use defra_agent::background_completion::{
     project_background_subagent_completion, BackgroundCompletionOutcome,
 };
+use defra_agent::defra_node::EmbeddedNode;
+use defra_agent::graphql::escape_graphql_string;
 use defra_agent::tool_call_lifecycle::{
     create_subagent_request_with_request_id, AwaitMode, CancelPolicy, ToolCallLifecycle,
 };
@@ -519,11 +519,11 @@ async fn background_completion_projects_bridge_appends_notification_and_enqueues
     assert_eq!(wakes[0].execution_origin.as_deref(), Some("scheduled"));
     let metadata: serde_json::Value =
         serde_json::from_str(wakes[0].metadata.as_deref().unwrap()).unwrap();
-    assert_eq!(metadata["queue"]["source"], "subagent_completion");
+    assert_eq!(metadata["queue"]["source"], "background_completion");
     assert_eq!(metadata["queue"]["policy"], "coalesce");
     assert_eq!(
         metadata["queue"]["key"],
-        format!("subagent_completion:{session_id}")
+        format!("background_completion:{session_id}")
     );
     assert_eq!(
         metadata["queue"]["queued_after_request_id"],

@@ -435,7 +435,26 @@ def recoverySweepCaseJson (witness : RecoverySweepCase) : String :=
     ++ "\"measure_before\":" ++ toString witness.measureBefore ++ ","
     ++ "\"measure_after\":" ++ toString witness.measureAfter ++ ","
     ++ "\"deadline_audit_ref\":"
-      ++ jsonString witness.deadlineAuditRef
+    ++ jsonString witness.deadlineAuditRef
+    ++ "}"
+
+def r6BackgroundingCaseJson (witness : R6BackgroundingCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"group\":" ++ jsonString witness.group ++ ","
+    ++ "\"action\":" ++ jsonString witness.action ++ ","
+    ++ "\"legal\":" ++ boolString witness.legal ++ ","
+    ++ "\"pre_live_count\":" ++ toString witness.preLiveCount ++ ","
+    ++ "\"max_backgrounded\":" ++ toString witness.maxBackgrounded ++ ","
+    ++ "\"await_mode\":" ++ jsonString witness.awaitMode ++ ","
+    ++ "\"cancel_policy\":" ++ jsonString witness.cancelPolicy ++ ","
+    ++ "\"child_request_id\":" ++ jsonOptionalString witness.childRequestId ++ ","
+    ++ "\"terminal_state\":" ++ jsonString witness.terminalState ++ ","
+    ++ "\"result\":" ++ jsonOptionalString witness.result ++ ","
+    ++ "\"reason\":" ++ jsonOptionalString witness.reason ++ ","
+    ++ "\"error_code\":" ++ jsonOptionalString witness.errorCode ++ ","
+    ++ "\"queue_source\":" ++ jsonOptionalString witness.queueSource ++ ","
+    ++ "\"queue_key\":" ++ jsonOptionalString witness.queueKey
     ++ "}"
 
 def transcriptCaseJson (witness : TranscriptCase) : String :=
@@ -528,6 +547,9 @@ def snapshotJson : String :=
     ++ "\"recovery_sweep_cases\":"
       ++ jsonArray
         (Recovery.recoverySweepCases.map recoverySweepCaseJson) ++ ","
+    ++ "\"r6_backgrounding_cases\":"
+      ++ jsonArray
+        (r6BackgroundingCases.map r6BackgroundingCaseJson) ++ ","
     ++ "\"transcript_conformance_cases\":"
       ++ jsonArray
         (transcriptConformanceCases.map transcriptCaseJson) ++ ","

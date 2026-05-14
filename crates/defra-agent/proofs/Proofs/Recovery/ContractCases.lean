@@ -69,6 +69,12 @@ def recoverySweepCases : List RecoverySweepCase :=
       "deadline-plumbing-audit-2026-05-12-tool-call-persisted-deadline"
   , recoveryCase
       toolCallRecoverySweep
+      "tool_backgrounded_running_live_parent_to_cancelled"
+      "running"
+      "cancelled"
+      "r6-TerminalizeBackgroundedAsInterrupted"
+  , recoveryCase
+      toolCallRecoverySweep
       "tool_running_child_completed_to_completed"
       "running"
       "completed"

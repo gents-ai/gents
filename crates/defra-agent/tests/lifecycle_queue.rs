@@ -65,9 +65,9 @@ async fn create_pending_request_with_metadata(
 fn automated_wakeup_metadata(session_id: &str, queued_after_request_id: &str) -> String {
     serde_json::json!({
         "queue": {
-            "source": "subagent_completion",
+            "source": "background_completion",
             "policy": "coalesce",
-            "key": format!("subagent_completion:{session_id}"),
+            "key": format!("background_completion:{session_id}"),
             "queued_after_request_id": queued_after_request_id,
         }
     })

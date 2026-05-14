@@ -83,6 +83,10 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
                 .delegate_to
                 .as_ref()
                 .and_then(|values| string_list_field("delegate_to", values)),
+            selection
+                .backgroundable_tool_names
+                .as_ref()
+                .and_then(|values| string_list_field("backgroundable_tool_names", values)),
         ]
         .into_iter()
         .flatten(),

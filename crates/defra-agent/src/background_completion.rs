@@ -15,16 +15,16 @@ use defra_node::{EmbeddedNode, EventName};
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
+use crate::background_tools::{
+    child_request_completed, load_authorized_child_edge, load_child_final_response,
+    load_child_terminal_row, load_parent_subagent_context, project_child_terminal, ChildEdge,
+};
 use crate::graphql::escape_graphql_string;
 use crate::lifecycle::queue::{
     enqueue_session_request, parse_queue_hints, QueueHints, QueuePolicy, QueueSource,
 };
 use crate::lifecycle::ExecutionOrigin;
 use crate::session;
-use crate::subagent_tools::{
-    child_request_completed, load_authorized_child_edge, load_child_final_response,
-    load_child_terminal_row, load_parent_subagent_context, project_child_terminal, ChildEdge,
-};
 use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, ToolCallLifecycle};
 use crate::watcher::{validate_agent_request_subagent_coherence, AgentRequest};
 
@@ -176,6 +176,65 @@ struct SideEffects {
     created_wake: bool,
 }
 
+pub(crate) async fn append_background_tool_completion(
+    node: &EmbeddedNode,
+    parent_session_id: &str,
+    parent_request_id: &str,
+    tool_call_id: &str,
+    tool_name: &str,
+    status: &str,
+    result: &str,
+    reason: Option<&str>,
+) -> Result<()> {
+    let (notification_timestamp, created_notification) =
+        match existing_tool_completion_notification(node, parent_session_id, tool_call_id).await? {
+            Some(existing) => (existing.timestamp, false),
+            None => {
+                let notification =
+                    render_tool_completion(tool_call_id, tool_name, status, result, reason);
+                let sequence =
+                    session::append_message(node, parent_session_id, "user", &notification).await?;
+                let timestamp = load_message_timestamp(node, parent_session_id, sequence).await?;
+                (timestamp, true)
+            }
+        };
+
+    let queue_key = format!("background_completion:{parent_session_id}");
+    if existing_wakeup_after(node, parent_session_id, &queue_key, &notification_timestamp)
+        .await?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    let parent_request = load_agent_request_for_queue(node, parent_request_id)
+        .await?
+        .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} not found"))?;
+    let _wake = enqueue_session_request(
+        node,
+        &parent_request,
+        BACKGROUND_COMPLETION_WAKE_PROMPT,
+        ExecutionOrigin::Scheduled,
+        QueueHints {
+            source: QueueSource::BackgroundCompletion,
+            policy: QueuePolicy::Coalesce,
+            key: Some(queue_key),
+            queued_after_request_id: Some(parent_request_id.to_string()),
+        },
+    )
+    .await?;
+
+    if created_notification {
+        tracing::debug!(
+            parent_session_id,
+            parent_request_id,
+            tool_call_id,
+            "appended background tool completion notification"
+        );
+    }
+    Ok(())
+}
+
 async fn ensure_projection_side_effects(
     node: &EmbeddedNode,
     parent_session_id: &str,
@@ -196,7 +255,7 @@ async fn ensure_projection_side_effects(
             }
         };
 
-    let queue_key = format!("subagent_completion:{parent_session_id}");
+    let queue_key = format!("background_completion:{parent_session_id}");
     if let Some(wake_request_id) =
         existing_wakeup_after(node, parent_session_id, &queue_key, &notification_timestamp).await?
     {
@@ -217,7 +276,7 @@ async fn ensure_projection_side_effects(
         BACKGROUND_COMPLETION_WAKE_PROMPT,
         ExecutionOrigin::Scheduled,
         QueueHints {
-            source: QueueSource::SubagentCompletion,
+            source: QueueSource::BackgroundCompletion,
             policy: QueuePolicy::Coalesce,
             key: Some(queue_key),
             queued_after_request_id: Some(parent_request_id.to_string()),
@@ -294,6 +353,52 @@ async fn existing_notification(
         }
     }
 
+    Ok(None)
+}
+
+async fn existing_tool_completion_notification(
+    node: &EmbeddedNode,
+    parent_session_id: &str,
+    tool_call_id: &str,
+) -> Result<Option<ExistingNotification>> {
+    let escaped_session_id = escape_graphql_string(parent_session_id);
+    let query = format!(
+        r#"{{
+            AgentMessage(
+                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                order: {{ sequence: ASC }}
+            ) {{
+                sequence
+                content
+                timestamp
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query AgentMessage for background tool completion session={parent_session_id} failed: {:?}",
+            response.errors
+        );
+    }
+    let rows: Vec<NotificationMessageRow> = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentMessage"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+    let needle = format!(
+        r#"<tool-completion tool_call_id="{}""#,
+        xml_escape_attr(tool_call_id)
+    );
+    for row in rows {
+        if row.content.contains(&needle) {
+            return Ok(Some(ExistingNotification {
+                sequence: row.sequence,
+                timestamp: parse_utc_timestamp(&row.timestamp, "AgentMessage.timestamp")?,
+            }));
+        }
+    }
     Ok(None)
 }
 
@@ -376,7 +481,7 @@ async fn existing_wakeup_after(
         .unwrap_or_default();
     for row in rows {
         let matches_key = parse_queue_hints(row.metadata.as_deref()).is_some_and(|hints| {
-            hints.source == QueueSource::SubagentCompletion
+            hints.source == QueueSource::BackgroundCompletion
                 && hints.policy == QueuePolicy::Coalesce
                 && hints.key.as_deref() == Some(queue_key)
         });
@@ -739,6 +844,28 @@ fn render_notification(edge: &ChildEdge, status: &str, summary: &str) -> String 
         parent_tool_call_id = xml_escape_attr(&edge.parent_tool_call_id),
         status = xml_escape_attr(status),
         summary = xml_escape_text(summary),
+    )
+}
+
+fn render_tool_completion(
+    tool_call_id: &str,
+    tool_name: &str,
+    status: &str,
+    result: &str,
+    reason: Option<&str>,
+) -> String {
+    let reason_element = reason
+        .map(|reason| format!("\n  <reason>{}</reason>", xml_escape_text(reason)))
+        .unwrap_or_default();
+    format!(
+        r#"<tool-completion tool_call_id="{tool_call_id}" tool_name="{tool_name}" status="{status}">
+  <result>{result}</result>{reason_element}
+</tool-completion>"#,
+        tool_call_id = xml_escape_attr(tool_call_id),
+        tool_name = xml_escape_attr(tool_name),
+        status = xml_escape_attr(status),
+        result = xml_escape_text(&compact_summary(result)),
+        reason_element = reason_element,
     )
 }
 

@@ -1761,9 +1761,9 @@ async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
         &child_session_id,
         "scheduled",
         &queue_metadata(
-            "subagent_completion",
+            "background_completion",
             "coalesce",
-            Some("subagent_completion:cancel-subagent-active"),
+            Some("background_completion:cancel-subagent-active"),
             Some(&child_request_id),
         ),
     )

@@ -8,14 +8,14 @@ use serde::Deserialize;
 use serde_json::json;
 use tracing::Instrument;
 
-use crate::config::DEFAULT_DEADLINE_DURATION_SECS;
-use crate::session;
-use crate::subagent_tools::{
+use crate::background_tools::{
     child_request_completed, load_authorized_child_edge, load_child_final_response,
     load_child_session_id, load_child_terminal_row, load_parent_subagent_context,
-    project_child_terminal, target_is_allowed, CancelSubagentArgs, ParentSubagentContext,
-    SpawnSubagentArgs, WaitSubagentArgs,
+    project_child_terminal, target_is_allowed, BackgroundToolArgs, CancelSubagentArgs,
+    CancelToolArgs, ParentSubagentContext, SpawnSubagentArgs, WaitSubagentArgs, WaitToolArgs,
 };
+use crate::config::DEFAULT_DEADLINE_DURATION_SECS;
+use crate::session;
 use crate::tool_call_lifecycle::query::load_tool_call_result;
 use crate::tool_call_lifecycle::runtime::{classify_managed_tool_result, ManagedToolTerminal};
 use crate::tool_call_lifecycle::{
@@ -23,11 +23,14 @@ use crate::tool_call_lifecycle::{
     ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
 use crate::toolset::{
-    CANCEL_SUBAGENT_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME, WAIT_SUBAGENT_TOOL_NAME,
+    BACKGROUND_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, CANCEL_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME,
+    WAIT_SUBAGENT_TOOL_NAME, WAIT_TOOL_NAME,
 };
 use crate::truncation::{truncate_text, DefraSpillTruncator, TruncationMode, Truncator};
 
 use super::{non_empty, DefraSessionHook, TranscriptTurnState};
+
+const MAX_BACKGROUNDED_TOOLS_PER_PARENT: usize = 8;
 
 impl DefraSessionHook {
     pub async fn persist_message(&self, message: &Message) -> anyhow::Result<u32> {
@@ -704,6 +707,404 @@ impl DefraSessionHook {
             "active_interrupted": active_interrupted,
             "descendants_cancelled": descendants_cancelled,
             "queued_drained": queued_drained
+        }))))
+    }
+
+    async fn persist_background_tool_call(
+        &self,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+    ) -> anyhow::Result<ToolCallHookAction> {
+        let (session_id, request_id, deadline_at, seq) =
+            self.ensure_assistant_turn_sequence().await?;
+        self.state.lock().await.register_tool_result_identity(
+            internal_call_id,
+            None,
+            tool_call_id.as_deref(),
+        );
+
+        let parsed = match serde_json::from_str::<BackgroundToolArgs>(args) {
+            Ok(args) => args,
+            Err(error) => {
+                return self
+                    .fail_background_meta_tool_call(
+                        session_id,
+                        request_id,
+                        deadline_at,
+                        seq,
+                        internal_call_id,
+                        BACKGROUND_TOOL_NAME,
+                        args,
+                        FailureClass::ArgumentInvalid,
+                        background_invalid_tool_arguments_payload(
+                            BACKGROUND_TOOL_NAME,
+                            "/",
+                            format!("invalid background_tool arguments: {error}"),
+                        ),
+                    )
+                    .await;
+            }
+        };
+
+        let target_name = parsed.tool_name.trim();
+        if target_name.is_empty() {
+            return self
+                .fail_background_meta_tool_call(
+                    session_id,
+                    request_id,
+                    deadline_at,
+                    seq,
+                    internal_call_id,
+                    BACKGROUND_TOOL_NAME,
+                    args,
+                    FailureClass::ArgumentInvalid,
+                    background_invalid_tool_arguments_payload(
+                        BACKGROUND_TOOL_NAME,
+                        "/tool_name",
+                        "tool_name is required",
+                    ),
+                )
+                .await;
+        }
+
+        let Some(target_tool) = self.background_tool_registry.get(target_name) else {
+            return self
+                .fail_background_meta_tool_call(
+                    session_id,
+                    request_id,
+                    deadline_at,
+                    seq,
+                    internal_call_id,
+                    BACKGROUND_TOOL_NAME,
+                    args,
+                    FailureClass::ServiceUnavailable,
+                    background_tool_not_allowed_payload(
+                        BACKGROUND_TOOL_NAME,
+                        "/tool_name",
+                        target_name,
+                        format!(
+                            "tool '{target_name}' is not allowed for backgrounding by this behavior"
+                        ),
+                        self.background_tool_registry.allowlist(),
+                    ),
+                )
+                .await;
+        };
+
+        let live_count = count_live_backgrounded_rows(&self.node, &request_id).await?;
+        if live_count >= MAX_BACKGROUNDED_TOOLS_PER_PARENT {
+            return self
+                .fail_background_meta_tool_call(
+                    session_id,
+                    request_id,
+                    deadline_at,
+                    seq,
+                    internal_call_id,
+                    BACKGROUND_TOOL_NAME,
+                    args,
+                    FailureClass::ArgumentInvalid,
+                    background_budget_exceeded_payload(live_count),
+                )
+                .await;
+        }
+
+        let background_tool_call_id = uuid::Uuid::new_v4().to_string();
+        let target_tool_name = target_name.to_string();
+        let target_args = serde_json::to_string(&parsed.args)?;
+        let mut lifecycle = ToolCallLifecycle::new_background_tool(
+            self.node.clone(),
+            request_id.clone(),
+            session_id.clone(),
+            background_tool_call_id.clone(),
+            seq,
+            target_tool_name.clone(),
+            target_args.clone(),
+            deadline_at,
+        );
+        lifecycle.start_running().await?;
+
+        let cancellation_token = tokio_util::sync::CancellationToken::new();
+        self.background_executions.lock().await.insert(
+            background_tool_call_id.clone(),
+            super::BackgroundExecution {
+                cancellation_token: cancellation_token.clone(),
+            },
+        );
+
+        let node = self.node.clone();
+        let executions = self.background_executions.clone();
+        let execution_call_id = background_tool_call_id.clone();
+        let execution_session_id = session_id.clone();
+        let execution_request_id = request_id.clone();
+        let execution_tool_name = target_tool_name.clone();
+        tokio::spawn(async move {
+            let result = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+                Some(deadline_at),
+                cancellation_token.clone(),
+                async {
+                    let tool = target_tool.lock().await;
+                    tool.call(target_args).await
+                },
+            )
+            .await;
+
+            match result {
+                Ok(output) => match classify_managed_tool_result(&output) {
+                    Some(ManagedToolTerminal::TimedOut) => {
+                        if let Err(error) = lifecycle.bridge_failure(ChildTerminal::Dead).await {
+                            tracing::warn!(
+                                tool_call_id = %execution_call_id,
+                                error = %error,
+                                "failed to terminalize timed-out background tool"
+                            );
+                        }
+                        if let Err(error) =
+                            crate::background_completion::append_background_tool_completion(
+                                node.as_ref(),
+                                &execution_session_id,
+                                &execution_request_id,
+                                &execution_call_id,
+                                &execution_tool_name,
+                                "failed",
+                                "",
+                                Some("deadline_exceeded"),
+                            )
+                            .await
+                        {
+                            tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append timed-out background tool notification");
+                        }
+                    }
+                    Some(ManagedToolTerminal::Cancelled) => {
+                        if let Err(error) =
+                            lifecycle.bridge_failure(ChildTerminal::Interrupted).await
+                        {
+                            tracing::warn!(
+                                tool_call_id = %execution_call_id,
+                                error = %error,
+                                "failed to terminalize cancelled background tool"
+                            );
+                        }
+                        if let Err(error) =
+                            crate::background_completion::append_background_tool_completion(
+                                node.as_ref(),
+                                &execution_session_id,
+                                &execution_request_id,
+                                &execution_call_id,
+                                &execution_tool_name,
+                                "cancelled",
+                                "",
+                                Some("parent_cancelled"),
+                            )
+                            .await
+                        {
+                            tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append cancelled background tool notification");
+                        }
+                    }
+                    None => {
+                        let notification_result = output.clone();
+                        if let Err(error) = lifecycle.bridge_complete(output).await {
+                            tracing::warn!(
+                                tool_call_id = %execution_call_id,
+                                error = %error,
+                                "failed to complete background tool"
+                            );
+                        }
+                        if let Err(error) =
+                            crate::background_completion::append_background_tool_completion(
+                                node.as_ref(),
+                                &execution_session_id,
+                                &execution_request_id,
+                                &execution_call_id,
+                                &execution_tool_name,
+                                "completed",
+                                &notification_result,
+                                None,
+                            )
+                            .await
+                        {
+                            tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append completed background tool notification");
+                        }
+                    }
+                },
+                Err(error) => {
+                    let reason = format!("{error:#}");
+                    let failure_class = classify_runtime_error(&reason);
+                    if let Err(error) = lifecycle
+                        .bridge_failure(ChildTerminal::Failed {
+                            reason: reason.clone(),
+                            failure_class,
+                        })
+                        .await
+                    {
+                        tracing::warn!(
+                            tool_call_id = %execution_call_id,
+                            error = %error,
+                            "failed to fail background tool"
+                        );
+                    }
+                    if let Err(error) =
+                        crate::background_completion::append_background_tool_completion(
+                            node.as_ref(),
+                            &execution_session_id,
+                            &execution_request_id,
+                            &execution_call_id,
+                            &execution_tool_name,
+                            "failed",
+                            &reason,
+                            Some("tool_failed"),
+                        )
+                        .await
+                    {
+                        tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append failed background tool notification");
+                    }
+                }
+            }
+
+            executions.lock().await.remove(&execution_call_id);
+        });
+
+        Ok(ToolCallHookAction::skip(json_string(json!({
+            "ok": true,
+            "tool_call_id": background_tool_call_id,
+            "tool_name": target_tool_name,
+            "await_mode": "background",
+            "status": "running"
+        }))))
+    }
+
+    async fn persist_wait_tool_call(
+        &self,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+    ) -> anyhow::Result<ToolCallHookAction> {
+        let (_session_id, request_id, parent_deadline_at, _seq) =
+            self.ensure_assistant_turn_sequence().await?;
+        self.state.lock().await.register_tool_result_identity(
+            internal_call_id,
+            None,
+            tool_call_id.as_deref(),
+        );
+
+        let parsed = match serde_json::from_str::<WaitToolArgs>(args) {
+            Ok(args) => args,
+            Err(error) => {
+                return Ok(ToolCallHookAction::skip(
+                    background_invalid_tool_arguments_payload(
+                        WAIT_TOOL_NAME,
+                        "/",
+                        format!("invalid wait_tool arguments: {error}"),
+                    ),
+                ));
+            }
+        };
+        let background_tool_call_id = parsed.tool_call_id.trim();
+        if background_tool_call_id.is_empty() {
+            return Ok(ToolCallHookAction::skip(
+                background_invalid_tool_arguments_payload(
+                    WAIT_TOOL_NAME,
+                    "/tool_call_id",
+                    "tool_call_id is required",
+                ),
+            ));
+        }
+
+        let result = self
+            .await_background_tool(&request_id, background_tool_call_id, parent_deadline_at)
+            .await?;
+        Ok(ToolCallHookAction::skip(result))
+    }
+
+    async fn persist_cancel_tool_call(
+        &self,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+    ) -> anyhow::Result<ToolCallHookAction> {
+        let (session_id, request_id, _deadline_at, _seq) =
+            self.ensure_assistant_turn_sequence().await?;
+        self.state.lock().await.register_tool_result_identity(
+            internal_call_id,
+            None,
+            tool_call_id.as_deref(),
+        );
+
+        let parsed = match serde_json::from_str::<CancelToolArgs>(args) {
+            Ok(args) => args,
+            Err(error) => {
+                return Ok(ToolCallHookAction::skip(
+                    background_invalid_tool_arguments_payload(
+                        CANCEL_TOOL_NAME,
+                        "/",
+                        format!("invalid cancel_tool arguments: {error}"),
+                    ),
+                ));
+            }
+        };
+        let background_tool_call_id = parsed.tool_call_id.trim();
+        if background_tool_call_id.is_empty() {
+            return Ok(ToolCallHookAction::skip(
+                background_invalid_tool_arguments_payload(
+                    CANCEL_TOOL_NAME,
+                    "/tool_call_id",
+                    "tool_call_id is required",
+                ),
+            ));
+        }
+        if parsed
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.trim().is_empty())
+        {
+            return Ok(ToolCallHookAction::skip(
+                background_invalid_tool_arguments_payload(
+                    CANCEL_TOOL_NAME,
+                    "/reason",
+                    "reason must be omitted or non-empty",
+                ),
+            ));
+        }
+
+        let lifecycle = self
+            .load_authorized_background_tool(&request_id, background_tool_call_id)
+            .await?;
+        if lifecycle.is_terminal() {
+            return self
+                .background_tool_envelope(lifecycle, "explicit_cancel")
+                .await
+                .map(ToolCallHookAction::skip);
+        }
+
+        let notification_tool_name = lifecycle.tool_name().to_string();
+        self.cancel_background_tool_lifecycle(lifecycle).await?;
+        let notification_reason = parsed
+            .reason
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("explicit_cancel");
+        if let Err(error) = crate::background_completion::append_background_tool_completion(
+            self.node.as_ref(),
+            &session_id,
+            &request_id,
+            background_tool_call_id,
+            &notification_tool_name,
+            "cancelled",
+            "",
+            Some(notification_reason),
+        )
+        .await
+        {
+            tracing::warn!(
+                tool_call_id = %background_tool_call_id,
+                error = %error,
+                "failed to append explicitly cancelled background tool notification"
+            );
+        }
+        Ok(ToolCallHookAction::skip(json_string(json!({
+            "ok": true,
+            "tool_call_id": background_tool_call_id,
+            "status": "cancelled"
         }))))
     }
 
@@ -1490,6 +1891,133 @@ impl DefraSessionHook {
         Ok(())
     }
 
+    async fn load_authorized_background_tool(
+        &self,
+        parent_request_id: &str,
+        tool_call_id: &str,
+    ) -> anyhow::Result<ToolCallLifecycle> {
+        let session_id = self
+            .state
+            .lock()
+            .await
+            .session_id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("session hook missing session id"))?;
+        let Some(lifecycle) =
+            ToolCallLifecycle::load(self.node.clone(), &session_id, tool_call_id).await?
+        else {
+            anyhow::bail!("background tool call {tool_call_id} was not found");
+        };
+        if lifecycle.request_id() != parent_request_id
+            || lifecycle.await_mode() != AwaitMode::Background
+            || lifecycle.is_subagent_bridge()
+        {
+            anyhow::bail!(
+                "background tool call {tool_call_id} is not owned by this parent request"
+            );
+        }
+        Ok(lifecycle)
+    }
+
+    async fn await_background_tool(
+        &self,
+        parent_request_id: &str,
+        tool_call_id: &str,
+        parent_deadline_at: chrono::DateTime<chrono::Utc>,
+    ) -> anyhow::Result<String> {
+        loop {
+            let now = chrono::Utc::now();
+            let lifecycle = self
+                .load_authorized_background_tool(parent_request_id, tool_call_id)
+                .await?;
+            if lifecycle.is_terminal() {
+                return self.background_tool_envelope(lifecycle, "terminal").await;
+            }
+
+            if crate::interrupt::fetch_interrupt_requested_at(&self.node, parent_request_id)
+                .await?
+                .is_some()
+            {
+                self.cancel_background_tool_lifecycle(lifecycle).await?;
+                let lifecycle = self
+                    .load_authorized_background_tool(parent_request_id, tool_call_id)
+                    .await?;
+                return self
+                    .background_tool_envelope(lifecycle, "parent_cancelled")
+                    .await;
+            }
+
+            if now >= parent_deadline_at {
+                self.cancel_background_tool_lifecycle(lifecycle).await?;
+                let lifecycle = self
+                    .load_authorized_background_tool(parent_request_id, tool_call_id)
+                    .await?;
+                return self
+                    .background_tool_envelope(lifecycle, "parent_deadline_exceeded")
+                    .await;
+            }
+
+            let remaining = (parent_deadline_at - now)
+                .to_std()
+                .unwrap_or(Duration::from_millis(0));
+            tokio::time::sleep(remaining.min(Duration::from_millis(100))).await;
+        }
+    }
+
+    async fn cancel_background_tool_lifecycle(
+        &self,
+        mut lifecycle: ToolCallLifecycle,
+    ) -> anyhow::Result<()> {
+        if let Some(execution) = self
+            .background_executions
+            .lock()
+            .await
+            .get(lifecycle.tool_call_id())
+            .cloned()
+        {
+            execution.cancellation_token.cancel();
+        }
+        if lifecycle.is_running() {
+            lifecycle.cancel_during_run().await?;
+        }
+        Ok(())
+    }
+
+    async fn background_tool_envelope(
+        &self,
+        lifecycle: ToolCallLifecycle,
+        reason: &str,
+    ) -> anyhow::Result<String> {
+        let session_id = self
+            .state
+            .lock()
+            .await
+            .session_id
+            .clone()
+            .unwrap_or_default();
+        let result = load_tool_call_result(&self.node, &session_id, lifecycle.tool_call_id())
+            .await
+            .unwrap_or_default();
+        let status = lifecycle.state().as_str();
+        let error = if lifecycle.state() == crate::tool_call_lifecycle::ToolCallState::Completed {
+            serde_json::Value::Null
+        } else {
+            json!({
+                "reason": reason,
+                "failure_class": "external"
+            })
+        };
+        Ok(json_string(json!({
+            "ok": lifecycle.state() == crate::tool_call_lifecycle::ToolCallState::Completed,
+            "tool_call_id": lifecycle.tool_call_id(),
+            "tool_name": lifecycle.tool_name(),
+            "await_mode": "background",
+            "status": status,
+            "result": result,
+            "error": error
+        })))
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn fail_spawn_subagent_tool_call(
         &self,
@@ -1515,6 +2043,79 @@ impl DefraSessionHook {
         lifecycle.spawn_failed(failure_class, &result).await?;
         Ok(ToolCallHookAction::skip(result))
     }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn fail_background_meta_tool_call(
+        &self,
+        session_id: String,
+        request_id: String,
+        deadline_at: chrono::DateTime<chrono::Utc>,
+        message_sequence: u32,
+        internal_call_id: &str,
+        tool_name: &str,
+        args: &str,
+        failure_class: FailureClass,
+        result: String,
+    ) -> anyhow::Result<ToolCallHookAction> {
+        let mut lifecycle = ToolCallLifecycle::new(
+            self.node.clone(),
+            request_id,
+            session_id,
+            internal_call_id.to_string(),
+            message_sequence,
+            tool_name.to_string(),
+            args.to_string(),
+            deadline_at,
+        );
+        lifecycle.spawn_failed(failure_class, &result).await?;
+        Ok(ToolCallHookAction::skip(result))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct BackgroundedRow {
+    lifecycle_state: Option<String>,
+}
+
+async fn count_live_backgrounded_rows(
+    node: &defra_node::EmbeddedNode,
+    request_id: &str,
+) -> anyhow::Result<usize> {
+    let escaped_request_id = crate::graphql::escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    request_id: {{ _eq: "{escaped_request_id}" }},
+                    await_mode: {{ _eq: "background" }}
+                }}
+            ) {{
+                lifecycle_state
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query live backgrounded tool count for request {request_id} failed: {:?}",
+            response.errors
+        );
+    }
+    let rows: Vec<BackgroundedRow> = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+    Ok(rows
+        .into_iter()
+        .filter(|row| {
+            !matches!(
+                row.lifecycle_state.as_deref(),
+                Some("completed" | "failed" | "timedOut" | "cancelled")
+            )
+        })
+        .count())
 }
 
 fn background_receipt_payload(
@@ -1729,6 +2330,60 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                     action
                 }
                 Err(e) => self.on_tool_persistence_error("persist cancel_subagent tool call", &e),
+            };
+        }
+        if tool_name == BACKGROUND_TOOL_NAME {
+            let result = self
+                .persist_background_tool_call(tool_call_id, internal_call_id, args)
+                .instrument(tracing::info_span!(
+                    "tool.call",
+                    tool_name = %tool_name,
+                    tool_call_id = %internal_call_id,
+                ))
+                .await;
+
+            return match result {
+                Ok(action) => {
+                    self.record_success();
+                    action
+                }
+                Err(e) => self.on_tool_persistence_error("persist background_tool tool call", &e),
+            };
+        }
+        if tool_name == WAIT_TOOL_NAME {
+            let result = self
+                .persist_wait_tool_call(tool_call_id, internal_call_id, args)
+                .instrument(tracing::info_span!(
+                    "tool.call",
+                    tool_name = %tool_name,
+                    tool_call_id = %internal_call_id,
+                ))
+                .await;
+
+            return match result {
+                Ok(action) => {
+                    self.record_success();
+                    action
+                }
+                Err(e) => self.on_tool_persistence_error("persist wait_tool tool call", &e),
+            };
+        }
+        if tool_name == CANCEL_TOOL_NAME {
+            let result = self
+                .persist_cancel_tool_call(tool_call_id, internal_call_id, args)
+                .instrument(tracing::info_span!(
+                    "tool.call",
+                    tool_name = %tool_name,
+                    tool_call_id = %internal_call_id,
+                ))
+                .await;
+
+            return match result {
+                Ok(action) => {
+                    self.record_success();
+                    action
+                }
+                Err(e) => self.on_tool_persistence_error("persist cancel_tool tool call", &e),
             };
         }
 
@@ -2028,6 +2683,59 @@ fn invalid_tool_arguments_payload(
         "retryable": false,
         "service_id": "subagent",
         "tool_name": tool_name
+    }))
+}
+
+fn background_invalid_tool_arguments_payload(
+    tool_name: &str,
+    path: &str,
+    message: impl Into<String>,
+) -> String {
+    json_string(json!({
+        "ok": false,
+        "failure_class": "argument_invalid",
+        "path": path,
+        "message": message.into(),
+        "retryable": false,
+        "service_id": "background",
+        "tool_name": tool_name
+    }))
+}
+
+fn background_tool_not_allowed_payload(
+    tool_name: &str,
+    path: &str,
+    requested: &str,
+    message: impl Into<String>,
+    allowed_targets: Vec<String>,
+) -> String {
+    json_string(json!({
+        "ok": false,
+        "failure_class": "tool_not_allowed",
+        "path": path,
+        "message": message.into(),
+        "retryable": false,
+        "service_id": "background",
+        "tool_name": tool_name,
+        "requested_tool_name": requested,
+        "allowed_backgroundable_tool_names": allowed_targets
+    }))
+}
+
+fn background_budget_exceeded_payload(current_backgrounded: usize) -> String {
+    json_string(json!({
+        "ok": false,
+        "failure_class": "argument_invalid",
+        "code": "background_tool_budget_exceeded",
+        "path": "/",
+        "message": format!(
+            "parent request has reached the concurrent backgrounded tool ceiling ({MAX_BACKGROUNDED_TOOLS_PER_PARENT})"
+        ),
+        "retryable": false,
+        "service_id": "background",
+        "tool_name": BACKGROUND_TOOL_NAME,
+        "current_backgrounded": current_backgrounded,
+        "max_backgrounded": MAX_BACKGROUNDED_TOOLS_PER_PARENT
     }))
 }
 

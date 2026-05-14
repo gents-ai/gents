@@ -12,6 +12,39 @@ once `ComposedState` has been refactored to multi-flight.
 
 namespace Subagent
 
+/-- The kind of backgrounded work represented by a bridge row. R4 only had
+    Subagent rows; R6 admits ordinary tool executions as a second kind. -/
+inductive BackgroundedKind where
+  | Subagent
+  | Tool
+  deriving DecidableEq, Repr
+
+/-- Terminal vocabulary observed by the bridge projector. `.running` is the
+    non-terminal catch-all used before the second leg reaches a terminal. -/
+inductive ChildTerminal where
+  | running
+  | completed
+  | failed
+  | dead
+  | interrupted
+  | superseded
+  deriving DecidableEq, Repr
+
+namespace ChildTerminal
+
+def isFailure : ChildTerminal → Prop
+  | .failed => True
+  | .dead => True
+  | .interrupted => True
+  | .superseded => True
+  | .running => False
+  | .completed => False
+
+instance (t : ChildTerminal) : Decidable t.isFailure := by
+  cases t <;> simp [isFailure] <;> infer_instance
+
+end ChildTerminal
+
 /-- Whether the parent's narrative is blocked on this tool's terminal state. -/
 inductive AwaitMode where
   | foreground   -- parent.advance / begin_inference are blocked while this tool is non-terminal
@@ -76,5 +109,9 @@ end CancelPolicy
     referenced by the depth-bound theorem; the runtime supplies the concrete
     value from behavior config. -/
 def maxSubagentDepth : Nat := 3
+
+/-- R6 ceiling on concurrent non-terminal backgrounded tool rows owned by one
+    parent request. -/
+def maxBackgroundedPerParent : Nat := 8
 
 end Subagent

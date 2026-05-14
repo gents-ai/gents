@@ -285,6 +285,10 @@ def caseCoverage : List CoverageEntry :=
       "state_machine_conformance::generated_recovery_sweep_cases_pin_startup_recovery_contract"
       "Deadline audit PR E must implement InferenceCall::recover_all; the bridge terminal wiring follow-up must implement detached bridge row recovery."
   , consumerCoverage
+      "r6_background_cases"
+      "R6BackgroundingCases"
+      "state_machine_conformance::generated_r6_backgrounding_cases_pin_tool_backgrounding_contract"
+  , consumerCoverage
       "transcript_cases"
       "TranscriptConformanceCases"
       "state_machine_conformance::generated_transcript_cases_pin_agent_message_ordering_contract"

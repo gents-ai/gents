@@ -2,7 +2,7 @@ import Proofs.Recovery.Contract
 import Proofs.Properties.Liveness
 import Proofs.InferenceCall
 import Proofs.ToolExecution
-import Proofs.Subagent
+import Proofs.Background
 import Proofs.StreamingResponse.State
 
 /-!
@@ -145,6 +145,7 @@ inductive ToolRecoveryCause where
   | deadlineExceeded
   | parentInterrupted
   | parentTerminal
+  | terminalizeBackgroundedAsInterrupted
   | childCompleted
   | childFailed
   | childDead
@@ -158,6 +159,7 @@ def toContract : ToolRecoveryCause → String
   | .deadlineExceeded => "deadlineExceeded"
   | .parentInterrupted => "parentInterrupted"
   | .parentTerminal => "parentTerminal"
+  | .terminalizeBackgroundedAsInterrupted => "TerminalizeBackgroundedAsInterrupted"
   | .childCompleted => "childCompleted"
   | .childFailed => "childFailed"
   | .childDead => "childDead"
@@ -168,6 +170,7 @@ def terminalState : ToolRecoveryCause → ToolCallState
   | .deadlineExceeded => .timedOut
   | .parentInterrupted => .cancelled
   | .parentTerminal => .failed
+  | .terminalizeBackgroundedAsInterrupted => .cancelled
   | .childCompleted => .completed
   | .childFailed => .failed
   | .childDead => .failed
@@ -180,6 +183,17 @@ theorem terminalState_terminal (cause : ToolRecoveryCause) :
     simp [terminalState, HasTerminal.isTerminal, ToolCallState.instHasTerminal]
 
 end ToolRecoveryCause
+
+def isBackgroundedRunningWithLiveParent
+    (row : ToolCallContext) (parent : RequestContext) : Prop :=
+  row.awaitMode = .background ∧
+  row.state = .running ∧
+  ¬ isTerminal parent.state
+
+instance (row : ToolCallContext) (parent : RequestContext) :
+    Decidable (isBackgroundedRunningWithLiveParent row parent) := by
+  unfold isBackgroundedRunningWithLiveParent
+  infer_instance
 
 structure ToolCallRecoveryRow where
   call : ToolCallContext

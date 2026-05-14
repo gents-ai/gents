@@ -42,13 +42,13 @@ def userEntry
   , queuedAfter := queuedAfter
   }
 
-def subagentCompletionEntry
+def backgroundCompletionEntry
     (requestId : RequestId)
     (createdAt : Time)
     (sessionId : SessionId) : QueueEntry :=
   { requestId := requestId
   , createdAt := createdAt
-  , source := .subagentCompletion
+  , source := .backgroundCompletion
   , policy := .coalesce
   , queueKey := some sessionId
   , queuedAfter := none
@@ -135,17 +135,17 @@ def terminalActiveAllowsNextPendingClaimCase : QueueDeadlineConformanceCase :=
       , legal := false
       }
 
-def subagentCompletionCoalescesOneWakeupCase : QueueDeadlineConformanceCase :=
+def backgroundCompletionCoalescesOneWakeupCase : QueueDeadlineConformanceCase :=
   let sessionId := 900
   let pre := queueState sessionId none []
-  let first := subagentCompletionEntry 201 10 sessionId
-  let duplicate := subagentCompletionEntry 202 11 sessionId
+  let first := backgroundCompletionEntry 201 10 sessionId
+  let duplicate := backgroundCompletionEntry 202 11 sessionId
   let post? :=
     match SessionQueue.step? pre (.coalescePending first) with
     | some afterFirst => SessionQueue.step? afterFirst (.coalescePending duplicate)
     | none => none
   let post := post?.getD pre
-  { name := "subagent_completion_session_coalesces_one_pending_wakeup"
+  { name := "background_completion_session_coalesces_one_pending_wakeup"
   , group := "queue_coalesce"
   , action := "coalescePending_twice"
   , sessionId := sessionId
@@ -157,9 +157,9 @@ def subagentCompletionCoalescesOneWakeupCase : QueueDeadlineConformanceCase :=
   , claimedRequestId := none
   , blockedByActive := false
   , supersededRequestIds := []
-  , queueKey := some (queueKeyLabel QueueSource.subagentCompletion sessionId)
+  , queueKey := some (queueKeyLabel QueueSource.backgroundCompletion sessionId)
   , postCoalescedPendingCount :=
-      coalescedPendingCount QueueSource.subagentCompletion sessionId post.pending
+      coalescedPendingCount QueueSource.backgroundCompletion sessionId post.pending
   , automatedDrainedRequestIds := []
   , preservedUserPendingRequestIds := []
   , postTerminalRequestIds := terminalIds [201, 202] post
@@ -172,10 +172,10 @@ def subagentCompletionCoalescesOneWakeupCase : QueueDeadlineConformanceCase :=
 def cancelDrainsAutomatedPreservesUserCase : QueueDeadlineConformanceCase :=
   let sessionId := 900
   let drainKey := sessionId
-  let automated := subagentCompletionEntry 301 10 drainKey
+  let automated := backgroundCompletionEntry 301 10 drainKey
   let user := userEntry 302 11 none
   let pre := queueState sessionId none [automated, user]
-  let post? := SessionQueue.step? pre (.drainAutomated .subagentCompletion (some drainKey))
+  let post? := SessionQueue.step? pre (.drainAutomated .backgroundCompletion (some drainKey))
   let post := post?.getD pre
   { name := "cancel_drains_automated_wakeups_preserves_user_pending"
   , group := "queue_cancel"
@@ -189,9 +189,9 @@ def cancelDrainsAutomatedPreservesUserCase : QueueDeadlineConformanceCase :=
   , claimedRequestId := none
   , blockedByActive := false
   , supersededRequestIds := []
-  , queueKey := some (queueKeyLabel QueueSource.subagentCompletion sessionId)
+  , queueKey := some (queueKeyLabel QueueSource.backgroundCompletion sessionId)
   , postCoalescedPendingCount :=
-      coalescedPendingCount QueueSource.subagentCompletion drainKey post.pending
+      coalescedPendingCount QueueSource.backgroundCompletion drainKey post.pending
   , automatedDrainedRequestIds := terminalIds [301] post
   , preservedUserPendingRequestIds := [302].filter (fun requestId =>
       if requestId ∈ requestIds post.pending then true else false)
@@ -249,7 +249,7 @@ def claimPreservesExplicitDeadlineCase : QueueDeadlineConformanceCase :=
 def queueDeadlineConformanceCases : List QueueDeadlineConformanceCase :=
   [ activeBlocksLaterSameSessionClaimCase
   , terminalActiveAllowsNextPendingClaimCase
-  , subagentCompletionCoalescesOneWakeupCase
+  , backgroundCompletionCoalescesOneWakeupCase
   , cancelDrainsAutomatedPreservesUserCase
   , claimPreservesExplicitDeadlineCase
   ]

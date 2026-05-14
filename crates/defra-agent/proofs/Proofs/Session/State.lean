@@ -16,12 +16,12 @@ namespace SessionQueue
     needs equality and intentionally has no empty-key inhabitant. -/
 abbrev QueueKey := Nat
 
-/-- Source attached to queue metadata. `subagentCompletion` is the automated
-    wake-up source R4a coalesces and drains. `steering` is modeled separately so
-    it can use append semantics until R4c gives it its own rules. -/
+/-- Source attached to queue metadata. `backgroundCompletion` is the automated
+    wake-up source R4a/R6 coalesces and drains. `steering` is modeled separately
+    so it can use append semantics until R4c gives it its own rules. -/
 inductive QueueSource where
   | user
-  | subagentCompletion
+  | backgroundCompletion
   | steering
   deriving DecidableEq, Repr
 
@@ -30,13 +30,15 @@ namespace QueueSource
 /-- Persisted vocabulary in `AgentRequest.metadata.queue.source`. -/
 def toDefraDB : QueueSource → String
   | .user => "user"
-  | .subagentCompletion => "subagent_completion"
+  | .backgroundCompletion => "background_completion"
   | .steering => "steering"
 
-/-- Parse persisted queue-source vocabulary. -/
+/-- Parse persisted queue-source vocabulary. The old `subagent_completion`
+    spelling remains a one-release read alias for in-flight rows. -/
 def fromDefraDB? : String → Option QueueSource
   | "user" => some .user
-  | "subagent_completion" => some .subagentCompletion
+  | "background_completion" => some .backgroundCompletion
+  | "subagent_completion" => some .backgroundCompletion
   | "steering" => some .steering
   | _ => none
 
@@ -48,13 +50,13 @@ theorem fromDefraDB_toDefraDB (source : QueueSource) :
     cancellation. -/
 def automatedWakeup : QueueSource → Prop
   | .user => False
-  | .subagentCompletion => True
+  | .backgroundCompletion => True
   | .steering => False
 
 instance (source : QueueSource) : Decidable source.automatedWakeup :=
   match source with
   | .user => isFalse (by intro h; exact h)
-  | .subagentCompletion => isTrue trivial
+  | .backgroundCompletion => isTrue trivial
   | .steering => isFalse (by intro h; exact h)
 
 end QueueSource
@@ -107,7 +109,7 @@ instance (entry : QueueEntry) : Decidable entry.appendWellFormed := by
 
 /-- Coalesced entries are keyed automated wake-ups. -/
 def coalesceWellFormed (entry : QueueEntry) (key : QueueKey) : Prop :=
-  entry.source = .subagentCompletion ∧ entry.policy = .coalesce ∧ entry.queueKey = some key
+  entry.source = .backgroundCompletion ∧ entry.policy = .coalesce ∧ entry.queueKey = some key
 
 instance (entry : QueueEntry) (key : QueueKey) : Decidable (entry.coalesceWellFormed key) := by
   unfold QueueEntry.coalesceWellFormed

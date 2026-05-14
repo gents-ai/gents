@@ -8,6 +8,8 @@ pub mod agent;
 pub mod apply_model;
 pub mod backend_provider;
 pub mod backend_registry;
+pub mod background_completion;
+pub(crate) mod background_tools;
 pub mod collection;
 pub mod compaction;
 pub(crate) mod completion_factory;
@@ -35,8 +37,6 @@ pub(crate) mod runtime_status;
 pub mod schema;
 pub mod session;
 pub mod streaming;
-pub mod subagent_completion;
-pub(crate) mod subagent_tools;
 pub mod template;
 pub mod tool_call_lifecycle;
 pub mod tool_surface;
@@ -67,7 +67,7 @@ pub use document_config::{
     AgentBehavior, AgentPrincipal, InferenceProfile, PrincipalBootstrap, ToolSelectionDocument,
 };
 pub use health_checker::{spawn_health_checker, HealthStatus, ServiceHealth, ServiceHealthMap};
-pub use hook::{DefraSessionHook, FailurePolicy, HookStats};
+pub use hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy, HookStats};
 pub use identity::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity,
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,

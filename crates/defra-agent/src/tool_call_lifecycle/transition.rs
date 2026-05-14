@@ -160,14 +160,22 @@ impl ToolCallLifecycle {
         let tool_call_key = format!("{escaped_session_id}:{escaped_tool_call_id}");
         let message_sequence = self.message_sequence;
 
-        // Persist subagent-specific fields when this tool has a child link.
-        // These are optional schema fields so we emit them only when set.
-        let subagent_fields = if let Some(ref crid) = self.child_request_id {
-            let escaped_crid = escape_graphql_string(crid);
+        // Persist bridge fields for both R4 subagent bridges and R6 ordinary
+        // backgrounded tool rows. Native foreground calls omit them for
+        // back-compat with older rows.
+        let bridge_fields = if self.is_bridge() {
             let await_mode_str = self.await_mode.as_str();
             let cancel_policy_str = self.cancel_policy.as_str();
+            let child_field = self
+                .child_request_id
+                .as_ref()
+                .map(|crid| {
+                    let escaped_crid = escape_graphql_string(crid);
+                    format!(r#"child_request_id: "{escaped_crid}","#)
+                })
+                .unwrap_or_default();
             format!(
-                r#"child_request_id: "{escaped_crid}",
+                r#"{child_field}
                     await_mode: "{await_mode_str}",
                     cancel_policy: "{cancel_policy_str}","#
             )
@@ -190,7 +198,7 @@ impl ToolCallLifecycle {
                     lifecycle_state: "running",
                     started_at: "{started_at_str}",
                     deadline_at: "{deadline_at_str}",
-                    {subagent_fields}
+                    {bridge_fields}
                     selected_service_id: null,
                     selected_tool_name: null,
                     tool_failure_class: null,
@@ -216,7 +224,7 @@ impl ToolCallLifecycle {
     /// latency_ms.
     pub async fn complete(&mut self, result: &str) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "complete")?;
-        if self.child_request_id.is_some() {
+        if self.is_bridge() {
             return Err(IllegalToolCallTransition::NativeCompleteOnSubagentTool.into());
         }
 
@@ -266,7 +274,7 @@ impl ToolCallLifecycle {
     /// Running → Failed. For tool errors during execution. Sets failure_class.
     pub async fn fail(&mut self, result: &str, failure: super::FailureClass) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "fail")?;
-        if self.child_request_id.is_some() {
+        if self.is_bridge() {
             return Err(IllegalToolCallTransition::NativeFailOnSubagentTool.into());
         }
 
@@ -382,7 +390,7 @@ impl ToolCallLifecycle {
     /// SubagentSource will be the natural place for that check.
     pub async fn bridge_complete(&mut self, child_result: String) -> Result<bool> {
         self.ensure_state(&[ToolCallState::Running], "bridge_complete")?;
-        if self.child_request_id.is_none() {
+        if !self.is_bridge() {
             return Err(IllegalToolCallTransition::BridgeCompleteRequiresChildLink.into());
         }
 
@@ -453,7 +461,7 @@ impl ToolCallLifecycle {
     /// child_request_id).
     pub async fn bridge_failure(&mut self, child_terminal: super::ChildTerminal) -> Result<bool> {
         self.ensure_state(&[ToolCallState::Running], "bridge_failure")?;
-        if self.child_request_id.is_none() {
+        if !self.is_bridge() {
             return Err(IllegalToolCallTransition::BridgeFailureRequiresChildLink.into());
         }
 

@@ -22,6 +22,17 @@ impl SubagentToolConfig {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct BackgroundToolConfig {
+    pub allowlist: Vec<String>,
+}
+
+impl BackgroundToolConfig {
+    pub(crate) fn tools_enabled(&self) -> bool {
+        !self.allowlist.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolSelection {
     pub file_tools: FileToolMode,
@@ -32,6 +43,7 @@ pub struct ToolSelection {
     pub enable_meta_tools: bool,
     pub allowed_mcp_service_ids: Vec<String>,
     pub delegate_to: Vec<String>,
+    pub backgroundable_tool_names: Vec<String>,
 }
 
 impl Default for ToolSelection {
@@ -45,6 +57,7 @@ impl Default for ToolSelection {
             enable_meta_tools: true,
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
+            backgroundable_tool_names: Vec::new(),
         }
     }
 }

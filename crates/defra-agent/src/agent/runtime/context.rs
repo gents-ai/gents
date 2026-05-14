@@ -10,6 +10,7 @@ use crate::admission::AdmissionRegistry;
 use crate::agent::daemon::BehaviorDaemon;
 use crate::backend_provider::BackendProviderKind;
 use crate::completion_factory::build_admitted_agent;
+use crate::hook::BackgroundToolRegistry;
 use crate::prompt::LayeredPromptBuilder;
 use crate::retry::RetryPolicy;
 use crate::tool_surface::{ToolRuntimeContext, ToolSurface};
@@ -86,6 +87,14 @@ impl RuntimeContext {
             .into_iter()
             .map(crate::tool_call_lifecycle::runtime::wrap_tool)
             .collect();
+        let background_tool_registry = BackgroundToolRegistry::from_tools(
+            tool_surface
+                .build_tools(&self.tool_runtime)?
+                .into_iter()
+                .map(crate::tool_call_lifecycle::runtime::wrap_tool)
+                .collect(),
+            &tool_surface.background_tools().allowlist,
+        );
         tracing::info!(
             behavior_id = %behavior.name,
             did = %behavior.did(),
@@ -113,6 +122,7 @@ impl RuntimeContext {
                     prompt_builder,
                     preamble,
                     tools,
+                    background_tool_registry,
                     client,
                 )
                 .await
@@ -135,6 +145,7 @@ impl RuntimeContext {
                     prompt_builder,
                     preamble,
                     tools,
+                    background_tool_registry,
                     client,
                 )
                 .await
@@ -151,6 +162,7 @@ impl RuntimeContext {
         prompt_builder: LayeredPromptBuilder,
         preamble: String,
         tools: Vec<Box<dyn ToolDyn>>,
+        background_tool_registry: BackgroundToolRegistry,
         client: C,
     ) -> Result<()>
     where
@@ -171,6 +183,7 @@ impl RuntimeContext {
             prompt_builder,
             self.retry_policy.clone(),
             self.hook_failure_policy,
+            background_tool_registry,
             self.startup_barrier.clone(),
         );
         daemon.run(request_rx, shutdown).await

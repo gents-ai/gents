@@ -121,6 +121,8 @@ pub(crate) struct ToolSelectionSaveRequest {
     #[serde(default)]
     pub allowed_mcp_service_ids: Vec<String>,
     pub delegate_to: Vec<String>,
+    #[serde(default)]
+    pub backgroundable_tool_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

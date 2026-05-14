@@ -215,6 +215,24 @@ structure RecoverySweepCase where
   deadlineAuditRef : String
   deriving DecidableEq, Repr
 
+structure R6BackgroundingCase where
+  name : String
+  group : String
+  action : String
+  legal : Bool
+  preLiveCount : Nat
+  maxBackgrounded : Nat
+  awaitMode : String
+  cancelPolicy : String
+  childRequestId : Option String
+  terminalState : String
+  result : Option String
+  reason : Option String
+  errorCode : Option String
+  queueSource : Option String
+  queueKey : Option String
+  deriving Repr
+
 structure TranscriptCase where
   name : String
   group : String

@@ -28,7 +28,8 @@ pub(crate) struct QueueHints {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum QueueSource {
     User,
-    SubagentCompletion,
+    #[serde(alias = "subagent_completion")]
+    BackgroundCompletion,
     Steering,
 }
 
@@ -43,6 +44,11 @@ pub(crate) fn parse_queue_hints(metadata: Option<&str>) -> Option<QueueHints> {
     let metadata = metadata?.trim();
     if metadata.is_empty() {
         return None;
+    }
+    if metadata.contains("\"subagent_completion\"") {
+        tracing::warn!(
+            "parsed deprecated queue source alias subagent_completion as background_completion"
+        );
     }
 
     serde_json::from_str::<RequestQueueMetadata>(metadata)
@@ -59,7 +65,7 @@ pub(crate) fn queue_metadata_json(hints: &QueueHints) -> String {
 
 pub(crate) fn is_automated_wakeup(metadata: Option<&str>) -> bool {
     parse_queue_hints(metadata).is_some_and(|hints| {
-        matches!(hints.source, QueueSource::SubagentCompletion)
+        matches!(hints.source, QueueSource::BackgroundCompletion)
             && hints.policy == QueuePolicy::Coalesce
             && hints
                 .key
@@ -71,7 +77,7 @@ pub(crate) fn is_automated_wakeup(metadata: Option<&str>) -> bool {
 pub(crate) fn is_subagent_owned_queue(metadata: Option<&str>) -> bool {
     parse_queue_hints(metadata).is_some_and(|hints| {
         matches!(hints.source, QueueSource::Steering)
-            || (matches!(hints.source, QueueSource::SubagentCompletion)
+            || (matches!(hints.source, QueueSource::BackgroundCompletion)
                 && hints.policy == QueuePolicy::Coalesce
                 && hints
                     .key
@@ -695,7 +701,7 @@ mod tests {
         assert_eq!(
             parse_queue_hints(Some(metadata)),
             Some(hints(
-                QueueSource::SubagentCompletion,
+                QueueSource::BackgroundCompletion,
                 QueuePolicy::Coalesce
             ))
         );
@@ -705,7 +711,8 @@ mod tests {
     fn parses_all_supported_string_values() {
         let cases = [
             ("user", QueueSource::User),
-            ("subagent_completion", QueueSource::SubagentCompletion),
+            ("background_completion", QueueSource::BackgroundCompletion),
+            ("subagent_completion", QueueSource::BackgroundCompletion),
             ("steering", QueueSource::Steering),
         ];
 
@@ -795,23 +802,23 @@ mod tests {
         ))));
         assert!(is_automated_wakeup(Some(&queue_metadata_json(
             &QueueHints {
-                source: QueueSource::SubagentCompletion,
+                source: QueueSource::BackgroundCompletion,
                 policy: QueuePolicy::Coalesce,
-                key: Some("subagent_completion:session-1".to_string()),
+                key: Some("background_completion:session-1".to_string()),
                 queued_after_request_id: None,
             }
         ))));
         assert!(!is_automated_wakeup(Some(&queue_metadata_json(
             &QueueHints {
-                source: QueueSource::SubagentCompletion,
+                source: QueueSource::BackgroundCompletion,
                 policy: QueuePolicy::Append,
-                key: Some("subagent_completion:session-1".to_string()),
+                key: Some("background_completion:session-1".to_string()),
                 queued_after_request_id: None,
             }
         ))));
         assert!(!is_automated_wakeup(Some(&queue_metadata_json(
             &QueueHints {
-                source: QueueSource::SubagentCompletion,
+                source: QueueSource::BackgroundCompletion,
                 policy: QueuePolicy::Coalesce,
                 key: None,
                 queued_after_request_id: None,
@@ -833,9 +840,9 @@ mod tests {
         let session_id = "session-coalesced-wakeup";
         let parent = parent_request(session_id);
         let hints = QueueHints {
-            source: QueueSource::SubagentCompletion,
+            source: QueueSource::BackgroundCompletion,
             policy: QueuePolicy::Coalesce,
-            key: Some(format!("subagent_completion:{session_id}")),
+            key: Some(format!("background_completion:{session_id}")),
             queued_after_request_id: Some(parent.request_id.clone()),
         };
 
@@ -891,9 +898,9 @@ mod tests {
         let session_id = "session-coalesce-ignores-append";
         let parent = parent_request(session_id);
         let append_hints = QueueHints {
-            source: QueueSource::SubagentCompletion,
+            source: QueueSource::BackgroundCompletion,
             policy: QueuePolicy::Append,
-            key: Some(format!("subagent_completion:{session_id}")),
+            key: Some(format!("background_completion:{session_id}")),
             queued_after_request_id: Some(parent.request_id.clone()),
         };
         insert_raw_queue_request(
@@ -936,9 +943,9 @@ mod tests {
         let session_id = "session-coalesce-race-reconcile";
         let parent = parent_request(session_id);
         let hints = QueueHints {
-            source: QueueSource::SubagentCompletion,
+            source: QueueSource::BackgroundCompletion,
             policy: QueuePolicy::Coalesce,
-            key: Some(format!("subagent_completion:{session_id}")),
+            key: Some(format!("background_completion:{session_id}")),
             queued_after_request_id: Some(parent.request_id.clone()),
         };
         let key = hints.key.clone().unwrap();
@@ -962,7 +969,7 @@ mod tests {
         let reconciled = reconcile_coalesced_pending_request(
             &db.node,
             session_id,
-            QueueSource::SubagentCompletion,
+            QueueSource::BackgroundCompletion,
             &key,
         )
         .await
@@ -996,9 +1003,9 @@ mod tests {
         let session_id = "session-coalesce-preexisting-duplicates";
         let parent = parent_request(session_id);
         let hints = QueueHints {
-            source: QueueSource::SubagentCompletion,
+            source: QueueSource::BackgroundCompletion,
             policy: QueuePolicy::Coalesce,
-            key: Some(format!("subagent_completion:{session_id}")),
+            key: Some(format!("background_completion:{session_id}")),
             queued_after_request_id: Some(parent.request_id.clone()),
         };
         let survivor_doc_id = insert_raw_queue_request(
@@ -1050,7 +1057,7 @@ mod tests {
         let session_id = "session-unkeyed-wakeup";
         let parent = parent_request(session_id);
         let hints = QueueHints {
-            source: QueueSource::SubagentCompletion,
+            source: QueueSource::BackgroundCompletion,
             policy: QueuePolicy::Coalesce,
             key: None,
             queued_after_request_id: Some(parent.request_id.clone()),

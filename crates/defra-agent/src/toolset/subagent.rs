@@ -2,18 +2,29 @@ use anyhow::anyhow;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 
-use crate::subagent_tools::{CancelSubagentArgs, SpawnSubagentArgs, WaitSubagentArgs};
+use crate::background_tools::{
+    BackgroundToolArgs, CancelSubagentArgs, CancelToolArgs, SpawnSubagentArgs, WaitSubagentArgs,
+    WaitToolArgs,
+};
 use crate::tool_call_lifecycle::AwaitMode;
-use crate::tool_surface::SubagentToolConfig;
+use crate::tool_surface::{BackgroundToolConfig, SubagentToolConfig};
 
 use super::shared::ToolError;
-use super::{CANCEL_SUBAGENT_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME, WAIT_SUBAGENT_TOOL_NAME};
+use super::{
+    BACKGROUND_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, CANCEL_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME,
+    WAIT_SUBAGENT_TOOL_NAME, WAIT_TOOL_NAME,
+};
 
 const SUBAGENT_SERVICE_ID: &str = "subagent";
 
 #[derive(Clone)]
 pub(super) struct SpawnSubagentTool {
     config: SubagentToolConfig,
+}
+
+#[derive(Clone)]
+pub(super) struct BackgroundTool {
+    config: BackgroundToolConfig,
 }
 
 impl SpawnSubagentTool {
@@ -72,11 +83,44 @@ impl SpawnSubagentTool {
     }
 }
 
+impl BackgroundTool {
+    pub(super) fn new(config: BackgroundToolConfig) -> Self {
+        Self { config }
+    }
+
+    fn validate(&self, args: &BackgroundToolArgs) -> Result<(), ToolError> {
+        let tool_name = args.tool_name.trim();
+        if tool_name.is_empty() {
+            return Err(background_invalid_arguments_error(
+                BACKGROUND_TOOL_NAME,
+                "/tool_name",
+                "tool_name is required",
+            ));
+        }
+        if !self.config.allowlist.iter().any(|name| name == tool_name) {
+            return Err(background_tool_not_allowed_error(
+                BACKGROUND_TOOL_NAME,
+                "/tool_name",
+                tool_name,
+                format!("tool '{tool_name}' is not allowed for backgrounding by this behavior"),
+                self.config.allowlist.clone(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct WaitSubagentTool;
 
 #[derive(Clone, Copy)]
 pub(super) struct CancelSubagentTool;
+
+#[derive(Clone, Copy)]
+pub(super) struct WaitTool;
+
+#[derive(Clone, Copy)]
+pub(super) struct CancelTool;
 
 impl Tool for SpawnSubagentTool {
     const NAME: &'static str = SPAWN_SUBAGENT_TOOL_NAME;
@@ -208,12 +252,135 @@ impl Tool for CancelSubagentTool {
     }
 }
 
+impl Tool for BackgroundTool {
+    const NAME: &'static str = BACKGROUND_TOOL_NAME;
+
+    type Error = ToolError;
+    type Args = BackgroundToolArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Run an allowlisted backgroundable tool and return a handle immediately."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "tool_name": {
+                        "type": "string",
+                        "enum": &self.config.allowlist,
+                        "description": "Allowlisted tool name to run in the background."
+                    },
+                    "args": {
+                        "type": "object",
+                        "description": "Arguments passed to the target tool."
+                    }
+                },
+                "required": ["tool_name", "args"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        self.validate(&args)?;
+        Err(background_not_yet_executable_error(Self::NAME))
+    }
+}
+
+impl Tool for WaitTool {
+    const NAME: &'static str = WAIT_TOOL_NAME;
+
+    type Error = ToolError;
+    type Args = WaitToolArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Wait for an existing backgrounded tool call to reach a terminal state."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "tool_call_id": {
+                        "type": "string",
+                        "description": "Tool call ID returned by background_tool."
+                    }
+                },
+                "required": ["tool_call_id"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        validate_tool_call_id(WAIT_TOOL_NAME, &args.tool_call_id)?;
+        Err(background_not_yet_executable_error(Self::NAME))
+    }
+}
+
+impl Tool for CancelTool {
+    const NAME: &'static str = CANCEL_TOOL_NAME;
+
+    type Error = ToolError;
+    type Args = CancelToolArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Cancel an existing backgrounded tool call.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "tool_call_id": {
+                        "type": "string",
+                        "description": "Tool call ID returned by background_tool."
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Optional human-readable cancellation reason."
+                    }
+                },
+                "required": ["tool_call_id"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        validate_tool_call_id(CANCEL_TOOL_NAME, &args.tool_call_id)?;
+        if args
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.trim().is_empty())
+        {
+            return Err(background_invalid_arguments_error(
+                CANCEL_TOOL_NAME,
+                "/reason",
+                "reason must be omitted or non-empty",
+            ));
+        }
+        Err(background_not_yet_executable_error(Self::NAME))
+    }
+}
+
 fn validate_child_request_id(tool_name: &str, child_request_id: &str) -> Result<(), ToolError> {
     if child_request_id.trim().is_empty() {
         return Err(invalid_arguments_error(
             tool_name,
             "/child_request_id",
             "child_request_id is required",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_tool_call_id(tool_name: &str, tool_call_id: &str) -> Result<(), ToolError> {
+    if tool_call_id.trim().is_empty() {
+        return Err(background_invalid_arguments_error(
+            tool_name,
+            "/tool_call_id",
+            "tool_call_id is required",
         ));
     }
     Ok(())
@@ -259,6 +426,54 @@ fn not_yet_executable_error(tool_name: &str) -> ToolError {
         "message": format!("{tool_name} is registered but requires the R4b subagent hook runtime path before direct execution"),
         "retryable": true,
         "service_id": SUBAGENT_SERVICE_ID,
+        "tool_name": tool_name
+    }))
+}
+
+fn background_invalid_arguments_error(
+    tool_name: &str,
+    path: &str,
+    message: impl Into<String>,
+) -> ToolError {
+    structured_error(serde_json::json!({
+        "ok": false,
+        "failure_class": "invalid_tool_arguments",
+        "path": path,
+        "message": message.into(),
+        "retryable": false,
+        "service_id": "background",
+        "tool_name": tool_name
+    }))
+}
+
+fn background_tool_not_allowed_error(
+    tool_name: &str,
+    path: &str,
+    requested: &str,
+    message: impl Into<String>,
+    allowed_targets: Vec<String>,
+) -> ToolError {
+    structured_error(serde_json::json!({
+        "ok": false,
+        "failure_class": "tool_not_allowed",
+        "path": path,
+        "message": message.into(),
+        "retryable": false,
+        "service_id": "background",
+        "tool_name": tool_name,
+        "requested_tool_name": requested,
+        "allowed_backgroundable_tool_names": allowed_targets
+    }))
+}
+
+fn background_not_yet_executable_error(tool_name: &str) -> ToolError {
+    structured_error(serde_json::json!({
+        "ok": false,
+        "failure_class": "service_unavailable",
+        "path": "/",
+        "message": format!("{tool_name} is registered but requires the R6 background-tool hook runtime path before direct execution"),
+        "retryable": true,
+        "service_id": "background",
         "tool_name": tool_name
     }))
 }

@@ -70,6 +70,22 @@ fn validate_rejects_empty_string_in_subagent_targets() {
 }
 
 #[test]
+fn validate_rejects_empty_string_in_backgroundable_tool_names() {
+    let doc = ToolSelectionDocument {
+        selection_id: "test-tools".to_string(),
+        agent_did: "did:defra-agent:test".to_string(),
+        backgroundable_tool_names: Some(vec!["".to_string()]),
+        ..Default::default()
+    };
+    let result = doc.validate();
+    assert!(result.is_err());
+    assert!(
+        format!("{}", result.unwrap_err()).contains("backgroundable_tool_names"),
+        "error message must mention backgroundable_tool_names"
+    );
+}
+
+#[test]
 fn validate_accepts_well_formed_subagent_targets() {
     let doc = ToolSelectionDocument {
         selection_id: "test-tools".to_string(),

@@ -1,5 +1,5 @@
-import Proofs.Subagent.State
-import Proofs.Subagent.Bridge
+import Proofs.Background.State
+import Proofs.Background.Bridge
 
 /-!
 # Subagent Bridge Transitions
@@ -75,7 +75,7 @@ inductive Transition : BridgedState → BridgedState → Prop where
 
   | bridge_complete {pre post : BridgedState}
       {idx : Nat} {tPre tPost : ToolExecution.ToolCallContext}
-      (h_child_done    : pre.child.request.state = .completed)
+      (h_second_done   : pre.terminalOf = .completed)
       -- pre bridge tool, located at a specific index. Pinning the index +
       -- describing post.parent.tools via .set fully determines the post-state
       -- (matches `tool_step`'s pattern), which is what makes
@@ -104,10 +104,7 @@ inductive Transition : BridgedState → BridgedState → Prop where
 
   | bridge_failure {pre post : BridgedState}
       {idx : Nat} {tPre tPost : ToolExecution.ToolCallContext}
-      (h_child_term    : pre.child.request.state = .failed ∨
-                         pre.child.request.state = .dead ∨
-                         pre.child.request.state = .interrupted ∨
-                         pre.child.request.state = .superseded)
+      (h_second_term   : pre.terminalOf.isFailure)
       -- pre bridge tool, located at a specific index. Same set-style description
       -- as `bridge_complete` — see the comment there.
       (h_idx_pre       : pre.parent.tools[idx]? = some tPre)

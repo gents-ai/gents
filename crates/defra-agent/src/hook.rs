@@ -5,7 +5,9 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use rig::agent::{HookAction, ToolCallHookAction};
+use rig::tool::ToolDyn;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use crate::session;
 use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, ToolCallLifecycle};
@@ -31,6 +33,56 @@ pub struct HookStats {
 struct HookCounters {
     failures: AtomicU64,
     successes: AtomicU64,
+}
+
+#[derive(Clone, Default)]
+pub struct BackgroundToolRegistry {
+    inner: Arc<BackgroundToolRegistryInner>,
+}
+
+#[derive(Default)]
+struct BackgroundToolRegistryInner {
+    tools: HashMap<String, Arc<Mutex<Box<dyn ToolDyn>>>>,
+    allowlist: Vec<String>,
+}
+
+impl BackgroundToolRegistry {
+    pub fn from_tools(tools: Vec<Box<dyn ToolDyn>>, allowlist: &[String]) -> Self {
+        let allowed = allowlist
+            .iter()
+            .map(|name| name.trim())
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .collect::<HashSet<_>>();
+        let mut registry_tools = HashMap::new();
+        for tool in tools {
+            let name = tool.name();
+            if allowed.contains(&name) {
+                registry_tools.insert(name, Arc::new(Mutex::new(tool)));
+            }
+        }
+        let mut allowlist = allowed.into_iter().collect::<Vec<_>>();
+        allowlist.sort();
+        Self {
+            inner: Arc::new(BackgroundToolRegistryInner {
+                tools: registry_tools,
+                allowlist,
+            }),
+        }
+    }
+
+    pub(crate) fn get(&self, tool_name: &str) -> Option<Arc<Mutex<Box<dyn ToolDyn>>>> {
+        self.inner.tools.get(tool_name).cloned()
+    }
+
+    pub(crate) fn allowlist(&self) -> Vec<String> {
+        self.inner.allowlist.clone()
+    }
+}
+
+#[derive(Clone)]
+struct BackgroundExecution {
+    cancellation_token: CancellationToken,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -228,6 +280,8 @@ pub struct DefraSessionHook {
     counters: Arc<HookCounters>,
     state: Arc<Mutex<SessionState>>,
     in_flight_lifecycles: Arc<Mutex<HashMap<String, ToolCallLifecycle>>>,
+    background_tool_registry: BackgroundToolRegistry,
+    background_executions: Arc<Mutex<HashMap<String, BackgroundExecution>>>,
 }
 
 enum PolicyDecision {
@@ -264,6 +318,8 @@ impl DefraSessionHook {
                 initialized: false,
             })),
             in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
+            background_tool_registry: BackgroundToolRegistry::default(),
+            background_executions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -299,7 +355,14 @@ impl DefraSessionHook {
                 initialized: true,
             })),
             in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
+            background_tool_registry: BackgroundToolRegistry::default(),
+            background_executions: Arc::new(Mutex::new(HashMap::new())),
         })
+    }
+
+    pub fn with_background_tool_registry(mut self, registry: BackgroundToolRegistry) -> Self {
+        self.background_tool_registry = registry;
+        self
     }
 
     pub fn stats(&self) -> HookStats {

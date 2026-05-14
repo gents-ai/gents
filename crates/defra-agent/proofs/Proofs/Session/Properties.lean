@@ -603,7 +603,7 @@ theorem transition_complete
       exact ⟨.coalescePending entry, by
         rcases h_well_formed with ⟨h_source, h_policy, h_key⟩
         have h_missing_source :
-            containsCoalescedQueueKey pre.pending QueueSource.subagentCompletion key = false := by
+            containsCoalescedQueueKey pre.pending QueueSource.backgroundCompletion key = false := by
           simpa [h_source] using h_missing
         have h_fresh_after : RequestIdFresh pre entry ∧ canAppendAfter pre.pending entry = true :=
           ⟨h_fresh, h_after⟩
@@ -613,7 +613,7 @@ theorem transition_complete
       exact ⟨.coalescePending entry, by
         rcases h_well_formed with ⟨h_source, h_policy, h_key⟩
         have h_contains_source :
-            containsCoalescedQueueKey pre.pending QueueSource.subagentCompletion key = true := by
+            containsCoalescedQueueKey pre.pending QueueSource.backgroundCompletion key = true := by
           simpa [h_source] using h_contains
         simp [step?, QueueEntry.coalesceWellFormed, h_source, h_policy, h_key, h_contains,
           h_contains_source, h_post]⟩

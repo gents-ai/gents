@@ -117,6 +117,8 @@ pub(crate) struct DesiredToolSelection {
     pub(crate) allowed_mcp_service_ids: Vec<String>,
     #[serde(default)]
     pub(crate) delegate_to: Vec<String>,
+    #[serde(default)]
+    pub(crate) backgroundable_tool_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

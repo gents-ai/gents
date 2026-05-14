@@ -46,6 +46,11 @@ const ADD_TOOL_SELECTION_SUBAGENT_PATCH: &str = r#"[
     {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"subagent_background_enabled","Kind":2}}
 ]"#;
 
+#[allow(dead_code)]
+const ADD_TOOL_SELECTION_BACKGROUND_TOOLS_PATCH: &str = r#"[
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"backgroundable_tool_names","Kind":17}}
+]"#;
+
 /// WASM lens bytes embedded at compile time. Built by build.rs.
 const LENS_WASM_BYTES: &[u8] =
     include_bytes!(env!("AGENT_TOOL_CALL_LIFECYCLE_V1_TO_V2_LENS_WASM_PATH"));
@@ -278,10 +283,11 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
         .context("get ToolSelection collection")?;
 
     if let Some(ref cv) = ts_collection {
-        if collection_has_field(cv, "subagent_targets") {
+        let mut active_version = cv.clone();
+        if collection_has_field(&active_version, "subagent_targets") {
             tracing::debug!("ToolSelection already has subagent_targets; skipping patch");
         } else {
-            let pre_version_id = cv.version_id.clone();
+            let pre_version_id = active_version.version_id.clone();
             let v3 = node
                 .patch_collection("ToolSelection", ADD_TOOL_SELECTION_SUBAGENT_PATCH)
                 .await
@@ -294,6 +300,26 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
                 pre = %pre_version_id,
                 v3 = %v3_version_id,
                 "ToolSelection patched to v3 (subagent fields)"
+            );
+            active_version = v3;
+        }
+
+        if collection_has_field(&active_version, "backgroundable_tool_names") {
+            tracing::debug!("ToolSelection already has backgroundable_tool_names; skipping patch");
+        } else {
+            let pre_version_id = active_version.version_id.clone();
+            let v4 = node
+                .patch_collection("ToolSelection", ADD_TOOL_SELECTION_BACKGROUND_TOOLS_PATCH)
+                .await
+                .context("patch_collection v3 -> v4 (ToolSelection background tool fields)")?;
+            let v4_version_id = v4.version_id.clone();
+            node.set_active_collection_version(&v4_version_id)
+                .await
+                .context("set_active_collection_version v4 (ToolSelection)")?;
+            tracing::info!(
+                pre = %pre_version_id,
+                v4 = %v4_version_id,
+                "ToolSelection patched to v4 (background tool fields)"
             );
         }
     } else {

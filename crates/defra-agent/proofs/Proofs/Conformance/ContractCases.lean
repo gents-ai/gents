@@ -5,6 +5,7 @@ import Proofs.Conformance.ContractCases.BoundaryRuntime
 import Proofs.Conformance.ContractCases.LifecycleTransitions
 import Proofs.Conformance.ContractCases.LiveOverlay
 import Proofs.Conformance.ContractCases.QueueDeadline
+import Proofs.Conformance.ContractCases.R6Background
 import Proofs.Conformance.ContractCases.Transcript
 
 /-!
