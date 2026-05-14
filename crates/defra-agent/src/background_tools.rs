@@ -18,6 +18,7 @@ use crate::session::execute_mutation_with_retry;
 use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass};
 
 use self::r4c_args::{
+    ListBackgroundToolsArgs, ListBackgroundToolsEntry, ListBackgroundToolsResponse,
     ListStatusFilter, ListSubagentsArgs, ListSubagentsEntry, ListSubagentsResponse,
 };
 
@@ -224,6 +225,18 @@ struct ListSubagentChildRow {
     subagent_depth: Option<u32>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ListBackgroundToolRow {
+    tool_call_id: String,
+    tool_name: String,
+    await_mode: Option<String>,
+    lifecycle_state: Option<String>,
+    child_request_id: Option<String>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+    result: Option<String>,
+}
+
 pub(crate) async fn handle_list_subagents(
     node: &EmbeddedNode,
     caller_request_id: &str,
@@ -337,7 +350,94 @@ pub(crate) async fn handle_list_subagents(
     })
 }
 
+pub(crate) async fn handle_list_background_tools(
+    node: &EmbeddedNode,
+    caller_request_id: &str,
+    local_deployment_id: &str,
+    args: ListBackgroundToolsArgs,
+) -> Result<ListBackgroundToolsResponse> {
+    let limit = args.validated_limit() as usize;
+    let escaped_caller = escape_graphql_string(caller_request_id);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    request_id: {{ _eq: "{escaped_caller}" }},
+                    await_mode: {{ _eq: "background" }}
+                }},
+                order: {{ started_at: ASC }}
+            ) {{
+                tool_call_id
+                tool_name
+                await_mode
+                lifecycle_state
+                child_request_id
+                started_at
+                completed_at
+                result
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!("list_background_tools query failed: {:?}", response.errors);
+    }
+    let rows: Vec<ListBackgroundToolRow> = rows(response.data.as_ref(), "AgentToolCall")?;
+
+    let mut entries = Vec::new();
+    for row in rows {
+        if non_empty_string(row.child_request_id.as_deref()).is_some() {
+            continue;
+        }
+        if row.await_mode.as_deref() != Some("background") {
+            continue;
+        }
+        let Some(tool_call_id) = non_empty_string(Some(&row.tool_call_id)) else {
+            continue;
+        };
+        let status = row
+            .lifecycle_state
+            .as_deref()
+            .filter(|state| !state.trim().is_empty())
+            .unwrap_or("running");
+        if !list_status_matches(args.status, status) {
+            continue;
+        }
+        let created_at = parse_rfc3339(row.started_at.as_deref())
+            .ok_or_else(|| anyhow!("background tool call {tool_call_id} has invalid started_at"))?;
+        let last_update = parse_rfc3339(row.completed_at.as_deref()).unwrap_or(created_at);
+        let stdout_bytes = row
+            .result
+            .as_deref()
+            .map_or(0, |result| result.len() as u64);
+
+        entries.push(ListBackgroundToolsEntry {
+            tool_call_id,
+            tool_name: row.tool_name,
+            deployment_id: local_deployment_id.to_string(),
+            await_mode: "background".to_string(),
+            status: status.to_string(),
+            created_at,
+            last_update,
+            stdout_bytes,
+            stderr_bytes: 0,
+        });
+    }
+
+    let truncated = entries.len() > limit;
+    entries.truncate(limit);
+    Ok(ListBackgroundToolsResponse {
+        read_at: Utc::now(),
+        truncated,
+        entries,
+    })
+}
+
 fn list_subagent_status_matches(filter: ListStatusFilter, status: &str) -> bool {
+    list_status_matches(filter, status)
+}
+
+fn list_status_matches(filter: ListStatusFilter, status: &str) -> bool {
     match filter {
         ListStatusFilter::Running => status == "running",
         ListStatusFilter::Terminal => matches!(

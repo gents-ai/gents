@@ -2,7 +2,7 @@ use anyhow::anyhow;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 
-use crate::background_tools::r4c_args::ListSubagentsArgs;
+use crate::background_tools::r4c_args::{ListBackgroundToolsArgs, ListSubagentsArgs};
 use crate::background_tools::{
     BackgroundToolArgs, CancelSubagentArgs, CancelToolArgs, SpawnSubagentArgs, WaitSubagentArgs,
     WaitToolArgs,
@@ -12,8 +12,9 @@ use crate::tool_surface::{BackgroundToolConfig, SubagentToolConfig};
 
 use super::shared::ToolError;
 use super::{
-    BACKGROUND_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, CANCEL_TOOL_NAME, LIST_SUBAGENTS_TOOL_NAME,
-    SPAWN_SUBAGENT_TOOL_NAME, WAIT_SUBAGENT_TOOL_NAME, WAIT_TOOL_NAME,
+    BACKGROUND_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, CANCEL_TOOL_NAME,
+    LIST_BACKGROUND_TOOLS_TOOL_NAME, LIST_SUBAGENTS_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME,
+    WAIT_SUBAGENT_TOOL_NAME, WAIT_TOOL_NAME,
 };
 
 const SUBAGENT_SERVICE_ID: &str = "subagent";
@@ -122,6 +123,9 @@ pub(super) struct CancelSubagentTool;
 
 #[derive(Clone, Copy)]
 pub(super) struct WaitTool;
+
+#[derive(Clone, Copy)]
+pub(super) struct ListBackgroundToolsTool;
 
 #[derive(Clone, Copy)]
 pub(super) struct CancelTool;
@@ -358,6 +362,44 @@ impl Tool for WaitTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         validate_tool_call_id(WAIT_TOOL_NAME, &args.tool_call_id)?;
+        Err(background_not_yet_executable_error(Self::NAME))
+    }
+}
+
+impl Tool for ListBackgroundToolsTool {
+    const NAME: &'static str = LIST_BACKGROUND_TOOLS_TOOL_NAME;
+
+    type Error = ToolError;
+    type Args = ListBackgroundToolsArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "List this parent request's visible background tool calls.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["running", "terminal", "all"],
+                        "default": "running",
+                        "description": "Filter background tool calls by lifecycle state."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50,
+                        "default": 20,
+                        "description": "Maximum entries to return."
+                    }
+                }
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let _ = args.validated_limit();
         Err(background_not_yet_executable_error(Self::NAME))
     }
 }

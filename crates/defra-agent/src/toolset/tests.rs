@@ -169,6 +169,7 @@ fn background_tool_names_are_gated_by_allowlist() {
         vec![
             BACKGROUND_TOOL_NAME.to_string(),
             WAIT_TOOL_NAME.to_string(),
+            LIST_BACKGROUND_TOOLS_TOOL_NAME.to_string(),
             CANCEL_TOOL_NAME.to_string()
         ]
     );
