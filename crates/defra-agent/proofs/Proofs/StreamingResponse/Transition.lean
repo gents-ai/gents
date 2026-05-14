@@ -84,4 +84,31 @@ inductive Trace : ResponseContext → ResponseContext → Prop where
   | step {s₁ s₂ s₃ : ResponseContext} :
       Transition s₁ s₂ → Trace s₂ s₃ → Trace s₁ s₃
 
+inductive BridgeTransition : ResponseRequestBridge → ResponseRequestBridge → Prop where
+  | finalizeComplete
+      {pre post : ResponseRequestBridge} :
+      Transition pre.response post.response →
+      post.response.status = .completed →
+      pre.requestState = .processing →
+      post.requestState = .completed →
+      post.requestPersistence = .committed →
+      BridgeTransition pre post
+  | finalizeError
+      {pre post : ResponseRequestBridge} :
+      Transition pre.response post.response →
+      post.response.status = .error →
+      post.response.errorReason ≠ some .daemonRestartRecovery →
+      pre.requestState = .processing →
+      post.requestState = .failed →
+      post.requestPersistence = .committed →
+      BridgeTransition pre post
+  | recoverPaired
+      {pre post : ResponseRequestBridge} :
+      Transition pre.response post.response →
+      post.response.errorReason = some .daemonRestartRecovery →
+      pre.requestState = .processing →
+      post.requestState = .failed →
+      post.requestPersistence = .committed →
+      BridgeTransition pre post
+
 end StreamingResponse
