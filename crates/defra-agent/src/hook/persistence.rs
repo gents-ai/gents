@@ -8,14 +8,14 @@ use serde::Deserialize;
 use serde_json::json;
 use tracing::Instrument;
 
-use crate::config::DEFAULT_DEADLINE_DURATION_SECS;
-use crate::session;
-use crate::subagent_tools::{
+use crate::background_tools::{
     child_request_completed, load_authorized_child_edge, load_child_final_response,
     load_child_session_id, load_child_terminal_row, load_parent_subagent_context,
     project_child_terminal, target_is_allowed, CancelSubagentArgs, ParentSubagentContext,
     SpawnSubagentArgs, WaitSubagentArgs,
 };
+use crate::config::DEFAULT_DEADLINE_DURATION_SECS;
+use crate::session;
 use crate::tool_call_lifecycle::query::load_tool_call_result;
 use crate::tool_call_lifecycle::runtime::{classify_managed_tool_result, ManagedToolTerminal};
 use crate::tool_call_lifecycle::{

@@ -15,16 +15,16 @@ use defra_node::{EmbeddedNode, EventName};
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
+use crate::background_tools::{
+    child_request_completed, load_authorized_child_edge, load_child_final_response,
+    load_child_terminal_row, load_parent_subagent_context, project_child_terminal, ChildEdge,
+};
 use crate::graphql::escape_graphql_string;
 use crate::lifecycle::queue::{
     enqueue_session_request, parse_queue_hints, QueueHints, QueuePolicy, QueueSource,
 };
 use crate::lifecycle::ExecutionOrigin;
 use crate::session;
-use crate::subagent_tools::{
-    child_request_completed, load_authorized_child_edge, load_child_final_response,
-    load_child_terminal_row, load_parent_subagent_context, project_child_terminal, ChildEdge,
-};
 use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, ToolCallLifecycle};
 use crate::watcher::{validate_agent_request_subagent_coherence, AgentRequest};
 

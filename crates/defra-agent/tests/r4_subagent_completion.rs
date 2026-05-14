@@ -4,11 +4,11 @@ mod support;
 
 use std::time::Duration;
 
-use defra_agent::defra_node::EmbeddedNode;
-use defra_agent::graphql::escape_graphql_string;
-use defra_agent::subagent_completion::{
+use defra_agent::background_completion::{
     project_background_subagent_completion, BackgroundCompletionOutcome,
 };
+use defra_agent::defra_node::EmbeddedNode;
+use defra_agent::graphql::escape_graphql_string;
 use defra_agent::tool_call_lifecycle::{
     create_subagent_request_with_request_id, AwaitMode, CancelPolicy, ToolCallLifecycle,
 };

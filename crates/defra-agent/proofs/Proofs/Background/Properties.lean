@@ -1,4 +1,4 @@
-import Proofs.Subagent.Transition
+import Proofs.Background.Transition
 
 /-!
 # Subagent Properties

@@ -15,12 +15,12 @@ use serde::Deserialize;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-use crate::graphql::escape_graphql_string;
-use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedTask};
-use crate::subagent_tools::{
+use crate::background_tools::{
     fail_running_subagent_tool_call, load_parent_subagent_authorization, subagent_spawn_denial,
     subagent_tool_not_allowed_payload,
 };
+use crate::graphql::escape_graphql_string;
+use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedTask};
 use crate::tool_call_lifecycle::subagent_request::create_subagent_request_with_request_id;
 use crate::tool_call_lifecycle::{AwaitMode, FailureClass, IllegalToolCallTransition};
 

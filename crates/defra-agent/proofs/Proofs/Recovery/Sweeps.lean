@@ -2,7 +2,7 @@ import Proofs.Recovery.Contract
 import Proofs.Properties.Liveness
 import Proofs.InferenceCall
 import Proofs.ToolExecution
-import Proofs.Subagent
+import Proofs.Background
 import Proofs.StreamingResponse.State
 
 /-!

@@ -19,7 +19,7 @@ use super::IllegalToolCallTransition;
 
 /// The configured cap on subagent recursion depth. Matches Lean's
 /// `Subagent.maxSubagentDepth = 3` (see
-/// `crates/defra-agent/proofs/Proofs/Subagent/State.lean`). Exposed as
+/// `crates/defra-agent/proofs/Proofs/Background/State.lean`). Exposed as
 /// part of R2's public API surface so R3's apply-time spawn-flow
 /// validation can reference the same value as the Lean spec.
 pub const MAX_SUBAGENT_DEPTH: u32 = 3;

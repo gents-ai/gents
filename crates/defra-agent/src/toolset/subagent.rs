@@ -2,7 +2,7 @@ use anyhow::anyhow;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 
-use crate::subagent_tools::{CancelSubagentArgs, SpawnSubagentArgs, WaitSubagentArgs};
+use crate::background_tools::{CancelSubagentArgs, SpawnSubagentArgs, WaitSubagentArgs};
 use crate::tool_call_lifecycle::AwaitMode;
 use crate::tool_surface::SubagentToolConfig;
 

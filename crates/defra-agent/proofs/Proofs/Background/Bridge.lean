@@ -1,5 +1,5 @@
 import Proofs.Composed
-import Proofs.Subagent.State
+import Proofs.Background.State
 
 /-!
 # BridgedState

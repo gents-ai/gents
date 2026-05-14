@@ -1,5 +1,5 @@
-import Proofs.Subagent.State
-import Proofs.Subagent.Bridge
+import Proofs.Background.State
+import Proofs.Background.Bridge
 
 /-!
 # Subagent Bridge Transitions

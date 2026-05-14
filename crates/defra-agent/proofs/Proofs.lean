@@ -20,7 +20,7 @@ import Proofs.CommandPolicy
 import Proofs.ToolExecution
 import Proofs.MCPHealth
 import Proofs.StreamingResponse
-import Proofs.Subagent
+import Proofs.Background
 import Proofs.Properties.Safety
 import Proofs.Properties.Decidable
 import Proofs.Properties.Liveness
