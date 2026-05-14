@@ -488,4 +488,49 @@ theorem recoverInterrupted_constructible
   · rfl
   · rfl
 
+/-- Helper: any trace starting from a terminal state is a no-op trace
+(every step is `observeIdempotentFinalize` or its parity, and produces
+`post = pre`). Used to lift one-step terminal-irreversibility / idempotent
+no-op into a Trace-level statement. -/
+private theorem trace_from_terminal_is_noop
+    {pre post : ResponseContext}
+    (h_trace : Trace pre post)
+    (h_pre_term : isTerminal pre.status) :
+    post = pre := by
+  induction h_trace with
+  | refl => rfl
+  | @step s₁ s₂ s₃ h_trans _ ih =>
+    have h_noop : s₂ = s₁ := idempotent_finalize_is_noop h_trans h_pre_term
+    have h_s₂_term : isTerminal s₂.status := h_noop ▸ h_pre_term
+    exact (ih h_s₂_term).trans h_noop
+
+/-- Audit-visible recovery-asymmetry corollary: along any trace from a
+recovery-state pre, `liveTail` is stable.
+
+Mirrors `completed_state_has_empty_liveTail`'s role (the Trace-level
+corollary for the #64 sentinel). Composes the single-step
+`recovery_path_preserves_liveTail` with `terminal_irreversibility`:
+a `pre.status = .error` is terminal, so by `idempotent_finalize_is_noop`,
+every transition in the trace produces `post = pre`, and `liveTail`
+is preserved along the entire trace.
+
+We require `pre.status = .error` explicitly. The natural state of a
+context with `errorReason = some .daemonRestartRecovery` IS `.error`
+(set by `Transition.recoverInterrupted`), but proving this from
+`errorReason` alone would require a global trace-well-formedness
+invariant; adding the explicit terminal hypothesis is the cleaner
+shape and matches how `completed_state_has_empty_liveTail` requires
+its `pre.status = .completed` disjunct. -/
+theorem recovery_state_liveTail_stable
+    {pre post : ResponseContext}
+    (h_trace : Trace pre post)
+    (h_pre_status : pre.status = .error)
+    (_h_pre_reason : pre.errorReason = some .daemonRestartRecovery)
+    (_h_post_reason : post.errorReason = some .daemonRestartRecovery) :
+    post.liveTail = pre.liveTail := by
+  have h_pre_term : isTerminal pre.status := by
+    rw [h_pre_status]; exact Or.inr rfl
+  have h_eq : post = pre := trace_from_terminal_is_noop h_trace h_pre_term
+  rw [h_eq]
+
 end StreamingResponse
