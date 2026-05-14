@@ -132,10 +132,10 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
             SPAWN_SUBAGENT_TOOL_NAME.to_string(),
             WAIT_SUBAGENT_TOOL_NAME.to_string(),
             LIST_SUBAGENTS_TOOL_NAME.to_string(),
+            READ_SUBAGENT_TRANSCRIPT_TOOL_NAME.to_string(),
             CANCEL_SUBAGENT_TOOL_NAME.to_string()
         ]
     );
-    assert!(!names.contains(&"read_subagent_transcript".to_string()));
     assert!(!names.contains(&"steer_subagent".to_string()));
 }
 
@@ -190,6 +190,7 @@ async fn subagent_tool_definitions_register_expected_surface() {
             SPAWN_SUBAGENT_TOOL_NAME.to_string(),
             WAIT_SUBAGENT_TOOL_NAME.to_string(),
             LIST_SUBAGENTS_TOOL_NAME.to_string(),
+            READ_SUBAGENT_TRANSCRIPT_TOOL_NAME.to_string(),
             CANCEL_SUBAGENT_TOOL_NAME.to_string()
         ]
     );

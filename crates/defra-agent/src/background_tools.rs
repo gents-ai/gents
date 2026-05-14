@@ -3,13 +3,13 @@
 pub(crate) mod r4c_args;
 mod transcript_render;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
-use defra_agent_protocol::transcript::decode_persisted_message;
+use defra_agent_protocol::transcript::{decode_persisted_message, present_persisted_message};
 use defra_node::EmbeddedNode;
-use rig::completion::message::{AssistantContent, Message, Text};
+use rig::completion::message::{AssistantContent, Message, Text, UserContent};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -20,6 +20,10 @@ use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass};
 use self::r4c_args::{
     ListBackgroundToolsArgs, ListBackgroundToolsEntry, ListBackgroundToolsResponse,
     ListStatusFilter, ListSubagentsArgs, ListSubagentsEntry, ListSubagentsResponse,
+    ReadSubagentTranscriptArgs, ReadSubagentTranscriptResponse,
+};
+use self::transcript_render::{
+    render_transcript, MessageKindView, MessageRoleView, MessageView, RenderOptions,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -237,6 +241,21 @@ struct ListBackgroundToolRow {
     result: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct TranscriptMessageRow {
+    sequence: u64,
+    role: String,
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TranscriptToolCallRow {
+    message_sequence: u64,
+    tool_call_id: String,
+    tool_name: String,
+    child_request_id: Option<String>,
+}
+
 pub(crate) async fn handle_list_subagents(
     node: &EmbeddedNode,
     caller_request_id: &str,
@@ -431,6 +450,226 @@ pub(crate) async fn handle_list_background_tools(
         truncated,
         entries,
     })
+}
+
+pub(crate) async fn handle_read_subagent_transcript(
+    node: &EmbeddedNode,
+    caller_request_id: &str,
+    args: ReadSubagentTranscriptArgs,
+) -> Result<Option<ReadSubagentTranscriptResponse>> {
+    let child_request_id = args.child_request_id.trim();
+    let Some(edge) =
+        load_readable_background_child_edge(node, caller_request_id, child_request_id).await?
+    else {
+        return Ok(None);
+    };
+
+    let escaped_session_id = escape_graphql_string(&edge.child_session_id);
+    let messages_query = format!(
+        r#"{{
+            AgentMessage(
+                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                order: {{ sequence: ASC }}
+            ) {{
+                sequence
+                role
+                content
+            }}
+        }}"#
+    );
+    let messages_response = node.execute(&messages_query).await;
+    if messages_response.has_errors() {
+        anyhow::bail!(
+            "read_subagent_transcript AgentMessage query failed: {:?}",
+            messages_response.errors
+        );
+    }
+    let message_rows: Vec<TranscriptMessageRow> =
+        rows(messages_response.data.as_ref(), "AgentMessage")?;
+
+    let tool_calls_query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}
+            ) {{
+                message_sequence
+                tool_call_id
+                tool_name
+                child_request_id
+            }}
+        }}"#
+    );
+    let tool_calls_response = node.execute(&tool_calls_query).await;
+    if tool_calls_response.has_errors() {
+        anyhow::bail!(
+            "read_subagent_transcript AgentToolCall query failed: {:?}",
+            tool_calls_response.errors
+        );
+    }
+    let tool_call_rows: Vec<TranscriptToolCallRow> =
+        rows(tool_calls_response.data.as_ref(), "AgentToolCall")?;
+
+    let views = decode_transcript_message_views(message_rows, tool_call_rows);
+    let rendered = render_transcript(
+        &views,
+        args.since_sequence,
+        RenderOptions {
+            include_user_messages: args.include_user_messages,
+            include_tool_results: args.include_tool_results,
+            limit: args.validated_limit(),
+            max_chars: args.validated_max_chars(),
+        },
+    );
+
+    Ok(Some(ReadSubagentTranscriptResponse {
+        child_request_id: edge.child_request_id,
+        child_session_id: edge.child_session_id,
+        from_sequence: rendered.from_sequence,
+        through_sequence: rendered.through_sequence,
+        next_sequence: rendered.next_sequence,
+        truncated: rendered.truncated,
+        transcript: rendered.transcript,
+    }))
+}
+
+async fn load_readable_background_child_edge(
+    node: &EmbeddedNode,
+    caller_request_id: &str,
+    child_request_id: &str,
+) -> Result<Option<ChildEdge>> {
+    if child_request_id.is_empty() {
+        return Ok(None);
+    }
+    let parent_context = load_parent_subagent_context(node, caller_request_id).await?;
+    match load_authorized_child_edge(node, &parent_context, child_request_id).await {
+        Ok(edge) if edge.await_mode == AwaitMode::Background => Ok(Some(edge)),
+        Ok(_) => Ok(None),
+        Err(error) if authorization_lookup_error(&error, caller_request_id, child_request_id) => {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn authorization_lookup_error(
+    error: &anyhow::Error,
+    caller_request_id: &str,
+    child_request_id: &str,
+) -> bool {
+    let message = error.to_string();
+    message.contains(&format!("child AgentRequest {child_request_id} not found"))
+        || message.contains(&format!(
+            "child AgentRequest {child_request_id} is not linked to parent request {caller_request_id}"
+        ))
+        || (message.contains("parent AgentToolCall") && message.contains("not found for child"))
+        || message.contains("has no parent tool-call link")
+        || message.contains("does not point at child")
+}
+
+fn decode_transcript_message_views(
+    message_rows: Vec<TranscriptMessageRow>,
+    tool_call_rows: Vec<TranscriptToolCallRow>,
+) -> Vec<MessageView> {
+    let mut bridge_call_ids_by_sequence = HashMap::<u64, HashSet<String>>::new();
+    let mut tool_names_by_call_id = HashMap::<String, String>::new();
+    for row in tool_call_rows {
+        if let Some(tool_call_id) = non_empty_string(Some(&row.tool_call_id)) {
+            tool_names_by_call_id.insert(tool_call_id.clone(), row.tool_name);
+            if non_empty_string(row.child_request_id.as_deref()).is_some() {
+                bridge_call_ids_by_sequence
+                    .entry(row.message_sequence)
+                    .or_default()
+                    .insert(tool_call_id);
+            }
+        }
+    }
+
+    message_rows
+        .into_iter()
+        .map(|row| {
+            let presentation = present_persisted_message(&row.role, &row.content);
+            let message = decode_persisted_message(&row.role, &row.content);
+            let role = if row.role == "assistant" {
+                MessageRoleView::Assistant
+            } else {
+                MessageRoleView::User
+            };
+            let body = presentation.body_markdown;
+            let kind = if presentation.has_tool_results {
+                let tool_name = tool_result_identities(&message)
+                    .into_iter()
+                    .find_map(|id| tool_names_by_call_id.get(&id).cloned())
+                    .unwrap_or_else(|| "tool".to_string());
+                MessageKindView::ToolResult { tool_name, body }
+            } else if presentation.has_tool_calls {
+                let bridge_call_ids = bridge_call_ids_by_sequence
+                    .get(&row.sequence)
+                    .map(|ids| ids.iter().cloned().collect::<Vec<_>>())
+                    .unwrap_or_default();
+                let bridge_set = bridge_call_ids.iter().cloned().collect::<HashSet<_>>();
+                let tool_call_identities = assistant_tool_call_identities(&message);
+                let non_bridge_tool_call_count = tool_call_identities
+                    .iter()
+                    .filter(|ids| ids.iter().all(|id| !bridge_set.contains(id)))
+                    .count() as u32;
+                MessageKindView::AssistantWithToolCalls {
+                    body,
+                    tool_call_count: tool_call_identities.len() as u32,
+                    bridge_call_ids,
+                    non_bridge_tool_call_count,
+                }
+            } else {
+                MessageKindView::Ordinary { body }
+            };
+
+            MessageView {
+                sequence: row.sequence,
+                role,
+                kind,
+            }
+        })
+        .collect()
+}
+
+fn assistant_tool_call_identities(message: &Message) -> Vec<Vec<String>> {
+    let Message::Assistant { content, .. } = message else {
+        return Vec::new();
+    };
+    content
+        .iter()
+        .filter_map(|item| {
+            let AssistantContent::ToolCall(tool_call) = item else {
+                return None;
+            };
+            let mut ids = Vec::new();
+            if let Some(id) = non_empty_string(Some(&tool_call.id)) {
+                ids.push(id);
+            }
+            if let Some(call_id) = non_empty_string(tool_call.call_id.as_deref()) {
+                ids.push(call_id);
+            }
+            (!ids.is_empty()).then_some(ids)
+        })
+        .collect()
+}
+
+fn tool_result_identities(message: &Message) -> Vec<String> {
+    let Message::User { content } = message else {
+        return Vec::new();
+    };
+    let mut ids = Vec::new();
+    for item in content.iter() {
+        let UserContent::ToolResult(tool_result) = item else {
+            continue;
+        };
+        if let Some(id) = non_empty_string(Some(&tool_result.id)) {
+            ids.push(id);
+        }
+        if let Some(call_id) = non_empty_string(tool_result.call_id.as_deref()) {
+            ids.push(call_id);
+        }
+    }
+    ids
 }
 
 fn list_subagent_status_matches(filter: ListStatusFilter, status: &str) -> bool {

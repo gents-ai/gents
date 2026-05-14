@@ -2,7 +2,9 @@ use anyhow::anyhow;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 
-use crate::background_tools::r4c_args::{ListBackgroundToolsArgs, ListSubagentsArgs};
+use crate::background_tools::r4c_args::{
+    ListBackgroundToolsArgs, ListSubagentsArgs, ReadSubagentTranscriptArgs,
+};
 use crate::background_tools::{
     BackgroundToolArgs, CancelSubagentArgs, CancelToolArgs, SpawnSubagentArgs, WaitSubagentArgs,
     WaitToolArgs,
@@ -13,8 +15,8 @@ use crate::tool_surface::{BackgroundToolConfig, SubagentToolConfig};
 use super::shared::ToolError;
 use super::{
     BACKGROUND_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, CANCEL_TOOL_NAME,
-    LIST_BACKGROUND_TOOLS_TOOL_NAME, LIST_SUBAGENTS_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME,
-    WAIT_SUBAGENT_TOOL_NAME, WAIT_TOOL_NAME,
+    LIST_BACKGROUND_TOOLS_TOOL_NAME, LIST_SUBAGENTS_TOOL_NAME, READ_SUBAGENT_TRANSCRIPT_TOOL_NAME,
+    SPAWN_SUBAGENT_TOOL_NAME, WAIT_SUBAGENT_TOOL_NAME, WAIT_TOOL_NAME,
 };
 
 const SUBAGENT_SERVICE_ID: &str = "subagent";
@@ -117,6 +119,9 @@ pub(super) struct WaitSubagentTool;
 
 #[derive(Clone, Copy)]
 pub(super) struct ListSubagentsTool;
+
+#[derive(Clone, Copy)]
+pub(super) struct ReadSubagentTranscriptTool;
 
 #[derive(Clone, Copy)]
 pub(super) struct CancelSubagentTool;
@@ -295,6 +300,69 @@ impl Tool for ListSubagentsTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let _ = args.validated_limit();
+        Err(not_yet_executable_error(Self::NAME))
+    }
+}
+
+impl Tool for ReadSubagentTranscriptTool {
+    const NAME: &'static str = READ_SUBAGENT_TRANSCRIPT_TOOL_NAME;
+
+    type Error = ToolError;
+    type Args = ReadSubagentTranscriptArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Read a compact transcript snapshot from a visible background subagent."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "child_request_id": {
+                        "type": "string",
+                        "description": "Child request ID returned by spawn_subagent or list_subagents."
+                    },
+                    "since_sequence": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "default": 0,
+                        "description": "First transcript sequence to include."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 20,
+                        "description": "Maximum rendered message blocks to return."
+                    },
+                    "max_chars": {
+                        "type": "integer",
+                        "minimum": 64,
+                        "maximum": 24000,
+                        "default": 6000,
+                        "description": "Maximum rendered transcript characters to return."
+                    },
+                    "include_user_messages": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Include ordinary user messages from the child session."
+                    },
+                    "include_tool_results": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Include capped tool-result snippets from the child session."
+                    }
+                },
+                "required": ["child_request_id"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        validate_child_request_id(Self::NAME, &args.child_request_id)?;
+        let _ = args.validated_limit();
+        let _ = args.validated_max_chars();
         Err(not_yet_executable_error(Self::NAME))
     }
 }

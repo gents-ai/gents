@@ -61,7 +61,7 @@ pub(crate) fn render_transcript(
     let mut truncated = false;
 
     for msg in messages {
-        if msg.sequence <= since_sequence {
+        if msg.sequence < since_sequence {
             continue;
         }
         if !opts.include_user_messages
@@ -299,7 +299,7 @@ mod tests {
     #[test]
     fn since_sequence_skips_earlier() {
         let msgs = vec![assistant(1, "a"), assistant(2, "b"), assistant(3, "c")];
-        let out = render_transcript(&msgs, 1, OPTS_DEFAULT);
+        let out = render_transcript(&msgs, 2, OPTS_DEFAULT);
         assert!(!out.transcript.contains("[assistant seq=1]"));
         assert!(out.transcript.contains("[assistant seq=2]"));
         assert_eq!(out.from_sequence, 2);
