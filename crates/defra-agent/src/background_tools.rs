@@ -1,6 +1,7 @@
 #![allow(dead_code)] // R4b lands these helpers one task ahead of their tool integrations.
 
 mod r4c_args;
+mod transcript_render;
 
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};

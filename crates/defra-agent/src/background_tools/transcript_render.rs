@@ -1,0 +1,343 @@
+//! Pure-function transcript renderer for read_subagent_transcript.
+
+use crate::background_tools::r4c_args::PER_TOOL_RESULT_SNIPPET_BYTES;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum MessageRoleView {
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum MessageKindView {
+    Ordinary {
+        body: String,
+    },
+    AssistantWithToolCalls {
+        body: String,
+        tool_call_count: u32,
+        bridge_call_ids: Vec<String>,
+        non_bridge_tool_call_count: u32,
+    },
+    ToolResult {
+        tool_name: String,
+        body: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct MessageView {
+    pub(crate) sequence: u64,
+    pub(crate) role: MessageRoleView,
+    pub(crate) kind: MessageKindView,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RenderOptions {
+    pub(crate) include_user_messages: bool,
+    pub(crate) include_tool_results: bool,
+    pub(crate) limit: u32,
+    pub(crate) max_chars: u32,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RenderOutput {
+    pub(crate) transcript: String,
+    pub(crate) from_sequence: u64,
+    pub(crate) through_sequence: u64,
+    pub(crate) next_sequence: u64,
+    pub(crate) truncated: bool,
+}
+
+pub(crate) fn render_transcript(
+    messages: &[MessageView],
+    since_sequence: u64,
+    opts: RenderOptions,
+) -> RenderOutput {
+    let mut transcript = String::new();
+    let mut first_included: Option<u64> = None;
+    let mut last_included = since_sequence;
+    let mut included_count = 0;
+    let mut truncated = false;
+
+    for msg in messages {
+        if msg.sequence <= since_sequence {
+            continue;
+        }
+        if !opts.include_user_messages
+            && msg.role == MessageRoleView::User
+            && !matches!(&msg.kind, MessageKindView::ToolResult { .. })
+        {
+            continue;
+        }
+
+        let Some(block) = render_block(msg, opts) else {
+            continue;
+        };
+        let projected_len = transcript.len() + block.len() + usize::from(!transcript.is_empty());
+        if included_count + 1 > opts.limit || projected_len > opts.max_chars as usize {
+            truncated = true;
+            break;
+        }
+
+        if !transcript.is_empty() {
+            transcript.push('\n');
+        }
+        transcript.push_str(&block);
+        included_count += 1;
+        first_included.get_or_insert(msg.sequence);
+        last_included = msg.sequence;
+    }
+
+    let from_sequence = first_included.unwrap_or(since_sequence);
+    RenderOutput {
+        transcript,
+        from_sequence,
+        through_sequence: last_included,
+        next_sequence: last_included
+            .saturating_add(1)
+            .max(since_sequence.saturating_add(1)),
+        truncated,
+    }
+}
+
+fn render_block(msg: &MessageView, opts: RenderOptions) -> Option<String> {
+    match (&msg.role, &msg.kind) {
+        (MessageRoleView::User, MessageKindView::Ordinary { body }) => {
+            Some(format!("[user seq={}]\n{}", msg.sequence, body))
+        }
+        (MessageRoleView::Assistant, MessageKindView::Ordinary { body }) => {
+            Some(format!("[assistant seq={}]\n{}", msg.sequence, body))
+        }
+        (
+            MessageRoleView::Assistant,
+            MessageKindView::AssistantWithToolCalls {
+                body,
+                non_bridge_tool_call_count,
+                ..
+            },
+        ) => {
+            if *non_bridge_tool_call_count == 0 {
+                Some(format!("[assistant seq={}]\n{}", msg.sequence, body))
+            } else {
+                Some(format!(
+                    "[assistant seq={} tool_calls={}]\n{}",
+                    msg.sequence, non_bridge_tool_call_count, body
+                ))
+            }
+        }
+        (MessageRoleView::User, MessageKindView::ToolResult { tool_name, body }) => {
+            if !opts.include_tool_results {
+                None
+            } else {
+                let snippet: String = body.chars().take(PER_TOOL_RESULT_SNIPPET_BYTES).collect();
+                Some(format!(
+                    "[tool-result seq={} tool={}]\n{}",
+                    msg.sequence, tool_name, snippet
+                ))
+            }
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const OPTS_DEFAULT: RenderOptions = RenderOptions {
+        include_user_messages: false,
+        include_tool_results: false,
+        limit: 20,
+        max_chars: 6000,
+    };
+
+    fn assistant(sequence: u64, body: &str) -> MessageView {
+        MessageView {
+            sequence,
+            role: MessageRoleView::Assistant,
+            kind: MessageKindView::Ordinary {
+                body: body.to_string(),
+            },
+        }
+    }
+
+    fn user(sequence: u64, body: &str) -> MessageView {
+        MessageView {
+            sequence,
+            role: MessageRoleView::User,
+            kind: MessageKindView::Ordinary {
+                body: body.to_string(),
+            },
+        }
+    }
+
+    fn assistant_with_tool_calls(
+        sequence: u64,
+        body: &str,
+        bridge_call_ids: Vec<&str>,
+        non_bridge_tool_call_count: u32,
+    ) -> MessageView {
+        MessageView {
+            sequence,
+            role: MessageRoleView::Assistant,
+            kind: MessageKindView::AssistantWithToolCalls {
+                body: body.to_string(),
+                tool_call_count: bridge_call_ids.len() as u32 + non_bridge_tool_call_count,
+                bridge_call_ids: bridge_call_ids
+                    .into_iter()
+                    .map(ToString::to_string)
+                    .collect(),
+                non_bridge_tool_call_count,
+            },
+        }
+    }
+
+    fn tool_result(sequence: u64, tool: &str, body: &str) -> MessageView {
+        MessageView {
+            sequence,
+            role: MessageRoleView::User,
+            kind: MessageKindView::ToolResult {
+                tool_name: tool.to_string(),
+                body: body.to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn assistant_only_default() {
+        let msgs = vec![
+            assistant(1, "hello"),
+            user(2, "ignored"),
+            assistant(3, "world"),
+        ];
+        let out = render_transcript(&msgs, 0, OPTS_DEFAULT);
+        assert!(out.transcript.contains("[assistant seq=1]"));
+        assert!(out.transcript.contains("[assistant seq=3]"));
+        assert!(!out.transcript.contains("[user"));
+        assert_eq!(out.from_sequence, 1);
+        assert_eq!(out.through_sequence, 3);
+        assert_eq!(out.next_sequence, 4);
+        assert!(!out.truncated);
+    }
+
+    #[test]
+    fn include_user_messages_when_opted_in() {
+        let msgs = vec![
+            assistant(1, "hello"),
+            user(2, "real input"),
+            assistant(3, "ok"),
+        ];
+        let out = render_transcript(
+            &msgs,
+            0,
+            RenderOptions {
+                include_user_messages: true,
+                ..OPTS_DEFAULT
+            },
+        );
+        assert!(out.transcript.contains("[user seq=2]"));
+        assert!(out.transcript.contains("real input"));
+    }
+
+    #[test]
+    fn bridge_only_assistant_renders_plain() {
+        let msgs = vec![assistant_with_tool_calls(
+            5,
+            "spawning child",
+            vec!["bridge-1"],
+            0,
+        )];
+        let out = render_transcript(&msgs, 0, OPTS_DEFAULT);
+        assert!(out.transcript.contains("[assistant seq=5]"));
+        assert!(!out.transcript.contains("tool_calls="));
+        assert!(!out.transcript.contains("bridge-1"));
+    }
+
+    #[test]
+    fn non_bridge_tool_calls_render_count_suffix() {
+        let msgs = vec![assistant_with_tool_calls(
+            5,
+            "using visible tool",
+            vec!["bridge-1"],
+            2,
+        )];
+        let out = render_transcript(&msgs, 0, OPTS_DEFAULT);
+        assert!(out.transcript.contains("[assistant seq=5 tool_calls=2]"));
+        assert!(!out.transcript.contains("bridge-1"));
+    }
+
+    #[test]
+    fn tool_result_hidden_by_default() {
+        let msgs = vec![assistant(1, "hi"), tool_result(2, "bash", "stdout")];
+        let out = render_transcript(&msgs, 0, OPTS_DEFAULT);
+        assert!(!out.transcript.contains("[tool-result"));
+    }
+
+    #[test]
+    fn tool_result_snippet_capped() {
+        let big_body = "x".repeat(1024);
+        let msgs = vec![tool_result(1, "bash", &big_body)];
+        let out = render_transcript(
+            &msgs,
+            0,
+            RenderOptions {
+                include_tool_results: true,
+                ..OPTS_DEFAULT
+            },
+        );
+        assert!(out.transcript.contains("[tool-result seq=1 tool=bash]"));
+        let snippet_len = out
+            .transcript
+            .split("[tool-result seq=1 tool=bash]\n")
+            .nth(1)
+            .expect("snippet body")
+            .len();
+        assert!(snippet_len <= PER_TOOL_RESULT_SNIPPET_BYTES);
+    }
+
+    #[test]
+    fn since_sequence_skips_earlier() {
+        let msgs = vec![assistant(1, "a"), assistant(2, "b"), assistant(3, "c")];
+        let out = render_transcript(&msgs, 1, OPTS_DEFAULT);
+        assert!(!out.transcript.contains("[assistant seq=1]"));
+        assert!(out.transcript.contains("[assistant seq=2]"));
+        assert_eq!(out.from_sequence, 2);
+    }
+
+    #[test]
+    fn truncated_when_limit_hit() {
+        let msgs = vec![assistant(1, "a"), assistant(2, "b"), assistant(3, "c")];
+        let out = render_transcript(
+            &msgs,
+            0,
+            RenderOptions {
+                limit: 2,
+                ..OPTS_DEFAULT
+            },
+        );
+        assert!(out.truncated);
+        assert_eq!(out.through_sequence, 2);
+        assert_eq!(out.next_sequence, 3);
+    }
+
+    #[test]
+    fn truncated_when_max_chars_hit() {
+        let long = "x".repeat(200);
+        let msgs = vec![
+            assistant(1, &long),
+            assistant(2, &long),
+            assistant(3, &long),
+        ];
+        let out = render_transcript(
+            &msgs,
+            0,
+            RenderOptions {
+                max_chars: 250,
+                ..OPTS_DEFAULT
+            },
+        );
+        assert!(out.truncated);
+        assert!(out.transcript.len() <= 250);
+    }
+}
