@@ -47,5 +47,41 @@ inductive Transition : ResponseContext → ResponseContext → Prop where
       pre.interruptedAt = none →
       post = { pre with interruptedAt := some t } →
       Transition pre post
+  | finalizeComplete
+      {pre post : ResponseContext} {seq : Transcript.Sequence} :
+      pre.status = .streaming →
+      post = { pre with
+        status := .completed
+      , liveTail := .empty
+      , materializedMessageSequence := some seq } →
+      Transition pre post
+  | finalizeError
+      {pre post : ResponseContext} {reason : ErrorReason} :
+      pre.status = .streaming →
+      (reason = .inferenceFailed ∨ reason = .finalizeRequestedError ∨
+       reason = .streamIdleTimeout ∨ reason = .interrupted) →
+      (reason = .streamIdleTimeout → pre.now > pre.streamIdleDeadline) →
+      post = { pre with
+        status := .error
+      , liveTail := .empty
+      , errorReason := some reason } →
+      Transition pre post
+  | recoverInterrupted
+      {pre post : ResponseContext} :
+      pre.status = .streaming →
+      post = { pre with
+        status := .error
+      , errorReason := some .daemonRestartRecovery } →
+      Transition pre post
+  | observeIdempotentFinalize
+      {pre post : ResponseContext} :
+      (pre.status = .completed ∨ pre.status = .error) →
+      post = pre →
+      Transition pre post
+
+inductive Trace : ResponseContext → ResponseContext → Prop where
+  | refl {s : ResponseContext} : Trace s s
+  | step {s₁ s₂ s₃ : ResponseContext} :
+      Transition s₁ s₂ → Trace s₂ s₃ → Trace s₁ s₃
 
 end StreamingResponse
