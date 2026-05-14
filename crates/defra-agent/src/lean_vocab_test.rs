@@ -56,6 +56,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) live_overlay_cases: Vec<LeanLiveOverlayCase>,
     pub(crate) queue_deadline_conformance_cases: Vec<LeanQueueDeadlineConformanceCase>,
     pub(crate) recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
+    pub(crate) r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     pub(crate) transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub(crate) streaming_response_cases: Vec<LeanResponseTransitionCase>,
     pub(crate) compaction_reducer_cases: Vec<LeanCompactionReducerCase>,
@@ -654,6 +655,25 @@ pub(crate) struct LeanRecoverySweepCase {
     pub(crate) deadline_audit_ref: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanR6BackgroundingCase {
+    pub(crate) name: String,
+    pub(crate) group: String,
+    pub(crate) action: String,
+    pub(crate) legal: bool,
+    pub(crate) pre_live_count: usize,
+    pub(crate) max_backgrounded: usize,
+    pub(crate) await_mode: String,
+    pub(crate) cancel_policy: String,
+    pub(crate) child_request_id: Option<String>,
+    pub(crate) terminal_state: String,
+    pub(crate) result: Option<String>,
+    pub(crate) reason: Option<String>,
+    pub(crate) error_code: Option<String>,
+    pub(crate) queue_source: Option<String>,
+    pub(crate) queue_key: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct LeanTranscriptCase {
     pub(crate) name: String,
@@ -873,6 +893,18 @@ pub(crate) fn lean_recovery_sweep_case(name: &str) -> &'static LeanRecoverySweep
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean recovery sweep case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_r6_backgrounding_cases() -> &'static [LeanR6BackgroundingCase] {
+    &lean_contract_snapshot().r6_backgrounding_cases
+}
+
+pub(crate) fn lean_r6_backgrounding_case(name: &str) -> &'static LeanR6BackgroundingCase {
+    lean_contract_snapshot()
+        .r6_backgrounding_cases
+        .iter()
+        .find(|case| case.name == name)
+        .unwrap_or_else(|| panic!("Lean R6 backgrounding case {name:?} was not emitted"))
 }
 
 pub(crate) fn lean_transcript_cases() -> &'static [LeanTranscriptCase] {

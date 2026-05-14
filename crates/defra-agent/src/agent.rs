@@ -308,6 +308,10 @@ pub(crate) fn tool_selection_from_document(
             .clone()
             .unwrap_or_default(),
         delegate_to: selection.delegate_to.clone().unwrap_or_default(),
+        backgroundable_tool_names: selection
+            .backgroundable_tool_names
+            .clone()
+            .unwrap_or_default(),
     })
 }
 

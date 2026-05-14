@@ -141,7 +141,8 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     self.behavior.did(),
                     self.hook_failure_policy,
                 )
-                .await?;
+                .await?
+                .with_background_tool_registry(self.background_tool_registry.clone());
                 hook.set_active_request_id(Some(request.request_id.clone()))
                     .await;
                 hook.set_request_deadline_at(request_deadline).await;

@@ -228,6 +228,7 @@ pub(crate) async fn save_tool_selection_config(
             enable_meta_tools: Some(false),
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
+            backgroundable_tool_names: Vec::new(),
         });
     row.agent_did = Some(agent_did);
     row.display_name = Some(display_name);
@@ -265,6 +266,12 @@ pub(crate) async fn save_tool_selection_config(
         .collect();
     row.delegate_to = request
         .delegate_to
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect();
+    row.backgroundable_tool_names = request
+        .backgroundable_tool_names
         .into_iter()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())

@@ -23,6 +23,7 @@ fn selection_file_tool_root_clamps_within_operator_root() {
             enable_meta_tools: false,
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
+            backgroundable_tool_names: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root.clone()),
         Vec::new(),
@@ -77,6 +78,7 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
             enable_meta_tools: false,
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
+            backgroundable_tool_names: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root),
         Vec::new(),
@@ -105,6 +107,7 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
             enable_meta_tools: false,
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
+            backgroundable_tool_names: Vec::new(),
         },
         &ToolCeiling::readonly_at(operator_root),
         Vec::new(),
@@ -133,6 +136,7 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
             enable_meta_tools: false,
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
+            backgroundable_tool_names: Vec::new(),
         },
         &ToolCeiling::meta_only(),
         Vec::new(),
@@ -158,6 +162,7 @@ fn selection_without_root_inherits_operator_root() {
             enable_meta_tools: false,
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
+            backgroundable_tool_names: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root.clone()),
         Vec::new(),
@@ -195,6 +200,7 @@ fn selection_cli_tools_require_ceiling_entries() {
             enable_meta_tools: false,
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
+            backgroundable_tool_names: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root),
         Vec::new(),
@@ -229,6 +235,7 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
             enable_meta_tools: false,
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
+            backgroundable_tool_names: Vec::new(),
         },
         &ceiling,
         Vec::new(),
@@ -266,6 +273,7 @@ fn selection_mcp_service_allowlist_is_deduped() {
                 "observability-mcp".to_string(),
             ],
             delegate_to: Vec::new(),
+            backgroundable_tool_names: Vec::new(),
         },
         &ToolCeiling::meta_only(),
         Vec::new(),
@@ -275,6 +283,60 @@ fn selection_mcp_service_allowlist_is_deduped() {
     assert_eq!(
         config.allowed_mcp_service_ids(),
         &["x-data".to_string(), "observability-mcp".to_string()]
+    );
+}
+
+#[test]
+fn background_tool_allowlist_registers_r6_tools() {
+    let config = BehaviorToolConfig::from_selection(
+        "ops",
+        ToolSelection {
+            file_tools: FileToolMode::ReadOnly,
+            file_tool_root: None,
+            bash: BashMode::ReadOnly,
+            command_policy: None,
+            cli_tool_names: Vec::new(),
+            enable_meta_tools: false,
+            allowed_mcp_service_ids: Vec::new(),
+            delegate_to: Vec::new(),
+            backgroundable_tool_names: vec!["bash".to_string(), "bash".to_string()],
+        },
+        &ToolCeiling::readonly(),
+        Vec::new(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        config.background_tools().allowlist,
+        vec!["bash".to_string()]
+    );
+}
+
+#[test]
+fn background_tool_allowlist_rejects_non_backgroundable_tools() {
+    let error = BehaviorToolConfig::from_selection(
+        "ops",
+        ToolSelection {
+            file_tools: FileToolMode::ReadOnly,
+            file_tool_root: None,
+            bash: BashMode::ReadOnly,
+            command_policy: None,
+            cli_tool_names: Vec::new(),
+            enable_meta_tools: false,
+            allowed_mcp_service_ids: Vec::new(),
+            delegate_to: Vec::new(),
+            backgroundable_tool_names: vec!["read_file".to_string()],
+        },
+        &ToolCeiling::readonly(),
+        Vec::new(),
+    )
+    .expect_err("read_file is intentionally not backgroundable");
+
+    assert!(
+        error
+            .to_string()
+            .contains("not a registered backgroundable tool"),
+        "{error:#}"
     );
 }
 
@@ -297,6 +359,7 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
             enable_meta_tools: false,
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
+            backgroundable_tool_names: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root),
         Vec::new(),

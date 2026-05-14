@@ -114,6 +114,7 @@ pub(crate) fn manifest_from_export_bundle(
                         "enable_meta_tools",
                         "allowed_mcp_service_ids",
                         "delegate_to",
+                        "backgroundable_tool_names",
                     ],
                 )
             })

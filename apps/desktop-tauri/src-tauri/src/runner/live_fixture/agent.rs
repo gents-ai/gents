@@ -123,6 +123,7 @@ async fn seed_live_behavior_documents(
         enable_meta_tools: Some(false),
         allowed_mcp_service_ids: Vec::new(),
         delegate_to: vec![],
+        backgroundable_tool_names: Vec::new(),
     })
     .await?;
     core.save_inference_profile(&InferenceProfileRow {

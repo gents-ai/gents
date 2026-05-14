@@ -100,6 +100,15 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                 ));
             }
         }
+
+        for (index, tool_name) in selection.backgroundable_tool_names.iter().enumerate() {
+            if tool_name.trim().is_empty() {
+                errors.push(format!(
+                    "tool selection {} has empty backgroundable_tool_names[{index}]",
+                    selection.selection_id
+                ));
+            }
+        }
         if let Some(mode) = selection.command_network_mode.as_deref() {
             if let Err(error) = CommandNetworkMode::parse(mode) {
                 errors.push(format!(

@@ -76,6 +76,7 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         enable_meta_tools: Some(true),
         allowed_mcp_service_ids: Vec::new(),
         delegate_to: vec!["planner".to_string()],
+        backgroundable_tool_names: Vec::new(),
     })
     .await?;
 

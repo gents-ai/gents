@@ -36,12 +36,12 @@ use lean_vocab_test::{
     lean_contract_snapshot, lean_event_delivery_convergence_traces,
     lean_event_delivery_source_instances, lean_event_delivery_transition_cases,
     lean_fleet_slot_accounting_case, lean_inference_slot_accounting_case, lean_mcp_health_cases,
-    lean_queue_deadline_case, lean_queue_deadline_cases, lean_recovery_sweep_case,
-    lean_recovery_sweep_cases, lean_request_transition_cases, lean_response_transition_case,
-    lean_response_transition_cases, lean_runtime_reconcile_case, lean_session_recovery_case,
-    lean_state_machine_contract, lean_tool_preflight_case, lean_tool_retry_case,
-    lean_transcript_case, lean_transcript_cases, lean_vocabulary_values, LeanEventDeliveryAction,
-    LeanLifecycleTransitionCase,
+    lean_queue_deadline_case, lean_queue_deadline_cases, lean_r6_backgrounding_case,
+    lean_r6_backgrounding_cases, lean_recovery_sweep_case, lean_recovery_sweep_cases,
+    lean_request_transition_cases, lean_response_transition_case, lean_response_transition_cases,
+    lean_runtime_reconcile_case, lean_session_recovery_case, lean_state_machine_contract,
+    lean_tool_preflight_case, lean_tool_retry_case, lean_transcript_case, lean_transcript_cases,
+    lean_vocabulary_values, LeanEventDeliveryAction, LeanLifecycleTransitionCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
@@ -231,7 +231,7 @@ fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().command_sandbox_cases.len(), 4);
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
     assert_eq!(lean_queue_deadline_cases().len(), 5);
-    assert_eq!(lean_recovery_sweep_cases().len(), 17);
+    assert_eq!(lean_recovery_sweep_cases().len(), 18);
     assert_eq!(lean_transcript_cases().len(), 6);
 }
 
@@ -581,6 +581,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "IdentityContracts".to_string(),
         ));
     }
+    if !lean_r6_backgrounding_cases().is_empty() {
+        emitted.insert((
+            "r6_background_cases".to_string(),
+            "R6BackgroundingCases".to_string(),
+        ));
+    }
     for hook in &snapshot.follow_up_hooks {
         emitted.insert(("follow_up_hook".to_string(), hook.clone()));
     }
@@ -614,6 +620,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "mcp_health_cases",
         "identity_structural_cases",
         "identity_contracts",
+        "r6_background_cases",
         "follow_up_hook",
     ];
     let registered_consumers = assert_registered_conformance_consumers_resolve();
@@ -697,7 +704,7 @@ fn generated_recovery_sweep_cases_pin_startup_recovery_contract() {
     let cases = lean_recovery_sweep_cases();
     assert_eq!(
         cases.len(),
-        17,
+        18,
         "Lean should emit one row per registered recovery predicate witness"
     );
 
@@ -1180,6 +1187,85 @@ fn assert_transcript_case_shape() {
             case.name
         );
     }
+}
+
+#[test]
+fn generated_r6_backgrounding_cases_pin_tool_backgrounding_contract() {
+    let cases = lean_r6_backgrounding_cases();
+    assert_eq!(cases.len(), 7);
+
+    let names = cases
+        .iter()
+        .map(|case| case.name.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        names,
+        [
+            "background_tool_budget_count_7_admits_spawn",
+            "background_tool_budget_count_8_rejects_spawn",
+            "tool_kind_bridge_complete_persists_result",
+            "tool_kind_bridge_failure_cancelled_projects_parent_cancelled",
+            "background_recovery_running_live_parent_to_cancelled",
+            "background_completion_source_writes_canonical_key",
+            "legacy_subagent_completion_source_aliases_canonical_key",
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+    );
+
+    for case in cases {
+        assert_eq!(case.max_backgrounded, 8, "{}", case.name);
+        assert_eq!(case.await_mode.as_str(), "background", "{}", case.name);
+        assert_eq!(case.cancel_policy.as_str(), "cascade", "{}", case.name);
+        assert_eq!(case.child_request_id.as_deref(), None, "{}", case.name);
+    }
+
+    let admit = lean_r6_backgrounding_case("background_tool_budget_count_7_admits_spawn");
+    assert!(admit.legal);
+    assert_eq!(admit.pre_live_count, 7);
+    assert_eq!(admit.terminal_state.as_str(), "running");
+
+    let reject = lean_r6_backgrounding_case("background_tool_budget_count_8_rejects_spawn");
+    assert!(!reject.legal);
+    assert_eq!(reject.pre_live_count, 8);
+    assert_eq!(
+        reject.error_code.as_deref(),
+        Some("background_tool_budget_exceeded")
+    );
+
+    let completed = lean_r6_backgrounding_case("tool_kind_bridge_complete_persists_result");
+    assert!(completed.legal);
+    assert_eq!(completed.terminal_state.as_str(), "completed");
+    assert_eq!(completed.result.as_deref(), Some("done"));
+
+    let cancelled =
+        lean_r6_backgrounding_case("tool_kind_bridge_failure_cancelled_projects_parent_cancelled");
+    assert_eq!(cancelled.terminal_state.as_str(), "cancelled");
+    assert_eq!(cancelled.reason.as_deref(), Some("parent_cancelled"));
+
+    let recovered =
+        lean_r6_backgrounding_case("background_recovery_running_live_parent_to_cancelled");
+    assert_eq!(
+        recovered.action.as_str(),
+        "TerminalizeBackgroundedAsInterrupted"
+    );
+    assert_eq!(recovered.terminal_state.as_str(), "cancelled");
+    assert_eq!(recovered.reason.as_deref(), Some("interrupted_on_restart"));
+
+    let canonical = lean_r6_backgrounding_case("background_completion_source_writes_canonical_key");
+    assert_eq!(
+        canonical.queue_source.as_deref(),
+        Some("background_completion")
+    );
+    assert_eq!(
+        canonical.queue_key.as_deref(),
+        Some("background_completion:900")
+    );
+
+    let legacy =
+        lean_r6_backgrounding_case("legacy_subagent_completion_source_aliases_canonical_key");
+    assert_eq!(legacy.queue_source.as_deref(), Some("subagent_completion"));
+    assert_eq!(legacy.queue_key.as_deref(), canonical.queue_key.as_deref());
 }
 
 #[tokio::test]
@@ -2975,7 +3061,7 @@ fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
         [
             "active_request_blocks_later_same_session_claim",
             "terminal_active_allows_next_pending_same_session_claim",
-            "subagent_completion_session_coalesces_one_pending_wakeup",
+            "background_completion_session_coalesces_one_pending_wakeup",
             "cancel_drains_automated_wakeups_preserves_user_pending",
             "claim_preserves_explicit_deadline",
         ]
@@ -3018,13 +3104,13 @@ fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
     assert_eq!(terminal.post_terminal_request_ids, vec![100]);
 
     let coalesced =
-        lean_queue_deadline_case("subagent_completion_session_coalesces_one_pending_wakeup");
+        lean_queue_deadline_case("background_completion_session_coalesces_one_pending_wakeup");
     assert_eq!(coalesced.group, "queue_coalesce");
     assert_eq!(coalesced.action, "coalescePending_twice");
     assert!(coalesced.legal);
     assert_eq!(
         coalesced.queue_key.as_deref(),
-        Some("subagent_completion:900")
+        Some("background_completion:900")
     );
     assert!(coalesced.pre_pending_request_ids.is_empty());
     assert_eq!(coalesced.post_pending_request_ids, vec![201]);
@@ -3035,7 +3121,10 @@ fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
     assert_eq!(cancel.group, "queue_cancel");
     assert_eq!(cancel.action, "drainAutomated");
     assert!(cancel.legal);
-    assert_eq!(cancel.queue_key.as_deref(), Some("subagent_completion:900"));
+    assert_eq!(
+        cancel.queue_key.as_deref(),
+        Some("background_completion:900")
+    );
     assert_eq!(cancel.pre_pending_request_ids, vec![301, 302]);
     assert_eq!(cancel.post_pending_request_ids, vec![302]);
     assert_eq!(cancel.automated_drained_request_ids, vec![301]);

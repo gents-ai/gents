@@ -10,7 +10,9 @@ use super::build::{
     has_registered_mcp_services,
 };
 use super::modes::ToolCeiling;
-use super::selection::{CustomToolFactory, SubagentToolConfig, ToolSelection};
+use super::selection::{
+    BackgroundToolConfig, CustomToolFactory, SubagentToolConfig, ToolSelection,
+};
 use super::ToolSurface;
 
 #[derive(Clone)]
@@ -20,6 +22,7 @@ pub struct BehaviorToolConfig {
     allowed_mcp_service_ids: Vec<String>,
     delegate_to: Vec<String>,
     subagent_tools: SubagentToolConfig,
+    background_tools: BackgroundToolConfig,
     custom_tools: Vec<CustomToolFactory>,
 }
 
@@ -31,6 +34,7 @@ impl BehaviorToolConfig {
             allowed_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
             subagent_tools: SubagentToolConfig::default(),
+            background_tools: BackgroundToolConfig::default(),
             custom_tools: Vec::new(),
         }
     }
@@ -66,6 +70,7 @@ impl BehaviorToolConfig {
             enable_meta_tools,
             allowed_mcp_service_ids,
             delegate_to,
+            backgroundable_tool_names,
         } = selection;
         let file_tools =
             downgrade_file_tools(behavior_name, requested_file_tools, ceiling.file_tools());
@@ -80,6 +85,16 @@ impl BehaviorToolConfig {
             ceiling,
         )?;
 
+        let background_allowlist = dedupe_strings(backgroundable_tool_names);
+        for name in &background_allowlist {
+            let allowed_mcp_wrapper = enable_meta_tools && name == "call_tool";
+            if !allowed_mcp_wrapper && !host_tools.is_backgroundable_tool_name(name) {
+                anyhow::bail!(
+                    "behavior {behavior_name} backgroundable_tool_names entry {name:?} is not a registered backgroundable tool"
+                );
+            }
+        }
+
         Ok(Self {
             host_tools,
             enable_meta_tools,
@@ -89,6 +104,9 @@ impl BehaviorToolConfig {
                 targets: dedupe_strings(subagent_tools.targets),
                 spawn_enabled: subagent_tools.spawn_enabled,
                 background_enabled: subagent_tools.background_enabled,
+            },
+            background_tools: BackgroundToolConfig {
+                allowlist: background_allowlist,
             },
             custom_tools,
         })
@@ -113,6 +131,11 @@ impl BehaviorToolConfig {
     #[allow(dead_code)]
     pub(crate) fn subagent_tools(&self) -> &SubagentToolConfig {
         &self.subagent_tools
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn background_tools(&self) -> &BackgroundToolConfig {
+        &self.background_tools
     }
 
     pub fn custom_tool_names(&self) -> Vec<String> {
@@ -144,6 +167,7 @@ impl BehaviorToolConfig {
             allowed_mcp_service_ids: self.allowed_mcp_service_ids.clone(),
             delegate_to: self.delegate_to.clone(),
             subagent_tools,
+            background_tools: self.background_tools.clone(),
             custom_tools: self.custom_tools.clone(),
         })
     }
@@ -175,6 +199,7 @@ impl std::fmt::Debug for BehaviorToolConfig {
             .field("allowed_mcp_service_ids", &self.allowed_mcp_service_ids)
             .field("delegate_to", &self.delegate_to)
             .field("subagent_tools", &self.subagent_tools)
+            .field("background_tools", &self.background_tools)
             .field(
                 "custom_tools",
                 &self

@@ -50,6 +50,11 @@ pub struct ToolSelectionDocument {
         default,
         deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
     )]
+    pub backgroundable_tool_names: Option<Vec<String>>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
+    )]
     pub subagent_targets: Option<Vec<String>>,
     pub subagent_spawn_enabled: Option<bool>,
     pub subagent_steering_enabled: Option<bool>,
@@ -63,6 +68,16 @@ impl ToolSelectionDocument {
                 if target.is_empty() {
                     return Err(anyhow::anyhow!(
                         "subagent_targets[{}] is empty; behavior IDs must be non-empty strings",
+                        i
+                    ));
+                }
+            }
+        }
+        if let Some(tool_names) = &self.backgroundable_tool_names {
+            for (i, tool_name) in tool_names.iter().enumerate() {
+                if tool_name.is_empty() {
+                    return Err(anyhow::anyhow!(
+                        "backgroundable_tool_names[{}] is empty; tool names must be non-empty strings",
                         i
                     ));
                 }
@@ -113,6 +128,7 @@ pub(crate) async fn load_tool_selection_record(
                 enable_meta_tools
                 allowed_mcp_service_ids
                 delegate_to
+                backgroundable_tool_names
                 subagent_targets
                 subagent_spawn_enabled
                 subagent_steering_enabled
@@ -160,6 +176,7 @@ pub(crate) async fn load_tool_selection_by_doc_id(
                 enable_meta_tools
                 allowed_mcp_service_ids
                 delegate_to
+                backgroundable_tool_names
                 subagent_targets
                 subagent_spawn_enabled
                 subagent_steering_enabled
@@ -207,6 +224,7 @@ pub(crate) async fn list_tool_selection_records(
                 enable_meta_tools
                 allowed_mcp_service_ids
                 delegate_to
+                backgroundable_tool_names
                 subagent_targets
                 subagent_spawn_enabled
                 subagent_steering_enabled
@@ -248,6 +266,7 @@ pub(crate) async fn list_all_tool_selection_records(
                 enable_meta_tools
                 allowed_mcp_service_ids
                 delegate_to
+                backgroundable_tool_names
                 subagent_targets
                 subagent_spawn_enabled
                 subagent_steering_enabled
@@ -321,6 +340,10 @@ pub async fn upsert_tool_selection(
         ),
         graphql_fields::graphql_string_list_field("delegate_to", selection.delegate_to.as_deref()),
         graphql_fields::graphql_string_list_field(
+            "backgroundable_tool_names",
+            selection.backgroundable_tool_names.as_deref(),
+        ),
+        graphql_fields::graphql_string_list_field(
             "subagent_targets",
             selection.subagent_targets.as_deref(),
         ),
@@ -388,6 +411,10 @@ pub async fn upsert_tool_selection(
             selection.allowed_mcp_service_ids.as_deref(),
         ),
         graphql_fields::graphql_string_list_field("delegate_to", selection.delegate_to.as_deref()),
+        graphql_fields::graphql_string_list_field(
+            "backgroundable_tool_names",
+            selection.backgroundable_tool_names.as_deref(),
+        ),
         graphql_fields::graphql_string_list_field(
             "subagent_targets",
             selection.subagent_targets.as_deref(),

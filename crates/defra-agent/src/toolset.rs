@@ -23,9 +23,11 @@ use cli_tool::CliTool;
 use delegate::DelegateToAgentTool;
 use file_tools::{EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool};
 use shared::ToolContext;
-use subagent::{CancelSubagentTool, SpawnSubagentTool, WaitSubagentTool};
+use subagent::{
+    BackgroundTool, CancelSubagentTool, CancelTool, SpawnSubagentTool, WaitSubagentTool, WaitTool,
+};
 
-use crate::tool_surface::SubagentToolConfig;
+use crate::tool_surface::{BackgroundToolConfig, SubagentToolConfig};
 
 pub(crate) use shared::parse_argv_prefixes;
 pub use shared::{CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode};
@@ -45,6 +47,9 @@ pub const DELEGATE_TOOL_NAME: &str = "delegate_to_agent";
 pub(crate) const SPAWN_SUBAGENT_TOOL_NAME: &str = "spawn_subagent";
 pub(crate) const WAIT_SUBAGENT_TOOL_NAME: &str = "wait_subagent";
 pub(crate) const CANCEL_SUBAGENT_TOOL_NAME: &str = "cancel_subagent";
+pub(crate) const BACKGROUND_TOOL_NAME: &str = "background_tool";
+pub(crate) const WAIT_TOOL_NAME: &str = "wait_tool";
+pub(crate) const CANCEL_TOOL_NAME: &str = "cancel_tool";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliToolConfig {
@@ -139,6 +144,20 @@ impl ToolSet {
 
     pub fn tool_names(&self) -> Vec<String> {
         self.tools.iter().map(NativeTool::tool_name).collect()
+    }
+
+    pub fn backgroundable_tool_names(&self) -> Vec<String> {
+        self.tools
+            .iter()
+            .filter(|tool| tool.backgroundable())
+            .map(NativeTool::tool_name)
+            .collect()
+    }
+
+    pub fn is_backgroundable_tool_name(&self, name: &str) -> bool {
+        self.tools
+            .iter()
+            .any(|tool| tool.tool_name() == name && tool.backgroundable())
     }
 
     pub fn build_native_tools(&self) -> Result<Vec<Box<dyn ToolDyn>>> {
@@ -250,6 +269,13 @@ impl NativeTool {
             Self::BashUnrestricted { .. } => "bash_unrestricted".to_string(),
             Self::Cli(tool) => tool.name.clone(),
         }
+    }
+
+    pub fn backgroundable(&self) -> bool {
+        matches!(
+            self,
+            Self::BashReadOnly { .. } | Self::BashUnrestricted { .. }
+        )
     }
 }
 
@@ -396,6 +422,29 @@ pub(crate) fn build_subagent_tools(config: SubagentToolConfig) -> Vec<Box<dyn To
         Box::new(SpawnSubagentTool::new(config.clone())),
         Box::new(WaitSubagentTool),
         Box::new(CancelSubagentTool),
+    ]
+}
+
+pub(crate) fn background_tool_names(config: &BackgroundToolConfig) -> Vec<String> {
+    if !config.tools_enabled() {
+        return Vec::new();
+    }
+
+    [BACKGROUND_TOOL_NAME, WAIT_TOOL_NAME, CANCEL_TOOL_NAME]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
+pub(crate) fn build_background_tools(config: BackgroundToolConfig) -> Vec<Box<dyn ToolDyn>> {
+    if !config.tools_enabled() {
+        return Vec::new();
+    }
+
+    vec![
+        Box::new(BackgroundTool::new(config.clone())),
+        Box::new(WaitTool),
+        Box::new(CancelTool),
     ]
 }
 

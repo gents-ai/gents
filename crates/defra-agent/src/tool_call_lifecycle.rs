@@ -311,6 +311,37 @@ impl ToolCallLifecycle {
         }
     }
 
+    /// Constructor for an ordinary tool launched through the R6 background
+    /// bridge. The row is a bridge row even though it has no child request.
+    pub fn new_background_tool(
+        node: Arc<EmbeddedNode>,
+        request_id: String,
+        session_id: String,
+        tool_call_id: String,
+        message_sequence: u32,
+        tool_name: String,
+        args: String,
+        deadline_at: chrono::DateTime<chrono::Utc>,
+    ) -> Self {
+        Self {
+            node,
+            request_id,
+            session_id,
+            tool_call_id,
+            message_sequence,
+            tool_name,
+            args,
+            doc_id: None,
+            deadline_at,
+            state: ToolCallState::Pending,
+            started_at: None,
+            failure_class: None,
+            await_mode: AwaitMode::Background,
+            cancel_policy: CancelPolicy::Cascade,
+            child_request_id: None,
+        }
+    }
+
     pub(crate) fn set_doc_id(&mut self, doc_id: Option<String>) {
         self.doc_id = doc_id;
     }
@@ -323,12 +354,40 @@ impl ToolCallLifecycle {
         self.child_request_id.is_some()
     }
 
+    pub(crate) fn is_background_tool_bridge(&self) -> bool {
+        self.child_request_id.is_none() && self.await_mode == AwaitMode::Background
+    }
+
+    pub(crate) fn is_bridge(&self) -> bool {
+        self.is_subagent_bridge() || self.is_background_tool_bridge()
+    }
+
     pub(crate) fn await_mode(&self) -> AwaitMode {
         self.await_mode
     }
 
+    pub(crate) fn state(&self) -> ToolCallState {
+        self.state
+    }
+
+    pub(crate) fn request_id(&self) -> &str {
+        &self.request_id
+    }
+
+    pub(crate) fn tool_name(&self) -> &str {
+        &self.tool_name
+    }
+
+    pub(crate) fn tool_call_id(&self) -> &str {
+        &self.tool_call_id
+    }
+
     pub(crate) fn is_running(&self) -> bool {
         self.state == ToolCallState::Running
+    }
+
+    pub(crate) fn is_terminal(&self) -> bool {
+        self.state.is_terminal()
     }
 
     pub(crate) fn is_cancelled(&self) -> bool {

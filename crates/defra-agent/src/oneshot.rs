@@ -11,7 +11,7 @@ use rig::tool::ToolDyn;
 use crate::backend_provider::BackendProviderKind;
 use crate::completion_factory::build_agent;
 use crate::config::BehaviorConfig;
-use crate::hook::{DefraSessionHook, FailurePolicy};
+use crate::hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
 use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
 use crate::schema::ensure_schemas;
 use crate::tool_surface::ToolRuntimeContext;
@@ -47,6 +47,14 @@ pub async fn run_openai_oneshot_with_tools(
 
     let mut tools = tool_surface.build_tools(&tool_runtime)?;
     tools.extend(extra_tools);
+    let background_tool_registry = BackgroundToolRegistry::from_tools(
+        tool_surface
+            .build_tools(&tool_runtime)?
+            .into_iter()
+            .map(crate::tool_call_lifecycle::runtime::wrap_tool)
+            .collect(),
+        &tool_surface.background_tools().allowlist,
+    );
 
     match behavior.backend_provider_kind {
         BackendProviderKind::OpenAiCompatible => {
@@ -67,6 +75,7 @@ pub async fn run_openai_oneshot_with_tools(
                 prompt_builder,
                 preamble,
                 tools,
+                background_tool_registry,
                 client,
             )
             .await
@@ -89,6 +98,7 @@ pub async fn run_openai_oneshot_with_tools(
                 prompt_builder,
                 preamble,
                 tools,
+                background_tool_registry,
                 client,
             )
             .await
@@ -103,6 +113,7 @@ async fn run_oneshot_with_completion_client<C>(
     prompt_builder: LayeredPromptBuilder,
     preamble: String,
     tools: Vec<Box<dyn ToolDyn>>,
+    background_tool_registry: BackgroundToolRegistry,
     client: C,
 ) -> Result<OneshotRunResult>
 where
@@ -110,7 +121,15 @@ where
     C::CompletionModel: 'static,
 {
     let agent = build_agent(&client, behavior, &preamble, tools);
-    run_oneshot_with_agent(node, behavior, &prompt_builder, &agent, prompt).await
+    run_oneshot_with_agent(
+        node,
+        behavior,
+        &prompt_builder,
+        &agent,
+        prompt,
+        background_tool_registry,
+    )
+    .await
 }
 
 async fn run_oneshot_with_agent<M: CompletionModel + 'static>(
@@ -119,13 +138,15 @@ async fn run_oneshot_with_agent<M: CompletionModel + 'static>(
     prompt_builder: &LayeredPromptBuilder,
     agent: &Agent<M>,
     prompt: &str,
+    background_tool_registry: BackgroundToolRegistry,
 ) -> Result<OneshotRunResult> {
     let hook = DefraSessionHook::with_identity(
         node,
         &behavior.name,
         behavior.did(),
         FailurePolicy::default(),
-    );
+    )
+    .with_background_tool_registry(background_tool_registry);
     let history = prompt_builder.build(&[], &[]).await?.messages;
 
     let response = agent

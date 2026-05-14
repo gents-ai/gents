@@ -496,6 +496,8 @@ pub struct ToolSelectionRow {
     pub allowed_mcp_service_ids: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub delegate_to: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_string_vec")]
+    pub backgroundable_tool_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

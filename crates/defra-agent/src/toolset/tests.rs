@@ -139,6 +139,41 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
     assert!(!names.contains(&"steer_subagent".to_string()));
 }
 
+#[test]
+fn native_tool_backgroundable_capability_is_explicit() {
+    let root = temp_root("defra-agent-backgroundable-capability");
+    let tools = ToolSet::readwrite(root);
+    let backgroundable = tools.backgroundable_tool_names();
+
+    assert!(backgroundable.contains(&"bash".to_string()));
+    assert!(backgroundable.contains(&"bash_unrestricted".to_string()));
+    assert!(tools.is_backgroundable_tool_name("bash"));
+    assert!(tools.is_backgroundable_tool_name("bash_unrestricted"));
+    assert!(!tools.is_backgroundable_tool_name("read_file"));
+    assert!(!tools.is_backgroundable_tool_name("glob"));
+    assert!(!tools.is_backgroundable_tool_name("grep"));
+}
+
+#[test]
+fn background_tool_names_are_gated_by_allowlist() {
+    let disabled = BackgroundToolConfig {
+        allowlist: Vec::new(),
+    };
+    assert!(background_tool_names(&disabled).is_empty());
+
+    let enabled = BackgroundToolConfig {
+        allowlist: vec!["bash".to_string()],
+    };
+    assert_eq!(
+        background_tool_names(&enabled),
+        vec![
+            BACKGROUND_TOOL_NAME.to_string(),
+            WAIT_TOOL_NAME.to_string(),
+            CANCEL_TOOL_NAME.to_string()
+        ]
+    );
+}
+
 #[tokio::test]
 async fn subagent_tool_definitions_register_only_r4b_surface() {
     let config = SubagentToolConfig {

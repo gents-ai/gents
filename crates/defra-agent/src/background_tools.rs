@@ -34,6 +34,25 @@ pub(crate) struct CancelSubagentArgs {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct BackgroundToolArgs {
+    pub tool_name: String,
+    #[serde(default)]
+    pub args: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct WaitToolArgs {
+    pub tool_call_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct CancelToolArgs {
+    pub tool_call_id: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum AwaitModeArg {
     #[default]

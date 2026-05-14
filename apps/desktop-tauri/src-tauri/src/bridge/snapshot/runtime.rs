@@ -169,6 +169,7 @@ pub(crate) async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeS
                     enable_meta_tools: row.enable_meta_tools,
                     allowed_mcp_service_ids: row.allowed_mcp_service_ids.clone(),
                     delegate_to: row.delegate_to.clone(),
+                    backgroundable_tool_names: row.backgroundable_tool_names.clone(),
                 })
                 .collect::<Vec<_>>();
             tool_selections.sort_by(|left, right| left.selection_id.cmp(&right.selection_id));
