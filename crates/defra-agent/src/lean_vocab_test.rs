@@ -58,6 +58,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
     pub(crate) transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub(crate) streaming_response_cases: Vec<LeanResponseTransitionCase>,
+    pub(crate) compaction_reducer_cases: Vec<LeanCompactionReducerCase>,
     pub(crate) follow_up_hooks: Vec<String>,
     pub(crate) coverage_ledger: Vec<LeanCoverageEntry>,
     pub(crate) identity_structural_cases: Vec<LeanIdentityStructuralCase>,
@@ -694,6 +695,21 @@ pub(crate) struct LeanResponseTransitionCase {
     pub(crate) expected_request_persistence: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanCompactionReducerCase {
+    pub(crate) name: String,
+    pub(crate) group: String,
+    pub(crate) reducer: String,
+    pub(crate) legal: bool,
+    pub(crate) pre_message_count: usize,
+    pub(crate) post_message_count: usize,
+    pub(crate) preserves_pairs: bool,
+    pub(crate) preserves_order: bool,
+    pub(crate) gate_open: bool,
+    pub(crate) safe_to_reduce: bool,
+    pub(crate) reducer_is_identity: bool,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum LeanVocabularyParseError<'a> {
     MissingNamespace,
@@ -881,6 +897,18 @@ pub(crate) fn lean_response_transition_case(name: &str) -> &'static LeanResponse
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean response-transition case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_compaction_reducer_cases() -> &'static [LeanCompactionReducerCase] {
+    &lean_contract_snapshot().compaction_reducer_cases
+}
+
+pub(crate) fn lean_compaction_reducer_case(name: &str) -> &'static LeanCompactionReducerCase {
+    lean_contract_snapshot()
+        .compaction_reducer_cases
+        .iter()
+        .find(|case| case.name == name)
+        .unwrap_or_else(|| panic!("Lean compaction-reducer case {name:?} was not emitted"))
 }
 
 pub(crate) fn lean_event_delivery_transition_cases() -> &'static [LeanEventDeliveryTransitionCase] {

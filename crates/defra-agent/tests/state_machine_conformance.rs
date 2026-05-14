@@ -20,7 +20,8 @@ use lean_vocab_test::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
     assert_lifecycle_transition_cases_partition, assert_state_machine_contract_is_complete,
     lean_client_shell_case, lean_command_env_case, lean_command_policy_case,
-    lean_command_sandbox_case, lean_contract_snapshot, lean_event_delivery_convergence_traces,
+    lean_command_sandbox_case, lean_compaction_reducer_case, lean_compaction_reducer_cases,
+    lean_contract_snapshot, lean_event_delivery_convergence_traces,
     lean_event_delivery_source_instances, lean_event_delivery_transition_cases,
     lean_fleet_slot_accounting_case, lean_inference_slot_accounting_case, lean_mcp_health_cases,
     lean_queue_deadline_case, lean_queue_deadline_cases, lean_recovery_sweep_case,
@@ -521,6 +522,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "streaming_response_cases".to_string(),
             "ResponseTransitionCases".to_string(),
+        ));
+    }
+    if !lean_compaction_reducer_cases().is_empty() {
+        emitted.insert((
+            "compaction_reducer_cases".to_string(),
+            "CompactionReducerCases".to_string(),
         ));
     }
     assert_eq!(
@@ -1180,6 +1187,205 @@ fn assert_response_transition_case(expectation: ResponseTransitionExpectation) {
         case.expected_request_persistence.as_deref(),
         expected_request_persistence
     );
+}
+
+#[test]
+fn generated_compaction_reducer_cases_pin_contract() {
+    let cases = lean_compaction_reducer_cases();
+    assert_eq!(cases.len(), 10);
+    let expected = [
+        (
+            "identity_reducer_is_no_op",
+            "witness",
+            "identity",
+            true,
+            0,
+            0,
+            true,
+            true,
+            false,
+            true,
+            true,
+        ),
+        (
+            "identity_preserves_pair_atomicity",
+            "witness",
+            "identity",
+            true,
+            2,
+            2,
+            true,
+            true,
+            false,
+            true,
+            true,
+        ),
+        (
+            "identity_preserves_message_order",
+            "witness",
+            "identity",
+            true,
+            3,
+            3,
+            true,
+            true,
+            false,
+            true,
+            true,
+        ),
+        (
+            "strip_preserves_pair_atomicity",
+            "witness",
+            "strip_tool_results",
+            true,
+            2,
+            2,
+            true,
+            true,
+            true,
+            true,
+            true,
+        ),
+        (
+            "strip_preserves_message_order",
+            "witness",
+            "strip_tool_results",
+            true,
+            3,
+            3,
+            true,
+            true,
+            true,
+            true,
+            true,
+        ),
+        (
+            "strip_is_strictly_idempotent",
+            "witness",
+            "strip_tool_results",
+            true,
+            2,
+            2,
+            true,
+            true,
+            true,
+            true,
+            true,
+        ),
+        (
+            "reduction_blocked_when_response_streaming",
+            "streaming",
+            "any_valid",
+            true,
+            1,
+            1,
+            true,
+            true,
+            true,
+            false,
+            true,
+        ),
+        (
+            "reduction_allowed_when_response_terminal",
+            "streaming",
+            "any_valid",
+            true,
+            1,
+            1,
+            true,
+            true,
+            true,
+            true,
+            false,
+        ),
+        (
+            "no_orphaned_tool_results_after_strip",
+            "contract",
+            "strip_tool_results",
+            true,
+            2,
+            2,
+            true,
+            true,
+            true,
+            true,
+            true,
+        ),
+        (
+            "reapply_preserves_view_coherent",
+            "contract",
+            "any_valid",
+            true,
+            2,
+            2,
+            true,
+            true,
+            true,
+            true,
+            true,
+        ),
+    ];
+
+    let names = cases
+        .iter()
+        .map(|case| case.name.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        names,
+        expected.iter().map(|case| case.0).collect::<BTreeSet<_>>()
+    );
+    for case in expected {
+        assert_compaction_reducer_case(case);
+    }
+    for case in cases {
+        assert!(case.legal, "compaction case {} should be legal", case.name);
+        assert!(
+            case.preserves_pairs && case.preserves_order,
+            "compaction case {} should preserve transcript shape",
+            case.name
+        );
+    }
+}
+
+type CompactionReducerExpectation = (
+    &'static str,
+    &'static str,
+    &'static str,
+    bool,
+    usize,
+    usize,
+    bool,
+    bool,
+    bool,
+    bool,
+    bool,
+);
+
+fn assert_compaction_reducer_case(expectation: CompactionReducerExpectation) {
+    let (
+        name,
+        group,
+        reducer,
+        legal,
+        pre_message_count,
+        post_message_count,
+        preserves_pairs,
+        preserves_order,
+        gate_open,
+        safe_to_reduce,
+        reducer_is_identity,
+    ) = expectation;
+    let case = lean_compaction_reducer_case(name);
+    assert_eq!(case.group.as_str(), group);
+    assert_eq!(case.reducer.as_str(), reducer);
+    assert_eq!(case.legal, legal);
+    assert_eq!(case.pre_message_count, pre_message_count);
+    assert_eq!(case.post_message_count, post_message_count);
+    assert_eq!(case.preserves_pairs, preserves_pairs);
+    assert_eq!(case.preserves_order, preserves_order);
+    assert_eq!(case.gate_open, gate_open);
+    assert_eq!(case.safe_to_reduce, safe_to_reduce);
+    assert_eq!(case.reducer_is_identity, reducer_is_identity);
 }
 
 #[test]

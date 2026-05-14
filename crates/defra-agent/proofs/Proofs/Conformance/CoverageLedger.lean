@@ -293,9 +293,11 @@ def caseCoverage : List CoverageEntry :=
       "ResponseTransitionCases"
       "state_machine_conformance::generated_streaming_response_cases_pin_lifecycle_contract"
       "Runtime-backed streaming response lifecycle drive remains a follow-up; this row pins the emitted Lean case shape."
-  -- compaction_reducer_cases was dropped because PR #202 added the ledger row
-  -- without the JSON emitter, Rust deserializer, or consumer test. Follow-up
-  -- issue #207 re-adds this row alongside the JSON bridge.
+  , consumerWithFollowUpCoverage
+      "compaction_reducer_cases"
+      "CompactionReducerCases"
+      "state_machine_conformance::generated_compaction_reducer_cases_pin_contract"
+      "Runtime-backed compaction reducer drive remains a follow-up; this row pins the emitted Lean case shape."
   , consumerCoverage
       "event_delivery_cases"
       "EventDeliveryTransitionCases"

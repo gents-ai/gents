@@ -5,6 +5,7 @@ import Proofs.ApplyReconcile.ContractCases
 import Proofs.ToolExecution
 import Proofs.MCPHealth.Executable
 import Proofs.StreamingResponse.Executable
+import Proofs.Compaction.Executable
 import Proofs.Conformance.Deviations
 import Proofs.CommandPolicy.Cases
 import Proofs.Conformance.CoverageLedger
@@ -365,6 +366,22 @@ def responseTransitionCaseJson
       ++ jsonOptionalString witness.expectedRequestPersistence
     ++ "}"
 
+def compactionReducerCaseJson (witness : Compaction.CompactionReducerCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"group\":" ++ jsonString witness.group ++ ","
+    ++ "\"reducer\":" ++ jsonString witness.reducer ++ ","
+    ++ "\"legal\":" ++ boolString witness.legal ++ ","
+    ++ "\"pre_message_count\":" ++ toString witness.preMessageCount ++ ","
+    ++ "\"post_message_count\":" ++ toString witness.postMessageCount ++ ","
+    ++ "\"preserves_pairs\":" ++ boolString witness.preservesPairs ++ ","
+    ++ "\"preserves_order\":" ++ boolString witness.preservesOrder ++ ","
+    ++ "\"gate_open\":" ++ boolString witness.gateOpen ++ ","
+    ++ "\"safe_to_reduce\":" ++ boolString witness.safeToReduce ++ ","
+    ++ "\"reducer_is_identity\":"
+      ++ boolString witness.reducerIsIdentity
+    ++ "}"
+
 def queueDeadlineConformanceCaseJson
     (witness : QueueDeadlineConformanceCase) : String :=
   "{"
@@ -517,6 +534,9 @@ def snapshotJson : String :=
     ++ "\"streaming_response_cases\":"
       ++ jsonArray
         (StreamingResponse.responseTransitionCases.map responseTransitionCaseJson) ++ ","
+    ++ "\"compaction_reducer_cases\":"
+      ++ jsonArray
+        (Compaction.compactionReducerCases.map compactionReducerCaseJson) ++ ","
     ++ "\"mcp_health_cases\":"
       ++ jsonArray
         (Proofs.MCPHealth.transitionCases.map mcpHealthCaseJson) ++ ","
