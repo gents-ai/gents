@@ -140,6 +140,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_storage_observation_cases_match_hook_runtime_classification",
         },
         ConformanceConsumer::RustTest {
+            id: "identity_conformance::identity_structural_cases_match_lean_verdicts",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/identity_conformance.rs",
+            module_path: "identity_conformance",
+            function: "identity_structural_cases_match_lean_verdicts",
+        },
+        ConformanceConsumer::RustTest {
+            id: "identity_conformance::identity_respects_principal_contract_is_declared",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/identity_conformance.rs",
+            module_path: "identity_conformance",
+            function: "identity_respects_principal_contract_is_declared",
+        },
+        ConformanceConsumer::RustTest {
             id: "lifecycle::tests::request_state_machine_contract_is_complete",
             package: "defra-agent",
             source_path: "crates/defra-agent/src/lifecycle.rs",

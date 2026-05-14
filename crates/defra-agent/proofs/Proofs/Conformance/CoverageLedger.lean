@@ -288,6 +288,14 @@ def caseCoverage : List CoverageEntry :=
       "transcript_cases"
       "TranscriptConformanceCases"
       "state_machine_conformance::generated_transcript_cases_pin_agent_message_ordering_contract"
+  , consumerCoverage
+      "identity_structural_cases"
+      "IdentityStructuralCases"
+      "identity_conformance::identity_structural_cases_match_lean_verdicts"
+  , consumerCoverage
+      "identity_contracts"
+      "IdentityContracts"
+      "identity_conformance::identity_respects_principal_contract_is_declared"
   , consumerWithFollowUpCoverage
       "streaming_response_cases"
       "ResponseTransitionCases"
