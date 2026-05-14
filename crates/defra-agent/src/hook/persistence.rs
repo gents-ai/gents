@@ -8,12 +8,13 @@ use serde::Deserialize;
 use serde_json::json;
 use tracing::Instrument;
 
+use crate::background_tools::r4c_args::ListSubagentsArgs;
 use crate::background_tools::{
     child_request_completed, effective_context_cross_deployment_spawn_timeout_seconds,
-    load_authorized_child_edge, load_child_final_response, load_child_session_id,
-    load_child_terminal_row, load_parent_subagent_context, project_child_terminal,
-    target_is_allowed, BackgroundToolArgs, CancelSubagentArgs, CancelToolArgs,
-    ParentSubagentContext, SpawnSubagentArgs, WaitSubagentArgs, WaitToolArgs,
+    handle_list_subagents, load_authorized_child_edge, load_child_final_response,
+    load_child_session_id, load_child_terminal_row, load_parent_subagent_context,
+    project_child_terminal, target_is_allowed, BackgroundToolArgs, CancelSubagentArgs,
+    CancelToolArgs, ParentSubagentContext, SpawnSubagentArgs, WaitSubagentArgs, WaitToolArgs,
 };
 use crate::config::DEFAULT_DEADLINE_DURATION_SECS;
 use crate::document_config::load_agent_behavior;
@@ -25,8 +26,8 @@ use crate::tool_call_lifecycle::{
     ChildTerminal, FailureClass, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
 use crate::toolset::{
-    BACKGROUND_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, CANCEL_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME,
-    WAIT_SUBAGENT_TOOL_NAME, WAIT_TOOL_NAME,
+    BACKGROUND_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, CANCEL_TOOL_NAME, LIST_SUBAGENTS_TOOL_NAME,
+    SPAWN_SUBAGENT_TOOL_NAME, WAIT_SUBAGENT_TOOL_NAME, WAIT_TOOL_NAME,
 };
 use crate::truncation::{truncate_text, DefraSpillTruncator, TruncationMode, Truncator};
 
@@ -660,6 +661,37 @@ impl DefraSessionHook {
             .await?;
 
         Ok(ToolCallHookAction::skip(result))
+    }
+
+    async fn persist_list_subagents_tool_call(
+        &self,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+    ) -> anyhow::Result<ToolCallHookAction> {
+        let (_session_id, request_id, _deadline_at, _seq) =
+            self.ensure_assistant_turn_sequence().await?;
+        self.state.lock().await.register_tool_result_identity(
+            internal_call_id,
+            None,
+            tool_call_id.as_deref(),
+        );
+
+        let parsed = match serde_json::from_str::<ListSubagentsArgs>(args) {
+            Ok(args) => args,
+            Err(error) => {
+                return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+                    LIST_SUBAGENTS_TOOL_NAME,
+                    "/",
+                    format!("invalid list_subagents arguments: {error}"),
+                )));
+            }
+        };
+        let response =
+            handle_list_subagents(&self.node, &request_id, &self.agent_did, parsed).await?;
+        let result = serde_json::to_value(response)
+            .map_err(|error| anyhow::anyhow!("serialize list_subagents response: {error}"))?;
+        Ok(ToolCallHookAction::skip(json_string(result)))
     }
 
     async fn persist_cancel_subagent_tool_call(
@@ -2384,6 +2416,24 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                     action
                 }
                 Err(e) => self.on_tool_persistence_error("persist wait_subagent tool call", &e),
+            };
+        }
+        if tool_name == LIST_SUBAGENTS_TOOL_NAME {
+            let result = self
+                .persist_list_subagents_tool_call(tool_call_id, internal_call_id, args)
+                .instrument(tracing::info_span!(
+                    "tool.call",
+                    tool_name = %tool_name,
+                    tool_call_id = %internal_call_id,
+                ))
+                .await;
+
+            return match result {
+                Ok(action) => {
+                    self.record_success();
+                    action
+                }
+                Err(e) => self.on_tool_persistence_error("persist list_subagents tool call", &e),
             };
         }
         if tool_name == CANCEL_SUBAGENT_TOOL_NAME {

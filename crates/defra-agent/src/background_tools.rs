@@ -1,7 +1,9 @@
 #![allow(dead_code)] // R4b lands these helpers one task ahead of their tool integrations.
 
-mod r4c_args;
+pub(crate) mod r4c_args;
 mod transcript_render;
+
+use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
@@ -14,6 +16,10 @@ use serde_json::json;
 use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::session::execute_mutation_with_retry;
 use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass};
+
+use self::r4c_args::{
+    ListStatusFilter, ListSubagentsArgs, ListSubagentsEntry, ListSubagentsResponse,
+};
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct SpawnSubagentArgs {
@@ -198,6 +204,149 @@ struct ToolSelectionTargetsRow {
 }
 
 pub(crate) const DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS: u32 = 60;
+
+#[derive(Debug, Deserialize)]
+struct ListSubagentBridgeRow {
+    tool_call_id: String,
+    child_request_id: Option<String>,
+    lifecycle_state: Option<String>,
+    await_mode: Option<String>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListSubagentChildRow {
+    request_id: String,
+    session_id: String,
+    behavior_id: Option<String>,
+    created_at: String,
+    subagent_depth: Option<u32>,
+}
+
+pub(crate) async fn handle_list_subagents(
+    node: &EmbeddedNode,
+    caller_request_id: &str,
+    local_deployment_id: &str,
+    args: ListSubagentsArgs,
+) -> Result<ListSubagentsResponse> {
+    let limit = args.validated_limit() as usize;
+    let escaped_caller = escape_graphql_string(caller_request_id);
+    let escaped_spawn_tool = escape_graphql_string("spawn_subagent");
+    let bridge_query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    request_id: {{ _eq: "{escaped_caller}" }},
+                    tool_name: {{ _eq: "{escaped_spawn_tool}" }}
+                }},
+                order: {{ started_at: ASC }}
+            ) {{
+                tool_call_id
+                child_request_id
+                lifecycle_state
+                await_mode
+                started_at
+                completed_at
+            }}
+        }}"#
+    );
+    let bridge_response = node.execute(&bridge_query).await;
+    if bridge_response.has_errors() {
+        anyhow::bail!(
+            "list_subagents bridge query failed: {:?}",
+            bridge_response.errors
+        );
+    }
+    let bridges: Vec<ListSubagentBridgeRow> = rows(bridge_response.data.as_ref(), "AgentToolCall")?;
+
+    let child_query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{
+                    caused_by_parent_request_id: {{ _eq: "{escaped_caller}" }}
+                }},
+                order: {{ created_at: ASC }}
+            ) {{
+                request_id
+                session_id
+                behavior_id
+                created_at
+                subagent_depth
+            }}
+        }}"#
+    );
+    let child_response = node.execute(&child_query).await;
+    if child_response.has_errors() {
+        anyhow::bail!(
+            "list_subagents child query failed: {:?}",
+            child_response.errors
+        );
+    }
+    let children_by_request =
+        rows::<ListSubagentChildRow>(child_response.data.as_ref(), "AgentRequest")?
+            .into_iter()
+            .map(|row| (row.request_id.clone(), row))
+            .collect::<HashMap<_, _>>();
+
+    let mut entries = Vec::new();
+    for bridge in bridges {
+        if bridge.await_mode.as_deref() != Some("background") {
+            continue;
+        }
+        let Some(child_request_id) = non_empty_string(bridge.child_request_id.as_deref()) else {
+            continue;
+        };
+        let status = bridge
+            .lifecycle_state
+            .as_deref()
+            .filter(|state| !state.trim().is_empty())
+            .unwrap_or("running");
+        if !list_subagent_status_matches(args.status, status) {
+            continue;
+        }
+        let Some(child) = children_by_request.get(&child_request_id) else {
+            continue;
+        };
+        let created_at = parse_rfc3339(Some(&child.created_at)).ok_or_else(|| {
+            anyhow!("child AgentRequest {child_request_id} has invalid created_at")
+        })?;
+        let last_update = parse_rfc3339(bridge.completed_at.as_deref())
+            .or_else(|| parse_rfc3339(bridge.started_at.as_deref()))
+            .unwrap_or(created_at);
+
+        entries.push(ListSubagentsEntry {
+            child_request_id,
+            child_session_id: child.session_id.clone(),
+            behavior_id: non_empty_string(child.behavior_id.as_deref()).unwrap_or_default(),
+            deployment_id: local_deployment_id.to_string(),
+            await_mode: "background".to_string(),
+            status: status.to_string(),
+            created_at,
+            last_update,
+            depth: child.subagent_depth.unwrap_or_default(),
+        });
+    }
+
+    let truncated = entries.len() > limit;
+    entries.truncate(limit);
+    Ok(ListSubagentsResponse {
+        read_at: Utc::now(),
+        truncated,
+        entries,
+    })
+}
+
+fn list_subagent_status_matches(filter: ListStatusFilter, status: &str) -> bool {
+    match filter {
+        ListStatusFilter::Running => status == "running",
+        ListStatusFilter::Terminal => matches!(
+            status,
+            "completed" | "failed" | "timedOut" | "cancelled" | "dead" | "interrupted"
+        ),
+        ListStatusFilter::All => !status.trim().is_empty(),
+    }
+}
 
 pub(crate) async fn load_parent_subagent_context(
     node: &EmbeddedNode,
@@ -854,6 +1003,16 @@ where
     data.and_then(|data| data.get(collection))
         .and_then(|value| serde_json::from_value::<Vec<T>>(value.clone()).ok())
         .and_then(|mut rows| rows.pop())
+}
+
+fn rows<T>(data: Option<&serde_json::Value>, collection: &str) -> Result<Vec<T>>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let Some(value) = data.and_then(|data| data.get(collection)) else {
+        anyhow::bail!("{collection} field missing from query response");
+    };
+    serde_json::from_value(value.clone()).map_err(|error| anyhow!("parse {collection}: {error}"))
 }
 
 fn dedupe_non_empty(values: Vec<String>) -> Vec<String> {

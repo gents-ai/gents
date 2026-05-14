@@ -131,10 +131,10 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
         vec![
             SPAWN_SUBAGENT_TOOL_NAME.to_string(),
             WAIT_SUBAGENT_TOOL_NAME.to_string(),
+            LIST_SUBAGENTS_TOOL_NAME.to_string(),
             CANCEL_SUBAGENT_TOOL_NAME.to_string()
         ]
     );
-    assert!(!names.contains(&"list_subagents".to_string()));
     assert!(!names.contains(&"read_subagent_transcript".to_string()));
     assert!(!names.contains(&"steer_subagent".to_string()));
 }
@@ -175,7 +175,7 @@ fn background_tool_names_are_gated_by_allowlist() {
 }
 
 #[tokio::test]
-async fn subagent_tool_definitions_register_only_r4b_surface() {
+async fn subagent_tool_definitions_register_expected_surface() {
     let config = SubagentToolConfig {
         targets: vec!["research".to_string()],
         spawn_enabled: true,
@@ -188,6 +188,7 @@ async fn subagent_tool_definitions_register_only_r4b_surface() {
         vec![
             SPAWN_SUBAGENT_TOOL_NAME.to_string(),
             WAIT_SUBAGENT_TOOL_NAME.to_string(),
+            LIST_SUBAGENTS_TOOL_NAME.to_string(),
             CANCEL_SUBAGENT_TOOL_NAME.to_string()
         ]
     );

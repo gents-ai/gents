@@ -217,8 +217,8 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
     let tool_names = tool_surface.tool_names();
     assert!(tool_names.contains(&"spawn_subagent".to_string()));
     assert!(tool_names.contains(&"wait_subagent".to_string()));
+    assert!(tool_names.contains(&"list_subagents".to_string()));
     assert!(tool_names.contains(&"cancel_subagent".to_string()));
-    assert!(!tool_names.contains(&"list_subagents".to_string()));
     assert!(!tool_names.contains(&"read_subagent_transcript".to_string()));
     assert!(!tool_names.contains(&"steer_subagent".to_string()));
 }

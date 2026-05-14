@@ -2,6 +2,7 @@ use anyhow::anyhow;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 
+use crate::background_tools::r4c_args::ListSubagentsArgs;
 use crate::background_tools::{
     BackgroundToolArgs, CancelSubagentArgs, CancelToolArgs, SpawnSubagentArgs, WaitSubagentArgs,
     WaitToolArgs,
@@ -11,8 +12,8 @@ use crate::tool_surface::{BackgroundToolConfig, SubagentToolConfig};
 
 use super::shared::ToolError;
 use super::{
-    BACKGROUND_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, CANCEL_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME,
-    WAIT_SUBAGENT_TOOL_NAME, WAIT_TOOL_NAME,
+    BACKGROUND_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, CANCEL_TOOL_NAME, LIST_SUBAGENTS_TOOL_NAME,
+    SPAWN_SUBAGENT_TOOL_NAME, WAIT_SUBAGENT_TOOL_NAME, WAIT_TOOL_NAME,
 };
 
 const SUBAGENT_SERVICE_ID: &str = "subagent";
@@ -112,6 +113,9 @@ impl BackgroundTool {
 
 #[derive(Clone, Copy)]
 pub(super) struct WaitSubagentTool;
+
+#[derive(Clone, Copy)]
+pub(super) struct ListSubagentsTool;
 
 #[derive(Clone, Copy)]
 pub(super) struct CancelSubagentTool;
@@ -248,6 +252,45 @@ impl Tool for CancelSubagentTool {
                 "reason must be omitted or non-empty",
             ));
         }
+        Err(not_yet_executable_error(Self::NAME))
+    }
+}
+
+impl Tool for ListSubagentsTool {
+    const NAME: &'static str = LIST_SUBAGENTS_TOOL_NAME;
+
+    type Error = ToolError;
+    type Args = ListSubagentsArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "List this parent request's visible background child subagents."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["running", "terminal", "all"],
+                        "default": "running",
+                        "description": "Filter child subagents by bridge lifecycle state."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50,
+                        "default": 20,
+                        "description": "Maximum entries to return."
+                    }
+                }
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let _ = args.validated_limit();
         Err(not_yet_executable_error(Self::NAME))
     }
 }
