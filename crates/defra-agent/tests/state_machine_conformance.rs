@@ -542,6 +542,18 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     if !lean_mcp_health_cases().is_empty() {
         emitted.insert(("mcp_health_cases".to_string(), "MCPHealthCases".to_string()));
     }
+    if !snapshot.identity_structural_cases.is_empty() {
+        emitted.insert((
+            "identity_structural_cases".to_string(),
+            "IdentityStructuralCases".to_string(),
+        ));
+    }
+    if !snapshot.identity_contracts.is_empty() {
+        emitted.insert((
+            "identity_contracts".to_string(),
+            "IdentityContracts".to_string(),
+        ));
+    }
     for hook in &snapshot.follow_up_hooks {
         emitted.insert(("follow_up_hook".to_string(), hook.clone()));
     }
@@ -569,8 +581,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "queue_deadline_cases",
         "recovery_sweep_cases",
         "transcript_cases",
+        "compaction_reducer_cases",
+        "streaming_response_cases",
         "event_delivery_cases",
         "mcp_health_cases",
+        "identity_structural_cases",
+        "identity_contracts",
         "follow_up_hook",
     ];
     let registered_consumers = assert_registered_conformance_consumers_resolve();
