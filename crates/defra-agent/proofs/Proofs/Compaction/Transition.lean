@@ -42,6 +42,53 @@ end Compaction
 
 namespace Compaction
 
+open Transcript (MessageKind)
+
+/-- Abstract analogue of the Rust stub-payload mutation: the textual
+content of a tool-result message is replaced with a stub, but the
+linking metadata (callId, key) is preserved. Since the model abstracts
+away payload text, this is case-wise the identity on MessageKind. -/
+def stubMessageKind : MessageKind → MessageKind
+  | .toolResult callId key => .toolResult callId key
+  | .assistantToolCalls callIds => .assistantToolCalls callIds
+  | .ordinary => .ordinary
+
+theorem stubMessageKind_id (k : MessageKind) : stubMessageKind k = k := by
+  cases k <;> rfl
+
+def stubMessageRow (row : Transcript.MessageRow) : Transcript.MessageRow :=
+  { row with kind := stubMessageKind row.kind }
+
+theorem stubMessageRow_id (row : Transcript.MessageRow) :
+    stubMessageRow row = row := by
+  simp [stubMessageRow, stubMessageKind_id]
+
+def stubMessages : List Transcript.MessageRow → List Transcript.MessageRow :=
+  List.map stubMessageRow
+
+theorem stubMessages_id (msgs : List Transcript.MessageRow) :
+    stubMessages msgs = msgs := by
+  unfold stubMessages
+  rw [show stubMessageRow = id from funext stubMessageRow_id]
+  exact List.map_id msgs
+
+/-- Abstract analogue of Rust's `CompactionStrategy::StripToolResults`.
+Replaces each tool-result payload with a stub. In the model this is
+propositionally identity-shaped (the textual payload is abstracted away),
+but the typeclass instance still has to discharge `preservesPairs`,
+`preservesOrder`, etc. via `stubMessages_id` -- see Properties.lean. -/
+def stripToolResultsReducer : TranscriptReducer := fun v =>
+  { v with messages := stubMessages v.messages }
+
+theorem stripToolResultsReducer_id (v : PromptView) :
+    stripToolResultsReducer v = v := by
+  unfold stripToolResultsReducer
+  simp [stubMessages_id]
+
+end Compaction
+
+namespace Compaction
+
 /-- The trivial reducer -- does nothing. Witnesses that `IsValidReducer`
 is non-vacuous. -/
 def identityReducer : TranscriptReducer := fun v => v
