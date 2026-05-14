@@ -29,8 +29,10 @@ these are management tools, not new state machines.
 
 ## Strategic Claim
 
-R4c adds **zero new Lean transitions** and **possibly zero new theorems**.
-Every primitive R4c uses already exists in the verified model:
+R4c adds **zero new Lean transitions** and **one new theorem** (B5
+preservation under the `steer_subagent(interrupt=true)` composition, see
+"Verified Obligations"). Every primitive R4c uses already exists in the
+verified model:
 
 - the parent-child edge for authorization (R4)
 - `Proofs/Background/*` bridge rows for listing (R6 parametric `BridgedState`)
@@ -290,6 +292,25 @@ overflowed; terminal: R6's terminal envelope already had `truncated = true`).
 `total_bytes_seen` is monotonic: it counts every byte that has flowed
 through the stream, including bytes the ring buffer subsequently dropped.
 Use it to detect "still making progress".
+
+### Tail-only snapshot limitation
+
+The snapshot posture has a real cost callers must understand: an agent
+polling `read_tool_output` every N seconds **will miss any line the tool
+emits that gets pushed out of the ring buffer between polls**. Concretely,
+if a bash subprocess produces 300 KB of stdout between two polls and the
+buffer is 256 KB, ~44 KB of intermediate output is gone — the agent sees
+the most recent 256 KB only.
+
+This is the right tradeoff for v1: the common case is "what is bash doing
+right now?", not "give me the complete log." `total_bytes_seen` lets the
+caller detect that bytes were dropped (`total_bytes_seen > buffer_size`
+implies older bytes are gone), but cannot recover them.
+
+If a future caller needs lossless tail-following, v2 may add a
+`since_byte` incremental protocol or persist the full stream to disk; both
+are out of scope for v1. Callers that need the full output today should
+not background the tool — they should run it foreground.
 
 ### `steer_subagent`
 
@@ -646,16 +667,31 @@ long-polls.
 ## Verified Obligations
 
 R4c expects **zero new Lean modules** and **zero new Lean transitions**.
+R4c ships **one new theorem**.
 
-### Possible derived property (deferred unless reviewer surfaces it)
+### New theorem (required)
 
-- `steer_subagent_interrupt_preserves_link_symmetry`: after the
-  `interrupt = true` composition (interrupt + cascade + drain + append),
-  every bridge row's `parent_request_id` still points at a request whose
-  `caused_by_parent_*` symmetry is intact. This is mechanically discharged
-  from existing B5 plus the existing `interrupt` transition's invariants.
-  Belt-and-suspenders; the implementation plan flags it for the
-  spec-compliance reviewer to confirm whether to ship.
+`steer_subagent_interrupt_preserves_link_symmetry`: after the
+`interrupt = true` composition (interrupt + cascade + drain + append),
+every bridge row's `parent_request_id` still points at a request whose
+`caused_by_parent_*` symmetry is intact (B5 invariant preserved).
+
+Statement (informal):
+
+```lean
+theorem steer_with_interrupt_preserves_link_symmetry
+    (pre post : BackgroundedState)
+    (steer : SteerWithInterrupt pre post)
+    (h_pre : B5 pre) :
+    B5 post
+```
+
+Discharged mechanically from existing B5 plus the existing `interrupt`
+transition's invariants. The composition (interrupt + cascade + drain +
+append) is the operationally-touchiest R4c path; the theorem makes future
+regressions of the composition trip Lean before they trip Rust. Cost is one
+short proof; gain is that any future steering refactor that breaks lineage
+symmetry fails `lake build`. R4c is the cheapest place to add it.
 
 ### Conformance witnesses (required)
 
@@ -711,7 +747,8 @@ Explicit non-goals; the implementation plan should not absorb them:
 - Foreground-steering surface (no tool to steer a foreground subagent; the
   parent is blocked anyway).
 - Cross-deployment listing / reading / steering. v1 is local-only; the
-  envelopes carry `deployment_id` so v2 lift is additive. R5's domain.
+  envelopes carry `deployment_id` so v2 lift is additive. R5's domain
+  (see "Cross-Deployment v2 Coordination" below).
 - A separate `replace_subagent` verb. We picked the boolean knob
   (`interrupt = false | true`).
 - A new Lean transition for steering. Reuse-only.
@@ -722,6 +759,33 @@ Explicit non-goals; the implementation plan should not absorb them:
   and let it keep running"). There is no design for this; if it ever lands,
   it's a separate tool.
 - Live transcript tail / long-poll variants. Snapshot posture is canonical.
+
+## Cross-Deployment v2 Coordination
+
+R4c v1 is local-only: `list_subagents` and `list_background_tools` enumerate
+work whose lineage lives on this deployment. The envelopes carry
+`deployment_id` (set to the local deployment in v1) so a v2 lift to
+cross-deployment is additive — the field is reserved, not invented later.
+
+The v2 coordination point is not decided in R4c. R5's current spec covers
+cross-deployment subagent **cancel propagation** and **completion
+projection**, but does not address cross-deployment **listing**. Two
+plausible v2 paths, both deferred:
+
+1. **R4c v2 extends in place.** `list_subagents` and `list_background_tools`
+   follow lineage across deployments via whatever cross-deployment query
+   primitive R5 establishes. The envelopes don't change; the
+   `deployment_id` field starts carrying remote values. Requires R5 to
+   surface a "list children visible to this parent across deployments"
+   query that R4c can call.
+2. **A separate cross-deployment list tool supersedes R4c's.** R5 (or a
+   later iteration) ships `list_remote_subagents` / `list_remote_background_tools`
+   as new tools alongside R4c's, with their own envelopes. R4c's tools
+   remain strictly local. Larger surface; clearer coordinate-system split.
+
+R4c does not pick. The `deployment_id` field is the seam that lets either
+path land additively. When R5 has consensus on the cross-deployment query
+surface, the v2 decision becomes mechanical.
 
 ## Approval Checklist
 
@@ -747,9 +811,13 @@ Before implementation planning, Jack should approve:
   and `interrupt = true` (interrupt + cascade + drain + append). Composes
   existing primitives — zero new Lean transitions.
 - No parent-side `AgentToolCall` rows for any of the five tools.
-- Zero new Lean modules. Possibly zero new theorems. Six conformance
-  witnesses cover observable Rust shapes.
+- Zero new Lean modules. One new theorem
+  (`steer_subagent_interrupt_preserves_link_symmetry`, B5 preservation
+  under the interrupt + cascade + drain + append composition). Six
+  conformance witnesses cover observable Rust shapes.
 - Cross-deployment deferred to v2 (R5's domain). `deployment_id` on
-  envelopes for additive v2 lift.
+  envelopes for additive v2 lift. R4c does not pick between v2 extending
+  in place vs. a separate cross-deployment list tool; the `deployment_id`
+  seam supports either.
 - Sequencing: R4c executes after R6 merges to main; PR rebases on R6 merge;
   no "pure rename" no-op commit in R4c (R6 owns that).
