@@ -141,4 +141,63 @@ theorem status_flow_bounded
       | inr h => cases h
     | observeIdempotentFinalize _ h_post => rw [h_post]
 
+theorem completed_carries_materialized_handle
+    {pre post : ResponseContext}
+    (h : Transition pre post)
+    (h_completed : post.status = .completed)
+    (h_pre : pre.status = .streaming ∨
+             (pre.status = .completed ∧ pre.materializedMessageSequence.isSome)) :
+    post.materializedMessageSequence.isSome := by
+  cases h with
+  | begin h_streaming _ _ _ h_post =>
+    rw [h_post] at h_completed
+    rw [h_streaming] at h_completed
+    cases h_completed
+  | writeTokens h_streaming _ h_post =>
+    rw [h_post] at h_completed; simp at h_completed
+    rw [h_streaming] at h_completed; cases h_completed
+  | writeReasoning h_streaming h_post =>
+    rw [h_post] at h_completed; simp at h_completed
+    rw [h_streaming] at h_completed; cases h_completed
+  | flushPending h_streaming h_post =>
+    rw [h_post] at h_completed
+    rw [h_streaming] at h_completed; cases h_completed
+  | resetTail h_streaming h_post =>
+    rw [h_post] at h_completed; simp at h_completed
+    rw [h_streaming] at h_completed; cases h_completed
+  | setInterruptedAt _ h_post =>
+    rw [h_post] at h_completed; simp at h_completed
+    rw [h_post]; simp
+    cases h_pre with
+    | inl h_pre_streaming =>
+      rw [h_pre_streaming] at h_completed; cases h_completed
+    | inr h_pre_completed => exact h_pre_completed.2
+  | finalizeComplete _ h_post =>
+    rw [h_post]; simp
+  | finalizeError _ _ _ h_post =>
+    rw [h_post] at h_completed; simp at h_completed
+  | recoverInterrupted _ h_post =>
+    rw [h_post] at h_completed; simp at h_completed
+  | observeIdempotentFinalize _ h_post =>
+    rw [h_post]; rw [h_post] at h_completed
+    cases h_pre with
+    | inl h_pre_streaming =>
+      rw [h_pre_streaming] at h_completed; cases h_completed
+    | inr h_pre_completed => exact h_pre_completed.2
+
+theorem response_completed_implies_request_committed
+    {pre post : ResponseRequestBridge}
+    (h : BridgeTransition pre post)
+    (h_completed : post.response.status = .completed) :
+    post.requestState = .completed ∧ post.requestPersistence = .committed := by
+  cases h with
+  | finalizeComplete _ _ _ h_req h_pers =>
+    exact ⟨h_req, h_pers⟩
+  | finalizeError _ _ _ h_eq _ _ _ =>
+    rw [h_eq] at h_completed
+    simp at h_completed
+  | recoverPaired _ h_eq _ _ _ =>
+    rw [h_eq] at h_completed
+    simp at h_completed
+
 end StreamingResponse

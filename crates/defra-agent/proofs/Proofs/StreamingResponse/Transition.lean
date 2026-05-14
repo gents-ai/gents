@@ -86,26 +86,37 @@ inductive Trace : ResponseContext → ResponseContext → Prop where
 
 inductive BridgeTransition : ResponseRequestBridge → ResponseRequestBridge → Prop where
   | finalizeComplete
-      {pre post : ResponseRequestBridge} :
-      Transition pre.response post.response →
-      post.response.status = .completed →
+      {pre post : ResponseRequestBridge} {seq : Transcript.Sequence} :
+      pre.response.status = .streaming →
+      post.response = { pre.response with
+        status := .completed
+      , liveTail := .empty
+      , materializedMessageSequence := some seq } →
       pre.requestState = .processing →
       post.requestState = .completed →
       post.requestPersistence = .committed →
       BridgeTransition pre post
   | finalizeError
-      {pre post : ResponseRequestBridge} :
-      Transition pre.response post.response →
-      post.response.status = .error →
-      post.response.errorReason ≠ some .daemonRestartRecovery →
+      {pre post : ResponseRequestBridge} {reason : ErrorReason} :
+      pre.response.status = .streaming →
+      (reason = .inferenceFailed ∨ reason = .finalizeRequestedError ∨
+       reason = .streamIdleTimeout ∨ reason = .interrupted) →
+      (reason = .streamIdleTimeout →
+         pre.response.now > pre.response.streamIdleDeadline) →
+      post.response = { pre.response with
+        status := .error
+      , liveTail := .empty
+      , errorReason := some reason } →
       pre.requestState = .processing →
       post.requestState = .failed →
       post.requestPersistence = .committed →
       BridgeTransition pre post
   | recoverPaired
       {pre post : ResponseRequestBridge} :
-      Transition pre.response post.response →
-      post.response.errorReason = some .daemonRestartRecovery →
+      pre.response.status = .streaming →
+      post.response = { pre.response with
+        status := .error
+      , errorReason := some .daemonRestartRecovery } →
       pre.requestState = .processing →
       post.requestState = .failed →
       post.requestPersistence = .committed →
