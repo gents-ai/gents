@@ -85,6 +85,31 @@ theorem stripToolResultsReducer_id (v : PromptView) :
   unfold stripToolResultsReducer
   simp [stubMessages_id]
 
+instance instIsValidReducerStrip : IsValidReducer stripToolResultsReducer where
+  gate                := fun _ => True
+  decGate             := fun _ => .isTrue trivial
+  preservesPairs      := by
+                          intro v h
+                          rw [stripToolResultsReducer_id]
+                          exact h
+  preservesOrder      := by
+                          intro v h
+                          rw [stripToolResultsReducer_id]
+                          exact h
+  preservesSession    := by
+                          intro v
+                          rw [stripToolResultsReducer_id]
+  identityBelowGate   := by
+                          intro v h
+                          exact absurd trivial h
+  identityUnlessSafe  := by
+                          intro v _
+                          exact stripToolResultsReducer_id v
+  reapplyPreservesCoh := by
+                          intro v h
+                          rw [stripToolResultsReducer_id, stripToolResultsReducer_id]
+                          exact h
+
 end Compaction
 
 namespace Compaction
