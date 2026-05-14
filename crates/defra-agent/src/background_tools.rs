@@ -20,7 +20,8 @@ use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass};
 use self::r4c_args::{
     ListBackgroundToolsArgs, ListBackgroundToolsEntry, ListBackgroundToolsResponse,
     ListStatusFilter, ListSubagentsArgs, ListSubagentsEntry, ListSubagentsResponse,
-    ReadSubagentTranscriptArgs, ReadSubagentTranscriptResponse,
+    ReadSubagentTranscriptArgs, ReadSubagentTranscriptResponse, ReadToolOutputArgs,
+    ReadToolOutputResponse, ReadToolOutputStream,
 };
 use self::transcript_render::{
     render_transcript, MessageKindView, MessageRoleView, MessageView, RenderOptions,
@@ -254,6 +255,23 @@ struct TranscriptToolCallRow {
     tool_call_id: String,
     tool_name: String,
     child_request_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReadToolOutputRow {
+    tool_call_id: String,
+    tool_name: String,
+    request_id: Option<String>,
+    await_mode: Option<String>,
+    lifecycle_state: Option<String>,
+    child_request_id: Option<String>,
+    result: Option<String>,
+}
+
+pub(crate) enum ReadToolOutputOutcome {
+    Found(ReadToolOutputResponse),
+    NotAuthorized,
+    NotBackgrounded,
 }
 
 pub(crate) async fn handle_list_subagents(
@@ -670,6 +688,101 @@ fn tool_result_identities(message: &Message) -> Vec<String> {
         }
     }
     ids
+}
+
+pub(crate) async fn handle_read_tool_output(
+    node: &EmbeddedNode,
+    caller_request_id: &str,
+    args: ReadToolOutputArgs,
+) -> Result<ReadToolOutputOutcome> {
+    let tool_call_id = args.tool_call_id.trim();
+    if tool_call_id.is_empty() {
+        return Ok(ReadToolOutputOutcome::NotAuthorized);
+    }
+
+    let escaped_tool_call_id = escape_graphql_string(tool_call_id);
+    let escaped_caller = escape_graphql_string(caller_request_id);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    request_id: {{ _eq: "{escaped_caller}" }},
+                    tool_call_id: {{ _eq: "{escaped_tool_call_id}" }}
+                }},
+                limit: 1
+            ) {{
+                tool_call_id
+                tool_name
+                request_id
+                await_mode
+                lifecycle_state
+                child_request_id
+                result
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!("read_tool_output query failed: {:?}", response.errors);
+    }
+    let Some(row) = first_row::<ReadToolOutputRow>(response.data.as_ref(), "AgentToolCall") else {
+        return Ok(ReadToolOutputOutcome::NotAuthorized);
+    };
+    if row.request_id.as_deref() != Some(caller_request_id) {
+        return Ok(ReadToolOutputOutcome::NotAuthorized);
+    }
+    if row.await_mode.as_deref() != Some("background")
+        || non_empty_string(row.child_request_id.as_deref()).is_some()
+    {
+        return Ok(ReadToolOutputOutcome::NotBackgrounded);
+    }
+
+    let status = row
+        .lifecycle_state
+        .as_deref()
+        .filter(|state| !state.trim().is_empty())
+        .unwrap_or("running")
+        .to_string();
+    let max_bytes = args.validated_max_bytes() as usize;
+    let result = if status == "running" {
+        ""
+    } else {
+        row.result.as_deref().unwrap_or_default()
+    };
+    let stdout = read_tool_output_stream(result, max_bytes);
+    Ok(ReadToolOutputOutcome::Found(ReadToolOutputResponse {
+        tool_call_id: row.tool_call_id,
+        tool_name: row.tool_name,
+        status,
+        stdout,
+        stderr: ReadToolOutputStream {
+            bytes: String::new(),
+            truncated: false,
+            total_bytes_seen: 0,
+        },
+        exit_code: None,
+    }))
+}
+
+fn read_tool_output_stream(value: &str, max_bytes: usize) -> ReadToolOutputStream {
+    let total_bytes_seen = value.as_bytes().len() as u64;
+    let (bytes, truncated) = truncate_utf8_prefix(value, max_bytes);
+    ReadToolOutputStream {
+        bytes,
+        truncated,
+        total_bytes_seen,
+    }
+}
+
+fn truncate_utf8_prefix(value: &str, max_bytes: usize) -> (String, bool) {
+    if value.len() <= max_bytes {
+        return (value.to_string(), false);
+    }
+    let mut end = max_bytes.min(value.len());
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    (value[..end].to_string(), true)
 }
 
 fn list_subagent_status_matches(filter: ListStatusFilter, status: &str) -> bool {

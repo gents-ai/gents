@@ -25,7 +25,7 @@ use file_tools::{EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, 
 use shared::ToolContext;
 use subagent::{
     BackgroundTool, CancelSubagentTool, CancelTool, ListBackgroundToolsTool, ListSubagentsTool,
-    ReadSubagentTranscriptTool, SpawnSubagentTool, WaitSubagentTool, WaitTool,
+    ReadSubagentTranscriptTool, ReadToolOutputTool, SpawnSubagentTool, WaitSubagentTool, WaitTool,
 };
 
 use crate::tool_surface::{BackgroundToolConfig, SubagentToolConfig};
@@ -53,6 +53,7 @@ pub(crate) const CANCEL_SUBAGENT_TOOL_NAME: &str = "cancel_subagent";
 pub(crate) const BACKGROUND_TOOL_NAME: &str = "background_tool";
 pub(crate) const WAIT_TOOL_NAME: &str = "wait_tool";
 pub(crate) const LIST_BACKGROUND_TOOLS_TOOL_NAME: &str = "list_background_tools";
+pub(crate) const READ_TOOL_OUTPUT_TOOL_NAME: &str = "read_tool_output";
 pub(crate) const CANCEL_TOOL_NAME: &str = "cancel_tool";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -442,6 +443,7 @@ pub(crate) fn background_tool_names(config: &BackgroundToolConfig) -> Vec<String
         BACKGROUND_TOOL_NAME,
         WAIT_TOOL_NAME,
         LIST_BACKGROUND_TOOLS_TOOL_NAME,
+        READ_TOOL_OUTPUT_TOOL_NAME,
         CANCEL_TOOL_NAME,
     ]
     .into_iter()
@@ -458,6 +460,7 @@ pub(crate) fn build_background_tools(config: BackgroundToolConfig) -> Vec<Box<dy
         Box::new(BackgroundTool::new(config.clone())),
         Box::new(WaitTool),
         Box::new(ListBackgroundToolsTool),
+        Box::new(ReadToolOutputTool),
         Box::new(CancelTool),
     ]
 }

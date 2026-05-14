@@ -3,7 +3,7 @@ use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 
 use crate::background_tools::r4c_args::{
-    ListBackgroundToolsArgs, ListSubagentsArgs, ReadSubagentTranscriptArgs,
+    ListBackgroundToolsArgs, ListSubagentsArgs, ReadSubagentTranscriptArgs, ReadToolOutputArgs,
 };
 use crate::background_tools::{
     BackgroundToolArgs, CancelSubagentArgs, CancelToolArgs, SpawnSubagentArgs, WaitSubagentArgs,
@@ -16,7 +16,7 @@ use super::shared::ToolError;
 use super::{
     BACKGROUND_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, CANCEL_TOOL_NAME,
     LIST_BACKGROUND_TOOLS_TOOL_NAME, LIST_SUBAGENTS_TOOL_NAME, READ_SUBAGENT_TRANSCRIPT_TOOL_NAME,
-    SPAWN_SUBAGENT_TOOL_NAME, WAIT_SUBAGENT_TOOL_NAME, WAIT_TOOL_NAME,
+    READ_TOOL_OUTPUT_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME, WAIT_SUBAGENT_TOOL_NAME, WAIT_TOOL_NAME,
 };
 
 const SUBAGENT_SERVICE_ID: &str = "subagent";
@@ -131,6 +131,9 @@ pub(super) struct WaitTool;
 
 #[derive(Clone, Copy)]
 pub(super) struct ListBackgroundToolsTool;
+
+#[derive(Clone, Copy)]
+pub(super) struct ReadToolOutputTool;
 
 #[derive(Clone, Copy)]
 pub(super) struct CancelTool;
@@ -468,6 +471,45 @@ impl Tool for ListBackgroundToolsTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let _ = args.validated_limit();
+        Err(background_not_yet_executable_error(Self::NAME))
+    }
+}
+
+impl Tool for ReadToolOutputTool {
+    const NAME: &'static str = READ_TOOL_OUTPUT_TOOL_NAME;
+
+    type Error = ToolError;
+    type Args = ReadToolOutputArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Read stdout and stderr snapshots for a visible background tool call."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "tool_call_id": {
+                        "type": "string",
+                        "description": "Tool call ID returned by background_tool or list_background_tools."
+                    },
+                    "max_bytes_per_stream": {
+                        "type": "integer",
+                        "minimum": 256,
+                        "maximum": 262144,
+                        "default": 16384,
+                        "description": "Maximum bytes to return per stream."
+                    }
+                },
+                "required": ["tool_call_id"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        validate_tool_call_id(Self::NAME, &args.tool_call_id)?;
+        let _ = args.validated_max_bytes();
         Err(background_not_yet_executable_error(Self::NAME))
     }
 }

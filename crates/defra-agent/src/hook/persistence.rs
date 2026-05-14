@@ -9,15 +9,16 @@ use serde_json::json;
 use tracing::Instrument;
 
 use crate::background_tools::r4c_args::{
-    ListBackgroundToolsArgs, ListSubagentsArgs, ReadSubagentTranscriptArgs,
+    ListBackgroundToolsArgs, ListSubagentsArgs, ReadSubagentTranscriptArgs, ReadToolOutputArgs,
 };
 use crate::background_tools::{
     child_request_completed, effective_context_cross_deployment_spawn_timeout_seconds,
     handle_list_background_tools, handle_list_subagents, handle_read_subagent_transcript,
-    load_authorized_child_edge, load_child_final_response, load_child_session_id,
-    load_child_terminal_row, load_parent_subagent_context, project_child_terminal,
-    target_is_allowed, BackgroundToolArgs, CancelSubagentArgs, CancelToolArgs,
-    ParentSubagentContext, SpawnSubagentArgs, WaitSubagentArgs, WaitToolArgs,
+    handle_read_tool_output, load_authorized_child_edge, load_child_final_response,
+    load_child_session_id, load_child_terminal_row, load_parent_subagent_context,
+    project_child_terminal, target_is_allowed, BackgroundToolArgs, CancelSubagentArgs,
+    CancelToolArgs, ParentSubagentContext, ReadToolOutputOutcome, SpawnSubagentArgs,
+    WaitSubagentArgs, WaitToolArgs,
 };
 use crate::config::DEFAULT_DEADLINE_DURATION_SECS;
 use crate::document_config::load_agent_behavior;
@@ -31,7 +32,7 @@ use crate::tool_call_lifecycle::{
 use crate::toolset::{
     BACKGROUND_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, CANCEL_TOOL_NAME,
     LIST_BACKGROUND_TOOLS_TOOL_NAME, LIST_SUBAGENTS_TOOL_NAME, READ_SUBAGENT_TRANSCRIPT_TOOL_NAME,
-    SPAWN_SUBAGENT_TOOL_NAME, WAIT_SUBAGENT_TOOL_NAME, WAIT_TOOL_NAME,
+    READ_TOOL_OUTPUT_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME, WAIT_SUBAGENT_TOOL_NAME, WAIT_TOOL_NAME,
 };
 use crate::truncation::{truncate_text, DefraSpillTruncator, TruncationMode, Truncator};
 
@@ -1190,6 +1191,69 @@ impl DefraSessionHook {
             anyhow::anyhow!("serialize list_background_tools response: {error}")
         })?;
         Ok(ToolCallHookAction::skip(json_string(result)))
+    }
+
+    async fn persist_read_tool_output_tool_call(
+        &self,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+    ) -> anyhow::Result<ToolCallHookAction> {
+        let (_session_id, request_id, _deadline_at, _seq) =
+            self.ensure_assistant_turn_sequence().await?;
+        self.state.lock().await.register_tool_result_identity(
+            internal_call_id,
+            None,
+            tool_call_id.as_deref(),
+        );
+
+        let parsed = match serde_json::from_str::<ReadToolOutputArgs>(args) {
+            Ok(args) => args,
+            Err(error) => {
+                return Ok(ToolCallHookAction::skip(
+                    background_invalid_tool_arguments_payload(
+                        READ_TOOL_OUTPUT_TOOL_NAME,
+                        "/",
+                        format!("invalid read_tool_output arguments: {error}"),
+                    ),
+                ));
+            }
+        };
+        let background_tool_call_id = parsed.tool_call_id.trim().to_string();
+        if background_tool_call_id.is_empty() {
+            return Ok(ToolCallHookAction::skip(
+                background_invalid_tool_arguments_payload(
+                    READ_TOOL_OUTPUT_TOOL_NAME,
+                    "/tool_call_id",
+                    "tool_call_id is required",
+                ),
+            ));
+        }
+
+        match handle_read_tool_output(&self.node, &request_id, parsed).await? {
+            ReadToolOutputOutcome::Found(response) => {
+                let result = serde_json::to_value(response).map_err(|error| {
+                    anyhow::anyhow!("serialize read_tool_output response: {error}")
+                })?;
+                Ok(ToolCallHookAction::skip(json_string(result)))
+            }
+            ReadToolOutputOutcome::NotBackgrounded => Ok(ToolCallHookAction::skip(
+                background_invalid_tool_arguments_payload(
+                    READ_TOOL_OUTPUT_TOOL_NAME,
+                    "/tool_call_id",
+                    "tool_call_id must identify an ordinary backgrounded tool call",
+                ),
+            )),
+            ReadToolOutputOutcome::NotAuthorized => Ok(ToolCallHookAction::skip(
+                background_tool_not_allowed_payload(
+                    READ_TOOL_OUTPUT_TOOL_NAME,
+                    "/tool_call_id",
+                    &background_tool_call_id,
+                    "background tool call is not owned by this parent request",
+                    Vec::new(),
+                ),
+            )),
+        }
     }
 
     async fn persist_cancel_tool_call(
@@ -2616,6 +2680,24 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                 Err(e) => {
                     self.on_tool_persistence_error("persist list_background_tools tool call", &e)
                 }
+            };
+        }
+        if tool_name == READ_TOOL_OUTPUT_TOOL_NAME {
+            let result = self
+                .persist_read_tool_output_tool_call(tool_call_id, internal_call_id, args)
+                .instrument(tracing::info_span!(
+                    "tool.call",
+                    tool_name = %tool_name,
+                    tool_call_id = %internal_call_id,
+                ))
+                .await;
+
+            return match result {
+                Ok(action) => {
+                    self.record_success();
+                    action
+                }
+                Err(e) => self.on_tool_persistence_error("persist read_tool_output tool call", &e),
             };
         }
         if tool_name == CANCEL_TOOL_NAME {
