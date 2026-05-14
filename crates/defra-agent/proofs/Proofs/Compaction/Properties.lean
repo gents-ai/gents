@@ -119,3 +119,27 @@ theorem reduction_implies_all_retained_tool_results_terminal
   exact h_nontrivial (IsValidReducer.identityUnlessSafe (r := r) v h_unsafe)
 
 end Compaction
+
+namespace Compaction
+
+/-!
+## Witness-specific theorems
+
+The two witness reducers (`identityReducer` and `stripToolResultsReducer`)
+are deterministic, so they satisfy the *strict* idempotence law
+`r (r v) = r v` unconditionally -- not just the conditional forms that
+the contract-parametric theorems prove. This is the boundary that
+LLM-based strategies (Summarize, StripThenSummarize) cannot cross:
+they satisfy only the conditional forms because their summary output
+is non-deterministic.
+-/
+
+theorem identity_reducer_is_strictly_idempotent (v : PromptView) :
+    identityReducer (identityReducer v) = identityReducer v := rfl
+
+theorem strip_tool_results_is_strictly_idempotent (v : PromptView) :
+    stripToolResultsReducer (stripToolResultsReducer v)
+      = stripToolResultsReducer v := by
+  rw [stripToolResultsReducer_id, stripToolResultsReducer_id]
+
+end Compaction
