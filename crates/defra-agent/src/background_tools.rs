@@ -1,5 +1,7 @@
 #![allow(dead_code)] // R4b lands these helpers one task ahead of their tool integrations.
 
+mod r4c_args;
+
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use defra_agent_protocol::transcript::decode_persisted_message;
