@@ -471,4 +471,21 @@ theorem idempotent_finalize_is_noop
     | inr h => cases h
   | observeIdempotentFinalize _ h_post => exact h_post
 
+/-- Parity: the streaming-stale recovery condition reaches an error
+state via the canonical `Transition.recoverInterrupted`. This is the
+formal statement that `responseRecoverySweep` in `Recovery/Sweeps.lean`
+is a degenerate instance of the transition relation. -/
+theorem recoverInterrupted_constructible
+    (pre : ResponseContext)
+    (h_streaming : pre.status = .streaming) :
+    ∃ post, Transition pre post ∧
+            post.status = .error ∧
+            post.errorReason = some .daemonRestartRecovery := by
+  refine ⟨{ pre with
+    status := .error
+  , errorReason := some .daemonRestartRecovery }, ?_, ?_, ?_⟩
+  · exact Transition.recoverInterrupted h_streaming rfl
+  · rfl
+  · rfl
+
 end StreamingResponse
