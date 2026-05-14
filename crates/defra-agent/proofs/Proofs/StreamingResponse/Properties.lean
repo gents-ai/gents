@@ -39,7 +39,7 @@ theorem terminal_irreversibility
     cases h_term with
     | inl h => cases h
     | inr h => cases h
-  | setInterruptedAt _ h_post =>
+  | setInterruptedAt _ _ h_post =>
     rw [h_post]
     simp
     exact h_term
@@ -72,7 +72,7 @@ theorem identity_preserved
   | writeReasoning _ h_post => rw [h_post]; exact ⟨rfl, rfl⟩
   | flushPending _ h_post => rw [h_post]; exact ⟨rfl, rfl⟩
   | resetTail _ h_post => rw [h_post]; exact ⟨rfl, rfl⟩
-  | setInterruptedAt _ h_post => rw [h_post]; exact ⟨rfl, rfl⟩
+  | setInterruptedAt _ _ h_post => rw [h_post]; exact ⟨rfl, rfl⟩
   | finalizeComplete _ h_post => rw [h_post]; exact ⟨rfl, rfl⟩
   | finalizeError _ _ _ h_post => rw [h_post]; exact ⟨rfl, rfl⟩
   | recoverInterrupted _ h_post => rw [h_post]; exact ⟨rfl, rfl⟩
@@ -91,7 +91,7 @@ theorem status_flow_bounded
     | writeReasoning h_streaming h_post => left; rw [h_post]; exact h_streaming
     | flushPending h_streaming h_post => left; rw [h_post]; exact h_streaming
     | resetTail h_streaming h_post => left; rw [h_post]; exact h_streaming
-    | setInterruptedAt _ h_post => left; rw [h_post]; exact h_pre_streaming
+    | setInterruptedAt _ _ h_post => left; rw [h_post]; exact h_pre_streaming
     | finalizeComplete _ h_post => right; rw [h_post]; exact Or.inl rfl
     | finalizeError _ _ _ h_post => right; rw [h_post]; exact Or.inr rfl
     | recoverInterrupted _ h_post => right; rw [h_post]; exact Or.inr rfl
@@ -123,7 +123,7 @@ theorem status_flow_bounded
       cases h_term with
       | inl h => cases h
       | inr h => cases h
-    | setInterruptedAt _ h_post => rw [h_post]
+    | setInterruptedAt _ _ h_post => rw [h_post]
     | finalizeComplete h_streaming _ =>
       rw [h_streaming] at h_term
       cases h_term with
@@ -165,7 +165,7 @@ theorem completed_carries_materialized_handle
   | resetTail h_streaming h_post =>
     rw [h_post] at h_completed; simp at h_completed
     rw [h_streaming] at h_completed; cases h_completed
-  | setInterruptedAt _ h_post =>
+  | setInterruptedAt _ _ h_post =>
     rw [h_post] at h_completed; simp at h_completed
     rw [h_post]; simp
     cases h_pre with
@@ -256,7 +256,7 @@ theorem normal_finalize_clears_liveTail
     · rw [h_post] at h_err; rw [h_pre_streaming] at h_err; cases h_err
   | resetTail _ h_post =>
     rw [h_post]
-  | setInterruptedAt _ h_post =>
+  | setInterruptedAt _ _ h_post =>
     rw [h_post] at h_finalize; simp at h_finalize
     rcases h_finalize with h_comp | ⟨h_err, _⟩
     · rw [h_pre_streaming] at h_comp; cases h_comp
@@ -301,7 +301,7 @@ theorem recovery_path_preserves_liveTail
   | resetTail _ h_post =>
     rw [h_post] at h_reason; simp at h_reason
     exact absurd h_reason h_pre_no_recovery
-  | setInterruptedAt _ h_post =>
+  | setInterruptedAt _ _ h_post =>
     rw [h_post] at h_reason; simp at h_reason
     exact absurd h_reason h_pre_no_recovery
   | finalizeComplete _ h_post =>
@@ -369,7 +369,7 @@ theorem completed_state_has_empty_liveTail
     | resetTail h_streaming h_post =>
       rw [h_post] at h_completed; simp at h_completed
       rw [h_streaming] at h_completed; cases h_completed
-    | setInterruptedAt _ h_post =>
+    | setInterruptedAt _ _ h_post =>
       -- post.liveTail = pre.liveTail; post.status = pre.status; we
       -- conclude empty from h_pre_wellformed (the inr branch, since
       -- post.status = .completed forces pre.status = .completed).
@@ -396,5 +396,79 @@ theorem completed_state_has_empty_liveTail
       | inr h_pre_completed => exact h_pre_completed.2.1
   · exact completed_carries_materialized_handle h h_completed
       (h_pre_wellformed.imp id (fun h => ⟨h.1, h.2.2⟩))
+
+def BeginUniquePerRequestId (rows : List ResponseContext) : Prop :=
+  ∀ r₁ r₂, r₁ ∈ rows → r₂ ∈ rows →
+    r₁.requestId = r₂.requestId → r₁.docId = r₂.docId
+
+theorem begin_preserves_unique_per_request_id
+    (rows : List ResponseContext) (new : ResponseContext)
+    (h_unique : BeginUniquePerRequestId rows)
+    (h_no_existing : ∀ r, r ∈ rows → r.requestId ≠ new.requestId) :
+    BeginUniquePerRequestId (new :: rows) := by
+  intro r₁ r₂ h₁ h₂ h_req_eq
+  simp at h₁ h₂
+  rcases h₁ with h₁ | h₁
+  · rcases h₂ with h₂ | h₂
+    · rw [h₁, h₂]
+    · exfalso
+      have := h_no_existing r₂ h₂
+      rw [h₁] at h_req_eq
+      exact this h_req_eq.symm
+  · rcases h₂ with h₂ | h₂
+    · exfalso
+      have := h_no_existing r₁ h₁
+      rw [h₂] at h_req_eq
+      exact this h_req_eq
+    · exact h_unique r₁ r₂ h₁ h₂ h_req_eq
+
+theorem idempotent_finalize_is_noop
+    {pre post : ResponseContext}
+    (h : Transition pre post)
+    (h_pre_term : isTerminal pre.status) :
+    post = pre := by
+  cases h with
+  | begin h_streaming _ _ _ _ =>
+    rw [h_streaming] at h_pre_term
+    cases h_pre_term with
+    | inl h => cases h
+    | inr h => cases h
+  | writeTokens h_streaming _ _ =>
+    rw [h_streaming] at h_pre_term
+    cases h_pre_term with
+    | inl h => cases h
+    | inr h => cases h
+  | writeReasoning h_streaming _ =>
+    rw [h_streaming] at h_pre_term
+    cases h_pre_term with
+    | inl h => cases h
+    | inr h => cases h
+  | flushPending _ h_post => exact h_post
+  | resetTail h_streaming _ =>
+    rw [h_streaming] at h_pre_term
+    cases h_pre_term with
+    | inl h => cases h
+    | inr h => cases h
+  | setInterruptedAt h_streaming _ _ =>
+    rw [h_streaming] at h_pre_term
+    cases h_pre_term with
+    | inl h => cases h
+    | inr h => cases h
+  | finalizeComplete h_streaming _ =>
+    rw [h_streaming] at h_pre_term
+    cases h_pre_term with
+    | inl h => cases h
+    | inr h => cases h
+  | finalizeError h_streaming _ _ _ =>
+    rw [h_streaming] at h_pre_term
+    cases h_pre_term with
+    | inl h => cases h
+    | inr h => cases h
+  | recoverInterrupted h_streaming _ =>
+    rw [h_streaming] at h_pre_term
+    cases h_pre_term with
+    | inl h => cases h
+    | inr h => cases h
+  | observeIdempotentFinalize _ h_post => exact h_post
 
 end StreamingResponse

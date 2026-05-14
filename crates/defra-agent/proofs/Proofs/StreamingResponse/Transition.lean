@@ -44,6 +44,7 @@ inductive Transition : ResponseContext → ResponseContext → Prop where
       Transition pre post
   | setInterruptedAt
       {pre post : ResponseContext} {t : Time} :
+      pre.status = .streaming →
       pre.interruptedAt = none →
       post = { pre with interruptedAt := some t } →
       Transition pre post
