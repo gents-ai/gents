@@ -684,6 +684,7 @@ pub(crate) async fn append_background_tool_completion(
             policy: QueuePolicy::Coalesce,
             key: Some(queue_key),
             queued_after_request_id: Some(parent_request_id.to_string()),
+            interrupted_request_id: None,
         },
     )
     .await?;
@@ -744,6 +745,7 @@ async fn ensure_projection_side_effects(
             policy: QueuePolicy::Coalesce,
             key: Some(queue_key),
             queued_after_request_id: Some(parent_request_id.to_string()),
+            interrupted_request_id: None,
         },
     )
     .await?;

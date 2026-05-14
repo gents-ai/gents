@@ -321,6 +321,7 @@ pub(crate) fn subagent_tool_config_from_document(
     SubagentToolConfig {
         targets: selection.subagent_targets.clone().unwrap_or_default(),
         spawn_enabled: selection.subagent_spawn_enabled.unwrap_or(false),
+        steering_enabled: selection.subagent_steering_enabled.unwrap_or(false),
         background_enabled: selection.subagent_background_enabled.unwrap_or(false),
     }
 }

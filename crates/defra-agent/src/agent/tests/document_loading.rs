@@ -134,6 +134,7 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
             delegate_to: Some(vec!["did:defra-agent:amy-code".to_string()]),
             subagent_targets: Some(vec!["researcher".to_string(), "researcher".to_string()]),
             subagent_spawn_enabled: Some(true),
+            subagent_steering_enabled: Some(true),
             subagent_background_enabled: Some(true),
             ..Default::default()
         },
@@ -203,6 +204,7 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
         ["researcher".to_string()]
     );
     assert!(behavior.tools.subagent_tools().spawn_enabled);
+    assert!(behavior.tools.subagent_tools().steering_enabled);
     assert!(behavior.tools.subagent_tools().background_enabled);
     let snapshot = resolve_document_runtime_snapshot(
         agent.node.as_ref(),
@@ -219,8 +221,8 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
     assert!(tool_names.contains(&"wait_subagent".to_string()));
     assert!(tool_names.contains(&"list_subagents".to_string()));
     assert!(tool_names.contains(&"read_subagent_transcript".to_string()));
+    assert!(tool_names.contains(&"steer_subagent".to_string()));
     assert!(tool_names.contains(&"cancel_subagent".to_string()));
-    assert!(!tool_names.contains(&"steer_subagent".to_string()));
 }
 
 #[tokio::test]

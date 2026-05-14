@@ -109,6 +109,7 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
     let disabled = SubagentToolConfig {
         targets: vec!["worker".to_string()],
         spawn_enabled: false,
+        steering_enabled: false,
         background_enabled: true,
     };
     assert!(subagent_tool_names(&disabled).is_empty());
@@ -116,6 +117,7 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
     let no_targets = SubagentToolConfig {
         targets: Vec::new(),
         spawn_enabled: true,
+        steering_enabled: true,
         background_enabled: true,
     };
     assert!(subagent_tool_names(&no_targets).is_empty());
@@ -123,6 +125,7 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
     let enabled = SubagentToolConfig {
         targets: vec!["worker".to_string()],
         spawn_enabled: true,
+        steering_enabled: true,
         background_enabled: false,
     };
     let names = subagent_tool_names(&enabled);
@@ -137,6 +140,40 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
         ]
     );
     assert!(!names.contains(&"steer_subagent".to_string()));
+
+    let steering_disabled = SubagentToolConfig {
+        targets: vec!["worker".to_string()],
+        spawn_enabled: true,
+        steering_enabled: false,
+        background_enabled: true,
+    };
+    assert_eq!(
+        subagent_tool_names(&steering_disabled),
+        vec![
+            SPAWN_SUBAGENT_TOOL_NAME.to_string(),
+            WAIT_SUBAGENT_TOOL_NAME.to_string(),
+            LIST_SUBAGENTS_TOOL_NAME.to_string(),
+            CANCEL_SUBAGENT_TOOL_NAME.to_string()
+        ]
+    );
+
+    let steering_and_background = SubagentToolConfig {
+        targets: vec!["worker".to_string()],
+        spawn_enabled: true,
+        steering_enabled: true,
+        background_enabled: true,
+    };
+    assert_eq!(
+        subagent_tool_names(&steering_and_background),
+        vec![
+            SPAWN_SUBAGENT_TOOL_NAME.to_string(),
+            WAIT_SUBAGENT_TOOL_NAME.to_string(),
+            LIST_SUBAGENTS_TOOL_NAME.to_string(),
+            READ_SUBAGENT_TRANSCRIPT_TOOL_NAME.to_string(),
+            STEER_SUBAGENT_TOOL_NAME.to_string(),
+            CANCEL_SUBAGENT_TOOL_NAME.to_string()
+        ]
+    );
 }
 
 #[test]
@@ -181,6 +218,7 @@ async fn subagent_tool_definitions_register_expected_surface() {
     let config = SubagentToolConfig {
         targets: vec!["research".to_string()],
         spawn_enabled: true,
+        steering_enabled: true,
         background_enabled: false,
     };
     let tools = build_subagent_tools(config);
@@ -212,6 +250,7 @@ async fn spawn_subagent_definition_exposes_background_mode_when_enabled() {
     let config = SubagentToolConfig {
         targets: vec!["research".to_string()],
         spawn_enabled: true,
+        steering_enabled: true,
         background_enabled: true,
     };
     let tools = build_subagent_tools(config);

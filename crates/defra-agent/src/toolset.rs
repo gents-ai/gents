@@ -25,7 +25,8 @@ use file_tools::{EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, 
 use shared::ToolContext;
 use subagent::{
     BackgroundTool, CancelSubagentTool, CancelTool, ListBackgroundToolsTool, ListSubagentsTool,
-    ReadSubagentTranscriptTool, ReadToolOutputTool, SpawnSubagentTool, WaitSubagentTool, WaitTool,
+    ReadSubagentTranscriptTool, ReadToolOutputTool, SpawnSubagentTool, SteerSubagentTool,
+    WaitSubagentTool, WaitTool,
 };
 
 use crate::tool_surface::{BackgroundToolConfig, SubagentToolConfig};
@@ -49,6 +50,7 @@ pub(crate) const SPAWN_SUBAGENT_TOOL_NAME: &str = "spawn_subagent";
 pub(crate) const WAIT_SUBAGENT_TOOL_NAME: &str = "wait_subagent";
 pub(crate) const LIST_SUBAGENTS_TOOL_NAME: &str = "list_subagents";
 pub(crate) const READ_SUBAGENT_TRANSCRIPT_TOOL_NAME: &str = "read_subagent_transcript";
+pub(crate) const STEER_SUBAGENT_TOOL_NAME: &str = "steer_subagent";
 pub(crate) const CANCEL_SUBAGENT_TOOL_NAME: &str = "cancel_subagent";
 pub(crate) const BACKGROUND_TOOL_NAME: &str = "background_tool";
 pub(crate) const WAIT_TOOL_NAME: &str = "wait_tool";
@@ -408,16 +410,27 @@ pub(crate) fn subagent_tool_names(config: &SubagentToolConfig) -> Vec<String> {
         return Vec::new();
     }
 
-    [
+    let mut names = [
         SPAWN_SUBAGENT_TOOL_NAME,
         WAIT_SUBAGENT_TOOL_NAME,
         LIST_SUBAGENTS_TOOL_NAME,
-        READ_SUBAGENT_TRANSCRIPT_TOOL_NAME,
         CANCEL_SUBAGENT_TOOL_NAME,
     ]
     .into_iter()
     .map(str::to_string)
-    .collect()
+    .collect::<Vec<_>>();
+    if config.steering_tools_enabled() {
+        names.insert(3, READ_SUBAGENT_TRANSCRIPT_TOOL_NAME.to_string());
+    }
+    if config.steer_subagent_enabled() {
+        let insert_at = if config.steering_tools_enabled() {
+            4
+        } else {
+            3
+        };
+        names.insert(insert_at, STEER_SUBAGENT_TOOL_NAME.to_string());
+    }
+    names
 }
 
 pub(crate) fn build_subagent_tools(config: SubagentToolConfig) -> Vec<Box<dyn ToolDyn>> {
@@ -425,13 +438,19 @@ pub(crate) fn build_subagent_tools(config: SubagentToolConfig) -> Vec<Box<dyn To
         return Vec::new();
     }
 
-    vec![
+    let mut tools: Vec<Box<dyn ToolDyn>> = vec![
         Box::new(SpawnSubagentTool::new(config.clone())),
         Box::new(WaitSubagentTool),
         Box::new(ListSubagentsTool),
-        Box::new(ReadSubagentTranscriptTool),
-        Box::new(CancelSubagentTool),
-    ]
+    ];
+    if config.steering_tools_enabled() {
+        tools.push(Box::new(ReadSubagentTranscriptTool));
+    }
+    if config.steer_subagent_enabled() {
+        tools.push(Box::new(SteerSubagentTool));
+    }
+    tools.push(Box::new(CancelSubagentTool));
+    tools
 }
 
 pub(crate) fn background_tool_names(config: &BackgroundToolConfig) -> Vec<String> {

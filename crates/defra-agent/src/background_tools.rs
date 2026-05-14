@@ -14,14 +14,21 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::graphql::{escape_graphql_string, response_has_documents};
+use crate::lifecycle::queue::{
+    drain_automated_wakeups, enqueue_session_request, is_automated_wakeup, QueueHints, QueuePolicy,
+    QueueSource,
+};
+use crate::lifecycle::ExecutionOrigin;
+use crate::session;
 use crate::session::execute_mutation_with_retry;
 use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass};
+use crate::watcher::{validate_agent_request_subagent_coherence, AgentRequest};
 
 use self::r4c_args::{
     ListBackgroundToolsArgs, ListBackgroundToolsEntry, ListBackgroundToolsResponse,
     ListStatusFilter, ListSubagentsArgs, ListSubagentsEntry, ListSubagentsResponse,
     ReadSubagentTranscriptArgs, ReadSubagentTranscriptResponse, ReadToolOutputArgs,
-    ReadToolOutputResponse, ReadToolOutputStream,
+    ReadToolOutputResponse, ReadToolOutputStream, SteerSubagentResponse,
 };
 use self::transcript_render::{
     render_transcript, MessageKindView, MessageRoleView, MessageView, RenderOptions,
@@ -268,10 +275,51 @@ struct ReadToolOutputRow {
     result: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct AgentRequestQueueRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    request_id: String,
+    agent_did: String,
+    behavior_id: Option<String>,
+    session_id: String,
+    content: String,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    top_k: Option<i64>,
+    max_tokens: Option<i64>,
+    metadata: Option<String>,
+    execution_origin: Option<String>,
+    created_at: String,
+    deadline: Option<String>,
+    subagent_depth: Option<u32>,
+    caused_by_parent_request_id: Option<String>,
+    caused_by_parent_tool_call_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ActiveSessionRequestRow {
+    request_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PendingWakeupRow {
+    request_id: Option<String>,
+    execution_origin: Option<String>,
+    metadata: Option<String>,
+}
+
 pub(crate) enum ReadToolOutputOutcome {
     Found(ReadToolOutputResponse),
     NotAuthorized,
     NotBackgrounded,
+}
+
+pub(crate) enum SteerSubagentTarget {
+    Found(ChildEdge),
+    NotAuthorized,
+    NotBackgrounded,
+    Terminal(String),
 }
 
 pub(crate) async fn handle_list_subagents(
@@ -762,6 +810,250 @@ pub(crate) async fn handle_read_tool_output(
         },
         exit_code: None,
     }))
+}
+
+pub(crate) async fn load_steer_subagent_target(
+    node: &EmbeddedNode,
+    caller_request_id: &str,
+    child_request_id: &str,
+) -> Result<SteerSubagentTarget> {
+    if child_request_id.trim().is_empty() {
+        return Ok(SteerSubagentTarget::NotAuthorized);
+    }
+    let parent_context = load_parent_subagent_context(node, caller_request_id).await?;
+    let edge = match load_authorized_child_edge(node, &parent_context, child_request_id).await {
+        Ok(edge) => edge,
+        Err(error) if authorization_lookup_error(&error, caller_request_id, child_request_id) => {
+            return Ok(SteerSubagentTarget::NotAuthorized);
+        }
+        Err(error) => return Err(error),
+    };
+    if edge.await_mode != AwaitMode::Background {
+        return Ok(SteerSubagentTarget::NotBackgrounded);
+    }
+    let Some(terminal_row) = load_child_terminal_row(node, &edge.child_request_id).await? else {
+        return Ok(SteerSubagentTarget::NotAuthorized);
+    };
+    if let Some(state) = child_terminal_state_name(&terminal_row) {
+        return Ok(SteerSubagentTarget::Terminal(state));
+    }
+
+    Ok(SteerSubagentTarget::Found(edge))
+}
+
+pub(crate) async fn append_steering_request(
+    node: &EmbeddedNode,
+    caller_request_id: &str,
+    edge: &ChildEdge,
+    message: &str,
+    interrupted_request_id: Option<String>,
+    drained_wake_up_request_ids: Vec<String>,
+) -> Result<SteerSubagentResponse> {
+    session::append_message(node, &edge.child_session_id, "user", message).await?;
+    let child_request = load_agent_request_for_queue(node, &edge.child_request_id)
+        .await?
+        .ok_or_else(|| anyhow!("child AgentRequest {} not found", edge.child_request_id))?;
+    if child_request.caused_by_parent_request_id.as_deref() != Some(caller_request_id) {
+        anyhow::bail!(
+            "child AgentRequest {} no longer links to caller request {caller_request_id}",
+            edge.child_request_id
+        );
+    }
+    let enqueued = enqueue_session_request(
+        node,
+        &child_request,
+        message,
+        ExecutionOrigin::Interactive,
+        QueueHints {
+            source: QueueSource::Steering,
+            policy: QueuePolicy::Append,
+            key: None,
+            queued_after_request_id: None,
+            interrupted_request_id: interrupted_request_id.clone(),
+        },
+    )
+    .await?;
+
+    Ok(SteerSubagentResponse {
+        child_request_id: edge.child_request_id.clone(),
+        child_session_id: edge.child_session_id.clone(),
+        queued_request_id: enqueued.request_id,
+        interrupted_active_request_id: interrupted_request_id,
+        drained_wake_up_request_ids,
+    })
+}
+
+pub(crate) async fn active_session_request_id(
+    node: &EmbeddedNode,
+    session_id: &str,
+) -> Result<Option<String>> {
+    let escaped_session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{
+                    session_id: {{ _eq: "{escaped_session_id}" }},
+                    status: {{ _eq: "processing" }},
+                    lifecycle_state: {{ _in: ["claimed", "processing"] }}
+                }},
+                order: [{{ created_at: ASC }}, {{ request_id: ASC }}],
+                limit: 1
+            ) {{
+                request_id
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query active request for session {session_id} failed: {:?}",
+            response.errors
+        );
+    }
+    Ok(
+        first_row::<ActiveSessionRequestRow>(response.data.as_ref(), "AgentRequest")
+            .map(|row| row.request_id),
+    )
+}
+
+pub(crate) async fn drain_automated_wakeups_returning_ids(
+    node: &EmbeddedNode,
+    session_id: &str,
+    reason: &str,
+) -> Result<Vec<String>> {
+    let request_ids = pending_automated_wakeup_request_ids(node, session_id).await?;
+    drain_automated_wakeups(node, session_id, reason).await?;
+    Ok(request_ids)
+}
+
+pub(crate) async fn pending_automated_wakeup_request_ids(
+    node: &EmbeddedNode,
+    session_id: &str,
+) -> Result<Vec<String>> {
+    let escaped_session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{
+                    session_id: {{ _eq: "{escaped_session_id}" }},
+                    status: {{ _eq: "pending" }},
+                    lifecycle_state: {{ _eq: "pending" }}
+                }},
+                order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
+            ) {{
+                request_id
+                execution_origin
+                metadata
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query pending automated wake-ups for session {session_id} failed: {:?}",
+            response.errors
+        );
+    }
+    let rows: Vec<PendingWakeupRow> = rows(response.data.as_ref(), "AgentRequest")?;
+    Ok(rows
+        .into_iter()
+        .filter(|row| {
+            row.execution_origin.as_deref() == Some("scheduled")
+                && is_automated_wakeup(row.metadata.as_deref())
+        })
+        .filter_map(|row| non_empty_string(row.request_id.as_deref()))
+        .collect())
+}
+
+async fn load_agent_request_for_queue(
+    node: &EmbeddedNode,
+    request_id: &str,
+) -> Result<Option<AgentRequest>> {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                limit: 1
+            ) {{
+                _docID
+                request_id
+                agent_did
+                behavior_id
+                session_id
+                content
+                temperature
+                top_p
+                top_k
+                max_tokens
+                metadata
+                execution_origin
+                created_at
+                deadline
+                subagent_depth
+                caused_by_parent_request_id
+                caused_by_parent_tool_call_id
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query AgentRequest {request_id} for steering queue failed: {:?}",
+            response.errors
+        );
+    }
+    let Some(row) = first_row::<AgentRequestQueueRow>(response.data.as_ref(), "AgentRequest")
+    else {
+        return Ok(None);
+    };
+    let request = AgentRequest {
+        doc_id: row.doc_id,
+        request_id: row.request_id,
+        agent_did: row.agent_did,
+        behavior_id: normalize_optional_string(row.behavior_id),
+        session_id: row.session_id,
+        content: row.content,
+        temperature: row.temperature,
+        top_p: row.top_p,
+        top_k: row.top_k,
+        max_tokens: row.max_tokens,
+        metadata: row.metadata,
+        execution_origin: normalize_optional_string(row.execution_origin),
+        created_at: row.created_at,
+        deadline: normalize_optional_string(row.deadline),
+        subagent_depth: row.subagent_depth.unwrap_or(0),
+        caused_by_parent_request_id: normalize_optional_string(row.caused_by_parent_request_id),
+        caused_by_parent_tool_call_id: normalize_optional_string(row.caused_by_parent_tool_call_id),
+    };
+    validate_agent_request_subagent_coherence(&request)?;
+    Ok(Some(request))
+}
+
+fn child_terminal_state_name(row: &ChildRequestTerminalRow) -> Option<String> {
+    if child_request_completed(row) {
+        return Some(
+            row.lifecycle_state
+                .as_deref()
+                .or(row.status.as_deref())
+                .unwrap_or("completed")
+                .to_string(),
+        );
+    }
+    project_child_terminal(row).map(|_| {
+        row.lifecycle_state
+            .as_deref()
+            .or(row.status.as_deref())
+            .unwrap_or("terminal")
+            .to_string()
+    })
+}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
 }
 
 fn read_tool_output_stream(value: &str, max_bytes: usize) -> ReadToolOutputStream {

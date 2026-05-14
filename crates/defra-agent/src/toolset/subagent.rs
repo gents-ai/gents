@@ -4,6 +4,7 @@ use rig::tool::Tool;
 
 use crate::background_tools::r4c_args::{
     ListBackgroundToolsArgs, ListSubagentsArgs, ReadSubagentTranscriptArgs, ReadToolOutputArgs,
+    SteerSubagentArgs,
 };
 use crate::background_tools::{
     BackgroundToolArgs, CancelSubagentArgs, CancelToolArgs, SpawnSubagentArgs, WaitSubagentArgs,
@@ -16,7 +17,8 @@ use super::shared::ToolError;
 use super::{
     BACKGROUND_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, CANCEL_TOOL_NAME,
     LIST_BACKGROUND_TOOLS_TOOL_NAME, LIST_SUBAGENTS_TOOL_NAME, READ_SUBAGENT_TRANSCRIPT_TOOL_NAME,
-    READ_TOOL_OUTPUT_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME, WAIT_SUBAGENT_TOOL_NAME, WAIT_TOOL_NAME,
+    READ_TOOL_OUTPUT_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME, STEER_SUBAGENT_TOOL_NAME,
+    WAIT_SUBAGENT_TOOL_NAME, WAIT_TOOL_NAME,
 };
 
 const SUBAGENT_SERVICE_ID: &str = "subagent";
@@ -122,6 +124,9 @@ pub(super) struct ListSubagentsTool;
 
 #[derive(Clone, Copy)]
 pub(super) struct ReadSubagentTranscriptTool;
+
+#[derive(Clone, Copy)]
+pub(super) struct SteerSubagentTool;
 
 #[derive(Clone, Copy)]
 pub(super) struct CancelSubagentTool;
@@ -366,6 +371,53 @@ impl Tool for ReadSubagentTranscriptTool {
         validate_child_request_id(Self::NAME, &args.child_request_id)?;
         let _ = args.validated_limit();
         let _ = args.validated_max_chars();
+        Err(not_yet_executable_error(Self::NAME))
+    }
+}
+
+impl Tool for SteerSubagentTool {
+    const NAME: &'static str = STEER_SUBAGENT_TOOL_NAME;
+
+    type Error = ToolError;
+    type Args = SteerSubagentArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Append a steering message to a visible background subagent, optionally interrupting its active request first."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "child_request_id": {
+                        "type": "string",
+                        "description": "Child request ID returned by spawn_subagent or list_subagents."
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "User-role steering message to append to the child session."
+                    },
+                    "interrupt": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Interrupt the child session's active request before appending the steering request."
+                    }
+                },
+                "required": ["child_request_id", "message"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        validate_child_request_id(Self::NAME, &args.child_request_id)?;
+        if args.message.trim().is_empty() {
+            return Err(invalid_arguments_error(
+                Self::NAME,
+                "/message",
+                "message is required",
+            ));
+        }
         Err(not_yet_executable_error(Self::NAME))
     }
 }

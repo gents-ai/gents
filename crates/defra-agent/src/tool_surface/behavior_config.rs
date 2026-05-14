@@ -103,6 +103,7 @@ impl BehaviorToolConfig {
             subagent_tools: SubagentToolConfig {
                 targets: dedupe_strings(subagent_tools.targets),
                 spawn_enabled: subagent_tools.spawn_enabled,
+                steering_enabled: subagent_tools.steering_enabled,
                 background_enabled: subagent_tools.background_enabled,
             },
             background_tools: BackgroundToolConfig {
