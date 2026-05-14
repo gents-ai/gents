@@ -83,4 +83,24 @@ def toContract : LiveTail → String
 
 end LiveTail
 
+structure ResponseContext where
+  docId                       : DocId
+  requestId                   : RequestId
+  status                      : Status
+  liveTail                    : LiveTail
+  tokenCount                  : Nat
+  lastProgressAt              : Time
+  streamIdleDeadline          : Time
+  now                         : Time
+  errorReason                 : Option ErrorReason
+  materializedMessageSequence : Option Transcript.Sequence
+  interruptedAt               : Option Time
+  deriving DecidableEq, Repr
+
+structure ResponseRequestBridge where
+  response           : ResponseContext
+  requestState       : RequestState
+  requestPersistence : PersistenceState
+  deriving DecidableEq
+
 end StreamingResponse
