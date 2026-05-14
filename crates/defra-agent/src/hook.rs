@@ -403,7 +403,7 @@ impl DefraSessionHook {
         Ok(count)
     }
 
-    pub(crate) async fn cancel_in_flight_tool_calls(&self) -> anyhow::Result<usize> {
+    pub async fn cancel_in_flight_tool_calls(&self) -> anyhow::Result<usize> {
         let lifecycles = {
             let mut map = self.in_flight_lifecycles.lock().await;
             map.drain()
