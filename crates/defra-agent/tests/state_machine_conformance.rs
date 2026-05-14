@@ -36,12 +36,13 @@ use lean_vocab_test::{
     lean_contract_snapshot, lean_event_delivery_convergence_traces,
     lean_event_delivery_source_instances, lean_event_delivery_transition_cases,
     lean_fleet_slot_accounting_case, lean_inference_slot_accounting_case, lean_mcp_health_cases,
-    lean_queue_deadline_case, lean_queue_deadline_cases, lean_r6_backgrounding_case,
-    lean_r6_backgrounding_cases, lean_recovery_sweep_case, lean_recovery_sweep_cases,
-    lean_request_transition_cases, lean_response_transition_case, lean_response_transition_cases,
-    lean_runtime_reconcile_case, lean_session_recovery_case, lean_state_machine_contract,
-    lean_tool_preflight_case, lean_tool_retry_case, lean_transcript_case, lean_transcript_cases,
-    lean_vocabulary_values, LeanEventDeliveryAction, LeanLifecycleTransitionCase,
+    lean_queue_deadline_case, lean_queue_deadline_cases, lean_r4c_background_work_case,
+    lean_r4c_background_work_cases, lean_r6_backgrounding_case, lean_r6_backgrounding_cases,
+    lean_recovery_sweep_case, lean_recovery_sweep_cases, lean_request_transition_cases,
+    lean_response_transition_case, lean_response_transition_cases, lean_runtime_reconcile_case,
+    lean_session_recovery_case, lean_state_machine_contract, lean_tool_preflight_case,
+    lean_tool_retry_case, lean_transcript_case, lean_transcript_cases, lean_vocabulary_values,
+    LeanEventDeliveryAction, LeanLifecycleTransitionCase, LeanR4cBackgroundWorkCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
@@ -657,6 +658,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "IdentityContracts".to_string(),
         ));
     }
+    if !lean_r4c_background_work_cases().is_empty() {
+        emitted.insert((
+            "r4c_background_work_cases".to_string(),
+            "R4cBackgroundWorkCases".to_string(),
+        ));
+    }
     if !lean_r6_backgrounding_cases().is_empty() {
         emitted.insert((
             "r6_background_cases".to_string(),
@@ -696,6 +703,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "mcp_health_cases",
         "identity_structural_cases",
         "identity_contracts",
+        "r4c_background_work_cases",
         "r6_background_cases",
         "follow_up_hook",
     ];
@@ -1342,6 +1350,162 @@ fn generated_r6_backgrounding_cases_pin_tool_backgrounding_contract() {
         lean_r6_backgrounding_case("legacy_subagent_completion_source_aliases_canonical_key");
     assert_eq!(legacy.queue_source.as_deref(), Some("subagent_completion"));
     assert_eq!(legacy.queue_key.as_deref(), canonical.queue_key.as_deref());
+}
+
+#[test]
+fn generated_r4c_background_work_cases_pin_observable_shapes() {
+    let cases = lean_r4c_background_work_cases();
+    assert_eq!(cases.len(), 6);
+
+    let names = cases
+        .iter()
+        .map(LeanR4cBackgroundWorkCase::witness)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        names,
+        [
+            "r4c.list_subagents.lineage_rejects",
+            "r4c.read_subagent_transcript.cursor_advances",
+            "r4c.read_subagent_transcript.hides_bridge_rows",
+            "r4c.read_tool_output.dispatch_by_state",
+            "r4c.steer_subagent.append_preserves_lineage",
+            "r4c.steer_subagent.interrupt_composes",
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+    );
+
+    match lean_r4c_background_work_case("r4c.list_subagents.lineage_rejects") {
+        LeanR4cBackgroundWorkCase::ListSubagentsLineageRejects {
+            caller_request_id,
+            sibling_request_id,
+            sibling_child_id,
+            caller_sees_sibling_child,
+        } => {
+            assert_eq!(caller_request_id, "r4c-w1-caller");
+            assert_eq!(sibling_request_id, "r4c-w1-sibling");
+            assert_eq!(sibling_child_id, "r4c-w1-sibling-child");
+            assert!(!*caller_sees_sibling_child);
+        }
+        other => panic!("unexpected R4c witness variant: {other:?}"),
+    }
+
+    match lean_r4c_background_work_case("r4c.read_subagent_transcript.cursor_advances") {
+        LeanR4cBackgroundWorkCase::ReadTranscriptCursorAdvances {
+            child_session_id,
+            first_since_sequence,
+            first_through_sequence,
+            first_next_sequence,
+            second_since_sequence,
+            second_through_sequence,
+            no_gap,
+            no_overlap,
+        } => {
+            assert_eq!(child_session_id, "r4c-w2-session");
+            assert_eq!(*first_since_sequence, 0);
+            assert_eq!(*first_through_sequence, 5);
+            assert_eq!(*first_next_sequence, 6);
+            assert_eq!(*second_since_sequence, 6);
+            assert_eq!(*second_through_sequence, 10);
+            assert_eq!(first_next_sequence, second_since_sequence);
+            assert!(*no_gap);
+            assert!(*no_overlap);
+        }
+        other => panic!("unexpected R4c witness variant: {other:?}"),
+    }
+
+    match lean_r4c_background_work_case("r4c.read_subagent_transcript.hides_bridge_rows") {
+        LeanR4cBackgroundWorkCase::ReadTranscriptHidesBridgeRows {
+            child_session_id,
+            bridge_call_id,
+            rendered_transcript,
+        } => {
+            assert_eq!(child_session_id, "r4c-w3-session");
+            assert_eq!(bridge_call_id, "r4c-w3-bridge-call");
+            assert_eq!(
+                rendered_transcript,
+                "[assistant seq=2]\nplain assistant message\n"
+            );
+            assert!(
+                !rendered_transcript.contains(bridge_call_id),
+                "rendered transcript must hide bridge tool-call rows"
+            );
+        }
+        other => panic!("unexpected R4c witness variant: {other:?}"),
+    }
+
+    match lean_r4c_background_work_case("r4c.read_tool_output.dispatch_by_state") {
+        LeanR4cBackgroundWorkCase::ReadToolOutputDispatchesByState {
+            tool_call_id,
+            running_source,
+            terminal_source,
+            running_payload,
+            stale_running_payload,
+            terminal_payload,
+        } => {
+            assert_eq!(tool_call_id, "r4c-w4-tool-call");
+            assert_eq!(running_source, "ring_buffer");
+            assert_eq!(terminal_source, "persisted_tool_completion");
+            assert_eq!(running_payload, "ring-buffer-live-tail");
+            assert_eq!(stale_running_payload, "stale-ring-buffer-tail");
+            assert_eq!(terminal_payload, "persisted-completion-stdout");
+            assert_ne!(
+                terminal_payload, stale_running_payload,
+                "terminal reads must not replay a stale live buffer"
+            );
+        }
+        other => panic!("unexpected R4c witness variant: {other:?}"),
+    }
+
+    match lean_r4c_background_work_case("r4c.steer_subagent.append_preserves_lineage") {
+        LeanR4cBackgroundWorkCase::SteerAppendPreservesLineage {
+            caller_request_id,
+            child_session_id,
+            queued_request_id,
+            caused_by_parent_request_id,
+            queue_source,
+            queue_policy,
+        } => {
+            assert_eq!(caller_request_id, "r4c-w5-caller");
+            assert_eq!(child_session_id, "r4c-w5-child-session");
+            assert_eq!(queued_request_id, "r4c-w5-queued");
+            assert_eq!(caused_by_parent_request_id, caller_request_id);
+            assert_eq!(queue_source, "steering");
+            assert_eq!(queue_policy, "append");
+        }
+        other => panic!("unexpected R4c witness variant: {other:?}"),
+    }
+
+    match lean_r4c_background_work_case("r4c.steer_subagent.interrupt_composes") {
+        LeanR4cBackgroundWorkCase::SteerInterruptComposes {
+            caller_request_id,
+            child_session_id,
+            interrupted_active_request_id,
+            drained_wake_up_request_ids,
+            drained_wake_up_queue_key,
+            queued_request_id,
+            queue_interrupted_request_id,
+        } => {
+            assert_eq!(caller_request_id, "r4c-w6-caller");
+            assert_eq!(child_session_id, "r4c-w6-child-session");
+            assert_eq!(interrupted_active_request_id, "r4c-w6-interrupted");
+            assert_eq!(
+                drained_wake_up_request_ids,
+                &vec!["r4c-w6-wake-1".to_string(), "r4c-w6-wake-2".to_string()]
+            );
+            assert_eq!(
+                drained_wake_up_queue_key,
+                "background_completion:r4c-w6-child-session"
+            );
+            assert_eq!(
+                drained_wake_up_queue_key,
+                &format!("background_completion:{child_session_id}")
+            );
+            assert_eq!(queued_request_id, "r4c-w6-queued");
+            assert_eq!(queue_interrupted_request_id, interrupted_active_request_id);
+        }
+        other => panic!("unexpected R4c witness variant: {other:?}"),
+    }
 }
 
 #[tokio::test]

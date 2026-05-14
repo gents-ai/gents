@@ -289,6 +289,10 @@ def caseCoverage : List CoverageEntry :=
       "R6BackgroundingCases"
       "state_machine_conformance::generated_r6_backgrounding_cases_pin_tool_backgrounding_contract"
   , consumerCoverage
+      "r4c_background_work_cases"
+      "R4cBackgroundWorkCases"
+      "state_machine_conformance::generated_r4c_background_work_cases_pin_observable_shapes"
+  , consumerCoverage
       "transcript_cases"
       "TranscriptConformanceCases"
       "state_machine_conformance::generated_transcript_cases_pin_agent_message_ordering_contract"
