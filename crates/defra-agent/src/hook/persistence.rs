@@ -9,18 +9,20 @@ use serde_json::json;
 use tracing::Instrument;
 
 use crate::background_tools::{
-    child_request_completed, load_authorized_child_edge, load_child_final_response,
-    load_child_session_id, load_child_terminal_row, load_parent_subagent_context,
-    project_child_terminal, target_is_allowed, BackgroundToolArgs, CancelSubagentArgs,
-    CancelToolArgs, ParentSubagentContext, SpawnSubagentArgs, WaitSubagentArgs, WaitToolArgs,
+    child_request_completed, effective_context_cross_deployment_spawn_timeout_seconds,
+    load_authorized_child_edge, load_child_final_response, load_child_session_id,
+    load_child_terminal_row, load_parent_subagent_context, project_child_terminal,
+    target_is_allowed, BackgroundToolArgs, CancelSubagentArgs, CancelToolArgs,
+    ParentSubagentContext, SpawnSubagentArgs, WaitSubagentArgs, WaitToolArgs,
 };
 use crate::config::DEFAULT_DEADLINE_DURATION_SECS;
+use crate::document_config::load_agent_behavior;
 use crate::session;
 use crate::tool_call_lifecycle::query::load_tool_call_result;
 use crate::tool_call_lifecycle::runtime::{classify_managed_tool_result, ManagedToolTerminal};
 use crate::tool_call_lifecycle::{
-    create_subagent_request_with_request_id, AwaitMode, CancelPolicy, ChildTerminal, FailureClass,
-    ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
+    create_subagent_request_with_request_id, AwaitMode, CancelPolicy, CascadeDispatch,
+    ChildTerminal, FailureClass, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
 use crate::toolset::{
     BACKGROUND_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, CANCEL_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME,
@@ -31,6 +33,12 @@ use crate::truncation::{truncate_text, DefraSpillTruncator, TruncationMode, Trun
 use super::{non_empty, DefraSessionHook, TranscriptTurnState};
 
 const MAX_BACKGROUNDED_TOOLS_PER_PARENT: usize = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubagentTargetHost {
+    Local,
+    Remote,
+}
 
 impl DefraSessionHook {
     pub async fn persist_message(&self, message: &Message) -> anyhow::Result<u32> {
@@ -353,6 +361,25 @@ impl DefraSessionHook {
         }
 
         let await_mode = parsed.await_mode.as_await_mode();
+        let target_host = self.subagent_target_host(behavior_id).await?;
+        if target_host == SubagentTargetHost::Remote && await_mode == AwaitMode::Foreground {
+            return self
+                .fail_spawn_subagent_tool_call(
+                    session_id,
+                    request_id,
+                    parent_context.request_deadline_at,
+                    seq,
+                    internal_call_id,
+                    args,
+                    FailureClass::ArgumentInvalid,
+                    invalid_tool_arguments_payload(
+                        SPAWN_SUBAGENT_TOOL_NAME,
+                        "/await_mode",
+                        "foreground cross-deployment subagents are not supported; use await_mode=background",
+                    ),
+                )
+                .await;
+        }
         if await_mode == AwaitMode::Background && !parent_context.subagent_background_enabled {
             return self
                 .fail_spawn_subagent_tool_call(
@@ -424,7 +451,25 @@ impl DefraSessionHook {
             CancelPolicy::Cascade,
             child_request_id.clone(),
         );
+        if await_mode == AwaitMode::Background {
+            let timeout_secs =
+                effective_context_cross_deployment_spawn_timeout_seconds(&parent_context);
+            lifecycle.set_unclaimed_deadline_at(Some(
+                chrono::Utc::now() + chrono::Duration::seconds(timeout_secs as i64),
+            ));
+        }
         lifecycle.start_running().await?;
+
+        if target_host == SubagentTargetHost::Remote {
+            let receipt = background_receipt_payload(&child_request_id, None, behavior_id);
+
+            self.in_flight_lifecycles
+                .lock()
+                .await
+                .insert(internal_call_id.to_string(), lifecycle);
+
+            return Ok(ToolCallHookAction::skip(receipt));
+        }
 
         let child_session_id = if let Err(error) = create_subagent_request_with_request_id(
             &self.node,
@@ -497,7 +542,7 @@ impl DefraSessionHook {
 
         if await_mode == AwaitMode::Background {
             let receipt =
-                background_receipt_payload(&child_request_id, &child_session_id, behavior_id);
+                background_receipt_payload(&child_request_id, Some(&child_session_id), behavior_id);
 
             self.in_flight_lifecycles
                 .lock()
@@ -524,6 +569,17 @@ impl DefraSessionHook {
             .await?;
 
         Ok(ToolCallHookAction::skip(result))
+    }
+
+    async fn subagent_target_host(&self, behavior_id: &str) -> anyhow::Result<SubagentTargetHost> {
+        let Some(behavior) = load_agent_behavior(&self.node, behavior_id).await? else {
+            return Ok(SubagentTargetHost::Remote);
+        };
+        if behavior.agent_did == self.agent_did {
+            Ok(SubagentTargetHost::Local)
+        } else {
+            Ok(SubagentTargetHost::Remote)
+        }
     }
 
     async fn persist_wait_subagent_tool_call(
@@ -1150,17 +1206,22 @@ impl DefraSessionHook {
             return Ok(false);
         }
 
-        let Some(intent) = lifecycle.bridge_cancel_cascade().await? else {
+        let Some(dispatch) = lifecycle
+            .bridge_cancel_cascade_dispatch(&self.agent_did)
+            .await?
+        else {
             return Ok(false);
         };
-        crate::interrupt::interrupt_request(&self.node, &intent.child_request_id)
-            .await
-            .map_err(|error| {
-                anyhow::anyhow!(
-                    "failed to cascade cancel_subagent {bridge_kind} bridge {tool_call_id} cancellation to child request {}: {error}",
-                    intent.child_request_id
-                )
-            })?;
+        if let CascadeDispatch::Local(intent) = dispatch {
+            crate::interrupt::interrupt_request(&self.node, &intent.child_request_id)
+                .await
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "failed to cascade cancel_subagent {bridge_kind} bridge {tool_call_id} cancellation to child request {}: {error}",
+                        intent.child_request_id
+                    )
+                })?;
+        }
         Ok(true)
     }
 
@@ -1184,17 +1245,22 @@ impl DefraSessionHook {
             return Ok(false);
         }
 
-        let Some(intent) = lifecycle.bridge_cancel_cascade().await? else {
+        let Some(dispatch) = lifecycle
+            .bridge_cancel_cascade_dispatch(&self.agent_did)
+            .await?
+        else {
             return Ok(false);
         };
-        crate::interrupt::interrupt_request(&self.node, &intent.child_request_id)
-            .await
-            .map_err(|error| {
-                anyhow::anyhow!(
-                    "failed to cascade cancel_subagent {bridge_kind} bridge {tool_call_id} cancellation to child request {}: {error}",
-                    intent.child_request_id
-                )
-            })?;
+        if let CascadeDispatch::Local(intent) = dispatch {
+            crate::interrupt::interrupt_request(&self.node, &intent.child_request_id)
+                .await
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "failed to cascade cancel_subagent {bridge_kind} bridge {tool_call_id} cancellation to child request {}: {error}",
+                        intent.child_request_id
+                    )
+                })?;
+        }
         Ok(true)
     }
 
@@ -1482,18 +1548,23 @@ impl DefraSessionHook {
                             )
                             .await;
                     }
-                    if let Some(intent) = lifecycle.bridge_cancel_cascade().await? {
-                        if let Err(error) = crate::interrupt::interrupt_request(
-                            &self.node,
-                            &intent.child_request_id,
-                        )
-                        .await
-                        {
-                            tracing::warn!(
-                                child_request_id = %intent.child_request_id,
-                                error = %error,
-                                "failed to cascade wait_subagent cancellation to child request"
-                            );
+                    if let Some(dispatch) = lifecycle
+                        .bridge_cancel_cascade_dispatch(&self.agent_did)
+                        .await?
+                    {
+                        if let CascadeDispatch::Local(intent) = dispatch {
+                            if let Err(error) = crate::interrupt::interrupt_request(
+                                &self.node,
+                                &intent.child_request_id,
+                            )
+                            .await
+                            {
+                                tracing::warn!(
+                                    child_request_id = %intent.child_request_id,
+                                    error = %error,
+                                    "failed to cascade wait_subagent cancellation to child request"
+                                );
+                            }
                         }
                     }
                 }
@@ -2120,7 +2191,7 @@ async fn count_live_backgrounded_rows(
 
 fn background_receipt_payload(
     child_request_id: &str,
-    child_session_id: &str,
+    child_session_id: Option<&str>,
     behavior_id: &str,
 ) -> String {
     json_string(json!({

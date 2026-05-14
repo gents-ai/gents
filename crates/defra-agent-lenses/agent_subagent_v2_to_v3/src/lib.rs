@@ -10,6 +10,7 @@ use std::error::Error;
 use lens_sdk::StreamOption;
 use serde_json::Value;
 
+#[cfg(target_arch = "wasm32")]
 lens_sdk::define!(try_transform, try_inverse);
 
 fn try_transform(

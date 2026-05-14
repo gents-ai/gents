@@ -206,6 +206,12 @@ pub struct CascadeIntent {
     pub at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Clone, Debug)]
+pub enum CascadeDispatch {
+    Local(CascadeIntent),
+    RemoteIntentWritten,
+}
+
 use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
@@ -218,7 +224,8 @@ mod transition;
 
 pub use recovery::ToolCallRecoveryReport;
 pub use subagent_request::{
-    create_subagent_request, create_subagent_request_with_request_id, MAX_SUBAGENT_DEPTH,
+    create_subagent_request, create_subagent_request_with_request_id,
+    create_subagent_request_with_trusted_parent_request_id, MAX_SUBAGENT_DEPTH,
 };
 pub use transition::IllegalToolCallTransition;
 
@@ -241,6 +248,7 @@ pub struct ToolCallLifecycle {
     pub(crate) await_mode: AwaitMode,
     pub(crate) cancel_policy: CancelPolicy,
     pub(crate) child_request_id: Option<String>,
+    pub(crate) unclaimed_deadline_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl ToolCallLifecycle {
@@ -272,6 +280,7 @@ impl ToolCallLifecycle {
             await_mode: AwaitMode::Foreground,
             cancel_policy: CancelPolicy::Cascade,
             child_request_id: None,
+            unclaimed_deadline_at: None,
         }
     }
 
@@ -308,6 +317,7 @@ impl ToolCallLifecycle {
             await_mode,
             cancel_policy,
             child_request_id: Some(child_request_id),
+            unclaimed_deadline_at: None,
         }
     }
 
@@ -339,6 +349,7 @@ impl ToolCallLifecycle {
             await_mode: AwaitMode::Background,
             cancel_policy: CancelPolicy::Cascade,
             child_request_id: None,
+            unclaimed_deadline_at: None,
         }
     }
 
@@ -408,6 +419,13 @@ impl ToolCallLifecycle {
 
     pub(crate) fn set_deadline_at(&mut self, deadline_at: chrono::DateTime<chrono::Utc>) {
         self.deadline_at = deadline_at;
+    }
+
+    pub(crate) fn set_unclaimed_deadline_at(
+        &mut self,
+        deadline_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) {
+        self.unclaimed_deadline_at = deadline_at;
     }
 }
 

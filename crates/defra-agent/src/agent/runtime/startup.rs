@@ -2,10 +2,11 @@
 // between health checking, snapshot resolution, slot bootstrap, and recovery.
 // Each phase depends on the previous; splitting into submodules would require
 // threading many intermediate values across module boundaries for no gain.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
+use serde::Deserialize;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -28,6 +29,7 @@ enum BackgroundTaskResult {
     Reconcile(Result<()>),
     Control(Result<()>),
     SubagentCompletion(Result<()>),
+    CrossDeploymentCancelMirror(Result<()>),
 }
 
 pub(in crate::agent) async fn run_agent(
@@ -231,6 +233,20 @@ pub(in crate::agent) async fn run_agent(
         )
     });
 
+    let cancel_mirror_node = agent.node.clone();
+    let cancel_mirror_snapshot_rx = active_snapshot_rx.clone();
+    let cancel_mirror_cancel = cancel.child_token();
+    background_tasks.spawn(async move {
+        BackgroundTaskResult::CrossDeploymentCancelMirror(
+            crate::trigger_engine::cross_deployment_cancel_mirror::run_cross_deployment_cancel_mirror(
+                cancel_mirror_node,
+                cancel_mirror_snapshot_rx,
+                cancel_mirror_cancel,
+            )
+            .await,
+        )
+    });
+
     let router_node = agent.node.clone();
     let router_agent_did = agent.agent_did.clone();
     let router_active_snapshot_rx = active_snapshot_rx.clone();
@@ -308,6 +324,7 @@ pub(in crate::agent) async fn run_agent(
             Ok(BackgroundTaskResult::Reconcile(result)) => (result, false),
             Ok(BackgroundTaskResult::Control(result)) => (result, false),
             Ok(BackgroundTaskResult::SubagentCompletion(result)) => (result, false),
+            Ok(BackgroundTaskResult::CrossDeploymentCancelMirror(result)) => (result, false),
             Err(error) => (Err(anyhow!("background task join failed: {error}")), false),
         },
         else => (Ok(()), false),
@@ -490,6 +507,7 @@ async fn resolve_startup_snapshot(agent: &DefraAgent) -> Result<ResolvedRuntimeS
                 resolve_tool_surfaces(agent.node.as_ref(), &agent.behaviors).await?;
             let backend_admission_configs =
                 resolve_backend_admission_configs(agent.node.as_ref(), &agent.behaviors).await?;
+            let paired_peer_dids = load_startup_paired_peer_dids(agent.node.as_ref()).await?;
             Ok(ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
                 agent.default_behavior_id.clone(),
                 agent.behaviors.clone(),
@@ -497,8 +515,46 @@ async fn resolve_startup_snapshot(agent: &DefraAgent) -> Result<ResolvedRuntimeS
                 backend_admission_configs,
                 agent.unavailable_behaviors.clone(),
             ))
+            .map(|snapshot| {
+                snapshot
+                    .with_local_did(agent.agent_did.clone())
+                    .with_paired_peer_dids(paired_peer_dids)
+            })
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct StartupPeerPairingDesiredRow {
+    peer_id: String,
+}
+
+async fn load_startup_paired_peer_dids(node: &defra_node::EmbeddedNode) -> Result<HashSet<String>> {
+    let query = r#"{
+        PeerPairingDesired {
+            peer_id
+        }
+    }"#;
+    let response = node.execute(query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query PeerPairingDesired for startup paired peer DIDs failed: {:?}",
+            response.errors
+        );
+    }
+    let rows: Vec<StartupPeerPairingDesiredRow> = response
+        .data
+        .as_ref()
+        .and_then(|d| d.get("PeerPairingDesired"))
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            let peer_id = row.peer_id.trim().to_string();
+            (!peer_id.is_empty()).then_some(peer_id)
+        })
+        .collect())
 }
 
 async fn resolve_backend_admission_configs(

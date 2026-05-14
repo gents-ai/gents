@@ -19,4 +19,8 @@ type AgentToolCall @branchable {
     await_mode: String
     cancel_policy: String
     child_request_id: String @index
+    unclaimed_deadline_at: DateTime
+    cancel_cascade_intent_at: DateTime
+    cancel_pending_remote_ack: Boolean
+    stuck_since: DateTime
 }

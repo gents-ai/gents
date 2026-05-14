@@ -17,7 +17,9 @@ use defra_node::QueryResponse;
 use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::session::execute_mutation_with_retry;
 
-use super::{AwaitMode, CancelPolicy, FailureClass, ToolCallLifecycle, ToolCallState};
+use super::{
+    AwaitMode, CancelPolicy, CascadeDispatch, FailureClass, ToolCallLifecycle, ToolCallState,
+};
 
 /// Error returned when a transition method is called from an illegal
 /// pre-state, or when a subagent-specific guard is violated.
@@ -83,6 +85,7 @@ impl ToolCallLifecycle {
         self.await_mode = current.await_mode;
         self.cancel_policy = current.cancel_policy;
         self.child_request_id = current.child_request_id;
+        self.unclaimed_deadline_at = current.unclaimed_deadline_at;
         Ok(())
     }
 
@@ -119,6 +122,7 @@ impl ToolCallLifecycle {
         self.await_mode = current.await_mode;
         self.cancel_policy = current.cancel_policy;
         self.child_request_id = current.child_request_id;
+        self.unclaimed_deadline_at = current.unclaimed_deadline_at;
         Ok(())
     }
 
@@ -174,8 +178,18 @@ impl ToolCallLifecycle {
                     format!(r#"child_request_id: "{escaped_crid}","#)
                 })
                 .unwrap_or_default();
+            let unclaimed_deadline_field = self
+                .unclaimed_deadline_at
+                .map(|deadline| {
+                    let escaped_deadline = escape_graphql_string(
+                        &deadline.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                    );
+                    format!(r#"unclaimed_deadline_at: "{escaped_deadline}","#)
+                })
+                .unwrap_or_default();
             format!(
                 r#"{child_field}
+                    {unclaimed_deadline_field}
                     await_mode: "{await_mode_str}",
                     cancel_policy: "{cancel_policy_str}","#
             )
@@ -245,6 +259,7 @@ impl ToolCallLifecycle {
         // avoid a type-mismatch error when re-validating the document.
         let started_at_str = started_at.to_rfc3339();
         let deadline_at_str = self.deadline_at.to_rfc3339();
+        let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
 
         let mutation = format!(
             r#"mutation {{
@@ -258,6 +273,7 @@ impl ToolCallLifecycle {
                         deadline_at: "{deadline_at_str}",
                         completed_at: "{now_str}",
                         latency_ms: {latency_ms}
+                        {unclaimed_deadline_clear}
                     }}
                 ) {{ _docID }}
             }}"#
@@ -295,6 +311,7 @@ impl ToolCallLifecycle {
         // DefraDB requires DateTime fields to be re-supplied on update.
         let started_at_str = started_at.to_rfc3339();
         let deadline_at_str = self.deadline_at.to_rfc3339();
+        let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
 
         let mutation = format!(
             r#"mutation {{
@@ -309,6 +326,7 @@ impl ToolCallLifecycle {
                         completed_at: "{now_str}",
                         tool_failure_class: "{failure_class_str}",
                         latency_ms: {latency_ms}
+                        {unclaimed_deadline_clear}
                     }}
                 ) {{ _docID }}
             }}"#
@@ -410,6 +428,7 @@ impl ToolCallLifecycle {
         // avoid a type-mismatch error when re-validating the document.
         let started_at_str = started_at.to_rfc3339();
         let deadline_at_str = self.deadline_at.to_rfc3339();
+        let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
 
         let mutation = format!(
             r#"mutation {{
@@ -426,6 +445,7 @@ impl ToolCallLifecycle {
                         deadline_at: "{deadline_at_str}",
                         completed_at: "{now_str}",
                         latency_ms: {latency_ms}
+                        {unclaimed_deadline_clear}
                     }}
                 ) {{ _docID }}
             }}"#
@@ -490,6 +510,7 @@ impl ToolCallLifecycle {
         let started_at_str = started_at.to_rfc3339();
         let deadline_at_str = self.deadline_at.to_rfc3339();
         let lifecycle_state_str = projected.as_str();
+        let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
 
         // Build conditional fields: tool_failure_class and result are only
         // set when the child reached .failed (mirrors R1's fail() pattern).
@@ -520,6 +541,7 @@ impl ToolCallLifecycle {
                         deadline_at: "{deadline_at_str}",
                         completed_at: "{now_str}",
                         latency_ms: {latency_ms}
+                        {unclaimed_deadline_clear}
                     }}
                 ) {{ _docID }}
             }}"#
@@ -569,6 +591,7 @@ impl ToolCallLifecycle {
         let started_at_str = started_at.to_rfc3339();
         let deadline_at_str = self.deadline_at.to_rfc3339();
         let failure_class = FailureClass::External.as_str();
+        let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
 
         let mutation = format!(
             r#"mutation {{
@@ -583,6 +606,7 @@ impl ToolCallLifecycle {
                         deadline_at: "{deadline_at_str}",
                         completed_at: "{now_str}",
                         latency_ms: {latency_ms}
+                        {unclaimed_deadline_clear}
                     }}
                 ) {{ _docID }}
             }}"#
@@ -671,6 +695,7 @@ impl ToolCallLifecycle {
             .ok_or_else(|| anyhow!("background called without started_at set"))?;
         let started_at_str = started_at.to_rfc3339();
         let deadline_at_str = self.deadline_at.to_rfc3339();
+        let unclaimed_deadline_fragment = self.resupply_unclaimed_deadline_fragment();
 
         let escaped_doc_id = escape_graphql_string(doc_id);
 
@@ -682,7 +707,7 @@ impl ToolCallLifecycle {
                         lifecycle_state: {{ _eq: "running" }},
                         await_mode: {{ _eq: "foreground" }}
                     }},
-                    input: {{ await_mode: "background", started_at: "{started_at_str}", deadline_at: "{deadline_at_str}" }}
+                    input: {{ await_mode: "background", started_at: "{started_at_str}", deadline_at: "{deadline_at_str}"{unclaimed_deadline_fragment} }}
                 ) {{ _docID }}
             }}"#
         );
@@ -728,6 +753,7 @@ impl ToolCallLifecycle {
             .ok_or_else(|| anyhow!("foreground called without started_at set"))?;
         let started_at_str = started_at.to_rfc3339();
         let deadline_at_str = self.deadline_at.to_rfc3339();
+        let unclaimed_deadline_fragment = self.resupply_unclaimed_deadline_fragment();
 
         let escaped_doc_id = escape_graphql_string(doc_id);
 
@@ -739,7 +765,7 @@ impl ToolCallLifecycle {
                         lifecycle_state: {{ _eq: "running" }},
                         await_mode: {{ _eq: "background" }}
                     }},
-                    input: {{ await_mode: "foreground", started_at: "{started_at_str}", deadline_at: "{deadline_at_str}" }}
+                    input: {{ await_mode: "foreground", started_at: "{started_at_str}", deadline_at: "{deadline_at_str}"{unclaimed_deadline_fragment} }}
                 ) {{ _docID }}
             }}"#
         );
@@ -788,6 +814,7 @@ impl ToolCallLifecycle {
             String::new()
         };
         let deadline_at_str = self.deadline_at.to_rfc3339();
+        let unclaimed_deadline_fragment = self.resupply_unclaimed_deadline_fragment();
 
         let escaped_doc_id = escape_graphql_string(doc_id);
 
@@ -795,7 +822,7 @@ impl ToolCallLifecycle {
             r#"mutation {{
                 update_AgentToolCall(
                     filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
-                    input: {{ cancel_policy: "detach", deadline_at: "{deadline_at_str}"{started_at_fragment} }}
+                    input: {{ cancel_policy: "detach", deadline_at: "{deadline_at_str}"{started_at_fragment}{unclaimed_deadline_fragment} }}
                 ) {{ _docID }}
             }}"#
         );
@@ -829,6 +856,63 @@ impl ToolCallLifecycle {
         }))
     }
 
+    /// Dispatch cascade cancellation according to child ownership. Local child
+    /// requests continue through the existing interrupt path; replicated
+    /// cross-deployment children are signaled through the bridge row.
+    pub async fn bridge_cancel_cascade_dispatch(
+        &self,
+        local_did: &str,
+    ) -> Result<Option<CascadeDispatch>> {
+        let Some(intent) = self.bridge_cancel_cascade().await? else {
+            return Ok(None);
+        };
+
+        if child_request_is_locally_owned(&self.node, local_did, &intent.child_request_id).await? {
+            return Ok(Some(CascadeDispatch::Local(intent)));
+        }
+
+        self.write_bridge_cancel_cascade_intent(intent.at).await?;
+        Ok(Some(CascadeDispatch::RemoteIntentWritten))
+    }
+
+    async fn write_bridge_cancel_cascade_intent(
+        &self,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()> {
+        let doc_id = self.doc_id.as_ref().ok_or_else(|| {
+            anyhow!("bridge_cancel_cascade_dispatch called before row was persisted")
+        })?;
+        let escaped_doc_id = escape_graphql_string(doc_id);
+        let at = escape_graphql_string(&at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+        let started_at = self.started_at.ok_or_else(|| {
+            anyhow!("bridge_cancel_cascade_dispatch called without started_at set")
+        })?;
+        let started_at = started_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let deadline_at = self
+            .deadline_at
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentToolCall(
+                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    input: {{
+                        started_at: "{started_at}",
+                        deadline_at: "{deadline_at}",
+                        completed_at: "{at}",
+                        cancel_cascade_intent_at: "{at}",
+                        cancel_pending_remote_ack: true
+                        {unclaimed_deadline_clear}
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+        execute_mutation_with_retry(&self.node, &mutation, "write_bridge_cancel_cascade_intent")
+            .await
+            .context("write bridge cancel cascade intent mutation")?;
+        Ok(())
+    }
+
     /// Running → Cancelled. Called by request interruption handling and
     /// startup recovery for interrupted parent requests.
     ///
@@ -850,6 +934,7 @@ impl ToolCallLifecycle {
         // DefraDB requires DateTime fields to be re-supplied on update.
         let started_at_str = started_at.to_rfc3339();
         let deadline_at_str = self.deadline_at.to_rfc3339();
+        let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
 
         let mutation = format!(
             r#"mutation {{
@@ -866,6 +951,7 @@ impl ToolCallLifecycle {
                         deadline_at: "{deadline_at_str}",
                         completed_at: "{now_str}",
                         latency_ms: {latency_ms}
+                        {unclaimed_deadline_clear}
                     }}
                 ) {{ _docID }}
             }}"#
@@ -888,6 +974,57 @@ impl ToolCallLifecycle {
         self.state = ToolCallState::Cancelled;
         Ok(())
     }
+
+    fn clear_unclaimed_deadline_fragment(&self) -> &'static str {
+        if self.unclaimed_deadline_at.is_some() {
+            ", unclaimed_deadline_at: null"
+        } else {
+            ""
+        }
+    }
+
+    fn resupply_unclaimed_deadline_fragment(&self) -> String {
+        self.unclaimed_deadline_at
+            .map(|deadline| {
+                let escaped_deadline = escape_graphql_string(
+                    &deadline.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                );
+                format!(r#", unclaimed_deadline_at: "{escaped_deadline}""#)
+            })
+            .unwrap_or_default()
+    }
+}
+
+async fn child_request_is_locally_owned(
+    node: &defra_node::EmbeddedNode,
+    local_did: &str,
+    child_request_id: &str,
+) -> Result<bool> {
+    let escaped = escape_graphql_string(child_request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped}" }} }},
+                limit: 1
+            ) {{ agent_did }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query AgentRequest for cross-deployment cancel dispatch failed: {:?}",
+            response.errors
+        );
+    }
+    let did = response
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("agent_did"))
+        .and_then(|v| v.as_str());
+    Ok(did == Some(local_did))
 }
 
 /// Helper to extract `_docID` from a `create_*` mutation response.

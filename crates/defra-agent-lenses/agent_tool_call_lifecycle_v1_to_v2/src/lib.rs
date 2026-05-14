@@ -7,9 +7,9 @@ use lens_sdk::StreamOption;
 use serde_json::Value;
 
 // The `define!` macro emits an `extern "C" { fn next() }` import that is only
-// resolvable at dylib load time from the lens host. Gate it behind a feature so
-// that the crate can also be linked as an rlib for unit / integration tests.
-#[cfg(feature = "lens-entry")]
+// resolvable when loaded by the WASM lens host. Gate it behind both the feature
+// and wasm32 so host `cargo test --workspace` can link the cdylib target.
+#[cfg(all(feature = "lens-entry", target_arch = "wasm32"))]
 lens_sdk::define!(try_transform, try_inverse);
 
 /// Compute the v2 (lifecycle_state, tool_failure_class) pair from the v1

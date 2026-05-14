@@ -547,6 +547,7 @@ fn standard_tool_selection(
         subagent_spawn_enabled: Some(false),
         subagent_steering_enabled: Some(false),
         subagent_background_enabled: Some(false),
+        cross_deployment_spawn_timeout_seconds: None,
     }
 }
 

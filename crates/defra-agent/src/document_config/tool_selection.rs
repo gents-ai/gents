@@ -59,6 +59,7 @@ pub struct ToolSelectionDocument {
     pub subagent_spawn_enabled: Option<bool>,
     pub subagent_steering_enabled: Option<bool>,
     pub subagent_background_enabled: Option<bool>,
+    pub cross_deployment_spawn_timeout_seconds: Option<u32>,
 }
 
 impl ToolSelectionDocument {
@@ -133,6 +134,7 @@ pub(crate) async fn load_tool_selection_record(
                 subagent_spawn_enabled
                 subagent_steering_enabled
                 subagent_background_enabled
+                cross_deployment_spawn_timeout_seconds
             }}
         }}"#
     );
@@ -181,6 +183,7 @@ pub(crate) async fn load_tool_selection_by_doc_id(
                 subagent_spawn_enabled
                 subagent_steering_enabled
                 subagent_background_enabled
+                cross_deployment_spawn_timeout_seconds
             }}
         }}"#
     );
@@ -229,6 +232,7 @@ pub(crate) async fn list_tool_selection_records(
                 subagent_spawn_enabled
                 subagent_steering_enabled
                 subagent_background_enabled
+                cross_deployment_spawn_timeout_seconds
             }}
         }}"#
     );
@@ -271,6 +275,7 @@ pub(crate) async fn list_all_tool_selection_records(
                 subagent_spawn_enabled
                 subagent_steering_enabled
                 subagent_background_enabled
+                cross_deployment_spawn_timeout_seconds
             }
         }"#;
 
@@ -359,6 +364,9 @@ pub async fn upsert_tool_selection(
             "subagent_background_enabled",
             selection.subagent_background_enabled,
         ),
+        selection
+            .cross_deployment_spawn_timeout_seconds
+            .map(|value| format!("cross_deployment_spawn_timeout_seconds: {value}")),
     ]
     .into_iter()
     .flatten()
@@ -431,6 +439,9 @@ pub async fn upsert_tool_selection(
             "subagent_background_enabled",
             selection.subagent_background_enabled,
         ),
+        selection
+            .cross_deployment_spawn_timeout_seconds
+            .map(|value| format!("cross_deployment_spawn_timeout_seconds: {value}")),
     ]
     .into_iter()
     .flatten()

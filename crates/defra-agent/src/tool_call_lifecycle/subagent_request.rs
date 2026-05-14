@@ -96,6 +96,64 @@ pub async fn create_subagent_request_with_request_id(
     prompt: String,
     deadline: Option<DateTime<Utc>>,
 ) -> Result<String> {
+    create_subagent_request_inner(
+        node,
+        request_id,
+        parent_request_id,
+        parent_tool_call_id,
+        parent_subagent_depth,
+        agent_did,
+        behavior_id,
+        prompt,
+        deadline,
+        true,
+    )
+    .await
+}
+
+/// Create a subagent request whose parent was authored by a trusted paired
+/// peer. R5 uses this on the claiming deployment: the child is locally owned,
+/// while the replicated parent request keeps the paired peer's DID.
+#[allow(clippy::too_many_arguments)]
+pub async fn create_subagent_request_with_trusted_parent_request_id(
+    node: &EmbeddedNode,
+    request_id: String,
+    parent_request_id: String,
+    parent_tool_call_id: String,
+    parent_subagent_depth: u32,
+    agent_did: String,
+    behavior_id: String,
+    prompt: String,
+    deadline: Option<DateTime<Utc>>,
+) -> Result<String> {
+    create_subagent_request_inner(
+        node,
+        request_id,
+        parent_request_id,
+        parent_tool_call_id,
+        parent_subagent_depth,
+        agent_did,
+        behavior_id,
+        prompt,
+        deadline,
+        false,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn create_subagent_request_inner(
+    node: &EmbeddedNode,
+    request_id: String,
+    parent_request_id: String,
+    parent_tool_call_id: String,
+    parent_subagent_depth: u32,
+    agent_did: String,
+    behavior_id: String,
+    prompt: String,
+    deadline: Option<DateTime<Utc>>,
+    require_parent_agent_match: bool,
+) -> Result<String> {
     // 1. Depth check (pure precondition, fires before any DB I/O).
     if parent_subagent_depth + 1 > MAX_SUBAGENT_DEPTH {
         return Err(anyhow!(IllegalToolCallTransition::SubagentDepthExceeded));
@@ -109,7 +167,7 @@ pub async fn create_subagent_request_with_request_id(
     // 3. Cross-reference check (R3): the parent link must point at a real
     // AgentRequest before the child can be materialized.
     let parent_agent_did = parent_request_agent_did(node, &parent_request_id).await?;
-    if parent_agent_did.as_deref() != Some(agent_did.as_str()) {
+    if require_parent_agent_match && parent_agent_did.as_deref() != Some(agent_did.as_str()) {
         return Err(anyhow!(IllegalToolCallTransition::ParentLinkageIncoherent));
     }
 

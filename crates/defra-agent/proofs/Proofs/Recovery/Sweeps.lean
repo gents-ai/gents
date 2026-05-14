@@ -151,6 +151,7 @@ inductive ToolRecoveryCause where
   | childDead
   | childInterrupted
   | childSuperseded
+  | unclaimedCrossDeploymentSpawn
   deriving DecidableEq, Repr
 
 namespace ToolRecoveryCause
@@ -165,6 +166,7 @@ def toContract : ToolRecoveryCause → String
   | .childDead => "childDead"
   | .childInterrupted => "childInterrupted"
   | .childSuperseded => "childSuperseded"
+  | .unclaimedCrossDeploymentSpawn => "unclaimedCrossDeploymentSpawn"
 
 def terminalState : ToolRecoveryCause → ToolCallState
   | .deadlineExceeded => .timedOut
@@ -176,6 +178,7 @@ def terminalState : ToolRecoveryCause → ToolCallState
   | .childDead => .failed
   | .childInterrupted => .cancelled
   | .childSuperseded => .failed
+  | .unclaimedCrossDeploymentSpawn => .failed
 
 theorem terminalState_terminal (cause : ToolRecoveryCause) :
     isTerminal cause.terminalState := by

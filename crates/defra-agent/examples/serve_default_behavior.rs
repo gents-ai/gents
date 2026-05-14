@@ -141,6 +141,7 @@ async fn seed_demo_documents(
             subagent_spawn_enabled: Some(false),
             subagent_steering_enabled: Some(false),
             subagent_background_enabled: Some(false),
+            cross_deployment_spawn_timeout_seconds: None,
         },
     )
     .await?;

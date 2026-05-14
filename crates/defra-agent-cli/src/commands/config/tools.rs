@@ -38,6 +38,7 @@ pub(super) async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<
         subagent_spawn_enabled: Some(false),
         subagent_steering_enabled: Some(false),
         subagent_background_enabled: Some(false),
+        cross_deployment_spawn_timeout_seconds: None,
     };
     let doc_id = write_tool_selection_document(&access, &selection).await?;
     let output = json!({

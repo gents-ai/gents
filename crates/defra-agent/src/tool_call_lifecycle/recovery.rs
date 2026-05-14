@@ -360,7 +360,21 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
         }
 
         if let Some(child_request_id) = cascade_child_request_id(&row) {
-            if let Err(error) = interrupt_request(node, child_request_id).await {
+            if child_request_is_locally_owned(node, agent_did, child_request_id).await? {
+                if let Err(error) = interrupt_request(node, child_request_id).await {
+                    tracing::warn!(
+                        doc_id = %row.doc_id,
+                        request_id = row.request_id.as_deref().unwrap_or(""),
+                        session_id = %row.session_id,
+                        tool_call_id = %row.tool_call_id,
+                        child_request_id,
+                        error = %error,
+                        "failed to cascade recovery interrupt to child request"
+                    );
+                }
+            } else if let Err(error) =
+                write_bridge_cancel_cascade_intent(node, &row.doc_id, Utc::now()).await
+            {
                 tracing::warn!(
                     doc_id = %row.doc_id,
                     request_id = row.request_id.as_deref().unwrap_or(""),
@@ -368,7 +382,7 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
                     tool_call_id = %row.tool_call_id,
                     child_request_id,
                     error = %error,
-                    "failed to cascade recovery interrupt to child request"
+                    "failed to write recovery cross-deployment cancel intent"
                 );
             }
         }
@@ -643,6 +657,66 @@ fn is_detached_subagent_tool(row: &RunningToolCallRow) -> bool {
 fn cascade_child_request_id(row: &RunningToolCallRow) -> Option<&str> {
     let child_request_id = child_request_id(row)?;
     (cancel_policy(row) == CancelPolicy::Cascade).then_some(child_request_id)
+}
+
+async fn child_request_is_locally_owned(
+    node: &EmbeddedNode,
+    local_did: &str,
+    child_request_id: &str,
+) -> Result<bool> {
+    let escaped = escape_graphql_string(child_request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped}" }} }},
+                limit: 1
+            ) {{ agent_did }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query AgentRequest for recovery cascade ownership failed: {:?}",
+            response.errors
+        );
+    }
+    let did = response
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("agent_did"))
+        .and_then(|v| v.as_str());
+    Ok(did == Some(local_did))
+}
+
+async fn write_bridge_cancel_cascade_intent(
+    node: &EmbeddedNode,
+    doc_id: &str,
+    at: DateTime<Utc>,
+) -> Result<()> {
+    let escaped_doc_id = escape_graphql_string(doc_id);
+    let at = escape_graphql_string(&at.to_rfc3339());
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentToolCall(
+                filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                input: {{
+                    cancel_cascade_intent_at: "{at}",
+                    cancel_pending_remote_ack: true
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    execute_mutation_with_retry(
+        node,
+        &mutation,
+        "recovery_write_bridge_cancel_cascade_intent",
+    )
+    .await
+    .context("write recovery bridge cancel cascade intent mutation")?;
+    Ok(())
 }
 
 impl RecoveryOutcome {
