@@ -447,6 +447,7 @@ Read-only (do not modify):
 - **The conditional-idempotence shape ("identity below gate") depends on the strategy's gate predicate.** The typeclass carries the gate as a field; each instance picks its own. `identityReducer` picks `False` (never reduces); `stripToolResultsReducer` picks `True` (always strips). Future LLM strategies pick `exceedsThreshold` or analogues. The implementation plan must verify that every shipping instance discharges `identityBelowGate` for its chosen gate.
 - **#190 merge timing.** If #190 hasn't merged when execution starts, pause and re-check; do not attempt to write proof files that import a nonexistent module. The design phase is independent; the execution phase has a hard dependency.
 - **Composability lemma is deferred.** "Composition of two valid reducers is a valid reducer" (relevant if future strategies are built as `truncate ∘ summarize`) is *not* proved in this PR. It's an obvious follow-up and is flagged here.
+- **v2 effect-monad lift (follow-up consideration, not a v1 blocker).** The v1 contract is `TranscriptReducer := PromptView → PromptView` — pure. A future Truncator witness whose spill-doc side-effect must be modeled (creating/updating the spill-doc collection row, threading a doc id back into the truncated payload) may require lifting the contract into an effect monad, e.g., `TranscriptReducerM := PromptView → StateM SpillDocs PromptView`. The composability lemma's prerequisites depend on whether v2 stays pure (`Reducer ∘ Reducer`) or moves to an effectful Kleisli composition (`Reducer >=> Reducer`). Flagged here so the v2 design knows the door is open; v1 stays pure.
 
 ## File-by-file build order (for the implementation plan)
 
@@ -474,3 +475,11 @@ PR body must call out:
 - Proved invariants: pair atomicity (`preservesPairs`), order monotonicity (`preservesOrder`), session identity (`preservesSession`), conditional fixpoint (`identityBelowGate`, `identityUnlessSafe`), invariant idempotence (`reapplyPreservesCoh`), and the streaming-terminal safety theorem (`reduction_implies_all_retained_tool_results_terminal`).
 - Audit verdict moved: row 40 (Compaction / context management) ❌ → ✓ Modeled.
 - Not in scope: per-strategy semantics, Rust production code, summary content, spill-doc lifecycle, token-budget convergence.
+
+### Reuse-vs-replacement: what the new vectors do and don't replace
+
+The PR body must state explicitly that the new `compaction_reducer_cases` are *structural* coverage, not *behavioral* coverage:
+
+> The `stripToolResultsReducer` witness is propositionally equal to the identity in the abstract model (because `MessageKind` doesn't carry payload text — see §Risks). This is correct and load-bearing: the witness pins the *structural* contract (pair atomicity, ordering, identity invariants are preserved by any admissible "strip"-shaped mutation). It does NOT replace `crates/defra-agent/src/compaction/tests.rs`, which exercises behavioral properties (the stub text format, the file-activity extractor, the byte-count formatting, the summary persistence flow). Those Rust tests stay as-is and continue to be the source of behavioral truth. The new Lean vectors are an *additional* layer of structural assertions, not a replacement. Reviewers should not interpret 10/10 Lean vector pass as covering the behavioral surface — the two layers cover different things.
+
+This framing prevents two failure modes: (a) deleting `compaction/tests.rs` because "Lean covers it now" (it doesn't), and (b) trusting the Lean witnesses to catch a regression in stub-text formatting (they won't — that's the Rust tests' job).
