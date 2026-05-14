@@ -288,6 +288,11 @@ def caseCoverage : List CoverageEntry :=
       "transcript_cases"
       "TranscriptConformanceCases"
       "state_machine_conformance::generated_transcript_cases_pin_agent_message_ordering_contract"
+  , consumerWithFollowUpCoverage
+      "streaming_response_cases"
+      "ResponseTransitionCases"
+      "state_machine_conformance::generated_streaming_response_cases_pin_lifecycle_contract"
+      "Rust consumer wires up in a follow-up; vectors are stable and ready."
   , consumerCoverage
       "event_delivery_cases"
       "EventDeliveryTransitionCases"
