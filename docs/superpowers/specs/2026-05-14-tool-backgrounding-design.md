@@ -57,19 +57,23 @@ modules; one new theorem (B7).
 
 | Obligation | Reuse target | Generalization |
 |---|---|---|
+| Bridge spawn precondition (existing transition) | `Proofs/Background/Transition.lean` (renamed from `Proofs/Subagent/Transition.lean`) — existing `bridge_spawn` constructor | Generalize the constructor's hypotheses over `BackgroundedKind`. Subagent-kind hypotheses (child request lineage, depth +1) remain as a kind-conditional clause; Tool-kind hypotheses add only the B7 budget guard and `awaitMode = .background`. No new Lean transition is introduced. |
+| Bridge terminal-completed projection (existing transition) | `Proofs/Background/Transition.lean` — existing `bridge_complete` constructor | Lift the `pre.child.request.state = .completed` hypothesis to `terminalOf(pre.second_leg) = Completed` via kind dispatch. |
+| Bridge terminal-failed projection (existing transition) | `Proofs/Background/Transition.lean` — existing `bridge_failure` constructor | Same lift; `terminalOf(pre.second_leg) ∈ { Failed, Dead, Interrupted, Superseded }`. |
+| Bridge cancel cascade (existing transition) | `Proofs/Background/Transition.lean` — existing `bridge_cancel_cascade` constructor | Generalize the cascade effect via kind dispatch: Subagent → `interruptRequestedAt`; Tool → executor cancel-signaled. Trigger predicate unchanged. |
 | Backgrounded row reaches exactly one terminal | `Proofs/Background/Properties.lean` (renamed from `Proofs/Subagent/Properties.lean`) — B1 | Lift `child.request.state` reads in the antecedent to `terminalOf(second_leg)` via a kind-dispatched predicate. Theorem text essentially unchanged. |
 | Bridge row never native-completed | B2 | Same parametrization. The "bridge row" identification reuses `callId = bridgeCallId`; the prohibition on `complete_native`/`fail_native` on bridge rows is kind-independent. |
 | Cascade preserves child terminal once parent terminal | B3 | Generalize the cascade post-state via kind dispatch: Subagent → `interruptRequestedAt`; Tool → executor cancel-signaled. |
 | Depth ≤ `maxSubagentDepth` (Subagent kind only) | B4 (kind-guarded) | Tool kind is depth-free; B4 becomes `∀ row, kind row = Subagent → depth ≤ maxSubagentDepth`. Existing proof carries. |
 | Bridge link symmetry | B5 | Link field generalizes from `child_request_id : Option RequestId` to `link : BackgroundLink` (still optional `RequestId` for Subagent kind; trivial for Tool kind). |
 | Unique call IDs | B6 | No change. Theorem already speaks only about `parent.tools`. |
-| Per-parent budget ≤ 8 | `Proofs/Background/Properties.lean` (new theorem B7) | New theorem: for any reachable state, `count (parent.tools.filter (λ t → t.awaitMode = .background ∧ ¬terminal t.state)) ≤ 8`. Single new theorem; precondition is a guard in `bridge_spawn` (parametric). |
+| Per-parent budget ≤ 8 | `Proofs/Background/Properties.lean` (new theorem B7) | New theorem: for any reachable state, `count (parent.tools.filter (λ t → t.awaitMode = .background ∧ ¬terminal t.state)) ≤ 8`. Single new theorem; precondition is the kind-conditional clause added to the existing `bridge_spawn` (parametric). |
 | Recovery sweep includes backgrounded rows | `Proofs/Recovery/` (#189 enumeration) | One new `RecoveryAction` variant `TerminalizeBackgroundedAsInterrupted`; one new clause in the existing match. Predicate: `awaitMode = .background ∧ state = .running ∧ ¬terminal parent.request.state`. |
 | Tool-completion transcript pair atomicity | `Proofs/Transcript/` (#191) | Reuse existing pair atomicity verbatim. New transcript element name `<tool-completion>` shares dedupe path with #160 (`(session, logical_result_id, payload_hash)`). |
 | Coalesced wake-up by `(session_id, queue_key)` | `Proofs/Session/` (R4a queue) | Reuse the queue model. Queue source string `subagent_completion` renames to `background_completion` (one-release alias for back-compat). Queue key for tool completion: `background_completion:<parent_session_id>`. |
 | Streaming compose with `StreamingResponse.Status` (#190) | `Proofs/StreamingResponse/` | Not required for v1 (in-memory buffer only; no live streaming). Vocabulary cited so v2 streaming can reference it. |
 
-Total new modules: **0**. Total new theorems: **1** (B7 budget bound).
+Total new modules: **0**. Total new Lean transitions: **0** (all four bridge transitions exist in R4 and are parametrically generalized in place). Total new theorems: **1** (B7 budget bound). Total new recovery actions: **1** (`TerminalizeBackgroundedAsInterrupted`).
 
 ## Architecture
 
@@ -81,11 +85,14 @@ Rust:
 - `crates/defra-agent/src/subagent_completion.rs` → `background_completion.rs`
 - `crates/defra-agent/src/subagent_tools.rs` → `background_tools.rs`
 
-This is a breaking import change across the verified module set. It lands in
-the same PR as the R6 implementation; the renamed file diffs are mechanical
-and reviewable separately within the PR. The implementation plan calls the
-rename out as its own task before the parametrization tasks so reviewers can
-verify the rename is a no-op before reading the substantive changes.
+This is a breaking import change across the verified module set. **PR
+structure: one PR, with the first commit being a pure rename (no semantic
+change) and every subsequent commit substantive.** The implementation plan
+makes this commit boundary explicit. Reviewers can `git show` the first
+commit and confirm a clean rename diff (file moves + import path edits, zero
+behavioral change) before reading any substantive commits. The R4
+conformance witnesses and tests must pass at the rename commit — that's the
+review gate that proves the rename is a no-op.
 
 The R4 spec, R3 spec, and R2 spec continue to refer to the modules by their
 historical names. Reviewers reading those specs against the renamed source
@@ -117,7 +124,10 @@ bridge row IS — i.e., the bridge row's own state is the terminal source. The
 the same row; the parametric form preserves the bridge transition semantics
 without inventing a new transition.
 
-The four R4 bridge transitions become parametric:
+The four R4 bridge transitions (`bridge_spawn`, `bridge_complete`,
+`bridge_failure`, `bridge_cancel_cascade`) all exist in
+`Proofs/Subagent/Transition.lean` today. R6 does not introduce new Lean
+transitions; it parametrically generalizes the existing four:
 
 - `bridge_spawn`: kind-dispatched. Subagent kind allocates a child
   `ComposedState`; Tool kind allocates an `AgentToolCall` row with
@@ -342,14 +352,24 @@ Return shape (failure / interrupted / cancelled):
 shape is uniform across tools; the `result` body is tool-specific (bash:
 `{stdout, stderr, exit_code}`; MCP: result body).
 
-If the parent request deadline passes during a wait, `wait_tool` returns a
-synthetic envelope with `status = "failed"` and a failure class
-`external`. The backgrounded row continues to run until cascade or its own
-deadline; the wait simply returns control to the agent.
+If the parent request deadline passes during a `wait_tool`, R6 fires
+`bridge_cancel_cascade` on the awaited row before returning to the agent,
+so the row's persisted state matches the envelope the agent sees. The
+returned envelope has `status = "cancelled"` and `error.reason =
+"parent_deadline_exceeded"`. Whatever stdout/stderr was buffered up to
+the cancel signal is included in `result`.
 
-If the parent is cancelled during a wait, `bridge_cancel_cascade` fires
-through the existing path (parametric over kind) and `wait_tool` returns
-`status = "cancelled"` with whatever stdout was buffered.
+This is a deliberate divergence from R4's `wait_subagent`, which lets a
+deadline-out child continue running. The misreasoning risk is higher for
+tools: an agent that sees a `"failed"` envelope while the underlying bash
+subprocess is still mutating files will branch on a stale world state. R6
+makes the envelope and the world consistent at the cost of one extra
+cascade-cancel call on deadline-out.
+
+If the parent is cancelled (not deadline-out) during a wait,
+`bridge_cancel_cascade` fires through the existing path (parametric over
+kind) and `wait_tool` returns `status = "cancelled"` with `error.reason =
+"parent_cancelled"`. Same envelope shape; different cause field.
 
 ### `cancel_tool`
 
@@ -551,7 +571,11 @@ as `background_completion`. No data migration is required.
 Before implementation planning, Jack should approve:
 
 - the rename `Proofs/Subagent/` → `Proofs/Background/` and Rust mirrors,
-  shipping in the same PR as R6
+  shipping in the same PR as R6 with the first commit being a pure rename
+  (no semantic change) and subsequent commits substantive
+- `wait_tool` deadline-out fires `bridge_cancel_cascade` on the awaited row
+  before returning to the agent (envelope/world consistency; diverges from
+  R4's `wait_subagent` which lets a deadline-out child continue running)
 - the parametric `BridgedState` over `BackgroundedKind = Subagent | Tool`
 - the v1 agent surface: `background_tool`, `wait_tool`, `cancel_tool`
 - tool capability bit `backgroundable` + operator allowlist
