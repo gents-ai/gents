@@ -39,3 +39,21 @@ class IsValidReducer (r : TranscriptReducer) where
                           PromptView.ViewCoherent (r (r v))
 
 end Compaction
+
+namespace Compaction
+
+/-- The trivial reducer -- does nothing. Witnesses that `IsValidReducer`
+is non-vacuous. -/
+def identityReducer : TranscriptReducer := fun v => v
+
+instance instIsValidReducerIdentity : IsValidReducer identityReducer where
+  gate                := fun _ => False
+  decGate             := fun _ => .isFalse (fun h => h)
+  preservesPairs      := fun _ h => h
+  preservesOrder      := fun _ h => h
+  preservesSession    := fun _ => rfl
+  identityBelowGate   := fun _ _ => rfl
+  identityUnlessSafe  := fun _ _ => rfl
+  reapplyPreservesCoh := fun _ h => h
+
+end Compaction
