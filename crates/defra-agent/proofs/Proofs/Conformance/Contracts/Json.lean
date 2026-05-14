@@ -4,6 +4,7 @@ import Proofs.Conformance.ClientShell.Contracts
 import Proofs.ApplyReconcile.ContractCases
 import Proofs.ToolExecution
 import Proofs.MCPHealth.Executable
+import Proofs.StreamingResponse.Executable
 import Proofs.Conformance.Deviations
 import Proofs.CommandPolicy.Cases
 import Proofs.Conformance.CoverageLedger
@@ -340,6 +341,30 @@ def jsonOptionalNat : Option Nat → String
   | none => "null"
   | some value => toString value
 
+def responseTransitionCaseJson
+    (witness : StreamingResponse.ResponseTransitionCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"group\":" ++ jsonString witness.group ++ ","
+    ++ "\"action\":" ++ jsonString witness.action ++ ","
+    ++ "\"legal\":" ++ boolString witness.legal ++ ","
+    ++ "\"pre_status\":" ++ jsonString witness.preStatus ++ ","
+    ++ "\"post_status\":" ++ jsonString witness.postStatus ++ ","
+    ++ "\"pre_live_tail\":" ++ jsonString witness.preLiveTail ++ ","
+    ++ "\"post_live_tail\":" ++ jsonString witness.postLiveTail ++ ","
+    ++ "\"pre_token_count\":" ++ toString witness.preTokenCount ++ ","
+    ++ "\"post_token_count\":" ++ toString witness.postTokenCount ++ ","
+    ++ "\"error_reason\":" ++ jsonOptionalString witness.errorReason ++ ","
+    ++ "\"pre_materialized_seq\":"
+      ++ jsonOptionalNat witness.preMaterializedSeq ++ ","
+    ++ "\"post_materialized_seq\":"
+      ++ jsonOptionalNat witness.postMaterializedSeq ++ ","
+    ++ "\"expected_request_state\":"
+      ++ jsonOptionalString witness.expectedRequestState ++ ","
+    ++ "\"expected_request_persistence\":"
+      ++ jsonOptionalString witness.expectedRequestPersistence
+    ++ "}"
+
 def queueDeadlineConformanceCaseJson
     (witness : QueueDeadlineConformanceCase) : String :=
   "{"
@@ -489,6 +514,9 @@ def snapshotJson : String :=
     ++ "\"transcript_conformance_cases\":"
       ++ jsonArray
         (transcriptConformanceCases.map transcriptCaseJson) ++ ","
+    ++ "\"streaming_response_cases\":"
+      ++ jsonArray
+        (StreamingResponse.responseTransitionCases.map responseTransitionCaseJson) ++ ","
     ++ "\"mcp_health_cases\":"
       ++ jsonArray
         (Proofs.MCPHealth.transitionCases.map mcpHealthCaseJson) ++ ","

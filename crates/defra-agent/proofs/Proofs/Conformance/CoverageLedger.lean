@@ -288,12 +288,14 @@ def caseCoverage : List CoverageEntry :=
       "transcript_cases"
       "TranscriptConformanceCases"
       "state_machine_conformance::generated_transcript_cases_pin_agent_message_ordering_contract"
-  -- compaction_reducer_cases and streaming_response_cases entries were dropped
-  -- here because PRs #199 and #202 added the ledger rows without the JSON
-  -- emitter, Rust deserializer, or consumer test. See
-  -- docs/superpowers/audits/2026-05-14-conformance-pipeline-audit.md §3.
-  -- Follow-up issues #206 (streaming) and #207 (compaction) re-add these rows
-  -- alongside the JSON bridges.
+  , consumerWithFollowUpCoverage
+      "streaming_response_cases"
+      "ResponseTransitionCases"
+      "state_machine_conformance::generated_streaming_response_cases_pin_lifecycle_contract"
+      "Runtime-backed streaming response lifecycle drive remains a follow-up; this row pins the emitted Lean case shape."
+  -- compaction_reducer_cases was dropped because PR #202 added the ledger row
+  -- without the JSON emitter, Rust deserializer, or consumer test. Follow-up
+  -- issue #207 re-adds this row alongside the JSON bridge.
   , consumerCoverage
       "event_delivery_cases"
       "EventDeliveryTransitionCases"
