@@ -3,6 +3,7 @@ import Proofs.Properties.Liveness
 import Proofs.InferenceCall
 import Proofs.ToolExecution
 import Proofs.Subagent
+import Proofs.StreamingResponse.State
 
 /-!
 # Registered Recovery Sweeps
@@ -70,31 +71,17 @@ def requestRecoverySweep : RecoverySweep :=
 
 /-! ## Streaming response recovery -/
 
-inductive ResponseRecoveryStatus where
-  | streaming
-  | completed
-  | error
-  deriving DecidableEq, Repr
+abbrev ResponseRecoveryStatus := StreamingResponse.Status
 
 namespace ResponseRecoveryStatus
-
-def toContract : ResponseRecoveryStatus → String
-  | .streaming => "streaming"
-  | .completed => "completed"
-  | .error => "error"
-
-instance : HasTerminal ResponseRecoveryStatus where
-  isTerminal status := status = .completed ∨ status = .error
-  isTerminal_dec status :=
-    match status with
-    | .completed => isTrue (Or.inl rfl)
-    | .error => isTrue (Or.inr rfl)
-    | .streaming => isFalse (by
-        intro h
-        cases h with
-        | inl h_completed => cases h_completed
-        | inr h_error => cases h_error)
-
+  /-- Contract name (not the DefraDB persistence name). `toContract` and
+  `StreamingResponse.Status.toDefraDB` serve different consumers: the
+  contract uses Lean-variant names ("completed"), while the persistence
+  field stringifies to "complete" (matching the Rust enum). -/
+  def toContract : StreamingResponse.Status → String
+    | .streaming => "streaming"
+    | .completed => "completed"
+    | .error => "error"
 end ResponseRecoveryStatus
 
 structure ResponseRecoveryRow where
@@ -122,7 +109,7 @@ theorem responseRecovery_stale_positive :
 theorem responseRecover_terminal :
     ∀ row, responseRecoveryStale row → isTerminal (responseRecover row).status := by
   intro row _h_stale
-  simp [responseRecover, HasTerminal.isTerminal, ResponseRecoveryStatus.instHasTerminal]
+  simp [responseRecover, HasTerminal.isTerminal, StreamingResponse.Status.instHasTerminal]
 
 theorem responseRecover_zero :
     ∀ row, responseRecoveryStale row → responseRecoveryMeasure (responseRecover row) = 0 := by
