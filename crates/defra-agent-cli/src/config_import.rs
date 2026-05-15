@@ -1744,6 +1744,46 @@ mod lean_apply_write_boundary_tests {
         (collection_from_lean_name(&doc.collection), doc.id.clone())
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn config_apply_txn_round_trip_against_recorder() {
+        let (graphql, recorder) = start_recording_graphql().await;
+        let access = ConfigAccess::Graphql(graphql);
+        let txn = access.begin_apply_txn().await.expect("begin");
+
+        let _ = txn
+            .execute("mutation { doc_0: create_Task(input: { task_id: \"task-a\" }) { _docID } }")
+            .await
+            .expect("execute in tx");
+
+        assert!(recorder.committed_state().is_empty());
+
+        txn.commit().await.expect("commit");
+
+        let committed = recorder.committed_state();
+        assert_eq!(committed.len(), 1);
+        assert_eq!(committed[0].unique_value, "task-a");
+        let (begin_count, commit_count, discard_count) = recorder.tx_lifecycle_counts();
+        assert_eq!((begin_count, commit_count, discard_count), (1, 1, 0));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn config_apply_txn_discard_leaves_committed_empty() {
+        let (graphql, recorder) = start_recording_graphql().await;
+        let access = ConfigAccess::Graphql(graphql);
+        let txn = access.begin_apply_txn().await.expect("begin");
+
+        let _ = txn
+            .execute("mutation { doc_0: create_Task(input: { task_id: \"task-a\" }) { _docID } }")
+            .await
+            .expect("execute in tx");
+
+        txn.discard().await.expect("discard");
+
+        assert!(recorder.committed_state().is_empty());
+        let (begin_count, commit_count, discard_count) = recorder.tx_lifecycle_counts();
+        assert_eq!((begin_count, commit_count, discard_count), (1, 0, 1));
+    }
+
     #[cfg(test)]
     mod recorder_unit_tests {
         use super::*;

@@ -3706,6 +3706,7 @@ dependencies = [
  "opentelemetry-otlp 0.31.1",
  "opentelemetry_sdk 0.31.0",
  "p2p",
+ "query",
  "regex",
  "reqwest 0.12.28",
  "rig-core",
@@ -3788,6 +3789,7 @@ name = "defra-agent-protocol"
 version = "0.1.5"
 dependencies = [
  "anyhow",
+ "axum 0.8.9",
  "chrono",
  "reqwest 0.12.28",
  "rig-core",

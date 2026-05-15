@@ -19,6 +19,7 @@ defra-agent = { path = "../defra-agent" }
 defra-agent-protocol.workspace = true
 defra-node.workspace = true
 defra-p2p-adapter.workspace = true
+query = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", branch = "main" }
 hostname.workspace = true
 opentelemetry.workspace = true
 opentelemetry-otlp.workspace = true

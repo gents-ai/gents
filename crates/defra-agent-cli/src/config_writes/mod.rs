@@ -5,6 +5,7 @@ mod inference_backend;
 mod schedule;
 mod task;
 mod tool_selection;
+mod txn;
 
 pub(crate) use agent_behavior::write_agent_behavior_document;
 pub(crate) use event_trigger::write_event_trigger_document;
@@ -14,6 +15,7 @@ pub(crate) use inference_backend::{
 pub(crate) use schedule::write_schedule_document;
 pub(crate) use task::write_task_document;
 pub(crate) use tool_selection::write_tool_selection_document;
+pub(crate) use txn::{ConfigApplyTxn, TxnHandle};
 
 use anyhow::Result;
 use defra_agent::defra_node::EmbeddedNode;
