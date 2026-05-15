@@ -14,7 +14,6 @@ use defra_agent::{AgentBehavior, AgentIdentity, AgentPrincipal};
 
 #[path = "support/identity_stubs.rs"]
 mod identity_stubs;
-#[allow(unused_imports)]
 use identity_stubs::StubAgentIdentity;
 
 /// Build `Arc<AgentPrincipal>` instances (one per Lean principal row)
@@ -197,6 +196,33 @@ fn identity_permission_cases_pin_runtime_permission_contract_shape() {
     }
 
     for case in cases {
+        // Fixture integrity: guard against a malformed Lean export. These
+        // assertions verify the IdentityPermissionCase row is internally
+        // consistent before the runtime-witness assertions run.
+        let principal_dids: std::collections::HashSet<&str> =
+            case.principals.iter().map(|p| p.did.as_str()).collect();
+        assert!(
+            principal_dids.contains(case.row_owner.as_str()),
+            "case {:?}: row_owner {:?} must be a declared principal",
+            case.name,
+            case.row_owner
+        );
+        assert!(
+            case.permission.contains(case.row_owner.as_str()),
+            "case {:?}: permission {:?} must identify the owned row principal {:?}",
+            case.name,
+            case.permission,
+            case.row_owner
+        );
+        for grant in &case.grants {
+            assert!(
+                principal_dids.contains(grant.principal.as_str()),
+                "case {:?}: grant principal {:?} must be declared",
+                case.name,
+                grant.principal
+            );
+        }
+
         // Drive runtime types from the Lean fixture. The assertions go
         // through AgentBehavior::principal.agent_did rather than the
         // local Rust mirror that this test used to maintain.
