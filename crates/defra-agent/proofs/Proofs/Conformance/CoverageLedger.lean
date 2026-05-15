@@ -308,7 +308,7 @@ def caseCoverage : List CoverageEntry :=
   , consumerCoverage
       "identity_contracts"
       "IdentityContracts"
-      "identity_conformance::identity_respects_principal_contract_is_declared"
+      "identity_conformance::identity_respects_principal_contract_enforced_by_runtime_routing"
   , consumerWithFollowUpCoverage
       "streaming_response_cases"
       "ResponseTransitionCases"

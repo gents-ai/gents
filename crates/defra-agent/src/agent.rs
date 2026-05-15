@@ -118,6 +118,13 @@ impl DefraAgent {
         };
         let resolved_snapshot =
             resolve_document_runtime_snapshot(node.as_ref(), &document_runtime_context).await?;
+        debug_assert!(
+            resolved_snapshot.principal.is_some(),
+            "from_default_behavior_documents called with a snapshot lacking a principal; \
+             the production loader always sets principal: Some(...) — a None snapshot \
+             means a non-production path bypassed the loader and would produce a \
+             DefraAgent.principal that's NOT Arc::ptr_eq to the snapshot's behavior principals",
+        );
         // The snapshot carries the principal Arc constructed once in the loader.
         // Fall back to a synthetic principal if (in tests) the snapshot has none.
         let principal = resolved_snapshot.principal.clone().unwrap_or_else(|| {
