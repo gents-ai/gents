@@ -728,6 +728,8 @@ def snapshotJson : String :=
       ++ coverageLedgerJson
     ++ ",\"identity_structural_cases\":"
       ++ Identity.Conformance.structuralCasesJson
+    ++ ",\"identity_permission_cases\":"
+      ++ Identity.Conformance.identityPermissionCasesJson
     ++ ",\"identity_contracts\":"
       ++ Identity.Conformance.identityContractsJson
     ++ "}"

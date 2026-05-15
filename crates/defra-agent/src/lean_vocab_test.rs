@@ -65,6 +65,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) follow_up_hooks: Vec<String>,
     pub(crate) coverage_ledger: Vec<LeanCoverageEntry>,
     pub(crate) identity_structural_cases: Vec<LeanIdentityStructuralCase>,
+    pub(crate) identity_permission_cases: Vec<LeanIdentityPermissionCase>,
     pub(crate) identity_contracts: Vec<LeanIdentityContract>,
     #[serde(default)]
     pub(crate) event_delivery_transition_case_count: usize,
@@ -610,6 +611,34 @@ pub(crate) struct LeanIdentityStructuralCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanIdentityPermissionGrant {
+    pub(crate) principal: String,
+    pub(crate) permission: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanIdentityPermissionCase {
+    pub(crate) name: String,
+    pub(crate) principals: Vec<LeanIdentityPrincipal>,
+    pub(crate) behaviors: Vec<LeanIdentityBehavior>,
+    pub(crate) deployments: Vec<LeanIdentityDeployment>,
+    pub(crate) grants: Vec<LeanIdentityPermissionGrant>,
+    pub(crate) permission: String,
+    pub(crate) row_owner: String,
+    pub(crate) actor_behavior: String,
+    pub(crate) peer_behavior: String,
+    pub(crate) expected_actor_principal: String,
+    pub(crate) expected_peer_principal: String,
+    pub(crate) expected_actor_allowed: bool,
+    pub(crate) expected_peer_allowed: bool,
+    pub(crate) same_principal: bool,
+    pub(crate) expected_decisions_equal: bool,
+    pub(crate) host_deployment: String,
+    pub(crate) expected_actor_hostable: bool,
+    pub(crate) expected_peer_hostable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanIdentityContract {
     pub(crate) name: String,
     pub(crate) statement: String,
@@ -1106,6 +1135,10 @@ pub(crate) fn lean_command_env_case(name: &str) -> &'static LeanCommandEnvCase {
 
 pub(crate) fn lean_identity_structural_cases() -> &'static [LeanIdentityStructuralCase] {
     &lean_contract_snapshot().identity_structural_cases
+}
+
+pub(crate) fn lean_identity_permission_cases() -> &'static [LeanIdentityPermissionCase] {
+    &lean_contract_snapshot().identity_permission_cases
 }
 
 pub(crate) fn lean_identity_contracts() -> &'static [LeanIdentityContract] {

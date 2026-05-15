@@ -4,8 +4,9 @@ use std::collections::HashSet;
 mod lean_vocab_test;
 
 use lean_vocab_test::{
-    lean_identity_contracts, lean_identity_structural_cases, LeanIdentityBehavior,
-    LeanIdentityContract, LeanIdentityDeployment, LeanIdentityStructuralCase,
+    lean_identity_contracts, lean_identity_permission_cases, lean_identity_structural_cases,
+    LeanIdentityBehavior, LeanIdentityContract, LeanIdentityDeployment, LeanIdentityPermissionCase,
+    LeanIdentityStructuralCase,
 };
 
 /// Rust mirror of `Identity.World.WellFormed` from
@@ -50,6 +51,53 @@ fn rust_well_formed(case: &LeanIdentityStructuralCase) -> bool {
     true
 }
 
+fn behavior_for_id<'a>(
+    case: &'a LeanIdentityPermissionCase,
+    behavior_id: &str,
+) -> &'a LeanIdentityBehavior {
+    case.behaviors
+        .iter()
+        .find(|behavior| behavior.id == behavior_id)
+        .unwrap_or_else(|| {
+            panic!(
+                "permission case {:?} references missing behavior {:?}",
+                case.name, behavior_id
+            )
+        })
+}
+
+fn deployment_for_id<'a>(
+    case: &'a LeanIdentityPermissionCase,
+    deployment_id: &str,
+) -> &'a LeanIdentityDeployment {
+    case.deployments
+        .iter()
+        .find(|deployment| deployment.id == deployment_id)
+        .unwrap_or_else(|| {
+            panic!(
+                "permission case {:?} references missing deployment {:?}",
+                case.name, deployment_id
+            )
+        })
+}
+
+fn rust_canonical_permission_decision(case: &LeanIdentityPermissionCase, principal: &str) -> bool {
+    case.grants
+        .iter()
+        .any(|grant| grant.principal == principal && grant.permission == case.permission)
+}
+
+fn rust_hostability_decision(
+    case: &LeanIdentityPermissionCase,
+    deployment: &LeanIdentityDeployment,
+    behavior: &LeanIdentityBehavior,
+) -> bool {
+    let principal_dids: HashSet<&str> = case.principals.iter().map(|p| p.did.as_str()).collect();
+    principal_dids.contains(deployment.principal.as_str())
+        && principal_dids.contains(behavior.principal.as_str())
+        && deployment.principal == behavior.principal
+}
+
 #[test]
 fn identity_structural_cases_match_lean_verdicts() {
     let cases = lean_identity_structural_cases();
@@ -89,6 +137,107 @@ fn identity_structural_cases_cover_named_scenarios() {
 }
 
 #[test]
+fn identity_permission_cases_pin_runtime_permission_contract_shape() {
+    let cases = lean_identity_permission_cases();
+    assert_eq!(
+        cases.len(),
+        4,
+        "Lean should emit the four executable identity permission rows that unblock #193"
+    );
+
+    let names: HashSet<&str> = cases.iter().map(|case| case.name.as_str()).collect();
+    for expected in [
+        "same_principal_row_owner_grant_allows_shared_behaviors",
+        "separate_principal_without_grant_blocks_peer",
+        "separate_principal_with_grant_allows_peer",
+        "behavior_id_lookup_selects_declared_principal",
+    ] {
+        assert!(
+            names.contains(expected),
+            "missing expected identity permission case: {expected}"
+        );
+    }
+
+    for case in cases {
+        let principal_dids: HashSet<&str> =
+            case.principals.iter().map(|p| p.did.as_str()).collect();
+        assert!(
+            principal_dids.contains(case.row_owner.as_str()),
+            "case {:?}: row_owner must be a declared principal",
+            case.name
+        );
+        assert!(
+            case.permission.contains(case.row_owner.as_str()),
+            "case {:?}: permission {:?} must identify the owned row principal {:?}",
+            case.name,
+            case.permission,
+            case.row_owner
+        );
+
+        for grant in &case.grants {
+            assert!(
+                principal_dids.contains(grant.principal.as_str()),
+                "case {:?}: grant principal {:?} must be declared",
+                case.name,
+                grant.principal
+            );
+        }
+
+        let actor = behavior_for_id(case, &case.actor_behavior);
+        let peer = behavior_for_id(case, &case.peer_behavior);
+        assert_eq!(
+            actor.principal, case.expected_actor_principal,
+            "case {:?}: actor behavior-id lookup drifted",
+            case.name
+        );
+        assert_eq!(
+            peer.principal, case.expected_peer_principal,
+            "case {:?}: peer behavior-id lookup drifted",
+            case.name
+        );
+
+        let actor_allowed = rust_canonical_permission_decision(case, &actor.principal);
+        let peer_allowed = rust_canonical_permission_decision(case, &peer.principal);
+        assert_eq!(
+            actor_allowed, case.expected_actor_allowed,
+            "case {:?}: actor permission decision drifted",
+            case.name
+        );
+        assert_eq!(
+            peer_allowed, case.expected_peer_allowed,
+            "case {:?}: peer permission decision drifted",
+            case.name
+        );
+        assert_eq!(
+            actor.principal == peer.principal,
+            case.same_principal,
+            "case {:?}: same-principal witness drifted",
+            case.name
+        );
+        assert_eq!(
+            actor_allowed == peer_allowed,
+            case.expected_decisions_equal,
+            "case {:?}: expected decision equality drifted",
+            case.name
+        );
+
+        let host = deployment_for_id(case, &case.host_deployment);
+        assert_eq!(
+            rust_hostability_decision(case, host, actor),
+            case.expected_actor_hostable,
+            "case {:?}: actor hostability decision drifted",
+            case.name
+        );
+        assert_eq!(
+            rust_hostability_decision(case, host, peer),
+            case.expected_peer_hostable,
+            "case {:?}: peer hostability decision drifted",
+            case.name
+        );
+    }
+}
+
+#[test]
 fn identity_respects_principal_contract_is_declared() {
     let contracts = lean_identity_contracts();
     let target = contracts
@@ -100,10 +249,10 @@ fn identity_respects_principal_contract_is_declared() {
         );
 
     // The contract is declared today and not yet enforced by a runtime
-    // permission decision module. When that module lands (#193), flip
-    // `enforced` to `true` in Proofs/Identity/Conformance.lean AND
-    // replace the assertion below with a property-based test driving
-    // the runtime decide function on the structural cases.
+    // permission decision module. The finite rows consumed by
+    // `identity_permission_cases_pin_runtime_permission_contract_shape`
+    // are the #193 handoff: replace that Rust mirror with the runtime
+    // decide function, then flip `enforced` to `true`.
     assert!(
         !target.enforced,
         "identity.respects_principal_boundary is marked enforced=true in Lean, \
