@@ -162,7 +162,7 @@ def stateMachineCoverage : List CoverageEntry :=
   , consumerCoverage
       "state_machine"
       "PairingReconcile"
-      "state_machine_conformance::lean_executable_contracts_cover_initial_domains"
+      "agent::reconcile::tests::pairing_reconcile_state_machine_contract_is_complete"
   , consumerCoverage
       "state_machine"
       "SessionRecovery"

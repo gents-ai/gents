@@ -17,6 +17,7 @@ pub mod config;
 pub mod desired_fields;
 pub mod document_config;
 pub mod error;
+pub mod event_delivery_contract;
 pub mod graphql;
 pub mod health_checker;
 pub mod hook;
