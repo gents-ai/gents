@@ -906,7 +906,7 @@ mod lean_apply_write_boundary_tests {
 
             assert_counts_match_lean(case, &counts);
 
-            // NOTE: Task 3 wires ConfigApplyTxn through apply_desired_state_changes.
+            // NOTE: Task 4 wires ConfigApplyTxn through apply_desired_state_changes.
             // At that point, switch the success-path assertion to recorder.committed_state()
             // to actually verify atomicity. observed_writes() includes uncommitted writes.
             let observed = recorder.observed_writes();

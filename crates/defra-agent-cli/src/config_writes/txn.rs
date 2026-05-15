@@ -37,11 +37,20 @@ pub(crate) enum TxnHandle {
 pub(crate) struct ConfigApplyTxn<'a> {
     access: &'a ConfigAccess,
     handle: TxnHandle,
+    http_client: reqwest::Client,
 }
 
 impl<'a> ConfigApplyTxn<'a> {
-    pub(crate) fn new(access: &'a ConfigAccess, handle: TxnHandle) -> Self {
-        Self { access, handle }
+    pub(crate) fn new(
+        access: &'a ConfigAccess,
+        handle: TxnHandle,
+        http_client: reqwest::Client,
+    ) -> Self {
+        Self {
+            access,
+            handle,
+            http_client,
+        }
     }
 
     pub(crate) fn mode(&self) -> &'static str {
@@ -81,18 +90,25 @@ impl<'a> ConfigApplyTxn<'a> {
     pub(crate) async fn commit(self) -> Result<()> {
         match (self.access, self.handle) {
             (ConfigAccess::Graphql(endpoint), TxnHandle::Graphql(id)) => {
-                let client = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(30))
-                    .build()?;
-                let response = client
-                    .post(format!("{endpoint}api/v0/tx/{id}"))
-                    .send()
-                    .await
-                    .with_context(|| format!("posting tx commit to {endpoint}"))?;
-                if !response.status().is_success() {
+                let status;
+                let bytes;
+                {
+                    let response = self
+                        .http_client
+                        .post(format!("{endpoint}api/v0/tx/{id}"))
+                        .send()
+                        .await
+                        .with_context(|| format!("posting tx commit to {endpoint}"))?;
+                    status = response.status();
+                    bytes = response
+                        .bytes()
+                        .await
+                        .with_context(|| format!("reading tx commit body from {endpoint}"))?;
+                }
+                if !status.is_success() {
                     anyhow::bail!(
-                        "tx commit returned HTTP {} from {endpoint}",
-                        response.status()
+                        "tx commit returned HTTP {status} from {endpoint}: {}",
+                        String::from_utf8_lossy(&bytes)
                     );
                 }
                 Ok(())
@@ -112,18 +128,25 @@ impl<'a> ConfigApplyTxn<'a> {
     pub(crate) async fn discard(self) -> Result<()> {
         match (self.access, self.handle) {
             (ConfigAccess::Graphql(endpoint), TxnHandle::Graphql(id)) => {
-                let client = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(30))
-                    .build()?;
-                let response = client
-                    .delete(format!("{endpoint}api/v0/tx/{id}"))
-                    .send()
-                    .await
-                    .with_context(|| format!("posting tx discard to {endpoint}"))?;
-                if !response.status().is_success() {
+                let status;
+                let bytes;
+                {
+                    let response = self
+                        .http_client
+                        .delete(format!("{endpoint}api/v0/tx/{id}"))
+                        .send()
+                        .await
+                        .with_context(|| format!("posting tx discard to {endpoint}"))?;
+                    status = response.status();
+                    bytes = response
+                        .bytes()
+                        .await
+                        .with_context(|| format!("reading tx discard body from {endpoint}"))?;
+                }
+                if !status.is_success() {
                     anyhow::bail!(
-                        "tx discard returned HTTP {} from {endpoint}",
-                        response.status()
+                        "tx discard returned HTTP {status} from {endpoint}: {}",
+                        String::from_utf8_lossy(&bytes)
                     );
                 }
                 Ok(())
@@ -151,22 +174,25 @@ impl ConfigAccess {
                     .send()
                     .await
                     .with_context(|| format!("posting tx begin to {endpoint}"))?;
-                if !response.status().is_success() {
+                let status = response.status();
+                let bytes = response
+                    .bytes()
+                    .await
+                    .with_context(|| format!("reading tx begin body from {endpoint}"))?;
+                if !status.is_success() {
                     anyhow::bail!(
-                        "tx begin returned HTTP {} from {endpoint}",
-                        response.status()
+                        "tx begin returned HTTP {status} from {endpoint}: {}",
+                        String::from_utf8_lossy(&bytes)
                     );
                 }
-                let body: Value = response
-                    .json()
-                    .await
+                let body: Value = serde_json::from_slice(&bytes)
                     .with_context(|| format!("decoding tx begin body from {endpoint}"))?;
                 let id = body
                     .get("id")
                     .and_then(Value::as_str)
                     .ok_or_else(|| anyhow::anyhow!("tx begin missing id: {body}"))?
                     .to_string();
-                Ok(ConfigApplyTxn::new(self, TxnHandle::Graphql(id)))
+                Ok(ConfigApplyTxn::new(self, TxnHandle::Graphql(id), client))
             }
             ConfigAccess::Local(node) => {
                 let handle = node
@@ -174,7 +200,11 @@ impl ConfigAccess {
                     .begin_txn(false)
                     .await
                     .map_err(|error| anyhow::anyhow!("begin_txn: {error}"))?;
-                Ok(ConfigApplyTxn::new(self, TxnHandle::Local(handle)))
+                Ok(ConfigApplyTxn::new(
+                    self,
+                    TxnHandle::Local(handle),
+                    reqwest::Client::new(),
+                ))
             }
         }
     }

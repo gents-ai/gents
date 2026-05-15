@@ -23,6 +23,8 @@ use serde_json::{json, Value};
 
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ConfigAccess {
+    /// HTTP GraphQL endpoint. **Must end with `/`** — callers append paths like
+    /// `api/v0/tx/begin` directly via `format!("{endpoint}api/...")`.
     Graphql(String),
     Local(EmbeddedNode),
 }
