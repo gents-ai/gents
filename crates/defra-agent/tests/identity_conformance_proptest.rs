@@ -24,11 +24,13 @@ mod identity_stubs;
 use identity_stubs::StubAgentIdentity;
 
 /// Mimic the production loader's principal+behavior construction for
-/// one snapshot's worth of behaviors. The production code lives in
-/// `crates/defra-agent/src/agent.rs::from_default_behavior_documents`
-/// and in the reconcile rebuild path; this helper isolates the
-/// load-bearing logic (build one Arc<AgentPrincipal>, clone it into
-/// every behavior).
+/// one snapshot's worth of behaviors. The load-bearing pattern lives
+/// in `crates/defra-agent/src/agent/document_view/snapshot.rs`
+/// (the `resolve_document_runtime_snapshot_from_view` flow constructs
+/// one `Arc<AgentPrincipal>` above the behavior loop and clones it
+/// into every `behavior_config_from_documents` call). The reconcile
+/// rebuild path goes through the same flow. This helper isolates the
+/// load-bearing logic (build one Arc, clone into every behavior).
 fn build_snapshot_principal_and_behaviors(
     agent_did: String,
     behavior_ids: Vec<String>,
@@ -85,6 +87,8 @@ fn arb_behavior_id() -> impl Strategy<Value = String> {
 }
 
 proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
     /// For any snapshot constructed via the helper, every behavior's
     /// principal Arc is pointer-equal to the snapshot's single
     /// principal Arc. Future loader changes that build fresh
