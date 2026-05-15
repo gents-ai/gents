@@ -429,10 +429,12 @@ structure IdentityContract where
 def identityContracts : List IdentityContract :=
   [ { name      := "identity.respects_principal_boundary"
     , statement :=
-        "For any two AgentBehavior rows b₁, b₂ with " ++
-        "b₁.agent_did == b₂.agent_did, the runtime's permission " ++
-        "decision function MUST return identical results for any " ++
-        "permission."
+        "The runtime's behavior_id -> agent_did resolution is " ++
+        "single-valued: for any two AgentBehavior rows b1, b2 with " ++
+        "b1.agent_did == b2.agent_did, the runtime supplies the same " ++
+        "Identity::Authenticated(did) as the actor for any DefraDB ACP " ++
+        "check, so any DID-keyed permission decision returns identical " ++
+        "results."
     , enforced  := false
     , trackedBy := "#193"
     }
