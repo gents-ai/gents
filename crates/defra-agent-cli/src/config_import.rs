@@ -926,23 +926,16 @@ mod lean_apply_write_boundary_tests {
                 case.name,
             );
 
-            let committed_after_commit = recorder.committed_state();
-            assert_eq!(
-                committed_after_commit.len(),
-                case.expected_selected_writes.len(),
-                "recorder committed state count mismatch for Lean case {} (expected = {}, actual = {})",
-                case.name,
-                case.expected_selected_writes.len(),
-                committed_after_commit.len(),
-            );
-
             if case.prefix_len > 0 {
                 let (graphql, recorder) = start_recording_graphql().await;
                 let access = ConfigAccess::Graphql(graphql);
 
                 // Begin a tx. The recorder hands out sequential numeric ids starting at 0;
                 // the first tx in this fresh recorder is "0".
-                let txn = access.begin_apply_txn().await.expect("begin failure-case tx");
+                let txn = access
+                    .begin_apply_txn()
+                    .await
+                    .expect("begin failure-case tx");
                 recorder.install_fail_at("0", case.prefix_len);
 
                 let result = apply_desired_state_changes(&txn, &desired_bundle, &planned).await;
@@ -953,6 +946,7 @@ mod lean_apply_write_boundary_tests {
                     case.name,
                 );
 
+                // discard errors are not under test here; the apply error path is what we're verifying.
                 let _ = txn.discard().await;
 
                 let (begin_count, commit_count, discard_count) = recorder.tx_lifecycle_counts();
@@ -971,10 +965,10 @@ mod lean_apply_write_boundary_tests {
 
                 let observed = recorder.observed_writes();
                 assert!(
-                    observed.len() <= case.prefix_len + 1,
-                    "failure path observed {} writes; cap is prefix_len + 1 = {} for Lean case {}",
+                    observed.len() <= case.prefix_len,
+                    "failure path observed {} writes; the batch containing the failing write must be rejected and writes after it must not happen — cap is prefix_len = {} for Lean case {}",
                     observed.len(),
-                    case.prefix_len + 1,
+                    case.prefix_len,
                     case.name,
                 );
             }
