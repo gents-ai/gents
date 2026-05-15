@@ -224,17 +224,31 @@ pub async fn execute_graphql_async(
     query: &str,
     options: GraphqlRequestOptions,
 ) -> Result<serde_json::Value> {
+    execute_graphql_async_with_tx(graphql, query, options, None).await
+}
+
+/// Like `execute_graphql_async` but adds an `x-defradb-tx` header when
+/// `txn_id` is `Some`. Used by `defra-agent-cli` to drive DefraDB HTTP
+/// transactions during `config apply`.
+pub async fn execute_graphql_async_with_tx(
+    graphql: &str,
+    query: &str,
+    options: GraphqlRequestOptions,
+    txn_id: Option<&str>,
+) -> Result<serde_json::Value> {
     let client = reqwest::Client::builder()
         .timeout(options.timeout)
         .build()?;
     let mut last_error = None;
 
     for attempt in 0..options.max_attempts.max(1) {
-        let response = client
+        let mut request = client
             .post(graphql)
-            .json(&serde_json::json!({ "query": query }))
-            .send()
-            .await;
+            .json(&serde_json::json!({ "query": query }));
+        if let Some(id) = txn_id {
+            request = request.header("x-defradb-tx", id);
+        }
+        let response = request.send().await;
         let response = match response {
             Ok(response) => response,
             Err(error)
@@ -296,109 +310,6 @@ pub async fn execute_graphql_async(
                     graphql,
                     error = %error,
                     "retrying async GraphQL request after decode error"
-                );
-                last_error = Some(
-                    anyhow::Error::new(error)
-                        .context(format!("decoding GraphQL response body from {graphql}")),
-                );
-                tokio::time::sleep(scale_backoff(options.retry_backoff, attempt)).await;
-                continue;
-            }
-            Err(error) => {
-                return Err(anyhow::Error::new(error)
-                    .context(format!("decoding GraphQL response body from {graphql}")));
-            }
-        };
-
-        return finish_graphql_response(graphql, value);
-    }
-
-    Err(last_error.unwrap_or_else(|| anyhow!("GraphQL request retries exhausted for {graphql}")))
-}
-
-/// Like `execute_graphql_async` but adds an `x-defradb-tx` header when
-/// `txn_id` is `Some`. Used by `defra-agent-cli` to drive DefraDB HTTP
-/// transactions during `config apply`.
-pub async fn execute_graphql_async_with_tx(
-    graphql: &str,
-    query: &str,
-    options: GraphqlRequestOptions,
-    txn_id: Option<&str>,
-) -> Result<serde_json::Value> {
-    let client = reqwest::Client::builder()
-        .timeout(options.timeout)
-        .build()?;
-    let mut last_error = None;
-
-    for attempt in 0..options.max_attempts.max(1) {
-        let mut request = client
-            .post(graphql)
-            .json(&serde_json::json!({ "query": query }));
-        if let Some(id) = txn_id {
-            request = request.header("x-defradb-tx", id);
-        }
-        let response = request.send().await;
-        let response = match response {
-            Ok(response) => response,
-            Err(error)
-                if graphql_transport_error_is_retryable(&error)
-                    && attempt + 1 < options.max_attempts =>
-            {
-                tracing::warn!(
-                    attempt,
-                    graphql,
-                    error = %error,
-                    "retrying async GraphQL tx request after transport error"
-                );
-                last_error = Some(
-                    anyhow::Error::new(error).context(format!("posting GraphQL to {graphql}")),
-                );
-                tokio::time::sleep(scale_backoff(options.retry_backoff, attempt)).await;
-                continue;
-            }
-            Err(error) => {
-                return Err(
-                    anyhow::Error::new(error).context(format!("posting GraphQL to {graphql}"))
-                );
-            }
-        };
-
-        let response = match response.error_for_status() {
-            Ok(response) => response,
-            Err(error)
-                if graphql_transport_error_is_retryable(&error)
-                    && attempt + 1 < options.max_attempts =>
-            {
-                tracing::warn!(
-                    attempt,
-                    graphql,
-                    error = %error,
-                    "retrying async GraphQL tx request after response status error"
-                );
-                last_error = Some(
-                    anyhow::Error::new(error)
-                        .context(format!("reading GraphQL response from {graphql}")),
-                );
-                tokio::time::sleep(scale_backoff(options.retry_backoff, attempt)).await;
-                continue;
-            }
-            Err(error) => {
-                return Err(anyhow::Error::new(error)
-                    .context(format!("reading GraphQL response from {graphql}")));
-            }
-        };
-
-        let value = match response.json().await {
-            Ok(value) => value,
-            Err(error)
-                if graphql_transport_error_is_retryable(&error)
-                    && attempt + 1 < options.max_attempts =>
-            {
-                tracing::warn!(
-                    attempt,
-                    graphql,
-                    error = %error,
-                    "retrying async GraphQL tx request after decode error"
                 );
                 last_error = Some(
                     anyhow::Error::new(error)
