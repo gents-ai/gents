@@ -209,6 +209,7 @@ The case model includes:
 - `ContractDoc`, `ContractLiveDoc`, `ContractStep`, `ApplyReconcileScenario`, and `ApplyReconcileCase` in `crates/defra-agent/proofs/Proofs/ApplyReconcile/ContractCases.lean:23`.
 - `diffSteps`, which computes expected steps from desired/live input, in `crates/defra-agent/proofs/Proofs/ApplyReconcile/ContractCases.lean:132`.
 - `buildCase`, which computes expected buckets, steps, prefix behavior, retry behavior, idempotence, and reference closure flags, in `crates/defra-agent/proofs/Proofs/ApplyReconcile/ContractCases.lean:203`.
+- #220 extends the same `apply_reconcile_cases` rows in place with production write-boundary projections: expected collection write order, GraphQL type and unique-field metadata, selected create/update/write docs, and production-prefix referrer-closure flags.
 
 The emitted scenario set includes:
 
@@ -218,6 +219,7 @@ The emitted scenario set includes:
 - `live_only_no_op` in `crates/defra-agent/proofs/Proofs/ApplyReconcile/ContractCases.lean:282`.
 - `prefix_retry_convergence_idempotence` in `crates/defra-agent/proofs/Proofs/ApplyReconcile/ContractCases.lean:288`.
 - `referrer_closure` in `crates/defra-agent/proofs/Proofs/ApplyReconcile/ContractCases.lean:298`.
+- `production_write_boundary_all_collections`, added by #220, exercises selected writes across every production apply collection while keeping delete semantics out of scope.
 
 The cases are serialized by `applyReconcileCasesJson` in `crates/defra-agent/proofs/Proofs/ApplyReconcile/ContractCases.lean:348`.
 
@@ -227,13 +229,9 @@ The JSON snapshot includes `apply_reconcile_cases` in `crates/defra-agent/proofs
 
 The ledger currently says:
 
-- `apply_reconcile_cases` has `consumerCoverage` with Rust consumer `apply_conformance::generated_apply_reconcile_cases_drive_apply_model_and_production_ordering` in `crates/defra-agent/proofs/Proofs/Conformance/CoverageLedger.lean:209`.
+- `apply_reconcile_cases` has `consumerCoverage` with Rust consumer `config_import::lean_apply_write_boundary_tests::generated_apply_reconcile_cases_fence_production_apply_write_boundary` in `crates/defra-agent/proofs/Proofs/Conformance/CoverageLedger.lean:209`.
 
-That is accurate for the current emitted domain. The Rust test consumes every Lean ApplyReconcile case and checks both the Rust reference model and production ordering constants.
-
-The caveat is that the production CLI write boundary is not fully Lean-driven yet. The ledger row does not mean `defra-agent-cli config apply` is transactionally fenced by Lean rows. It means the Lean cases drive `defra_agent::apply_model`, and the same test cross-checks the production collection ordering constant.
-
-I filed #220 because the next operational boundary for #56 needs its own Lean-backed production consumer.
+That is accurate for the current emitted domain after #220. The reference-model consumer remains useful and still consumes the same rows in `apply_conformance.rs`, but the ledger now points at the production-boundary consumer because that is the stronger #56 gate.
 
 ### Rust consumer state
 
@@ -264,13 +262,12 @@ The production CLI surface is separate:
 - `CONFIG_APPLY_ORDER` lives in `crates/defra-agent-cli/src/config_import.rs:24`.
 - `apply_desired_state_changes` iterates that order and applies selected documents in `crates/defra-agent-cli/src/config_import.rs:591`.
 - `select_apply_docs_for_collection` selects the create/update documents for one collection in `crates/defra-agent-cli/src/config_import.rs:615`.
-- Existing CLI tests pin order and retry-safe prefixes in `crates/defra-agent-cli/src/config_import.rs:642` and `crates/defra-agent-cli/tests/cli_config_apply_order.rs:4`.
+- `generated_apply_reconcile_cases_fence_production_apply_write_boundary` consumes the Lean rows next to `apply_desired_state_changes`, checks production order and selection, validates GraphQL type / unique-field mapping, keeps live-owned fields out of prepared writes, and records the real mutation sequence against a fake GraphQL endpoint.
+- Existing CLI tests still pin order and retry-safe prefixes in `crates/defra-agent-cli/src/config_import.rs:642` and `crates/defra-agent-cli/tests/cli_config_apply_order.rs:4`.
 
 ### Is this a Rust-catches-up-to-Lean candidate?
 
-Yes for the reference model and collection ordering.
-
-Not yet for the production write boundary.
+Yes for the reference model, collection ordering, and production write boundary.
 
 The current Lean cases are strong enough to catch regressions in:
 
@@ -283,34 +280,21 @@ The current Lean cases are strong enough to catch regressions in:
 - idempotence,
 - lower-rank reference closure.
 
-They are not yet enough to catch bugs in:
+They now also catch bugs in:
 
 - actual `config apply` write sequencing,
 - production document selection per collection,
+- GraphQL type / unique-field projection drift,
+- live-field leakage at the write boundary,
+
+They are still not intended to catch:
+
 - transactional rollback behavior for #56,
 - future delete behavior for #57.
 
-### Smallest additions to make ApplyReconcile production-ready
+### Production-boundary status
 
-Issue #220 is the next narrow addition.
-
-Minimum useful addition:
-
-1. Either reuse existing `apply_reconcile_cases` directly in `defra-agent-cli`, or add production-facing expected fields only if the existing rows are too model-shaped.
-
-2. Add a `defra-agent-cli` conformance test that consumes Lean rows and checks:
-   - `CONFIG_APPLY_ORDER` matches Lean `Collection.applyOrder`;
-   - selected create/update documents match expected Lean buckets;
-   - no live-only document is selected for write;
-   - prefixes are retry-safe and lower-rank references appear before referrers.
-
-3. Keep delete behavior out of this task.
-   - Lean and Rust currently model create/update/no-op only.
-   - #57 should own live-only deletion semantics and any new Lean rows for delete.
-
-4. Use #56 for the transactional implementation once the production boundary is fenced.
-
-This is smaller than a Lean refactor because the existing rows already contain most of the needed data. The main gap is consumer placement: `defra-agent-cli`, not `defra_agent::apply_model`.
+#220 reused the existing `apply_reconcile_cases` domain and extended it in place rather than adding a sibling emitted domain. That keeps the reference-model consumer green while giving `defra-agent-cli` a production-facing projection. Delete behavior remains out of scope; Lean and Rust still model create/update/no-op only, and #57 should own live-only deletion semantics and any new delete rows. #56 can now use the production-boundary conformance test as the pre-transactional gate.
 
 ## Other shape-pin or follow-up ledger entries
 

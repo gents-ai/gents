@@ -105,11 +105,11 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             test: "matches generated Lean ClientShell projection contracts",
         },
         ConformanceConsumer::RustTest {
-            id: "apply_conformance::generated_apply_reconcile_cases_drive_apply_model_and_production_ordering",
-            package: "defra-agent",
-            source_path: "crates/defra-agent/tests/apply_conformance.rs",
-            module_path: "apply_conformance",
-            function: "generated_apply_reconcile_cases_drive_apply_model_and_production_ordering",
+            id: "config_import::lean_apply_write_boundary_tests::generated_apply_reconcile_cases_fence_production_apply_write_boundary",
+            package: "defra-agent-cli",
+            source_path: "crates/defra-agent-cli/src/config_import.rs",
+            module_path: "config_import::lean_apply_write_boundary_tests",
+            function: "generated_apply_reconcile_cases_fence_production_apply_write_boundary",
         },
         ConformanceConsumer::RustTest {
             id: "backend_registry::tests::generated_backend_health_admission_cases_match_registry_and_admission_policy",

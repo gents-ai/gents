@@ -35,6 +35,21 @@ structure ContractStep where
   content : String
   refs : List DocRef
 
+structure ContractCollectionWrite where
+  collection : Collection
+  graphqlType : String
+  uniqueField : String
+  applyOrder : Nat
+
+structure ContractSelectedDoc where
+  action : String
+  target : DocRef
+  graphqlType : String
+  uniqueField : String
+  uniqueValue : String
+  content : String
+  refs : List DocRef
+
 structure ApplyReconcileScenario where
   name : String
   manifest : List ContractDoc
@@ -52,6 +67,10 @@ structure ApplyReconcileCase where
   expectedUnchanged : List DocRef
   expectedLiveOnly : List DocRef
   expectedSteps : List ContractStep
+  expectedWriteOrder : List ContractCollectionWrite
+  expectedSelectedCreateDocs : List ContractSelectedDoc
+  expectedSelectedUpdateDocs : List ContractSelectedDoc
+  expectedSelectedWrites : List ContractSelectedDoc
   prefixLen : Nat
   expectedPrefixDesired : List ContractDoc
   expectedAfterDesired : List ContractDoc
@@ -62,6 +81,8 @@ structure ApplyReconcileCase where
   manifestRealizedAfter : Bool
   retryConverges : Bool
   idempotentAfter : Bool
+  writeOrderPrefixSafe : Bool
+  productionPrefixesReferrersClosed : Bool
   prefixReferrersClosed : Bool
   desiredReferencesClosedAfterPrefix : Bool
 
@@ -78,6 +99,39 @@ def collectionName : Collection → String
   | .task => "Task"
   | .schedule => "Schedule"
   | .eventTrigger => "EventTrigger"
+
+def collectionUniqueField : Collection → String
+  | .agentPrincipal => "agent_did"
+  | .agentBehavior => "behavior_id"
+  | .toolSelection => "selection_id"
+  | .inferenceBackend => "backend_id"
+  | .inferenceProfile => "profile_id"
+  | .toolServiceRegistry => "service_id"
+  | .task => "task_id"
+  | .schedule => "schedule_id"
+  | .eventTrigger => "trigger_id"
+
+def productionWriteOrder : List Collection :=
+  [ .inferenceBackend
+  , .inferenceProfile
+  , .toolServiceRegistry
+  , .toolSelection
+  , .agentBehavior
+  , .task
+  , .schedule
+  , .eventTrigger
+  , .agentPrincipal
+  ]
+
+def collectionWriteProjection (collection : Collection) : ContractCollectionWrite :=
+  { collection := collection
+  , graphqlType := collectionName collection
+  , uniqueField := collectionUniqueField collection
+  , applyOrder := collection.applyOrder
+  }
+
+def collectionBEq (a b : Collection) : Bool :=
+  if a = b then true else false
 
 def docRefBEq (a b : DocRef) : Bool :=
   if a = b then true else false
@@ -120,8 +174,31 @@ def sortedDocs (docs : List ContractDoc) : List ContractDoc :=
 def sortedSteps (steps : List ContractStep) : List ContractStep :=
   steps.mergeSort contractStepLe
 
+def productionOrderedSteps (steps : List ContractStep) : List ContractStep :=
+  productionWriteOrder.flatMap fun collection =>
+    steps.filter fun step => collectionBEq step.target.collection collection
+
 def stepToDoc (step : ContractStep) : ContractDoc :=
   { ref := step.target, content := step.content, refs := step.refs }
+
+def stepToSelectedDoc (step : ContractStep) : ContractSelectedDoc :=
+  { action := step.action
+  , target := step.target
+  , graphqlType := collectionName step.target.collection
+  , uniqueField := collectionUniqueField step.target.collection
+  , uniqueValue := step.target.id
+  , content := step.content
+  , refs := step.refs
+  }
+
+def selectedDocsByAction
+    (action : String)
+    (steps : List ContractStep) : List ContractSelectedDoc :=
+  (productionOrderedSteps steps).filterMap fun step =>
+    if step.action == action then some (stepToSelectedDoc step) else none
+
+def selectedWriteDocs (steps : List ContractStep) : List ContractSelectedDoc :=
+  (productionOrderedSteps steps).map stepToSelectedDoc
 
 def createStep (doc : ContractDoc) : ContractStep :=
   { action := "create", target := doc.ref, content := doc.content, refs := doc.refs }
@@ -200,8 +277,25 @@ def prefixReferrersClosed
     | some doc => doc.refs.all fun ref => containsDoc desired ref
     | none => false
 
+def adjacentCollectionsPrefixSafe : List Collection → Bool
+  | [] => true
+  | [_] => true
+  | left :: right :: rest =>
+      (left.applyOrder <= right.applyOrder) &&
+        adjacentCollectionsPrefixSafe (right :: rest)
+
+def allProductionPrefixesReferrersClosed
+    (preDesired : List ContractDoc)
+    (steps : List ContractStep) : Bool :=
+  (List.range (steps.length + 1)).all fun prefixLen =>
+    let prefixSteps := steps.take prefixLen
+    let prefixDesired := applyAll preDesired prefixSteps
+    prefixReferrersClosed prefixDesired prefixSteps &&
+      desiredReferencesClosed prefixDesired
+
 def buildCase (scenario : ApplyReconcileScenario) : ApplyReconcileCase :=
   let steps := diffSteps scenario.manifest scenario.preDesired
+  let productionSteps := productionOrderedSteps steps
   let prefixSteps := steps.take scenario.prefixLen
   let prefixDesired := applyAll scenario.preDesired prefixSteps
   let after := applyAll scenario.preDesired steps
@@ -218,6 +312,10 @@ def buildCase (scenario : ApplyReconcileScenario) : ApplyReconcileCase :=
   , expectedUnchanged := diffUnchanged scenario
   , expectedLiveOnly := diffLiveOnly scenario
   , expectedSteps := steps
+  , expectedWriteOrder := productionWriteOrder.map collectionWriteProjection
+  , expectedSelectedCreateDocs := selectedDocsByAction "create" steps
+  , expectedSelectedUpdateDocs := selectedDocsByAction "update" steps
+  , expectedSelectedWrites := selectedWriteDocs steps
   , prefixLen := scenario.prefixLen
   , expectedPrefixDesired := sortedDocs prefixDesired
   , expectedAfterDesired := sortedDocs after
@@ -230,6 +328,9 @@ def buildCase (scenario : ApplyReconcileScenario) : ApplyReconcileCase :=
   , manifestRealizedAfter := manifestRealizedBool scenario.manifest after
   , retryConverges := desiredDocsEq retry after
   , idempotentAfter := desiredDocsEq reapplied after
+  , writeOrderPrefixSafe := adjacentCollectionsPrefixSafe productionWriteOrder
+  , productionPrefixesReferrersClosed :=
+      allProductionPrefixesReferrersClosed scenario.preDesired productionSteps
   , prefixReferrersClosed :=
       prefixReferrersClosed prefixDesired prefixSteps
   , desiredReferencesClosedAfterPrefix := desiredReferencesClosed prefixDesired
@@ -253,8 +354,11 @@ def backendA : DocRef := doc .inferenceBackend "backend-a"
 def backendB : DocRef := doc .inferenceBackend "backend-b"
 def selectionA : DocRef := doc .toolSelection "selection-a"
 def profileA : DocRef := doc .inferenceProfile "profile-a"
+def serviceA : DocRef := doc .toolServiceRegistry "service-a"
 def behaviorA : DocRef := doc .agentBehavior "behavior-a"
 def taskA : DocRef := doc .task "task-a"
+def scheduleA : DocRef := doc .schedule "schedule-a"
+def eventTriggerA : DocRef := doc .eventTrigger "trigger-a"
 def principalA : DocRef := doc .agentPrincipal "did:example:agent"
 
 def applyReconcileScenarios : List ApplyReconcileScenario :=
@@ -309,6 +413,23 @@ def applyReconcileScenarios : List ApplyReconcileScenario :=
     , preLive := []
     , prefixLen := 4
     }
+  , { name := "production_write_boundary_all_collections"
+    , manifest :=
+        [ desired .inferenceBackend "backend-a" "backend-desired"
+        , desired .inferenceProfile "profile-a" "profile-desired"
+        , desired .toolServiceRegistry "service-a" "service-desired"
+        , desired .toolSelection "selection-a" "selection-desired"
+        , desired .agentBehavior "behavior-a" "behavior-desired"
+            [backendA, selectionA, profileA, serviceA]
+        , desired .task "task-a" "task-desired" [behaviorA]
+        , desired .schedule "schedule-a" "schedule-desired"
+        , desired .eventTrigger "trigger-a" "trigger-desired" [taskA]
+        , desired .agentPrincipal "did:example:agent" "principal-desired" [behaviorA]
+        ]
+    , preDesired := []
+    , preLive := []
+    , prefixLen := 6
+    }
   ]
 
 def applyReconcileCases : List ApplyReconcileCase :=
@@ -345,6 +466,26 @@ def stepJson (step : ContractStep) : String :=
       ++ jsonArray ((sortedDocRefs step.refs).map docRefJson)
     ++ "}"
 
+def collectionWriteJson (entry : ContractCollectionWrite) : String :=
+  "{"
+    ++ "\"collection\":" ++ jsonString (collectionName entry.collection) ++ ","
+    ++ "\"graphql_type\":" ++ jsonString entry.graphqlType ++ ","
+    ++ "\"unique_field\":" ++ jsonString entry.uniqueField ++ ","
+    ++ "\"apply_order\":" ++ toString entry.applyOrder
+    ++ "}"
+
+def selectedDocJson (entry : ContractSelectedDoc) : String :=
+  "{"
+    ++ "\"action\":" ++ jsonString entry.action ++ ","
+    ++ "\"target\":" ++ docRefJson entry.target ++ ","
+    ++ "\"graphql_type\":" ++ jsonString entry.graphqlType ++ ","
+    ++ "\"unique_field\":" ++ jsonString entry.uniqueField ++ ","
+    ++ "\"unique_value\":" ++ jsonString entry.uniqueValue ++ ","
+    ++ "\"content\":" ++ jsonString entry.content ++ ","
+    ++ "\"refs\":"
+      ++ jsonArray ((sortedDocRefs entry.refs).map docRefJson)
+    ++ "}"
+
 def applyReconcileCaseJson (witness : ApplyReconcileCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
@@ -361,6 +502,14 @@ def applyReconcileCaseJson (witness : ApplyReconcileCase) : String :=
       ++ jsonArray (witness.expectedLiveOnly.map docRefJson) ++ ","
     ++ "\"expected_steps\":"
       ++ jsonArray (witness.expectedSteps.map stepJson) ++ ","
+    ++ "\"expected_write_order\":"
+      ++ jsonArray (witness.expectedWriteOrder.map collectionWriteJson) ++ ","
+    ++ "\"expected_selected_create_docs\":"
+      ++ jsonArray (witness.expectedSelectedCreateDocs.map selectedDocJson) ++ ","
+    ++ "\"expected_selected_update_docs\":"
+      ++ jsonArray (witness.expectedSelectedUpdateDocs.map selectedDocJson) ++ ","
+    ++ "\"expected_selected_writes\":"
+      ++ jsonArray (witness.expectedSelectedWrites.map selectedDocJson) ++ ","
     ++ "\"prefix_len\":" ++ toString witness.prefixLen ++ ","
     ++ "\"expected_prefix_desired\":"
       ++ jsonArray (witness.expectedPrefixDesired.map desiredDocJson) ++ ","
@@ -377,6 +526,10 @@ def applyReconcileCaseJson (witness : ApplyReconcileCase) : String :=
       ++ boolString witness.manifestRealizedAfter ++ ","
     ++ "\"retry_converges\":" ++ boolString witness.retryConverges ++ ","
     ++ "\"idempotent_after\":" ++ boolString witness.idempotentAfter ++ ","
+    ++ "\"write_order_prefix_safe\":"
+      ++ boolString witness.writeOrderPrefixSafe ++ ","
+    ++ "\"production_prefixes_referrers_closed\":"
+      ++ boolString witness.productionPrefixesReferrersClosed ++ ","
     ++ "\"prefix_referrers_closed\":"
       ++ boolString witness.prefixReferrersClosed ++ ","
     ++ "\"desired_references_closed_after_prefix\":"
