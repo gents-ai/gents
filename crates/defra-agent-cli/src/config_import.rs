@@ -834,6 +834,10 @@ mod lean_apply_write_boundary_tests {
             self.committed.lock().expect("committed lock").clone()
         }
 
+        /// Returns committed writes plus any still-pending in-tx writes (across all
+        /// open transactions). Useful for backward-compat assertions against
+        /// "every write attempted." **Use `committed_state()` to verify durability**
+        /// — e.g., to confirm a discard left no externally-observable state.
         fn observed_writes(&self) -> Vec<ObservedWrite> {
             let mut all = self.committed.lock().expect("committed lock").clone();
             let txs = self.transactions.lock().expect("tx lock").clone();
@@ -902,6 +906,9 @@ mod lean_apply_write_boundary_tests {
 
             assert_counts_match_lean(case, &counts);
 
+            // NOTE: Task 3 wires ConfigApplyTxn through apply_desired_state_changes.
+            // At that point, switch the success-path assertion to recorder.committed_state()
+            // to actually verify atomicity. observed_writes() includes uncommitted writes.
             let observed = recorder.observed_writes();
             let expected = case
                 .expected_selected_writes
@@ -1192,6 +1199,8 @@ mod lean_apply_write_boundary_tests {
         let addr = listener.local_addr().expect("recording GraphQL addr");
         let app = Router::new()
             .route("/", post(recording_graphql_handler))
+            // axum routes static paths before capture patterns, so `/api/v0/tx/begin`
+            // resolves to begin_handler, not to the `/api/v0/tx/{id}` commit handler.
             .route("/api/v0/tx/begin", post(recording_tx_begin_handler))
             .route(
                 "/api/v0/tx/{id}",
@@ -1863,6 +1872,21 @@ mod lean_apply_write_boundary_tests {
                 .await
                 .unwrap();
             assert!(ok.get("errors").is_none(), "first mutation should succeed");
+
+            // Confirm the first write was actually buffered into the tx's pending window —
+            // a broken recorder that ignored writes silently would still pass the
+            // `errors.is_none()` check above.
+            let pending_after_first = recorder.observed_writes();
+            assert_eq!(
+                pending_after_first.len(),
+                1,
+                "first mutation must be buffered into tx pending window"
+            );
+            assert_eq!(pending_after_first[0].unique_value, "task-a");
+            assert!(
+                recorder.committed_state().is_empty(),
+                "buffered tx writes must not appear in committed state yet"
+            );
 
             let fail = client
                 .post(format!("{graphql}"))
