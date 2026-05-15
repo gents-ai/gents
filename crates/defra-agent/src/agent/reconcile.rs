@@ -6,7 +6,7 @@ use tokio::sync::{mpsc, watch, Mutex};
 use tracing::Instrument;
 
 use crate::admission::AdmissionRegistry;
-use crate::config::BehaviorConfig;
+use crate::config::AgentBehavior;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
@@ -32,7 +32,7 @@ pub(super) struct GenerationSupervisor<F> {
 impl<F, Fut> GenerationSupervisor<F>
 where
     F: Fn(
-            Arc<BehaviorConfig>,
+            Arc<AgentBehavior>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
             watch::Receiver<bool>,

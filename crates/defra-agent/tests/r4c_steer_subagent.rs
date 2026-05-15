@@ -8,8 +8,8 @@ use defra_agent::tool_call_lifecycle::{
     create_subagent_request_with_request_id, AwaitMode, CancelPolicy, ToolCallLifecycle,
 };
 use defra_agent::{
-    fetch_interrupt_requested_at, upsert_agent_behavior, upsert_tool_selection, AgentBehavior,
-    DefraSessionHook, FailurePolicy, ToolSelectionDocument,
+    fetch_interrupt_requested_at, upsert_agent_behavior, upsert_tool_selection,
+    AgentBehaviorDocument, DefraSessionHook, FailurePolicy, ToolSelectionDocument,
 };
 use rig::agent::{PromptHook, ToolCallHookAction};
 use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
@@ -91,7 +91,7 @@ async fn setup_db(name: &str) -> support::TestDb {
     .unwrap();
     upsert_agent_behavior(
         db.node.as_ref(),
-        &AgentBehavior {
+        &AgentBehaviorDocument {
             behavior_id: PARENT_BEHAVIOR_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
             display_name: Some("R4c parent".to_string()),
@@ -110,7 +110,7 @@ async fn setup_db(name: &str) -> support::TestDb {
     .unwrap();
     upsert_agent_behavior(
         db.node.as_ref(),
-        &AgentBehavior {
+        &AgentBehaviorDocument {
             behavior_id: CHILD_BEHAVIOR_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
             display_name: Some("R4c child".to_string()),

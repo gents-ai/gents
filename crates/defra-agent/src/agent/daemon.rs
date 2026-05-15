@@ -13,7 +13,7 @@ mod title;
 
 use super::runtime::StartupBarrier;
 use crate::compaction::{CompactionOptions, DefraCompactor};
-use crate::config::BehaviorConfig;
+use crate::config::AgentBehavior;
 use crate::hook::FailurePolicy;
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::prompt::LayeredPromptBuilder;
@@ -23,7 +23,7 @@ use crate::watcher::AgentRequest;
 
 pub(super) struct BehaviorDaemon<M: CompletionModel> {
     node: Arc<defra_node::EmbeddedNode>,
-    behavior: Arc<BehaviorConfig>,
+    behavior: Arc<AgentBehavior>,
     agent: Agent<M>,
     prompt_builder: LayeredPromptBuilder,
     stream_writer: DefraStreamWriter,
@@ -44,7 +44,7 @@ enum HandleRequestOutcome {
 impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
     pub(super) fn new(
         node: Arc<defra_node::EmbeddedNode>,
-        behavior: Arc<BehaviorConfig>,
+        behavior: Arc<AgentBehavior>,
         agent: Agent<M>,
         prompt_builder: LayeredPromptBuilder,
         retry_policy: RetryPolicy,
@@ -54,7 +54,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
     ) -> Self {
         let stream_writer = DefraStreamWriter::new(
             node.clone(),
-            behavior.did(),
+            behavior.agent_did(),
             Duration::from_millis(behavior.stream_batch_ms),
         );
         let compactor = DefraCompactor::new(agent.clone());
@@ -86,7 +86,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
     ) -> Result<()> {
         tracing::info!(
             behavior_id = %self.behavior.name,
-            did = %self.behavior.did(),
+            did = %self.behavior.agent_did(),
             model = %self.behavior.model_name,
             context_window = self.behavior.context_window,
             "defra-agent behavior started"
@@ -97,7 +97,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             .await;
         tracing::info!(
             behavior_id = %self.behavior.name,
-            did = %self.behavior.did(),
+            did = %self.behavior.agent_did(),
             "defra-agent behavior executor online"
         );
 
@@ -160,7 +160,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             self.node.clone(),
             &self.behavior.name,
-            self.behavior.did(),
+            self.behavior.agent_did(),
             request.clone(),
             self.behavior.deadline_duration.as_secs(),
             crate::lifecycle::ExecutionOrigin::from_persisted(request.execution_origin.as_deref()),

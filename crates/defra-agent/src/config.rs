@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 
 use crate::backend_provider::BackendProviderKind;
 use crate::compaction::CompactionStrategy;
-use crate::identity::AgentIdentity;
+use crate::identity::{AgentIdentity, AgentPrincipal};
 use crate::tool_surface::BehaviorToolConfig;
 
 pub const DEFAULT_CONTEXT_WINDOW: usize = 131_072;
@@ -18,10 +18,17 @@ pub const DEFAULT_DEADLINE_DURATION_SECS: u64 = 900;
 pub const DEFAULT_MODEL_NAME: &str = "default";
 
 /// Runtime configuration for one loaded behavior executor.
+///
+/// Mirrors the Lean `Identity.Behavior` record. Holds an
+/// `Arc<AgentPrincipal>` back-reference; the principal owns the
+/// signing identity used for all DefraDB ops issued for this
+/// behavior. Two behaviors sharing the same principal Arc share the
+/// same actor DID (Lean's `behavior_id_determines_principal` is
+/// structural at the type level here).
 #[derive(Clone)]
-pub struct BehaviorConfig {
+pub struct AgentBehavior {
     pub name: String,
-    pub identity: Arc<dyn AgentIdentity>,
+    pub principal: Arc<AgentPrincipal>,
     pub backend_id: Option<String>,
     pub backend_provider_kind: BackendProviderKind,
     pub backend_endpoint: String,
@@ -72,11 +79,11 @@ impl SamplingConfig {
     }
 }
 
-impl std::fmt::Debug for BehaviorConfig {
+impl std::fmt::Debug for AgentBehavior {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BehaviorConfig")
+        f.debug_struct("AgentBehavior")
             .field("name", &self.name)
-            .field("identity_did", &self.identity.did())
+            .field("principal_did", &self.principal.agent_did)
             .field("backend_id", &self.backend_id)
             .field("backend_provider_kind", &self.backend_provider_kind)
             .field("backend_endpoint", &self.backend_endpoint)
@@ -100,9 +107,21 @@ impl std::fmt::Debug for BehaviorConfig {
     }
 }
 
-impl BehaviorConfig {
-    pub fn did(&self) -> &str {
-        self.identity.did()
+impl AgentBehavior {
+    /// Returns the principal's agent_did.
+    pub fn agent_did(&self) -> &str {
+        &self.principal.agent_did
+    }
+
+    /// Returns the principal's signing identity.
+    ///
+    /// This is the only way to obtain an `Arc<dyn AgentIdentity>` for
+    /// a behavior; the behavior itself does not hold one. Two
+    /// behaviors sharing an `Arc<AgentPrincipal>` return identical
+    /// clones, so DefraDB ACP receives the same actor for both —
+    /// satisfying Lean's `RespectsPrincipal` predicate.
+    pub fn principal_identity(&self) -> &Arc<dyn AgentIdentity> {
+        &self.principal.identity
     }
 
     pub fn resolve_backend_api_key(&self) -> Result<Option<String>> {

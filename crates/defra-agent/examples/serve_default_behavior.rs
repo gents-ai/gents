@@ -7,8 +7,8 @@ use defra_agent::defra_node::{EmbeddedNode, HttpConfig};
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{
     ensure_agent_principal, ensure_runtime_schemas, upsert_agent_behavior,
-    upsert_inference_profile, upsert_tool_selection, AgentBehavior, AgentIdentity, DefraAgent,
-    DocumentRuntimeOptions, InferenceProfile, KeyIdentity, McpPool, ToolCeiling,
+    upsert_inference_profile, upsert_tool_selection, AgentBehaviorDocument, AgentIdentity,
+    DefraAgent, DocumentRuntimeOptions, InferenceProfile, KeyIdentity, McpPool, ToolCeiling,
     ToolSelectionDocument,
 };
 use tokio::sync::watch;
@@ -161,7 +161,7 @@ async fn seed_demo_documents(
     .await?;
     upsert_agent_behavior(
         node,
-        &AgentBehavior {
+        &AgentBehaviorDocument {
             behavior_id: bootstrap.default_behavior.behavior_id,
             agent_did: agent_did.to_string(),
             display_name: Some("Default".to_string()),

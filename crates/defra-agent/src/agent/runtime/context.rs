@@ -37,7 +37,7 @@ pub struct StartupBarrier {
 }
 
 impl StartupBarrier {
-    pub(super) fn new(behaviors: &[Arc<crate::config::BehaviorConfig>]) -> Self {
+    pub(super) fn new(behaviors: &[Arc<crate::config::AgentBehavior>]) -> Self {
         Self {
             pending_behaviors: Mutex::new(
                 behaviors
@@ -73,7 +73,7 @@ impl StartupBarrier {
 impl RuntimeContext {
     pub(super) async fn run_behavior(
         &self,
-        behavior: Arc<crate::config::BehaviorConfig>,
+        behavior: Arc<crate::config::AgentBehavior>,
         tool_surface: Arc<ToolSurface>,
         request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
         shutdown: watch::Receiver<bool>,
@@ -97,7 +97,7 @@ impl RuntimeContext {
         );
         tracing::info!(
             behavior_id = %behavior.name,
-            did = %behavior.did(),
+            did = %behavior.agent_did(),
             model = %behavior.model_name,
             tools = ?tool_names,
             "building behavior runtime"
@@ -156,7 +156,7 @@ impl RuntimeContext {
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_behavior_with_client<C>(
         &self,
-        behavior: Arc<crate::config::BehaviorConfig>,
+        behavior: Arc<crate::config::AgentBehavior>,
         request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
         shutdown: watch::Receiver<bool>,
         prompt_builder: LayeredPromptBuilder,

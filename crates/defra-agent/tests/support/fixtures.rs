@@ -5,8 +5,8 @@ use defra_agent::compaction::CompactionStrategy;
 use defra_agent::defra_node::EmbeddedNode;
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::{
-    ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, BackendProviderKind,
-    BehaviorConfig, BehaviorToolConfig, KeyIdentity,
+    ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, AgentBehavior,
+    AgentPrincipal, BackendProviderKind, BehaviorToolConfig, KeyIdentity,
 };
 
 pub fn test_identity(name: &str) -> KeyIdentity {
@@ -14,14 +14,29 @@ pub fn test_identity(name: &str) -> KeyIdentity {
     KeyIdentity::load_or_create(path, None).unwrap()
 }
 
+pub fn test_principal_for(
+    identity: Arc<dyn defra_agent::AgentIdentity>,
+    default_behavior_id: impl Into<String>,
+) -> Arc<AgentPrincipal> {
+    Arc::new(AgentPrincipal {
+        agent_did: identity.did().to_string(),
+        identity,
+        default_behavior_id: default_behavior_id.into(),
+        display_name: None,
+        enabled: true,
+    })
+}
+
 pub fn test_behavior(
     name: &str,
     backend_id: &str,
     backend_api_key_env_var: Option<&str>,
-) -> BehaviorConfig {
-    BehaviorConfig {
+) -> AgentBehavior {
+    let identity: Arc<dyn defra_agent::AgentIdentity> = Arc::new(test_identity(name));
+    let principal = test_principal_for(identity, name);
+    AgentBehavior {
         name: name.to_string(),
-        identity: Arc::new(test_identity(name)),
+        principal,
         backend_id: Some(backend_id.to_string()),
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
         backend_endpoint: "http://localhost:8000/v1".to_string(),

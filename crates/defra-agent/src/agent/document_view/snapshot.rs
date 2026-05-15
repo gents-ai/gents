@@ -6,8 +6,10 @@ use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
 use crate::admission::backend_admission_configs_from_backends;
-use crate::config::BehaviorConfig;
-use crate::document_config::{default_behavior_id_for_agent, AgentBehavior};
+use crate::config::AgentBehavior;
+use crate::document_config::{
+    default_behavior_id_for_agent, AgentBehavior as AgentBehaviorDocument,
+};
 use crate::runtime_snapshot::{
     ConcurrencyMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot, ResolvedSchedule, ResolvedTask,
 };
@@ -42,7 +44,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| default_behavior_id_for_agent(context.identity.did()));
 
-    let mut behaviors = Vec::<Arc<BehaviorConfig>>::new();
+    let mut behaviors = Vec::<Arc<AgentBehavior>>::new();
     let mut unavailable_behaviors = HashMap::new();
 
     for behavior_record in view.behaviors.values() {
@@ -476,7 +478,7 @@ fn resolve_event_triggers(
 
 pub(super) fn collect_unresolved_behavior_references(
     view: &DocumentRuntimeView,
-    behavior: &AgentBehavior,
+    behavior: &AgentBehaviorDocument,
     details: &mut Vec<String>,
 ) {
     if let Some(selection_id) = behavior.tool_selection_id.as_deref().and_then(non_empty) {
@@ -509,7 +511,7 @@ pub(super) fn collect_unresolved_behavior_references(
 
 pub(super) fn behavior_references_ready(
     view: &DocumentRuntimeView,
-    behavior: &AgentBehavior,
+    behavior: &AgentBehaviorDocument,
 ) -> bool {
     let mut details = Vec::new();
     collect_unresolved_behavior_references(view, behavior, &mut details);

@@ -83,7 +83,7 @@ async fn from_default_behavior_documents_composes_behavior_and_inference_profile
 
     let behavior = &agent.behaviors()[0];
     assert_eq!(behavior.name, default_behavior_id);
-    assert_eq!(behavior.did(), did);
+    assert_eq!(behavior.agent_did(), did);
     assert_eq!(behavior.backend_endpoint, "http://127.0.0.1:8123/v1");
     assert_eq!(behavior.model_name, "gpt-local");
     assert_eq!(behavior.context_window, 32768);

@@ -8,7 +8,7 @@ use defra_agent::background_completion::{
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::tool_call_lifecycle::{CascadeDispatch, ToolCallLifecycle};
 use defra_agent::{
-    interrupt_request, upsert_agent_behavior, upsert_tool_selection, AgentBehavior,
+    interrupt_request, upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument,
     RequestLifecycle, ToolSelectionDocument,
 };
 use serde::Deserialize;
@@ -648,7 +648,7 @@ async fn ensure_behavior(node: &HarnessNode, behavior_id: &str, agent_did: &str)
     .await?;
     upsert_agent_behavior(
         node.db.node.as_ref(),
-        &AgentBehavior {
+        &AgentBehaviorDocument {
             behavior_id: behavior_id.to_string(),
             agent_did: agent_did.to_string(),
             display_name: Some(behavior_id.to_string()),

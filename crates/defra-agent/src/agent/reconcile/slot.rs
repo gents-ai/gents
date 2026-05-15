@@ -6,7 +6,7 @@ use futures::FutureExt;
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
 
-use crate::config::BehaviorConfig;
+use crate::config::AgentBehavior;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::tool_surface::ToolSurface;
@@ -31,7 +31,7 @@ pub(super) struct BehaviorSlot {
 impl BehaviorSlot {
     pub(super) fn matches(
         &self,
-        behavior: &Arc<BehaviorConfig>,
+        behavior: &Arc<AgentBehavior>,
         tool_surface: &Arc<ToolSurface>,
     ) -> bool {
         self.behavior_fingerprint == format!("{behavior:?}")
@@ -47,7 +47,7 @@ pub(super) fn spawn_slots<F, Fut>(
 ) -> HashMap<String, BehaviorSlot>
 where
     F: Fn(
-            Arc<BehaviorConfig>,
+            Arc<AgentBehavior>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
             watch::Receiver<bool>,
@@ -80,7 +80,7 @@ where
 }
 
 pub(super) fn spawn_slot<F, Fut>(
-    behavior: Arc<BehaviorConfig>,
+    behavior: Arc<AgentBehavior>,
     tool_surface: Arc<ToolSurface>,
     retry_policy: RetryPolicy,
     runner: F,
@@ -88,7 +88,7 @@ pub(super) fn spawn_slot<F, Fut>(
 ) -> BehaviorSlot
 where
     F: Fn(
-            Arc<BehaviorConfig>,
+            Arc<AgentBehavior>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
             watch::Receiver<bool>,
@@ -137,7 +137,7 @@ pub(super) fn retire_slot(slot: BehaviorSlot) {
 }
 
 async fn run_slot_loop<F, Fut>(
-    behavior: Arc<BehaviorConfig>,
+    behavior: Arc<AgentBehavior>,
     tool_surface: Arc<ToolSurface>,
     request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
     retry_policy: RetryPolicy,
@@ -146,7 +146,7 @@ async fn run_slot_loop<F, Fut>(
     state_rx: watch::Receiver<BehaviorSlotState>,
 ) where
     F: Fn(
-            Arc<BehaviorConfig>,
+            Arc<AgentBehavior>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
             watch::Receiver<bool>,

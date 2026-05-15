@@ -43,12 +43,7 @@ impl AgentIdentity for StubAgentIdentity {
         )
     }
 
-    async fn verify(
-        &self,
-        _did: &str,
-        _payload: &[u8],
-        _sig: &[u8],
-    ) -> anyhow::Result<bool> {
+    async fn verify(&self, _did: &str, _payload: &[u8], _sig: &[u8]) -> anyhow::Result<bool> {
         panic!(
             "StubAgentIdentity::verify called for {} — routing tests must not verify",
             self.did

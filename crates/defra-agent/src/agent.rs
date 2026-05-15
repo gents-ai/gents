@@ -7,12 +7,12 @@ use tokio::sync::{watch, OnceCell};
 
 use crate::compaction::CompactionStrategy;
 use crate::config::{
-    BehaviorConfig, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
+    AgentBehavior, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
     DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
 };
 use crate::hook::FailurePolicy;
-use crate::identity::AgentIdentity;
+use crate::identity::{AgentIdentity, AgentPrincipal};
 use crate::mcp_pool::McpPool;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
@@ -37,7 +37,7 @@ mod supervision;
 mod tests;
 
 #[cfg(test)]
-pub(crate) use builder::PendingBehaviorConfig;
+pub(crate) use builder::PendingAgentBehavior;
 pub use builder::{BehaviorBuilder, DefraAgentBuilder};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,7 +87,7 @@ pub struct DefraAgent {
     node: Arc<EmbeddedNode>,
     agent_did: String,
     default_behavior_id: String,
-    behaviors: Vec<Arc<BehaviorConfig>>,
+    behaviors: Vec<Arc<AgentBehavior>>,
     unavailable_behaviors: HashMap<String, String>,
     document_runtime_context: Option<DocumentResolveContext>,
     mcp_pool: McpPool,
@@ -152,7 +152,7 @@ impl DefraAgent {
         })
     }
 
-    pub fn behaviors(&self) -> &[Arc<BehaviorConfig>] {
+    pub fn behaviors(&self) -> &[Arc<AgentBehavior>] {
         &self.behaviors
     }
 
@@ -206,7 +206,7 @@ pub(crate) fn behavior_config_from_documents(
     tool_selection: ToolSelection,
     subagent_tools: SubagentToolConfig,
     tool_ceiling: &ToolCeiling,
-) -> anyhow::Result<BehaviorConfig> {
+) -> anyhow::Result<AgentBehavior> {
     let compaction_strategy = parse_compaction_strategy(behavior.compaction_strategy.as_deref())?;
     let stream_batch_ms = inference_profile
         .stream_batch_ms
@@ -219,10 +219,17 @@ pub(crate) fn behavior_config_from_documents(
     let profile_max_tokens = inference_profile
         .max_output_tokens
         .and_then(|value| u64::try_from(value).ok());
-
-    Ok(BehaviorConfig {
-        name: behavior.behavior_id.clone(),
+    let principal = Arc::new(AgentPrincipal {
+        agent_did: identity.did().to_string(),
         identity,
+        default_behavior_id: String::new(), // Task 7 will thread the real value
+        display_name: None,
+        enabled: true,
+    });
+
+    Ok(AgentBehavior {
+        name: behavior.behavior_id.clone(),
+        principal,
         backend_id: Some(backend.backend_id.clone()),
         backend_provider_kind: backend.provider_kind,
         backend_endpoint: backend.endpoint.clone(),

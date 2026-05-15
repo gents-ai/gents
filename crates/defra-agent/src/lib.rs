@@ -56,7 +56,7 @@ pub use agent::{
 pub use backend_provider::{discover_models as discover_backend_models, BackendProviderKind};
 pub use backend_registry::InferenceBackend;
 pub use compaction::CompactionStrategy;
-pub use config::BehaviorConfig;
+pub use config::AgentBehavior;
 pub use defra_agent_protocol::client_protocol;
 pub use defra_node;
 pub use desired_fields::{DesiredFields, LiveFields};
@@ -65,7 +65,8 @@ pub use document_config::{
     default_tool_selection_id_for_behavior, ensure_agent_principal, list_agent_behaviors,
     load_agent_behavior, load_agent_principal, load_inference_profile, load_tool_selection,
     upsert_agent_behavior, upsert_agent_principal, upsert_inference_profile, upsert_tool_selection,
-    AgentBehavior, InferenceProfile, PrincipalBootstrap, ToolSelectionDocument,
+    AgentBehavior as AgentBehaviorDocument, InferenceProfile, PrincipalBootstrap,
+    ToolSelectionDocument,
 };
 pub use health_checker::{spawn_health_checker, HealthStatus, ServiceHealth, ServiceHealthMap};
 pub use hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy, HookStats};

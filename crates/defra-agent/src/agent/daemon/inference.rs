@@ -138,7 +138,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     self.node.clone(),
                     &request.session_id,
                     &self.behavior.name,
-                    self.behavior.did(),
+                    self.behavior.agent_did(),
                     self.hook_failure_policy,
                 )
                 .await?

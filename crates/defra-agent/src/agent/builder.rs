@@ -15,12 +15,12 @@ use crate::backend_provider::BackendProviderKind;
 use crate::backend_registry::lookup_backend;
 use crate::compaction::CompactionStrategy;
 use crate::config::{
-    BehaviorConfig, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
+    AgentBehavior, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
     DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
 };
 use crate::hook::FailurePolicy;
-use crate::identity::AgentIdentity;
+use crate::identity::{AgentIdentity, AgentPrincipal};
 use crate::mcp_pool::McpPool;
 use crate::retry::RetryPolicy;
 use crate::tool_surface::{
@@ -42,7 +42,7 @@ pub struct DefraAgentBuilder {
     retry_policy: RetryPolicy,
     hook_failure_policy: FailurePolicy,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
-    behaviors: Vec<PendingBehaviorConfig>,
+    behaviors: Vec<PendingAgentBehavior>,
 }
 
 impl DefraAgentBuilder {
@@ -103,7 +103,7 @@ impl DefraAgentBuilder {
     pub fn behavior(self, name: impl Into<String>) -> BehaviorBuilder {
         BehaviorBuilder {
             agent: self,
-            behavior: PendingBehaviorConfig::new(name),
+            behavior: PendingAgentBehavior::new(name),
         }
     }
 
@@ -181,7 +181,7 @@ impl DefraAgentBuilder {
 
 pub struct BehaviorBuilder {
     agent: DefraAgentBuilder,
-    behavior: PendingBehaviorConfig,
+    behavior: PendingAgentBehavior,
 }
 
 impl BehaviorBuilder {
@@ -318,7 +318,7 @@ fn find_duplicates(values: &[String]) -> HashSet<String> {
 }
 
 #[derive(Clone)]
-pub(crate) struct PendingBehaviorConfig {
+pub(crate) struct PendingAgentBehavior {
     name: String,
     identity: Option<Arc<dyn AgentIdentity>>,
     backend_id: Option<String>,
@@ -338,7 +338,7 @@ pub(crate) struct PendingBehaviorConfig {
     sampling: SamplingConfig,
 }
 
-impl PendingBehaviorConfig {
+impl PendingAgentBehavior {
     pub(crate) fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -366,7 +366,7 @@ impl PendingBehaviorConfig {
         node: &EmbeddedNode,
         default_identity: Option<&Arc<dyn AgentIdentity>>,
         tool_ceiling: &ToolCeiling,
-    ) -> Result<BehaviorConfig> {
+    ) -> Result<AgentBehavior> {
         let identity = self
             .identity
             .clone()
@@ -414,12 +414,19 @@ impl PendingBehaviorConfig {
         backend_api_key: Option<String>,
         backend_api_key_env_var: Option<String>,
         tool_ceiling: &ToolCeiling,
-    ) -> Result<BehaviorConfig> {
+    ) -> Result<AgentBehavior> {
         let behavior_name = self.name.clone();
-
-        Ok(BehaviorConfig {
-            name: self.name,
+        let principal = Arc::new(AgentPrincipal {
+            agent_did: identity.did().to_string(),
             identity,
+            default_behavior_id: String::new(), // Task 7 will thread the real value
+            display_name: None,
+            enabled: true,
+        });
+
+        Ok(AgentBehavior {
+            name: self.name,
+            principal,
             backend_id,
             backend_provider_kind,
             backend_endpoint,
@@ -446,8 +453,8 @@ impl PendingBehaviorConfig {
 }
 
 #[cfg(test)]
-impl PendingBehaviorConfig {
-    pub(crate) fn build_with_identity_for_test<I>(mut self, identity: I) -> BehaviorConfig
+impl PendingAgentBehavior {
+    pub(crate) fn build_with_identity_for_test<I>(mut self, identity: I) -> AgentBehavior
     where
         I: AgentIdentity + 'static,
     {

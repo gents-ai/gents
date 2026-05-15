@@ -12,7 +12,8 @@ use defra_agent::tool_call_lifecycle::{
 };
 use defra_agent::{
     fetch_interrupt_requested_at, interrupt_request, load_history, upsert_agent_behavior,
-    upsert_tool_selection, AgentBehavior, DefraSessionHook, FailurePolicy, ToolSelectionDocument,
+    upsert_tool_selection, AgentBehaviorDocument, DefraSessionHook, FailurePolicy,
+    ToolSelectionDocument,
 };
 use rig::agent::{PromptHook, ToolCallHookAction};
 use rig::completion::message::{
@@ -174,7 +175,7 @@ async fn setup_spawn_fixture_with_flags_and_deadline(
     .unwrap();
     upsert_agent_behavior(
         db.node.as_ref(),
-        &AgentBehavior {
+        &AgentBehaviorDocument {
             behavior_id: PARENT_BEHAVIOR_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
             display_name: Some("R4 parent".to_string()),
@@ -193,7 +194,7 @@ async fn setup_spawn_fixture_with_flags_and_deadline(
     .unwrap();
     upsert_agent_behavior(
         db.node.as_ref(),
-        &AgentBehavior {
+        &AgentBehaviorDocument {
             behavior_id: CHILD_BEHAVIOR_ID.to_string(),
             agent_did: AGENT_DID.to_string(),
             display_name: Some("R4 child".to_string()),

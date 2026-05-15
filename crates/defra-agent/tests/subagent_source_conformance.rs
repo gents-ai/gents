@@ -14,8 +14,8 @@ use defra_agent::tool_call_lifecycle::{
 };
 use defra_agent::{
     default_behavior_id_for_agent, load_agent_behavior, upsert_agent_behavior,
-    upsert_tool_selection, AgentBehavior, AgentIdentity, DefraAgent, DocumentRuntimeOptions,
-    ToolCeiling, ToolSelectionDocument,
+    upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, DefraAgent,
+    DocumentRuntimeOptions, ToolCeiling, ToolSelectionDocument,
 };
 use serde::Deserialize;
 
@@ -116,7 +116,7 @@ async fn ensure_parent_subagent_authorization(
 
     let mut behavior = match load_agent_behavior(node, behavior_id).await.unwrap() {
         Some(behavior) => behavior,
-        None => AgentBehavior {
+        None => AgentBehaviorDocument {
             behavior_id: behavior_id.to_string(),
             agent_did: agent_did.to_string(),
             display_name: Some(behavior_id.to_string()),

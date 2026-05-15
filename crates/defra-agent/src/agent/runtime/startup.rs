@@ -496,7 +496,7 @@ async fn validate_startup_snapshot(
 
 async fn resolve_tool_surfaces(
     node: &defra_node::EmbeddedNode,
-    behaviors: &[Arc<crate::config::BehaviorConfig>],
+    behaviors: &[Arc<crate::config::AgentBehavior>],
 ) -> Result<HashMap<String, Arc<ToolSurface>>> {
     let mut tool_surfaces = HashMap::with_capacity(behaviors.len());
     for behavior in behaviors {
@@ -577,7 +577,7 @@ async fn load_startup_paired_peer_dids(node: &defra_node::EmbeddedNode) -> Resul
 
 async fn resolve_backend_admission_configs(
     node: &defra_node::EmbeddedNode,
-    behaviors: &[Arc<crate::config::BehaviorConfig>],
+    behaviors: &[Arc<crate::config::AgentBehavior>],
 ) -> Result<HashMap<String, BackendAdmissionConfig>> {
     let mut configs = HashMap::new();
     for behavior in behaviors {

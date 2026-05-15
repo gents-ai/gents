@@ -1,6 +1,6 @@
 use anyhow::Result;
 use defra_agent::graphql::escape_graphql_string;
-use defra_agent::AgentBehavior;
+use defra_agent::AgentBehaviorDocument as AgentBehavior;
 
 use crate::config_writes::ConfigAccess;
 use crate::{graphql_bool_literal, optional_f64_field, optional_string_field};
