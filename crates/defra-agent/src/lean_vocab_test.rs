@@ -285,6 +285,25 @@ pub(crate) struct LeanApplyStep {
     pub(crate) refs: Vec<LeanApplyDocRef>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanApplyCollectionWrite {
+    pub(crate) collection: String,
+    pub(crate) graphql_type: String,
+    pub(crate) unique_field: String,
+    pub(crate) apply_order: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanApplySelectedDoc {
+    pub(crate) action: String,
+    pub(crate) target: LeanApplyDocRef,
+    pub(crate) graphql_type: String,
+    pub(crate) unique_field: String,
+    pub(crate) unique_value: String,
+    pub(crate) content: String,
+    pub(crate) refs: Vec<LeanApplyDocRef>,
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct LeanApplyReconcileCase {
     pub(crate) name: String,
@@ -296,6 +315,10 @@ pub(crate) struct LeanApplyReconcileCase {
     pub(crate) expected_unchanged: Vec<LeanApplyDocRef>,
     pub(crate) expected_live_only: Vec<LeanApplyDocRef>,
     pub(crate) expected_steps: Vec<LeanApplyStep>,
+    pub(crate) expected_write_order: Vec<LeanApplyCollectionWrite>,
+    pub(crate) expected_selected_create_docs: Vec<LeanApplySelectedDoc>,
+    pub(crate) expected_selected_update_docs: Vec<LeanApplySelectedDoc>,
+    pub(crate) expected_selected_writes: Vec<LeanApplySelectedDoc>,
     pub(crate) prefix_len: usize,
     pub(crate) expected_prefix_desired: Vec<LeanApplyDesiredDoc>,
     pub(crate) expected_after_desired: Vec<LeanApplyDesiredDoc>,
@@ -306,6 +329,8 @@ pub(crate) struct LeanApplyReconcileCase {
     pub(crate) manifest_realized_after: bool,
     pub(crate) retry_converges: bool,
     pub(crate) idempotent_after: bool,
+    pub(crate) write_order_prefix_safe: bool,
+    pub(crate) production_prefixes_referrers_closed: bool,
     pub(crate) prefix_referrers_closed: bool,
     pub(crate) desired_references_closed_after_prefix: bool,
 }

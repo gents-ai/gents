@@ -209,7 +209,7 @@ def caseCoverage : List CoverageEntry :=
   , consumerCoverage
       "apply_reconcile_cases"
       "ApplyReconcileCases"
-      "apply_conformance::generated_apply_reconcile_cases_drive_apply_model_and_production_ordering"
+      "config_import::lean_apply_write_boundary_tests::generated_apply_reconcile_cases_fence_production_apply_write_boundary"
   , consumerCoverage
       "session_recovery_cases"
       "SessionRecoveryCases"
