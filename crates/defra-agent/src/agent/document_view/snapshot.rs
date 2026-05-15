@@ -47,6 +47,9 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     let mut behaviors = Vec::<Arc<AgentBehavior>>::new();
     let mut unavailable_behaviors = HashMap::new();
 
+    // TODO(Task 7): construct a single Arc<AgentPrincipal> above the loop and
+    // clone into each behavior_config_from_documents call so all behaviors
+    // share the snapshot's principal Arc per the single-principal invariant.
     for behavior_record in view.behaviors.values() {
         let behavior = &behavior_record.value;
         if !behavior.enabled {

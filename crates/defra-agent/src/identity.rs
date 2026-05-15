@@ -20,8 +20,8 @@ pub struct ServiceAccount {
 /// The runtime constructs a single instance per deployment and shares
 /// it as `Arc<AgentPrincipal>` across all behaviors; the type itself
 /// does not enforce this constraint — the single-principal invariant
-/// lives in the loader and is fenced by the proptest in
-/// `tests/identity_conformance_proptest.rs`.
+/// lives in the loader and will be fenced by a loader-dedup proptest
+/// (Task 12, `tests/identity_conformance_proptest.rs`).
 ///
 /// Owns the signing identity used for every DefraDB op the runtime
 /// issues. Every `AgentBehavior` on the deployment holds an
