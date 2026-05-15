@@ -435,7 +435,7 @@ def identityContracts : List IdentityContract :=
         "Identity::Authenticated(did) as the actor for any DefraDB ACP " ++
         "check, so any DID-keyed permission decision returns identical " ++
         "results."
-    , enforced  := false
+    , enforced  := true
     , trackedBy := "#193"
     }
   ]
