@@ -16,15 +16,24 @@ pub struct ServiceAccount {
 
 /// Deployment-level principal record.
 ///
-/// One `AgentPrincipal` exists per defra-agent process. Owns the signing
-/// identity used for every DefraDB op the runtime issues. Every
-/// `AgentBehavior` on the deployment holds an `Arc<AgentPrincipal>`
-/// back-reference; the back-reference makes Lean's
-/// `behavior_id_determines_principal` theorem structural at the type
-/// level (no path constructs a behavior with a dangling agent_did).
+/// Represents the DID-backed principal for a defra-agent deployment.
+/// The runtime constructs a single instance per deployment and shares
+/// it as `Arc<AgentPrincipal>` across all behaviors; the type itself
+/// does not enforce this constraint — the single-principal invariant
+/// lives in the loader and is fenced by the proptest in
+/// `tests/identity_conformance_proptest.rs`.
 ///
-/// Mirrors the Lean `Identity.Principal` record in
-/// `crates/defra-agent/proofs/Proofs/Identity/State.lean:17`.
+/// Owns the signing identity used for every DefraDB op the runtime
+/// issues. Every `AgentBehavior` on the deployment holds an
+/// `Arc<AgentPrincipal>` back-reference; the back-reference makes
+/// Lean's `behavior_id_determines_principal` theorem (`Identity.Properties`)
+/// structural at the type level (no path constructs a behavior with a
+/// dangling agent_did).
+///
+/// Extends the Lean `Identity.Principal` record in
+/// `crates/defra-agent/proofs/Proofs/Identity/State.lean`
+/// (`Identity.Principal`) with the live signing handle (`identity`)
+/// and the routing shortcut (`default_behavior_id`).
 pub struct AgentPrincipal {
     pub agent_did: String,
     pub identity: Arc<dyn AgentIdentity>,
