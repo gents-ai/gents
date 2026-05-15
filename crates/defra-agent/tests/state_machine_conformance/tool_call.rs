@@ -32,7 +32,7 @@ fn tool_call_transitions_match_lean_contract() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn lean_emits_await_mode_vocabulary() {
+pub(super) fn lean_emits_await_mode_vocabulary() {
     use defra_agent::tool_call_lifecycle::AwaitMode;
 
     let machine = lean_state_machine_contract("AwaitMode");
@@ -50,7 +50,7 @@ fn lean_emits_await_mode_vocabulary() {
 }
 
 #[test]
-fn lean_emits_cancel_policy_vocabulary() {
+pub(super) fn lean_emits_cancel_policy_vocabulary() {
     use defra_agent::tool_call_lifecycle::CancelPolicy;
 
     let machine = lean_state_machine_contract("CancelPolicy");
@@ -68,7 +68,7 @@ fn lean_emits_cancel_policy_vocabulary() {
 }
 
 #[test]
-fn lean_emits_child_terminal_vocabulary_and_projections() {
+pub(super) fn lean_emits_child_terminal_vocabulary_and_projections() {
     use defra_agent::tool_call_lifecycle::ChildTerminal;
 
     let machine = lean_state_machine_contract("ChildTerminal");

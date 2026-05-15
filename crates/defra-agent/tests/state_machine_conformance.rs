@@ -133,6 +133,21 @@ fn generated_tool_execution_cases_cover_preflight_and_retry_contracts() {
 }
 
 #[test]
+fn lean_emits_await_mode_vocabulary() {
+    tool_call::lean_emits_await_mode_vocabulary();
+}
+
+#[test]
+fn lean_emits_cancel_policy_vocabulary() {
+    tool_call::lean_emits_cancel_policy_vocabulary();
+}
+
+#[test]
+fn lean_emits_child_terminal_vocabulary_and_projections() {
+    tool_call::lean_emits_child_terminal_vocabulary_and_projections();
+}
+
+#[test]
 fn generated_slot_accounting_cases_pin_inference_and_fleet_contracts() {
     tooling_slots_queue_command::generated_slot_accounting_cases_pin_inference_and_fleet_contracts(
     );
