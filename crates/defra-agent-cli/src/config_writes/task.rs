@@ -2,7 +2,6 @@ use anyhow::Result;
 use defra_agent::graphql::escape_graphql_string;
 use serde_json::Value;
 
-use crate::config_writes::ConfigAccess;
 use crate::graphql_input_literal;
 
 use super::common::{query_documents_by_unique_value, select_existing_document};
@@ -15,7 +14,7 @@ use super::common::{query_documents_by_unique_value, select_existing_document};
 /// runtime-owned fields today; the runtime-owned lifecycle lives on
 /// `Schedule` and `Run`.
 pub(crate) async fn write_task_document(
-    access: &ConfigAccess,
+    txn: &super::ConfigApplyTxn<'_>,
     task_id: &str,
     add_doc: &Value,
     update_doc: &Value,
@@ -24,14 +23,14 @@ pub(crate) async fn write_task_document(
         "Task",
         "task_id",
         task_id,
-        &query_documents_by_unique_value(access, "Task", "task_id", task_id, true).await?,
+        &query_documents_by_unique_value(txn, "Task", "task_id", task_id, true).await?,
     )?;
 
     let Some(existing) = existing.as_ref() else {
-        return create_task_document(access, task_id, add_doc).await;
+        return create_task_document(txn, task_id, add_doc).await;
     };
     if existing.deleted {
-        return create_task_document(access, task_id, add_doc).await;
+        return create_task_document(txn, task_id, add_doc).await;
     }
 
     let input_literal = graphql_input_literal(update_doc)?;
@@ -43,11 +42,11 @@ pub(crate) async fn write_task_document(
         input_literal = input_literal,
     );
 
-    let response = access.execute(&mutation).await?;
+    let response = txn.execute(&mutation).await?;
     match crate::extract_mutation_doc_id(&response, "Task") {
         Ok(doc_id) => Ok(doc_id),
         Err(extract_error) => {
-            let current = select_matching_task_row(access, task_id, update_doc).await?;
+            let current = select_matching_task_row(txn, task_id, update_doc).await?;
             if let Some(row) = current {
                 let current_doc_id = row
                     .get("_docID")
@@ -81,7 +80,7 @@ pub(crate) async fn write_task_document(
 }
 
 async fn create_task_document(
-    access: &ConfigAccess,
+    txn: &super::ConfigApplyTxn<'_>,
     task_id: &str,
     add_doc: &Value,
 ) -> Result<String> {
@@ -92,11 +91,11 @@ async fn create_task_document(
         }}"#,
         input_literal = input_literal,
     );
-    let response = access.execute(&mutation).await?;
+    let response = txn.execute(&mutation).await?;
     match crate::extract_mutation_doc_id(&response, "Task") {
         Ok(doc_id) => Ok(doc_id),
         Err(extract_error) => {
-            let current = select_matching_task_row(access, task_id, add_doc).await?;
+            let current = select_matching_task_row(txn, task_id, add_doc).await?;
             if let Some(row) = current {
                 let deleted = row
                     .get("_deleted")
@@ -128,11 +127,11 @@ async fn create_task_document(
 }
 
 async fn select_matching_task_row(
-    access: &ConfigAccess,
+    txn: &super::ConfigApplyTxn<'_>,
     task_id: &str,
     expected: &Value,
 ) -> Result<Option<Value>> {
-    let rows = query_task_rows(access, task_id, true).await?;
+    let rows = query_task_rows(txn, task_id, true).await?;
     let live_rows = rows
         .into_iter()
         .filter(|row| row.get("_deleted").and_then(Value::as_bool) != Some(true))
@@ -152,7 +151,7 @@ async fn select_matching_task_row(
 }
 
 async fn query_task_rows(
-    access: &ConfigAccess,
+    txn: &super::ConfigApplyTxn<'_>,
     task_id: &str,
     show_deleted: bool,
 ) -> Result<Vec<Value>> {
@@ -183,7 +182,7 @@ async fn query_task_rows(
         show_deleted_arg = show_deleted_arg,
         task_id = escape_graphql_string(task_id),
     );
-    let response = access.execute(&query).await?;
+    let response = txn.execute(&query).await?;
     Ok(response
         .get("data")
         .and_then(|data| data.get("Task"))

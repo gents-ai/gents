@@ -2,7 +2,6 @@ use anyhow::Result;
 use defra_agent::graphql::escape_graphql_string;
 use serde_json::Value;
 
-use crate::config_writes::ConfigAccess;
 use crate::graphql_input_literal;
 
 use super::common::{query_documents_by_unique_value, select_existing_document};
@@ -21,7 +20,7 @@ use super::common::{query_documents_by_unique_value, select_existing_document};
 /// the contract that reapplying a manifest does not reset live scheduler
 /// state.
 pub(crate) async fn write_schedule_document(
-    access: &ConfigAccess,
+    txn: &super::ConfigApplyTxn<'_>,
     schedule_id: &str,
     add_doc: &Value,
     update_doc: &Value,
@@ -30,15 +29,14 @@ pub(crate) async fn write_schedule_document(
         "Schedule",
         "schedule_id",
         schedule_id,
-        &query_documents_by_unique_value(access, "Schedule", "schedule_id", schedule_id, true)
-            .await?,
+        &query_documents_by_unique_value(txn, "Schedule", "schedule_id", schedule_id, true).await?,
     )?;
 
     let Some(existing) = existing.as_ref() else {
-        return create_schedule_document(access, schedule_id, add_doc).await;
+        return create_schedule_document(txn, schedule_id, add_doc).await;
     };
     if existing.deleted {
-        return create_schedule_document(access, schedule_id, add_doc).await;
+        return create_schedule_document(txn, schedule_id, add_doc).await;
     }
 
     let input_literal = graphql_input_literal(update_doc)?;
@@ -50,11 +48,11 @@ pub(crate) async fn write_schedule_document(
         input_literal = input_literal,
     );
 
-    let response = access.execute(&mutation).await?;
+    let response = txn.execute(&mutation).await?;
     match crate::extract_mutation_doc_id(&response, "Schedule") {
         Ok(doc_id) => Ok(doc_id),
         Err(extract_error) => {
-            let current = select_matching_schedule_row(access, schedule_id, update_doc).await?;
+            let current = select_matching_schedule_row(txn, schedule_id, update_doc).await?;
             if let Some(row) = current {
                 let current_doc_id = row
                     .get("_docID")
@@ -88,7 +86,7 @@ pub(crate) async fn write_schedule_document(
 }
 
 async fn create_schedule_document(
-    access: &ConfigAccess,
+    txn: &super::ConfigApplyTxn<'_>,
     schedule_id: &str,
     add_doc: &Value,
 ) -> Result<String> {
@@ -99,11 +97,11 @@ async fn create_schedule_document(
         }}"#,
         input_literal = input_literal,
     );
-    let response = access.execute(&mutation).await?;
+    let response = txn.execute(&mutation).await?;
     match crate::extract_mutation_doc_id(&response, "Schedule") {
         Ok(doc_id) => Ok(doc_id),
         Err(extract_error) => {
-            let current = select_matching_schedule_row(access, schedule_id, add_doc).await?;
+            let current = select_matching_schedule_row(txn, schedule_id, add_doc).await?;
             if let Some(row) = current {
                 let deleted = row
                     .get("_deleted")
@@ -138,11 +136,11 @@ async fn create_schedule_document(
 }
 
 async fn select_matching_schedule_row(
-    access: &ConfigAccess,
+    txn: &super::ConfigApplyTxn<'_>,
     schedule_id: &str,
     expected: &Value,
 ) -> Result<Option<Value>> {
-    let rows = query_schedule_rows(access, schedule_id, true).await?;
+    let rows = query_schedule_rows(txn, schedule_id, true).await?;
     let live_rows = rows
         .into_iter()
         .filter(|row| row.get("_deleted").and_then(Value::as_bool) != Some(true))
@@ -162,7 +160,7 @@ async fn select_matching_schedule_row(
 }
 
 async fn query_schedule_rows(
-    access: &ConfigAccess,
+    txn: &super::ConfigApplyTxn<'_>,
     schedule_id: &str,
     show_deleted: bool,
 ) -> Result<Vec<Value>> {
@@ -195,7 +193,7 @@ async fn query_schedule_rows(
         show_deleted_arg = show_deleted_arg,
         schedule_id = escape_graphql_string(schedule_id),
     );
-    let response = access.execute(&query).await?;
+    let response = txn.execute(&query).await?;
     Ok(response
         .get("data")
         .and_then(|data| data.get("Schedule"))

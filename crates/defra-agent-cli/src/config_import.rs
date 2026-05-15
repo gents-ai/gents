@@ -9,7 +9,7 @@ use serde_json::Value;
 use crate::config_bundle::{sanitize_import_document, select_apply_collection_docs};
 use crate::config_writes::{
     write_event_trigger_document, write_schedule_document, write_task_document, ConfigAccess,
-    ExistingDocumentRef,
+    ConfigApplyTxn, ExistingDocumentRef,
 };
 use crate::desired_state;
 use crate::desired_state::DesiredApplyBundle;
@@ -108,7 +108,7 @@ pub(crate) fn migrate_config_import_bundle(bundle: &mut ConfigExportBundle) {
 }
 
 pub(crate) async fn apply_import_collection(
-    access: &ConfigAccess,
+    txn: &ConfigApplyTxn<'_>,
     collection_name: &str,
     unique_field: &str,
     docs: &[Value],
@@ -121,11 +121,11 @@ pub(crate) async fn apply_import_collection(
     }
 
     if override_existing && uses_custom_apply_writer(collection_name) {
-        apply_custom_override_collection_batched(access, collection_name, unique_field, &prepared)
+        apply_custom_override_collection_batched(txn, collection_name, unique_field, &prepared)
             .await?;
     } else {
         apply_generic_import_collection_batched(
-            access,
+            txn,
             collection_name,
             unique_field,
             &prepared,
@@ -179,7 +179,7 @@ fn uses_custom_apply_writer(collection_name: &str) -> bool {
 }
 
 async fn apply_generic_import_collection_batched(
-    access: &ConfigAccess,
+    txn: &ConfigApplyTxn<'_>,
     collection_name: &str,
     unique_field: &str,
     docs: &[PreparedImportDocument],
@@ -199,12 +199,12 @@ async fn apply_generic_import_collection_batched(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    match execute_aliased_mutation_batches(access, collection_name, &fields).await {
+    match execute_aliased_mutation_batches(txn, collection_name, &fields).await {
         Ok(()) => Ok(()),
         Err(_) if override_existing => {
             for doc in docs {
                 apply_generic_import_document(
-                    access,
+                    txn,
                     collection_name,
                     unique_field,
                     doc,
@@ -253,7 +253,7 @@ fn generic_import_mutation_field(
 }
 
 async fn apply_generic_import_document(
-    access: &ConfigAccess,
+    txn: &ConfigApplyTxn<'_>,
     collection_name: &str,
     unique_field: &str,
     doc: &PreparedImportDocument,
@@ -281,7 +281,7 @@ async fn apply_generic_import_document(
     } else {
         format!(r#"mutation {{ create_{collection_name}(input: {add_literal}) {{ _docID }} }}"#)
     };
-    let response = access.execute(&mutation).await.map_err(|error| {
+    let response = txn.execute(&mutation).await.map_err(|error| {
         if override_existing {
             anyhow::anyhow!(
                 "importing {collection_name} {} failed: {error}",
@@ -299,29 +299,25 @@ async fn apply_generic_import_document(
 }
 
 async fn apply_custom_override_collection_batched(
-    access: &ConfigAccess,
+    txn: &ConfigApplyTxn<'_>,
     collection_name: &str,
     unique_field: &str,
     docs: &[PreparedImportDocument],
 ) -> Result<()> {
     if has_duplicate_unique_values(docs) {
-        return apply_custom_override_documents_individually(access, collection_name, docs).await;
+        return apply_custom_override_documents_individually(txn, collection_name, docs).await;
     }
 
-    let existing_by_unique = match query_existing_documents_by_unique_values(
-        access,
-        collection_name,
-        unique_field,
-        docs,
-    )
-    .await
-    {
-        Ok(existing_by_unique) => existing_by_unique,
-        Err(_) => {
-            return apply_custom_override_documents_individually(access, collection_name, docs)
-                .await;
-        }
-    };
+    let existing_by_unique =
+        match query_existing_documents_by_unique_values(txn, collection_name, unique_field, docs)
+            .await
+        {
+            Ok(existing_by_unique) => existing_by_unique,
+            Err(_) => {
+                return apply_custom_override_documents_individually(txn, collection_name, docs)
+                    .await;
+            }
+        };
     let fields = docs
         .iter()
         .enumerate()
@@ -339,9 +335,9 @@ async fn apply_custom_override_collection_batched(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    match execute_aliased_mutation_batches(access, collection_name, &fields).await {
+    match execute_aliased_mutation_batches(txn, collection_name, &fields).await {
         Ok(()) => Ok(()),
-        Err(_) => apply_custom_override_documents_individually(access, collection_name, docs).await,
+        Err(_) => apply_custom_override_documents_individually(txn, collection_name, docs).await,
     }
 }
 
@@ -352,7 +348,7 @@ fn has_duplicate_unique_values(docs: &[PreparedImportDocument]) -> bool {
 }
 
 async fn query_existing_documents_by_unique_values(
-    access: &ConfigAccess,
+    txn: &ConfigApplyTxn<'_>,
     collection_name: &str,
     unique_field: &str,
     docs: &[PreparedImportDocument],
@@ -376,7 +372,7 @@ async fn query_existing_documents_by_unique_values(
             }}
         }}"#,
     );
-    let response = access.execute(&query).await?;
+    let response = txn.execute(&query).await?;
     let rows = response
         .get("data")
         .and_then(|data| data.get(collection_name))
@@ -477,7 +473,7 @@ fn select_existing_import_document(
 }
 
 async fn apply_custom_override_documents_individually(
-    access: &ConfigAccess,
+    txn: &ConfigApplyTxn<'_>,
     collection_name: &str,
     docs: &[PreparedImportDocument],
 ) -> Result<()> {
@@ -487,15 +483,12 @@ async fn apply_custom_override_documents_individually(
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("missing update document for {collection_name}"))?;
         let doc_id = match collection_name {
-            "Task" => {
-                write_task_document(access, &doc.unique_value, &doc.add_doc, update_doc).await
-            }
+            "Task" => write_task_document(txn, &doc.unique_value, &doc.add_doc, update_doc).await,
             "Schedule" => {
-                write_schedule_document(access, &doc.unique_value, &doc.add_doc, update_doc).await
+                write_schedule_document(txn, &doc.unique_value, &doc.add_doc, update_doc).await
             }
             "EventTrigger" => {
-                write_event_trigger_document(access, &doc.unique_value, &doc.add_doc, update_doc)
-                    .await
+                write_event_trigger_document(txn, &doc.unique_value, &doc.add_doc, update_doc).await
             }
             _ => unreachable!("custom apply writer only supports selected collections"),
         }
@@ -517,13 +510,13 @@ async fn apply_custom_override_documents_individually(
 }
 
 async fn execute_aliased_mutation_batches(
-    access: &ConfigAccess,
+    txn: &ConfigApplyTxn<'_>,
     collection_name: &str,
     fields: &[AliasedMutationField],
 ) -> Result<()> {
     for chunk in fields.chunks(CONFIG_IMPORT_BATCH_SIZE) {
         let mutation = build_aliased_mutation(chunk);
-        let response = access.execute(&mutation).await?;
+        let response = txn.execute(&mutation).await?;
         for field in chunk {
             let _ = extract_aliased_mutation_doc_id(&response, &field.alias, collection_name)?;
         }
@@ -593,7 +586,7 @@ pub(crate) fn select_apply_principal_docs(
 }
 
 pub(crate) async fn apply_desired_state_changes(
-    access: &ConfigAccess,
+    txn: &ConfigApplyTxn<'_>,
     desired_bundle: &DesiredApplyBundle,
     planned: &desired_state::DesiredStateDiffReport,
 ) -> Result<ConfigApplyCounts> {
@@ -603,7 +596,7 @@ pub(crate) async fn apply_desired_state_changes(
     for collection in CONFIG_APPLY_ORDER {
         let docs = select_apply_docs_for_collection(desired_bundle, planned, collection)?;
         let applied = apply_import_collection(
-            access,
+            txn,
             collection.graphql_type(),
             collection.unique_field(),
             &docs,
@@ -891,25 +884,25 @@ mod lean_apply_write_boundary_tests {
             assert_selected_documents_match_lean(case, desired_bundle.as_bundle(), &planned);
 
             let (graphql, recorder) = start_recording_graphql().await;
-            let counts = apply_desired_state_changes(
-                &ConfigAccess::Graphql(graphql),
-                &desired_bundle,
-                &planned,
-            )
-            .await
-            .unwrap_or_else(|error| {
-                panic!(
-                    "production apply_desired_state_changes failed for Lean case {}: {error}",
-                    case.name
-                )
-            });
+            let access = ConfigAccess::Graphql(graphql);
+            let txn = access.begin_apply_txn().await.expect("begin apply tx");
+            let counts = match apply_desired_state_changes(&txn, &desired_bundle, &planned).await {
+                Ok(counts) => {
+                    txn.commit().await.expect("commit");
+                    counts
+                }
+                Err(error) => {
+                    let _ = txn.discard().await;
+                    panic!(
+                        "production apply_desired_state_changes failed for Lean case {}: {error}",
+                        case.name
+                    );
+                }
+            };
 
             assert_counts_match_lean(case, &counts);
 
-            // NOTE: Task 4 wires ConfigApplyTxn through apply_desired_state_changes.
-            // At that point, switch the success-path assertion to recorder.committed_state()
-            // to actually verify atomicity. observed_writes() includes uncommitted writes.
-            let observed = recorder.observed_writes();
+            let observed = recorder.committed_state();
             let expected = case
                 .expected_selected_writes
                 .iter()

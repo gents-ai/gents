@@ -2,10 +2,9 @@ use anyhow::Result;
 use serde_json::Value;
 
 use super::ExistingDocumentRef;
-use crate::config_writes::ConfigAccess;
 
 pub(super) async fn query_documents_by_unique_value(
-    access: &ConfigAccess,
+    txn: &super::ConfigApplyTxn<'_>,
     collection_name: &str,
     unique_field: &str,
     unique_value: &str,
@@ -33,7 +32,7 @@ pub(super) async fn query_documents_by_unique_value(
         unique_field = unique_field,
         unique_value = escape_graphql_string(unique_value),
     );
-    let response = access.execute(&query).await?;
+    let response = txn.execute(&query).await?;
     let rows = response
         .get("data")
         .and_then(|data| data.get(collection_name))
