@@ -652,6 +652,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "IdentityStructuralCases".to_string(),
         ));
     }
+    if !snapshot.identity_permission_cases.is_empty() {
+        emitted.insert((
+            "identity_permission_cases".to_string(),
+            "IdentityPermissionCases".to_string(),
+        ));
+    }
     if !snapshot.identity_contracts.is_empty() {
         emitted.insert((
             "identity_contracts".to_string(),
@@ -702,6 +708,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "event_delivery_cases",
         "mcp_health_cases",
         "identity_structural_cases",
+        "identity_permission_cases",
         "identity_contracts",
         "r4c_background_work_cases",
         "r6_background_cases",
