@@ -595,6 +595,11 @@ pub(crate) async fn apply_desired_state_changes(
     let desired_bundle = desired_bundle.as_bundle();
     let mut counts = ConfigApplyCounts::default();
 
+    let per_collection_sleep = std::env::var("DEFRA_AGENT_CONFIG_APPLY_SLEEP_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(std::time::Duration::from_millis);
+
     for collection in CONFIG_APPLY_ORDER {
         let docs = select_apply_docs_for_collection(desired_bundle, planned, collection)?;
         let applied = apply_import_collection(
@@ -606,6 +611,10 @@ pub(crate) async fn apply_desired_state_changes(
         )
         .await?;
         counts.set(collection, applied);
+
+        if let Some(sleep) = per_collection_sleep {
+            tokio::time::sleep(sleep).await;
+        }
     }
 
     Ok(counts)
