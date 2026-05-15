@@ -7,9 +7,11 @@ use defra_agent::Collection;
 use serde_json::Value;
 
 use crate::config_bundle::{sanitize_import_document, select_apply_collection_docs};
+#[cfg(test)]
+use crate::config_writes::ConfigAccess;
 use crate::config_writes::{
-    write_event_trigger_document, write_schedule_document, write_task_document, ConfigAccess,
-    ConfigApplyTxn, ExistingDocumentRef,
+    write_event_trigger_document, write_schedule_document, write_task_document, ConfigApplyTxn,
+    ExistingDocumentRef,
 };
 use crate::desired_state;
 use crate::desired_state::DesiredApplyBundle;

@@ -130,7 +130,9 @@ pub(super) async fn config_import(args: ConfigImportArgs) -> Result<()> {
             Ok(())
         }
         Err(error) => {
-            let _ = txn.discard().await;
+            if let Err(discard_err) = txn.discard().await {
+                tracing::warn!(%discard_err, "config import: tx discard failed after apply error");
+            }
             Err(error)
         }
     }
