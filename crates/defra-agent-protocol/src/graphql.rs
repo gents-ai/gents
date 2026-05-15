@@ -316,6 +316,109 @@ pub async fn execute_graphql_async(
     Err(last_error.unwrap_or_else(|| anyhow!("GraphQL request retries exhausted for {graphql}")))
 }
 
+/// Like `execute_graphql_async` but adds an `x-defradb-tx` header when
+/// `txn_id` is `Some`. Used by `defra-agent-cli` to drive DefraDB HTTP
+/// transactions during `config apply`.
+pub async fn execute_graphql_async_with_tx(
+    graphql: &str,
+    query: &str,
+    options: GraphqlRequestOptions,
+    txn_id: Option<&str>,
+) -> Result<serde_json::Value> {
+    let client = reqwest::Client::builder()
+        .timeout(options.timeout)
+        .build()?;
+    let mut last_error = None;
+
+    for attempt in 0..options.max_attempts.max(1) {
+        let mut request = client
+            .post(graphql)
+            .json(&serde_json::json!({ "query": query }));
+        if let Some(id) = txn_id {
+            request = request.header("x-defradb-tx", id);
+        }
+        let response = request.send().await;
+        let response = match response {
+            Ok(response) => response,
+            Err(error)
+                if graphql_transport_error_is_retryable(&error)
+                    && attempt + 1 < options.max_attempts =>
+            {
+                tracing::warn!(
+                    attempt,
+                    graphql,
+                    error = %error,
+                    "retrying async GraphQL tx request after transport error"
+                );
+                last_error = Some(
+                    anyhow::Error::new(error).context(format!("posting GraphQL to {graphql}")),
+                );
+                tokio::time::sleep(scale_backoff(options.retry_backoff, attempt)).await;
+                continue;
+            }
+            Err(error) => {
+                return Err(
+                    anyhow::Error::new(error).context(format!("posting GraphQL to {graphql}"))
+                );
+            }
+        };
+
+        let response = match response.error_for_status() {
+            Ok(response) => response,
+            Err(error)
+                if graphql_transport_error_is_retryable(&error)
+                    && attempt + 1 < options.max_attempts =>
+            {
+                tracing::warn!(
+                    attempt,
+                    graphql,
+                    error = %error,
+                    "retrying async GraphQL tx request after response status error"
+                );
+                last_error = Some(
+                    anyhow::Error::new(error)
+                        .context(format!("reading GraphQL response from {graphql}")),
+                );
+                tokio::time::sleep(scale_backoff(options.retry_backoff, attempt)).await;
+                continue;
+            }
+            Err(error) => {
+                return Err(anyhow::Error::new(error)
+                    .context(format!("reading GraphQL response from {graphql}")));
+            }
+        };
+
+        let value = match response.json().await {
+            Ok(value) => value,
+            Err(error)
+                if graphql_transport_error_is_retryable(&error)
+                    && attempt + 1 < options.max_attempts =>
+            {
+                tracing::warn!(
+                    attempt,
+                    graphql,
+                    error = %error,
+                    "retrying async GraphQL tx request after decode error"
+                );
+                last_error = Some(
+                    anyhow::Error::new(error)
+                        .context(format!("decoding GraphQL response body from {graphql}")),
+                );
+                tokio::time::sleep(scale_backoff(options.retry_backoff, attempt)).await;
+                continue;
+            }
+            Err(error) => {
+                return Err(anyhow::Error::new(error)
+                    .context(format!("decoding GraphQL response body from {graphql}")));
+            }
+        };
+
+        return finish_graphql_response(graphql, value);
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow!("GraphQL request retries exhausted for {graphql}")))
+}
+
 pub fn execute_graphql_blocking(
     graphql: &str,
     query: &str,
@@ -809,5 +912,59 @@ mod tests {
         assert!(rendered.contains("enabled: true"));
         assert!(rendered.contains(r#"name: "alpha""#));
         assert!(rendered.contains(r#"tags: ["a", "b"]"#));
+    }
+}
+
+#[cfg(test)]
+mod tx_tests {
+    use super::*;
+    use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
+    use std::sync::{Arc, Mutex};
+    use tokio::net::TcpListener;
+
+    #[derive(Clone, Default)]
+    struct HeaderRecorder {
+        last_tx_header: Arc<Mutex<Option<String>>>,
+    }
+
+    async fn capture_handler(
+        State(state): State<HeaderRecorder>,
+        headers: HeaderMap,
+        Json(_body): Json<serde_json::Value>,
+    ) -> Json<serde_json::Value> {
+        *state.last_tx_header.lock().unwrap() = headers
+            .get("x-defradb-tx")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        Json(serde_json::json!({ "data": {} }))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn execute_graphql_async_with_tx_sets_header_when_id_provided() {
+        let state = HeaderRecorder::default();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/", post(capture_handler))
+            .with_state(state.clone());
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let endpoint = format!("http://{addr}/");
+        let options = GraphqlRequestOptions {
+            timeout: std::time::Duration::from_secs(2),
+            max_attempts: 1,
+            retry_backoff: std::time::Duration::from_millis(50),
+        };
+
+        execute_graphql_async_with_tx(&endpoint, "{ __typename }", options.clone(), Some("42"))
+            .await
+            .unwrap();
+        assert_eq!(state.last_tx_header.lock().unwrap().as_deref(), Some("42"));
+
+        execute_graphql_async_with_tx(&endpoint, "{ __typename }", options, None)
+            .await
+            .unwrap();
+        assert_eq!(state.last_tx_header.lock().unwrap().as_deref(), None);
     }
 }
