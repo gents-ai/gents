@@ -385,6 +385,13 @@ fn parent_linkage_graphql_fields(parent: &AgentRequest) -> String {
                 escape_graphql_string(parent_tool_call_id),
             )
         }
+        (Some(parent_request_id), None) if !parent_request_id.trim().is_empty() => {
+            format!(
+                r#",
+                caused_by_parent_request_id: "{}""#,
+                escape_graphql_string(parent_request_id),
+            )
+        }
         _ => String::new(),
     }
 }

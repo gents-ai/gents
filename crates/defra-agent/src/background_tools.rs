@@ -11,7 +11,7 @@ use defra_agent_protocol::transcript::{decode_persisted_message, present_persist
 use defra_node::EmbeddedNode;
 use rig::completion::message::{AssistantContent, Message, Text, UserContent};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::lifecycle::queue::{
@@ -261,6 +261,7 @@ struct TranscriptToolCallRow {
     message_sequence: u64,
     tool_call_id: String,
     tool_name: String,
+    await_mode: Option<String>,
     child_request_id: Option<String>,
 }
 
@@ -561,6 +562,7 @@ pub(crate) async fn handle_read_subagent_transcript(
                 message_sequence
                 tool_call_id
                 tool_name
+                await_mode
                 child_request_id
             }}
         }}"#
@@ -641,7 +643,9 @@ fn decode_transcript_message_views(
     for row in tool_call_rows {
         if let Some(tool_call_id) = non_empty_string(Some(&row.tool_call_id)) {
             tool_names_by_call_id.insert(tool_call_id.clone(), row.tool_name);
-            if non_empty_string(row.child_request_id.as_deref()).is_some() {
+            let is_background_bridge = non_empty_string(row.child_request_id.as_deref()).is_some()
+                || row.await_mode.as_deref().map(str::trim) == Some("background");
+            if is_background_bridge {
                 bridge_call_ids_by_sequence
                     .entry(row.message_sequence)
                     .or_default()
@@ -797,18 +801,24 @@ pub(crate) async fn handle_read_tool_output(
     } else {
         row.result.as_deref().unwrap_or_default()
     };
-    let stdout = read_tool_output_stream(result, max_bytes);
+    let persisted = persisted_tool_output_streams(&row.tool_name, result);
+    let stdout = read_tool_output_stream(
+        &persisted.stdout,
+        max_bytes,
+        persisted.stdout_total_bytes_seen,
+    );
+    let stderr = read_tool_output_stream(
+        &persisted.stderr,
+        max_bytes,
+        persisted.stderr_total_bytes_seen,
+    );
     Ok(ReadToolOutputOutcome::Found(ReadToolOutputResponse {
         tool_call_id: row.tool_call_id,
         tool_name: row.tool_name,
         status,
         stdout,
-        stderr: ReadToolOutputStream {
-            bytes: String::new(),
-            truncated: false,
-            total_bytes_seen: 0,
-        },
-        exit_code: None,
+        stderr,
+        exit_code: persisted.exit_code,
     }))
 }
 
@@ -850,7 +860,7 @@ pub(crate) async fn append_steering_request(
     drained_wake_up_request_ids: Vec<String>,
 ) -> Result<SteerSubagentResponse> {
     session::append_message(node, &edge.child_session_id, "user", message).await?;
-    let child_request = load_agent_request_for_queue(node, &edge.child_request_id)
+    let mut child_request = load_agent_request_for_queue(node, &edge.child_request_id)
         .await?
         .ok_or_else(|| anyhow!("child AgentRequest {} not found", edge.child_request_id))?;
     if child_request.caused_by_parent_request_id.as_deref() != Some(caller_request_id) {
@@ -859,6 +869,8 @@ pub(crate) async fn append_steering_request(
             edge.child_request_id
         );
     }
+    child_request.caused_by_parent_request_id = Some(caller_request_id.to_string());
+    child_request.caused_by_parent_tool_call_id = None;
     let enqueued = enqueue_session_request(
         node,
         &child_request,
@@ -1056,9 +1068,82 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
     })
 }
 
-fn read_tool_output_stream(value: &str, max_bytes: usize) -> ReadToolOutputStream {
-    let total_bytes_seen = value.as_bytes().len() as u64;
-    let (bytes, truncated) = truncate_utf8_prefix(value, max_bytes);
+#[derive(Debug, Default)]
+struct PersistedToolOutputStreams {
+    stdout: String,
+    stderr: String,
+    exit_code: Option<i32>,
+    stdout_total_bytes_seen: Option<u64>,
+    stderr_total_bytes_seen: Option<u64>,
+}
+
+fn persisted_tool_output_streams(tool_name: &str, result: &str) -> PersistedToolOutputStreams {
+    parse_native_command_output_streams(tool_name, result).unwrap_or_else(|| {
+        PersistedToolOutputStreams {
+            stdout: result.to_string(),
+            stdout_total_bytes_seen: Some(result.as_bytes().len() as u64),
+            ..Default::default()
+        }
+    })
+}
+
+fn parse_native_command_output_streams(
+    tool_name: &str,
+    result: &str,
+) -> Option<PersistedToolOutputStreams> {
+    if !matches!(tool_name, "bash" | "bash_unrestricted") {
+        return None;
+    }
+
+    let trimmed = result.trim_start();
+    let (metadata_line, body) = trimmed.split_once('\n')?;
+    let metadata = metadata_line.trim().strip_prefix("defra_exec: ")?;
+    let metadata = serde_json::from_str::<Value>(metadata).ok()?;
+    let body = body.strip_prefix("stdout:\n")?;
+    let (stdout, stderr) = body.rsplit_once("\nstderr:\n")?;
+    let stdout = persisted_stream_body(stdout);
+    let stderr = persisted_stream_body(stderr);
+    let stdout_total_bytes_seen = stream_total_seen(&metadata, "stdout_truncation", &stdout);
+    let stderr_total_bytes_seen = stream_total_seen(&metadata, "stderr_truncation", &stderr);
+    let exit_code = metadata
+        .get("exit_code")
+        .and_then(Value::as_i64)
+        .and_then(|code| i32::try_from(code).ok());
+
+    Some(PersistedToolOutputStreams {
+        stdout,
+        stderr,
+        exit_code,
+        stdout_total_bytes_seen: Some(stdout_total_bytes_seen),
+        stderr_total_bytes_seen: Some(stderr_total_bytes_seen),
+    })
+}
+
+fn persisted_stream_body(value: &str) -> String {
+    if value == "(empty)" {
+        String::new()
+    } else {
+        value.to_string()
+    }
+}
+
+fn stream_total_seen(metadata: &Value, key: &str, returned: &str) -> u64 {
+    metadata
+        .get(key)
+        .and_then(|value| value.get("total_chars"))
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| returned.as_bytes().len() as u64)
+        .max(returned.as_bytes().len() as u64)
+}
+
+fn read_tool_output_stream(
+    value: &str,
+    max_bytes: usize,
+    total_bytes_seen: Option<u64>,
+) -> ReadToolOutputStream {
+    let value_bytes = value.as_bytes().len() as u64;
+    let total_bytes_seen = total_bytes_seen.unwrap_or(value_bytes).max(value_bytes);
+    let (bytes, truncated) = truncate_utf8_tail(value, max_bytes);
     ReadToolOutputStream {
         bytes,
         truncated,
@@ -1066,15 +1151,15 @@ fn read_tool_output_stream(value: &str, max_bytes: usize) -> ReadToolOutputStrea
     }
 }
 
-fn truncate_utf8_prefix(value: &str, max_bytes: usize) -> (String, bool) {
+fn truncate_utf8_tail(value: &str, max_bytes: usize) -> (String, bool) {
     if value.len() <= max_bytes {
         return (value.to_string(), false);
     }
-    let mut end = max_bytes.min(value.len());
-    while end > 0 && !value.is_char_boundary(end) {
-        end -= 1;
+    let mut start = value.len().saturating_sub(max_bytes);
+    while start < value.len() && !value.is_char_boundary(start) {
+        start += 1;
     }
-    (value[..end].to_string(), true)
+    (value[start..].to_string(), true)
 }
 
 fn list_subagent_status_matches(filter: ListStatusFilter, status: &str) -> bool {
@@ -1086,7 +1171,13 @@ fn list_status_matches(filter: ListStatusFilter, status: &str) -> bool {
         ListStatusFilter::Running => status == "running",
         ListStatusFilter::Terminal => matches!(
             status,
-            "completed" | "failed" | "timedOut" | "cancelled" | "dead" | "interrupted"
+            "completed"
+                | "failed"
+                | "timedOut"
+                | "cancelled"
+                | "dead"
+                | "interrupted"
+                | "superseded"
         ),
         ListStatusFilter::All => !status.trim().is_empty(),
     }

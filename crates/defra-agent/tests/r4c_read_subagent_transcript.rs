@@ -243,6 +243,7 @@ async fn append_assistant_tool_call_message(
     sequence: u32,
     body: &str,
     tool_call_id: &str,
+    tool_name: &str,
 ) {
     let message = Message::Assistant {
         id: None,
@@ -254,7 +255,7 @@ async fn append_assistant_tool_call_message(
                 id: tool_call_id.to_string(),
                 call_id: Some(tool_call_id.to_string()),
                 function: ToolFunction {
-                    name: "spawn_subagent".to_string(),
+                    name: tool_name.to_string(),
                     arguments: json!({"behavior_id": CHILD_BEHAVIOR_ID}),
                 },
                 signature: None,
@@ -309,6 +310,45 @@ async fn create_child_bridge_tool_call(
     assert!(
         !response.has_errors(),
         "create child bridge AgentToolCall failed: {:?}",
+        response.errors
+    );
+}
+
+async fn create_background_tool_call(
+    node: &EmbeddedNode,
+    child_request_id: &str,
+    child_session_id: &str,
+    message_sequence: u32,
+    tool_call_id: &str,
+) {
+    let child_request_id = escape_graphql_string(child_request_id);
+    let child_session_id = escape_graphql_string(child_session_id);
+    let tool_call_id = escape_graphql_string(tool_call_id);
+    let tool_call_key = format!("{child_session_id}:{tool_call_id}");
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentToolCall(input: {{
+                tool_call_key: "{tool_call_key}",
+                request_id: "{child_request_id}",
+                session_id: "{child_session_id}",
+                message_sequence: {message_sequence},
+                tool_name: "bash",
+                tool_call_id: "{tool_call_id}",
+                args: "{{}}",
+                result: "",
+                status: "called",
+                lifecycle_state: "running",
+                started_at: "2026-05-14T00:01:00Z",
+                deadline_at: "2026-05-14T00:06:00Z",
+                await_mode: "background",
+                cancel_policy: "propagate"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create background AgentToolCall failed: {:?}",
         response.errors
     );
 }
@@ -414,6 +454,7 @@ async fn read_transcript_hides_bridge_rows() {
         1,
         "plain assistant message",
         "bridge-tc-1",
+        "spawn_subagent",
     )
     .await;
     create_child_bridge_tool_call(
@@ -434,6 +475,43 @@ async fn read_transcript_hides_bridge_rows() {
     let transcript = result["transcript"].as_str().unwrap();
     assert!(transcript.contains("plain assistant message"));
     assert!(!transcript.contains("bridge-tc-1"));
+    assert!(!transcript.contains("tool_calls="));
+}
+
+#[tokio::test]
+async fn read_transcript_hides_tool_kind_background_bridge_rows() {
+    let db = setup_db("r4c-read-tool-bridge").await;
+    let hook = create_parent_hook(&db, "parent-tool-bridge", "session-tool-bridge").await;
+    let child = spawn_background_child(&hook, "spawn-tool-bridge", "do work").await;
+    let child_request_id = child["child_request_id"].as_str().unwrap();
+    let child_session_id = child["child_session_id"].as_str().unwrap();
+    append_assistant_tool_call_message(
+        db.node.as_ref(),
+        child_session_id,
+        1,
+        "checking files",
+        "background-tc-1",
+        "bash",
+    )
+    .await;
+    create_background_tool_call(
+        db.node.as_ref(),
+        child_request_id,
+        child_session_id,
+        1,
+        "background-tc-1",
+    )
+    .await;
+
+    let result = read_transcript(
+        &hook,
+        "read-tool-bridge",
+        json!({ "child_request_id": child_request_id }),
+    )
+    .await;
+    let transcript = result["transcript"].as_str().unwrap();
+    assert!(transcript.contains("checking files"));
+    assert!(!transcript.contains("background-tc-1"));
     assert!(!transcript.contains("tool_calls="));
 }
 

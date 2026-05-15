@@ -40,13 +40,16 @@ pub struct AgentRequest {
 }
 
 /// Coherence check on AgentRequest's subagent fields:
-/// - caused_by_parent_request_id and caused_by_parent_tool_call_id must be
-///   set together (both Some) or together (both None).
-/// - subagent_depth = 0 ↔ both parent fields are None.
+/// - caused_by_parent_tool_call_id requires caused_by_parent_request_id.
+/// - caused_by_parent_request_id without caused_by_parent_tool_call_id is only
+///   valid for queued steering requests, which preserve lineage without
+///   claiming a bridge call.
+/// - subagent_depth = 0 ↔ no parent lineage is present.
 pub fn validate_agent_request_subagent_coherence(req: &AgentRequest) -> Result<()> {
     let has_parent_req = req.caused_by_parent_request_id.is_some();
     let has_parent_tc = req.caused_by_parent_tool_call_id.is_some();
-    if has_parent_req != has_parent_tc {
+    let request_only_steering_link = has_parent_req && !has_parent_tc && is_steering_queue(req);
+    if has_parent_req != has_parent_tc && !request_only_steering_link {
         return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
     }
     let is_top_level = !has_parent_req; // both None
@@ -57,6 +60,25 @@ pub fn validate_agent_request_subagent_coherence(req: &AgentRequest) -> Result<(
         return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
     }
     Ok(())
+}
+
+fn is_steering_queue(req: &AgentRequest) -> bool {
+    let Some(metadata) = req
+        .metadata
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+    else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(metadata) else {
+        return false;
+    };
+    value
+        .get("queue")
+        .and_then(|queue| queue.get("source"))
+        .and_then(serde_json::Value::as_str)
+        == Some("steering")
 }
 
 pub trait Watcher: Send + Sync {

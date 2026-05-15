@@ -321,14 +321,63 @@ async fn read_tool_output_terminal_reads_persisted_result() {
 }
 
 #[tokio::test]
+async fn read_tool_output_terminal_parses_native_command_streams() {
+    let persisted = concat!(
+        "defra_exec: {\"ok\":false,\"status\":\"exit_nonzero\",",
+        "\"command\":\"grep -P foo README.md\",\"argv\":[\"grep\",\"-P\",\"foo\",\"README.md\"],",
+        "\"cwd\":\".\",\"exit_code\":2,\"timed_out\":false,\"duration_ms\":4,",
+        "\"timeout_ms\":10000,\"execution_mode\":\"read_only\",",
+        "\"network_mode\":\"inherit\",\"sandbox\":\"policy_read_only\",",
+        "\"stdout_truncation\":{\"returned_chars\":7,\"total_chars\":7,",
+        "\"max_chars\":16000,\"truncated\":false},",
+        "\"stderr_truncation\":{\"returned_chars\":25,\"total_chars\":25,",
+        "\"max_chars\":16000,\"truncated\":false}}\n",
+        "stdout:\n",
+        "matches\n",
+        "stderr:\n",
+        "grep: invalid option -- P"
+    );
+    let (_db, hook, _session_id, _request_id) = setup_hook(
+        "r4c-read-output-native",
+        registry(
+            vec![Box::new(StaticTool {
+                name: "bash",
+                result: persisted.to_string(),
+            })],
+            &["bash"],
+        ),
+    )
+    .await;
+    let handle = background_tool(&hook, "bg-native", "bash").await;
+    let tool_call_id = handle["tool_call_id"].as_str().unwrap();
+    let waited = wait_tool(&hook, "wait-native", tool_call_id).await;
+    assert_eq!(waited["status"].as_str(), Some("completed"));
+
+    let result = read_tool_output(
+        &hook,
+        "read-native",
+        json!({ "tool_call_id": tool_call_id }),
+    )
+    .await;
+    assert_eq!(result["stdout"]["bytes"].as_str(), Some("matches"));
+    assert_eq!(result["stdout"]["total_bytes_seen"].as_u64(), Some(7));
+    assert_eq!(
+        result["stderr"]["bytes"].as_str(),
+        Some("grep: invalid option -- P")
+    );
+    assert_eq!(result["stderr"]["total_bytes_seen"].as_u64(), Some(25));
+    assert_eq!(result["exit_code"].as_i64(), Some(2));
+}
+
+#[tokio::test]
 async fn read_tool_output_truncated_flag_on_overflow() {
-    let large = "x".repeat(300);
+    let large = format!("{}tail", "prefix".repeat(60));
     let (_db, hook, _session_id, _request_id) = setup_hook(
         "r4c-read-output-truncate",
         registry(
             vec![Box::new(StaticTool {
                 name: "large_tool",
-                result: large,
+                result: large.clone(),
             })],
             &["large_tool"],
         ),
@@ -349,8 +398,16 @@ async fn read_tool_output_truncated_flag_on_overflow() {
     )
     .await;
     assert_eq!(result["stdout"]["truncated"].as_bool(), Some(true));
-    assert_eq!(result["stdout"]["total_bytes_seen"].as_u64(), Some(300));
+    assert_eq!(
+        result["stdout"]["total_bytes_seen"].as_u64(),
+        Some(large.len() as u64)
+    );
     assert_eq!(result["stdout"]["bytes"].as_str().unwrap().len(), 256);
+    assert!(result["stdout"]["bytes"]
+        .as_str()
+        .unwrap()
+        .ends_with("tail"));
+    assert_ne!(result["stdout"]["bytes"].as_str().unwrap(), &large[..256]);
 }
 
 #[tokio::test]

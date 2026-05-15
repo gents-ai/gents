@@ -64,6 +64,7 @@ struct RequestRow {
     metadata: Option<String>,
     subagent_depth: Option<u32>,
     caused_by_parent_request_id: Option<String>,
+    caused_by_parent_tool_call_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -251,6 +252,7 @@ async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> RequestRow {
                 metadata
                 subagent_depth
                 caused_by_parent_request_id
+                caused_by_parent_tool_call_id
             }}
         }}"#
     );
@@ -430,6 +432,7 @@ async fn steer_subagent_append_enqueues_with_steering_source() {
         queued.caused_by_parent_request_id.as_deref(),
         Some("parent-append")
     );
+    assert_eq!(queued.caused_by_parent_tool_call_id.as_deref(), None);
     assert_eq!(queued.status.as_deref(), Some("pending"));
     assert_eq!(queued.lifecycle_state.as_deref(), Some("pending"));
     let metadata: Value = serde_json::from_str(queued.metadata.as_deref().unwrap()).unwrap();

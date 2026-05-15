@@ -257,6 +257,74 @@ async fn bridge_complete(db: &support::TestDb, session_id: &str, tool_call_id: &
     assert!(projected);
 }
 
+async fn create_superseded_child_edge(
+    node: &EmbeddedNode,
+    parent_request_id: &str,
+    session_id: &str,
+    tool_call_id: &str,
+) {
+    let child_request_id = format!("{tool_call_id}-child");
+    let child_session_id = format!("{tool_call_id}-child-session");
+    let parent_request_id = escape_graphql_string(parent_request_id);
+    let session_id = escape_graphql_string(session_id);
+    let tool_call_id = escape_graphql_string(tool_call_id);
+    let child_request_id = escape_graphql_string(&child_request_id);
+    let child_session_id = escape_graphql_string(&child_session_id);
+    let agent_did = escape_graphql_string(AGENT_DID);
+    let behavior_id = escape_graphql_string(CHILD_BEHAVIOR_ID);
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{child_request_id}",
+                agent_did: "{agent_did}",
+                behavior_id: "{behavior_id}",
+                session_id: "{child_session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{child_request_id}",
+                superseded_by_request: "",
+                content: "superseded child",
+                status: "superseded",
+                lifecycle_state: "superseded",
+                backend_id: "",
+                execution_origin: "interactive",
+                metadata: "",
+                failure_reason: "",
+                created_at: "2026-05-14T00:01:00Z",
+                deadline: "2026-05-14T00:06:00Z",
+                retry_count: 0,
+                max_retries: 3,
+                subagent_depth: 1,
+                caused_by_parent_request_id: "{parent_request_id}",
+                caused_by_parent_tool_call_id: "{tool_call_id}"
+            }}) {{ _docID }}
+            create_AgentToolCall(input: {{
+                tool_call_key: "{session_id}:{tool_call_id}",
+                request_id: "{parent_request_id}",
+                session_id: "{session_id}",
+                message_sequence: 1,
+                tool_name: "spawn_subagent",
+                tool_call_id: "{tool_call_id}",
+                args: "{{}}",
+                result: "",
+                status: "superseded",
+                lifecycle_state: "superseded",
+                started_at: "2026-05-14T00:01:00Z",
+                completed_at: "2026-05-14T00:02:00Z",
+                deadline_at: "2026-05-14T00:06:00Z",
+                await_mode: "background",
+                cancel_policy: "propagate",
+                child_request_id: "{child_request_id}"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create superseded child edge failed: {:?}",
+        response.errors
+    );
+}
+
 #[tokio::test]
 async fn list_subagents_returns_running_children() {
     let db = setup_db("r4c-list-running").await;
@@ -314,6 +382,27 @@ async fn list_subagents_status_filter() {
 
     let all = list_subagents(&hook, "list-status-all", json!({"status": "all"})).await;
     assert_eq!(all["entries"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn list_subagents_terminal_includes_superseded_children() {
+    let db = setup_db("r4c-list-superseded").await;
+    let session_id = "session-superseded";
+    let hook = create_parent_hook(&db, "parent-superseded", session_id).await;
+    create_superseded_child_edge(
+        db.node.as_ref(),
+        "parent-superseded",
+        session_id,
+        "spawn-superseded",
+    )
+    .await;
+
+    let terminal = list_subagents(&hook, "list-superseded", json!({"status": "terminal"})).await;
+    assert_eq!(terminal["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        terminal["entries"][0]["status"].as_str(),
+        Some("superseded")
+    );
 }
 
 #[tokio::test]
