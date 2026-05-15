@@ -185,10 +185,12 @@ impl Harness {
             }
             Action::RunCancelMirrorObserverOnB => run_cancel_mirror_on_b(&self.b).await?,
             Action::RunUnclaimedSpawnReconcilerOnA => {
-                let _ = reconcile_unclaimed_cross_deployment_spawns(self.a.db.node.clone()).await?;
+                let _ =
+                    reconcile_unclaimed_cross_deployment_spawns(self.a.db.node.clone(), NODE_A_DID)
+                        .await?;
             }
             Action::RunCancelAckObserverOnA => {
-                let _ = observe_cancel_cascade_ack(self.a.db.node.clone()).await?;
+                let _ = observe_cancel_cascade_ack(self.a.db.node.clone(), NODE_A_DID).await?;
             }
             Action::RunRecoverySweepOn { node } => {
                 let did = if node == "A" { NODE_A_DID } else { NODE_B_DID };
@@ -211,7 +213,7 @@ impl Harness {
 
     async fn wait_for_convergence(&mut self, _timeout: Duration) -> Result<()> {
         run_background_completion_on_a(&self.a).await?;
-        let _ = observe_cancel_cascade_ack(self.a.db.node.clone()).await?;
+        let _ = observe_cancel_cascade_ack(self.a.db.node.clone(), NODE_A_DID).await?;
         run_cancel_mirror_on_b(&self.b).await?;
         Ok(())
     }
@@ -247,7 +249,8 @@ async fn write_pairing(node: &HarnessNode, peer: &str, collections: &[String]) -
     } else {
         peer
     };
-    let peer = escape_graphql_string(peer_did);
+    let peer_id = escape_graphql_string(peer);
+    let peer_did = escape_graphql_string(peer_did);
     let collections = collections
         .iter()
         .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
@@ -257,15 +260,17 @@ async fn write_pairing(node: &HarnessNode, peer: &str, collections: &[String]) -
     let mutation = format!(
         r#"mutation {{
             upsert_PeerPairingDesired(
-                filter: {{ peer_id: {{ _eq: "{peer}" }} }},
+                filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
                 add: {{
-                    peer_id: "{peer}",
+                    peer_id: "{peer_id}",
+                    agent_did: "{peer_did}",
                     collections: [{collections}],
                     replicator_addresses: [],
                     created_at: "{now}",
                     updated_at: "{now}"
                 }},
                 update: {{
+                    agent_did: "{peer_did}",
                     collections: [{collections}],
                     replicator_addresses: [],
                     updated_at: "{now}"
@@ -733,7 +738,9 @@ async fn parent_request_for_tool(node: &HarnessNode, tool_call_id: &str) -> Resu
 
 async fn run_background_completion_on_a(node: &HarnessNode) -> Result<()> {
     for request_id in terminal_child_request_ids(node).await? {
-        let _ = project_background_subagent_completion(node.db.node.clone(), &request_id).await?;
+        let _ =
+            project_background_subagent_completion(node.db.node.clone(), &request_id, NODE_A_DID)
+                .await?;
     }
     Ok(())
 }

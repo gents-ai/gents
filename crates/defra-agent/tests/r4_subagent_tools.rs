@@ -918,9 +918,8 @@ async fn cross_deployment_cancel_writes_cascade_intent_on_bridge() {
             .await
             .unwrap()
             .expect("bridge should be persisted");
-    lifecycle.cancel_during_run().await.unwrap();
     let dispatch = lifecycle
-        .bridge_cancel_cascade_dispatch(AGENT_DID)
+        .cancel_during_run_with_cascade_dispatch(AGENT_DID)
         .await
         .unwrap()
         .expect("cascade dispatch");
@@ -979,9 +978,8 @@ async fn single_deployment_cancel_dispatch_still_interrupts_child() {
             .await
             .unwrap()
             .expect("bridge should be persisted");
-    lifecycle.cancel_during_run().await.unwrap();
     let dispatch = lifecycle
-        .bridge_cancel_cascade_dispatch(AGENT_DID)
+        .cancel_during_run_with_cascade_dispatch(AGENT_DID)
         .await
         .unwrap()
         .expect("cascade dispatch");

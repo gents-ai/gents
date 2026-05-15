@@ -13,6 +13,7 @@ use crate::graphql::escape_graphql_string;
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 
 const TOOL_CALL_COLLECTION: &str = "AgentToolCall";
+const AGENT_REQUEST_COLLECTION: &str = "AgentRequest";
 
 pub(crate) async fn run_cross_deployment_cancel_mirror(
     node: Arc<EmbeddedNode>,
@@ -52,10 +53,15 @@ impl CrossDeploymentCancelMirror {
 
     pub(crate) async fn run(mut self) -> Result<()> {
         self.scan_pending_intents().await?;
+        let mut retry_tick = tokio::time::interval(std::time::Duration::from_secs(5));
         loop {
             let message = tokio::select! {
                 biased;
                 _ = self.cancel.cancelled() => return Ok(()),
+                _ = retry_tick.tick() => {
+                    self.scan_pending_intents().await?;
+                    continue;
+                }
                 changed = self.snapshot_rx.changed() => {
                     if changed.is_err() {
                         return Ok(());
@@ -87,15 +93,20 @@ impl CrossDeploymentCancelMirror {
             else {
                 continue;
             };
-            if collection_name != TOOL_CALL_COLLECTION {
-                continue;
-            }
-            if let Err(error) = self.handle_tool_call_doc(&update.doc_id).await {
-                tracing::warn!(
-                    doc_id = %update.doc_id,
-                    %error,
-                    "cancel mirror failed to handle AgentToolCall update"
-                );
+            match collection_name.as_str() {
+                TOOL_CALL_COLLECTION => {
+                    if let Err(error) = self.handle_tool_call_doc(&update.doc_id).await {
+                        tracing::warn!(
+                            doc_id = %update.doc_id,
+                            %error,
+                            "cancel mirror failed to handle AgentToolCall update"
+                        );
+                    }
+                }
+                AGENT_REQUEST_COLLECTION => {
+                    self.scan_pending_intents().await?;
+                }
+                _ => {}
             }
         }
     }
@@ -365,4 +376,159 @@ async fn write_child_interrupt_requested_at(
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime_snapshot::ActiveRuntimeSnapshot;
+    use std::collections::{HashMap, HashSet};
+    use tokio::sync::watch;
+
+    const PARENT_DID: &str = "did:defra-agent:parent";
+    const CHILD_DID: &str = "did:defra-agent:child";
+
+    async fn test_node() -> Arc<EmbeddedNode> {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        node
+    }
+
+    async fn exec(node: &EmbeddedNode, statement: &str) {
+        let response = node.execute(statement).await;
+        assert!(
+            !response.has_errors(),
+            "GraphQL errors: {:?}",
+            response.errors
+        );
+    }
+
+    fn snapshot() -> Arc<ActiveRuntimeSnapshot> {
+        Arc::new(ActiveRuntimeSnapshot {
+            generation: 1,
+            local_did: CHILD_DID.to_string(),
+            paired_peer_dids: HashSet::from([PARENT_DID.to_string()]),
+            default_behavior_id: "child-behavior".to_string(),
+            behaviors: HashMap::new(),
+            tool_surfaces: HashMap::new(),
+            backend_admission_configs: HashMap::new(),
+            unavailable_behaviors: HashMap::new(),
+            active_schedules: HashMap::new(),
+            unavailable_schedules: HashSet::new(),
+            active_event_triggers: HashMap::new(),
+            unavailable_event_triggers: HashSet::new(),
+            active_tasks: HashMap::new(),
+            dispatchers: HashMap::new(),
+        })
+    }
+
+    async fn write_parent_and_bridge(node: &EmbeddedNode) {
+        exec(
+            node,
+            r#"mutation {
+                create_AgentRequest(input: {
+                    request_id: "parent-request",
+                    agent_did: "did:defra-agent:parent",
+                    behavior_id: "parent-behavior",
+                    session_id: "parent-session",
+                    content: "parent",
+                    status: "interrupted",
+                    lifecycle_state: "interrupted",
+                    created_at: "2026-05-15T00:00:00Z"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+        exec(
+            node,
+            r#"mutation {
+                create_AgentToolCall(input: {
+                    tool_call_key: "parent-request:spawn",
+                    request_id: "parent-request",
+                    session_id: "parent-session",
+                    message_sequence: 1,
+                    tool_name: "spawn_subagent",
+                    tool_call_id: "spawn",
+                    args: "{}",
+                    status: "completed",
+                    lifecycle_state: "cancelled",
+                    started_at: "2026-05-15T00:00:00Z",
+                    deadline_at: "2026-05-15T00:05:00Z",
+                    completed_at: "2026-05-15T00:01:00Z",
+                    await_mode: "background",
+                    cancel_policy: "cascade",
+                    child_request_id: "child-request",
+                    cancel_cascade_intent_at: "2026-05-15T00:01:00Z",
+                    cancel_pending_remote_ack: true
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    }
+
+    async fn write_child_request(node: &EmbeddedNode) {
+        exec(
+            node,
+            r#"mutation {
+                create_AgentRequest(input: {
+                    request_id: "child-request",
+                    agent_did: "did:defra-agent:child",
+                    behavior_id: "child-behavior",
+                    session_id: "child-session",
+                    content: "child",
+                    status: "processing",
+                    lifecycle_state: "processing",
+                    created_at: "2026-05-15T00:00:30Z",
+                    caused_by_parent_request_id: "parent-request",
+                    caused_by_parent_tool_call_id: "spawn"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    }
+
+    async fn child_interrupt_requested_at(node: &EmbeddedNode) -> Option<String> {
+        let response = node
+            .execute(
+                r#"{
+                    AgentRequest(filter: { request_id: { _eq: "child-request" } }, limit: 1) {
+                        interrupt_requested_at
+                    }
+                }"#,
+            )
+            .await;
+        assert!(
+            !response.has_errors(),
+            "query errors: {:?}",
+            response.errors
+        );
+        response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(|rows| rows.as_array())
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("interrupt_requested_at"))
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned)
+    }
+
+    #[tokio::test]
+    async fn pending_intent_is_retried_after_child_request_arrives() {
+        let node = test_node().await;
+        write_parent_and_bridge(node.as_ref()).await;
+        let (_tx, rx) = watch::channel(snapshot());
+        let cancel = CancellationToken::new();
+        let mut mirror = CrossDeploymentCancelMirror::new(node.clone(), rx, cancel);
+
+        mirror.scan_pending_intents().await.unwrap();
+        assert!(child_interrupt_requested_at(node.as_ref()).await.is_none());
+
+        write_child_request(node.as_ref()).await;
+        mirror.scan_pending_intents().await.unwrap();
+        assert_eq!(
+            child_interrupt_requested_at(node.as_ref()).await.as_deref(),
+            Some("2026-05-15T00:01:00Z")
+        );
+    }
 }

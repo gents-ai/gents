@@ -359,6 +359,7 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
             continue;
         }
 
+        let mut remote_cancel_intent_at = None;
         if let Some(child_request_id) = cascade_child_request_id(&row) {
             if child_request_is_locally_owned(node, agent_did, child_request_id).await? {
                 if let Err(error) = interrupt_request(node, child_request_id).await {
@@ -372,22 +373,14 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
                         "failed to cascade recovery interrupt to child request"
                     );
                 }
-            } else if let Err(error) =
-                write_bridge_cancel_cascade_intent(node, &row.doc_id, Utc::now()).await
-            {
-                tracing::warn!(
-                    doc_id = %row.doc_id,
-                    request_id = row.request_id.as_deref().unwrap_or(""),
-                    session_id = %row.session_id,
-                    tool_call_id = %row.tool_call_id,
-                    child_request_id,
-                    error = %error,
-                    "failed to write recovery cross-deployment cancel intent"
-                );
+            } else {
+                remote_cancel_intent_at = Some(Utc::now());
             }
         }
 
-        if let Err(error) = recover_tool_call_row(node, &row, deadline_at, outcome).await {
+        if let Err(error) =
+            recover_tool_call_row(node, &row, deadline_at, outcome, remote_cancel_intent_at).await
+        {
             tracing::warn!(
                 doc_id = %row.doc_id,
                 request_id = row.request_id.as_deref().unwrap_or(""),
@@ -543,6 +536,7 @@ async fn recover_tool_call_row(
     row: &RunningToolCallRow,
     deadline_at: Option<DateTime<Utc>>,
     outcome: RecoveryOutcome,
+    remote_cancel_intent_at: Option<DateTime<Utc>>,
 ) -> Result<()> {
     let now = Utc::now();
     let started_at = parse_datetime(row.started_at.as_deref()).unwrap_or(now);
@@ -558,6 +552,14 @@ async fn recover_tool_call_row(
         .failure_class()
         .map(|failure| format!(r#", tool_failure_class: "{}""#, failure.as_str()))
         .unwrap_or_default();
+    let remote_cancel_intent_fields = remote_cancel_intent_at
+        .map(|at| {
+            format!(
+                r#", cancel_cascade_intent_at: "{}", cancel_pending_remote_ack: true"#,
+                escape_graphql_string(&at.to_rfc3339())
+            )
+        })
+        .unwrap_or_default();
 
     let mutation = format!(
         r#"mutation {{
@@ -569,7 +571,7 @@ async fn recover_tool_call_row(
                     lifecycle_state: "{lifecycle_state}",
                     started_at: "{started_at_str}"{deadline_field},
                     completed_at: "{completed_at_str}",
-                    latency_ms: {latency_ms}{failure_class_field}
+                    latency_ms: {latency_ms}{failure_class_field}{remote_cancel_intent_fields}
                 }}
             ) {{ _docID }}
         }}"#,
@@ -689,34 +691,6 @@ async fn child_request_is_locally_owned(
         .and_then(|row| row.get("agent_did"))
         .and_then(|v| v.as_str());
     Ok(did == Some(local_did))
-}
-
-async fn write_bridge_cancel_cascade_intent(
-    node: &EmbeddedNode,
-    doc_id: &str,
-    at: DateTime<Utc>,
-) -> Result<()> {
-    let escaped_doc_id = escape_graphql_string(doc_id);
-    let at = escape_graphql_string(&at.to_rfc3339());
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentToolCall(
-                filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
-                input: {{
-                    cancel_cascade_intent_at: "{at}",
-                    cancel_pending_remote_ack: true
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    execute_mutation_with_retry(
-        node,
-        &mutation,
-        "recovery_write_bridge_cancel_cascade_intent",
-    )
-    .await
-    .context("write recovery bridge cancel cascade intent mutation")?;
-    Ok(())
 }
 
 impl RecoveryOutcome {

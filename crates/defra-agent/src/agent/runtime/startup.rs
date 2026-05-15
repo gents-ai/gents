@@ -47,6 +47,13 @@ pub(in crate::agent) async fn run_agent(
     if let Some(observer) = &agent.process_state_observer {
         observer.on_process_state_change(ProcessLifecycleState::Recovering);
     }
+    if let Err(error) = crate::migration::ensure_peer_pairing_desired_migrations(agent.node.clone())
+        .await
+        .context("ensure PeerPairingDesired migrations")
+    {
+        runtime_status.publish_error(&format!("{error:#}")).await;
+        return Err(error);
+    }
     let health_map = ServiceHealthMap::new();
     let tool_runtime = ToolRuntimeContext::new(
         agent.node.clone(),
@@ -222,11 +229,13 @@ pub(in crate::agent) async fn run_agent(
     let mut background_tasks = JoinSet::new();
 
     let completion_node = agent.node.clone();
+    let completion_agent_did = agent.agent_did.clone();
     let completion_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::SubagentCompletion(
             crate::background_completion::run_background_completion_observer(
                 completion_node,
+                completion_agent_did,
                 completion_cancel,
             )
             .await,
@@ -527,12 +536,14 @@ async fn resolve_startup_snapshot(agent: &DefraAgent) -> Result<ResolvedRuntimeS
 #[derive(Debug, Deserialize)]
 struct StartupPeerPairingDesiredRow {
     peer_id: String,
+    agent_did: Option<String>,
 }
 
 async fn load_startup_paired_peer_dids(node: &defra_node::EmbeddedNode) -> Result<HashSet<String>> {
     let query = r#"{
         PeerPairingDesired {
             peer_id
+            agent_did
         }
     }"#;
     let response = node.execute(query).await;
@@ -551,8 +562,15 @@ async fn load_startup_paired_peer_dids(node: &defra_node::EmbeddedNode) -> Resul
     Ok(rows
         .into_iter()
         .filter_map(|row| {
-            let peer_id = row.peer_id.trim().to_string();
-            (!peer_id.is_empty()).then_some(peer_id)
+            row.agent_did
+                .as_deref()
+                .map(str::trim)
+                .filter(|did| !did.is_empty())
+                .map(ToOwned::to_owned)
+                .or_else(|| {
+                    let peer_id = row.peer_id.trim();
+                    peer_id.starts_with("did:").then(|| peer_id.to_string())
+                })
         })
         .collect())
 }

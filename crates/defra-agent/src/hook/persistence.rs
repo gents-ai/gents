@@ -1201,15 +1201,14 @@ impl DefraSessionHook {
             return Ok(false);
         }
 
-        lifecycle.cancel_during_run().await?;
+        let dispatch = lifecycle
+            .cancel_during_run_with_cascade_dispatch(&self.agent_did)
+            .await?;
         if !lifecycle.is_cancelled() {
             return Ok(false);
         }
 
-        let Some(dispatch) = lifecycle
-            .bridge_cancel_cascade_dispatch(&self.agent_did)
-            .await?
-        else {
+        let Some(dispatch) = dispatch else {
             return Ok(false);
         };
         if let CascadeDispatch::Local(intent) = dispatch {
@@ -1240,15 +1239,14 @@ impl DefraSessionHook {
             return Ok(false);
         }
 
-        lifecycle.cancel_during_run().await?;
+        let dispatch = lifecycle
+            .cancel_during_run_with_cascade_dispatch(&self.agent_did)
+            .await?;
         if !lifecycle.is_cancelled() {
             return Ok(false);
         }
 
-        let Some(dispatch) = lifecycle
-            .bridge_cancel_cascade_dispatch(&self.agent_did)
-            .await?
-        else {
+        let Some(dispatch) = dispatch else {
             return Ok(false);
         };
         if let CascadeDispatch::Local(intent) = dispatch {
@@ -1525,18 +1523,24 @@ impl DefraSessionHook {
                     )
                     .await?
                 {
-                    if let Err(error) = lifecycle.cancel_during_run().await {
-                        return self
-                            .foreground_external_bridge_terminal_or_error(
-                                parent_context,
-                                parent_tool_call_id,
-                                child_request_id,
-                                child_session_id,
-                                behavior_id,
-                                error,
-                            )
-                            .await;
-                    }
+                    let dispatch = match lifecycle
+                        .cancel_during_run_with_cascade_dispatch(&self.agent_did)
+                        .await
+                    {
+                        Ok(dispatch) => dispatch,
+                        Err(error) => {
+                            return self
+                                .foreground_external_bridge_terminal_or_error(
+                                    parent_context,
+                                    parent_tool_call_id,
+                                    child_request_id,
+                                    child_session_id,
+                                    behavior_id,
+                                    error,
+                                )
+                                .await;
+                        }
+                    };
                     if !lifecycle.is_cancelled() {
                         return self
                             .foreground_external_bridge_terminal_payload(
@@ -1548,10 +1552,7 @@ impl DefraSessionHook {
                             )
                             .await;
                     }
-                    if let Some(dispatch) = lifecycle
-                        .bridge_cancel_cascade_dispatch(&self.agent_did)
-                        .await?
-                    {
+                    if let Some(dispatch) = dispatch {
                         if let CascadeDispatch::Local(intent) = dispatch {
                             if let Err(error) = crate::interrupt::interrupt_request(
                                 &self.node,

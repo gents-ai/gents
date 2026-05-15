@@ -64,6 +64,10 @@ const ADD_TOOL_SELECTION_R5_PATCH: &str = r#"[
     {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"cross_deployment_spawn_timeout_seconds","Kind":5}}
 ]"#;
 
+const ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH: &str = r#"[
+    {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"agent_did","Kind":11}}
+]"#;
+
 /// WASM lens bytes embedded at compile time. Built by build.rs.
 const LENS_WASM_BYTES: &[u8] =
     include_bytes!(env!("AGENT_TOOL_CALL_LIFECYCLE_V1_TO_V2_LENS_WASM_PATH"));
@@ -424,5 +428,33 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
         "agent_subagent_v2_to_v3 lens registered"
     );
 
+    Ok(())
+}
+
+pub async fn ensure_peer_pairing_desired_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    let Some(collection) = node
+        .get_collection("PeerPairingDesired")
+        .context("get PeerPairingDesired collection")?
+    else {
+        return Ok(());
+    };
+    if collection_has_field(&collection, "agent_did") {
+        return Ok(());
+    }
+
+    let next = node
+        .patch_collection(
+            "PeerPairingDesired",
+            ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH,
+        )
+        .await
+        .context("patch_collection PeerPairingDesired agent_did")?;
+    node.set_active_collection_version(&next.version_id)
+        .await
+        .context("set_active_collection_version PeerPairingDesired agent_did")?;
+    tracing::info!(
+        version = %next.version_id,
+        "PeerPairingDesired patched with agent_did field"
+    );
     Ok(())
 }

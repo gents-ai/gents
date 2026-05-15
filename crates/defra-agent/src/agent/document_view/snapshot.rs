@@ -212,12 +212,14 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
 #[derive(Debug, Deserialize)]
 struct PeerPairingDesiredDidRow {
     peer_id: String,
+    agent_did: Option<String>,
 }
 
 async fn load_paired_peer_dids(node: &EmbeddedNode) -> Result<HashSet<String>> {
     let query = r#"{
         PeerPairingDesired {
             peer_id
+            agent_did
         }
     }"#;
     let response = node.execute(query).await;
@@ -236,8 +238,15 @@ async fn load_paired_peer_dids(node: &EmbeddedNode) -> Result<HashSet<String>> {
     Ok(rows
         .into_iter()
         .filter_map(|row| {
-            let peer_id = row.peer_id.trim().to_string();
-            (!peer_id.is_empty()).then_some(peer_id)
+            row.agent_did
+                .as_deref()
+                .map(str::trim)
+                .filter(|did| !did.is_empty())
+                .map(ToOwned::to_owned)
+                .or_else(|| {
+                    let peer_id = row.peer_id.trim();
+                    peer_id.starts_with("did:").then(|| peer_id.to_string())
+                })
         })
         .collect())
 }

@@ -917,6 +917,55 @@ impl ToolCallLifecycle {
     /// startup recovery for interrupted parent requests.
     ///
     pub async fn cancel_during_run(&mut self) -> Result<()> {
+        self.cancel_during_run_inner(None).await
+    }
+
+    /// Running -> Cancelled while dispatching a cascade cancel. For remote
+    /// children the durable cancel intent is written in the same bridge update
+    /// that terminalizes the tool call, so recovery never observes a cancelled
+    /// bridge without the remote signal.
+    pub async fn cancel_during_run_with_cascade_dispatch(
+        &mut self,
+        local_did: &str,
+    ) -> Result<Option<CascadeDispatch>> {
+        self.ensure_state(
+            &[ToolCallState::Running],
+            "cancel_during_run_with_cascade_dispatch",
+        )?;
+
+        let Some(child_request_id) = self.child_request_id.clone() else {
+            self.cancel_during_run_inner(None).await?;
+            return Ok(None);
+        };
+        if self.cancel_policy != CancelPolicy::Cascade {
+            self.cancel_during_run_inner(None).await?;
+            return Ok(None);
+        }
+
+        let intent = super::CascadeIntent {
+            child_request_id,
+            at: chrono::Utc::now(),
+        };
+        if child_request_is_locally_owned(&self.node, local_did, &intent.child_request_id).await? {
+            self.cancel_during_run_inner(None).await?;
+            if self.is_cancelled() {
+                return Ok(Some(CascadeDispatch::Local(intent)));
+            }
+            return Ok(None);
+        }
+
+        self.cancel_during_run_inner(Some(intent.at)).await?;
+        if self.is_cancelled() {
+            Ok(Some(CascadeDispatch::RemoteIntentWritten))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn cancel_during_run_inner(
+        &mut self,
+        remote_cancel_intent_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "cancel_during_run")?;
 
         let doc_id = self.doc_id.as_ref().ok_or_else(|| {
@@ -935,6 +984,16 @@ impl ToolCallLifecycle {
         let started_at_str = started_at.to_rfc3339();
         let deadline_at_str = self.deadline_at.to_rfc3339();
         let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
+        let remote_cancel_intent_fragment = remote_cancel_intent_at
+            .map(|at| {
+                let at = escape_graphql_string(&at.to_rfc3339());
+                format!(
+                    r#",
+                        cancel_cascade_intent_at: "{at}",
+                        cancel_pending_remote_ack: true"#
+                )
+            })
+            .unwrap_or_default();
 
         let mutation = format!(
             r#"mutation {{
@@ -951,6 +1010,7 @@ impl ToolCallLifecycle {
                         deadline_at: "{deadline_at_str}",
                         completed_at: "{now_str}",
                         latency_ms: {latency_ms}
+                        {remote_cancel_intent_fragment}
                         {unclaimed_deadline_clear}
                     }}
                 ) {{ _docID }}

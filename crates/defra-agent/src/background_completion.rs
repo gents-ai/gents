@@ -48,6 +48,7 @@ pub enum BackgroundCompletionOutcome {
     NotBackground,
     MissingFinalResponse,
     AlreadyProjected,
+    NotLocalOwner,
     Unlinked,
 }
 
@@ -94,6 +95,7 @@ struct UnclaimedBridgeRow {
 struct CancelPendingBridgeRow {
     #[serde(rename = "_docID")]
     doc_id: String,
+    request_id: String,
     tool_call_id: String,
     child_request_id: String,
     cancel_cascade_intent_at: Option<String>,
@@ -119,6 +121,7 @@ struct AgentToolCallDateTimeRow {
 
 pub async fn reconcile_unclaimed_cross_deployment_spawns(
     node: Arc<EmbeddedNode>,
+    local_did: &str,
 ) -> Result<Vec<UnclaimedSpawnReconcileOutcome>> {
     let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let now = escape_graphql_string(&now);
@@ -159,6 +162,10 @@ pub async fn reconcile_unclaimed_cross_deployment_spawns(
 
     let mut outcomes = Vec::with_capacity(rows.len());
     for row in rows {
+        if !request_is_locally_owned(node.as_ref(), &row.request_id, local_did).await? {
+            continue;
+        }
+
         if child_request_exists_locally(node.as_ref(), &row.child_request_id).await? {
             clear_unclaimed_deadline_at(node.as_ref(), &row.doc_id).await?;
             outcomes.push(UnclaimedSpawnReconcileOutcome::Linked {
@@ -192,11 +199,15 @@ pub async fn reconcile_unclaimed_cross_deployment_spawns(
     Ok(outcomes)
 }
 
-pub async fn observe_cancel_cascade_ack(node: Arc<EmbeddedNode>) -> Result<Vec<CancelAckOutcome>> {
+pub async fn observe_cancel_cascade_ack(
+    node: Arc<EmbeddedNode>,
+    local_did: &str,
+) -> Result<Vec<CancelAckOutcome>> {
     let now = Utc::now();
     let query = r#"{
         AgentToolCall(filter: { cancel_pending_remote_ack: { _eq: true } }) {
             _docID
+            request_id
             tool_call_id
             child_request_id
             cancel_cascade_intent_at
@@ -216,6 +227,10 @@ pub async fn observe_cancel_cascade_ack(node: Arc<EmbeddedNode>) -> Result<Vec<C
 
     let mut outcomes = Vec::with_capacity(rows.len());
     for row in rows {
+        if !request_is_locally_owned(node.as_ref(), &row.request_id, local_did).await? {
+            continue;
+        }
+
         let probe = load_child_ack_probe(node.as_ref(), &row.child_request_id).await?;
         let child_done = probe
             .as_ref()
@@ -332,6 +347,38 @@ fn request_terminal_or_interrupted(row: &ChildAckProbeRow) -> bool {
         row.status.as_deref(),
         Some("completed" | "error" | "dead" | "interrupted" | "superseded")
     ) || row.interrupt_requested_at.is_some()
+}
+
+async fn request_is_locally_owned(
+    node: &EmbeddedNode,
+    request_id: &str,
+    local_did: &str,
+) -> Result<bool> {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                limit: 1
+            ) {{ agent_did }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query parent AgentRequest owner {request_id} failed: {:?}",
+            response.errors
+        );
+    }
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("agent_did"))
+        .and_then(|v| v.as_str())
+        == Some(local_did))
 }
 
 async fn clear_cancel_pending_ack(node: &EmbeddedNode, doc_id: &str) -> Result<()> {
@@ -465,6 +512,7 @@ fn push_datetime_field(
 pub async fn project_background_subagent_completion(
     node: Arc<EmbeddedNode>,
     child_request_id: &str,
+    local_did: &str,
 ) -> Result<BackgroundCompletionOutcome> {
     let Some(linkage) = load_child_linkage(node.as_ref(), child_request_id).await? else {
         return Ok(BackgroundCompletionOutcome::Unlinked);
@@ -474,6 +522,9 @@ pub async fn project_background_subagent_completion(
     };
     if non_empty(linkage.caused_by_parent_tool_call_id.as_deref()).is_none() {
         return Ok(BackgroundCompletionOutcome::Unlinked);
+    }
+    if !request_is_locally_owned(node.as_ref(), parent_request_id, local_did).await? {
+        return Ok(BackgroundCompletionOutcome::NotLocalOwner);
     }
 
     let Some(terminal_row) = load_child_terminal_row(node.as_ref(), child_request_id).await? else {
@@ -918,14 +969,16 @@ fn parse_utc_timestamp(value: &str, field: &str) -> Result<DateTime<Utc>> {
 
 pub(crate) async fn run_background_completion_observer(
     node: Arc<EmbeddedNode>,
+    local_did: String,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let mut observer = BackgroundCompletionObserver::new(node, cancel);
+    let mut observer = BackgroundCompletionObserver::new(node, local_did, cancel);
     observer.run().await
 }
 
 struct BackgroundCompletionObserver {
     node: Arc<EmbeddedNode>,
+    local_did: String,
     cancel: CancellationToken,
     subscription: events::Subscription,
     collection_id_to_name: HashMap<String, String>,
@@ -933,10 +986,11 @@ struct BackgroundCompletionObserver {
 }
 
 impl BackgroundCompletionObserver {
-    fn new(node: Arc<EmbeddedNode>, cancel: CancellationToken) -> Self {
+    fn new(node: Arc<EmbeddedNode>, local_did: String, cancel: CancellationToken) -> Self {
         let subscription = node.subscribe(&[EventName::Update]);
         Self {
             node,
+            local_did,
             cancel,
             subscription,
             collection_id_to_name: HashMap::new(),
@@ -1003,14 +1057,15 @@ impl BackgroundCompletionObserver {
     }
 
     async fn run_reconcilers(&self) -> Result<()> {
-        let unclaimed = reconcile_unclaimed_cross_deployment_spawns(self.node.clone()).await?;
+        let unclaimed =
+            reconcile_unclaimed_cross_deployment_spawns(self.node.clone(), &self.local_did).await?;
         if !unclaimed.is_empty() {
             tracing::debug!(
                 count = unclaimed.len(),
                 "reconciled unclaimed subagent spawns"
             );
         }
-        let cancel_ack = observe_cancel_cascade_ack(self.node.clone()).await?;
+        let cancel_ack = observe_cancel_cascade_ack(self.node.clone(), &self.local_did).await?;
         if !cancel_ack.is_empty() {
             tracing::debug!(
                 count = cancel_ack.len(),
@@ -1025,9 +1080,16 @@ impl BackgroundCompletionObserver {
             return;
         }
 
-        match project_background_subagent_completion(self.node.clone(), &child_request_id).await {
+        match project_background_subagent_completion(
+            self.node.clone(),
+            &child_request_id,
+            &self.local_did,
+        )
+        .await
+        {
             Ok(BackgroundCompletionOutcome::Projected { .. })
-            | Ok(BackgroundCompletionOutcome::AlreadyProjected) => {
+            | Ok(BackgroundCompletionOutcome::AlreadyProjected)
+            | Ok(BackgroundCompletionOutcome::NotLocalOwner) => {
                 self.processed_child_request_ids.insert(child_request_id);
             }
             Ok(
@@ -1378,4 +1440,148 @@ where
     data.and_then(|data| data.get(collection))
         .and_then(|value| serde_json::from_value::<Vec<T>>(value.clone()).ok())
         .and_then(|mut rows| rows.pop())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LOCAL_DID: &str = "did:defra-agent:local-owner";
+    const FOREIGN_DID: &str = "did:defra-agent:foreign-owner";
+
+    async fn test_node() -> Arc<EmbeddedNode> {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        node
+    }
+
+    async fn exec(node: &EmbeddedNode, statement: &str) {
+        let response = node.execute(statement).await;
+        assert!(
+            !response.has_errors(),
+            "GraphQL errors: {:?}",
+            response.errors
+        );
+    }
+
+    async fn write_parent_request(node: &EmbeddedNode, request_id: &str, agent_did: &str) {
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentRequest(input: {{
+                    request_id: "{request_id}",
+                    agent_did: "{agent_did}",
+                    behavior_id: "parent",
+                    session_id: "session-{request_id}",
+                    content: "parent",
+                    status: "processing",
+                    lifecycle_state: "processing",
+                    created_at: "2026-05-15T00:00:00Z",
+                    deadline: "2026-05-15T00:05:00Z"
+                }}) {{ _docID }}
+            }}"#
+        );
+        exec(node, &mutation).await;
+    }
+
+    async fn write_bridge(
+        node: &EmbeddedNode,
+        request_id: &str,
+        tool_call_id: &str,
+        extra_fields: &str,
+    ) {
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentToolCall(input: {{
+                    tool_call_key: "{request_id}:{tool_call_id}",
+                    request_id: "{request_id}",
+                    session_id: "session-{request_id}",
+                    message_sequence: 1,
+                    tool_name: "spawn_subagent",
+                    tool_call_id: "{tool_call_id}",
+                    args: "{{}}",
+                    status: "running",
+                    lifecycle_state: "running",
+                    started_at: "2026-05-15T00:00:00Z",
+                    deadline_at: "2026-05-15T00:05:00Z",
+                    await_mode: "background",
+                    cancel_policy: "cascade",
+                    child_request_id: "child-{tool_call_id}"
+                    {extra_fields}
+                }}) {{ _docID }}
+            }}"#
+        );
+        exec(node, &mutation).await;
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ToolRow {
+        lifecycle_state: Option<String>,
+        unclaimed_deadline_at: Option<String>,
+        cancel_pending_remote_ack: Option<bool>,
+        stuck_since: Option<String>,
+    }
+
+    async fn load_tool(node: &EmbeddedNode, tool_call_id: &str) -> ToolRow {
+        let query = format!(
+            r#"{{
+                AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tool_call_id}" }} }}, limit: 1) {{
+                    lifecycle_state
+                    unclaimed_deadline_at
+                    cancel_pending_remote_ack
+                    stuck_since
+                }}
+            }}"#
+        );
+        let response = node.execute(&query).await;
+        assert!(
+            !response.has_errors(),
+            "query errors: {:?}",
+            response.errors
+        );
+        first_row(response.data.as_ref(), "AgentToolCall").expect("tool row")
+    }
+
+    #[tokio::test]
+    async fn unclaimed_reconciler_skips_foreign_parent_bridge() {
+        let node = test_node().await;
+        write_parent_request(node.as_ref(), "parent-foreign-unclaimed", FOREIGN_DID).await;
+        write_bridge(
+            node.as_ref(),
+            "parent-foreign-unclaimed",
+            "foreign-unclaimed",
+            r#", unclaimed_deadline_at: "2020-01-01T00:00:00Z""#,
+        )
+        .await;
+
+        let outcomes = reconcile_unclaimed_cross_deployment_spawns(node.clone(), LOCAL_DID)
+            .await
+            .unwrap();
+        assert!(outcomes.is_empty());
+
+        let tool = load_tool(node.as_ref(), "foreign-unclaimed").await;
+        assert_eq!(tool.lifecycle_state.as_deref(), Some("running"));
+        assert!(tool.unclaimed_deadline_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn cancel_ack_observer_skips_foreign_parent_bridge() {
+        let node = test_node().await;
+        write_parent_request(node.as_ref(), "parent-foreign-cancel", FOREIGN_DID).await;
+        write_bridge(
+            node.as_ref(),
+            "parent-foreign-cancel",
+            "foreign-cancel",
+            r#", cancel_cascade_intent_at: "2020-01-01T00:00:00Z", cancel_pending_remote_ack: true"#,
+        )
+        .await;
+
+        let outcomes = observe_cancel_cascade_ack(node.clone(), LOCAL_DID)
+            .await
+            .unwrap();
+        assert!(outcomes.is_empty());
+
+        let tool = load_tool(node.as_ref(), "foreign-cancel").await;
+        assert_eq!(tool.cancel_pending_remote_ack, Some(true));
+        assert!(tool.stuck_since.is_none());
+    }
 }

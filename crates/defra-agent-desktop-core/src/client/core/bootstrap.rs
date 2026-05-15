@@ -331,6 +331,7 @@ pub(super) async fn write_peer_pairing_desired(
     use defra_agent_protocol::graphql::escape_graphql_string;
 
     let peer_id = escape_graphql_string(&record.peer_id);
+    let agent_did = escape_graphql_string(&record.agent_did);
     let collections = subscribed_collection_names()
         .iter()
         .map(|s| format!(r#""{}""#, escape_graphql_string(s)))
@@ -375,6 +376,7 @@ pub(super) async fn write_peer_pairing_desired(
                 input: {{
                     collections: [{collections}],
                     replicator_addresses: ["{replicator_addr}"],
+                    agent_did: "{agent_did}",
                     created_at: "{created_at}",
                     updated_at: "{now}"
                 }}
@@ -384,6 +386,7 @@ pub(super) async fn write_peer_pairing_desired(
         format!(
             r#"mutation {{ create_PeerPairingDesired(input: {{
                 peer_id: "{peer_id}",
+                agent_did: "{agent_did}",
                 collections: [{collections}],
                 replicator_addresses: ["{replicator_addr}"],
                 created_at: "{now}",

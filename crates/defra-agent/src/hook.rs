@@ -476,12 +476,11 @@ impl DefraSessionHook {
 
         let count = lifecycles.len();
         for mut lifecycle in lifecycles {
-            lifecycle.cancel_during_run().await?;
+            let dispatch = lifecycle
+                .cancel_during_run_with_cascade_dispatch(&self.agent_did)
+                .await?;
             if lifecycle.is_cancelled() {
-                if let Some(dispatch) = lifecycle
-                    .bridge_cancel_cascade_dispatch(&self.agent_did)
-                    .await?
-                {
+                if let Some(dispatch) = dispatch {
                     if let CascadeDispatch::Local(intent) = dispatch {
                         if let Err(error) = crate::interrupt::interrupt_request(
                             &self.node,

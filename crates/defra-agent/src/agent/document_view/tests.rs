@@ -231,6 +231,54 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
     assert!(tool_names.contains(&"list_files".to_string()));
 }
 
+#[tokio::test]
+async fn runtime_snapshot_uses_pairing_agent_did_not_peer_id() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-paired-did"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-paired-did",
+        "http://localhost:18181/v1",
+    )
+    .await;
+    let response = node
+        .execute(
+            r#"mutation {
+                create_PeerPairingDesired(input: {
+                    peer_id: "peer-b",
+                    agent_did: "did:defra-agent:peer-b",
+                    collections: ["AgentRequest"],
+                    replicator_addresses: [],
+                    created_at: "2026-05-15T00:00:00Z",
+                    updated_at: "2026-05-15T00:00:00Z"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(
+        !response.has_errors(),
+        "create PeerPairingDesired failed: {:?}",
+        response.errors
+    );
+
+    let resolve_context = DocumentResolveContext {
+        identity: identity.clone(),
+        tool_ceiling: ToolCeiling::readonly(),
+    };
+    let view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("document view should load");
+    let snapshot =
+        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
+            .await
+            .expect("snapshot should resolve");
+
+    assert!(snapshot.paired_peer_dids.contains("did:defra-agent:peer-b"));
+    assert!(!snapshot.paired_peer_dids.contains("peer-b"));
+}
+
 /// Insert a ToolSelection row with an empty string in `subagent_targets` and
 /// return its `_docID`.  DefraDB schema has no non-empty constraint on
 /// `[String]` fields, so the document writes successfully.  The validator
