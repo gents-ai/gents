@@ -1,7 +1,6 @@
 use super::*;
 
-#[tokio::test]
-async fn trigger_engine_dispatch_matches_lean_generated_contract_cases() {
+pub(super) async fn trigger_engine_dispatch_matches_lean_generated_contract_cases() {
     let cases = lean_trigger_dispatch_cases();
     assert!(
         !cases.is_empty(),

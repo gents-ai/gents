@@ -448,3 +448,8 @@ mod dispatch_contract;
 mod event_source;
 mod manual_source;
 mod schedule_source;
+
+#[tokio::test]
+async fn trigger_engine_dispatch_matches_lean_generated_contract_cases() {
+    dispatch_contract::trigger_engine_dispatch_matches_lean_generated_contract_cases().await;
+}

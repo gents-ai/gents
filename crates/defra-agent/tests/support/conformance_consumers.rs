@@ -387,7 +387,7 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "trigger_engine::tests::trigger_engine_dispatch_matches_lean_generated_contract_cases",
             package: "defra-agent",
-            source_path: "crates/defra-agent/src/trigger_engine/tests.rs",
+            source_path: "crates/defra-agent/src/trigger_engine/tests/mod.rs",
             module_path: "trigger_engine::tests",
             function: "trigger_engine_dispatch_matches_lean_generated_contract_cases",
         },
