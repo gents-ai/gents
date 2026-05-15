@@ -9,6 +9,11 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
+const KILL_DELAY: Duration = Duration::from_millis(400);
+const TX_GC_DEADLINE: Duration = Duration::from_secs(10);
+const POLL_INTERVAL: Duration = Duration::from_millis(250);
+const PER_COLLECTION_SLEEP_MS: &str = "200";
+
 /// SIGKILL the CLI mid-apply and assert that DefraDB's tx GC reclaims the
 /// orphaned transaction and leaves the database at the pre-apply snapshot.
 /// This exercises the operationally-meaningful failure mode (Ctrl-C, OOM,
@@ -26,7 +31,7 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
     let graphql = graphql_url(port);
     let agent_name = format!("cli-rollback-{}", Uuid::new_v4().simple());
 
-    run_init_json(
+    let init = run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -36,6 +41,7 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
 
     run_cli_text(
         &home_dir,
@@ -49,11 +55,25 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
-    let pre_apply_backends = count_collection_rows(&graphql, "InferenceBackend").await?;
-    let pre_apply_profiles = count_collection_rows(&graphql, "InferenceProfile").await?;
-    let pre_apply_tools = count_collection_rows(&graphql, "ToolSelection").await?;
-    let pre_apply_tasks = count_collection_rows(&graphql, "Task").await?;
+    // Snapshot row counts for every collection in CONFIG_APPLY_ORDER so the
+    // atomicity assertion covers the full apply surface, not just a subset.
+    let collections = [
+        "InferenceBackend",
+        "InferenceProfile",
+        "ToolServiceRegistry",
+        "ToolSelection",
+        "AgentBehavior",
+        "Task",
+        "Schedule",
+        "EventTrigger",
+        "AgentPrincipal",
+    ];
+    let mut pre_apply = std::collections::BTreeMap::new();
+    for c in &collections {
+        pre_apply.insert(*c, count_collection_rows(&graphql, c).await?);
+    }
 
     let root_str = root
         .to_str()
@@ -63,7 +83,7 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
     let mut cli = std::process::Command::new(support::cli_bin())
         .env("HOME", &home_dir)
         .env("RUST_LOG", "error")
-        .env("DEFRA_AGENT_CONFIG_APPLY_SLEEP_MS", "200")
+        .env("DEFRA_AGENT_CONFIG_APPLY_SLEEP_MS", PER_COLLECTION_SLEEP_MS)
         .current_dir(&home_dir)
         .args(["config", "apply", "--root", root_str, "--graphql", &graphql])
         .stdout(std::process::Stdio::piped())
@@ -76,41 +96,38 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
     // begin and at least the first batched collection mutation, well before
     // commit. The sleep widens the kill window deterministically; without
     // it a fast local apply could complete in under our delay.
-    thread::sleep(Duration::from_millis(400));
+    thread::sleep(KILL_DELAY);
     cli.kill().context("SIGKILL CLI")?;
     cli.wait().context("reap CLI")?;
 
     // Allow DefraDB's tx GC to reclaim the orphaned handle. Poll for
     // stability rather than sleep blindly.
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + TX_GC_DEADLINE;
     loop {
-        let backends = count_collection_rows(&graphql, "InferenceBackend").await?;
-        let profiles = count_collection_rows(&graphql, "InferenceProfile").await?;
-        let tools = count_collection_rows(&graphql, "ToolSelection").await?;
-        let tasks = count_collection_rows(&graphql, "Task").await?;
+        let mut current = std::collections::BTreeMap::new();
+        for c in &collections {
+            current.insert(*c, count_collection_rows(&graphql, c).await?);
+        }
 
-        if backends == pre_apply_backends
-            && profiles == pre_apply_profiles
-            && tools == pre_apply_tools
-            && tasks == pre_apply_tasks
-        {
+        if current == pre_apply {
             return Ok(());
         }
         if Instant::now() > deadline {
+            // Build a diff line for collections whose counts changed.
+            let drift: Vec<String> = collections
+                .iter()
+                .filter_map(|c| {
+                    let pre = pre_apply[c];
+                    let now = current[c];
+                    (pre != now).then(|| format!("{c}: pre={pre} now={now}"))
+                })
+                .collect();
             return Err(anyhow!(
-                "after SIGKILL, DB still shows post-apply state: backends={} (pre={}), \
-                profiles={} (pre={}), tools={} (pre={}), tasks={} (pre={})",
-                backends,
-                pre_apply_backends,
-                profiles,
-                pre_apply_profiles,
-                tools,
-                pre_apply_tools,
-                tasks,
-                pre_apply_tasks,
+                "after SIGKILL, DB shows post-apply drift: {}",
+                drift.join(", ")
             ));
         }
-        thread::sleep(Duration::from_millis(250));
+        tokio::time::sleep(POLL_INTERVAL).await;
     }
 }
 
