@@ -1,7 +1,10 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 
 use defra_agent::defra_node::EmbeddedNode;
+use defra_agent::event_delivery_contract::{
+    runtime_event_delivery_source_contracts, EventDeliverySourceContract,
+};
 use defra_agent::graphql::escape_graphql_string;
 use defra_agent::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
 use defra_agent::{
@@ -6147,90 +6150,44 @@ fn lean_marks_native_complete_fail_as_requires_native() {
 #[test]
 fn event_delivery_transition_cases_match_contract() {
     let cases = lean_event_delivery_transition_cases();
+    let watcher = runtime_event_delivery_source_contract("Watcher");
     assert!(
         cases.len() >= 12,
         "Expected at least 12 transition-case rows; got {}",
         cases.len()
     );
     for case in cases {
-        match &case.action {
-            LeanEventDeliveryAction::Persist { doc } => {
-                assert!(
-                    case.post.persistent_set.contains(doc),
-                    "case `{}`: persist did not add doc to persistent_set",
-                    case.name
-                );
-            }
-            LeanEventDeliveryAction::Handle { doc } => {
-                assert!(
-                    case.post.handled.contains(doc),
-                    "case `{}`: handle did not add doc to handled",
-                    case.name
-                );
-                assert!(
-                    case.post.processed_set.contains(doc),
-                    "case `{}`: handle did not add doc to processed_set",
-                    case.name
-                );
-            }
-            LeanEventDeliveryAction::RescanTick => {
-                assert_eq!(
-                    case.pre.persistent_set, case.post.persistent_set,
-                    "case `{}`: rescanTick changed persistent_set",
-                    case.name
-                );
-            }
-            _ => {}
-        }
+        let mut runtime = InMemoryEventDeliverySource::new(watcher, &case.pre);
+        runtime
+            .apply(&case.action)
+            .unwrap_or_else(|err| panic!("case `{}` rejected runtime action: {err}", case.name));
+        assert_eq!(
+            runtime.world, case.post,
+            "case `{}` drifted from in-memory runtime replay",
+            case.name
+        );
     }
 }
 
 #[test]
 fn event_delivery_source_instances_match_runtime() {
-    let by_name: std::collections::HashMap<
-        &str,
-        &lean_vocab_test::LeanEventDeliverySourceInstance,
-    > = lean_event_delivery_source_instances()
+    let runtime_by_name = runtime_event_delivery_source_contracts()
         .iter()
-        .map(|i| (i.name.as_str(), i))
-        .collect();
+        .map(|instance| (instance.name, *instance))
+        .collect::<HashMap<_, _>>();
 
-    let watcher = by_name
-        .get("Watcher")
-        .expect("Watcher instance must be present");
-    assert_eq!(watcher.dedupe_policy, "ttl_cooldown");
-    assert!(
-        watcher.rescan_bounded_by > 0,
-        "Watcher rescanBoundedBy must be positive"
-    );
-    assert!(
-        watcher.deviation.is_none(),
-        "Watcher must have no deviation entry; got {:?}",
-        watcher.deviation
-    );
-
-    let event_source = by_name
-        .get("EventSource")
-        .expect("EventSource instance must be present");
-    assert_eq!(event_source.dedupe_policy, "monotone_once");
+    for lean in lean_event_delivery_source_instances() {
+        let runtime = runtime_by_name
+            .get(lean.name.as_str())
+            .unwrap_or_else(|| panic!("runtime source {:?} must be present", lean.name));
+        assert_eq!(runtime.dedupe_policy, lean.dedupe_policy);
+        assert_eq!(runtime.rescan_bounded_by, lean.rescan_bounded_by);
+        assert_eq!(runtime.deviation, lean.deviation.as_deref());
+    }
     assert_eq!(
-        event_source.rescan_bounded_by, 0,
-        "EventSource must currently use unboundedRescan sentinel"
-    );
-    assert_eq!(
-        event_source.deviation.as_deref(),
-        Some("event_source_lacks_periodic_rescan"),
-        "EventSource deviation tag drifted"
-    );
-
-    let subagent_source = by_name
-        .get("SubagentSource")
-        .expect("SubagentSource instance must be present");
-    assert_eq!(subagent_source.dedupe_policy, "monotone_once");
-    assert_eq!(subagent_source.rescan_bounded_by, 0);
-    assert_eq!(
-        subagent_source.deviation.as_deref(),
-        Some("subagent_source_lacks_live_rescan")
+        runtime_by_name.len(),
+        lean_event_delivery_source_instances().len(),
+        "runtime source introspection should not expose unmodeled sources"
     );
 }
 
@@ -6243,47 +6200,46 @@ fn event_delivery_convergence_traces_match_runtime_or_deviation() {
     );
 
     for trace in traces {
+        let source = runtime_event_delivery_source_contract(&trace.instance_name);
+        let mut runtime = InMemoryEventDeliverySource::new(source, &trace.initial_world);
+        for action in &trace.actions {
+            runtime.apply(action).unwrap_or_else(|err| {
+                panic!("trace `{}` rejected runtime action: {err}", trace.name)
+            });
+        }
+        assert_eq!(
+            runtime.world, trace.final_world,
+            "trace `{}` drifted from in-memory runtime replay",
+            trace.name
+        );
+
         match trace.status.as_str() {
             "substantive" => {
-                let final_handled: std::collections::HashSet<&String> =
-                    trace.final_world.handled.iter().collect();
-                let final_persistent: std::collections::HashSet<&String> =
-                    trace.final_world.persistent_set.iter().collect();
-                for doc in &trace.initial_world.persistent_set {
-                    let was_handled = final_handled.contains(doc);
-                    let was_depersisted = !final_persistent.contains(doc);
-                    assert!(
-                        was_handled || was_depersisted,
-                        "substantive trace `{}` did not converge for doc `{}` \
-                         (handled? {}, depersisted? {})",
-                        trace.name,
-                        doc,
-                        was_handled,
-                        was_depersisted,
-                    );
-                }
+                assert!(
+                    runtime.unhandled_persistent_docs().is_empty(),
+                    "substantive trace `{}` left persistent docs unhandled: {:?}",
+                    trace.name,
+                    runtime.unhandled_persistent_docs()
+                );
+                assert!(
+                    source.deviation.is_none(),
+                    "substantive trace `{}` should run against a non-deviation source",
+                    trace.name
+                );
             }
             "deviation" => {
-                let final_handled: std::collections::HashSet<&String> =
-                    trace.final_world.handled.iter().collect();
-                let final_persistent: std::collections::HashSet<&String> =
-                    trace.final_world.persistent_set.iter().collect();
-                // Collect all docs that were ever persisted: either present in
-                // the initial world or added via a Persist action during the trace.
-                let mut all_persisted: std::collections::HashSet<&String> =
-                    trace.initial_world.persistent_set.iter().collect();
-                for action in &trace.actions {
-                    if let LeanEventDeliveryAction::Persist { doc } = action {
-                        all_persisted.insert(doc);
-                    }
-                }
-                // Deviation is witnessed when at least one persisted doc ends
-                // up still in the persistent_set but was never handled.
-                let observed_deviation = all_persisted
-                    .iter()
-                    .any(|doc| final_persistent.contains(*doc) && !final_handled.contains(*doc));
                 assert!(
-                    observed_deviation,
+                    source.deviation.is_some(),
+                    "deviation trace `{}` must name a runtime source with a documented deviation",
+                    trace.name
+                );
+                assert_eq!(
+                    source.rescan_bounded_by, 0,
+                    "deviation trace `{}` must run against an unbounded-rescan source",
+                    trace.name
+                );
+                assert!(
+                    !runtime.unhandled_persistent_docs().is_empty(),
                     "deviation trace `{}` did not witness the documented \
                      deviation state (no orphan persistent doc remaining)",
                     trace.name,
@@ -6305,4 +6261,98 @@ fn event_delivery_convergence_traces_match_runtime_or_deviation() {
             name
         );
     }
+}
+
+#[derive(Debug)]
+struct InMemoryEventDeliverySource {
+    source: EventDeliverySourceContract,
+    world: lean_vocab_test::LeanEventDeliveryWorld,
+}
+
+impl InMemoryEventDeliverySource {
+    fn new(
+        source: EventDeliverySourceContract,
+        world: &lean_vocab_test::LeanEventDeliveryWorld,
+    ) -> Self {
+        Self {
+            source,
+            world: world.clone(),
+        }
+    }
+
+    fn apply(&mut self, action: &LeanEventDeliveryAction) -> Result<(), String> {
+        match action {
+            LeanEventDeliveryAction::Persist { doc } => {
+                if self.world.persistent_set.contains(doc) {
+                    return Err(format!("doc {doc:?} already persisted"));
+                }
+                self.world.persistent_set.insert(0, doc.clone());
+            }
+            LeanEventDeliveryAction::Depersist { doc } => {
+                erase_first(&mut self.world.persistent_set, doc)
+                    .ok_or_else(|| format!("doc {doc:?} is not persistent"))?;
+            }
+            LeanEventDeliveryAction::Enqueue { doc } => {
+                if !self.world.persistent_set.contains(doc) {
+                    return Err(format!("doc {doc:?} is not persistent"));
+                }
+                self.world.subscription_queue.insert(0, doc.clone());
+            }
+            LeanEventDeliveryAction::Drop { doc }
+            | LeanEventDeliveryAction::DeliverFromQueue { doc } => {
+                erase_first(&mut self.world.subscription_queue, doc)
+                    .ok_or_else(|| format!("doc {doc:?} is not queued"))?;
+            }
+            LeanEventDeliveryAction::RescanTick => {
+                if self.source.rescan_bounded_by == 0 {
+                    return Err(format!(
+                        "source {} has no bounded live rescan",
+                        self.source.name
+                    ));
+                }
+                let mut rescanned = self
+                    .world
+                    .persistent_set
+                    .iter()
+                    .filter(|doc| !self.world.processed_set.contains(*doc))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                rescanned.extend(self.world.subscription_queue.clone());
+                self.world.subscription_queue = rescanned;
+            }
+            LeanEventDeliveryAction::Handle { doc } => {
+                if self.world.processed_set.contains(doc) {
+                    return Err(format!("doc {doc:?} is already processed"));
+                }
+                erase_first(&mut self.world.subscription_queue, doc)
+                    .ok_or_else(|| format!("doc {doc:?} is not queued"))?;
+                self.world.processed_set.insert(0, doc.clone());
+                self.world.handled.insert(0, doc.clone());
+            }
+        }
+        Ok(())
+    }
+
+    fn unhandled_persistent_docs(&self) -> Vec<String> {
+        self.world
+            .persistent_set
+            .iter()
+            .filter(|doc| !self.world.handled.contains(*doc))
+            .cloned()
+            .collect()
+    }
+}
+
+fn erase_first(values: &mut Vec<String>, target: &str) -> Option<String> {
+    values
+        .iter()
+        .position(|value| value == target)
+        .map(|index| values.remove(index))
+}
+
+fn runtime_event_delivery_source_contract(name: &str) -> EventDeliverySourceContract {
+    runtime_event_delivery_source_contracts()
+        .into_iter()
+        .find(|source| source.name == name)
+        .unwrap_or_else(|| panic!("runtime event-delivery source {name:?} must be present"))
 }

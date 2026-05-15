@@ -24,6 +24,7 @@ use defra_node::{EmbeddedNode, EventName};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
+use crate::event_delivery_contract::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 
 use super::{FireIntent, TriggerKind, TriggerSource};
@@ -748,6 +749,15 @@ impl EventSource {
         }
         intents
     }
+}
+
+impl EventDeliveryRuntimeContract for EventSource {
+    const EVENT_DELIVERY_CONTRACT: EventDeliverySourceContract = EventDeliverySourceContract {
+        name: "EventSource",
+        dedupe_policy: "monotone_once",
+        rescan_bounded_by: 0,
+        deviation: Some("event_source_lacks_periodic_rescan"),
+    };
 }
 
 impl TriggerSource for EventSource {

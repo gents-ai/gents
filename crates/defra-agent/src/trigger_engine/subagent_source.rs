@@ -19,6 +19,7 @@ use crate::background_tools::{
     fail_running_subagent_tool_call, load_parent_subagent_authorization, subagent_spawn_denial,
     subagent_tool_not_allowed_payload,
 };
+use crate::event_delivery_contract::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
 use crate::graphql::escape_graphql_string;
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedTask};
 use crate::tool_call_lifecycle::subagent_request::{
@@ -468,6 +469,15 @@ impl SubagentSource {
             }),
         }))
     }
+}
+
+impl EventDeliveryRuntimeContract for SubagentSource {
+    const EVENT_DELIVERY_CONTRACT: EventDeliverySourceContract = EventDeliverySourceContract {
+        name: "SubagentSource",
+        dedupe_policy: "monotone_once",
+        rescan_bounded_by: 0,
+        deviation: Some("subagent_source_lacks_live_rescan"),
+    };
 }
 
 impl TriggerSource for SubagentSource {

@@ -5,6 +5,7 @@ use std::time::Instant;
 use anyhow::Result;
 use defra_node::{EmbeddedNode, EventName};
 
+use crate::event_delivery_contract::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
 use crate::tool_call_lifecycle::IllegalToolCallTransition;
 
 mod cooldown;
@@ -104,6 +105,15 @@ impl DefraWatcher {
             processed_request_ids: HashMap::new(),
         }
     }
+}
+
+impl EventDeliveryRuntimeContract for DefraWatcher {
+    const EVENT_DELIVERY_CONTRACT: EventDeliverySourceContract = EventDeliverySourceContract {
+        name: "Watcher",
+        dedupe_policy: "ttl_cooldown",
+        rescan_bounded_by: 1,
+        deviation: None,
+    };
 }
 
 impl Watcher for DefraWatcher {
