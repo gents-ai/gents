@@ -265,36 +265,76 @@ fn identity_permission_cases_pin_runtime_permission_contract_shape() {
 }
 
 #[test]
-fn identity_respects_principal_contract_is_declared() {
+fn identity_respects_principal_contract_enforced_by_runtime_routing() {
     let contracts = lean_identity_contracts();
     let target = contracts
         .iter()
         .find(|c: &&LeanIdentityContract| c.name == "identity.respects_principal_boundary")
         .expect(
             "Lean must emit the identity.respects_principal_boundary contract \
-             — this is the spec the future runtime permission engine (#193) lands against",
+             — this is the runtime routing witness for #193",
         );
 
-    // The contract is declared today and not yet enforced by a runtime
-    // permission decision module. The finite rows consumed by
-    // `identity_permission_cases_pin_runtime_permission_contract_shape`
-    // are the #193 handoff: replace that Rust mirror with the runtime
-    // decide function, then flip `enforced` to `true`.
+    // After #193 lands, the contract is enforced by the runtime: the
+    // AgentBehavior::principal back-reference makes behavior -> principal
+    // -> Identity::Authenticated(did) routing single-valued by
+    // construction. DefraDB ACP, being DID-keyed, returns identical
+    // results for behaviors sharing a principal.
     assert!(
-        !target.enforced,
-        "identity.respects_principal_boundary is marked enforced=true in Lean, \
-         but the Rust runtime permission decision module is not yet wired up. \
-         Either revert the Lean flag or extend this test to drive the runtime."
+        target.enforced,
+        "identity.respects_principal_boundary must be enforced=true \
+         now that AgentBehavior holds Arc<AgentPrincipal> as a back-ref \
+         and the loader threads a single principal Arc through every \
+         behavior in the snapshot"
     );
     assert_eq!(
         target.tracked_by, "#193",
-        "tracked_by must point at the runtime-refactor tracker so the deferred \
-         enforcement has a discoverable owner"
+        "tracked_by must continue to point at the runtime-refactor tracker"
     );
     assert!(
         target.statement.contains("agent_did"),
-        "contract statement must mention agent_did so a reader unfamiliar with the \
-         Lean model can grasp the boundary; statement was: {}",
+        "contract statement must name agent_did so a reader unfamiliar \
+         with the Lean model can grasp the boundary; statement was: {}",
         target.statement
     );
+    assert!(
+        target.statement.contains("routing")
+            || target.statement.contains("resolution")
+            || target.statement.contains("Identity::Authenticated"),
+        "contract statement must name the routing-witness interpretation: \
+         the runtime resolves behavior -> agent_did and supplies that DID \
+         as the ACP actor; statement was: {}",
+        target.statement
+    );
+
+    // Exercise the runtime routing witness over every Lean row.
+    for case in lean_identity_permission_cases() {
+        let runtime_behaviors = build_runtime_behaviors_from_lean_case(case);
+        let by_id: std::collections::HashMap<&str, &AgentBehavior> = runtime_behaviors
+            .iter()
+            .map(|b| (b.behavior_id.as_str(), b.as_ref()))
+            .collect();
+
+        let actor = by_id[case.actor_behavior.as_str()];
+        let peer = by_id[case.peer_behavior.as_str()];
+
+        // The structural claim: behaviors with the same Lean principal
+        // resolve to the same agent_did at the runtime layer.
+        assert_eq!(
+            actor.principal.agent_did, case.expected_actor_principal,
+            "case {:?}: actor.principal.agent_did mismatch",
+            case.name
+        );
+        assert_eq!(
+            peer.principal.agent_did, case.expected_peer_principal,
+            "case {:?}: peer.principal.agent_did mismatch",
+            case.name
+        );
+        assert_eq!(
+            actor.principal.agent_did == peer.principal.agent_did,
+            case.same_principal,
+            "case {:?}: routing-witness same_principal mismatch",
+            case.name
+        );
+    }
 }
