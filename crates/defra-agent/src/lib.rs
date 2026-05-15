@@ -56,7 +56,11 @@ pub use agent::{
 pub use backend_provider::{discover_models as discover_backend_models, BackendProviderKind};
 pub use backend_registry::InferenceBackend;
 pub use compaction::CompactionStrategy;
-pub use config::AgentBehavior;
+pub use config::{
+    AgentBehavior, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
+    DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
+};
 pub use defra_agent_protocol::client_protocol;
 pub use defra_node;
 pub use desired_fields::{DesiredFields, LiveFields};
