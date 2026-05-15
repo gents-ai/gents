@@ -22,6 +22,8 @@ pub(crate) struct QueueHints {
     pub policy: QueuePolicy,
     pub key: Option<String>,
     pub queued_after_request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interrupted_request_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -383,6 +385,13 @@ fn parent_linkage_graphql_fields(parent: &AgentRequest) -> String {
                 escape_graphql_string(parent_tool_call_id),
             )
         }
+        (Some(parent_request_id), None) if !parent_request_id.trim().is_empty() => {
+            format!(
+                r#",
+                caused_by_parent_request_id: "{}""#,
+                escape_graphql_string(parent_request_id),
+            )
+        }
         _ => String::new(),
     }
 }
@@ -564,6 +573,7 @@ mod tests {
             policy,
             key: Some("session:sess-1".to_string()),
             queued_after_request_id: Some("req-1".to_string()),
+            interrupted_request_id: None,
         }
     }
 
@@ -735,6 +745,7 @@ mod tests {
                     policy: QueuePolicy::Append,
                     key: None,
                     queued_after_request_id: None,
+                    interrupted_request_id: None,
                 })
             );
         }
@@ -773,6 +784,7 @@ mod tests {
             policy: QueuePolicy::Coalesce,
             key: Some("agent:did:key:z123".to_string()),
             queued_after_request_id: None,
+            interrupted_request_id: None,
         });
 
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -798,6 +810,7 @@ mod tests {
                 policy: QueuePolicy::Append,
                 key: None,
                 queued_after_request_id: None,
+                interrupted_request_id: None,
             }
         ))));
         assert!(is_automated_wakeup(Some(&queue_metadata_json(
@@ -806,6 +819,7 @@ mod tests {
                 policy: QueuePolicy::Coalesce,
                 key: Some("background_completion:session-1".to_string()),
                 queued_after_request_id: None,
+                interrupted_request_id: None,
             }
         ))));
         assert!(!is_automated_wakeup(Some(&queue_metadata_json(
@@ -814,6 +828,7 @@ mod tests {
                 policy: QueuePolicy::Append,
                 key: Some("background_completion:session-1".to_string()),
                 queued_after_request_id: None,
+                interrupted_request_id: None,
             }
         ))));
         assert!(!is_automated_wakeup(Some(&queue_metadata_json(
@@ -822,6 +837,7 @@ mod tests {
                 policy: QueuePolicy::Coalesce,
                 key: None,
                 queued_after_request_id: None,
+                interrupted_request_id: None,
             }
         ))));
         assert!(!is_automated_wakeup(Some(&queue_metadata_json(
@@ -830,6 +846,7 @@ mod tests {
                 policy: QueuePolicy::Coalesce,
                 key: None,
                 queued_after_request_id: None,
+                interrupted_request_id: None,
             }
         ))));
     }
@@ -844,6 +861,7 @@ mod tests {
             policy: QueuePolicy::Coalesce,
             key: Some(format!("background_completion:{session_id}")),
             queued_after_request_id: Some(parent.request_id.clone()),
+            interrupted_request_id: None,
         };
 
         let first = enqueue_session_request(
@@ -902,6 +920,7 @@ mod tests {
             policy: QueuePolicy::Append,
             key: Some(format!("background_completion:{session_id}")),
             queued_after_request_id: Some(parent.request_id.clone()),
+            interrupted_request_id: None,
         };
         insert_raw_queue_request(
             &db.node,
@@ -947,6 +966,7 @@ mod tests {
             policy: QueuePolicy::Coalesce,
             key: Some(format!("background_completion:{session_id}")),
             queued_after_request_id: Some(parent.request_id.clone()),
+            interrupted_request_id: None,
         };
         let key = hints.key.clone().unwrap();
         let survivor = enqueue_session_request(
@@ -1007,6 +1027,7 @@ mod tests {
             policy: QueuePolicy::Coalesce,
             key: Some(format!("background_completion:{session_id}")),
             queued_after_request_id: Some(parent.request_id.clone()),
+            interrupted_request_id: None,
         };
         let survivor_doc_id = insert_raw_queue_request(
             &db.node,
@@ -1061,6 +1082,7 @@ mod tests {
             policy: QueuePolicy::Coalesce,
             key: None,
             queued_after_request_id: Some(parent.request_id.clone()),
+            interrupted_request_id: None,
         };
 
         let first = enqueue_session_request(

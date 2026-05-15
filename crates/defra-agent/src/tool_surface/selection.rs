@@ -13,12 +13,21 @@ use crate::toolset::CommandExecutionPolicy;
 pub(crate) struct SubagentToolConfig {
     pub targets: Vec<String>,
     pub spawn_enabled: bool,
+    pub steering_enabled: bool,
     pub background_enabled: bool,
 }
 
 impl SubagentToolConfig {
     pub(crate) fn tools_enabled(&self) -> bool {
         self.spawn_enabled && !self.targets.is_empty()
+    }
+
+    pub(crate) fn steering_tools_enabled(&self) -> bool {
+        self.tools_enabled() && self.steering_enabled
+    }
+
+    pub(crate) fn steer_subagent_enabled(&self) -> bool {
+        self.steering_tools_enabled() && self.background_enabled
     }
 }
 

@@ -22,6 +22,21 @@ fn validate_rejects_mixed_parent_linkage_request_id_only() {
 }
 
 #[test]
+fn validate_accepts_steering_request_lineage_without_tool_call_link() {
+    let req = AgentRequest {
+        subagent_depth: 1,
+        metadata: Some(
+            r#"{"queue":{"source":"steering","policy":"append","key":null,"queued_after_request_id":null}}"#
+                .to_string(),
+        ),
+        caused_by_parent_request_id: Some("parent-req-1".to_string()),
+        caused_by_parent_tool_call_id: None,
+        ..base_request()
+    };
+    assert!(validate_agent_request_subagent_coherence(&req).is_ok());
+}
+
+#[test]
 fn validate_rejects_mixed_parent_linkage_tool_call_id_only() {
     let req = AgentRequest {
         subagent_depth: 1,

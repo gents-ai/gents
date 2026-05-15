@@ -8,12 +8,20 @@ use serde::Deserialize;
 use serde_json::json;
 use tracing::Instrument;
 
+use crate::background_tools::r4c_args::{
+    ListBackgroundToolsArgs, ListSubagentsArgs, ReadSubagentTranscriptArgs, ReadToolOutputArgs,
+    SteerSubagentArgs,
+};
 use crate::background_tools::{
-    child_request_completed, effective_context_cross_deployment_spawn_timeout_seconds,
+    active_session_request_id, append_steering_request, child_request_completed,
+    drain_automated_wakeups_returning_ids,
+    effective_context_cross_deployment_spawn_timeout_seconds, handle_list_background_tools,
+    handle_list_subagents, handle_read_subagent_transcript, handle_read_tool_output,
     load_authorized_child_edge, load_child_final_response, load_child_session_id,
-    load_child_terminal_row, load_parent_subagent_context, project_child_terminal,
-    target_is_allowed, BackgroundToolArgs, CancelSubagentArgs, CancelToolArgs,
-    ParentSubagentContext, SpawnSubagentArgs, WaitSubagentArgs, WaitToolArgs,
+    load_child_terminal_row, load_parent_subagent_context, load_steer_subagent_target,
+    pending_automated_wakeup_request_ids, project_child_terminal, target_is_allowed,
+    BackgroundToolArgs, CancelSubagentArgs, CancelToolArgs, ParentSubagentContext,
+    ReadToolOutputOutcome, SpawnSubagentArgs, SteerSubagentTarget, WaitSubagentArgs, WaitToolArgs,
 };
 use crate::config::DEFAULT_DEADLINE_DURATION_SECS;
 use crate::document_config::load_agent_behavior;
@@ -25,7 +33,9 @@ use crate::tool_call_lifecycle::{
     ChildTerminal, FailureClass, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
 use crate::toolset::{
-    BACKGROUND_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, CANCEL_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME,
+    BACKGROUND_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, CANCEL_TOOL_NAME,
+    LIST_BACKGROUND_TOOLS_TOOL_NAME, LIST_SUBAGENTS_TOOL_NAME, READ_SUBAGENT_TRANSCRIPT_TOOL_NAME,
+    READ_TOOL_OUTPUT_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME, STEER_SUBAGENT_TOOL_NAME,
     WAIT_SUBAGENT_TOOL_NAME, WAIT_TOOL_NAME,
 };
 use crate::truncation::{truncate_text, DefraSpillTruncator, TruncationMode, Truncator};
@@ -662,6 +672,203 @@ impl DefraSessionHook {
         Ok(ToolCallHookAction::skip(result))
     }
 
+    async fn persist_list_subagents_tool_call(
+        &self,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+    ) -> anyhow::Result<ToolCallHookAction> {
+        let (_session_id, request_id, _deadline_at, _seq) =
+            self.ensure_assistant_turn_sequence().await?;
+        self.state.lock().await.register_tool_result_identity(
+            internal_call_id,
+            None,
+            tool_call_id.as_deref(),
+        );
+
+        let parsed = match serde_json::from_str::<ListSubagentsArgs>(args) {
+            Ok(args) => args,
+            Err(error) => {
+                return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+                    LIST_SUBAGENTS_TOOL_NAME,
+                    "/",
+                    format!("invalid list_subagents arguments: {error}"),
+                )));
+            }
+        };
+        let response =
+            handle_list_subagents(&self.node, &request_id, &self.agent_did, parsed).await?;
+        let result = serde_json::to_value(response)
+            .map_err(|error| anyhow::anyhow!("serialize list_subagents response: {error}"))?;
+        Ok(ToolCallHookAction::skip(json_string(result)))
+    }
+
+    async fn persist_read_subagent_transcript_tool_call(
+        &self,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+    ) -> anyhow::Result<ToolCallHookAction> {
+        let (_session_id, request_id, _deadline_at, _seq) =
+            self.ensure_assistant_turn_sequence().await?;
+        self.state.lock().await.register_tool_result_identity(
+            internal_call_id,
+            None,
+            tool_call_id.as_deref(),
+        );
+
+        let parsed = match serde_json::from_str::<ReadSubagentTranscriptArgs>(args) {
+            Ok(args) => args,
+            Err(error) => {
+                return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+                    READ_SUBAGENT_TRANSCRIPT_TOOL_NAME,
+                    "/",
+                    format!("invalid read_subagent_transcript arguments: {error}"),
+                )));
+            }
+        };
+        let child_request_id = parsed.child_request_id.trim().to_string();
+        if child_request_id.is_empty() {
+            return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+                READ_SUBAGENT_TRANSCRIPT_TOOL_NAME,
+                "/child_request_id",
+                "child_request_id is required",
+            )));
+        }
+
+        let Some(response) =
+            handle_read_subagent_transcript(&self.node, &request_id, parsed).await?
+        else {
+            return Ok(ToolCallHookAction::skip(tool_not_allowed_payload(
+                READ_SUBAGENT_TRANSCRIPT_TOOL_NAME,
+                "/child_request_id",
+                &child_request_id,
+                "child is not a background subagent owned by this parent request",
+                Vec::new(),
+            )));
+        };
+        let result = serde_json::to_value(response).map_err(|error| {
+            anyhow::anyhow!("serialize read_subagent_transcript response: {error}")
+        })?;
+        Ok(ToolCallHookAction::skip(json_string(result)))
+    }
+
+    async fn persist_steer_subagent_tool_call(
+        &self,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+    ) -> anyhow::Result<ToolCallHookAction> {
+        let (_session_id, request_id, _deadline_at, _seq) =
+            self.ensure_assistant_turn_sequence().await?;
+        self.state.lock().await.register_tool_result_identity(
+            internal_call_id,
+            None,
+            tool_call_id.as_deref(),
+        );
+
+        let parsed = match serde_json::from_str::<SteerSubagentArgs>(args) {
+            Ok(args) => args,
+            Err(error) => {
+                return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+                    STEER_SUBAGENT_TOOL_NAME,
+                    "/",
+                    format!("invalid steer_subagent arguments: {error}"),
+                )));
+            }
+        };
+        let child_request_id = parsed.child_request_id.trim().to_string();
+        if child_request_id.is_empty() {
+            return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+                STEER_SUBAGENT_TOOL_NAME,
+                "/child_request_id",
+                "child_request_id is required",
+            )));
+        }
+        let message = parsed.message.trim().to_string();
+        if message.is_empty() {
+            return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+                STEER_SUBAGENT_TOOL_NAME,
+                "/message",
+                "message is required",
+            )));
+        }
+
+        let edge = match load_steer_subagent_target(&self.node, &request_id, &child_request_id)
+            .await?
+        {
+            SteerSubagentTarget::Found(edge) => edge,
+            SteerSubagentTarget::NotAuthorized => {
+                return Ok(ToolCallHookAction::skip(tool_not_allowed_payload(
+                    STEER_SUBAGENT_TOOL_NAME,
+                    "/child_request_id",
+                    &child_request_id,
+                    "child not owned by this parent request",
+                    Vec::new(),
+                )));
+            }
+            SteerSubagentTarget::NotBackgrounded => {
+                return Ok(ToolCallHookAction::skip(tool_not_allowed_payload(
+                    STEER_SUBAGENT_TOOL_NAME,
+                    "/child_request_id",
+                    &child_request_id,
+                    "foreground subagents cannot be steered; call cancel_subagent first",
+                    Vec::new(),
+                )));
+            }
+            SteerSubagentTarget::Terminal(state) => {
+                return Ok(ToolCallHookAction::skip(invalid_tool_arguments_payload(
+                    STEER_SUBAGENT_TOOL_NAME,
+                    "/child_request_id",
+                    format!("child is in terminal state '{state}'; spawn a new subagent instead"),
+                )));
+            }
+        };
+
+        let mut interrupted_active_request_id = None;
+        let mut drained_wake_up_request_ids = Vec::new();
+        if parsed.interrupt {
+            drained_wake_up_request_ids =
+                pending_automated_wakeup_request_ids(&self.node, &edge.child_session_id).await?;
+            if let Some(active_request_id) =
+                active_session_request_id(&self.node, &edge.child_session_id).await?
+            {
+                crate::interrupt::interrupt_request(&self.node, &active_request_id).await?;
+                let _descendants_cancelled = self
+                    .cancel_live_subagent_descendants(&edge.child_session_id)
+                    .await?;
+                interrupted_active_request_id = Some(active_request_id);
+            }
+            let post_interrupt_drained = drain_automated_wakeups_returning_ids(
+                &self.node,
+                &edge.child_session_id,
+                "automated wake-up drained because subagent was steered with interrupt=true",
+            )
+            .await?;
+            for request_id in post_interrupt_drained {
+                if !drained_wake_up_request_ids
+                    .iter()
+                    .any(|existing| existing == &request_id)
+                {
+                    drained_wake_up_request_ids.push(request_id);
+                }
+            }
+        }
+
+        let response = append_steering_request(
+            &self.node,
+            &request_id,
+            &edge,
+            &message,
+            interrupted_active_request_id,
+            drained_wake_up_request_ids,
+        )
+        .await?;
+        let result = serde_json::to_value(response)
+            .map_err(|error| anyhow::anyhow!("serialize steer_subagent response: {error}"))?;
+        Ok(ToolCallHookAction::skip(json_string(result)))
+    }
+
     async fn persist_cancel_subagent_tool_call(
         &self,
         tool_call_id: Option<String>,
@@ -1070,6 +1277,103 @@ impl DefraSessionHook {
             .await_background_tool(&request_id, background_tool_call_id, parent_deadline_at)
             .await?;
         Ok(ToolCallHookAction::skip(result))
+    }
+
+    async fn persist_list_background_tools_tool_call(
+        &self,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+    ) -> anyhow::Result<ToolCallHookAction> {
+        let (_session_id, request_id, _deadline_at, _seq) =
+            self.ensure_assistant_turn_sequence().await?;
+        self.state.lock().await.register_tool_result_identity(
+            internal_call_id,
+            None,
+            tool_call_id.as_deref(),
+        );
+
+        let parsed = match serde_json::from_str::<ListBackgroundToolsArgs>(args) {
+            Ok(args) => args,
+            Err(error) => {
+                return Ok(ToolCallHookAction::skip(
+                    background_invalid_tool_arguments_payload(
+                        LIST_BACKGROUND_TOOLS_TOOL_NAME,
+                        "/",
+                        format!("invalid list_background_tools arguments: {error}"),
+                    ),
+                ));
+            }
+        };
+        let response =
+            handle_list_background_tools(&self.node, &request_id, &self.agent_did, parsed).await?;
+        let result = serde_json::to_value(response).map_err(|error| {
+            anyhow::anyhow!("serialize list_background_tools response: {error}")
+        })?;
+        Ok(ToolCallHookAction::skip(json_string(result)))
+    }
+
+    async fn persist_read_tool_output_tool_call(
+        &self,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+    ) -> anyhow::Result<ToolCallHookAction> {
+        let (_session_id, request_id, _deadline_at, _seq) =
+            self.ensure_assistant_turn_sequence().await?;
+        self.state.lock().await.register_tool_result_identity(
+            internal_call_id,
+            None,
+            tool_call_id.as_deref(),
+        );
+
+        let parsed = match serde_json::from_str::<ReadToolOutputArgs>(args) {
+            Ok(args) => args,
+            Err(error) => {
+                return Ok(ToolCallHookAction::skip(
+                    background_invalid_tool_arguments_payload(
+                        READ_TOOL_OUTPUT_TOOL_NAME,
+                        "/",
+                        format!("invalid read_tool_output arguments: {error}"),
+                    ),
+                ));
+            }
+        };
+        let background_tool_call_id = parsed.tool_call_id.trim().to_string();
+        if background_tool_call_id.is_empty() {
+            return Ok(ToolCallHookAction::skip(
+                background_invalid_tool_arguments_payload(
+                    READ_TOOL_OUTPUT_TOOL_NAME,
+                    "/tool_call_id",
+                    "tool_call_id is required",
+                ),
+            ));
+        }
+
+        match handle_read_tool_output(&self.node, &request_id, parsed).await? {
+            ReadToolOutputOutcome::Found(response) => {
+                let result = serde_json::to_value(response).map_err(|error| {
+                    anyhow::anyhow!("serialize read_tool_output response: {error}")
+                })?;
+                Ok(ToolCallHookAction::skip(json_string(result)))
+            }
+            ReadToolOutputOutcome::NotBackgrounded => Ok(ToolCallHookAction::skip(
+                background_invalid_tool_arguments_payload(
+                    READ_TOOL_OUTPUT_TOOL_NAME,
+                    "/tool_call_id",
+                    "tool_call_id must identify an ordinary backgrounded tool call",
+                ),
+            )),
+            ReadToolOutputOutcome::NotAuthorized => Ok(ToolCallHookAction::skip(
+                background_tool_not_allowed_payload(
+                    READ_TOOL_OUTPUT_TOOL_NAME,
+                    "/tool_call_id",
+                    &background_tool_call_id,
+                    "background tool call is not owned by this parent request",
+                    Vec::new(),
+                ),
+            )),
+        }
     }
 
     async fn persist_cancel_tool_call(
@@ -2386,6 +2690,62 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                 Err(e) => self.on_tool_persistence_error("persist wait_subagent tool call", &e),
             };
         }
+        if tool_name == LIST_SUBAGENTS_TOOL_NAME {
+            let result = self
+                .persist_list_subagents_tool_call(tool_call_id, internal_call_id, args)
+                .instrument(tracing::info_span!(
+                    "tool.call",
+                    tool_name = %tool_name,
+                    tool_call_id = %internal_call_id,
+                ))
+                .await;
+
+            return match result {
+                Ok(action) => {
+                    self.record_success();
+                    action
+                }
+                Err(e) => self.on_tool_persistence_error("persist list_subagents tool call", &e),
+            };
+        }
+        if tool_name == READ_SUBAGENT_TRANSCRIPT_TOOL_NAME {
+            let result = self
+                .persist_read_subagent_transcript_tool_call(tool_call_id, internal_call_id, args)
+                .instrument(tracing::info_span!(
+                    "tool.call",
+                    tool_name = %tool_name,
+                    tool_call_id = %internal_call_id,
+                ))
+                .await;
+
+            return match result {
+                Ok(action) => {
+                    self.record_success();
+                    action
+                }
+                Err(e) => {
+                    self.on_tool_persistence_error("persist read_subagent_transcript tool call", &e)
+                }
+            };
+        }
+        if tool_name == STEER_SUBAGENT_TOOL_NAME {
+            let result = self
+                .persist_steer_subagent_tool_call(tool_call_id, internal_call_id, args)
+                .instrument(tracing::info_span!(
+                    "tool.call",
+                    tool_name = %tool_name,
+                    tool_call_id = %internal_call_id,
+                ))
+                .await;
+
+            return match result {
+                Ok(action) => {
+                    self.record_success();
+                    action
+                }
+                Err(e) => self.on_tool_persistence_error("persist steer_subagent tool call", &e),
+            };
+        }
         if tool_name == CANCEL_SUBAGENT_TOOL_NAME {
             let result = self
                 .persist_cancel_subagent_tool_call(tool_call_id, internal_call_id, args)
@@ -2438,6 +2798,44 @@ impl<M: CompletionModel> PromptHook<M> for DefraSessionHook {
                     action
                 }
                 Err(e) => self.on_tool_persistence_error("persist wait_tool tool call", &e),
+            };
+        }
+        if tool_name == LIST_BACKGROUND_TOOLS_TOOL_NAME {
+            let result = self
+                .persist_list_background_tools_tool_call(tool_call_id, internal_call_id, args)
+                .instrument(tracing::info_span!(
+                    "tool.call",
+                    tool_name = %tool_name,
+                    tool_call_id = %internal_call_id,
+                ))
+                .await;
+
+            return match result {
+                Ok(action) => {
+                    self.record_success();
+                    action
+                }
+                Err(e) => {
+                    self.on_tool_persistence_error("persist list_background_tools tool call", &e)
+                }
+            };
+        }
+        if tool_name == READ_TOOL_OUTPUT_TOOL_NAME {
+            let result = self
+                .persist_read_tool_output_tool_call(tool_call_id, internal_call_id, args)
+                .instrument(tracing::info_span!(
+                    "tool.call",
+                    tool_name = %tool_name,
+                    tool_call_id = %internal_call_id,
+                ))
+                .await;
+
+            return match result {
+                Ok(action) => {
+                    self.record_success();
+                    action
+                }
+                Err(e) => self.on_tool_persistence_error("persist read_tool_output tool call", &e),
             };
         }
         if tool_name == CANCEL_TOOL_NAME {

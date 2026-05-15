@@ -233,6 +233,62 @@ structure R6BackgroundingCase where
   queueKey : Option String
   deriving Repr
 
+namespace R4cWitnesses
+
+structure ListSubagentsLineageRejects where
+  callerRequestId : String
+  siblingRequestId : String
+  siblingChildId : String
+  callerSeesSiblingChild : Bool
+  deriving Repr
+
+structure ReadTranscriptCursorAdvances where
+  childSessionId : String
+  firstSinceSequence : Nat
+  firstThroughSequence : Nat
+  firstNextSequence : Nat
+  secondSinceSequence : Nat
+  secondThroughSequence : Nat
+  noGap : Bool
+  noOverlap : Bool
+  deriving Repr
+
+structure ReadTranscriptHidesBridgeRows where
+  childSessionId : String
+  bridgeCallId : String
+  renderedTranscript : String
+  deriving Repr
+
+structure ReadToolOutputDispatchesByState where
+  toolCallId : String
+  runningSource : String
+  terminalSource : String
+  runningPayload : String
+  staleRunningPayload : String
+  terminalPayload : String
+  deriving Repr
+
+structure SteerAppendPreservesLineage where
+  callerRequestId : String
+  childSessionId : String
+  queuedRequestId : String
+  causedByParentRequestId : String
+  queueSource : String
+  queuePolicy : String
+  deriving Repr
+
+structure SteerInterruptComposes where
+  callerRequestId : String
+  childSessionId : String
+  interruptedActiveRequestId : String
+  drainedWakeUpRequestIds : List String
+  drainedWakeUpQueueKey : String
+  queuedRequestId : String
+  queueInterruptedRequestId : String
+  deriving Repr
+
+end R4cWitnesses
+
 structure TranscriptCase where
   name : String
   group : String

@@ -56,6 +56,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) live_overlay_cases: Vec<LeanLiveOverlayCase>,
     pub(crate) queue_deadline_conformance_cases: Vec<LeanQueueDeadlineConformanceCase>,
     pub(crate) recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
+    #[serde(default)]
+    pub(crate) r4c_background_work_cases: Vec<LeanR4cBackgroundWorkCase>,
     pub(crate) r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     pub(crate) transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub(crate) streaming_response_cases: Vec<LeanResponseTransitionCase>,
@@ -656,6 +658,84 @@ pub(crate) struct LeanRecoverySweepCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "witness", deny_unknown_fields)]
+pub(crate) enum LeanR4cBackgroundWorkCase {
+    #[serde(rename = "r4c.list_subagents.lineage_rejects")]
+    ListSubagentsLineageRejects {
+        caller_request_id: String,
+        sibling_request_id: String,
+        sibling_child_id: String,
+        caller_sees_sibling_child: bool,
+    },
+    #[serde(rename = "r4c.read_subagent_transcript.cursor_advances")]
+    ReadTranscriptCursorAdvances {
+        child_session_id: String,
+        first_since_sequence: usize,
+        first_through_sequence: usize,
+        first_next_sequence: usize,
+        second_since_sequence: usize,
+        second_through_sequence: usize,
+        no_gap: bool,
+        no_overlap: bool,
+    },
+    #[serde(rename = "r4c.read_subagent_transcript.hides_bridge_rows")]
+    ReadTranscriptHidesBridgeRows {
+        child_session_id: String,
+        bridge_call_id: String,
+        rendered_transcript: String,
+    },
+    #[serde(rename = "r4c.read_tool_output.dispatch_by_state")]
+    ReadToolOutputDispatchesByState {
+        tool_call_id: String,
+        running_source: String,
+        terminal_source: String,
+        running_payload: String,
+        stale_running_payload: String,
+        terminal_payload: String,
+    },
+    #[serde(rename = "r4c.steer_subagent.append_preserves_lineage")]
+    SteerAppendPreservesLineage {
+        caller_request_id: String,
+        child_session_id: String,
+        queued_request_id: String,
+        caused_by_parent_request_id: String,
+        queue_source: String,
+        queue_policy: String,
+    },
+    #[serde(rename = "r4c.steer_subagent.interrupt_composes")]
+    SteerInterruptComposes {
+        caller_request_id: String,
+        child_session_id: String,
+        interrupted_active_request_id: String,
+        drained_wake_up_request_ids: Vec<String>,
+        drained_wake_up_queue_key: String,
+        queued_request_id: String,
+        queue_interrupted_request_id: String,
+    },
+}
+
+impl LeanR4cBackgroundWorkCase {
+    pub(crate) fn witness(&self) -> &'static str {
+        match self {
+            Self::ListSubagentsLineageRejects { .. } => "r4c.list_subagents.lineage_rejects",
+            Self::ReadTranscriptCursorAdvances { .. } => {
+                "r4c.read_subagent_transcript.cursor_advances"
+            }
+            Self::ReadTranscriptHidesBridgeRows { .. } => {
+                "r4c.read_subagent_transcript.hides_bridge_rows"
+            }
+            Self::ReadToolOutputDispatchesByState { .. } => {
+                "r4c.read_tool_output.dispatch_by_state"
+            }
+            Self::SteerAppendPreservesLineage { .. } => {
+                "r4c.steer_subagent.append_preserves_lineage"
+            }
+            Self::SteerInterruptComposes { .. } => "r4c.steer_subagent.interrupt_composes",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanR6BackgroundingCase {
     pub(crate) name: String,
     pub(crate) group: String,
@@ -893,6 +973,18 @@ pub(crate) fn lean_recovery_sweep_case(name: &str) -> &'static LeanRecoverySweep
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean recovery sweep case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_r4c_background_work_cases() -> &'static [LeanR4cBackgroundWorkCase] {
+    &lean_contract_snapshot().r4c_background_work_cases
+}
+
+pub(crate) fn lean_r4c_background_work_case(witness: &str) -> &'static LeanR4cBackgroundWorkCase {
+    lean_contract_snapshot()
+        .r4c_background_work_cases
+        .iter()
+        .find(|case| case.witness() == witness)
+        .unwrap_or_else(|| panic!("Lean R4c background-work witness {witness:?} was not emitted"))
 }
 
 pub(crate) fn lean_r6_backgrounding_cases() -> &'static [LeanR6BackgroundingCase] {

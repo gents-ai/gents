@@ -1,0 +1,615 @@
+//! Integration tests for R4c read_subagent_transcript.
+
+mod support;
+
+use defra_agent::defra_node::EmbeddedNode;
+use defra_agent::graphql::escape_graphql_string;
+use defra_agent::{
+    upsert_agent_behavior, upsert_tool_selection, AgentBehavior, DefraSessionHook, FailurePolicy,
+    ToolSelectionDocument,
+};
+use rig::agent::{PromptHook, ToolCallHookAction};
+use rig::completion::message::{AssistantContent, Message, Text, ToolCall, ToolFunction};
+use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
+use rig::one_or_many::OneOrMany;
+use rig::streaming::StreamingCompletionResponse;
+use serde_json::{json, Value};
+
+use support::test_db;
+
+const AGENT_DID: &str = "did:defra-agent:r4c-read-transcript";
+const PARENT_BEHAVIOR_ID: &str = "r4c-parent";
+const CHILD_BEHAVIOR_ID: &str = "r4c-child";
+
+#[derive(Clone, Default)]
+struct TestModel;
+
+#[allow(refining_impl_trait)]
+impl CompletionModel for TestModel {
+    type Response = ();
+    type StreamingResponse = ();
+    type Client = ();
+
+    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+        Self
+    }
+
+    async fn completion(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+        Err(CompletionError::ProviderError(
+            "completion is unused in R4c read_subagent_transcript tests".to_string(),
+        ))
+    }
+
+    async fn stream(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        Err(CompletionError::ProviderError(
+            "streaming is unused in R4c read_subagent_transcript tests".to_string(),
+        ))
+    }
+}
+
+async fn setup_db(name: &str) -> support::TestDb {
+    let db = test_db(name).await;
+    upsert_tool_selection(
+        db.node.as_ref(),
+        &ToolSelectionDocument {
+            selection_id: "r4c-parent-tools".to_string(),
+            agent_did: AGENT_DID.to_string(),
+            subagent_targets: Some(vec![CHILD_BEHAVIOR_ID.to_string()]),
+            subagent_spawn_enabled: Some(true),
+            subagent_background_enabled: Some(true),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    upsert_agent_behavior(
+        db.node.as_ref(),
+        &AgentBehavior {
+            behavior_id: PARENT_BEHAVIOR_ID.to_string(),
+            agent_did: AGENT_DID.to_string(),
+            display_name: Some("R4c parent".to_string()),
+            system_prompt: None,
+            backend_id: None,
+            model_name: None,
+            tool_selection_id: Some("r4c-parent-tools".to_string()),
+            inference_profile_id: None,
+            compaction_strategy: None,
+            compaction_threshold: None,
+            enabled: true,
+            created_at: Some("2026-05-14T00:00:00Z".to_string()),
+        },
+    )
+    .await
+    .unwrap();
+    upsert_agent_behavior(
+        db.node.as_ref(),
+        &AgentBehavior {
+            behavior_id: CHILD_BEHAVIOR_ID.to_string(),
+            agent_did: AGENT_DID.to_string(),
+            display_name: Some("R4c child".to_string()),
+            system_prompt: None,
+            backend_id: None,
+            model_name: None,
+            tool_selection_id: None,
+            inference_profile_id: None,
+            compaction_strategy: None,
+            compaction_threshold: None,
+            enabled: true,
+            created_at: Some("2026-05-14T00:00:01Z".to_string()),
+        },
+    )
+    .await
+    .unwrap();
+    db
+}
+
+async fn create_parent_hook(
+    db: &support::TestDb,
+    request_id: &str,
+    session_id: &str,
+) -> DefraSessionHook {
+    let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
+    create_parent_request(db.node.as_ref(), request_id, session_id, deadline).await;
+    let hook = DefraSessionHook::resume_or_create_with_identity_policy(
+        db.node.clone(),
+        session_id,
+        PARENT_BEHAVIOR_ID,
+        AGENT_DID,
+        FailurePolicy::default(),
+    )
+    .await
+    .unwrap();
+    hook.set_active_request_id(Some(request_id.to_string()))
+        .await;
+    hook.set_request_deadline_at(Some(deadline)).await;
+    hook
+}
+
+async fn create_parent_request(
+    node: &EmbeddedNode,
+    request_id: &str,
+    session_id: &str,
+    deadline: chrono::DateTime<chrono::Utc>,
+) {
+    let request_id = escape_graphql_string(request_id);
+    let session_id = escape_graphql_string(session_id);
+    let behavior_id = escape_graphql_string(PARENT_BEHAVIOR_ID);
+    let agent_did = escape_graphql_string(AGENT_DID);
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let deadline = deadline.to_rfc3339();
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{request_id}",
+                agent_did: "{agent_did}",
+                behavior_id: "{behavior_id}",
+                session_id: "{session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{request_id}",
+                superseded_by_request: "",
+                content: "parent prompt",
+                status: "processing",
+                lifecycle_state: "processing",
+                backend_id: "",
+                execution_origin: "interactive",
+                metadata: "",
+                failure_reason: "",
+                created_at: "{created_at}",
+                deadline: "{deadline}",
+                retry_count: 0,
+                max_retries: 3,
+                subagent_depth: 0
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create parent AgentRequest failed: {:?}",
+        response.errors
+    );
+}
+
+async fn spawn_background_child(
+    hook: &DefraSessionHook,
+    internal_call_id: &str,
+    prompt: &str,
+) -> Value {
+    let args = json!({
+        "behavior_id": CHILD_BEHAVIOR_ID,
+        "prompt": prompt,
+        "await_mode": "background"
+    })
+    .to_string();
+    let action = PromptHook::<TestModel>::on_tool_call(
+        hook,
+        "spawn_subagent",
+        Some(format!("model-{internal_call_id}")),
+        internal_call_id,
+        &args,
+    )
+    .await;
+    let receipt = skip_reason_json(action);
+    assert_eq!(receipt["ok"], true);
+    receipt
+}
+
+async fn read_transcript(hook: &DefraSessionHook, internal_call_id: &str, args: Value) -> Value {
+    let action = PromptHook::<TestModel>::on_tool_call(
+        hook,
+        "read_subagent_transcript",
+        Some(format!("model-{internal_call_id}")),
+        internal_call_id,
+        &args.to_string(),
+    )
+    .await;
+    skip_reason_json(action)
+}
+
+fn skip_reason_json(action: ToolCallHookAction) -> Value {
+    let ToolCallHookAction::Skip { reason } = action else {
+        panic!("expected Skip action, got {action:?}");
+    };
+    serde_json::from_str(&reason).expect("skip reason should be JSON")
+}
+
+async fn append_message(
+    node: &EmbeddedNode,
+    session_id: &str,
+    sequence: u32,
+    role: &str,
+    content: &str,
+) {
+    support::create_agent_message(
+        node,
+        session_id,
+        sequence,
+        role,
+        content,
+        &format!("2026-05-14T00:00:{sequence:02}Z"),
+    )
+    .await;
+}
+
+async fn append_assistant_tool_call_message(
+    node: &EmbeddedNode,
+    session_id: &str,
+    sequence: u32,
+    body: &str,
+    tool_call_id: &str,
+    tool_name: &str,
+) {
+    let message = Message::Assistant {
+        id: None,
+        content: OneOrMany::many(vec![
+            AssistantContent::Text(Text {
+                text: body.to_string(),
+            }),
+            AssistantContent::ToolCall(ToolCall {
+                id: tool_call_id.to_string(),
+                call_id: Some(tool_call_id.to_string()),
+                function: ToolFunction {
+                    name: tool_name.to_string(),
+                    arguments: json!({"behavior_id": CHILD_BEHAVIOR_ID}),
+                },
+                signature: None,
+                additional_params: None,
+            }),
+        ])
+        .unwrap(),
+    };
+    append_message(
+        node,
+        session_id,
+        sequence,
+        "assistant",
+        &serde_json::to_string(&message).unwrap(),
+    )
+    .await;
+}
+
+async fn create_child_bridge_tool_call(
+    node: &EmbeddedNode,
+    child_request_id: &str,
+    child_session_id: &str,
+    message_sequence: u32,
+    tool_call_id: &str,
+) {
+    let child_request_id = escape_graphql_string(child_request_id);
+    let child_session_id = escape_graphql_string(child_session_id);
+    let tool_call_id = escape_graphql_string(tool_call_id);
+    let tool_call_key = format!("{child_session_id}:{tool_call_id}");
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentToolCall(input: {{
+                tool_call_key: "{tool_call_key}",
+                request_id: "{child_request_id}",
+                session_id: "{child_session_id}",
+                message_sequence: {message_sequence},
+                tool_name: "spawn_subagent",
+                tool_call_id: "{tool_call_id}",
+                args: "{{}}",
+                result: "",
+                status: "called",
+                lifecycle_state: "running",
+                started_at: "2026-05-14T00:01:00Z",
+                deadline_at: "2026-05-14T00:06:00Z",
+                await_mode: "background",
+                cancel_policy: "propagate",
+                child_request_id: "grandchild-request"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create child bridge AgentToolCall failed: {:?}",
+        response.errors
+    );
+}
+
+async fn create_background_tool_call(
+    node: &EmbeddedNode,
+    child_request_id: &str,
+    child_session_id: &str,
+    message_sequence: u32,
+    tool_call_id: &str,
+) {
+    let child_request_id = escape_graphql_string(child_request_id);
+    let child_session_id = escape_graphql_string(child_session_id);
+    let tool_call_id = escape_graphql_string(tool_call_id);
+    let tool_call_key = format!("{child_session_id}:{tool_call_id}");
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentToolCall(input: {{
+                tool_call_key: "{tool_call_key}",
+                request_id: "{child_request_id}",
+                session_id: "{child_session_id}",
+                message_sequence: {message_sequence},
+                tool_name: "bash",
+                tool_call_id: "{tool_call_id}",
+                args: "{{}}",
+                result: "",
+                status: "called",
+                lifecycle_state: "running",
+                started_at: "2026-05-14T00:01:00Z",
+                deadline_at: "2026-05-14T00:06:00Z",
+                await_mode: "background",
+                cancel_policy: "propagate"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create background AgentToolCall failed: {:?}",
+        response.errors
+    );
+}
+
+async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_name: &str) -> usize {
+    let session_id = escape_graphql_string(session_id);
+    let tool_name = escape_graphql_string(tool_name);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    session_id: {{ _eq: "{session_id}" }},
+                    tool_name: {{ _eq: "{tool_name}" }}
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "count AgentToolCall by name failed: {:?}",
+        response.errors
+    );
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|rows| rows.as_array())
+        .map_or(0, Vec::len)
+}
+
+#[tokio::test]
+async fn read_transcript_assistant_only_default() {
+    let db = setup_db("r4c-read-default").await;
+    let hook = create_parent_hook(&db, "parent-default", "session-default").await;
+    let child = spawn_background_child(&hook, "spawn-default", "do work").await;
+    let child_request_id = child["child_request_id"].as_str().unwrap();
+    let child_session_id = child["child_session_id"].as_str().unwrap();
+    append_message(
+        db.node.as_ref(),
+        child_session_id,
+        1,
+        "assistant",
+        "first thought",
+    )
+    .await;
+    append_message(db.node.as_ref(), child_session_id, 2, "user", "feedback").await;
+    append_message(
+        db.node.as_ref(),
+        child_session_id,
+        3,
+        "assistant",
+        "second thought",
+    )
+    .await;
+
+    let result = read_transcript(
+        &hook,
+        "read-default",
+        json!({ "child_request_id": child_request_id }),
+    )
+    .await;
+    let transcript = result["transcript"].as_str().unwrap();
+    assert!(transcript.contains("first thought"));
+    assert!(transcript.contains("second thought"));
+    assert!(!transcript.contains("feedback"));
+}
+
+#[tokio::test]
+async fn read_transcript_includes_user_when_opted_in() {
+    let db = setup_db("r4c-read-user").await;
+    let hook = create_parent_hook(&db, "parent-user", "session-user").await;
+    let child = spawn_background_child(&hook, "spawn-user", "do work").await;
+    let child_request_id = child["child_request_id"].as_str().unwrap();
+    let child_session_id = child["child_session_id"].as_str().unwrap();
+    append_message(db.node.as_ref(), child_session_id, 1, "assistant", "a1").await;
+    append_message(db.node.as_ref(), child_session_id, 2, "user", "u1").await;
+
+    let result = read_transcript(
+        &hook,
+        "read-user",
+        json!({
+            "child_request_id": child_request_id,
+            "include_user_messages": true
+        }),
+    )
+    .await;
+    let transcript = result["transcript"].as_str().unwrap();
+    assert!(transcript.contains("a1"));
+    assert!(transcript.contains("u1"));
+}
+
+#[tokio::test]
+async fn read_transcript_hides_bridge_rows() {
+    let db = setup_db("r4c-read-bridge").await;
+    let hook = create_parent_hook(&db, "parent-bridge", "session-bridge").await;
+    let child = spawn_background_child(&hook, "spawn-bridge", "do work").await;
+    let child_request_id = child["child_request_id"].as_str().unwrap();
+    let child_session_id = child["child_session_id"].as_str().unwrap();
+    append_assistant_tool_call_message(
+        db.node.as_ref(),
+        child_session_id,
+        1,
+        "plain assistant message",
+        "bridge-tc-1",
+        "spawn_subagent",
+    )
+    .await;
+    create_child_bridge_tool_call(
+        db.node.as_ref(),
+        child_request_id,
+        child_session_id,
+        1,
+        "bridge-tc-1",
+    )
+    .await;
+
+    let result = read_transcript(
+        &hook,
+        "read-bridge",
+        json!({ "child_request_id": child_request_id }),
+    )
+    .await;
+    let transcript = result["transcript"].as_str().unwrap();
+    assert!(transcript.contains("plain assistant message"));
+    assert!(!transcript.contains("bridge-tc-1"));
+    assert!(!transcript.contains("tool_calls="));
+}
+
+#[tokio::test]
+async fn read_transcript_hides_tool_kind_background_bridge_rows() {
+    let db = setup_db("r4c-read-tool-bridge").await;
+    let hook = create_parent_hook(&db, "parent-tool-bridge", "session-tool-bridge").await;
+    let child = spawn_background_child(&hook, "spawn-tool-bridge", "do work").await;
+    let child_request_id = child["child_request_id"].as_str().unwrap();
+    let child_session_id = child["child_session_id"].as_str().unwrap();
+    append_assistant_tool_call_message(
+        db.node.as_ref(),
+        child_session_id,
+        1,
+        "checking files",
+        "background-tc-1",
+        "bash",
+    )
+    .await;
+    create_background_tool_call(
+        db.node.as_ref(),
+        child_request_id,
+        child_session_id,
+        1,
+        "background-tc-1",
+    )
+    .await;
+
+    let result = read_transcript(
+        &hook,
+        "read-tool-bridge",
+        json!({ "child_request_id": child_request_id }),
+    )
+    .await;
+    let transcript = result["transcript"].as_str().unwrap();
+    assert!(transcript.contains("checking files"));
+    assert!(!transcript.contains("background-tc-1"));
+    assert!(!transcript.contains("tool_calls="));
+}
+
+#[tokio::test]
+async fn read_transcript_cursor_advances_cleanly() {
+    let db = setup_db("r4c-read-cursor").await;
+    let hook = create_parent_hook(&db, "parent-cursor", "session-cursor").await;
+    let child = spawn_background_child(&hook, "spawn-cursor", "do work").await;
+    let child_request_id = child["child_request_id"].as_str().unwrap();
+    let child_session_id = child["child_session_id"].as_str().unwrap();
+    for sequence in 1..=10 {
+        append_message(
+            db.node.as_ref(),
+            child_session_id,
+            sequence,
+            "assistant",
+            &format!("turn {sequence}"),
+        )
+        .await;
+    }
+
+    let first = read_transcript(
+        &hook,
+        "read-cursor-first",
+        json!({
+            "child_request_id": child_request_id,
+            "limit": 5
+        }),
+    )
+    .await;
+    assert_eq!(first["truncated"].as_bool(), Some(true));
+    assert_eq!(first["through_sequence"].as_u64(), Some(5));
+    let next = first["next_sequence"].as_u64().unwrap();
+    assert_eq!(next, 6);
+
+    let second = read_transcript(
+        &hook,
+        "read-cursor-second",
+        json!({
+            "child_request_id": child_request_id,
+            "since_sequence": next,
+            "limit": 5
+        }),
+    )
+    .await;
+    assert_eq!(second["through_sequence"].as_u64(), Some(10));
+    let combined = format!(
+        "{}\n{}",
+        first["transcript"].as_str().unwrap(),
+        second["transcript"].as_str().unwrap()
+    );
+    for sequence in 1..=10 {
+        assert!(
+            combined.contains(&format!("turn {sequence}")),
+            "missing turn {sequence}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn read_transcript_rejects_unauthorized_child() {
+    let db = setup_db("r4c-read-unauthorized").await;
+    let hook_1 = create_parent_hook(&db, "parent-one", "session-one").await;
+    let hook_2 = create_parent_hook(&db, "parent-two", "session-two").await;
+    let child = spawn_background_child(&hook_2, "spawn-sibling", "do work").await;
+    let child_request_id = child["child_request_id"].as_str().unwrap();
+
+    let result = read_transcript(
+        &hook_1,
+        "read-unauthorized",
+        json!({ "child_request_id": child_request_id }),
+    )
+    .await;
+    assert_eq!(result["ok"].as_bool(), Some(false));
+    assert_eq!(result["failure_class"].as_str(), Some("tool_not_allowed"));
+}
+
+#[tokio::test]
+async fn read_transcript_no_parent_tool_call_row_written() {
+    let db = setup_db("r4c-read-no-row").await;
+    let parent_session_id = "session-no-row";
+    let hook = create_parent_hook(&db, "parent-no-row", parent_session_id).await;
+    let child = spawn_background_child(&hook, "spawn-no-row", "do work").await;
+    let child_request_id = child["child_request_id"].as_str().unwrap();
+
+    let _ = read_transcript(
+        &hook,
+        "read-no-row",
+        json!({ "child_request_id": child_request_id }),
+    )
+    .await;
+    assert_eq!(
+        count_tool_calls_by_name(
+            db.node.as_ref(),
+            parent_session_id,
+            "read_subagent_transcript"
+        )
+        .await,
+        0
+    );
+}

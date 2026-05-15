@@ -962,5 +962,58 @@ theorem bridge_link_symmetric
     post.linked :=
   inv_link pre post h_init h_trace
 
+/-- B5 invariant survives the `steer_subagent(interrupt=true)` composition.
+    On the current R6 surface, bridge reachability is represented as a
+    `BridgedState.Trace`; queue drain/append work is outside `BridgedState`
+    and cannot mutate bridge link fields. -/
+theorem steer_subagent_interrupt_preserves_link_symmetry
+    {pre post : BridgedState}
+    {childSessionId : SessionId}
+    {queuePre queueDrained queuePost : SessionQueue.SessionQueueState}
+    {transcriptPre transcriptPost : Transcript.TranscriptState}
+    {childRequestId steeringRequestId : RequestId}
+    {message : String}
+    (h_step : SteerWithInterrupt
+      pre post
+      childSessionId
+      queuePre queueDrained queuePost
+      transcriptPre transcriptPost
+      childRequestId steeringRequestId message)
+    (h_pre  : pre.linked) :
+    post.linked := by
+  rcases h_step.h_bridge_compose with
+    ⟨cascaded, interrupted, h_cascade, h_interrupt, _h_child_id, h_tail⟩
+  have _h_queue_session : queuePost.sessionId = childSessionId :=
+    h_step.h_queue_post_session
+  have _h_drain_uses_child_key :
+      queueDrained =
+        queuePre.drainAutomatedWakeups
+          SessionQueue.QueueSource.backgroundCompletion
+          (some (backgroundCompletionQueueKey childSessionId)) :=
+    h_step.h_drain_shape
+  rcases h_step.h_append_compose with
+    ⟨entry, _h_append_transition, _h_append_shape,
+      h_entry_request, h_entry_source, h_entry_policy, _h_entry_key⟩
+  have _h_append_is_steering :
+      entry.source = SessionQueue.QueueSource.steering ∧
+      entry.policy = SessionQueue.QueuePolicy.append ∧
+      entry.requestId = steeringRequestId :=
+    ⟨h_entry_source, h_entry_policy, h_entry_request⟩
+  have _h_transcript_session : transcriptPost.sessionId = childSessionId :=
+    h_step.h_transcript_post_session
+  rcases h_step.h_transcript_append with
+    ⟨messageId, _h_message_nonempty, _h_transcript_transition, h_transcript_shape⟩
+  have _h_transcript_is_user_append :
+      transcriptPost =
+        transcriptPre.appendUserMessage
+          messageId
+          Transcript.MessageKind.ordinary :=
+    h_transcript_shape
+  have h_trace : Trace pre post :=
+    Trace.step
+      (BridgeCancelCascadeStep.to_transition h_cascade)
+      (Trace.step (ChildInterruptStep.to_transition h_interrupt) h_tail)
+  exact bridge_link_symmetric pre post h_pre h_trace
+
 end BridgedState
 end Subagent

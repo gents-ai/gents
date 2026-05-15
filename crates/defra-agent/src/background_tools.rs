@@ -1,16 +1,38 @@
 #![allow(dead_code)] // R4b lands these helpers one task ahead of their tool integrations.
 
+pub(crate) mod r4c_args;
+mod transcript_render;
+
+use std::collections::{HashMap, HashSet};
+
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
-use defra_agent_protocol::transcript::decode_persisted_message;
+use defra_agent_protocol::transcript::{decode_persisted_message, present_persisted_message};
 use defra_node::EmbeddedNode;
-use rig::completion::message::{AssistantContent, Message, Text};
+use rig::completion::message::{AssistantContent, Message, Text, UserContent};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::graphql::{escape_graphql_string, response_has_documents};
+use crate::lifecycle::queue::{
+    drain_automated_wakeups, enqueue_session_request, is_automated_wakeup, QueueHints, QueuePolicy,
+    QueueSource,
+};
+use crate::lifecycle::ExecutionOrigin;
+use crate::session;
 use crate::session::execute_mutation_with_retry;
 use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass};
+use crate::watcher::{validate_agent_request_subagent_coherence, AgentRequest};
+
+use self::r4c_args::{
+    ListBackgroundToolsArgs, ListBackgroundToolsEntry, ListBackgroundToolsResponse,
+    ListStatusFilter, ListSubagentsArgs, ListSubagentsEntry, ListSubagentsResponse,
+    ReadSubagentTranscriptArgs, ReadSubagentTranscriptResponse, ReadToolOutputArgs,
+    ReadToolOutputResponse, ReadToolOutputStream, SteerSubagentResponse,
+};
+use self::transcript_render::{
+    render_transcript, MessageKindView, MessageRoleView, MessageView, RenderOptions,
+};
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct SpawnSubagentArgs {
@@ -195,6 +217,971 @@ struct ToolSelectionTargetsRow {
 }
 
 pub(crate) const DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS: u32 = 60;
+
+#[derive(Debug, Deserialize)]
+struct ListSubagentBridgeRow {
+    tool_call_id: String,
+    child_request_id: Option<String>,
+    lifecycle_state: Option<String>,
+    await_mode: Option<String>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListSubagentChildRow {
+    request_id: String,
+    session_id: String,
+    behavior_id: Option<String>,
+    created_at: String,
+    subagent_depth: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListBackgroundToolRow {
+    tool_call_id: String,
+    tool_name: String,
+    await_mode: Option<String>,
+    lifecycle_state: Option<String>,
+    child_request_id: Option<String>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+    result: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TranscriptMessageRow {
+    sequence: u64,
+    role: String,
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TranscriptToolCallRow {
+    message_sequence: u64,
+    tool_call_id: String,
+    tool_name: String,
+    await_mode: Option<String>,
+    child_request_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReadToolOutputRow {
+    tool_call_id: String,
+    tool_name: String,
+    request_id: Option<String>,
+    await_mode: Option<String>,
+    lifecycle_state: Option<String>,
+    child_request_id: Option<String>,
+    result: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentRequestQueueRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    request_id: String,
+    agent_did: String,
+    behavior_id: Option<String>,
+    session_id: String,
+    content: String,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    top_k: Option<i64>,
+    max_tokens: Option<i64>,
+    metadata: Option<String>,
+    execution_origin: Option<String>,
+    created_at: String,
+    deadline: Option<String>,
+    subagent_depth: Option<u32>,
+    caused_by_parent_request_id: Option<String>,
+    caused_by_parent_tool_call_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ActiveSessionRequestRow {
+    request_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PendingWakeupRow {
+    request_id: Option<String>,
+    execution_origin: Option<String>,
+    metadata: Option<String>,
+}
+
+pub(crate) enum ReadToolOutputOutcome {
+    Found(ReadToolOutputResponse),
+    NotAuthorized,
+    NotBackgrounded,
+}
+
+pub(crate) enum SteerSubagentTarget {
+    Found(ChildEdge),
+    NotAuthorized,
+    NotBackgrounded,
+    Terminal(String),
+}
+
+pub(crate) async fn handle_list_subagents(
+    node: &EmbeddedNode,
+    caller_request_id: &str,
+    local_deployment_id: &str,
+    args: ListSubagentsArgs,
+) -> Result<ListSubagentsResponse> {
+    let limit = args.validated_limit() as usize;
+    let escaped_caller = escape_graphql_string(caller_request_id);
+    let escaped_spawn_tool = escape_graphql_string("spawn_subagent");
+    let bridge_query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    request_id: {{ _eq: "{escaped_caller}" }},
+                    tool_name: {{ _eq: "{escaped_spawn_tool}" }}
+                }},
+                order: {{ started_at: ASC }}
+            ) {{
+                tool_call_id
+                child_request_id
+                lifecycle_state
+                await_mode
+                started_at
+                completed_at
+            }}
+        }}"#
+    );
+    let bridge_response = node.execute(&bridge_query).await;
+    if bridge_response.has_errors() {
+        anyhow::bail!(
+            "list_subagents bridge query failed: {:?}",
+            bridge_response.errors
+        );
+    }
+    let bridges: Vec<ListSubagentBridgeRow> = rows(bridge_response.data.as_ref(), "AgentToolCall")?;
+
+    let child_query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{
+                    caused_by_parent_request_id: {{ _eq: "{escaped_caller}" }}
+                }},
+                order: {{ created_at: ASC }}
+            ) {{
+                request_id
+                session_id
+                behavior_id
+                created_at
+                subagent_depth
+            }}
+        }}"#
+    );
+    let child_response = node.execute(&child_query).await;
+    if child_response.has_errors() {
+        anyhow::bail!(
+            "list_subagents child query failed: {:?}",
+            child_response.errors
+        );
+    }
+    let children_by_request =
+        rows::<ListSubagentChildRow>(child_response.data.as_ref(), "AgentRequest")?
+            .into_iter()
+            .map(|row| (row.request_id.clone(), row))
+            .collect::<HashMap<_, _>>();
+
+    let mut entries = Vec::new();
+    for bridge in bridges {
+        if bridge.await_mode.as_deref() != Some("background") {
+            continue;
+        }
+        let Some(child_request_id) = non_empty_string(bridge.child_request_id.as_deref()) else {
+            continue;
+        };
+        let status = bridge
+            .lifecycle_state
+            .as_deref()
+            .filter(|state| !state.trim().is_empty())
+            .unwrap_or("running");
+        if !list_subagent_status_matches(args.status, status) {
+            continue;
+        }
+        let Some(child) = children_by_request.get(&child_request_id) else {
+            continue;
+        };
+        let created_at = parse_rfc3339(Some(&child.created_at)).ok_or_else(|| {
+            anyhow!("child AgentRequest {child_request_id} has invalid created_at")
+        })?;
+        let last_update = parse_rfc3339(bridge.completed_at.as_deref())
+            .or_else(|| parse_rfc3339(bridge.started_at.as_deref()))
+            .unwrap_or(created_at);
+
+        entries.push(ListSubagentsEntry {
+            child_request_id,
+            child_session_id: child.session_id.clone(),
+            behavior_id: non_empty_string(child.behavior_id.as_deref()).unwrap_or_default(),
+            deployment_id: local_deployment_id.to_string(),
+            await_mode: "background".to_string(),
+            status: status.to_string(),
+            created_at,
+            last_update,
+            depth: child.subagent_depth.unwrap_or_default(),
+        });
+    }
+
+    let truncated = entries.len() > limit;
+    entries.truncate(limit);
+    Ok(ListSubagentsResponse {
+        read_at: Utc::now(),
+        truncated,
+        entries,
+    })
+}
+
+pub(crate) async fn handle_list_background_tools(
+    node: &EmbeddedNode,
+    caller_request_id: &str,
+    local_deployment_id: &str,
+    args: ListBackgroundToolsArgs,
+) -> Result<ListBackgroundToolsResponse> {
+    let limit = args.validated_limit() as usize;
+    let escaped_caller = escape_graphql_string(caller_request_id);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    request_id: {{ _eq: "{escaped_caller}" }},
+                    await_mode: {{ _eq: "background" }}
+                }},
+                order: {{ started_at: ASC }}
+            ) {{
+                tool_call_id
+                tool_name
+                await_mode
+                lifecycle_state
+                child_request_id
+                started_at
+                completed_at
+                result
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!("list_background_tools query failed: {:?}", response.errors);
+    }
+    let rows: Vec<ListBackgroundToolRow> = rows(response.data.as_ref(), "AgentToolCall")?;
+
+    let mut entries = Vec::new();
+    for row in rows {
+        if non_empty_string(row.child_request_id.as_deref()).is_some() {
+            continue;
+        }
+        if row.await_mode.as_deref() != Some("background") {
+            continue;
+        }
+        let Some(tool_call_id) = non_empty_string(Some(&row.tool_call_id)) else {
+            continue;
+        };
+        let status = row
+            .lifecycle_state
+            .as_deref()
+            .filter(|state| !state.trim().is_empty())
+            .unwrap_or("running");
+        if !list_status_matches(args.status, status) {
+            continue;
+        }
+        let created_at = parse_rfc3339(row.started_at.as_deref())
+            .ok_or_else(|| anyhow!("background tool call {tool_call_id} has invalid started_at"))?;
+        let last_update = parse_rfc3339(row.completed_at.as_deref()).unwrap_or(created_at);
+        let stdout_bytes = row
+            .result
+            .as_deref()
+            .map_or(0, |result| result.len() as u64);
+
+        entries.push(ListBackgroundToolsEntry {
+            tool_call_id,
+            tool_name: row.tool_name,
+            deployment_id: local_deployment_id.to_string(),
+            await_mode: "background".to_string(),
+            status: status.to_string(),
+            created_at,
+            last_update,
+            stdout_bytes,
+            stderr_bytes: 0,
+        });
+    }
+
+    let truncated = entries.len() > limit;
+    entries.truncate(limit);
+    Ok(ListBackgroundToolsResponse {
+        read_at: Utc::now(),
+        truncated,
+        entries,
+    })
+}
+
+pub(crate) async fn handle_read_subagent_transcript(
+    node: &EmbeddedNode,
+    caller_request_id: &str,
+    args: ReadSubagentTranscriptArgs,
+) -> Result<Option<ReadSubagentTranscriptResponse>> {
+    let child_request_id = args.child_request_id.trim();
+    let Some(edge) =
+        load_readable_background_child_edge(node, caller_request_id, child_request_id).await?
+    else {
+        return Ok(None);
+    };
+
+    let escaped_session_id = escape_graphql_string(&edge.child_session_id);
+    let messages_query = format!(
+        r#"{{
+            AgentMessage(
+                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                order: {{ sequence: ASC }}
+            ) {{
+                sequence
+                role
+                content
+            }}
+        }}"#
+    );
+    let messages_response = node.execute(&messages_query).await;
+    if messages_response.has_errors() {
+        anyhow::bail!(
+            "read_subagent_transcript AgentMessage query failed: {:?}",
+            messages_response.errors
+        );
+    }
+    let message_rows: Vec<TranscriptMessageRow> =
+        rows(messages_response.data.as_ref(), "AgentMessage")?;
+
+    let tool_calls_query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}
+            ) {{
+                message_sequence
+                tool_call_id
+                tool_name
+                await_mode
+                child_request_id
+            }}
+        }}"#
+    );
+    let tool_calls_response = node.execute(&tool_calls_query).await;
+    if tool_calls_response.has_errors() {
+        anyhow::bail!(
+            "read_subagent_transcript AgentToolCall query failed: {:?}",
+            tool_calls_response.errors
+        );
+    }
+    let tool_call_rows: Vec<TranscriptToolCallRow> =
+        rows(tool_calls_response.data.as_ref(), "AgentToolCall")?;
+
+    let views = decode_transcript_message_views(message_rows, tool_call_rows);
+    let rendered = render_transcript(
+        &views,
+        args.since_sequence,
+        RenderOptions {
+            include_user_messages: args.include_user_messages,
+            include_tool_results: args.include_tool_results,
+            limit: args.validated_limit(),
+            max_chars: args.validated_max_chars(),
+        },
+    );
+
+    Ok(Some(ReadSubagentTranscriptResponse {
+        child_request_id: edge.child_request_id,
+        child_session_id: edge.child_session_id,
+        from_sequence: rendered.from_sequence,
+        through_sequence: rendered.through_sequence,
+        next_sequence: rendered.next_sequence,
+        truncated: rendered.truncated,
+        transcript: rendered.transcript,
+    }))
+}
+
+async fn load_readable_background_child_edge(
+    node: &EmbeddedNode,
+    caller_request_id: &str,
+    child_request_id: &str,
+) -> Result<Option<ChildEdge>> {
+    if child_request_id.is_empty() {
+        return Ok(None);
+    }
+    let parent_context = load_parent_subagent_context(node, caller_request_id).await?;
+    match load_authorized_child_edge(node, &parent_context, child_request_id).await {
+        Ok(edge) if edge.await_mode == AwaitMode::Background => Ok(Some(edge)),
+        Ok(_) => Ok(None),
+        Err(error) if authorization_lookup_error(&error, caller_request_id, child_request_id) => {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn authorization_lookup_error(
+    error: &anyhow::Error,
+    caller_request_id: &str,
+    child_request_id: &str,
+) -> bool {
+    let message = error.to_string();
+    message.contains(&format!("child AgentRequest {child_request_id} not found"))
+        || message.contains(&format!(
+            "child AgentRequest {child_request_id} is not linked to parent request {caller_request_id}"
+        ))
+        || (message.contains("parent AgentToolCall") && message.contains("not found for child"))
+        || message.contains("has no parent tool-call link")
+        || message.contains("does not point at child")
+}
+
+fn decode_transcript_message_views(
+    message_rows: Vec<TranscriptMessageRow>,
+    tool_call_rows: Vec<TranscriptToolCallRow>,
+) -> Vec<MessageView> {
+    let mut bridge_call_ids_by_sequence = HashMap::<u64, HashSet<String>>::new();
+    let mut tool_names_by_call_id = HashMap::<String, String>::new();
+    for row in tool_call_rows {
+        if let Some(tool_call_id) = non_empty_string(Some(&row.tool_call_id)) {
+            tool_names_by_call_id.insert(tool_call_id.clone(), row.tool_name);
+            let is_background_bridge = non_empty_string(row.child_request_id.as_deref()).is_some()
+                || row.await_mode.as_deref().map(str::trim) == Some("background");
+            if is_background_bridge {
+                bridge_call_ids_by_sequence
+                    .entry(row.message_sequence)
+                    .or_default()
+                    .insert(tool_call_id);
+            }
+        }
+    }
+
+    message_rows
+        .into_iter()
+        .map(|row| {
+            let presentation = present_persisted_message(&row.role, &row.content);
+            let message = decode_persisted_message(&row.role, &row.content);
+            let role = if row.role == "assistant" {
+                MessageRoleView::Assistant
+            } else {
+                MessageRoleView::User
+            };
+            let body = presentation.body_markdown;
+            let kind = if presentation.has_tool_results {
+                let tool_name = tool_result_identities(&message)
+                    .into_iter()
+                    .find_map(|id| tool_names_by_call_id.get(&id).cloned())
+                    .unwrap_or_else(|| "tool".to_string());
+                MessageKindView::ToolResult { tool_name, body }
+            } else if presentation.has_tool_calls {
+                let bridge_call_ids = bridge_call_ids_by_sequence
+                    .get(&row.sequence)
+                    .map(|ids| ids.iter().cloned().collect::<Vec<_>>())
+                    .unwrap_or_default();
+                let bridge_set = bridge_call_ids.iter().cloned().collect::<HashSet<_>>();
+                let tool_call_identities = assistant_tool_call_identities(&message);
+                let non_bridge_tool_call_count = tool_call_identities
+                    .iter()
+                    .filter(|ids| ids.iter().all(|id| !bridge_set.contains(id)))
+                    .count() as u32;
+                MessageKindView::AssistantWithToolCalls {
+                    body,
+                    tool_call_count: tool_call_identities.len() as u32,
+                    bridge_call_ids,
+                    non_bridge_tool_call_count,
+                }
+            } else {
+                MessageKindView::Ordinary { body }
+            };
+
+            MessageView {
+                sequence: row.sequence,
+                role,
+                kind,
+            }
+        })
+        .collect()
+}
+
+fn assistant_tool_call_identities(message: &Message) -> Vec<Vec<String>> {
+    let Message::Assistant { content, .. } = message else {
+        return Vec::new();
+    };
+    content
+        .iter()
+        .filter_map(|item| {
+            let AssistantContent::ToolCall(tool_call) = item else {
+                return None;
+            };
+            let mut ids = Vec::new();
+            if let Some(id) = non_empty_string(Some(&tool_call.id)) {
+                ids.push(id);
+            }
+            if let Some(call_id) = non_empty_string(tool_call.call_id.as_deref()) {
+                ids.push(call_id);
+            }
+            (!ids.is_empty()).then_some(ids)
+        })
+        .collect()
+}
+
+fn tool_result_identities(message: &Message) -> Vec<String> {
+    let Message::User { content } = message else {
+        return Vec::new();
+    };
+    let mut ids = Vec::new();
+    for item in content.iter() {
+        let UserContent::ToolResult(tool_result) = item else {
+            continue;
+        };
+        if let Some(id) = non_empty_string(Some(&tool_result.id)) {
+            ids.push(id);
+        }
+        if let Some(call_id) = non_empty_string(tool_result.call_id.as_deref()) {
+            ids.push(call_id);
+        }
+    }
+    ids
+}
+
+pub(crate) async fn handle_read_tool_output(
+    node: &EmbeddedNode,
+    caller_request_id: &str,
+    args: ReadToolOutputArgs,
+) -> Result<ReadToolOutputOutcome> {
+    let tool_call_id = args.tool_call_id.trim();
+    if tool_call_id.is_empty() {
+        return Ok(ReadToolOutputOutcome::NotAuthorized);
+    }
+
+    let escaped_tool_call_id = escape_graphql_string(tool_call_id);
+    let escaped_caller = escape_graphql_string(caller_request_id);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    request_id: {{ _eq: "{escaped_caller}" }},
+                    tool_call_id: {{ _eq: "{escaped_tool_call_id}" }}
+                }},
+                limit: 1
+            ) {{
+                tool_call_id
+                tool_name
+                request_id
+                await_mode
+                lifecycle_state
+                child_request_id
+                result
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!("read_tool_output query failed: {:?}", response.errors);
+    }
+    let Some(row) = first_row::<ReadToolOutputRow>(response.data.as_ref(), "AgentToolCall") else {
+        return Ok(ReadToolOutputOutcome::NotAuthorized);
+    };
+    if row.request_id.as_deref() != Some(caller_request_id) {
+        return Ok(ReadToolOutputOutcome::NotAuthorized);
+    }
+    if row.await_mode.as_deref() != Some("background")
+        || non_empty_string(row.child_request_id.as_deref()).is_some()
+    {
+        return Ok(ReadToolOutputOutcome::NotBackgrounded);
+    }
+
+    let status = row
+        .lifecycle_state
+        .as_deref()
+        .filter(|state| !state.trim().is_empty())
+        .unwrap_or("running")
+        .to_string();
+    let max_bytes = args.validated_max_bytes() as usize;
+    let result = if status == "running" {
+        ""
+    } else {
+        row.result.as_deref().unwrap_or_default()
+    };
+    let persisted = persisted_tool_output_streams(&row.tool_name, result);
+    let stdout = read_tool_output_stream(
+        &persisted.stdout,
+        max_bytes,
+        persisted.stdout_total_bytes_seen,
+    );
+    let stderr = read_tool_output_stream(
+        &persisted.stderr,
+        max_bytes,
+        persisted.stderr_total_bytes_seen,
+    );
+    Ok(ReadToolOutputOutcome::Found(ReadToolOutputResponse {
+        tool_call_id: row.tool_call_id,
+        tool_name: row.tool_name,
+        status,
+        stdout,
+        stderr,
+        exit_code: persisted.exit_code,
+    }))
+}
+
+pub(crate) async fn load_steer_subagent_target(
+    node: &EmbeddedNode,
+    caller_request_id: &str,
+    child_request_id: &str,
+) -> Result<SteerSubagentTarget> {
+    if child_request_id.trim().is_empty() {
+        return Ok(SteerSubagentTarget::NotAuthorized);
+    }
+    let parent_context = load_parent_subagent_context(node, caller_request_id).await?;
+    let edge = match load_authorized_child_edge(node, &parent_context, child_request_id).await {
+        Ok(edge) => edge,
+        Err(error) if authorization_lookup_error(&error, caller_request_id, child_request_id) => {
+            return Ok(SteerSubagentTarget::NotAuthorized);
+        }
+        Err(error) => return Err(error),
+    };
+    if edge.await_mode != AwaitMode::Background {
+        return Ok(SteerSubagentTarget::NotBackgrounded);
+    }
+    let Some(terminal_row) = load_child_terminal_row(node, &edge.child_request_id).await? else {
+        return Ok(SteerSubagentTarget::NotAuthorized);
+    };
+    if let Some(state) = child_terminal_state_name(&terminal_row) {
+        return Ok(SteerSubagentTarget::Terminal(state));
+    }
+
+    Ok(SteerSubagentTarget::Found(edge))
+}
+
+pub(crate) async fn append_steering_request(
+    node: &EmbeddedNode,
+    caller_request_id: &str,
+    edge: &ChildEdge,
+    message: &str,
+    interrupted_request_id: Option<String>,
+    drained_wake_up_request_ids: Vec<String>,
+) -> Result<SteerSubagentResponse> {
+    session::append_message(node, &edge.child_session_id, "user", message).await?;
+    let mut child_request = load_agent_request_for_queue(node, &edge.child_request_id)
+        .await?
+        .ok_or_else(|| anyhow!("child AgentRequest {} not found", edge.child_request_id))?;
+    if child_request.caused_by_parent_request_id.as_deref() != Some(caller_request_id) {
+        anyhow::bail!(
+            "child AgentRequest {} no longer links to caller request {caller_request_id}",
+            edge.child_request_id
+        );
+    }
+    child_request.caused_by_parent_request_id = Some(caller_request_id.to_string());
+    child_request.caused_by_parent_tool_call_id = None;
+    let enqueued = enqueue_session_request(
+        node,
+        &child_request,
+        message,
+        ExecutionOrigin::Interactive,
+        QueueHints {
+            source: QueueSource::Steering,
+            policy: QueuePolicy::Append,
+            key: None,
+            queued_after_request_id: None,
+            interrupted_request_id: interrupted_request_id.clone(),
+        },
+    )
+    .await?;
+
+    Ok(SteerSubagentResponse {
+        child_request_id: edge.child_request_id.clone(),
+        child_session_id: edge.child_session_id.clone(),
+        queued_request_id: enqueued.request_id,
+        interrupted_active_request_id: interrupted_request_id,
+        drained_wake_up_request_ids,
+    })
+}
+
+pub(crate) async fn active_session_request_id(
+    node: &EmbeddedNode,
+    session_id: &str,
+) -> Result<Option<String>> {
+    let escaped_session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{
+                    session_id: {{ _eq: "{escaped_session_id}" }},
+                    status: {{ _eq: "processing" }},
+                    lifecycle_state: {{ _in: ["claimed", "processing"] }}
+                }},
+                order: [{{ created_at: ASC }}, {{ request_id: ASC }}],
+                limit: 1
+            ) {{
+                request_id
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query active request for session {session_id} failed: {:?}",
+            response.errors
+        );
+    }
+    Ok(
+        first_row::<ActiveSessionRequestRow>(response.data.as_ref(), "AgentRequest")
+            .map(|row| row.request_id),
+    )
+}
+
+pub(crate) async fn drain_automated_wakeups_returning_ids(
+    node: &EmbeddedNode,
+    session_id: &str,
+    reason: &str,
+) -> Result<Vec<String>> {
+    let request_ids = pending_automated_wakeup_request_ids(node, session_id).await?;
+    drain_automated_wakeups(node, session_id, reason).await?;
+    Ok(request_ids)
+}
+
+pub(crate) async fn pending_automated_wakeup_request_ids(
+    node: &EmbeddedNode,
+    session_id: &str,
+) -> Result<Vec<String>> {
+    let escaped_session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{
+                    session_id: {{ _eq: "{escaped_session_id}" }},
+                    status: {{ _eq: "pending" }},
+                    lifecycle_state: {{ _eq: "pending" }}
+                }},
+                order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
+            ) {{
+                request_id
+                execution_origin
+                metadata
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query pending automated wake-ups for session {session_id} failed: {:?}",
+            response.errors
+        );
+    }
+    let rows: Vec<PendingWakeupRow> = rows(response.data.as_ref(), "AgentRequest")?;
+    Ok(rows
+        .into_iter()
+        .filter(|row| {
+            row.execution_origin.as_deref() == Some("scheduled")
+                && is_automated_wakeup(row.metadata.as_deref())
+        })
+        .filter_map(|row| non_empty_string(row.request_id.as_deref()))
+        .collect())
+}
+
+async fn load_agent_request_for_queue(
+    node: &EmbeddedNode,
+    request_id: &str,
+) -> Result<Option<AgentRequest>> {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                limit: 1
+            ) {{
+                _docID
+                request_id
+                agent_did
+                behavior_id
+                session_id
+                content
+                temperature
+                top_p
+                top_k
+                max_tokens
+                metadata
+                execution_origin
+                created_at
+                deadline
+                subagent_depth
+                caused_by_parent_request_id
+                caused_by_parent_tool_call_id
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query AgentRequest {request_id} for steering queue failed: {:?}",
+            response.errors
+        );
+    }
+    let Some(row) = first_row::<AgentRequestQueueRow>(response.data.as_ref(), "AgentRequest")
+    else {
+        return Ok(None);
+    };
+    let request = AgentRequest {
+        doc_id: row.doc_id,
+        request_id: row.request_id,
+        agent_did: row.agent_did,
+        behavior_id: normalize_optional_string(row.behavior_id),
+        session_id: row.session_id,
+        content: row.content,
+        temperature: row.temperature,
+        top_p: row.top_p,
+        top_k: row.top_k,
+        max_tokens: row.max_tokens,
+        metadata: row.metadata,
+        execution_origin: normalize_optional_string(row.execution_origin),
+        created_at: row.created_at,
+        deadline: normalize_optional_string(row.deadline),
+        subagent_depth: row.subagent_depth.unwrap_or(0),
+        caused_by_parent_request_id: normalize_optional_string(row.caused_by_parent_request_id),
+        caused_by_parent_tool_call_id: normalize_optional_string(row.caused_by_parent_tool_call_id),
+    };
+    validate_agent_request_subagent_coherence(&request)?;
+    Ok(Some(request))
+}
+
+fn child_terminal_state_name(row: &ChildRequestTerminalRow) -> Option<String> {
+    if child_request_completed(row) {
+        return Some(
+            row.lifecycle_state
+                .as_deref()
+                .or(row.status.as_deref())
+                .unwrap_or("completed")
+                .to_string(),
+        );
+    }
+    project_child_terminal(row).map(|_| {
+        row.lifecycle_state
+            .as_deref()
+            .or(row.status.as_deref())
+            .unwrap_or("terminal")
+            .to_string()
+    })
+}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
+}
+
+#[derive(Debug, Default)]
+struct PersistedToolOutputStreams {
+    stdout: String,
+    stderr: String,
+    exit_code: Option<i32>,
+    stdout_total_bytes_seen: Option<u64>,
+    stderr_total_bytes_seen: Option<u64>,
+}
+
+fn persisted_tool_output_streams(tool_name: &str, result: &str) -> PersistedToolOutputStreams {
+    parse_native_command_output_streams(tool_name, result).unwrap_or_else(|| {
+        PersistedToolOutputStreams {
+            stdout: result.to_string(),
+            stdout_total_bytes_seen: Some(result.as_bytes().len() as u64),
+            ..Default::default()
+        }
+    })
+}
+
+fn parse_native_command_output_streams(
+    tool_name: &str,
+    result: &str,
+) -> Option<PersistedToolOutputStreams> {
+    if !matches!(tool_name, "bash" | "bash_unrestricted") {
+        return None;
+    }
+
+    let trimmed = result.trim_start();
+    let (metadata_line, body) = trimmed.split_once('\n')?;
+    let metadata = metadata_line.trim().strip_prefix("defra_exec: ")?;
+    let metadata = serde_json::from_str::<Value>(metadata).ok()?;
+    let body = body.strip_prefix("stdout:\n")?;
+    let (stdout, stderr) = body.rsplit_once("\nstderr:\n")?;
+    let stdout = persisted_stream_body(stdout);
+    let stderr = persisted_stream_body(stderr);
+    let stdout_total_bytes_seen = stream_total_seen(&metadata, "stdout_truncation", &stdout);
+    let stderr_total_bytes_seen = stream_total_seen(&metadata, "stderr_truncation", &stderr);
+    let exit_code = metadata
+        .get("exit_code")
+        .and_then(Value::as_i64)
+        .and_then(|code| i32::try_from(code).ok());
+
+    Some(PersistedToolOutputStreams {
+        stdout,
+        stderr,
+        exit_code,
+        stdout_total_bytes_seen: Some(stdout_total_bytes_seen),
+        stderr_total_bytes_seen: Some(stderr_total_bytes_seen),
+    })
+}
+
+fn persisted_stream_body(value: &str) -> String {
+    if value == "(empty)" {
+        String::new()
+    } else {
+        value.to_string()
+    }
+}
+
+fn stream_total_seen(metadata: &Value, key: &str, returned: &str) -> u64 {
+    metadata
+        .get(key)
+        .and_then(|value| value.get("total_chars"))
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| returned.as_bytes().len() as u64)
+        .max(returned.as_bytes().len() as u64)
+}
+
+fn read_tool_output_stream(
+    value: &str,
+    max_bytes: usize,
+    total_bytes_seen: Option<u64>,
+) -> ReadToolOutputStream {
+    let value_bytes = value.as_bytes().len() as u64;
+    let total_bytes_seen = total_bytes_seen.unwrap_or(value_bytes).max(value_bytes);
+    let (bytes, truncated) = truncate_utf8_tail(value, max_bytes);
+    ReadToolOutputStream {
+        bytes,
+        truncated,
+        total_bytes_seen,
+    }
+}
+
+fn truncate_utf8_tail(value: &str, max_bytes: usize) -> (String, bool) {
+    if value.len() <= max_bytes {
+        return (value.to_string(), false);
+    }
+    let mut start = value.len().saturating_sub(max_bytes);
+    while start < value.len() && !value.is_char_boundary(start) {
+        start += 1;
+    }
+    (value[start..].to_string(), true)
+}
+
+fn list_subagent_status_matches(filter: ListStatusFilter, status: &str) -> bool {
+    list_status_matches(filter, status)
+}
+
+fn list_status_matches(filter: ListStatusFilter, status: &str) -> bool {
+    match filter {
+        ListStatusFilter::Running => status == "running",
+        ListStatusFilter::Terminal => matches!(
+            status,
+            "completed"
+                | "failed"
+                | "timedOut"
+                | "cancelled"
+                | "dead"
+                | "interrupted"
+                | "superseded"
+        ),
+        ListStatusFilter::All => !status.trim().is_empty(),
+    }
+}
 
 pub(crate) async fn load_parent_subagent_context(
     node: &EmbeddedNode,
@@ -851,6 +1838,16 @@ where
     data.and_then(|data| data.get(collection))
         .and_then(|value| serde_json::from_value::<Vec<T>>(value.clone()).ok())
         .and_then(|mut rows| rows.pop())
+}
+
+fn rows<T>(data: Option<&serde_json::Value>, collection: &str) -> Result<Vec<T>>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let Some(value) = data.and_then(|data| data.get(collection)) else {
+        anyhow::bail!("{collection} field missing from query response");
+    };
+    serde_json::from_value(value.clone()).map_err(|error| anyhow!("parse {collection}: {error}"))
 }
 
 fn dedupe_non_empty(values: Vec<String>) -> Vec<String> {

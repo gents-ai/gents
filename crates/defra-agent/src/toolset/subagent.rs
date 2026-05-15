@@ -2,6 +2,10 @@ use anyhow::anyhow;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 
+use crate::background_tools::r4c_args::{
+    ListBackgroundToolsArgs, ListSubagentsArgs, ReadSubagentTranscriptArgs, ReadToolOutputArgs,
+    SteerSubagentArgs,
+};
 use crate::background_tools::{
     BackgroundToolArgs, CancelSubagentArgs, CancelToolArgs, SpawnSubagentArgs, WaitSubagentArgs,
     WaitToolArgs,
@@ -11,7 +15,9 @@ use crate::tool_surface::{BackgroundToolConfig, SubagentToolConfig};
 
 use super::shared::ToolError;
 use super::{
-    BACKGROUND_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, CANCEL_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME,
+    BACKGROUND_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, CANCEL_TOOL_NAME,
+    LIST_BACKGROUND_TOOLS_TOOL_NAME, LIST_SUBAGENTS_TOOL_NAME, READ_SUBAGENT_TRANSCRIPT_TOOL_NAME,
+    READ_TOOL_OUTPUT_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME, STEER_SUBAGENT_TOOL_NAME,
     WAIT_SUBAGENT_TOOL_NAME, WAIT_TOOL_NAME,
 };
 
@@ -114,10 +120,25 @@ impl BackgroundTool {
 pub(super) struct WaitSubagentTool;
 
 #[derive(Clone, Copy)]
+pub(super) struct ListSubagentsTool;
+
+#[derive(Clone, Copy)]
+pub(super) struct ReadSubagentTranscriptTool;
+
+#[derive(Clone, Copy)]
+pub(super) struct SteerSubagentTool;
+
+#[derive(Clone, Copy)]
 pub(super) struct CancelSubagentTool;
 
 #[derive(Clone, Copy)]
 pub(super) struct WaitTool;
+
+#[derive(Clone, Copy)]
+pub(super) struct ListBackgroundToolsTool;
+
+#[derive(Clone, Copy)]
+pub(super) struct ReadToolOutputTool;
 
 #[derive(Clone, Copy)]
 pub(super) struct CancelTool;
@@ -252,6 +273,155 @@ impl Tool for CancelSubagentTool {
     }
 }
 
+impl Tool for ListSubagentsTool {
+    const NAME: &'static str = LIST_SUBAGENTS_TOOL_NAME;
+
+    type Error = ToolError;
+    type Args = ListSubagentsArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "List this parent request's visible background child subagents."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["running", "terminal", "all"],
+                        "default": "running",
+                        "description": "Filter child subagents by bridge lifecycle state."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50,
+                        "default": 20,
+                        "description": "Maximum entries to return."
+                    }
+                }
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let _ = args.validated_limit();
+        Err(not_yet_executable_error(Self::NAME))
+    }
+}
+
+impl Tool for ReadSubagentTranscriptTool {
+    const NAME: &'static str = READ_SUBAGENT_TRANSCRIPT_TOOL_NAME;
+
+    type Error = ToolError;
+    type Args = ReadSubagentTranscriptArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Read a compact transcript snapshot from a visible background subagent."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "child_request_id": {
+                        "type": "string",
+                        "description": "Child request ID returned by spawn_subagent or list_subagents."
+                    },
+                    "since_sequence": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "default": 0,
+                        "description": "First transcript sequence to include."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 20,
+                        "description": "Maximum rendered message blocks to return."
+                    },
+                    "max_chars": {
+                        "type": "integer",
+                        "minimum": 64,
+                        "maximum": 24000,
+                        "default": 6000,
+                        "description": "Maximum rendered transcript characters to return."
+                    },
+                    "include_user_messages": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Include ordinary user messages from the child session."
+                    },
+                    "include_tool_results": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Include capped tool-result snippets from the child session."
+                    }
+                },
+                "required": ["child_request_id"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        validate_child_request_id(Self::NAME, &args.child_request_id)?;
+        let _ = args.validated_limit();
+        let _ = args.validated_max_chars();
+        Err(not_yet_executable_error(Self::NAME))
+    }
+}
+
+impl Tool for SteerSubagentTool {
+    const NAME: &'static str = STEER_SUBAGENT_TOOL_NAME;
+
+    type Error = ToolError;
+    type Args = SteerSubagentArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Append a steering message to a visible background subagent, optionally interrupting its active request first."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "child_request_id": {
+                        "type": "string",
+                        "description": "Child request ID returned by spawn_subagent or list_subagents."
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "User-role steering message to append to the child session."
+                    },
+                    "interrupt": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Interrupt the child session's active request before appending the steering request."
+                    }
+                },
+                "required": ["child_request_id", "message"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        validate_child_request_id(Self::NAME, &args.child_request_id)?;
+        if args.message.trim().is_empty() {
+            return Err(invalid_arguments_error(
+                Self::NAME,
+                "/message",
+                "message is required",
+            ));
+        }
+        Err(not_yet_executable_error(Self::NAME))
+    }
+}
+
 impl Tool for BackgroundTool {
     const NAME: &'static str = BACKGROUND_TOOL_NAME;
 
@@ -315,6 +485,83 @@ impl Tool for WaitTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         validate_tool_call_id(WAIT_TOOL_NAME, &args.tool_call_id)?;
+        Err(background_not_yet_executable_error(Self::NAME))
+    }
+}
+
+impl Tool for ListBackgroundToolsTool {
+    const NAME: &'static str = LIST_BACKGROUND_TOOLS_TOOL_NAME;
+
+    type Error = ToolError;
+    type Args = ListBackgroundToolsArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "List this parent request's visible background tool calls.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["running", "terminal", "all"],
+                        "default": "running",
+                        "description": "Filter background tool calls by lifecycle state."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50,
+                        "default": 20,
+                        "description": "Maximum entries to return."
+                    }
+                }
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let _ = args.validated_limit();
+        Err(background_not_yet_executable_error(Self::NAME))
+    }
+}
+
+impl Tool for ReadToolOutputTool {
+    const NAME: &'static str = READ_TOOL_OUTPUT_TOOL_NAME;
+
+    type Error = ToolError;
+    type Args = ReadToolOutputArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Read stdout and stderr snapshots for a visible background tool call."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "tool_call_id": {
+                        "type": "string",
+                        "description": "Tool call ID returned by background_tool or list_background_tools."
+                    },
+                    "max_bytes_per_stream": {
+                        "type": "integer",
+                        "minimum": 256,
+                        "maximum": 262144,
+                        "default": 16384,
+                        "description": "Maximum bytes to return per stream."
+                    }
+                },
+                "required": ["tool_call_id"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        validate_tool_call_id(Self::NAME, &args.tool_call_id)?;
+        let _ = args.validated_max_bytes();
         Err(background_not_yet_executable_error(Self::NAME))
     }
 }
