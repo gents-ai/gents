@@ -14,6 +14,36 @@ pub struct ServiceAccount {
     pub deployment_id: String,
 }
 
+/// Deployment-level principal record.
+///
+/// One `AgentPrincipal` exists per defra-agent process. Owns the signing
+/// identity used for every DefraDB op the runtime issues. Every
+/// `AgentBehavior` on the deployment holds an `Arc<AgentPrincipal>`
+/// back-reference; the back-reference makes Lean's
+/// `behavior_id_determines_principal` theorem structural at the type
+/// level (no path constructs a behavior with a dangling agent_did).
+///
+/// Mirrors the Lean `Identity.Principal` record in
+/// `crates/defra-agent/proofs/Proofs/Identity/State.lean:17`.
+pub struct AgentPrincipal {
+    pub agent_did: String,
+    pub identity: Arc<dyn AgentIdentity>,
+    pub default_behavior_id: String,
+    pub display_name: Option<String>,
+    pub enabled: bool,
+}
+
+impl std::fmt::Debug for AgentPrincipal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentPrincipal")
+            .field("agent_did", &self.agent_did)
+            .field("default_behavior_id", &self.default_behavior_id)
+            .field("display_name", &self.display_name)
+            .field("enabled", &self.enabled)
+            .finish_non_exhaustive()
+    }
+}
+
 #[async_trait]
 pub trait AgentIdentity: Send + Sync {
     fn did(&self) -> &str;

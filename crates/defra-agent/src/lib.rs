@@ -65,14 +65,14 @@ pub use document_config::{
     default_tool_selection_id_for_behavior, ensure_agent_principal, list_agent_behaviors,
     load_agent_behavior, load_agent_principal, load_inference_profile, load_tool_selection,
     upsert_agent_behavior, upsert_agent_principal, upsert_inference_profile, upsert_tool_selection,
-    AgentBehavior, AgentPrincipal, InferenceProfile, PrincipalBootstrap, ToolSelectionDocument,
+    AgentBehavior, InferenceProfile, PrincipalBootstrap, ToolSelectionDocument,
 };
 pub use health_checker::{spawn_health_checker, HealthStatus, ServiceHealth, ServiceHealthMap};
 pub use hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy, HookStats};
 pub use identity::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity,
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
-    AgentIdentity, KeyIdentity, RegisteredIdentity, ServiceAccount,
+    AgentIdentity, AgentPrincipal, KeyIdentity, RegisteredIdentity, ServiceAccount,
 };
 pub use interrupt::{fetch_interrupt_requested_at, interrupt_request};
 pub use lifecycle::{
