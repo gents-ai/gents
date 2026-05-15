@@ -1789,7 +1789,8 @@ mod lean_apply_write_boundary_tests {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn recorder_begin_returns_numeric_id_and_commit_appends_to_committed() {
             let (graphql, recorder) = start_recording_graphql().await;
-            let api_base = graphql.strip_suffix("/graphql").unwrap();
+            let api_base =
+                crate::graphql_access::graphql_api_base(&graphql).expect("graphql endpoint");
             let client = reqwest::Client::new();
 
             let begin = client
@@ -1836,7 +1837,8 @@ mod lean_apply_write_boundary_tests {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn recorder_discard_drops_pending_writes() {
             let (graphql, recorder) = start_recording_graphql().await;
-            let api_base = graphql.strip_suffix("/graphql").unwrap().to_owned();
+            let api_base =
+                crate::graphql_access::graphql_api_base(&graphql).expect("graphql endpoint");
             let client = reqwest::Client::new();
 
             let begin = client
@@ -1881,7 +1883,8 @@ mod lean_apply_write_boundary_tests {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn recorder_fail_injection_aborts_at_target_index() {
             let (graphql, recorder) = start_recording_graphql().await;
-            let api_base = graphql.strip_suffix("/graphql").unwrap().to_owned();
+            let api_base =
+                crate::graphql_access::graphql_api_base(&graphql).expect("graphql endpoint");
             let client = reqwest::Client::new();
 
             let begin = client

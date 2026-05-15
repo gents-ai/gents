@@ -24,27 +24,11 @@ use query::TransactionHandle;
 use serde_json::{json, Value};
 
 use crate::config_writes::ConfigAccess;
-use crate::graphql_access::graphql_diagnostic_hint;
-
-/// Derive the API base URL from a GraphQL endpoint.
-///
-/// The GraphQL endpoint is expected to end with `/graphql` (e.g.
-/// `http://host:port/api/v0/graphql`). Stripping that suffix gives the API
-/// base `http://host:port/api/v0`, from which transaction paths like
-/// `/tx/begin` and `/tx/{id}` are appended.
-fn api_base_from_graphql(graphql: &str) -> Result<String> {
-    graphql
-        .trim()
-        .strip_suffix("/graphql")
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| {
-            anyhow::anyhow!("expected GraphQL endpoint ending in /graphql, got {graphql}")
-        })
-}
+use crate::graphql_access::{graphql_api_base, graphql_diagnostic_hint};
 
 #[derive(Debug)]
 pub(crate) enum TxnHandle {
-    /// Numeric txn id parsed from `POST /api/v0/tx/begin`.
+    /// Numeric txn id parsed from `POST /api/v0/tx`.
     Graphql(String),
     /// Embedded transaction handle returned by `runner.begin_txn(false)`.
     Local(TransactionHandle),
@@ -106,7 +90,7 @@ impl<'a> ConfigApplyTxn<'a> {
     pub(crate) async fn commit(self) -> Result<()> {
         match (self.access, self.handle) {
             (ConfigAccess::Graphql(endpoint), TxnHandle::Graphql(id)) => {
-                let api_base = api_base_from_graphql(endpoint)?;
+                let api_base = graphql_api_base(endpoint)?;
                 let status;
                 let bytes;
                 {
@@ -145,7 +129,7 @@ impl<'a> ConfigApplyTxn<'a> {
     pub(crate) async fn discard(self) -> Result<()> {
         match (self.access, self.handle) {
             (ConfigAccess::Graphql(endpoint), TxnHandle::Graphql(id)) => {
-                let api_base = api_base_from_graphql(endpoint)?;
+                let api_base = graphql_api_base(endpoint)?;
                 let status;
                 let bytes;
                 {
@@ -184,7 +168,7 @@ impl ConfigAccess {
     pub(crate) async fn begin_apply_txn(&self) -> Result<ConfigApplyTxn<'_>> {
         match self {
             ConfigAccess::Graphql(endpoint) => {
-                let api_base = api_base_from_graphql(endpoint)?;
+                let api_base = graphql_api_base(endpoint)?;
                 let client = reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(30))
                     .build()?;

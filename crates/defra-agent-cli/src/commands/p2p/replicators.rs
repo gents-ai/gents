@@ -11,12 +11,12 @@ use super::collections::expand_p2p_collection_args;
 use super::output::{
     fetch_live_http_p2p_status, flatten_p2p_fields, load_collection_name_by_id, p2p_replicator_rows,
 };
-use super::{p2p_api_base, p2p_http_client};
+use super::p2p_http_client;
 
 pub(super) async fn p2p_replicators_list(args: P2pAccessArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
+    let api_base = crate::graphql_access::graphql_api_base(&graphql)?;
     let raw_replicators: Vec<P2pReplicatorRow> =
         crate::http_get_json(&client, &format!("{api_base}/p2p/replicators")).await?;
     let collection_names_by_id = load_collection_name_by_id(&client, &api_base).await;
@@ -37,7 +37,7 @@ pub(super) async fn p2p_replicators_add(args: P2pReplicatorAddArgs) -> Result<()
     let collections = expand_p2p_collection_args(&args.collections, &args.profiles)?;
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
+    let api_base = crate::graphql_access::graphql_api_base(&graphql)?;
     let request = P2pReplicatorRequest {
         collections: collections.clone(),
         addresses: vec![args.peer.clone()],
@@ -65,7 +65,7 @@ pub(super) async fn p2p_replicators_remove(args: P2pReplicatorRemoveArgs) -> Res
     let collections = expand_p2p_collection_args(&args.collections, &args.profiles)?;
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
+    let api_base = crate::graphql_access::graphql_api_base(&graphql)?;
     let request = P2pReplicatorDeleteRequest {
         id: args.peer.clone(),
         collections: collections.clone(),

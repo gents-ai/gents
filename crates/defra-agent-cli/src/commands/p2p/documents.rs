@@ -8,12 +8,12 @@ use crate::{
     resolve_home_dir,
 };
 
-use super::{p2p_api_base, p2p_http_client};
+use super::p2p_http_client;
 
 pub(super) async fn p2p_documents_list(args: P2pAccessArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
+    let api_base = crate::graphql_access::graphql_api_base(&graphql)?;
     let doc_ids: Vec<String> =
         crate::http_get_json(&client, &format!("{api_base}/p2p/documents")).await?;
     let count = doc_ids.len();
@@ -32,7 +32,7 @@ pub(super) async fn p2p_documents_add(args: P2pDocumentsMutateArgs) -> Result<()
     let doc_ids = expand_nonempty_values(&args.doc_ids, "--doc-id")?;
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
+    let api_base = crate::graphql_access::graphql_api_base(&graphql)?;
     http_post_json(&client, &format!("{api_base}/p2p/documents"), &doc_ids).await?;
     let home_dir = resolve_home_dir(args.home.as_deref());
     print_json(&json!({
@@ -48,7 +48,7 @@ pub(super) async fn p2p_documents_remove(args: P2pDocumentsMutateArgs) -> Result
     let doc_ids = expand_nonempty_values(&args.doc_ids, "--doc-id")?;
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
+    let api_base = crate::graphql_access::graphql_api_base(&graphql)?;
     http_delete_json(&client, &format!("{api_base}/p2p/documents"), &doc_ids).await?;
     let home_dir = resolve_home_dir(args.home.as_deref());
     print_json(&json!({
@@ -68,7 +68,7 @@ pub(super) async fn p2p_documents_sync(args: P2pDocumentsSyncArgs) -> Result<()>
     let doc_ids = expand_nonempty_values(&args.doc_ids, "--doc-id")?;
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
+    let api_base = crate::graphql_access::graphql_api_base(&graphql)?;
     let request = P2pSyncDocumentsRequest {
         collection_name: collection.clone(),
         doc_ids: doc_ids.clone(),

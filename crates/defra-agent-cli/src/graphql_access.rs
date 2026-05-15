@@ -16,6 +16,22 @@ use serde_json::Value;
 
 use crate::config_writes::ConfigAccess;
 
+/// Derive the REST API base URL from a GraphQL endpoint.
+///
+/// The GraphQL endpoint is expected to end with `/graphql` (e.g.
+/// `http://host:port/api/v0/graphql`). Stripping that suffix gives the API
+/// base `http://host:port/api/v0`, from which paths like `/tx` (begin) and
+/// `/tx/{id}` (commit/discard) are appended.
+pub(crate) fn graphql_api_base(graphql: &str) -> Result<String> {
+    graphql
+        .trim()
+        .strip_suffix("/graphql")
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            anyhow::anyhow!("expected GraphQL endpoint ending in /graphql, got {graphql}")
+        })
+}
+
 pub(crate) async fn graphql_endpoint_available(graphql: &str) -> bool {
     shared_graphql_endpoint_available(
         graphql,

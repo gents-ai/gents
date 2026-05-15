@@ -17,7 +17,7 @@ use super::output::{
     fetch_live_http_p2p_status, flatten_p2p_fields, load_collection_name_by_id,
     p2p_collection_names, p2p_collection_rows,
 };
-use super::{p2p_api_base, p2p_http_client};
+use super::p2p_http_client;
 
 const P2P_AGENT_COLLECTIONS: &[&str] = &[
     "AgentPrincipal",
@@ -92,7 +92,7 @@ fn p2p_collection_profile_names(profile: P2pCollectionProfileArg) -> Vec<&'stati
 pub(super) async fn p2p_collections_list(args: P2pAccessArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
+    let api_base = crate::graphql_access::graphql_api_base(&graphql)?;
     let collection_ids: Vec<String> =
         crate::http_get_json(&client, &format!("{api_base}/p2p/collections")).await?;
     let collection_names_by_id = load_collection_name_by_id(&client, &api_base).await;
@@ -116,7 +116,7 @@ pub(super) async fn p2p_collections_add(args: P2pCollectionsMutateArgs) -> Resul
     let collections = expand_p2p_collection_args(&args.collections, &args.profiles)?;
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
+    let api_base = crate::graphql_access::graphql_api_base(&graphql)?;
     http_post_json(
         &client,
         &format!("{api_base}/p2p/collections"),
@@ -144,7 +144,7 @@ pub(super) async fn p2p_collections_remove(args: P2pCollectionsMutateArgs) -> Re
     let collections = expand_p2p_collection_args(&args.collections, &args.profiles)?;
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
+    let api_base = crate::graphql_access::graphql_api_base(&graphql)?;
     http_delete_json(
         &client,
         &format!("{api_base}/p2p/collections"),
@@ -168,7 +168,7 @@ pub(super) async fn p2p_collections_sync_branchable(args: P2pSyncBranchableArgs)
     }
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
+    let api_base = crate::graphql_access::graphql_api_base(&graphql)?;
     let request = P2pSyncBranchableRequest {
         collection_id: collection_id.clone(),
     };
@@ -192,7 +192,7 @@ pub(super) async fn p2p_collections_sync_versions(args: P2pSyncVersionsArgs) -> 
     let version_ids = expand_nonempty_values(&args.version_ids, "--version-id")?;
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let client = p2p_http_client()?;
-    let api_base = p2p_api_base(&graphql)?;
+    let api_base = crate::graphql_access::graphql_api_base(&graphql)?;
     let request = P2pSyncVersionsRequest {
         version_ids: version_ids.clone(),
     };
