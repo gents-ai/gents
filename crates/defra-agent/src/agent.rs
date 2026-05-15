@@ -170,6 +170,10 @@ impl DefraAgent {
         &self.principal
     }
 
+    pub(crate) fn principal_arc(&self) -> Arc<AgentPrincipal> {
+        Arc::clone(&self.principal)
+    }
+
     pub fn agent_did(&self) -> &str {
         &self.principal.agent_did
     }

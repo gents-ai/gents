@@ -527,6 +527,7 @@ async fn resolve_startup_snapshot(agent: &DefraAgent) -> Result<ResolvedRuntimeS
             ))
             .map(|snapshot| {
                 snapshot
+                    .with_principal(agent.principal_arc())
                     .with_local_did(agent.agent_did().to_string())
                     .with_paired_peer_dids(paired_peer_dids)
             })
