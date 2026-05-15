@@ -136,49 +136,6 @@ fn rust_well_formed(case: &LeanIdentityStructuralCase) -> bool {
     true
 }
 
-fn behavior_for_id<'a>(
-    case: &'a LeanIdentityPermissionCase,
-    behavior_id: &str,
-) -> &'a LeanIdentityBehavior {
-    case.behaviors
-        .iter()
-        .find(|behavior| behavior.id == behavior_id)
-        .unwrap_or_else(|| {
-            panic!(
-                "permission case {:?} references missing behavior {:?}",
-                case.name, behavior_id
-            )
-        })
-}
-
-fn deployment_for_id<'a>(
-    case: &'a LeanIdentityPermissionCase,
-    deployment_id: &str,
-) -> &'a LeanIdentityDeployment {
-    case.deployments
-        .iter()
-        .find(|deployment| deployment.id == deployment_id)
-        .unwrap_or_else(|| {
-            panic!(
-                "permission case {:?} references missing deployment {:?}",
-                case.name, deployment_id
-            )
-        })
-}
-
-fn rust_canonical_permission_decision(case: &LeanIdentityPermissionCase, principal: &str) -> bool {
-    case.grants
-        .iter()
-        .any(|grant| grant.principal == principal && grant.permission == case.permission)
-}
-
-fn rust_hostability_decision(
-    deployment: &LeanIdentityDeployment,
-    behavior: &LeanIdentityBehavior,
-) -> bool {
-    deployment.principal == behavior.principal
-}
-
 #[test]
 fn identity_structural_cases_match_lean_verdicts() {
     let cases = lean_identity_structural_cases();
