@@ -85,15 +85,29 @@ let counts = match apply_desired_state_changes(&txn, &desired_bundle, &planned).
         return Err(error);
     }
 };
-txn.commit().await.context("config apply: commit failed")?;
+if let Err(commit_err) = txn.commit().await {
+    return Err(commit_err).context("config apply: commit failed");
+}
 Ok(counts)
 ```
+
+(Bound `counts` in the success arm; explicit `commit` block keeps the success/failure paths visually parallel for a scan-read.)
 
 Properties of the braid:
 
 - **Any error from any write aborts the whole apply.** No per-collection commits, no partial successes. Inner per-mutation retry loops in `defra-agent`'s retry classification are unchanged; what changes is that an exhausted retry discards the entire apply rather than continuing past the failure.
 - **Apply error wins.** A `discard` failure after an apply error is logged, not surfaced. The user needs to act on the apply error; the transaction will be reclaimed by DefraDB.
 - **Commit failure is propagated** as an apply error. From the user's perspective a commit failure is operationally identical to any other apply failure: the DB stayed at pre-apply state.
+- **Per-collection progress logging is unchanged.** The existing tracing lines that emit one entry per collection apply remain; transactional wrapping does not alter the user-visible progress surface.
+
+### Backend error asymmetry for `discard`
+
+Discard semantics differ between the two backends and the implementation should not paper that over:
+
+- **Embedded.** `runner.rollback_txn(handle)` returns `TransactionError` only in pathological cases (handle already finalized, lock poisoned). The underlying `db_txn` is dropped in any case. `discard` on the embedded path is effectively infallible from the operator's perspective.
+- **HTTP.** `DELETE /api/v0/tx/{id}` is a network call. It can fail for network reasons unrelated to the apply error — connection reset, server restart, timeout. Even if the DELETE never reaches the server, DefraDB's tx GC will reclaim the handle on its own.
+
+Both variants return `Result<()>` so the orchestrator can log the discrepancy when it occurs (useful telemetry). Neither return changes operator-facing behavior: the apply error is what surfaces, and the DB state ends at pre-apply regardless of whether the explicit `discard` round-trip succeeded.
 
 ### Crash semantics
 
@@ -131,17 +145,36 @@ The success-path flavor (already implemented today) keeps the existing assertion
 
 Cases with `prefix_len = 0` (`empty_manifest`, `update_existing_backend`, `live_only_no_op`) skip the injected-failure flavor; there is no meaningful interior failure point. The success-path flavor still runs for every case.
 
+#### Recording-server extension — scope note
+
+This is meaningfully more than a tweak to the existing recorder. The current `RecordingGraphqlState` is a single mutation log behind a regex parser, with only the `/` route. The tx-aware extension is roughly:
+
+- Three new routes (`POST /api/v0/tx/begin`, `POST /api/v0/tx/{id}`, `DELETE /api/v0/tx/{id}`) returning numeric ids and `204`-style success/failure on commit/discard.
+- A header-routed dispatch on the existing `/` (or `/api/v0/graphql`, whichever the production CLI calls) that reads `x-defradb-tx` and steers the write into the per-tx window vs. committed state.
+- A per-tx state struct keyed by id, plus the "committed" snapshot it merges into on `commit`.
+- A "fail at write N within tx M" injection knob.
+
+The regex-based mutation parser stays — header routing is at the HTTP layer and does not need a real GraphQL parser. The implementation plan calls this out as its own task (estimated 150–250 LOC, with focused unit tests against the recorder itself before any apply-side test consumes it). Doing the recorder before the production threading change keeps the red→green pivot clean: write the new conformance assertions first, watch them go red against today's production, then turn green as the threading lands.
+
 ### Reference-model consumer
 
 `crates/defra-agent/tests/apply_conformance.rs` is unchanged. It consumes the same Lean rows against `defra_agent::apply_model`, which is a pure reference implementation with no DB and no transaction semantics. It stays green by construction.
 
 ### Targeted integration test
 
-A new file `crates/defra-agent-cli/tests/cli_config_apply_transactional_rollback.rs` exercises the braid against a real DefraDB node, not the mock recorder:
+A new file `crates/defra-agent-cli/tests/cli_config_apply_transactional_rollback.rs` exercises the braid against a real DefraDB node, not the mock recorder. The earlier draft of this section was vague about *how* the apply fails; pinning the mechanism here so the implementer is not chasing "why doesn't my failing manifest fail at the right step."
 
-- Construct a manifest whose 4th apply step will fail (e.g., a behavior referencing a profile id that the manifest builder will deliberately omit at write time).
-- Run `defra-agent-cli config apply` against a running node.
-- Assert: command exits non-zero, query the node for every operator-controlled collection, observe zero new rows.
+**Mechanism: mid-apply process termination.** The test exercises the real-node crash recovery path:
+
+1. Build a manifest with at least three documents in each foundational collection (InferenceBackend, InferenceProfile, ToolSelection) plus enough downstream behaviors/tasks/schedules/triggers to make the apply visibly multi-step. The goal is a non-trivial write sequence on the wire so the kill can land mid-stream.
+2. Spawn `defra-agent-cli config apply` as a subprocess, pointed at the real DefraDB node via the `Graphql` backend.
+3. Tail the node's `Update` event stream (via the existing event-bus subscription used elsewhere in tests) and count incoming document-create events. Once at least one but fewer than all expected create events have arrived, SIGKILL the CLI subprocess.
+4. Wait for DefraDB's tx GC to reclaim the orphaned transaction (poll-on-query is enough — querying for the committed state directly).
+5. Query the node for every operator-controlled collection. Assert **zero new rows** across every collection that the manifest would have added. SIGKILL between `begin` and `commit` means no write the CLI made in-tx ever becomes committed.
+
+This is more operationally meaningful than synthesizing a manifest that fails apply-time validation: it exercises the real tx-GC path on a real node, which is the actual failure mode operators will hit (`Ctrl-C`, OOM kill, ssh disconnect, container restart).
+
+**Why not a fail-at-write-N mechanism against the real node?** It would require either (a) a passthrough proxy that's a second copy of the recording-server extension above, or (b) deliberately constructing a manifest that passes pre-apply validation but trips a server-side constraint at a specific step — which is brittle (validators and DefraDB GraphQL type checks both move). The recording-server flavor of the conformance fence already covers fail-at-write-N. The integration test's job is to verify the real tx GC behaves as the design assumes.
 
 The existing `cli_config_apply_order.rs` covers prefix-safe ordering and is orthogonal to atomicity — it stays as-is.
 
@@ -168,13 +201,14 @@ The fence is expressed entirely in terms of fields already emitted by `apply_rec
 
 ## Deliverables
 
-- [ ] `ConfigApplyTxn<'a>` and `TxnHandle` defined in `crates/defra-agent-cli/src/config_writes/mod.rs`.
-- [ ] `ConfigAccess::begin_apply_txn` implementations for both `Graphql` and `Local` variants.
+- [ ] `ConfigApplyTxn<'a>` and `TxnHandle` defined in `crates/defra-agent-cli/src/config_writes/mod.rs`, with backend-asymmetric discard semantics noted in doc comments.
+- [ ] `ConfigAccess::begin_apply_txn` implementations for both `Graphql` (POST `/api/v0/tx/begin`, parse numeric id) and `Local` (`runner.begin_txn(false)`) variants.
 - [ ] Threading change: `&ConfigAccess` → `&ConfigApplyTxn` through `apply_desired_state_changes`, `apply_import_collection`, `apply_generic_import_collection_batched`, `apply_custom_override_collection_batched`, `apply_custom_override_documents_individually`, `query_existing_documents_by_unique_values`, and the three `write_*_document` custom writers.
-- [ ] Top-level CLI command path braid: `begin_apply_txn` → `apply_desired_state_changes` → `commit` (success) | `discard` (error).
-- [ ] Extend `generated_apply_reconcile_cases_fence_production_apply_write_boundary` with the injected-failure / no-commit / pre-live-preservation flavor (recording server gains `begin / commit / discard` endpoints and a per-tx state window).
-- [ ] New `crates/defra-agent-cli/tests/cli_config_apply_transactional_rollback.rs` integration test against a real DefraDB node.
-- [ ] Two follow-up issues filed.
+- [ ] Top-level CLI command path braid: `begin_apply_txn` → `apply_desired_state_changes` → `commit` (success) | `discard` (error). Per-collection progress logging preserved.
+- [ ] Recording-server extension (its own task): three new tx routes, header-routed dispatch on the GraphQL endpoint, per-tx state window keyed by id, fail-at-write-N injection knob, focused recorder-only unit tests.
+- [ ] Extend `generated_apply_reconcile_cases_fence_production_apply_write_boundary` with the injected-failure / no-commit / pre-live-preservation flavor against the extended recorder, plus the success-path `begin`/`commit` count assertion.
+- [ ] New `crates/defra-agent-cli/tests/cli_config_apply_transactional_rollback.rs` integration test against a real DefraDB node, exercising the SIGKILL-mid-apply / tx-GC path.
+- [ ] Two follow-up issues filed (Lean external-abort projection; defra-node tx idle-timeout audit if implementation surfaces a gap).
 - [ ] CHANGELOG / release-note entry.
 
 ## Verification
