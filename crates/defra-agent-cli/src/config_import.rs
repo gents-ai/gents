@@ -797,6 +797,7 @@ mod lean_apply_write_boundary_tests {
     use regex::Regex;
     use serde_json::{json, Map};
     use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
     use tokio::net::TcpListener;
 
@@ -813,7 +814,49 @@ mod lean_apply_write_boundary_tests {
     #[derive(Clone, Default)]
     struct RecordingGraphqlState {
         queries: Arc<Mutex<Vec<String>>>,
-        writes: Arc<Mutex<Vec<ObservedWrite>>>,
+        transactions: Arc<Mutex<BTreeMap<String, Vec<ObservedWrite>>>>,
+        committed: Arc<Mutex<Vec<ObservedWrite>>>,
+        next_tx_id: Arc<AtomicU64>,
+        fail_injection: Arc<Mutex<Option<FailInjection>>>,
+        tx_begin_count: Arc<AtomicU64>,
+        tx_commit_count: Arc<AtomicU64>,
+        tx_discard_count: Arc<AtomicU64>,
+    }
+
+    #[derive(Debug, Clone)]
+    struct FailInjection {
+        tx_id: String,
+        write_index: usize,
+    }
+
+    impl RecordingGraphqlState {
+        fn committed_state(&self) -> Vec<ObservedWrite> {
+            self.committed.lock().expect("committed lock").clone()
+        }
+
+        fn observed_writes(&self) -> Vec<ObservedWrite> {
+            let mut all = self.committed.lock().expect("committed lock").clone();
+            let txs = self.transactions.lock().expect("tx lock").clone();
+            for (_id, writes) in txs.iter() {
+                all.extend(writes.iter().cloned());
+            }
+            all
+        }
+
+        fn tx_lifecycle_counts(&self) -> (u64, u64, u64) {
+            (
+                self.tx_begin_count.load(Ordering::SeqCst),
+                self.tx_commit_count.load(Ordering::SeqCst),
+                self.tx_discard_count.load(Ordering::SeqCst),
+            )
+        }
+
+        fn install_fail_at(&self, tx_id: impl Into<String>, write_index: usize) {
+            *self.fail_injection.lock().expect("fail lock") = Some(FailInjection {
+                tx_id: tx_id.into(),
+                write_index,
+            });
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -859,7 +902,7 @@ mod lean_apply_write_boundary_tests {
 
             assert_counts_match_lean(case, &counts);
 
-            let observed = recorder.writes.lock().expect("writes lock").clone();
+            let observed = recorder.observed_writes();
             let expected = case
                 .expected_selected_writes
                 .iter()
@@ -1149,6 +1192,11 @@ mod lean_apply_write_boundary_tests {
         let addr = listener.local_addr().expect("recording GraphQL addr");
         let app = Router::new()
             .route("/", post(recording_graphql_handler))
+            .route("/api/v0/tx/begin", post(recording_tx_begin_handler))
+            .route(
+                "/api/v0/tx/{id}",
+                post(recording_tx_commit_handler).delete(recording_tx_discard_handler),
+            )
             .with_state(state.clone());
         tokio::spawn(async move {
             axum::serve(listener, app)
@@ -1158,8 +1206,56 @@ mod lean_apply_write_boundary_tests {
         (format!("http://{addr}/"), state)
     }
 
+    async fn recording_tx_begin_handler(State(state): State<RecordingGraphqlState>) -> Json<Value> {
+        let id = state.next_tx_id.fetch_add(1, Ordering::SeqCst);
+        state
+            .transactions
+            .lock()
+            .expect("tx lock")
+            .insert(id.to_string(), Vec::new());
+        state.tx_begin_count.fetch_add(1, Ordering::SeqCst);
+        Json(json!({ "id": id.to_string() }))
+    }
+
+    async fn recording_tx_commit_handler(
+        State(state): State<RecordingGraphqlState>,
+        axum::extract::Path(id): axum::extract::Path<String>,
+    ) -> axum::http::StatusCode {
+        let mut transactions = state.transactions.lock().expect("tx lock");
+        let Some(writes) = transactions.remove(&id) else {
+            return axum::http::StatusCode::NOT_FOUND;
+        };
+        drop(transactions);
+        state
+            .committed
+            .lock()
+            .expect("committed lock")
+            .extend(writes);
+        state.tx_commit_count.fetch_add(1, Ordering::SeqCst);
+        axum::http::StatusCode::OK
+    }
+
+    async fn recording_tx_discard_handler(
+        State(state): State<RecordingGraphqlState>,
+        axum::extract::Path(id): axum::extract::Path<String>,
+    ) -> axum::http::StatusCode {
+        let removed = state
+            .transactions
+            .lock()
+            .expect("tx lock")
+            .remove(&id)
+            .is_some();
+        if removed {
+            state.tx_discard_count.fetch_add(1, Ordering::SeqCst);
+            axum::http::StatusCode::OK
+        } else {
+            axum::http::StatusCode::NOT_FOUND
+        }
+    }
+
     async fn recording_graphql_handler(
         State(state): State<RecordingGraphqlState>,
+        headers: axum::http::HeaderMap,
         Json(body): Json<Value>,
     ) -> Json<Value> {
         let query = body
@@ -1173,9 +1269,45 @@ mod lean_apply_write_boundary_tests {
             .expect("queries lock")
             .push(query.clone());
 
+        let tx_id = headers
+            .get("x-defradb-tx")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
         if query.contains("mutation") {
             let writes = parse_mutation_writes(&query);
-            state.writes.lock().expect("writes lock").extend(writes);
+
+            if let Some(fail) = state.fail_injection.lock().expect("fail lock").clone() {
+                if tx_id.as_deref() == Some(fail.tx_id.as_str()) {
+                    let prior = state
+                        .transactions
+                        .lock()
+                        .expect("tx lock")
+                        .get(&fail.tx_id)
+                        .map(|v| v.len())
+                        .unwrap_or(0);
+                    if (prior..prior + writes.len()).contains(&fail.write_index) {
+                        return Json(json!({
+                            "errors": [{ "message": "injected failure at recorder" }]
+                        }));
+                    }
+                }
+            }
+
+            match tx_id {
+                Some(id) => {
+                    let mut transactions = state.transactions.lock().expect("tx lock");
+                    let entry = transactions.entry(id).or_default();
+                    entry.extend(writes);
+                }
+                None => {
+                    state
+                        .committed
+                        .lock()
+                        .expect("committed lock")
+                        .extend(writes);
+                }
+            }
             Json(json!({ "data": aliased_mutation_response(&query) }))
         } else {
             Json(json!({ "data": empty_collection_query_response(&query) }))
@@ -1601,5 +1733,150 @@ mod lean_apply_write_boundary_tests {
 
     fn doc_key_from_desired(doc: &LeanApplyDesiredDoc) -> (Collection, String) {
         (collection_from_lean_name(&doc.collection), doc.id.clone())
+    }
+
+    #[cfg(test)]
+    mod recorder_unit_tests {
+        use super::*;
+        use serde_json::json;
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn recorder_begin_returns_numeric_id_and_commit_appends_to_committed() {
+            let (graphql, recorder) = start_recording_graphql().await;
+            let client = reqwest::Client::new();
+
+            let begin = client
+                .post(format!("{graphql}api/v0/tx/begin"))
+                .send()
+                .await
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap();
+            let txn_id = begin
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap()
+                .to_string();
+            assert!(txn_id.parse::<u64>().is_ok(), "tx id must be numeric");
+
+            let _write = client
+                .post(format!("{graphql}"))
+                .header("x-defradb-tx", &txn_id)
+                .json(&json!({
+                    "query": "mutation { doc_0: create_Task(input: { task_id: \"task-a\" }) { _docID } }",
+                }))
+                .send()
+                .await
+                .unwrap();
+
+            // Before commit, committed window is empty.
+            assert!(recorder.committed_state().is_empty());
+
+            let commit = client
+                .post(format!("{graphql}api/v0/tx/{txn_id}"))
+                .send()
+                .await
+                .unwrap();
+            assert!(commit.status().is_success());
+
+            let committed = recorder.committed_state();
+            assert_eq!(committed.len(), 1);
+            assert_eq!(committed[0].collection, Collection::Task);
+            assert_eq!(committed[0].unique_value, "task-a");
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn recorder_discard_drops_pending_writes() {
+            let (graphql, recorder) = start_recording_graphql().await;
+            let client = reqwest::Client::new();
+
+            let begin = client
+                .post(format!("{graphql}api/v0/tx/begin"))
+                .send()
+                .await
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap();
+            let txn_id = begin
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap()
+                .to_string();
+
+            let _write = client
+                .post(format!("{graphql}"))
+                .header("x-defradb-tx", &txn_id)
+                .json(&serde_json::json!({
+                    "query": "mutation { doc_0: create_Task(input: { task_id: \"task-a\" }) { _docID } }",
+                }))
+                .send()
+                .await
+                .unwrap();
+
+            let discard = client
+                .delete(format!("{graphql}api/v0/tx/{txn_id}"))
+                .send()
+                .await
+                .unwrap();
+            assert!(discard.status().is_success());
+
+            assert!(
+                recorder.committed_state().is_empty(),
+                "discarded tx must not contribute to committed state"
+            );
+            let (begin_count, commit_count, discard_count) = recorder.tx_lifecycle_counts();
+            assert_eq!((begin_count, commit_count, discard_count), (1, 0, 1));
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn recorder_fail_injection_aborts_at_target_index() {
+            let (graphql, recorder) = start_recording_graphql().await;
+            let client = reqwest::Client::new();
+
+            let begin = client
+                .post(format!("{graphql}api/v0/tx/begin"))
+                .send()
+                .await
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap();
+            let txn_id = begin
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap()
+                .to_string();
+            recorder.install_fail_at(&txn_id, 1);
+
+            let ok = client
+                .post(format!("{graphql}"))
+                .header("x-defradb-tx", &txn_id)
+                .json(&serde_json::json!({
+                    "query": "mutation { doc_0: create_Task(input: { task_id: \"task-a\" }) { _docID } }",
+                }))
+                .send()
+                .await
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap();
+            assert!(ok.get("errors").is_none(), "first mutation should succeed");
+
+            let fail = client
+                .post(format!("{graphql}"))
+                .header("x-defradb-tx", &txn_id)
+                .json(&serde_json::json!({
+                    "query": "mutation { doc_0: create_Task(input: { task_id: \"task-b\" }) { _docID } }",
+                }))
+                .send()
+                .await
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap();
+            assert!(fail.get("errors").is_some(), "second mutation should fail");
+        }
     }
 }
