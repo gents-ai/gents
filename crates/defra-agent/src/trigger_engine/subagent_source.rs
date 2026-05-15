@@ -21,7 +21,9 @@ use crate::background_tools::{
 };
 use crate::graphql::escape_graphql_string;
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedTask};
-use crate::tool_call_lifecycle::subagent_request::create_subagent_request_with_request_id;
+use crate::tool_call_lifecycle::subagent_request::{
+    create_subagent_request_with_request_id, create_subagent_request_with_trusted_parent_request_id,
+};
 use crate::tool_call_lifecycle::{AwaitMode, FailureClass, IllegalToolCallTransition};
 
 use super::{FireIntent, FireResult, TriggerKind, TriggerSource};
@@ -299,62 +301,75 @@ impl SubagentSource {
             anyhow::bail!(IllegalToolCallTransition::ParentLinkageIncoherent);
         };
 
-        let authorization = match load_parent_subagent_authorization(&self.node, &parent_request_id)
+        let snapshot = self.snapshot_rx.borrow().clone();
+        let parent_authoring_did = parent.agent_did.clone();
+        let trusted_paired_peer = snapshot.paired_peer_dids.contains(&parent_authoring_did);
+        let tool_name = non_empty(Some(&row.tool_name)).unwrap_or("spawn_subagent");
+        if trusted_paired_peer {
+            tracing::debug!(
+                parent_request_id = %parent_request_id,
+                parent_authoring_did = %parent_authoring_did,
+                "subagent source claiming cross-deployment spawn from paired peer",
+            );
+        } else {
+            let authorization = match load_parent_subagent_authorization(
+                &self.node,
+                &parent_request_id,
+            )
             .await
-        {
-            Ok(authorization) => authorization,
-            Err(error) => {
+            {
+                Ok(authorization) => authorization,
+                Err(error) => {
+                    let failed = self
+                        .fail_unauthorized_tool_call(
+                            &row,
+                            "/behavior_id",
+                            &spawn_args.behavior_id,
+                            "subagent authorization could not be verified for this behavior",
+                            &[],
+                        )
+                        .await?;
+                    self.processed_tool_calls.insert(processed_key);
+                    tracing::warn!(
+                        parent_request_id = %parent_request_id,
+                        parent_tool_call_id = %parent_tool_call_id,
+                        target_behavior_id = %spawn_args.behavior_id,
+                        failed_tool_call = failed,
+                        %error,
+                        "subagent source could not verify parent subagent authorization; rejecting spawn",
+                    );
+                    return Ok(None);
+                }
+            };
+            if let Some(denial) = subagent_spawn_denial(
+                &authorization,
+                &spawn_args.behavior_id,
+                await_mode,
+                tool_name,
+            ) {
                 let failed = self
                     .fail_unauthorized_tool_call(
                         &row,
-                        "/behavior_id",
-                        &spawn_args.behavior_id,
-                        "subagent authorization could not be verified for this behavior",
-                        &[],
+                        denial.path,
+                        &denial.requested,
+                        denial.message,
+                        &authorization.allowed_targets,
                     )
                     .await?;
                 self.processed_tool_calls.insert(processed_key);
                 tracing::warn!(
                     parent_request_id = %parent_request_id,
+                    parent_behavior_id = %authorization.behavior_id,
                     parent_tool_call_id = %parent_tool_call_id,
                     target_behavior_id = %spawn_args.behavior_id,
+                    await_mode = %await_mode.as_str(),
                     failed_tool_call = failed,
-                    %error,
-                    "subagent source could not verify parent subagent authorization; rejecting spawn",
+                    "subagent source rejected unauthorized subagent spawn",
                 );
                 return Ok(None);
             }
-        };
-        let tool_name = non_empty(Some(&row.tool_name)).unwrap_or("spawn_subagent");
-        if let Some(denial) = subagent_spawn_denial(
-            &authorization,
-            &spawn_args.behavior_id,
-            await_mode,
-            tool_name,
-        ) {
-            let failed = self
-                .fail_unauthorized_tool_call(
-                    &row,
-                    denial.path,
-                    &denial.requested,
-                    denial.message,
-                    &authorization.allowed_targets,
-                )
-                .await?;
-            self.processed_tool_calls.insert(processed_key);
-            tracing::warn!(
-                parent_request_id = %parent_request_id,
-                parent_behavior_id = %authorization.behavior_id,
-                parent_tool_call_id = %parent_tool_call_id,
-                target_behavior_id = %spawn_args.behavior_id,
-                await_mode = %await_mode.as_str(),
-                failed_tool_call = failed,
-                "subagent source rejected unauthorized subagent spawn",
-            );
-            return Ok(None);
         }
 
-        let snapshot = self.snapshot_rx.borrow().clone();
         if snapshot.behavior(&spawn_args.behavior_id).is_none() {
             tracing::warn!(
                 parent_request_id = %parent_request_id,
@@ -376,18 +391,38 @@ impl SubagentSource {
             .unwrap_or(0);
         let deadline =
             effective_deadline(row.deadline_at.as_deref(), spawn_args.deadline.as_deref());
-        let request_id = create_subagent_request_with_request_id(
-            &self.node,
-            child_request_id.clone(),
-            parent_request_id.clone(),
-            parent_tool_call_id.clone(),
-            parent_depth,
-            parent.agent_did,
-            spawn_args.behavior_id.clone(),
-            spawn_args.prompt.clone(),
-            deadline,
-        )
-        .await?;
+        let child_agent_did = if trusted_paired_peer && !snapshot.local_did.trim().is_empty() {
+            snapshot.local_did.clone()
+        } else {
+            parent.agent_did
+        };
+        let request_id = if trusted_paired_peer {
+            create_subagent_request_with_trusted_parent_request_id(
+                &self.node,
+                child_request_id.clone(),
+                parent_request_id.clone(),
+                parent_tool_call_id.clone(),
+                parent_depth,
+                child_agent_did,
+                spawn_args.behavior_id.clone(),
+                spawn_args.prompt.clone(),
+                deadline,
+            )
+            .await?
+        } else {
+            create_subagent_request_with_request_id(
+                &self.node,
+                child_request_id.clone(),
+                parent_request_id.clone(),
+                parent_tool_call_id.clone(),
+                parent_depth,
+                child_agent_did,
+                spawn_args.behavior_id.clone(),
+                spawn_args.prompt.clone(),
+                deadline,
+            )
+            .await?
+        };
 
         self.processed_tool_calls.insert(processed_key);
         let fired_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);

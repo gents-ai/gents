@@ -8,6 +8,8 @@ use super::*;
 fn snapshot(generation: u64, default_behavior_id: &str) -> Arc<ActiveRuntimeSnapshot> {
     Arc::new(ActiveRuntimeSnapshot {
         generation,
+        local_did: String::new(),
+        paired_peer_dids: HashSet::new(),
         default_behavior_id: default_behavior_id.to_string(),
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
@@ -25,6 +27,8 @@ fn snapshot(generation: u64, default_behavior_id: &str) -> Arc<ActiveRuntimeSnap
 #[test]
 fn resolved_snapshot_activate_preserves_generation_and_dispatchers() {
     let resolved = ResolvedRuntimeSnapshot {
+        local_did: "did:local".to_string(),
+        paired_peer_dids: HashSet::from(["did:peer".to_string()]),
         default_behavior_id: "general".to_string(),
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
@@ -41,6 +45,8 @@ fn resolved_snapshot_activate_preserves_generation_and_dispatchers() {
 
     assert_eq!(active.generation, 1);
     assert_eq!(active.default_behavior_id, "general");
+    assert_eq!(active.local_did, "did:local");
+    assert!(active.paired_peer_dids.contains("did:peer"));
     assert!(active.dispatchers.contains_key("general"));
     assert_eq!(active.unavailable_reason("code"), Some("missing backend"));
 }
@@ -74,6 +80,8 @@ fn concurrency_mode_parse_is_strict() {
 #[test]
 fn configuration_fingerprint_reflects_schedule_set() {
     let base = ResolvedRuntimeSnapshot {
+        local_did: String::new(),
+        paired_peer_dids: HashSet::new(),
         default_behavior_id: "general".to_string(),
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),

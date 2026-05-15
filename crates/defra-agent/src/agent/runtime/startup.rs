@@ -2,10 +2,11 @@
 // between health checking, snapshot resolution, slot bootstrap, and recovery.
 // Each phase depends on the previous; splitting into submodules would require
 // threading many intermediate values across module boundaries for no gain.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
+use serde::Deserialize;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -28,6 +29,7 @@ enum BackgroundTaskResult {
     Reconcile(Result<()>),
     Control(Result<()>),
     SubagentCompletion(Result<()>),
+    CrossDeploymentCancelMirror(Result<()>),
 }
 
 pub(in crate::agent) async fn run_agent(
@@ -44,6 +46,13 @@ pub(in crate::agent) async fn run_agent(
         .await;
     if let Some(observer) = &agent.process_state_observer {
         observer.on_process_state_change(ProcessLifecycleState::Recovering);
+    }
+    if let Err(error) = crate::migration::ensure_peer_pairing_desired_migrations(agent.node.clone())
+        .await
+        .context("ensure PeerPairingDesired migrations")
+    {
+        runtime_status.publish_error(&format!("{error:#}")).await;
+        return Err(error);
     }
     let health_map = ServiceHealthMap::new();
     let tool_runtime = ToolRuntimeContext::new(
@@ -220,12 +229,28 @@ pub(in crate::agent) async fn run_agent(
     let mut background_tasks = JoinSet::new();
 
     let completion_node = agent.node.clone();
+    let completion_agent_did = agent.agent_did.clone();
     let completion_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::SubagentCompletion(
             crate::background_completion::run_background_completion_observer(
                 completion_node,
+                completion_agent_did,
                 completion_cancel,
+            )
+            .await,
+        )
+    });
+
+    let cancel_mirror_node = agent.node.clone();
+    let cancel_mirror_snapshot_rx = active_snapshot_rx.clone();
+    let cancel_mirror_cancel = cancel.child_token();
+    background_tasks.spawn(async move {
+        BackgroundTaskResult::CrossDeploymentCancelMirror(
+            crate::trigger_engine::cross_deployment_cancel_mirror::run_cross_deployment_cancel_mirror(
+                cancel_mirror_node,
+                cancel_mirror_snapshot_rx,
+                cancel_mirror_cancel,
             )
             .await,
         )
@@ -308,6 +333,7 @@ pub(in crate::agent) async fn run_agent(
             Ok(BackgroundTaskResult::Reconcile(result)) => (result, false),
             Ok(BackgroundTaskResult::Control(result)) => (result, false),
             Ok(BackgroundTaskResult::SubagentCompletion(result)) => (result, false),
+            Ok(BackgroundTaskResult::CrossDeploymentCancelMirror(result)) => (result, false),
             Err(error) => (Err(anyhow!("background task join failed: {error}")), false),
         },
         else => (Ok(()), false),
@@ -490,6 +516,7 @@ async fn resolve_startup_snapshot(agent: &DefraAgent) -> Result<ResolvedRuntimeS
                 resolve_tool_surfaces(agent.node.as_ref(), &agent.behaviors).await?;
             let backend_admission_configs =
                 resolve_backend_admission_configs(agent.node.as_ref(), &agent.behaviors).await?;
+            let paired_peer_dids = load_startup_paired_peer_dids(agent.node.as_ref()).await?;
             Ok(ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
                 agent.default_behavior_id.clone(),
                 agent.behaviors.clone(),
@@ -497,8 +524,55 @@ async fn resolve_startup_snapshot(agent: &DefraAgent) -> Result<ResolvedRuntimeS
                 backend_admission_configs,
                 agent.unavailable_behaviors.clone(),
             ))
+            .map(|snapshot| {
+                snapshot
+                    .with_local_did(agent.agent_did.clone())
+                    .with_paired_peer_dids(paired_peer_dids)
+            })
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct StartupPeerPairingDesiredRow {
+    peer_id: String,
+    agent_did: Option<String>,
+}
+
+async fn load_startup_paired_peer_dids(node: &defra_node::EmbeddedNode) -> Result<HashSet<String>> {
+    let query = r#"{
+        PeerPairingDesired {
+            peer_id
+            agent_did
+        }
+    }"#;
+    let response = node.execute(query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query PeerPairingDesired for startup paired peer DIDs failed: {:?}",
+            response.errors
+        );
+    }
+    let rows: Vec<StartupPeerPairingDesiredRow> = response
+        .data
+        .as_ref()
+        .and_then(|d| d.get("PeerPairingDesired"))
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            row.agent_did
+                .as_deref()
+                .map(str::trim)
+                .filter(|did| !did.is_empty())
+                .map(ToOwned::to_owned)
+                .or_else(|| {
+                    let peer_id = row.peer_id.trim();
+                    peer_id.starts_with("did:").then(|| peer_id.to_string())
+                })
+        })
+        .collect())
 }
 
 async fn resolve_backend_admission_configs(

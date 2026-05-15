@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
+use serde::Deserialize;
 
 use crate::admission::backend_admission_configs_from_backends;
 use crate::config::BehaviorConfig;
@@ -192,6 +193,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     let (active_event_triggers, unavailable_event_triggers) =
         resolve_event_triggers(view, &unavailable_behaviors);
     let active_tasks = resolve_tasks(view, &unavailable_behaviors);
+    let paired_peer_dids = load_paired_peer_dids(node).await?;
 
     Ok(ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         default_behavior_id,
@@ -200,9 +202,53 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         backend_admission_configs,
         unavailable_behaviors,
     )
+    .with_local_did(context.identity.did().to_string())
+    .with_paired_peer_dids(paired_peer_dids)
     .with_schedules(active_schedules, unavailable_schedules)
     .with_event_triggers(active_event_triggers, unavailable_event_triggers)
     .with_tasks(active_tasks))
+}
+
+#[derive(Debug, Deserialize)]
+struct PeerPairingDesiredDidRow {
+    peer_id: String,
+    agent_did: Option<String>,
+}
+
+async fn load_paired_peer_dids(node: &EmbeddedNode) -> Result<HashSet<String>> {
+    let query = r#"{
+        PeerPairingDesired {
+            peer_id
+            agent_did
+        }
+    }"#;
+    let response = node.execute(query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query PeerPairingDesired for paired peer DIDs failed: {:?}",
+            response.errors
+        );
+    }
+    let rows: Vec<PeerPairingDesiredDidRow> = response
+        .data
+        .as_ref()
+        .and_then(|d| d.get("PeerPairingDesired"))
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            row.agent_did
+                .as_deref()
+                .map(str::trim)
+                .filter(|did| !did.is_empty())
+                .map(ToOwned::to_owned)
+                .or_else(|| {
+                    let peer_id = row.peer_id.trim();
+                    peer_id.starts_with("did:").then(|| peer_id.to_string())
+                })
+        })
+        .collect())
 }
 
 /// Classify every `Task` in `view` into `active_tasks` if it's enabled and

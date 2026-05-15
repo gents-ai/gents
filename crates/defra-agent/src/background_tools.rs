@@ -95,6 +95,7 @@ pub(crate) struct ParentSubagentContext {
     pub allowed_targets: Vec<String>,
     pub subagent_spawn_enabled: bool,
     pub subagent_background_enabled: bool,
+    pub cross_deployment_spawn_timeout_seconds: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,6 +104,7 @@ pub(crate) struct ParentSubagentAuthorization {
     pub allowed_targets: Vec<String>,
     pub spawn_enabled: bool,
     pub background_enabled: bool,
+    pub cross_deployment_spawn_timeout_seconds: Option<u32>,
 }
 
 impl ParentSubagentAuthorization {
@@ -189,7 +191,10 @@ struct ToolSelectionTargetsRow {
     subagent_targets: Option<Vec<String>>,
     subagent_spawn_enabled: Option<bool>,
     subagent_background_enabled: Option<bool>,
+    cross_deployment_spawn_timeout_seconds: Option<u32>,
 }
+
+pub(crate) const DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS: u32 = 60;
 
 pub(crate) async fn load_parent_subagent_context(
     node: &EmbeddedNode,
@@ -241,6 +246,7 @@ pub(crate) async fn load_parent_subagent_context(
         allowed_targets: selection.allowed_targets,
         subagent_spawn_enabled: selection.spawn_enabled,
         subagent_background_enabled: selection.background_enabled,
+        cross_deployment_spawn_timeout_seconds: selection.cross_deployment_spawn_timeout_seconds,
     })
 }
 
@@ -290,7 +296,24 @@ pub(crate) async fn load_parent_subagent_authorization(
         allowed_targets: selection.allowed_targets,
         spawn_enabled: selection.spawn_enabled,
         background_enabled: selection.background_enabled,
+        cross_deployment_spawn_timeout_seconds: selection.cross_deployment_spawn_timeout_seconds,
     })
+}
+
+pub(crate) fn effective_cross_deployment_spawn_timeout_seconds(
+    authorization: &ParentSubagentAuthorization,
+) -> u32 {
+    authorization
+        .cross_deployment_spawn_timeout_seconds
+        .unwrap_or(DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS)
+}
+
+pub(crate) fn effective_context_cross_deployment_spawn_timeout_seconds(
+    context: &ParentSubagentContext,
+) -> u32 {
+    context
+        .cross_deployment_spawn_timeout_seconds
+        .unwrap_or(DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS)
 }
 
 pub(crate) fn target_is_allowed(context: &ParentSubagentContext, target_behavior_id: &str) -> bool {
@@ -304,6 +327,7 @@ struct SubagentToolSelection {
     allowed_targets: Vec<String>,
     spawn_enabled: bool,
     background_enabled: bool,
+    cross_deployment_spawn_timeout_seconds: Option<u32>,
 }
 
 async fn load_subagent_tool_selection(
@@ -343,6 +367,7 @@ async fn load_subagent_tool_selection(
                 allowed_targets: Vec::new(),
                 spawn_enabled: false,
                 background_enabled: false,
+                cross_deployment_spawn_timeout_seconds: None,
             });
         }
     };
@@ -357,6 +382,7 @@ async fn load_subagent_tool_selection(
                 subagent_targets
                 subagent_spawn_enabled
                 subagent_background_enabled
+                cross_deployment_spawn_timeout_seconds
             }}
         }}"#
     );
@@ -374,6 +400,7 @@ async fn load_subagent_tool_selection(
             allowed_targets: Vec::new(),
             spawn_enabled: false,
             background_enabled: false,
+            cross_deployment_spawn_timeout_seconds: None,
         });
     };
 
@@ -381,7 +408,39 @@ async fn load_subagent_tool_selection(
         allowed_targets: dedupe_non_empty(selection.subagent_targets.unwrap_or_default()),
         spawn_enabled: selection.subagent_spawn_enabled.unwrap_or(false),
         background_enabled: selection.subagent_background_enabled.unwrap_or(false),
+        cross_deployment_spawn_timeout_seconds: selection.cross_deployment_spawn_timeout_seconds,
     })
+}
+
+#[cfg(test)]
+mod cross_deployment_timeout_tests {
+    use super::*;
+
+    fn auth(timeout: Option<u32>) -> ParentSubagentAuthorization {
+        ParentSubagentAuthorization {
+            behavior_id: "parent".to_string(),
+            allowed_targets: vec!["child".to_string()],
+            spawn_enabled: true,
+            background_enabled: true,
+            cross_deployment_spawn_timeout_seconds: timeout,
+        }
+    }
+
+    #[test]
+    fn override_takes_precedence() {
+        assert_eq!(
+            effective_cross_deployment_spawn_timeout_seconds(&auth(Some(120))),
+            120
+        );
+    }
+
+    #[test]
+    fn default_when_none() {
+        assert_eq!(
+            effective_cross_deployment_spawn_timeout_seconds(&auth(None)),
+            DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS
+        );
+    }
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,0 +1,82 @@
+{
+  "name": "b_crash_mid_execution",
+  "actions": [
+    {
+      "op": "OperatorWritePairing",
+      "node": "A",
+      "peer": "B",
+      "collections": ["AgentRequest", "AgentResponse", "AgentToolCall", "AgentMessage"]
+    },
+    {
+      "op": "OperatorWritePairing",
+      "node": "B",
+      "peer": "A",
+      "collections": ["AgentRequest", "AgentResponse", "AgentToolCall", "AgentMessage"]
+    },
+    {
+      "op": "WriteAgentRequest",
+      "node": "A",
+      "request_id": "parent-req-b-crash",
+      "agent_did": "did:agent:a-parent",
+      "behavior_id": "parent-behavior",
+      "state": "processing"
+    },
+    {
+      "op": "WriteParentToolCall",
+      "node": "A",
+      "parent_request_id": "parent-req-b-crash",
+      "parent_tool_call_id": "tool-call-b-crash",
+      "child_request_id": "child-req-b-crash",
+      "behavior_id": "child-behavior",
+      "unclaimed_deadline_at": null
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "A",
+      "to": "B",
+      "collection": "AgentRequest",
+      "doc_id": "parent-req-b-crash"
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "A",
+      "to": "B",
+      "collection": "AgentToolCall",
+      "doc_id": "tool-call-b-crash"
+    },
+    {
+      "op": "WriteAgentRequest",
+      "node": "B",
+      "request_id": "child-req-b-crash",
+      "agent_did": "did:agent:b-child",
+      "behavior_id": "child-behavior",
+      "state": "processing",
+      "caused_by_parent_request_id": "parent-req-b-crash",
+      "caused_by_parent_tool_call_id": "tool-call-b-crash"
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "B",
+      "to": "A",
+      "collection": "AgentRequest",
+      "doc_id": "child-req-b-crash"
+    },
+    { "op": "Crash", "node": "B" },
+    { "op": "RunRecoverySweepOn", "node": "B" },
+    {
+      "op": "TerminalizeChildOnB",
+      "request_id": "child-req-b-crash",
+      "terminal": "failed",
+      "final_response": null
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "B",
+      "to": "A",
+      "collection": "AgentRequest",
+      "doc_id": "child-req-b-crash"
+    },
+    { "op": "RunBackgroundCompletionObserverOnA" },
+    { "op": "WaitForConvergence", "timeout_secs": 10 }
+  ]
+}

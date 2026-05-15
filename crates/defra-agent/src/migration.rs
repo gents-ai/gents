@@ -51,6 +51,23 @@ const ADD_TOOL_SELECTION_BACKGROUND_TOOLS_PATCH: &str = r#"[
     {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"backgroundable_tool_names","Kind":17}}
 ]"#;
 
+#[allow(dead_code)]
+const ADD_AGENT_TOOL_CALL_R5_PATCH: &str = r#"[
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"unclaimed_deadline_at","Kind":10}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"cancel_cascade_intent_at","Kind":10}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"cancel_pending_remote_ack","Kind":2}},
+    {"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"stuck_since","Kind":10}}
+]"#;
+
+#[allow(dead_code)]
+const ADD_TOOL_SELECTION_R5_PATCH: &str = r#"[
+    {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"cross_deployment_spawn_timeout_seconds","Kind":5}}
+]"#;
+
+const ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH: &str = r#"[
+    {"op":"add","path":"/PeerPairingDesired/Fields/-","value":{"Name":"agent_did","Kind":11}}
+]"#;
+
 /// WASM lens bytes embedded at compile time. Built by build.rs.
 const LENS_WASM_BYTES: &[u8] =
     include_bytes!(env!("AGENT_TOOL_CALL_LIFECYCLE_V1_TO_V2_LENS_WASM_PATH"));
@@ -222,7 +239,8 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
         .context("get AgentToolCall collection")?;
 
     let mut atc_pre_version_id_for_lens = None;
-    let atc_v3_version_id = if let Some(ref cv) = atc_collection {
+    let mut active_atc_collection = atc_collection.clone();
+    let atc_v3_version_id = if let Some(ref cv) = active_atc_collection {
         if collection_has_field(cv, "await_mode") {
             tracing::debug!("AgentToolCall already has await_mode; skipping patch");
             cv.version_id.clone()
@@ -242,12 +260,33 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
                 "AgentToolCall patched to v3 (subagent fields)"
             );
             atc_pre_version_id_for_lens = Some(pre_version_id);
+            active_atc_collection = Some(v3.clone());
             v3_version_id
         }
     } else {
         tracing::debug!("AgentToolCall collection absent; subagent patch no-op");
         return Ok(());
     };
+
+    if let Some(ref cv) = active_atc_collection {
+        if collection_has_field(cv, "unclaimed_deadline_at") {
+            tracing::debug!("AgentToolCall already has R5 cross-deployment fields; skipping patch");
+        } else {
+            let pre_version_id = cv.version_id.clone();
+            let v4 = node
+                .patch_collection("AgentToolCall", ADD_AGENT_TOOL_CALL_R5_PATCH)
+                .await
+                .context("patch_collection AgentToolCall R5 cross-deployment fields")?;
+            node.set_active_collection_version(&v4.version_id)
+                .await
+                .context("set_active_collection_version AgentToolCall R5 fields")?;
+            tracing::info!(
+                pre = %pre_version_id,
+                v4 = %v4.version_id,
+                "AgentToolCall patched with R5 cross-deployment fields"
+            );
+        }
+    }
 
     // 2. AgentRequest — independent idempotency check.
     let ar_collection = node
@@ -321,6 +360,27 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
                 v4 = %v4_version_id,
                 "ToolSelection patched to v4 (background tool fields)"
             );
+            active_version = v4;
+        }
+
+        if collection_has_field(&active_version, "cross_deployment_spawn_timeout_seconds") {
+            tracing::debug!(
+                "ToolSelection already has R5 cross-deployment timeout; skipping patch"
+            );
+        } else {
+            let pre_version_id = active_version.version_id.clone();
+            let v5 = node
+                .patch_collection("ToolSelection", ADD_TOOL_SELECTION_R5_PATCH)
+                .await
+                .context("patch_collection ToolSelection R5 timeout field")?;
+            node.set_active_collection_version(&v5.version_id)
+                .await
+                .context("set_active_collection_version ToolSelection R5 timeout")?;
+            tracing::info!(
+                pre = %pre_version_id,
+                v5 = %v5.version_id,
+                "ToolSelection patched with R5 cross-deployment timeout"
+            );
         }
     } else {
         tracing::debug!("ToolSelection collection absent; subagent patch no-op");
@@ -368,5 +428,33 @@ pub async fn ensure_subagent_extensions_migrations(node: Arc<EmbeddedNode>) -> R
         "agent_subagent_v2_to_v3 lens registered"
     );
 
+    Ok(())
+}
+
+pub async fn ensure_peer_pairing_desired_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
+    let Some(collection) = node
+        .get_collection("PeerPairingDesired")
+        .context("get PeerPairingDesired collection")?
+    else {
+        return Ok(());
+    };
+    if collection_has_field(&collection, "agent_did") {
+        return Ok(());
+    }
+
+    let next = node
+        .patch_collection(
+            "PeerPairingDesired",
+            ADD_PEER_PAIRING_DESIRED_AGENT_DID_PATCH,
+        )
+        .await
+        .context("patch_collection PeerPairingDesired agent_did")?;
+    node.set_active_collection_version(&next.version_id)
+        .await
+        .context("set_active_collection_version PeerPairingDesired agent_did")?;
+    tracing::info!(
+        version = %next.version_id,
+        "PeerPairingDesired patched with agent_did field"
+    );
     Ok(())
 }

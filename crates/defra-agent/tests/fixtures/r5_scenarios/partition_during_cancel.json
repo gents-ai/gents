@@ -1,0 +1,95 @@
+{
+  "name": "partition_during_cancel",
+  "actions": [
+    {
+      "op": "OperatorWritePairing",
+      "node": "A",
+      "peer": "B",
+      "collections": ["AgentRequest", "AgentResponse", "AgentToolCall", "AgentMessage"]
+    },
+    {
+      "op": "OperatorWritePairing",
+      "node": "B",
+      "peer": "A",
+      "collections": ["AgentRequest", "AgentResponse", "AgentToolCall", "AgentMessage"]
+    },
+    {
+      "op": "WriteAgentRequest",
+      "node": "A",
+      "request_id": "parent-req-cancel",
+      "agent_did": "did:agent:a-parent",
+      "behavior_id": "parent-behavior",
+      "state": "processing"
+    },
+    {
+      "op": "WriteParentToolCall",
+      "node": "A",
+      "parent_request_id": "parent-req-cancel",
+      "parent_tool_call_id": "tool-call-cancel",
+      "child_request_id": "child-req-cancel",
+      "behavior_id": "child-behavior",
+      "unclaimed_deadline_at": null
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "A",
+      "to": "B",
+      "collection": "AgentRequest",
+      "doc_id": "parent-req-cancel"
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "A",
+      "to": "B",
+      "collection": "AgentToolCall",
+      "doc_id": "tool-call-cancel"
+    },
+    {
+      "op": "WriteAgentRequest",
+      "node": "B",
+      "request_id": "child-req-cancel",
+      "agent_did": "did:agent:b-child",
+      "behavior_id": "child-behavior",
+      "state": "processing",
+      "caused_by_parent_request_id": "parent-req-cancel",
+      "caused_by_parent_tool_call_id": "tool-call-cancel"
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "B",
+      "to": "A",
+      "collection": "AgentRequest",
+      "doc_id": "child-req-cancel"
+    },
+    {
+      "op": "CancelParentOnA",
+      "parent_request_id": "parent-req-cancel",
+      "parent_tool_call_id": "tool-call-cancel"
+    },
+    { "op": "AdvanceClockOn", "node": "A", "seconds": 360 },
+    { "op": "RunCancelAckObserverOnA" },
+    {
+      "op": "ReplicateDoc",
+      "from": "A",
+      "to": "B",
+      "collection": "AgentToolCall",
+      "doc_id": "tool-call-cancel"
+    },
+    { "op": "RunCancelMirrorObserverOnB" },
+    {
+      "op": "TerminalizeChildOnB",
+      "request_id": "child-req-cancel",
+      "terminal": "interrupted",
+      "final_response": null
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "B",
+      "to": "A",
+      "collection": "AgentRequest",
+      "doc_id": "child-req-cancel"
+    },
+    { "op": "RunCancelAckObserverOnA" },
+    { "op": "WaitForConvergence", "timeout_secs": 10 }
+  ]
+}

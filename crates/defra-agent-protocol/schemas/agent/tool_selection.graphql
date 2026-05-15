@@ -20,4 +20,5 @@ type ToolSelection {
     subagent_spawn_enabled: Boolean
     subagent_steering_enabled: Boolean
     subagent_background_enabled: Boolean
+    cross_deployment_spawn_timeout_seconds: Int
 }

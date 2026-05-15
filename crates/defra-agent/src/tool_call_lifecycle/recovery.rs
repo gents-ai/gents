@@ -359,21 +359,28 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
             continue;
         }
 
+        let mut remote_cancel_intent_at = None;
         if let Some(child_request_id) = cascade_child_request_id(&row) {
-            if let Err(error) = interrupt_request(node, child_request_id).await {
-                tracing::warn!(
-                    doc_id = %row.doc_id,
-                    request_id = row.request_id.as_deref().unwrap_or(""),
-                    session_id = %row.session_id,
-                    tool_call_id = %row.tool_call_id,
-                    child_request_id,
-                    error = %error,
-                    "failed to cascade recovery interrupt to child request"
-                );
+            if child_request_is_locally_owned(node, agent_did, child_request_id).await? {
+                if let Err(error) = interrupt_request(node, child_request_id).await {
+                    tracing::warn!(
+                        doc_id = %row.doc_id,
+                        request_id = row.request_id.as_deref().unwrap_or(""),
+                        session_id = %row.session_id,
+                        tool_call_id = %row.tool_call_id,
+                        child_request_id,
+                        error = %error,
+                        "failed to cascade recovery interrupt to child request"
+                    );
+                }
+            } else {
+                remote_cancel_intent_at = Some(Utc::now());
             }
         }
 
-        if let Err(error) = recover_tool_call_row(node, &row, deadline_at, outcome).await {
+        if let Err(error) =
+            recover_tool_call_row(node, &row, deadline_at, outcome, remote_cancel_intent_at).await
+        {
             tracing::warn!(
                 doc_id = %row.doc_id,
                 request_id = row.request_id.as_deref().unwrap_or(""),
@@ -529,6 +536,7 @@ async fn recover_tool_call_row(
     row: &RunningToolCallRow,
     deadline_at: Option<DateTime<Utc>>,
     outcome: RecoveryOutcome,
+    remote_cancel_intent_at: Option<DateTime<Utc>>,
 ) -> Result<()> {
     let now = Utc::now();
     let started_at = parse_datetime(row.started_at.as_deref()).unwrap_or(now);
@@ -544,6 +552,14 @@ async fn recover_tool_call_row(
         .failure_class()
         .map(|failure| format!(r#", tool_failure_class: "{}""#, failure.as_str()))
         .unwrap_or_default();
+    let remote_cancel_intent_fields = remote_cancel_intent_at
+        .map(|at| {
+            format!(
+                r#", cancel_cascade_intent_at: "{}", cancel_pending_remote_ack: true"#,
+                escape_graphql_string(&at.to_rfc3339())
+            )
+        })
+        .unwrap_or_default();
 
     let mutation = format!(
         r#"mutation {{
@@ -555,7 +571,7 @@ async fn recover_tool_call_row(
                     lifecycle_state: "{lifecycle_state}",
                     started_at: "{started_at_str}"{deadline_field},
                     completed_at: "{completed_at_str}",
-                    latency_ms: {latency_ms}{failure_class_field}
+                    latency_ms: {latency_ms}{failure_class_field}{remote_cancel_intent_fields}
                 }}
             ) {{ _docID }}
         }}"#,
@@ -643,6 +659,38 @@ fn is_detached_subagent_tool(row: &RunningToolCallRow) -> bool {
 fn cascade_child_request_id(row: &RunningToolCallRow) -> Option<&str> {
     let child_request_id = child_request_id(row)?;
     (cancel_policy(row) == CancelPolicy::Cascade).then_some(child_request_id)
+}
+
+async fn child_request_is_locally_owned(
+    node: &EmbeddedNode,
+    local_did: &str,
+    child_request_id: &str,
+) -> Result<bool> {
+    let escaped = escape_graphql_string(child_request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped}" }} }},
+                limit: 1
+            ) {{ agent_did }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query AgentRequest for recovery cascade ownership failed: {:?}",
+            response.errors
+        );
+    }
+    let did = response
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("agent_did"))
+        .and_then(|v| v.as_str());
+    Ok(did == Some(local_did))
 }
 
 impl RecoveryOutcome {

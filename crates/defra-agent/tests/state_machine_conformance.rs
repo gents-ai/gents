@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::time::Duration;
 
 use defra_agent::defra_node::EmbeddedNode;
@@ -231,8 +231,84 @@ fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().command_sandbox_cases.len(), 4);
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
     assert_eq!(lean_queue_deadline_cases().len(), 5);
-    assert_eq!(lean_recovery_sweep_cases().len(), 18);
+    assert_eq!(lean_recovery_sweep_cases().len(), 19);
     assert_eq!(lean_transcript_cases().len(), 6);
+}
+
+#[tokio::test]
+async fn agent_tool_call_has_r5_cross_deployment_fields() {
+    let db = crate::support::test_db("agent-tool-call-r5-fields").await;
+    let response = db
+        .node
+        .execute(
+            r#"{
+                __type(name: "AgentToolCall") {
+                    fields { name }
+                }
+            }"#,
+        )
+        .await;
+    assert!(
+        !response.has_errors(),
+        "introspection errors: {:?}",
+        response.errors
+    );
+    let names: HashSet<String> = response
+        .data
+        .as_ref()
+        .and_then(|d| d.get("__type"))
+        .and_then(|t| t.get("fields"))
+        .and_then(|fs| fs.as_array())
+        .map(|fs| {
+            fs.iter()
+                .filter_map(|f| f.get("name").and_then(|n| n.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    for field in [
+        "unclaimed_deadline_at",
+        "cancel_cascade_intent_at",
+        "cancel_pending_remote_ack",
+        "stuck_since",
+    ] {
+        assert!(names.contains(field), "AgentToolCall missing field {field}");
+    }
+}
+
+#[tokio::test]
+async fn tool_selection_has_cross_deployment_spawn_timeout() {
+    let db = crate::support::test_db("tool-selection-r5-timeout").await;
+    let response = db
+        .node
+        .execute(
+            r#"{
+                __type(name: "ToolSelection") {
+                    fields { name }
+                }
+            }"#,
+        )
+        .await;
+    assert!(
+        !response.has_errors(),
+        "introspection errors: {:?}",
+        response.errors
+    );
+    let names: HashSet<String> = response
+        .data
+        .as_ref()
+        .and_then(|d| d.get("__type"))
+        .and_then(|t| t.get("fields"))
+        .and_then(|fs| fs.as_array())
+        .map(|fs| {
+            fs.iter()
+                .filter_map(|f| f.get("name").and_then(|n| n.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        names.contains("cross_deployment_spawn_timeout_seconds"),
+        "ToolSelection missing cross_deployment_spawn_timeout_seconds",
+    );
 }
 
 #[test]
@@ -704,7 +780,7 @@ fn generated_recovery_sweep_cases_pin_startup_recovery_contract() {
     let cases = lean_recovery_sweep_cases();
     assert_eq!(
         cases.len(),
-        18,
+        19,
         "Lean should emit one row per registered recovery predicate witness"
     );
 

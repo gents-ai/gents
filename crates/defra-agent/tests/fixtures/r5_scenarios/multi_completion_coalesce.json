@@ -1,0 +1,155 @@
+{
+  "name": "multi_completion_coalesce",
+  "actions": [
+    {
+      "op": "OperatorWritePairing",
+      "node": "A",
+      "peer": "B",
+      "collections": ["AgentRequest", "AgentResponse", "AgentToolCall", "AgentMessage"]
+    },
+    {
+      "op": "OperatorWritePairing",
+      "node": "B",
+      "peer": "A",
+      "collections": ["AgentRequest", "AgentResponse", "AgentToolCall", "AgentMessage"]
+    },
+    {
+      "op": "WriteAgentRequest",
+      "node": "A",
+      "request_id": "parent-req-multi",
+      "agent_did": "did:agent:a-parent",
+      "behavior_id": "parent-behavior",
+      "state": "processing"
+    },
+    {
+      "op": "WriteParentToolCall",
+      "node": "A",
+      "parent_request_id": "parent-req-multi",
+      "parent_tool_call_id": "tool-call-multi-1",
+      "child_request_id": "child-req-multi-1",
+      "behavior_id": "child-behavior-1",
+      "unclaimed_deadline_at": null
+    },
+    {
+      "op": "WriteParentToolCall",
+      "node": "A",
+      "parent_request_id": "parent-req-multi",
+      "parent_tool_call_id": "tool-call-multi-2",
+      "child_request_id": "child-req-multi-2",
+      "behavior_id": "child-behavior-2",
+      "unclaimed_deadline_at": null
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "A",
+      "to": "B",
+      "collection": "AgentRequest",
+      "doc_id": "parent-req-multi"
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "A",
+      "to": "B",
+      "collection": "AgentToolCall",
+      "doc_id": "tool-call-multi-1"
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "A",
+      "to": "B",
+      "collection": "AgentToolCall",
+      "doc_id": "tool-call-multi-2"
+    },
+    {
+      "op": "WriteAgentRequest",
+      "node": "B",
+      "request_id": "child-req-multi-1",
+      "agent_did": "did:agent:b-child",
+      "behavior_id": "child-behavior-1",
+      "state": "processing",
+      "caused_by_parent_request_id": "parent-req-multi",
+      "caused_by_parent_tool_call_id": "tool-call-multi-1"
+    },
+    {
+      "op": "WriteAgentRequest",
+      "node": "B",
+      "request_id": "child-req-multi-2",
+      "agent_did": "did:agent:b-child",
+      "behavior_id": "child-behavior-2",
+      "state": "processing",
+      "caused_by_parent_request_id": "parent-req-multi",
+      "caused_by_parent_tool_call_id": "tool-call-multi-2"
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "B",
+      "to": "A",
+      "collection": "AgentRequest",
+      "doc_id": "child-req-multi-1"
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "B",
+      "to": "A",
+      "collection": "AgentRequest",
+      "doc_id": "child-req-multi-2"
+    },
+    {
+      "op": "TerminalizeChildOnB",
+      "request_id": "child-req-multi-1",
+      "terminal": "completed",
+      "final_response": "child one completed"
+    },
+    {
+      "op": "TerminalizeChildOnB",
+      "request_id": "child-req-multi-2",
+      "terminal": "completed",
+      "final_response": "child two completed"
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "B",
+      "to": "A",
+      "collection": "AgentRequest",
+      "doc_id": "child-req-multi-1"
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "B",
+      "to": "A",
+      "collection": "AgentMessage",
+      "doc_id": "child-req-multi-1"
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "B",
+      "to": "A",
+      "collection": "AgentResponse",
+      "doc_id": "child-req-multi-1"
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "B",
+      "to": "A",
+      "collection": "AgentRequest",
+      "doc_id": "child-req-multi-2"
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "B",
+      "to": "A",
+      "collection": "AgentMessage",
+      "doc_id": "child-req-multi-2"
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "B",
+      "to": "A",
+      "collection": "AgentResponse",
+      "doc_id": "child-req-multi-2"
+    },
+    { "op": "RunBackgroundCompletionObserverOnA" },
+    { "op": "RunBackgroundCompletionObserverOnA" },
+    { "op": "WaitForConvergence", "timeout_secs": 10 }
+  ]
+}

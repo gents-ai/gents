@@ -75,6 +75,12 @@ def recoverySweepCases : List RecoverySweepCase :=
       "r6-TerminalizeBackgroundedAsInterrupted"
   , recoveryCase
       toolCallRecoverySweep
+      "tool_running_unclaimed_cross_deployment_spawn_to_failed"
+      "running"
+      "failed"
+      "r5-cross-deployment-subagents-design"
+  , recoveryCase
+      toolCallRecoverySweep
       "tool_running_child_completed_to_completed"
       "running"
       "completed"

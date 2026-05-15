@@ -261,6 +261,8 @@ async fn runtime_status_persists_process_and_reconcile_state() {
     status
         .publish_startup_snapshot(&ActiveRuntimeSnapshot {
             generation: 1,
+            local_did: String::new(),
+            paired_peer_dids: HashSet::new(),
             default_behavior_id: "general".to_string(),
             behaviors: HashMap::new(),
             tool_surfaces: HashMap::new(),
@@ -300,6 +302,8 @@ async fn runtime_status_serializes_persisted_generation_updates() {
     let status = RuntimeStatusHandle::new(node.clone(), "did:defra-agent:status-serialize");
     let startup = ActiveRuntimeSnapshot {
         generation: 1,
+        local_did: String::new(),
+        paired_peer_dids: HashSet::new(),
         default_behavior_id: "general".to_string(),
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
@@ -314,6 +318,8 @@ async fn runtime_status_serializes_persisted_generation_updates() {
     };
     let applied = ActiveRuntimeSnapshot {
         generation: 2,
+        local_did: String::new(),
+        paired_peer_dids: HashSet::new(),
         default_behavior_id: "general".to_string(),
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
@@ -358,6 +364,8 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
     let status = RuntimeStatusHandle::new(node.clone(), "did:defra-agent:runtime-contract");
     let startup = ActiveRuntimeSnapshot {
         generation: publish.pre_active_generation as u64,
+        local_did: String::new(),
+        paired_peer_dids: HashSet::new(),
         default_behavior_id: "general".to_string(),
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
@@ -372,6 +380,8 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
     };
     let applied = ActiveRuntimeSnapshot {
         generation: publish.post_active_generation as u64,
+        local_did: String::new(),
+        paired_peer_dids: HashSet::new(),
         default_behavior_id: "general".to_string(),
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),

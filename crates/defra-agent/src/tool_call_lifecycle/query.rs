@@ -82,6 +82,7 @@ struct ToolCallRow {
     await_mode: Option<String>,
     cancel_policy: Option<String>,
     child_request_id: Option<String>,
+    unclaimed_deadline_at: Option<String>,
 }
 
 impl ToolCallLifecycle {
@@ -115,6 +116,7 @@ impl ToolCallLifecycle {
                     await_mode
                     cancel_policy
                     child_request_id
+                    unclaimed_deadline_at
                 }}
             }}"#
         );
@@ -178,6 +180,11 @@ impl ToolCallLifecycle {
             .unwrap_or(CancelPolicy::Cascade);
 
         let child_request_id = row.child_request_id.filter(|s| !s.is_empty());
+        let unclaimed_deadline_at = row
+            .unclaimed_deadline_at
+            .as_deref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc));
 
         Ok(Some(Self {
             node,
@@ -195,6 +202,7 @@ impl ToolCallLifecycle {
             await_mode,
             cancel_policy,
             child_request_id,
+            unclaimed_deadline_at,
         }))
     }
 }

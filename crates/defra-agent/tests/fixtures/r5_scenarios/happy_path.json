@@ -1,0 +1,94 @@
+{
+  "name": "happy_path",
+  "actions": [
+    {
+      "op": "OperatorWritePairing",
+      "node": "A",
+      "peer": "B",
+      "collections": ["AgentRequest", "AgentResponse", "AgentToolCall", "AgentMessage"]
+    },
+    {
+      "op": "OperatorWritePairing",
+      "node": "B",
+      "peer": "A",
+      "collections": ["AgentRequest", "AgentResponse", "AgentToolCall", "AgentMessage"]
+    },
+    {
+      "op": "WriteAgentRequest",
+      "node": "A",
+      "request_id": "parent-req-1",
+      "agent_did": "did:agent:a-parent",
+      "behavior_id": "parent-behavior",
+      "state": "processing"
+    },
+    {
+      "op": "WriteParentToolCall",
+      "node": "A",
+      "parent_request_id": "parent-req-1",
+      "parent_tool_call_id": "tool-call-1",
+      "child_request_id": "child-req-1",
+      "behavior_id": "child-behavior",
+      "unclaimed_deadline_at": null
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "A",
+      "to": "B",
+      "collection": "AgentRequest",
+      "doc_id": "parent-req-1"
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "A",
+      "to": "B",
+      "collection": "AgentToolCall",
+      "doc_id": "tool-call-1"
+    },
+    {
+      "op": "WriteAgentRequest",
+      "node": "B",
+      "request_id": "child-req-1",
+      "agent_did": "did:agent:b-child",
+      "behavior_id": "child-behavior",
+      "state": "processing",
+      "caused_by_parent_request_id": "parent-req-1",
+      "caused_by_parent_tool_call_id": "tool-call-1"
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "B",
+      "to": "A",
+      "collection": "AgentRequest",
+      "doc_id": "child-req-1"
+    },
+    {
+      "op": "TerminalizeChildOnB",
+      "request_id": "child-req-1",
+      "terminal": "completed",
+      "final_response": "child completed successfully"
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "B",
+      "to": "A",
+      "collection": "AgentRequest",
+      "doc_id": "child-req-1"
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "B",
+      "to": "A",
+      "collection": "AgentMessage",
+      "doc_id": "child-req-1"
+    },
+    {
+      "op": "ReplicateDoc",
+      "from": "B",
+      "to": "A",
+      "collection": "AgentResponse",
+      "doc_id": "child-req-1"
+    },
+    { "op": "RunBackgroundCompletionObserverOnA" },
+    { "op": "WaitForConvergence", "timeout_secs": 10 }
+  ]
+}

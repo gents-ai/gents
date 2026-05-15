@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::session;
-use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, ToolCallLifecycle};
+use crate::tool_call_lifecycle::{AwaitMode, CascadeDispatch, ChildTerminal, ToolCallLifecycle};
 use crate::truncation::TruncationLimits;
 
 mod persistence;
@@ -476,18 +476,24 @@ impl DefraSessionHook {
 
         let count = lifecycles.len();
         for mut lifecycle in lifecycles {
-            lifecycle.cancel_during_run().await?;
+            let dispatch = lifecycle
+                .cancel_during_run_with_cascade_dispatch(&self.agent_did)
+                .await?;
             if lifecycle.is_cancelled() {
-                if let Some(intent) = lifecycle.bridge_cancel_cascade().await? {
-                    if let Err(error) =
-                        crate::interrupt::interrupt_request(&self.node, &intent.child_request_id)
-                            .await
-                    {
-                        tracing::warn!(
-                            child_request_id = %intent.child_request_id,
-                            error = %error,
-                            "failed to cascade live tool-call cancellation to child request"
-                        );
+                if let Some(dispatch) = dispatch {
+                    if let CascadeDispatch::Local(intent) = dispatch {
+                        if let Err(error) = crate::interrupt::interrupt_request(
+                            &self.node,
+                            &intent.child_request_id,
+                        )
+                        .await
+                        {
+                            tracing::warn!(
+                                child_request_id = %intent.child_request_id,
+                                error = %error,
+                                "failed to cascade live tool-call cancellation to child request"
+                            );
+                        }
                     }
                 }
             }

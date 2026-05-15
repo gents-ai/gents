@@ -13,6 +13,7 @@ async fn peer_pairing_desired_round_trip() {
     let create = r#"mutation {
         create_PeerPairingDesired(input: {
             peer_id: "p1",
+            agent_did: "did:defra-agent:p1",
             collections: ["c1", "c2"],
             replicator_addresses: ["/ip4/1/p2p/p1"],
             created_at: "2026-05-13T00:00:00Z",
@@ -25,6 +26,7 @@ async fn peer_pairing_desired_round_trip() {
     let query = r#"query {
         PeerPairingDesired(filter: { peer_id: { _eq: "p1" } }) {
             peer_id
+            agent_did
             collections
             replicator_addresses
         }

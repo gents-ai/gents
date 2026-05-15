@@ -485,9 +485,10 @@ async fn background_completion_projects_bridge_appends_notification_and_enqueues
     )
     .await;
 
-    let outcome = project_background_subagent_completion(db.node.clone(), &child_request_id)
-        .await
-        .unwrap();
+    let outcome =
+        project_background_subagent_completion(db.node.clone(), &child_request_id, AGENT_DID)
+            .await
+            .unwrap();
     let BackgroundCompletionOutcome::Projected {
         wake_request_id, ..
     } = outcome
@@ -530,9 +531,10 @@ async fn background_completion_projects_bridge_appends_notification_and_enqueues
         parent_request_id
     );
 
-    let again = project_background_subagent_completion(db.node.clone(), &child_request_id)
-        .await
-        .unwrap();
+    let again =
+        project_background_subagent_completion(db.node.clone(), &child_request_id, AGENT_DID)
+            .await
+            .unwrap();
     assert_eq!(again, BackgroundCompletionOutcome::AlreadyProjected);
     assert_eq!(
         fetch_parent_messages(db.node.as_ref(), &session_id)
@@ -583,9 +585,10 @@ async fn background_completion_recovers_side_effects_after_bridge_already_projec
         .await
         .is_empty());
 
-    let outcome = project_background_subagent_completion(db.node.clone(), &child_request_id)
-        .await
-        .unwrap();
+    let outcome =
+        project_background_subagent_completion(db.node.clone(), &child_request_id, AGENT_DID)
+            .await
+            .unwrap();
     assert!(matches!(
         outcome,
         BackgroundCompletionOutcome::Projected { .. }
@@ -602,9 +605,10 @@ async fn background_completion_recovers_side_effects_after_bridge_already_projec
         1
     );
 
-    let again = project_background_subagent_completion(db.node.clone(), &child_request_id)
-        .await
-        .unwrap();
+    let again =
+        project_background_subagent_completion(db.node.clone(), &child_request_id, AGENT_DID)
+            .await
+            .unwrap();
     assert_eq!(again, BackgroundCompletionOutcome::AlreadyProjected);
     assert_eq!(
         fetch_parent_messages(db.node.as_ref(), &session_id)
@@ -661,7 +665,7 @@ async fn background_notification_sorts_after_reserved_spawn_tool_result() {
         "fast background child done",
     )
     .await;
-    project_background_subagent_completion(db.node.clone(), &child_request_id)
+    project_background_subagent_completion(db.node.clone(), &child_request_id, AGENT_DID)
         .await
         .unwrap();
 
@@ -729,9 +733,10 @@ async fn background_completion_compacts_multibyte_summary_without_panicking() {
     )
     .await;
 
-    let outcome = project_background_subagent_completion(db.node.clone(), &child_request_id)
-        .await
-        .unwrap();
+    let outcome =
+        project_background_subagent_completion(db.node.clone(), &child_request_id, AGENT_DID)
+            .await
+            .unwrap();
     assert!(matches!(
         outcome,
         BackgroundCompletionOutcome::Projected { .. }
@@ -766,10 +771,10 @@ async fn multiple_background_completions_append_notifications_but_coalesce_wakeu
     persist_child_completion(db.node.as_ref(), &child_a, &session_a, "child A done").await;
     persist_child_completion(db.node.as_ref(), &child_b, &session_b, "child B done").await;
 
-    let first = project_background_subagent_completion(db.node.clone(), &child_a)
+    let first = project_background_subagent_completion(db.node.clone(), &child_a, AGENT_DID)
         .await
         .unwrap();
-    let second = project_background_subagent_completion(db.node.clone(), &child_b)
+    let second = project_background_subagent_completion(db.node.clone(), &child_b, AGENT_DID)
         .await
         .unwrap();
     let (
@@ -831,9 +836,10 @@ async fn background_completion_wakeup_waits_behind_active_foreground_parent_then
     )
     .await;
 
-    let outcome = project_background_subagent_completion(db.node.clone(), &background_child)
-        .await
-        .unwrap();
+    let outcome =
+        project_background_subagent_completion(db.node.clone(), &background_child, AGENT_DID)
+            .await
+            .unwrap();
     assert!(matches!(
         outcome,
         BackgroundCompletionOutcome::Projected { .. }
@@ -932,7 +938,7 @@ async fn stale_hook_sequence_does_not_overwrite_background_notification() {
         "notification must survive",
     )
     .await;
-    project_background_subagent_completion(db.node.clone(), &child_request_id)
+    project_background_subagent_completion(db.node.clone(), &child_request_id, AGENT_DID)
         .await
         .unwrap();
 
