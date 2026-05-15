@@ -301,6 +301,27 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "lean_executable_contracts_cover_initial_domains",
         },
         ConformanceConsumer::RustTest {
+            id: "state_machine_conformance::lean_emits_await_mode_vocabulary",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/state_machine_conformance.rs",
+            module_path: "state_machine_conformance",
+            function: "lean_emits_await_mode_vocabulary",
+        },
+        ConformanceConsumer::RustTest {
+            id: "state_machine_conformance::lean_emits_cancel_policy_vocabulary",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/state_machine_conformance.rs",
+            module_path: "state_machine_conformance",
+            function: "lean_emits_cancel_policy_vocabulary",
+        },
+        ConformanceConsumer::RustTest {
+            id: "state_machine_conformance::lean_emits_child_terminal_vocabulary_and_projections",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/tests/state_machine_conformance.rs",
+            module_path: "state_machine_conformance",
+            function: "lean_emits_child_terminal_vocabulary_and_projections",
+        },
+        ConformanceConsumer::RustTest {
             id: "state_machine_conformance::event_delivery_transition_cases_match_contract",
             package: "defra-agent",
             source_path: "crates/defra-agent/tests/state_machine_conformance.rs",

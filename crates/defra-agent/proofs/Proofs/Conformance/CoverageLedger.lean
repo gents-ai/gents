@@ -112,18 +112,18 @@ def vocabularyCoverage : List CoverageEntry :=
       "vocabulary"
       "ToolFailureClass"
       "tool_call_lifecycle::tests::rust_failure_class_vocabulary_matches_lean_model"
-  , followUpCoverage
+  , consumerCoverage
       "vocabulary"
       "AwaitMode"
-      "Rust vocabulary round-trip tests pending subagent consumer implementation."
-  , followUpCoverage
+      "state_machine_conformance::lean_emits_await_mode_vocabulary"
+  , consumerCoverage
       "vocabulary"
       "CancelPolicy"
-      "Rust vocabulary round-trip tests pending subagent consumer implementation."
-  , followUpCoverage
+      "state_machine_conformance::lean_emits_cancel_policy_vocabulary"
+  , consumerCoverage
       "vocabulary"
       "ChildTerminal"
-      "Rust projection-mapping tests pending subagent consumer implementation."
+      "state_machine_conformance::lean_emits_child_terminal_vocabulary_and_projections"
   ]
 
 def stateMachineCoverage : List CoverageEntry :=
@@ -175,18 +175,18 @@ def stateMachineCoverage : List CoverageEntry :=
       "state_machine"
       "ToolCall"
       "tool_call_lifecycle::tests::tool_call_state_machine_contract_is_complete"
-  , followUpCoverage
+  , consumerCoverage
       "state_machine"
       "AwaitMode"
-      "Rust subagent mode-flip contract tests pending subagent consumer implementation."
-  , followUpCoverage
+      "state_machine_conformance::lean_emits_await_mode_vocabulary"
+  , consumerCoverage
       "state_machine"
       "CancelPolicy"
-      "Rust subagent cancel-policy contract tests pending subagent consumer implementation."
-  , followUpCoverage
+      "state_machine_conformance::lean_emits_cancel_policy_vocabulary"
+  , consumerCoverage
       "state_machine"
       "ChildTerminal"
-      "Rust bridge projection contract tests pending subagent consumer implementation."
+      "state_machine_conformance::lean_emits_child_terminal_vocabulary_and_projections"
   ]
 
 def caseCoverage : List CoverageEntry :=
