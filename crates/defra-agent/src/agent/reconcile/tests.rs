@@ -39,6 +39,23 @@ fn test_identity(name: &str) -> KeyIdentity {
     KeyIdentity::load_or_create(path, None).unwrap()
 }
 
+fn stub_principal() -> Arc<AgentPrincipal> {
+    let identity: Arc<dyn crate::identity::AgentIdentity> = Arc::new(
+        KeyIdentity::load_or_create(
+            std::env::temp_dir().join(format!("stub-principal-{}.key", uuid::Uuid::new_v4())),
+            None,
+        )
+        .unwrap(),
+    );
+    Arc::new(AgentPrincipal {
+        agent_did: identity.did().to_string(),
+        identity,
+        default_behavior_id: String::new(),
+        display_name: None,
+        enabled: true,
+    })
+}
+
 async fn snapshot_for_behaviors(
     node: &defra_node::EmbeddedNode,
     default_behavior_id: &str,
@@ -55,6 +72,7 @@ async fn snapshot_for_behaviors(
         tool_surfaces,
         HashMap::new(),
     )
+    .with_principal(stub_principal())
 }
 
 #[tokio::test]
@@ -143,7 +161,8 @@ async fn reconcile_install_applies_added_behavior(node: &defra_node::EmbeddedNod
         Vec::new(),
         HashMap::new(),
         HashMap::new(),
-    );
+    )
+    .with_principal(stub_principal());
     let proposed = snapshot_for_behaviors(node, "general", vec![Arc::new(behavior)]).await;
     let current = current_resolved.activate(1, HashMap::new());
     let diff = diff_counts(&current, &proposed);
@@ -167,7 +186,8 @@ async fn reconcile_teardown_applies_removed_behavior(node: &defra_node::Embedded
         Vec::new(),
         HashMap::new(),
         HashMap::new(),
-    );
+    )
+    .with_principal(stub_principal());
     let current = current_resolved.activate(1, HashMap::new());
     let diff = diff_counts(&current, &proposed);
     let applied = proposed.clone().activate(2, HashMap::new());
@@ -439,7 +459,8 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
         valid_updated_snapshot.behaviors.values().cloned().collect(),
         HashMap::new(),
         HashMap::new(),
-    );
+    )
+    .with_principal(stub_principal());
 
     let runner = move |_behavior: Arc<AgentBehavior>,
                        _tool_surface: Arc<ToolSurface>,

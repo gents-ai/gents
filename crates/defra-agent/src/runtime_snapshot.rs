@@ -167,6 +167,13 @@ impl ResolvedRuntimeSnapshot {
         }
     }
 
+    /// Attach the deployment principal Arc to this resolved snapshot.
+    ///
+    /// Mirrors `with_schedules` / `with_event_triggers`: the loader
+    /// (`document_view/snapshot.rs`) constructs one
+    /// `Arc<AgentPrincipal>` per snapshot and attaches it here so
+    /// `ActiveRuntimeSnapshot.principal` is uniformly `Some(...)`
+    /// across both loader and builder construction paths.
     pub(crate) fn with_principal(mut self, principal: Arc<AgentPrincipal>) -> Self {
         self.principal = Some(principal);
         self
@@ -225,6 +232,12 @@ impl ResolvedRuntimeSnapshot {
         generation: u64,
         dispatchers: DispatcherMap,
     ) -> ActiveRuntimeSnapshot {
+        debug_assert!(
+            self.principal.is_some(),
+            "ResolvedRuntimeSnapshot::activate called without principal set — \
+             every production construction path must call .with_principal(...) \
+             before activation",
+        );
         ActiveRuntimeSnapshot {
             generation,
             principal: self.principal,

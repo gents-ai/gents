@@ -23,7 +23,8 @@ fn snapshot_with_active_task(task: ResolvedTask) -> Arc<ActiveRuntimeSnapshot> {
         HashMap::new(),
         HashMap::new(),
     )
-    .with_tasks(tasks);
+    .with_tasks(tasks)
+    .with_principal(stub_principal());
     Arc::new(resolved.activate(1, HashMap::new()))
 }
 

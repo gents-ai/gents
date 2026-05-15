@@ -193,11 +193,6 @@ pub struct BehaviorBuilder {
 }
 
 impl BehaviorBuilder {
-    pub fn identity(mut self, identity: Arc<dyn AgentIdentity>) -> Self {
-        self.behavior.identity = Some(identity);
-        self
-    }
-
     pub fn backend_id(mut self, backend_id: impl Into<String>) -> Self {
         self.behavior.backend_id = Some(backend_id.into());
         self
@@ -328,7 +323,6 @@ fn find_duplicates(values: &[String]) -> HashSet<String> {
 #[derive(Clone)]
 pub(crate) struct PendingAgentBehavior {
     name: String,
-    identity: Option<Arc<dyn AgentIdentity>>,
     backend_id: Option<String>,
     #[cfg(test)]
     backend_endpoint: String,
@@ -350,7 +344,6 @@ impl PendingAgentBehavior {
     pub(crate) fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            identity: None,
             backend_id: None,
             #[cfg(test)]
             backend_endpoint: TEST_DEFAULT_BACKEND_ENDPOINT.to_string(),

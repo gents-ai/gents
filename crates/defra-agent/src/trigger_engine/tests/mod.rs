@@ -42,6 +42,27 @@ type MaterializeCall = (Option<String>, TriggerKind, String);
 /// Recorded `supersede` invocation: `(trigger_id, trigger_kind)`.
 type SupersedeCall = (String, TriggerKind);
 
+/// Build a minimal `Arc<AgentPrincipal>` for tests that need to satisfy the
+/// principal invariant enforced by `ResolvedRuntimeSnapshot::activate`'s
+/// `debug_assert!`. Does not exercise signing.
+fn stub_principal() -> Arc<crate::identity::AgentPrincipal> {
+    use crate::identity::AgentIdentity as _;
+    let identity: Arc<dyn crate::identity::AgentIdentity> = Arc::new(
+        KeyIdentity::load_or_create(
+            std::env::temp_dir().join(format!("stub-principal-{}.key", uuid::Uuid::new_v4())),
+            None,
+        )
+        .unwrap(),
+    );
+    Arc::new(crate::identity::AgentPrincipal {
+        agent_did: identity.did().to_string(),
+        identity,
+        default_behavior_id: String::new(),
+        display_name: None,
+        enabled: true,
+    })
+}
+
 const LEAN_TRIGGER_TYPES_MODEL: &str = include_str!("../../../proofs/Proofs/Triggers/Types.lean");
 const LEAN_TRIGGER_TYPES_FILE: &str = "crates/defra-agent/proofs/Proofs/Triggers/Types.lean";
 
@@ -274,7 +295,8 @@ fn snapshot_with_schedules(
         HashMap::new(),
         HashMap::new(),
     )
-    .with_schedules(schedules, HashSet::new());
+    .with_schedules(schedules, HashSet::new())
+    .with_principal(stub_principal());
     Arc::new(resolved.activate(1, HashMap::new()))
 }
 
@@ -385,7 +407,8 @@ fn snapshot_from_trigger_contract(
         HashMap::new(),
     )
     .with_schedules(active_schedules, HashSet::new())
-    .with_event_triggers(active_event_triggers, HashSet::new());
+    .with_event_triggers(active_event_triggers, HashSet::new())
+    .with_principal(stub_principal());
     Arc::new(resolved.activate(1, HashMap::new()))
 }
 
@@ -446,7 +469,8 @@ fn snapshot_with_behavior_and_schedules(
         HashMap::new(),
         HashMap::new(),
     )
-    .with_schedules(schedules, HashSet::new());
+    .with_schedules(schedules, HashSet::new())
+    .with_principal(stub_principal());
     Arc::new(resolved.activate(1, HashMap::new()))
 }
 

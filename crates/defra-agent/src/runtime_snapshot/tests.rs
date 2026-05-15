@@ -4,6 +4,27 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 
 use super::*;
+use crate::identity::{AgentIdentity as _, AgentPrincipal, KeyIdentity};
+
+/// Build a minimal `Arc<AgentPrincipal>` for tests that call `.activate()`.
+/// Does not exercise signing — only satisfies the principal invariant so that
+/// the `debug_assert!` in `activate()` does not fire.
+fn stub_principal() -> Arc<AgentPrincipal> {
+    let identity = Arc::new(
+        KeyIdentity::load_or_create(
+            std::env::temp_dir().join(format!("stub-principal-{}.key", uuid::Uuid::new_v4())),
+            None,
+        )
+        .unwrap(),
+    );
+    Arc::new(AgentPrincipal {
+        agent_did: identity.did().to_string(),
+        identity,
+        default_behavior_id: String::new(),
+        display_name: None,
+        enabled: true,
+    })
+}
 
 fn snapshot(generation: u64, default_behavior_id: &str) -> Arc<ActiveRuntimeSnapshot> {
     Arc::new(ActiveRuntimeSnapshot {
@@ -41,7 +62,8 @@ fn resolved_snapshot_activate_preserves_generation_and_dispatchers() {
         active_event_triggers: HashMap::new(),
         unavailable_event_triggers: HashSet::new(),
         active_tasks: HashMap::new(),
-    };
+    }
+    .with_principal(stub_principal());
     let (general_tx, _general_rx) = mpsc::channel(1);
     let active = resolved.activate(1, HashMap::from([("general".to_string(), general_tx)]));
 

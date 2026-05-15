@@ -166,10 +166,23 @@ impl DefraAgent {
         &self.behaviors
     }
 
+    /// Returns the deployment principal record.
+    ///
+    /// All DefraDB ops issued by this `DefraAgent` are signed by
+    /// `self.principal.identity`. Two `AgentBehavior`s on the same
+    /// `DefraAgent` share this Arc by construction (single-principal
+    /// per snapshot invariant), so any DID-keyed permission decision
+    /// returns identical results for behaviors on this deployment.
     pub fn principal(&self) -> &AgentPrincipal {
         &self.principal
     }
 
+    /// Returns a clone of the deployment principal Arc.
+    ///
+    /// Use this when threading the principal into a task / spawned
+    /// future / snapshot rebuild path that needs to hold the Arc
+    /// independently. Prefer `principal()` for read-only access
+    /// from a single scope.
     pub(crate) fn principal_arc(&self) -> Arc<AgentPrincipal> {
         Arc::clone(&self.principal)
     }
