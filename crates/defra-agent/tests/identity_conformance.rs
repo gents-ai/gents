@@ -88,14 +88,10 @@ fn rust_canonical_permission_decision(case: &LeanIdentityPermissionCase, princip
 }
 
 fn rust_hostability_decision(
-    case: &LeanIdentityPermissionCase,
     deployment: &LeanIdentityDeployment,
     behavior: &LeanIdentityBehavior,
 ) -> bool {
-    let principal_dids: HashSet<&str> = case.principals.iter().map(|p| p.did.as_str()).collect();
-    principal_dids.contains(deployment.principal.as_str())
-        && principal_dids.contains(behavior.principal.as_str())
-        && deployment.principal == behavior.principal
+    deployment.principal == behavior.principal
 }
 
 #[test]
@@ -223,13 +219,13 @@ fn identity_permission_cases_pin_runtime_permission_contract_shape() {
 
         let host = deployment_for_id(case, &case.host_deployment);
         assert_eq!(
-            rust_hostability_decision(case, host, actor),
+            rust_hostability_decision(host, actor),
             case.expected_actor_hostable,
             "case {:?}: actor hostability decision drifted",
             case.name
         );
         assert_eq!(
-            rust_hostability_decision(case, host, peer),
+            rust_hostability_decision(host, peer),
             case.expected_peer_hostable,
             "case {:?}: peer hostability decision drifted",
             case.name

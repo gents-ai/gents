@@ -330,6 +330,20 @@ def identityPermissionCases : List IdentityPermissionCase :=
 theorem identityPermissionCases_count :
     identityPermissionCases.length = 4 := rfl
 
+def stringListContains (values : List String) (value : String) : Bool :=
+  values.any (fun candidate => candidate == value)
+
+def identityPermissionCaseReferencesDeclared
+    (c : IdentityPermissionCase) : Bool :=
+  let behaviorIds := c.behaviors.map (fun behavior => behavior.id)
+  let deploymentIds := c.deployments.map (fun deployment => deployment.id)
+  stringListContains behaviorIds c.actorBehavior &&
+    stringListContains behaviorIds c.peerBehavior &&
+    stringListContains deploymentIds c.hostDeployment
+
+theorem identityPermissionCases_reference_declared_ids :
+    identityPermissionCases.all identityPermissionCaseReferencesDeclared = true := rfl
+
 open Conformance.Contracts
 open Conformance.ContractCases (boolString)
 
