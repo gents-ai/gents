@@ -917,6 +917,67 @@ mod lean_apply_write_boundary_tests {
             );
             assert_observed_prefixes_are_referrer_closed(case, &observed);
             assert_live_payloads_not_written(case, &recorder);
+
+            let (begin_count, commit_count, discard_count) = recorder.tx_lifecycle_counts();
+            assert_eq!(
+                (begin_count, commit_count, discard_count),
+                (1, 1, 0),
+                "success path must drive exactly one begin/commit and zero discard for Lean case {}",
+                case.name,
+            );
+
+            let committed_after_commit = recorder.committed_state();
+            assert_eq!(
+                committed_after_commit.len(),
+                case.expected_selected_writes.len(),
+                "recorder committed state count mismatch for Lean case {} (expected = {}, actual = {})",
+                case.name,
+                case.expected_selected_writes.len(),
+                committed_after_commit.len(),
+            );
+
+            if case.prefix_len > 0 {
+                let (graphql, recorder) = start_recording_graphql().await;
+                let access = ConfigAccess::Graphql(graphql);
+
+                // Begin a tx. The recorder hands out sequential numeric ids starting at 0;
+                // the first tx in this fresh recorder is "0".
+                let txn = access.begin_apply_txn().await.expect("begin failure-case tx");
+                recorder.install_fail_at("0", case.prefix_len);
+
+                let result = apply_desired_state_changes(&txn, &desired_bundle, &planned).await;
+                assert!(
+                    result.is_err(),
+                    "injected failure at write {} must surface as Err for Lean case {}",
+                    case.prefix_len,
+                    case.name,
+                );
+
+                let _ = txn.discard().await;
+
+                let (begin_count, commit_count, discard_count) = recorder.tx_lifecycle_counts();
+                assert_eq!(
+                    (begin_count, commit_count, discard_count),
+                    (1, 0, 1),
+                    "failure path must drive exactly one begin/discard and zero commit for Lean case {}",
+                    case.name,
+                );
+
+                assert!(
+                    recorder.committed_state().is_empty(),
+                    "failure path must leave externally-observed committed state empty (= pre_live) for Lean case {}",
+                    case.name,
+                );
+
+                let observed = recorder.observed_writes();
+                assert!(
+                    observed.len() <= case.prefix_len + 1,
+                    "failure path observed {} writes; cap is prefix_len + 1 = {} for Lean case {}",
+                    observed.len(),
+                    case.prefix_len + 1,
+                    case.name,
+                );
+            }
         }
     }
 
