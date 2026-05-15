@@ -126,11 +126,11 @@ impl DefraAgent {
             .cloned()
             .collect::<Vec<_>>();
         behaviors.sort_by(|left, right| {
-            let left_is_default = left.name == default_behavior_id;
-            let right_is_default = right.name == default_behavior_id;
+            let left_is_default = left.behavior_id == default_behavior_id;
+            let right_is_default = right.behavior_id == default_behavior_id;
             right_is_default
                 .cmp(&left_is_default)
-                .then_with(|| left.name.cmp(&right.name))
+                .then_with(|| left.behavior_id.cmp(&right.behavior_id))
         });
 
         Ok(Self {
@@ -228,7 +228,7 @@ pub(crate) fn behavior_config_from_documents(
     });
 
     Ok(AgentBehavior {
-        name: behavior.behavior_id.clone(),
+        behavior_id: behavior.behavior_id.clone(),
         principal,
         backend_id: Some(backend.backend_id.clone()),
         backend_provider_kind: backend.provider_kind,

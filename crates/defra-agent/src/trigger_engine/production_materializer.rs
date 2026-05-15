@@ -70,11 +70,11 @@ impl ProductionMaterializer {
             .ok_or_else(|| {
                 anyhow!(
                     "behavior {} has no backend binding; scheduled fires require a backend",
-                    behavior.name
+                    behavior.behavior_id
                 )
             })?;
         Ok((
-            behavior.name.clone(),
+            behavior.behavior_id.clone(),
             behavior.agent_did().to_string(),
             behavior.deadline_duration.as_secs(),
             backend_id,

@@ -35,7 +35,7 @@ pub fn test_behavior(
     let identity: Arc<dyn defra_agent::AgentIdentity> = Arc::new(test_identity(name));
     let principal = test_principal_for(identity, name);
     AgentBehavior {
-        name: name.to_string(),
+        behavior_id: name.to_string(),
         principal,
         backend_id: Some(backend_id.to_string()),
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,

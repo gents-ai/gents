@@ -178,7 +178,7 @@ async fn run_slot_loop<F, Fut>(
                 let delay = retry_policy.delay_for_attempt(failure_count);
                 failure_count += 1;
                 tracing::warn!(
-                    behavior_id = %behavior.name,
+                    behavior_id = %behavior.behavior_id,
                     delay_ms = delay.as_millis() as u64,
                     "behavior slot exited unexpectedly, scheduling restart"
                 );
@@ -190,7 +190,7 @@ async fn run_slot_loop<F, Fut>(
                 let delay = retry_policy.delay_for_attempt(failure_count);
                 failure_count += 1;
                 tracing::error!(
-                    behavior_id = %behavior.name,
+                    behavior_id = %behavior.behavior_id,
                     error = %error,
                     delay_ms = delay.as_millis() as u64,
                     "behavior slot failed, scheduling restart"
@@ -203,7 +203,7 @@ async fn run_slot_loop<F, Fut>(
                 let delay = retry_policy.delay_for_attempt(failure_count);
                 failure_count += 1;
                 tracing::error!(
-                    behavior_id = %behavior.name,
+                    behavior_id = %behavior.behavior_id,
                     delay_ms = delay.as_millis() as u64,
                     "behavior slot panicked, scheduling restart"
                 );

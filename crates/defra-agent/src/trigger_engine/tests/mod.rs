@@ -410,7 +410,7 @@ fn integration_test_behavior(behavior_name: &str) -> Arc<AgentBehavior> {
         enabled: true,
     });
     Arc::new(AgentBehavior {
-        name: behavior_name.to_string(),
+        behavior_id: behavior_name.to_string(),
         principal,
         backend_id: Some("backend-it".to_string()),
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
@@ -440,7 +440,7 @@ fn snapshot_with_behavior_and_schedules(
     schedules: HashMap<String, ResolvedSchedule>,
 ) -> Arc<ActiveRuntimeSnapshot> {
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-        behavior.name.clone(),
+        behavior.behavior_id.clone(),
         vec![behavior],
         HashMap::new(),
         HashMap::new(),

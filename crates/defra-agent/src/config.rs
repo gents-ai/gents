@@ -27,7 +27,7 @@ pub const DEFAULT_MODEL_NAME: &str = "default";
 /// structural at the type level here).
 #[derive(Clone)]
 pub struct AgentBehavior {
-    pub name: String,
+    pub behavior_id: String,
     pub principal: Arc<AgentPrincipal>,
     pub backend_id: Option<String>,
     pub backend_provider_kind: BackendProviderKind,
@@ -82,7 +82,7 @@ impl SamplingConfig {
 impl std::fmt::Debug for AgentBehavior {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentBehavior")
-            .field("name", &self.name)
+            .field("behavior_id", &self.behavior_id)
             .field("principal_did", &self.principal.agent_did)
             .field("backend_id", &self.backend_id)
             .field("backend_provider_kind", &self.backend_provider_kind)
@@ -134,7 +134,7 @@ impl AgentBehavior {
                 format!(
                     "backend {} for behavior {} requires environment variable {}",
                     self.backend_id.as_deref().unwrap_or("<unbound>"),
-                    self.name,
+                    self.behavior_id,
                     env_var
                 )
             })?;
@@ -143,7 +143,7 @@ impl AgentBehavior {
                 anyhow::bail!(
                     "backend {} for behavior {} resolved empty API key from environment variable {}",
                     self.backend_id.as_deref().unwrap_or("<unbound>"),
-                    self.name,
+                    self.behavior_id,
                     env_var
                 );
             }

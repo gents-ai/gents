@@ -47,7 +47,7 @@ async fn snapshot_for_behaviors(
     let mut tool_surfaces = HashMap::new();
     for behavior in &behaviors {
         let tool_surface = behavior.tools.resolve(node).await.unwrap();
-        tool_surfaces.insert(behavior.name.clone(), Arc::new(tool_surface));
+        tool_surfaces.insert(behavior.behavior_id.clone(), Arc::new(tool_surface));
     }
     ResolvedRuntimeSnapshot::from_parts(
         default_behavior_id.to_string(),
@@ -317,7 +317,7 @@ async fn generation_supervisor_rotates_dispatcher_on_behavior_change() {
                 *starts
                     .lock()
                     .unwrap()
-                    .entry(behavior.name.clone())
+                    .entry(behavior.behavior_id.clone())
                     .or_default() += 1;
                 loop {
                     tokio::select! {
@@ -532,7 +532,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     });
 
     let initial_behavior = Arc::new(AgentBehavior {
-        name: "general".to_string(),
+        behavior_id: "general".to_string(),
         principal: principal.clone(),
         backend_id: Some("backend-general".to_string()),
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
@@ -552,7 +552,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         sampling: crate::config::SamplingConfig::default(),
     });
     let updated_behavior = Arc::new(AgentBehavior {
-        name: "general".to_string(),
+        behavior_id: "general".to_string(),
         principal: principal.clone(),
         backend_id: Some("backend-general".to_string()),
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,

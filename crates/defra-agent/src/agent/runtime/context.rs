@@ -42,7 +42,7 @@ impl StartupBarrier {
             pending_behaviors: Mutex::new(
                 behaviors
                     .iter()
-                    .map(|behavior| behavior.name.clone())
+                    .map(|behavior| behavior.behavior_id.clone())
                     .collect::<HashSet<_>>(),
             ),
             notify: Notify::new(),
@@ -96,7 +96,7 @@ impl RuntimeContext {
             &tool_surface.background_tools().allowlist,
         );
         tracing::info!(
-            behavior_id = %behavior.name,
+            behavior_id = %behavior.behavior_id,
             did = %behavior.agent_did(),
             model = %behavior.model_name,
             tools = ?tool_names,
@@ -107,7 +107,7 @@ impl RuntimeContext {
             BackendProviderKind::OpenAiCompatible => {
                 let build_context = format!(
                     "building OpenAI-compatible completion client for behavior {} against {}",
-                    behavior.name, behavior.backend_endpoint
+                    behavior.behavior_id, behavior.backend_endpoint
                 );
                 let client: rig::providers::openai::CompletionsClient =
                     rig::providers::openai::CompletionsClient::builder()
@@ -130,7 +130,7 @@ impl RuntimeContext {
             BackendProviderKind::OpenRouter => {
                 let build_context = format!(
                     "building OpenRouter completion client for behavior {} against {}",
-                    behavior.name, behavior.backend_endpoint
+                    behavior.behavior_id, behavior.backend_endpoint
                 );
                 let client: rig::providers::openrouter::Client =
                     rig::providers::openrouter::Client::builder()

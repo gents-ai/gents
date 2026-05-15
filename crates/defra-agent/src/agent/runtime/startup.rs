@@ -501,7 +501,7 @@ async fn resolve_tool_surfaces(
     let mut tool_surfaces = HashMap::with_capacity(behaviors.len());
     for behavior in behaviors {
         let tool_surface = behavior.tools.resolve(node).await?;
-        tool_surfaces.insert(behavior.name.clone(), Arc::new(tool_surface));
+        tool_surfaces.insert(behavior.behavior_id.clone(), Arc::new(tool_surface));
     }
     Ok(tool_surfaces)
 }
@@ -597,7 +597,7 @@ async fn resolve_backend_admission_configs(
             .ok_or_else(|| {
                 anyhow!(
                     "behavior {} references missing backend {}",
-                    behavior.name,
+                    behavior.behavior_id,
                     backend_id
                 )
             })?;

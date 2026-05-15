@@ -152,11 +152,11 @@ impl DefraAgentBuilder {
             behaviors.push(Arc::new(config));
         }
         behaviors.sort_by(|left, right| {
-            let left_is_default = left.name == default_behavior_id;
-            let right_is_default = right.name == default_behavior_id;
+            let left_is_default = left.behavior_id == default_behavior_id;
+            let right_is_default = right.behavior_id == default_behavior_id;
             right_is_default
                 .cmp(&left_is_default)
-                .then_with(|| left.name.cmp(&right.name))
+                .then_with(|| left.behavior_id.cmp(&right.behavior_id))
         });
 
         Ok(DefraAgent {
@@ -425,7 +425,7 @@ impl PendingAgentBehavior {
         });
 
         Ok(AgentBehavior {
-            name: self.name,
+            behavior_id: self.name,
             principal,
             backend_id,
             backend_provider_kind,

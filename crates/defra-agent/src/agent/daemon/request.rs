@@ -22,7 +22,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     ) -> Result<HandleRequestOutcome> {
         let request_token = tokio_util::sync::CancellationToken::new();
         let request = lifecycle.request().clone();
-        let behavior_name = self.behavior.name.clone();
+        let behavior_name = self.behavior.behavior_id.clone();
         let admission_context = AdmissionCallContext::for_request(
             &request,
             lifecycle.behavior_id(),
@@ -38,7 +38,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     compaction::strip_tool_results(full_history);
                 if !file_activity.is_empty() {
                     tracing::debug!(
-                        behavior_id = %self.behavior.name,
+                        behavior_id = %self.behavior.behavior_id,
                         session_id = %request.session_id,
                         files_read = ?file_activity.files_read,
                         files_modified = ?file_activity.files_modified,
@@ -184,7 +184,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         .await
                     {
                         tracing::warn!(
-                            behavior_id = %self.behavior.name,
+                            behavior_id = %self.behavior.behavior_id,
                             doc_id = %doc_id,
                             error = %error,
                             "failed to stamp interrupted_at on response; continuing to terminal transition"
@@ -222,7 +222,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         .await
                     {
                         tracing::error!(
-                            behavior_id = %self.behavior.name,
+                            behavior_id = %self.behavior.behavior_id,
                             doc_id = %doc_id,
                             error = %set_error,
                             "failed to persist response error message"
@@ -234,7 +234,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         .await
                     {
                         tracing::error!(
-                            behavior_id = %self.behavior.name,
+                            behavior_id = %self.behavior.behavior_id,
                             doc_id = %doc_id,
                             error = %finalize_error,
                             "failed to finalize stream after error"

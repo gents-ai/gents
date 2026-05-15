@@ -99,7 +99,7 @@ impl LayeredPromptBuilder {
         let tool_refs = tool_names.iter().map(String::as_str).collect::<Vec<_>>();
         Self::for_behavior(
             &behavior.system_prompt,
-            &behavior.name,
+            &behavior.behavior_id,
             &tool_refs,
             tool_surface.includes_meta_tools(),
             behavior.context_window,

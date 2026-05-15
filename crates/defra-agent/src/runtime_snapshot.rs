@@ -151,7 +151,7 @@ impl ResolvedRuntimeSnapshot {
             default_behavior_id,
             behaviors: behaviors
                 .into_iter()
-                .map(|behavior| (behavior.name.clone(), behavior))
+                .map(|behavior| (behavior.behavior_id.clone(), behavior))
                 .collect(),
             tool_surfaces,
             backend_admission_configs,

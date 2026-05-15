@@ -162,7 +162,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
 
     let candidate_behavior_ids = behaviors
         .iter()
-        .map(|behavior| behavior.name.clone())
+        .map(|behavior| behavior.behavior_id.clone())
         .collect::<HashSet<_>>();
     let mut behavior_surfaces = Vec::with_capacity(behaviors.len());
     for behavior in behaviors {
@@ -173,20 +173,20 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         {
             Ok(tool_surface) => behavior_surfaces.push((behavior, tool_surface)),
             Err(error) => {
-                unavailable_behaviors.insert(behavior.name.clone(), error.to_string());
+                unavailable_behaviors.insert(behavior.behavior_id.clone(), error.to_string());
             }
         }
     }
 
     let active_behavior_ids = behavior_surfaces
         .iter()
-        .map(|(behavior, _)| behavior.name.clone())
+        .map(|(behavior, _)| behavior.behavior_id.clone())
         .collect::<HashSet<_>>();
     let mut behaviors = Vec::with_capacity(behavior_surfaces.len());
     let mut tool_surfaces = HashMap::with_capacity(behavior_surfaces.len());
     for (behavior, mut tool_surface) in behavior_surfaces {
         tool_surface.retain_subagent_targets(&active_behavior_ids);
-        tool_surfaces.insert(behavior.name.clone(), Arc::new(tool_surface));
+        tool_surfaces.insert(behavior.behavior_id.clone(), Arc::new(tool_surface));
         behaviors.push(behavior);
     }
 

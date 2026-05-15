@@ -82,7 +82,7 @@ async fn from_default_behavior_documents_composes_behavior_and_inference_profile
     .unwrap();
 
     let behavior = &agent.behaviors()[0];
-    assert_eq!(behavior.name, default_behavior_id);
+    assert_eq!(behavior.behavior_id, default_behavior_id);
     assert_eq!(behavior.agent_did(), did);
     assert_eq!(behavior.backend_endpoint, "http://127.0.0.1:8123/v1");
     assert_eq!(behavior.model_name, "gpt-local");
@@ -192,7 +192,7 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
     .unwrap();
 
     let behavior = &agent.behaviors()[0];
-    assert_eq!(behavior.name, default_behavior_id);
+    assert_eq!(behavior.behavior_id, default_behavior_id);
     assert_eq!(behavior.tools.host_tools(), &ToolSet::readonly());
     assert!(!behavior.tools.meta_tools_requested());
     assert_eq!(
@@ -505,7 +505,7 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
     let runnable_names = agent
         .behaviors()
         .iter()
-        .map(|behavior| behavior.name.as_str())
+        .map(|behavior| behavior.behavior_id.as_str())
         .collect::<std::collections::HashSet<_>>();
     assert_eq!(agent.agent_did(), did);
     assert_eq!(agent.default_behavior_id(), default_behavior_id);
