@@ -37,7 +37,8 @@ pub(in crate::agent) async fn run_agent(
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     let cancel = CancellationToken::new();
-    let runtime_status = RuntimeStatusHandle::new(agent.node.clone(), agent.agent_did.clone());
+    let runtime_status =
+        RuntimeStatusHandle::new(agent.node.clone(), agent.agent_did().to_string());
     runtime_status
         .set_process_state(ProcessLifecycleState::Recovering)
         .await;
@@ -84,8 +85,8 @@ pub(in crate::agent) async fn run_agent(
 
     log_recovery(
         agent.node.as_ref(),
-        &agent.agent_did,
-        &agent.default_behavior_id,
+        agent.agent_did(),
+        agent.default_behavior_id(),
     )
     .await;
     for (behavior_id, reason) in &agent.unavailable_behaviors {
@@ -229,7 +230,7 @@ pub(in crate::agent) async fn run_agent(
     let mut background_tasks = JoinSet::new();
 
     let completion_node = agent.node.clone();
-    let completion_agent_did = agent.agent_did.clone();
+    let completion_agent_did = agent.agent_did().to_string();
     let completion_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::SubagentCompletion(
@@ -257,7 +258,7 @@ pub(in crate::agent) async fn run_agent(
     });
 
     let router_node = agent.node.clone();
-    let router_agent_did = agent.agent_did.clone();
+    let router_agent_did = agent.agent_did().to_string();
     let router_active_snapshot_rx = active_snapshot_rx.clone();
     let router_shutdown = shutdown.clone();
     background_tasks.spawn(async move {
@@ -302,7 +303,7 @@ pub(in crate::agent) async fn run_agent(
 
     if agent.document_runtime_context().is_some() {
         let control_node = agent.node.clone();
-        let control_agent_did = agent.agent_did.clone();
+        let control_agent_did = agent.agent_did().to_string();
         let control_context = agent
             .document_runtime_context()
             .cloned()
@@ -518,7 +519,7 @@ async fn resolve_startup_snapshot(agent: &DefraAgent) -> Result<ResolvedRuntimeS
                 resolve_backend_admission_configs(agent.node.as_ref(), &agent.behaviors).await?;
             let paired_peer_dids = load_startup_paired_peer_dids(agent.node.as_ref()).await?;
             Ok(ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-                agent.default_behavior_id.clone(),
+                agent.default_behavior_id().to_string(),
                 agent.behaviors.clone(),
                 tool_surfaces,
                 backend_admission_configs,
@@ -526,7 +527,7 @@ async fn resolve_startup_snapshot(agent: &DefraAgent) -> Result<ResolvedRuntimeS
             ))
             .map(|snapshot| {
                 snapshot
-                    .with_local_did(agent.agent_did.clone())
+                    .with_local_did(agent.agent_did().to_string())
                     .with_paired_peer_dids(paired_peer_dids)
             })
         }

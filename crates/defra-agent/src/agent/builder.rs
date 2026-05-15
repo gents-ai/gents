@@ -144,10 +144,19 @@ impl DefraAgentBuilder {
             );
         }
 
+        // Construct one principal Arc and share it across all behaviors.
+        let principal = Arc::new(AgentPrincipal {
+            agent_did: identity.did().to_string(),
+            identity: identity.clone(),
+            default_behavior_id: default_behavior_id.clone(),
+            display_name: None,
+            enabled: true,
+        });
+
         let mut behaviors = Vec::with_capacity(self.behaviors.len());
         for behavior in self.behaviors {
             let config = behavior
-                .build(node.as_ref(), Some(&identity), &self.tool_ceiling)
+                .build(node.as_ref(), principal.clone(), &self.tool_ceiling)
                 .await?;
             behaviors.push(Arc::new(config));
         }
@@ -161,8 +170,7 @@ impl DefraAgentBuilder {
 
         Ok(DefraAgent {
             node,
-            agent_did: identity.did().to_string(),
-            default_behavior_id,
+            principal,
             behaviors,
             unavailable_behaviors: Default::default(),
             document_runtime_context: None,
@@ -364,14 +372,9 @@ impl PendingAgentBehavior {
     async fn build(
         self,
         node: &EmbeddedNode,
-        default_identity: Option<&Arc<dyn AgentIdentity>>,
+        principal: Arc<AgentPrincipal>,
         tool_ceiling: &ToolCeiling,
     ) -> Result<AgentBehavior> {
-        let identity = self
-            .identity
-            .clone()
-            .or_else(|| default_identity.cloned())
-            .ok_or_else(|| anyhow!("behavior '{}' is missing identity", self.name))?;
         let backend_id = self
             .backend_id
             .as_deref()
@@ -394,7 +397,7 @@ impl PendingAgentBehavior {
         }
         BackendAdmissionConfig::from_backend(&backend)?;
         self.build_with_resolved_backend(
-            identity,
+            principal,
             Some(backend.backend_id),
             backend.provider_kind,
             backend.endpoint,
@@ -407,7 +410,7 @@ impl PendingAgentBehavior {
     #[allow(clippy::too_many_arguments)]
     fn build_with_resolved_backend(
         self,
-        identity: Arc<dyn AgentIdentity>,
+        principal: Arc<AgentPrincipal>,
         backend_id: Option<String>,
         backend_provider_kind: BackendProviderKind,
         backend_endpoint: String,
@@ -416,13 +419,6 @@ impl PendingAgentBehavior {
         tool_ceiling: &ToolCeiling,
     ) -> Result<AgentBehavior> {
         let behavior_name = self.name.clone();
-        let principal = Arc::new(AgentPrincipal {
-            agent_did: identity.did().to_string(),
-            identity,
-            default_behavior_id: String::new(), // Task 7 will thread the real value
-            display_name: None,
-            enabled: true,
-        });
 
         Ok(AgentBehavior {
             behavior_id: self.name,
@@ -454,16 +450,23 @@ impl PendingAgentBehavior {
 
 #[cfg(test)]
 impl PendingAgentBehavior {
-    pub(crate) fn build_with_identity_for_test<I>(mut self, identity: I) -> AgentBehavior
+    pub(crate) fn build_with_identity_for_test<I>(self, identity: I) -> AgentBehavior
     where
         I: AgentIdentity + 'static,
     {
         let backend_id = self.backend_id.clone();
         let backend_endpoint = self.backend_endpoint.clone();
-        self.identity = Some(Arc::new(identity));
-        let resolved_identity = self.identity.clone().unwrap();
+        let behavior_name = self.name.clone();
+        let identity: Arc<dyn AgentIdentity> = Arc::new(identity);
+        let principal = Arc::new(AgentPrincipal {
+            agent_did: identity.did().to_string(),
+            identity,
+            default_behavior_id: behavior_name.clone(),
+            display_name: None,
+            enabled: true,
+        });
         self.build_with_resolved_backend(
-            resolved_identity,
+            principal,
             backend_id,
             BackendProviderKind::OpenAiCompatible,
             backend_endpoint,

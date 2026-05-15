@@ -21,6 +21,7 @@ use crate::agent::{
     behavior_config_from_documents, subagent_tool_config_from_document,
     tool_selection_from_document, DocumentResolveContext,
 };
+use crate::identity::AgentPrincipal;
 use crate::tool_surface::SubagentToolConfig;
 
 pub(crate) async fn resolve_document_runtime_snapshot_from_view(
@@ -44,12 +45,17 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| default_behavior_id_for_agent(context.identity.did()));
 
+    let principal = Arc::new(AgentPrincipal {
+        agent_did: view.principal.value.agent_did.clone(),
+        identity: context.identity.clone(),
+        default_behavior_id: default_behavior_id.clone(),
+        display_name: view.principal.value.display_name.clone(),
+        enabled: view.principal.value.enabled,
+    });
+
     let mut behaviors = Vec::<Arc<AgentBehavior>>::new();
     let mut unavailable_behaviors = HashMap::new();
 
-    // TODO(Task 7): construct a single Arc<AgentPrincipal> above the loop and
-    // clone into each behavior_config_from_documents call so all behaviors
-    // share the snapshot's principal Arc per the single-principal invariant.
     for behavior_record in view.behaviors.values() {
         let behavior = &behavior_record.value;
         if !behavior.enabled {
@@ -138,7 +144,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
             };
 
             let behavior_config = behavior_config_from_documents(
-                context.identity.clone(),
+                principal.clone(),
                 behavior,
                 backend,
                 inference_profile,
@@ -207,6 +213,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         backend_admission_configs,
         unavailable_behaviors,
     )
+    .with_principal(principal)
     .with_local_did(context.identity.did().to_string())
     .with_paired_peer_dids(paired_peer_dids)
     .with_schedules(active_schedules, unavailable_schedules)

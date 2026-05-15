@@ -406,6 +406,7 @@ mod tests {
     fn snapshot() -> Arc<ActiveRuntimeSnapshot> {
         Arc::new(ActiveRuntimeSnapshot {
             generation: 1,
+            principal: None,
             local_did: CHILD_DID.to_string(),
             paired_peer_dids: HashSet::from([PARENT_DID.to_string()]),
             default_behavior_id: "child-behavior".to_string(),

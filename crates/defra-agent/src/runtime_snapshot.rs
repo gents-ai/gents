@@ -7,6 +7,7 @@ use tokio::sync::watch;
 
 use crate::admission::BackendAdmissionConfig;
 use crate::config::AgentBehavior;
+use crate::identity::AgentPrincipal;
 use crate::tool_surface::ToolSurface;
 use crate::watcher::AgentRequest;
 
@@ -107,6 +108,7 @@ pub(crate) struct ResolvedEventTrigger {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ResolvedRuntimeSnapshot {
+    pub(crate) principal: Option<Arc<AgentPrincipal>>,
     pub(crate) local_did: String,
     pub(crate) paired_peer_dids: HashSet<String>,
     pub(crate) default_behavior_id: String,
@@ -146,6 +148,7 @@ impl ResolvedRuntimeSnapshot {
         unavailable_behaviors: HashMap<String, String>,
     ) -> Self {
         Self {
+            principal: None,
             local_did: String::new(),
             paired_peer_dids: HashSet::new(),
             default_behavior_id,
@@ -162,6 +165,11 @@ impl ResolvedRuntimeSnapshot {
             unavailable_event_triggers: HashSet::new(),
             active_tasks: HashMap::new(),
         }
+    }
+
+    pub(crate) fn with_principal(mut self, principal: Arc<AgentPrincipal>) -> Self {
+        self.principal = Some(principal);
+        self
     }
 
     pub(crate) fn with_local_did(mut self, local_did: String) -> Self {
@@ -219,6 +227,7 @@ impl ResolvedRuntimeSnapshot {
     ) -> ActiveRuntimeSnapshot {
         ActiveRuntimeSnapshot {
             generation,
+            principal: self.principal,
             local_did: self.local_did,
             paired_peer_dids: self.paired_peer_dids,
             default_behavior_id: self.default_behavior_id,
@@ -256,6 +265,7 @@ impl ResolvedRuntimeSnapshot {
 #[derive(Clone, Debug)]
 pub(crate) struct ActiveRuntimeSnapshot {
     pub(crate) generation: u64,
+    pub(crate) principal: Option<Arc<AgentPrincipal>>,
     pub(crate) local_did: String,
     pub(crate) paired_peer_dids: HashSet<String>,
     pub(crate) default_behavior_id: String,

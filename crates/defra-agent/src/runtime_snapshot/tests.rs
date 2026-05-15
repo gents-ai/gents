@@ -8,6 +8,7 @@ use super::*;
 fn snapshot(generation: u64, default_behavior_id: &str) -> Arc<ActiveRuntimeSnapshot> {
     Arc::new(ActiveRuntimeSnapshot {
         generation,
+        principal: None,
         local_did: String::new(),
         paired_peer_dids: HashSet::new(),
         default_behavior_id: default_behavior_id.to_string(),
@@ -27,6 +28,7 @@ fn snapshot(generation: u64, default_behavior_id: &str) -> Arc<ActiveRuntimeSnap
 #[test]
 fn resolved_snapshot_activate_preserves_generation_and_dispatchers() {
     let resolved = ResolvedRuntimeSnapshot {
+        principal: None,
         local_did: "did:local".to_string(),
         paired_peer_dids: HashSet::from(["did:peer".to_string()]),
         default_behavior_id: "general".to_string(),
@@ -80,6 +82,7 @@ fn concurrency_mode_parse_is_strict() {
 #[test]
 fn configuration_fingerprint_reflects_schedule_set() {
     let base = ResolvedRuntimeSnapshot {
+        principal: None,
         local_did: String::new(),
         paired_peer_dids: HashSet::new(),
         default_behavior_id: "general".to_string(),

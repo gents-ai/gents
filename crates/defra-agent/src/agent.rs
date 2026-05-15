@@ -85,8 +85,7 @@ pub(crate) struct DocumentResolveContext {
 #[derive(Clone)]
 pub struct DefraAgent {
     node: Arc<EmbeddedNode>,
-    agent_did: String,
-    default_behavior_id: String,
+    principal: Arc<AgentPrincipal>,
     behaviors: Vec<Arc<AgentBehavior>>,
     unavailable_behaviors: HashMap<String, String>,
     document_runtime_context: Option<DocumentResolveContext>,
@@ -119,7 +118,19 @@ impl DefraAgent {
         };
         let resolved_snapshot =
             resolve_document_runtime_snapshot(node.as_ref(), &document_runtime_context).await?;
-        let default_behavior_id = resolved_snapshot.default_behavior_id.clone();
+        // The snapshot carries the principal Arc constructed once in the loader.
+        // Fall back to a synthetic principal if (in tests) the snapshot has none.
+        let principal = resolved_snapshot.principal.clone().unwrap_or_else(|| {
+            let default_behavior_id = resolved_snapshot.default_behavior_id.clone();
+            Arc::new(AgentPrincipal {
+                agent_did: identity.did().to_string(),
+                identity: identity.clone(),
+                default_behavior_id,
+                display_name: None,
+                enabled: true,
+            })
+        });
+        let default_behavior_id = principal.default_behavior_id.clone();
         let mut behaviors = resolved_snapshot
             .behaviors
             .values()
@@ -135,8 +146,7 @@ impl DefraAgent {
 
         Ok(Self {
             node,
-            agent_did: identity.did().to_string(),
-            default_behavior_id,
+            principal,
             behaviors,
             unavailable_behaviors: resolved_snapshot.unavailable_behaviors,
             document_runtime_context: Some(document_runtime_context),
@@ -156,12 +166,16 @@ impl DefraAgent {
         &self.behaviors
     }
 
+    pub fn principal(&self) -> &AgentPrincipal {
+        &self.principal
+    }
+
     pub fn agent_did(&self) -> &str {
-        &self.agent_did
+        &self.principal.agent_did
     }
 
     pub fn default_behavior_id(&self) -> &str {
-        &self.default_behavior_id
+        &self.principal.default_behavior_id
     }
 
     pub fn unavailable_behaviors(&self) -> &HashMap<String, String> {
@@ -199,7 +213,7 @@ pub(crate) async fn resolve_document_runtime_snapshot(
 }
 
 pub(crate) fn behavior_config_from_documents(
-    identity: Arc<dyn AgentIdentity>,
+    principal: Arc<AgentPrincipal>,
     behavior: &crate::document_config::AgentBehavior,
     backend: &crate::backend_registry::InferenceBackend,
     inference_profile: &crate::document_config::InferenceProfile,
@@ -219,13 +233,6 @@ pub(crate) fn behavior_config_from_documents(
     let profile_max_tokens = inference_profile
         .max_output_tokens
         .and_then(|value| u64::try_from(value).ok());
-    let principal = Arc::new(AgentPrincipal {
-        agent_did: identity.did().to_string(),
-        identity,
-        default_behavior_id: String::new(), // Task 7 will thread the real value
-        display_name: None,
-        enabled: true,
-    });
 
     Ok(AgentBehavior {
         behavior_id: behavior.behavior_id.clone(),
