@@ -105,6 +105,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             test: "matches generated Lean ClientShell projection contracts",
         },
         ConformanceConsumer::RustTest {
+            id: "agent::reconcile::tests::pairing_reconcile_state_machine_contract_is_complete",
+            package: "defra-agent",
+            source_path: "crates/defra-agent/src/agent/reconcile/tests.rs",
+            module_path: "agent::reconcile::tests",
+            function: "pairing_reconcile_state_machine_contract_is_complete",
+        },
+        ConformanceConsumer::RustTest {
             id: "config_import::lean_apply_write_boundary_tests::generated_apply_reconcile_cases_fence_production_apply_write_boundary",
             package: "defra-agent-cli",
             source_path: "crates/defra-agent-cli/src/config_import.rs",

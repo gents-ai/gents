@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
@@ -11,12 +12,23 @@ use crate::config::BehaviorConfig;
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
 use crate::identity::KeyIdentity;
-use crate::lean_vocab_test::lean_runtime_reconcile_case;
+use crate::lean_vocab_test::{
+    assert_state_machine_contract_is_complete, lean_runtime_reconcile_case,
+    lean_state_machine_contract,
+};
 use crate::runtime_status::RuntimeStatusHandle;
 use crate::tool_surface::{
     BehaviorToolConfig, FileToolMode, ToolCeiling, ToolSelection, ToolSurface,
 };
 use crate::watcher::AgentRequest;
+
+#[derive(Debug)]
+struct PairingReconcileRuntimeProbes {
+    operator_write_diverges: bool,
+    install_converges: bool,
+    teardown_converges: bool,
+    crash_restarts_slot: bool,
+}
 
 async fn test_node() -> Arc<defra_node::EmbeddedNode> {
     Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap())
@@ -43,6 +55,192 @@ async fn snapshot_for_behaviors(
         tool_surfaces,
         HashMap::new(),
     )
+}
+
+#[tokio::test]
+async fn pairing_reconcile_state_machine_contract_is_complete() {
+    assert_state_machine_contract_is_complete("PairingReconcile");
+    let machine = lean_state_machine_contract("PairingReconcile");
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let probes = PairingReconcileRuntimeProbes {
+        operator_write_diverges: operator_write_changes_snapshot_fingerprint(node.as_ref()).await,
+        install_converges: reconcile_install_applies_added_behavior(node.as_ref()).await,
+        teardown_converges: reconcile_teardown_applies_removed_behavior(node.as_ref()).await,
+        crash_restarts_slot: slot_panic_restarts_behavior(node.as_ref()).await,
+    };
+
+    let mut rust_legal_pairs = BTreeSet::new();
+    for from in &machine.states {
+        for action in &machine.actions {
+            if let Some(post) = rust_pairing_reconcile_step(from, action, &probes) {
+                rust_legal_pairs.insert((from.clone(), post.to_string()));
+            }
+        }
+    }
+
+    let lean_legal_pairs = machine
+        .legal_transitions
+        .iter()
+        .map(|pair| (pair.from.clone(), pair.to.clone()))
+        .collect::<BTreeSet<_>>();
+    let lean_illegal_pairs = machine
+        .illegal_transitions
+        .iter()
+        .map(|pair| (pair.from.clone(), pair.to.clone()))
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        rust_legal_pairs, lean_legal_pairs,
+        "PairingReconcile Lean legal transitions drifted from Rust diff/slot behavior"
+    );
+    assert!(
+        rust_legal_pairs.is_disjoint(&lean_illegal_pairs),
+        "PairingReconcile Rust transitions overlap Lean illegal transitions"
+    );
+}
+
+fn rust_pairing_reconcile_step(
+    phase: &str,
+    action: &str,
+    probes: &PairingReconcileRuntimeProbes,
+) -> Option<&'static str> {
+    match (phase, action) {
+        ("idle" | "converged" | "crashed", "operatorWrite") if probes.operator_write_diverges => {
+            Some("diverged")
+        }
+        ("diverged", "reconcileInstall") if probes.install_converges => Some("converged"),
+        ("diverged", "reconcileTeardown") if probes.teardown_converges => Some("converged"),
+        (_, "crash") if probes.crash_restarts_slot => Some("crashed"),
+        _ => None,
+    }
+}
+
+async fn operator_write_changes_snapshot_fingerprint(node: &defra_node::EmbeddedNode) -> bool {
+    let mut initial_behavior = PendingBehaviorConfig::new("general")
+        .build_with_identity_for_test(test_identity("pairing-contract-initial"));
+    initial_behavior.system_prompt = "before operator write".to_string();
+    let mut updated_behavior = PendingBehaviorConfig::new("general")
+        .build_with_identity_for_test(test_identity("pairing-contract-updated"));
+    updated_behavior.system_prompt = "after operator write".to_string();
+    let current_resolved =
+        snapshot_for_behaviors(node, "general", vec![Arc::new(initial_behavior)]).await;
+    let proposed = snapshot_for_behaviors(node, "general", vec![Arc::new(updated_behavior)]).await;
+    let current = current_resolved.activate(1, HashMap::new());
+    let diff = diff_counts(&current, &proposed);
+
+    current.configuration_fingerprint() != proposed.configuration_fingerprint()
+        && diff.updated == 1
+        && diff.added == 0
+        && diff.removed == 0
+}
+
+async fn reconcile_install_applies_added_behavior(node: &defra_node::EmbeddedNode) -> bool {
+    let behavior = PendingBehaviorConfig::new("general")
+        .build_with_identity_for_test(test_identity("pairing-contract-install"));
+    let current_resolved = ResolvedRuntimeSnapshot::from_parts(
+        "general".to_string(),
+        Vec::new(),
+        HashMap::new(),
+        HashMap::new(),
+    );
+    let proposed = snapshot_for_behaviors(node, "general", vec![Arc::new(behavior)]).await;
+    let current = current_resolved.activate(1, HashMap::new());
+    let diff = diff_counts(&current, &proposed);
+    let applied = proposed.clone().activate(2, HashMap::new());
+    let rediff = diff_counts(&applied, &proposed);
+
+    diff.added == 1
+        && diff.updated == 0
+        && diff.removed == 0
+        && rediff.added == 0
+        && rediff.updated == 0
+        && rediff.removed == 0
+}
+
+async fn reconcile_teardown_applies_removed_behavior(node: &defra_node::EmbeddedNode) -> bool {
+    let behavior = PendingBehaviorConfig::new("general")
+        .build_with_identity_for_test(test_identity("pairing-contract-teardown"));
+    let current_resolved = snapshot_for_behaviors(node, "general", vec![Arc::new(behavior)]).await;
+    let proposed = ResolvedRuntimeSnapshot::from_parts(
+        "general".to_string(),
+        Vec::new(),
+        HashMap::new(),
+        HashMap::new(),
+    );
+    let current = current_resolved.activate(1, HashMap::new());
+    let diff = diff_counts(&current, &proposed);
+    let applied = proposed.clone().activate(2, HashMap::new());
+    let rediff = diff_counts(&applied, &proposed);
+
+    diff.removed == 1
+        && diff.added == 0
+        && diff.updated == 0
+        && rediff.added == 0
+        && rediff.updated == 0
+        && rediff.removed == 0
+}
+
+async fn slot_panic_restarts_behavior(node: &defra_node::EmbeddedNode) -> bool {
+    let behavior = Arc::new(
+        PendingBehaviorConfig::new("general")
+            .build_with_identity_for_test(test_identity("pairing-contract-slot-crash")),
+    );
+    let tool_surface = Arc::new(behavior.tools.resolve(node).await.unwrap());
+    let starts = Arc::new(AtomicUsize::new(0));
+    let runner = {
+        let starts = starts.clone();
+        move |_behavior: Arc<BehaviorConfig>,
+              _tool_surface: Arc<ToolSurface>,
+              request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              mut shutdown: watch::Receiver<bool>| {
+            let starts = starts.clone();
+            async move {
+                if starts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    panic!("contract probe panic");
+                }
+                loop {
+                    tokio::select! {
+                        _ = shutdown.changed() => return Ok(()),
+                        message = async {
+                            let mut receiver = request_rx.lock().await;
+                            receiver.recv().await
+                        } => {
+                            if message.is_none() {
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let slot = spawn_slot(
+        behavior,
+        tool_surface,
+        crate::retry::RetryPolicy {
+            max_retries: 1,
+            base_delay_ms: 1,
+            max_delay_ms: 1,
+        },
+        runner,
+        shutdown_rx,
+    );
+
+    let restarted = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if starts.load(Ordering::SeqCst) >= 2 {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap_or(false);
+    let _ = shutdown_tx.send(true);
+    retire_slot(slot);
+    restarted
 }
 
 #[derive(Debug, serde::Deserialize)]
