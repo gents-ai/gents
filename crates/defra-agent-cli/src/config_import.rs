@@ -1193,10 +1193,12 @@ mod lean_apply_write_boundary_tests {
             .expect("bind recording GraphQL listener");
         let addr = listener.local_addr().expect("recording GraphQL addr");
         let app = Router::new()
-            .route("/", post(recording_graphql_handler))
-            // axum routes static paths before capture patterns, so `/api/v0/tx/begin`
-            // resolves to begin_handler, not to the `/api/v0/tx/{id}` commit handler.
-            .route("/api/v0/tx/begin", post(recording_tx_begin_handler))
+            .route("/api/v0/graphql", post(recording_graphql_handler))
+            // Go-compatible transaction routes (mirrors DefraDB HTTP API):
+            //   POST /api/v0/tx          → begin
+            //   POST /api/v0/tx/{id}     → commit
+            //   DELETE /api/v0/tx/{id}   → discard/rollback
+            .route("/api/v0/tx", post(recording_tx_begin_handler))
             .route(
                 "/api/v0/tx/{id}",
                 post(recording_tx_commit_handler).delete(recording_tx_discard_handler),
@@ -1207,7 +1209,7 @@ mod lean_apply_write_boundary_tests {
                 .await
                 .expect("recording GraphQL server");
         });
-        (format!("http://{addr}/"), state)
+        (format!("http://{addr}/api/v0/graphql"), state)
     }
 
     async fn recording_tx_begin_handler(State(state): State<RecordingGraphqlState>) -> Json<Value> {
@@ -1787,10 +1789,11 @@ mod lean_apply_write_boundary_tests {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn recorder_begin_returns_numeric_id_and_commit_appends_to_committed() {
             let (graphql, recorder) = start_recording_graphql().await;
+            let api_base = graphql.strip_suffix("/graphql").unwrap();
             let client = reqwest::Client::new();
 
             let begin = client
-                .post(format!("{graphql}api/v0/tx/begin"))
+                .post(format!("{api_base}/tx"))
                 .send()
                 .await
                 .unwrap()
@@ -1805,7 +1808,7 @@ mod lean_apply_write_boundary_tests {
             assert!(txn_id.parse::<u64>().is_ok(), "tx id must be numeric");
 
             let _write = client
-                .post(format!("{graphql}"))
+                .post(&graphql)
                 .header("x-defradb-tx", &txn_id)
                 .json(&json!({
                     "query": "mutation { doc_0: create_Task(input: { task_id: \"task-a\" }) { _docID } }",
@@ -1818,7 +1821,7 @@ mod lean_apply_write_boundary_tests {
             assert!(recorder.committed_state().is_empty());
 
             let commit = client
-                .post(format!("{graphql}api/v0/tx/{txn_id}"))
+                .post(format!("{api_base}/tx/{txn_id}"))
                 .send()
                 .await
                 .unwrap();
@@ -1833,10 +1836,11 @@ mod lean_apply_write_boundary_tests {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn recorder_discard_drops_pending_writes() {
             let (graphql, recorder) = start_recording_graphql().await;
+            let api_base = graphql.strip_suffix("/graphql").unwrap().to_owned();
             let client = reqwest::Client::new();
 
             let begin = client
-                .post(format!("{graphql}api/v0/tx/begin"))
+                .post(format!("{api_base}/tx"))
                 .send()
                 .await
                 .unwrap()
@@ -1850,7 +1854,7 @@ mod lean_apply_write_boundary_tests {
                 .to_string();
 
             let _write = client
-                .post(format!("{graphql}"))
+                .post(&graphql)
                 .header("x-defradb-tx", &txn_id)
                 .json(&serde_json::json!({
                     "query": "mutation { doc_0: create_Task(input: { task_id: \"task-a\" }) { _docID } }",
@@ -1860,7 +1864,7 @@ mod lean_apply_write_boundary_tests {
                 .unwrap();
 
             let discard = client
-                .delete(format!("{graphql}api/v0/tx/{txn_id}"))
+                .delete(format!("{api_base}/tx/{txn_id}"))
                 .send()
                 .await
                 .unwrap();
@@ -1877,10 +1881,11 @@ mod lean_apply_write_boundary_tests {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn recorder_fail_injection_aborts_at_target_index() {
             let (graphql, recorder) = start_recording_graphql().await;
+            let api_base = graphql.strip_suffix("/graphql").unwrap().to_owned();
             let client = reqwest::Client::new();
 
             let begin = client
-                .post(format!("{graphql}api/v0/tx/begin"))
+                .post(format!("{api_base}/tx"))
                 .send()
                 .await
                 .unwrap()
@@ -1895,7 +1900,7 @@ mod lean_apply_write_boundary_tests {
             recorder.install_fail_at(&txn_id, 1);
 
             let ok = client
-                .post(format!("{graphql}"))
+                .post(&graphql)
                 .header("x-defradb-tx", &txn_id)
                 .json(&serde_json::json!({
                     "query": "mutation { doc_0: create_Task(input: { task_id: \"task-a\" }) { _docID } }",
@@ -1924,7 +1929,7 @@ mod lean_apply_write_boundary_tests {
             );
 
             let fail = client
-                .post(format!("{graphql}"))
+                .post(&graphql)
                 .header("x-defradb-tx", &txn_id)
                 .json(&serde_json::json!({
                     "query": "mutation { doc_0: create_Task(input: { task_id: \"task-b\" }) { _docID } }",

@@ -26,6 +26,22 @@ use serde_json::{json, Value};
 use crate::config_writes::ConfigAccess;
 use crate::graphql_access::graphql_diagnostic_hint;
 
+/// Derive the API base URL from a GraphQL endpoint.
+///
+/// The GraphQL endpoint is expected to end with `/graphql` (e.g.
+/// `http://host:port/api/v0/graphql`). Stripping that suffix gives the API
+/// base `http://host:port/api/v0`, from which transaction paths like
+/// `/tx/begin` and `/tx/{id}` are appended.
+fn api_base_from_graphql(graphql: &str) -> Result<String> {
+    graphql
+        .trim()
+        .strip_suffix("/graphql")
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            anyhow::anyhow!("expected GraphQL endpoint ending in /graphql, got {graphql}")
+        })
+}
+
 #[derive(Debug)]
 pub(crate) enum TxnHandle {
     /// Numeric txn id parsed from `POST /api/v0/tx/begin`.
@@ -90,12 +106,13 @@ impl<'a> ConfigApplyTxn<'a> {
     pub(crate) async fn commit(self) -> Result<()> {
         match (self.access, self.handle) {
             (ConfigAccess::Graphql(endpoint), TxnHandle::Graphql(id)) => {
+                let api_base = api_base_from_graphql(endpoint)?;
                 let status;
                 let bytes;
                 {
                     let response = self
                         .http_client
-                        .post(format!("{endpoint}api/v0/tx/{id}"))
+                        .post(format!("{api_base}/tx/{id}"))
                         .send()
                         .await
                         .with_context(|| format!("posting tx commit to {endpoint}"))?;
@@ -128,12 +145,13 @@ impl<'a> ConfigApplyTxn<'a> {
     pub(crate) async fn discard(self) -> Result<()> {
         match (self.access, self.handle) {
             (ConfigAccess::Graphql(endpoint), TxnHandle::Graphql(id)) => {
+                let api_base = api_base_from_graphql(endpoint)?;
                 let status;
                 let bytes;
                 {
                     let response = self
                         .http_client
-                        .delete(format!("{endpoint}api/v0/tx/{id}"))
+                        .delete(format!("{api_base}/tx/{id}"))
                         .send()
                         .await
                         .with_context(|| format!("posting tx discard to {endpoint}"))?;
@@ -166,11 +184,12 @@ impl ConfigAccess {
     pub(crate) async fn begin_apply_txn(&self) -> Result<ConfigApplyTxn<'_>> {
         match self {
             ConfigAccess::Graphql(endpoint) => {
+                let api_base = api_base_from_graphql(endpoint)?;
                 let client = reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(30))
                     .build()?;
                 let response = client
-                    .post(format!("{endpoint}api/v0/tx/begin"))
+                    .post(format!("{api_base}/tx"))
                     .send()
                     .await
                     .with_context(|| format!("posting tx begin to {endpoint}"))?;
@@ -187,11 +206,16 @@ impl ConfigAccess {
                 }
                 let body: Value = serde_json::from_slice(&bytes)
                     .with_context(|| format!("decoding tx begin body from {endpoint}"))?;
+                // DefraDB returns `{"id": uint64}` (numeric); accept both string
+                // and number forms so the recording test harness can use either.
                 let id = body
                     .get("id")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| anyhow::anyhow!("tx begin missing id: {body}"))?
-                    .to_string();
+                    .and_then(|v| {
+                        v.as_str()
+                            .map(ToOwned::to_owned)
+                            .or_else(|| v.as_u64().map(|n| n.to_string()))
+                    })
+                    .ok_or_else(|| anyhow::anyhow!("tx begin missing id: {body}"))?;
                 Ok(ConfigApplyTxn::new(self, TxnHandle::Graphql(id), client))
             }
             ConfigAccess::Local(node) => {
