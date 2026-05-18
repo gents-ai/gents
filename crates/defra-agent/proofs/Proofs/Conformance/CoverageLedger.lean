@@ -274,11 +274,10 @@ def caseCoverage : List CoverageEntry :=
       "command_policy_cases"
       "CommandPolicyEnv"
       "toolset::tests::generated_command_env_cases_match_rust_filtering"
-  , consumerWithFollowUpCoverage
+  , consumerCoverage
       "queue_deadline_cases"
       "QueueDeadlineConformanceCases"
       "state_machine_conformance::generated_queue_deadline_cases_pin_r4a_contract_rows"
-      "Runtime-backed queue/deadline consumers land in R4a Task 5 and Task 7 after the Rust claim and scheduler implementations exist."
   , consumerWithFollowUpCoverage
       "recovery_sweep_cases"
       "RecoverySweepCases"
