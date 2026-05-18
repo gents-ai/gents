@@ -309,16 +309,14 @@ def caseCoverage : List CoverageEntry :=
       "identity_contracts"
       "IdentityContracts"
       "identity_conformance::identity_respects_principal_contract_enforced_by_runtime_routing"
-  , consumerWithFollowUpCoverage
+  , consumerCoverage
       "streaming_response_cases"
       "ResponseTransitionCases"
       "state_machine_conformance::generated_streaming_response_cases_pin_lifecycle_contract"
-      "Runtime-backed streaming response lifecycle drive remains a follow-up; this row pins the emitted Lean case shape."
-  , consumerWithFollowUpCoverage
+  , consumerCoverage
       "compaction_reducer_cases"
       "CompactionReducerCases"
       "state_machine_conformance::generated_compaction_reducer_cases_pin_contract"
-      "Runtime-backed compaction reducer drive remains a follow-up; this row pins the emitted Lean case shape."
   , consumerCoverage
       "event_delivery_cases"
       "EventDeliveryTransitionCases"

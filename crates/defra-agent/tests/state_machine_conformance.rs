@@ -35,17 +35,17 @@ use lean_vocab_test::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
     assert_lifecycle_transition_cases_partition, assert_state_machine_contract_is_complete,
     lean_client_shell_case, lean_command_env_case, lean_command_policy_case,
-    lean_command_sandbox_case, lean_compaction_reducer_case, lean_compaction_reducer_cases,
-    lean_contract_snapshot, lean_event_delivery_convergence_traces,
-    lean_event_delivery_source_instances, lean_event_delivery_transition_cases,
-    lean_fleet_slot_accounting_case, lean_inference_slot_accounting_case, lean_mcp_health_cases,
-    lean_queue_deadline_case, lean_queue_deadline_cases, lean_r4c_background_work_case,
-    lean_r4c_background_work_cases, lean_r6_backgrounding_case, lean_r6_backgrounding_cases,
-    lean_recovery_sweep_case, lean_recovery_sweep_cases, lean_request_transition_cases,
-    lean_response_transition_case, lean_response_transition_cases, lean_runtime_reconcile_case,
-    lean_session_recovery_case, lean_state_machine_contract, lean_tool_preflight_case,
-    lean_tool_retry_case, lean_transcript_case, lean_transcript_cases, lean_vocabulary_values,
-    LeanEventDeliveryAction, LeanLifecycleTransitionCase, LeanR4cBackgroundWorkCase,
+    lean_command_sandbox_case, lean_compaction_reducer_cases, lean_contract_snapshot,
+    lean_event_delivery_convergence_traces, lean_event_delivery_source_instances,
+    lean_event_delivery_transition_cases, lean_fleet_slot_accounting_case,
+    lean_inference_slot_accounting_case, lean_mcp_health_cases, lean_queue_deadline_case,
+    lean_queue_deadline_cases, lean_r4c_background_work_case, lean_r4c_background_work_cases,
+    lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_sweep_case,
+    lean_recovery_sweep_cases, lean_request_transition_cases, lean_response_transition_cases,
+    lean_runtime_reconcile_case, lean_session_recovery_case, lean_state_machine_contract,
+    lean_tool_preflight_case, lean_tool_retry_case, lean_transcript_case, lean_transcript_cases,
+    lean_vocabulary_values, LeanEventDeliveryAction, LeanLifecycleTransitionCase,
+    LeanR4cBackgroundWorkCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
@@ -111,9 +111,9 @@ async fn generated_transcript_cases_pin_agent_message_ordering_contract() {
     transcript_background::generated_transcript_cases_pin_agent_message_ordering_contract().await;
 }
 
-#[test]
-fn generated_streaming_response_cases_pin_lifecycle_contract() {
-    streaming_compaction::generated_streaming_response_cases_pin_lifecycle_contract();
+#[tokio::test]
+async fn generated_streaming_response_cases_pin_lifecycle_contract() {
+    streaming_compaction::generated_streaming_response_cases_pin_lifecycle_contract().await;
 }
 
 #[test]
