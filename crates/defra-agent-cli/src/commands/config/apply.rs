@@ -1,8 +1,6 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
-use defra_agent::graphql::escape_graphql_string;
-
 use crate::cli::*;
 use crate::config_writes::ConfigAccess;
 use crate::desired_state;
@@ -92,33 +90,6 @@ pub(crate) async fn apply_bound_desired_manifest(
         counts
     };
 
-    // === STOPGAP for sourcenetwork/defradb.rs#970 ===
-    // DefraDB tx commits do not emit Update events on the EventBus, so the
-    // in-process runtime watcher (control_watcher.rs) never reconciles after
-    // a transactional config apply. Until upstream emits Update events on
-    // commit, we issue a single auto-commit no-op write here to wake the
-    // watcher. The data we just committed inside the tx is durable regardless
-    // of whether this nudge succeeds.
-    //
-    // When defradb.rs#970 ships and we bump the workspace pin, remove:
-    //   1. This comment block and the `if` block that follows it.
-    //   2. The `nudge_runtime_watcher_after_apply` helper below.
-    //   3. The `escape_graphql_string` import at the top of this file, if it
-    //      becomes unused after (2).
-    // Verify the removal by running:
-    //   cargo test -p defra-agent-cli --test cli_config_apply_running
-    // — `config_apply_reconciles_running_runtime_without_restart` must still
-    // pass against the upstream-fixed defradb.rs without the nudge.
-    if config_apply_counts_changed(&applied) {
-        if let Err(nudge_err) = nudge_runtime_watcher_after_apply(&access, bound).await {
-            tracing::warn!(
-                agent_did = %bound.context.target_agent_did,
-                %nudge_err,
-                "config apply: post-commit runtime nudge failed; runtime may not reconcile until restart"
-            );
-        }
-    }
-
     let remaining_bundle = build_desired_state_live_bundle(&access, desired_manifest).await?;
     let (remaining_principal, remaining_manifest) =
         live_manifest_from_bundle(desired_manifest, &remaining_bundle)?;
@@ -147,43 +118,4 @@ pub(crate) async fn apply_bound_desired_manifest(
         remaining: remaining.counts.clone(),
     };
     Ok(report)
-}
-
-/// Wake the runtime watcher after a transactional apply commit by issuing
-/// an auto-commit write that triggers an Update event on the EventBus.
-///
-/// The write targets `AgentPrincipal::enabled`, re-setting it to the
-/// manifest's declared value. This is a no-op when the live `enabled`
-/// already matches the manifest; if the live value drifted out-of-band,
-/// the nudge will also reconcile it back to the manifest value, which is
-/// the correct manifest-wins semantics.
-///
-/// This helper is part of the stopgap for sourcenetwork/defradb.rs#970;
-/// remove together with its call site when upstream emits Update events
-/// on transaction commit.
-async fn nudge_runtime_watcher_after_apply(
-    access: &ConfigAccess,
-    bound: &super::binding::BoundDesiredManifest,
-) -> Result<()> {
-    let agent_did = &bound.context.target_agent_did;
-    let enabled = bound.manifest.agent_principal.enabled;
-    let escaped_did = escape_graphql_string(agent_did);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentPrincipal(
-                filter: {{ agent_did: {{ _eq: "{escaped_did}" }} }},
-                input: {{ enabled: {enabled} }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = access.execute(&mutation).await?;
-    tracing::debug!(
-        agent_did = %agent_did,
-        "config apply: post-commit runtime nudge succeeded; _docID={}",
-        response
-            .pointer("/data/update_AgentPrincipal/0/_docID")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("<none>")
-    );
-    Ok(())
 }
